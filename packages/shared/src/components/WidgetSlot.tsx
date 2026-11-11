@@ -1149,11 +1149,40 @@ export function WidgetSlot({
       if (seen?.state.status === 'success')
         hostStateRef.current = hostStepChange(undefined, seen.state.data).next
     }
+    // The data each grid query last held. A refetch that brings back the same rows keeps the same
+    // reference (react-query's structural sharing), so it is not a change. Without this, an
+    // integration creating workflows elsewhere refetched every open record's grids, every
+    // custom-query widget re-rendered in the same second past a just-invalidated cache, and the
+    // project's PUB-health render took 30–57 s for 12 people (prod 2026-11-10, 12:00 + 4:00 PM).
+    const lastData = new WeakMap<object, unknown>()
+    // Seed with the grids already loaded before this widget subscribed.
+    for (const q of qc.getQueryCache().getAll()) {
+      const h = q.queryKey?.[0]
+      if (typeof h !== 'string' || q.state.status !== 'success') continue
+      if (
+        h.startsWith('o2m-rows') ||
+        h.startsWith('nested') ||
+        h === 'match-agg' ||
+        h === 'm2m-items'
+      )
+        lastData.set(q, q.state.data)
+    }
     const unsub = qc.getQueryCache().subscribe((ev) => {
       if (ev.type !== 'updated' || ev.action?.type !== 'success') return
       const key = ev.query.queryKey
       const head = key?.[0]
       if (typeof head !== 'string') return
+      const isGrid =
+        head.startsWith('o2m-rows') ||
+        head.startsWith('nested') ||
+        head === 'match-agg' ||
+        head === 'm2m-items'
+      if (isGrid) {
+        const had = lastData.has(ev.query)
+        const prev = lastData.get(ev.query)
+        lastData.set(ev.query, ev.query.state.data)
+        if (had && prev === ev.query.state.data) return
+      }
       // A pipeline move on the host record (the instance read refetches after
       // every transition) changes what record-scoped money counts — EFP
       // Committed counts approval states only. Re-render past the cached

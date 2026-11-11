@@ -177,6 +177,10 @@ export async function numberTrail(
     /** The child row ids (of those given) the caller may open; events on any
      *  other row — deleted rows included — are left out. Unset = all. */
     visible?: (collection: string, ids: string[]) => Promise<Set<string>>
+    /** The field's value now as the caller read it (the record row from readOne). A virtual
+     *  computed field has no column, so it can only come from there (2026-11-10: four 500s on
+     *  workflows.forecast_left — "Invalid column name"). */
+    currentValue?: unknown
   } = {}
 ): Promise<NumberTrail> {
   const fieldRow = (await db('nivaro_fields')
@@ -208,6 +212,9 @@ export async function numberTrail(
     await Promise.all(cfg.sources.map((src) => trailSource(src)))
   } else {
     // A plain or stored field: the parent's own revisions of it.
+    if (fieldRow?.computed_type) {
+      addNote('This number is calculated from other fields; their changes move it.')
+    }
     const revs = await revisionsSince(collection, since, (q) => q.where('r.item', String(itemId)))
     if (revs.length > CAP) truncated = true
     for (const r of revs.slice(0, CAP)) {
@@ -416,10 +423,12 @@ export async function numberTrail(
   const net = Math.round(events.reduce((n, e) => n + (e.delta ?? 0), 0) * 100) / 100
   let valueNow: number | null = null
   if (cfg) valueNow = await computeRollupTotal(cfg, itemId, collection).catch(() => null)
+  else if ('currentValue' in opts) valueNow = num(opts.currentValue)
   else {
     const row = (await db(collection)
       .where('id', itemId as never)
-      .first(field)) as Record<string, unknown> | undefined
+      .first(field)
+      .catch(() => undefined)) as Record<string, unknown> | undefined
     valueNow = num(row?.[field])
   }
   return {

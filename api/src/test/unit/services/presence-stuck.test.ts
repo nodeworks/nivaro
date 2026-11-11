@@ -26,7 +26,10 @@ function chain(table: string): unknown {
   return proxy
 }
 
-vi.mock('../../../db/index.js', () => ({ db: (t: string) => chain(t) }))
+vi.mock('../../../db/index.js', () => ({
+  // `db.from(name)` is how the request-log read starts (WITH (NOLOCK) on SQL Server only).
+  db: Object.assign((t: string) => chain(t), { from: (t: string) => chain(t) })
+}))
 
 import {
   classifyPresence,

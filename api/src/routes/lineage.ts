@@ -89,7 +89,8 @@ export async function lineageRoutes(app: FastifyInstance): Promise<void> {
           new Set(await visibleRecordIds(req.user!, col, ids, false))
     const data = await withReadGate(
       req.user!.id,
-      () => numberTrail(collection, item, field, since, { visible }),
+      () =>
+        numberTrail(collection, item, field, since, { visible, currentValue: parent.row[field] }),
       { label: 'lineage:changes' }
     )
     return reply.send({ data })

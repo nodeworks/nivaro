@@ -1,3 +1,4 @@
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 
 /**
@@ -262,7 +263,12 @@ export async function stuckMinutes(
     const recordPage = await currentRecordPages(candidates, routeSince)
     const onRecord = candidates.filter((id) => recordPage.has(id.toUpperCase()))
     if (onRecord.length === 0) return out
-    const changeRows = (await db('nivaro_api_logs')
+    // WITH (NOLOCK) on SQL Server: the request log is the hottest append table there is, and
+    // this read's page S locks deadlocked with its inserts on prod (2026-11-10 11:42 AM, 2:09 PM:
+    // two victims, 76 presence answers at 2–10 s). A dirty read can at most see a write a moment
+    // early — fine for "when did this person last save".
+    const changeRows = (await db
+      .from(isMssql(db) ? db.raw('?? WITH (NOLOCK)', ['nivaro_api_logs']) : 'nivaro_api_logs')
       .whereIn('user', onRecord)
       .where('created_at', '>', new Date(now - STUCK_AFTER_MS - 60_000))
       .whereIn('method', ['POST', 'PUT', 'PATCH', 'DELETE'])

@@ -15,6 +15,7 @@ import {
   varcharSafePattern
 } from '../lib/filter-like.js'
 import {
+  CURSOR_START,
   decodeCursor,
   encodeCursor,
   type KeysetSort,
@@ -4484,6 +4485,12 @@ async function planKeyset(
   return { sorts, values: decodeCursor(after, collection, sorts, keysetSecret()), dateTypes }
 }
 
+/** The sort with `id` last (unless it is there already) — the order a by-number page shares
+ *  with a cursor walk, so pages never repeat or skip a row on ties. */
+function withIdTieBreakSort(sort: string[]): string[] {
+  return sort.some((s) => s.replace(/^-/, '').toLowerCase() === 'id') ? sort : [...sort, 'id']
+}
+
 /** Every row that sorts after the cursor's row. */
 function applyKeyset(q: QB, collection: string, plan: KeysetPlan): void {
   if (!plan.values) return
@@ -4963,13 +4970,26 @@ export async function readItems(
   )
   // A cursor walk sorts by the caller's columns and then by id; everything
   // below reads `sort`, so it is settled here.
-  const keyset =
-    query.after !== undefined
-      ? await planKeyset(collection, query.sort ?? [], String(query.after), allowedFields)
-      : null
+  // `after=start` on a sort a cursor cannot walk (a computed or linked field) answers page 1 by
+  // number, with the same id tie-break and no next_cursor, so the list pages on by number. A
+  // refusal here cost every filter change a 400 and a second read (prod 2026-11-10: 21 × 400
+  // on workflows sorted by po_open_unbilled_amount). A real cursor on such a sort still refuses.
+  let keyset: KeysetPlan | null = null
+  let cursorOff = false
+  if (query.after !== undefined) {
+    try {
+      keyset = await planKeyset(collection, query.sort ?? [], String(query.after), allowedFields)
+    } catch (err) {
+      const start = String(query.after) === '' || String(query.after) === CURSOR_START
+      if (!start || (err as { code?: string }).code !== 'CURSOR_SORT_UNSUPPORTED') throw err
+      cursorOff = true
+    }
+  }
   const sort = keyset
     ? keyset.sorts.map((k) => `${k.desc ? '-' : ''}${k.column}`)
-    : (query.sort ?? [])
+    : cursorOff
+      ? withIdTieBreakSort(query.sort ?? [])
+      : (query.sort ?? [])
   // Traffic Map (#1135): the request's first list read leaves its filter / sort inputs by
   // reference; the shape (paths + operators, never values) is derived after the response.
   noteReadShape(collection, filter, sort, conditions, fields)

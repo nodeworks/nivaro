@@ -570,7 +570,11 @@ const LABEL_FALLBACK_FIELDS = ['name', 'title', 'label', 'display_name', 'subjec
  *  Dotted template tokens would need nested expansion (and 500 on a stale
  *  path), so those fall back to the full row rather than risk the request. */
 function optionFieldsFor(template: string | null, labelField: string): string | null {
-  if (!template) return ['id', labelField, ...LABEL_FALLBACK_FIELDS].join(',')
+  // No template: the label column labelFieldFor picked from the collection's real fields. Never
+  // the whole fallback list — the API refuses a projection naming columns the table lacks (prod
+  // 2026-11-10: oracle_category has only `name`, 12 × 400 UNKNOWN_FIELD). No known label column
+  // (metadata not loaded yet) = the full row, which renderDisplayTemplate reads from.
+  if (!template) return labelField === 'id' ? null : `id,${labelField}`
   const tokens = [...template.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1])
   if (tokens.some((t) => t.includes('.'))) return null
   return [...new Set(['id', labelField, ...tokens])].join(',')
