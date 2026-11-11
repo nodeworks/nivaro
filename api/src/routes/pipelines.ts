@@ -2784,6 +2784,56 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     })
   })
 
+  // Admin "Move to state": put ONE record in a chosen state with a reason.
+  // A repair, not a transition — no actions, pushes, flows or mail run
+  // (services/pipeline-move-state.ts).
+  app.post(
+    '/instance/:collection/:item/move-state',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { collection, item } = req.params as { collection: string; item: string }
+      const b = (req.body ?? {}) as { to_state?: unknown; reason?: unknown }
+      try {
+        await assertInstanceAccess(req.user, true, collection, item)
+      } catch (err) {
+        if (err instanceof InstanceAccessError)
+          return reply.code(err.statusCode).send({ error: err.message })
+        throw err
+      }
+      const { moveRecordToState, MoveStateError } = await import(
+        '../services/pipeline-move-state.js'
+      )
+      try {
+        const result = await moveRecordToState({
+          collection,
+          item,
+          toState: String(b.to_state ?? ''),
+          reason: typeof b.reason === 'string' ? b.reason : '',
+          userId: req.user!.id
+        })
+        await logActivity({
+          action: 'pipeline-move',
+          user: req.user?.id,
+          collection,
+          item,
+          comment: JSON.stringify({
+            from: result.from.key,
+            to: result.to.key,
+            ended: result.ended?.key ?? null,
+            reason: String(b.reason).trim().slice(0, 500)
+          }),
+          origin: 'person',
+          req
+        })
+        return reply.send({ data: result })
+      } catch (err) {
+        if (err instanceof MoveStateError)
+          return reply.code(err.status).send({ error: err.message })
+        throw err
+      }
+    }
+  )
+
   // Start pipeline instance for an item
   app.post('/instance/:collection/:item/start', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }

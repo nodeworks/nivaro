@@ -68,6 +68,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { deniedToastAction, isAccessRefusal, WhyOwnersButton } from './AccessInsights'
 import { BranchLanes, type BranchLanesData } from './BranchLanes'
 import { joinLabels, landingSkipGroups, landingState } from './landing-state'
+import { MoveToStatePanel } from './MoveToStatePanel'
 import { SlaClockLine } from './SlaClock'
 import type { TransitionRequirementsPayload } from './TransitionRequirementsDialog'
 
@@ -2661,6 +2662,7 @@ function PipelinePanelInner({
 }) {
   const client = useNivaroClient()
   const queryClient = useQueryClient()
+  const { isAdmin: canMoveState } = useItemEditAuth()
   const [comment, setComment] = useState('')
   const [pendingTransition, setPendingTransition] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
@@ -3426,6 +3428,22 @@ function PipelinePanelInner({
                     </div>
                   )}
                 </div>
+                {canMoveState && (states ?? []).length > 1 && (
+                  <div className='px-5 py-3'>
+                    <MoveToStatePanel
+                      collection={collection}
+                      item={item}
+                      states={states ?? []}
+                      currentStateId={instance.current_state ?? null}
+                      onMoved={() => {
+                        void queryClient.invalidateQueries({ queryKey })
+                        void queryClient.invalidateQueries({
+                          queryKey: ['pipeline-instance', collection, item]
+                        })
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>

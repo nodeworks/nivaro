@@ -185,6 +185,32 @@ Reading: "approve a 25k budget from the South division"
     {
       type: 'note',
       text: 'Unlike workflows (simple state tracking), pipelines resolve owners dynamically based on each record. Same template, different owners per item.'
+    },
+    {
+      type: 'h2',
+      id: 'pipeline-move-to-state',
+      text: 'Moving one record to a state (administrators)'
+    },
+    {
+      type: 'p',
+      text: 'To repair a record that ended up in the wrong state, an administrator opens the record, expands its pipeline panel and picks **Move to state…** at the bottom. Choose the state, say why, and press Move. The reason is saved in the transition history with your name.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'It is a repair, not a transition: no transition steps run — no Fusion or MWF pushes, emails, flows, requirements or role checks.',
+        'Moving to a final state (such as Completed) closes the pipeline; moving anywhere else reopens it.',
+        'Automatic transitions are checked again right after the move, so a record that already meets an automatic rule in its new state moves on by itself. The message says where it ended.',
+        "An addendum's decision is not applied or undone by a move — that happens only when it finishes through its own approval steps.",
+        'To move every record in a state at once (after changing a pipeline), use the pipeline editor instead.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `POST /api/pipelines/instance/:collection/:item/move-state   (administrators)
+{ "to_state": "<state id or key>", "reason": "Completed before the PO matched" }
+
+→ { "data": { "from": {...}, "to": {...}, "ended": {...} | null, "history_id": 542210 } }`
     }
   ]
 }

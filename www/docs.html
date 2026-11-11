@@ -2097,7 +2097,7 @@ GET /api/workflows/:templateId/instance/articles/42</code></pre>
           <!-- /SYNC:pipeline-simulator -->
         </div>
 
-        <div class="doc-section" id="s-pipeline-overview" data-toc='[{"id":"pipeline-overview","label":"Pipeline Engine — Overview"}]'>
+        <div class="doc-section" id="s-pipeline-overview" data-toc='[{"id":"pipeline-overview","label":"Pipeline Engine — Overview"},{"id":"pipeline-move-to-state","label":"Moving one record to a state (administrators)"}]'>
           <!-- SYNC:pipeline-overview -->
           <h1 class="doc-h1" id="pipeline-overview">Pipeline Engine — Overview</h1>
           <p class="doc-p">Pipelines extend workflows with a multi-dimensional Owner Matrix. Resolve different users as owners depending on record attributes (region, project type, product line, etc.).</p>
@@ -2138,6 +2138,19 @@ West     | Manager-W   | Director-W   | CEO
 Reading: "approve a 25k budget from the South division"
 → Match South + 10k-100k → Director-S is the owner for Manager Review state</code></pre>
           <div class="doc-note">Unlike workflows (simple state tracking), pipelines resolve owners dynamically based on each record. Same template, different owners per item.</div>
+          <h2 class="doc-h2" id="pipeline-move-to-state">Moving one record to a state (administrators)</h2>
+          <p class="doc-p">To repair a record that ended up in the wrong state, an administrator opens the record, expands its pipeline panel and picks **Move to state…** at the bottom. Choose the state, say why, and press Move. The reason is saved in the transition history with your name.</p>
+          <ul class="doc-ul">
+            <li>It is a repair, not a transition: no transition steps run — no Fusion or MWF pushes, emails, flows, requirements or role checks.</li>
+            <li>Moving to a final state (such as Completed) closes the pipeline; moving anywhere else reopens it.</li>
+            <li>Automatic transitions are checked again right after the move, so a record that already meets an automatic rule in its new state moves on by itself. The message says where it ended.</li>
+            <li>An addendum's decision is not applied or undone by a move — that happens only when it finishes through its own approval steps.</li>
+            <li>To move every record in a state at once (after changing a pipeline), use the pipeline editor instead.</li>
+          </ul>
+          <pre class="doc-pre"><code>POST /api/pipelines/instance/:collection/:item/move-state   (administrators)
+{ "to_state": "&lt;state id or key&gt;", "reason": "Completed before the PO matched" }
+
+→ { "data": { "from": {...}, "to": {...}, "ended": {...} | null, "history_id": 542210 } }</code></pre>
           <!-- /SYNC:pipeline-overview -->
         </div>
 
@@ -19497,7 +19510,7 @@ scrape_configs:
           <p class="doc-p">Every night Nivaro writes a post-mortem of the day: what people did, how fast the app answered, what failed, what partners refused, what changed, and why. It lives at Health → Daily report (/health/daily-report; efp-new hosts it at /admin/daily-report). Every number on the page opens the rows behind it in a side drawer, down to a single request, issue, job run, partner send or person — you never leave the page, and a row that is a record opens in the record drawer with "Open full record".</p>
           <h2 class="doc-h2" id="ops-daily-report-how">How a report is made</h2>
           <ul class="doc-ul">
-            <li>The window: one day of the instance, 7 AM to 8 PM by default (the SLA time zone). The nightly run fires at :05 after the window closes; Run now works any time.</li>
+            <li>The window: one day of the instance, 6 AM to 11 PM by default (the SLA time zone). The nightly run fires 5 minutes after the window closes (11:05 PM); Run now works any time.</li>
             <li>The numbers (no AI): people (active vs signed in today vs still signed in from an earlier day vs new accounts, View-as, machine callers), traffic, speed, errors, deploys and drains, deadlocks, issues, jobs, partner sends and calls against their 7-day normal, imports, mail, notifications, work done, backlog and SLA misses, search, config changes, security, capacity, pages, browser errors, feature adoption, support, AI use, data quality, who holds the waiting work, tomorrow's watch list, and extension sections such as business volume.</li>
             <li>Leads (no AI): for every slow burst, deadlock, server error and cluster of partner refusals, what else happened at that minute — writes by origin, jobs, deploys, admin bulk actions, partner calls — and, for an "Invalid column" error, what the data model says.</li>
             <li>The bug tracker (no AI): today's errors become stable keys and are matched with yesterday's, so each bug reads new, open, fixed (with the version deployed after it stopped) or came back.</li>
