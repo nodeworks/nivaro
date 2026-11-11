@@ -80,6 +80,8 @@ interface Addendum {
   attachments: string[] | null
   /** Set on rows imported from the previous system — read-only history, never reverted. */
   legacy_id?: number | null
+  /** Its pipeline's current state (GET /addendums/:collection/:itemId). */
+  workflow_state?: { key: string; label: string; color: string | null } | null
 }
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
@@ -1073,15 +1075,16 @@ function AddendumCard({
   const client = useNivaroClient()
   const [expanded, setExpanded] = useState(false)
   // A workflow-driven addendum isn't a 'draft' anyone must submit — its
-  // review IS the pipeline. Say so instead of leaking the storage status.
-  const displayStatus =
-    addendum.workflow_template_id && ['draft', 'review'].includes(addendum.status)
-      ? 'in approvals'
-      : addendum.status
-  const styles =
-    displayStatus === 'in approvals'
-      ? STATUS_STYLES.review
-      : (STATUS_STYLES[addendum.status] ?? STATUS_STYLES.draft)
+  // review IS the pipeline. Name where the pipeline stands ("Waiting on PO"),
+  // never the storage status.
+  const inPipeline =
+    !!addendum.workflow_template_id && ['draft', 'review'].includes(addendum.status)
+  const displayStatus = inPipeline
+    ? (addendum.workflow_state?.label ?? 'in approvals')
+    : addendum.status
+  const styles = inPipeline
+    ? STATUS_STYLES.review
+    : (STATUS_STYLES[addendum.status] ?? STATUS_STYLES.draft)
 
   const proposedData = addendum.data ?? {}
 

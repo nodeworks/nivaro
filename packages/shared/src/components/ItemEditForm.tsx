@@ -17,6 +17,7 @@ import {
   Loader2,
   Lock,
   MessageSquarePlus,
+  MoveRight,
   PencilLine,
   PictureInPicture2,
   Save,
@@ -141,6 +142,7 @@ import {
   summaryRulesNeedRole,
   summaryRulesNeedState
 } from '../lib/summary-mode'
+import { requestMoveState } from '../lib/move-state'
 import { isReloadingForUpdate, useUnsavedWork } from '../lib/unsaved-work'
 import {
   choiceLabel,
@@ -418,6 +420,7 @@ import {
   WorkflowPanel
 } from './panels'
 import { RecordEventPathSheet } from './panels/IntegrationActivitySection'
+import { MoveToStatePanel } from './panels/MoveToStatePanel'
 import type { PendingTask } from './panels/TaskPanel'
 import { FormSkeleton } from './Skeletons'
 import { SlowNoticeView } from './SlowNotice'
@@ -2416,6 +2419,8 @@ function ItemEditFormView({
   // until the user supplies a justification, then retries with _change_reason
   const [crChallenge, setCrChallenge] = useState<ChangeReasonChallenge | null>(null)
   const [rawEditOpen, setRawEditOpen] = useState(false)
+  // ⋯ → Move to state… when the form has no pipeline panel to open it in.
+  const [moveStateOpen, setMoveStateOpen] = useState(false)
   const [graphOpen, setGraphOpen] = useState(false)
   const changeReasonRef = useRef<string | null>(null)
   // Mid-air collision: a 409 pauses the save into a per-field merge dialog
@@ -14401,6 +14406,31 @@ function ItemEditFormView({
                                                       View as role…
                                                     </Button>
                                                   )}
+                                                  {!isNew && itemId && (
+                                                    <Button
+                                                      type='button'
+                                                      variant='outline'
+                                                      size='sm'
+                                                      data-nvr-menu-close
+                                                      onClick={() => {
+                                                        // The pipeline panel opens its form; a form
+                                                        // without one gets the same form in a dialog.
+                                                        if (
+                                                          !requestMoveState({
+                                                            collection,
+                                                            item: String(itemId)
+                                                          })
+                                                        )
+                                                          setMoveStateOpen(true)
+                                                      }}
+                                                      title='Put this record straight into a chosen pipeline state, with a reason. No transition steps run (admin)'
+                                                      className='gap-1.5'
+                                                      data-move-to-state-menu
+                                                    >
+                                                      <MoveRight className='h-3.5 w-3.5' />
+                                                      Move to state…
+                                                    </Button>
+                                                  )}
                                                   {effectiveShowClone && (
                                                     // lint-traps-ok: self-triggered; HeaderTools ignores clicks inside dialogs it opened
                                                     <CloneDialog
@@ -15080,6 +15110,37 @@ function ItemEditFormView({
                                         })
                                       }}
                                     />
+                                  )}
+                                  {isAdmin && !isNew && itemId && moveStateOpen && (
+                                    <Dialog
+                                      open
+                                      onOpenChange={(next) => !next && setMoveStateOpen(false)}
+                                    >
+                                      <DialogContent className='max-w-lg'>
+                                        <DialogHeader>
+                                          <DialogTitle className='text-[15px]'>
+                                            Move to state
+                                          </DialogTitle>
+                                        </DialogHeader>
+                                        <DialogBody>
+                                          <MoveToStatePanel
+                                            collection={collection}
+                                            item={String(itemId)}
+                                            standalone
+                                            onCancel={() => setMoveStateOpen(false)}
+                                            onMoved={() => {
+                                              setMoveStateOpen(false)
+                                              qc.invalidateQueries({
+                                                queryKey: ['pipeline-instance', collection]
+                                              })
+                                              qc.invalidateQueries({
+                                                queryKey: ['item', collection, String(itemId)]
+                                              })
+                                            }}
+                                          />
+                                        </DialogBody>
+                                      </DialogContent>
+                                    </Dialog>
                                   )}
 
                                   {(entryCfg.badge ||

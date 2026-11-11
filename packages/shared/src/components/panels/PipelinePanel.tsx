@@ -34,6 +34,7 @@ import {
   useRecordSignalPeers,
   useRecordSignalWhile
 } from '../../lib/presence-signals'
+import { OPEN_MOVE_STATE_EVENT, type OpenMoveStateRequest } from '../../lib/move-state'
 import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
 import { userErrorMessage } from '../../lib/safe-error'
 import { serverNow } from '../../lib/server-clock'
@@ -2663,6 +2664,25 @@ function PipelinePanelInner({
   const client = useNivaroClient()
   const queryClient = useQueryClient()
   const { isAdmin: canMoveState } = useItemEditAuth()
+  // The record's ⋯ menu → Move to state…: open the panel and its form here.
+  const [moveSignal, setMoveSignal] = useState(0)
+  const moveAnchorRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!canMoveState) return
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<OpenMoveStateRequest>).detail
+      if (!d || d.claimed || d.collection !== collection || String(d.item) !== String(item)) return
+      d.claimed = true
+      setExpanded(true)
+      setMoveSignal((n) => n + 1)
+      setTimeout(
+        () => moveAnchorRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }),
+        80
+      )
+    }
+    window.addEventListener(OPEN_MOVE_STATE_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_MOVE_STATE_EVENT, onOpen)
+  }, [canMoveState, collection, item])
   const [comment, setComment] = useState('')
   const [pendingTransition, setPendingTransition] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
@@ -3429,12 +3449,13 @@ function PipelinePanelInner({
                   )}
                 </div>
                 {canMoveState && (states ?? []).length > 1 && (
-                  <div className='px-5 py-3'>
+                  <div className='px-5 py-3' ref={moveAnchorRef}>
                     <MoveToStatePanel
                       collection={collection}
                       item={item}
                       states={states ?? []}
                       currentStateId={instance.current_state ?? null}
+                      openSignal={moveSignal}
                       onMoved={() => {
                         void queryClient.invalidateQueries({ queryKey })
                         void queryClient.invalidateQueries({

@@ -16,6 +16,9 @@ export interface AddendumSummary {
     status: string
     cost_impact: number | null
     created_at: string | null
+    /** Where its pipeline stands — what views name instead of the storage
+     *  status ('draft' for every addendum still in its approvals). */
+    workflow_state?: { key: string; label: string } | null
   } | null
 }
 
@@ -149,6 +152,27 @@ export async function addendumSummaryBatch(
       }
     }
     out.set(key, cur)
+  }
+  // The latest addendum's pipeline state, one read for the whole page.
+  const latestIds = [...out.values()].flatMap((s) => (s.latest ? [s.latest.id] : []))
+  if (latestIds.length > 0) {
+    try {
+      const insts = (await selectInChunks(latestIds, 2000, (chunk) =>
+        database('nivaro_workflow_instances as i')
+          .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
+          .where('i.collection', 'nivaro_addendums')
+          .modify((qb) => whereInList(qb, 'i.item', chunk))
+          .select('i.item', 's.key', 's.label')
+      )) as Array<{ item: string; key: string; label: string }>
+      const byItem = new Map(insts.map((x) => [String(x.item).toUpperCase(), x]))
+      for (const s of out.values()) {
+        if (!s.latest) continue
+        const x = byItem.get(s.latest.id.toUpperCase())
+        s.latest.workflow_state = x ? { key: x.key, label: x.label } : null
+      }
+    } catch {
+      /* the storage status still reads */
+    }
   }
   return out
 }

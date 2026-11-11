@@ -699,7 +699,14 @@ function fetchRelationRow(
 type AddendumSummaryEntry = {
   active: number
   total: number
-  latest: { id: string; title: string | null; status: string; cost_impact: number | null } | null
+  latest: {
+    id: string
+    title: string | null
+    status: string
+    cost_impact: number | null
+    /** Its pipeline's state — named instead of the storage status ('draft'). */
+    workflow_state?: { key: string; label: string } | null
+  } | null
 }
 const ADDENDUM_STATUS_LABEL: Record<string, string> = {
   draft: 'draft',
@@ -713,7 +720,13 @@ function AddendumSummaryPill({ summary }: { summary: AddendumSummaryEntry | unde
   if (!summary || summary.total === 0) return <span className='text-[12px] text-slate-300'>—</span>
   const latest = summary.latest
   const active = summary.active > 0
-  const status = latest ? (ADDENDUM_STATUS_LABEL[latest.status] ?? latest.status) : ''
+  const inPipeline =
+    !!latest?.workflow_state && !['approved', 'rejected', 'reverted'].includes(latest.status)
+  const status = latest
+    ? inPipeline
+      ? (latest.workflow_state?.label ?? '')
+      : (ADDENDUM_STATUS_LABEL[latest.status] ?? latest.status)
+    : ''
   const cost = latest?.cost_impact
   const costText =
     cost != null && cost !== 0
@@ -736,7 +749,7 @@ function AddendumSummaryPill({ summary }: { summary: AddendumSummaryEntry | unde
         className={`h-1.5 w-1.5 shrink-0 rounded-full ${active ? 'bg-amber-500' : 'bg-slate-400'}`}
       />
       {active
-        ? `${summary.active} ${summary.active === 1 ? 'addendum' : 'addendums'} ${status || 'active'}`
+        ? `${summary.active} ${summary.active === 1 ? 'addendum' : 'addendums'}${inPipeline ? ` · ${status}` : ` ${status || 'active'}`}`
         : `${summary.total} ${status}`}
       {costText && <span className='tabular-nums opacity-80'>· {costText}</span>}
     </span>

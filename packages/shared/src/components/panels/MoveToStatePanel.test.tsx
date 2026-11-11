@@ -5,6 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NivaroProvider } from '../../context'
+import { OPEN_MOVE_STATE_EVENT, requestMoveState } from '../../lib/move-state'
 import { MoveToStatePanel } from './MoveToStatePanel'
 
 let host: HTMLDivElement
@@ -54,6 +55,18 @@ const typeInto = (el: HTMLTextAreaElement, value: string) =>
     set.call(el, value)
     el.dispatchEvent(new Event('input', { bubbles: true }))
   })
+
+describe('⋯ menu → Move to state…', () => {
+  it('is claimed by a listening panel; unclaimed means the menu opens its own dialog', () => {
+    expect(requestMoveState({ collection: 'workflows', item: '1' })).toBe(false)
+    const on = (e: Event) => {
+      ;(e as CustomEvent<{ claimed?: boolean }>).detail.claimed = true
+    }
+    window.addEventListener(OPEN_MOVE_STATE_EVENT, on)
+    expect(requestMoveState({ collection: 'workflows', item: '1' })).toBe(true)
+    window.removeEventListener(OPEN_MOVE_STATE_EVENT, on)
+  })
+})
 
 describe('MoveToStatePanel', () => {
   it('opens an inline form that warns no transition steps run', () => {

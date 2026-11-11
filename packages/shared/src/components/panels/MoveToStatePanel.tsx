@@ -1,9 +1,9 @@
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { Loader2, MoveRight } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
-import { post } from '../../lib/commands'
+import { get, post } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
 import { Button } from '../ui/button'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -29,20 +29,48 @@ interface MoveResult {
 export function MoveToStatePanel({
   collection,
   item,
-  states,
-  currentStateId,
-  onMoved
+  states: givenStates,
+  currentStateId: givenCurrent,
+  onMoved,
+  openSignal = 0,
+  standalone = false,
+  onCancel
 }: {
   collection: string
   item: string | number
-  states: StateOption[]
-  currentStateId: string | null
+  /** The pipeline's states; read from the instance when not given (⋯ menu dialog). */
+  states?: StateOption[]
+  currentStateId?: string | null
   onMoved: () => void
+  /** Bumped by the record's ⋯ menu → Move to state…: opens the form. */
+  openSignal?: number
+  /** Always open, no fold link — the ⋯ menu's dialog when no panel is on the form. */
+  standalone?: boolean
+  onCancel?: () => void
 }) {
   const client = useNivaroClient()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(standalone)
   const [target, setTarget] = useState('')
   const [reason, setReason] = useState('')
+  useEffect(() => {
+    if (openSignal > 0) setOpen(true)
+  }, [openSignal])
+
+  const { data: instanceData, isLoading } = useQuery({
+    queryKey: ['move-state-instance', collection, String(item)],
+    queryFn: () =>
+      client.request(
+        get(`/pipelines/instance/${collection}/${encodeURIComponent(String(item))}`)
+      ) as Promise<{
+        data: { instance: { current_state: string | null } | null; states: StateOption[] }
+      }>,
+    enabled: !givenStates
+  })
+  const states = givenStates ?? instanceData?.data?.states ?? []
+  const currentStateId = givenStates
+    ? (givenCurrent ?? null)
+    : (instanceData?.data?.instance?.current_state ?? null)
+  const noPipeline = !givenStates && !isLoading && !instanceData?.data?.instance
 
   const options = useMemo(
     () => [
@@ -69,7 +97,7 @@ export function MoveToStatePanel({
           ? `Moved to ${r.to.label}, then an automatic rule took it to ${r.ended.label}`
           : `Moved to ${r?.to.label ?? 'the new state'}`
       )
-      setOpen(false)
+      if (!standalone) setOpen(false)
       setTarget('')
       setReason('')
       onMoved()
@@ -94,6 +122,14 @@ export function MoveToStatePanel({
     )
   }
 
+  if (noPipeline) {
+    return (
+      <p className='text-[12px] text-slate-500' data-move-to-state-none>
+        This record has no pipeline to move.
+      </p>
+    )
+  }
+
   return (
     <div
       className='space-y-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-500/25 dark:bg-amber-500/[0.06]'
@@ -113,7 +149,7 @@ export function MoveToStatePanel({
           onChange={setTarget}
           options={options}
           ariaLabel='New state'
-          disabled={move.isPending}
+          disabled={move.isPending || (!givenStates && isLoading)}
         />
         <Textarea
           value={reason}
@@ -136,7 +172,7 @@ export function MoveToStatePanel({
           size='sm'
           variant='ghost'
           className='h-7 text-[12px]'
-          onClick={() => setOpen(false)}
+          onClick={() => (standalone ? onCancel?.() : setOpen(false))}
           disabled={move.isPending}
         >
           Cancel
