@@ -7641,6 +7641,7 @@ export function InlineTableField({
                         provenance={editState?.provenance?.[c.field]}
                         labelOf={labelOf}
                         fieldLabel={fieldLabel}
+                        relatedCollection={rel?.one_collection ?? null}
                         onReset={
                           prov === 'overridden' && !readOnly && !editState?.locks?.includes(c.field)
                             ? () => resetToAuto(c.field)

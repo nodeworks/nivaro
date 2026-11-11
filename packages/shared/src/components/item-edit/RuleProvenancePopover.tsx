@@ -1,8 +1,9 @@
 import { Check, ChevronRight } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { explainProvenance, type RuleProvenance } from '../../lib/rule-provenance'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { useRecordLabels } from './useRecordLabels'
 
 /**
  * The "auto" / "overridden" chip on a grid row editor field, opening into
@@ -15,18 +16,34 @@ export function RuleProvenanceChip({
   provenance,
   labelOf,
   fieldLabel,
+  relatedCollection,
   onReset
 }: {
   kind: 'auto' | 'overridden'
   provenance: RuleProvenance | null | undefined
   labelOf?: (v: unknown) => string
   fieldLabel?: (f: string) => string
+  /** The column's related collection: ids the grid has no label for yet are
+   *  looked up when the popover opens, never shown raw ("33"). */
+  relatedCollection?: string | null
   /** Overridden only: put the rule's value back. */
   onReset?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const [showTried, setShowTried] = useState(false)
-  const story = provenance ? explainProvenance(provenance, { labelOf, fieldLabel }) : null
+  const ids = useMemo(
+    () => [provenance?.value, ...(provenance?.sources ?? []).map((s) => s.value)],
+    [provenance]
+  )
+  const looked = useRecordLabels(relatedCollection, ids, open)
+  const labelWithLookup = (v: unknown) => {
+    const known = labelOf?.(v)
+    if (known != null && known !== String(v)) return known
+    return looked.get(String(v)) ?? known ?? String(v)
+  }
+  const story = provenance
+    ? explainProvenance(provenance, { labelOf: labelWithLookup, fieldLabel })
+    : null
   const chip = (
     <span
       className={cn(

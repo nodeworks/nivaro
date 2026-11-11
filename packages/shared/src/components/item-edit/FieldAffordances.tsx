@@ -31,6 +31,7 @@ import { clearPersonalDefault, refusalText, usePersonalDefaultCss } from './Pers
 import { PERSONAL_DEFAULT_GHOST_BUTTON } from './PersonalDefaultPill'
 import type { CMSField, CMSRelation } from './types'
 import { usePersonalDefaultsApi } from './usePersonalDefaults'
+import { useRecordLabels } from './useRecordLabels'
 
 /**
  * Per-field affordances the record form hands down to every FieldRow without
@@ -106,12 +107,24 @@ export const ghostText = (v: unknown): string => {
 export function RemoteChangeGhost({
   change,
   onDismiss,
-  onTakeTheirs
+  onTakeTheirs,
+  relatedCollection
 }: {
   change: RemoteFieldChange
   onDismiss: () => void
   onTakeTheirs?: () => void
+  /** A relation field's target: the ids it shows ("was 33") read as labels. */
+  relatedCollection?: string | null
 }) {
+  const looked = useRecordLabels(
+    relatedCollection,
+    [change.was, change.theirs],
+    !!relatedCollection
+  )
+  const shown = (v: unknown) =>
+    v != null && typeof v !== 'object' && looked.has(String(v))
+      ? (looked.get(String(v)) as string)
+      : ghostText(v)
   if (change.conflict && onTakeTheirs)
     return (
       <div
@@ -122,7 +135,7 @@ export function RemoteChangeGhost({
         <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500' />
         <span className='min-w-0 flex-1'>
           {change.by ?? 'Someone'} changed this to{' '}
-          <span className='font-medium'>{ghostText(change.theirs)}</span> while you were editing
+          <span className='font-medium'>{shown(change.theirs)}</span> while you were editing
           <span className='text-amber-700/80 dark:text-amber-200/70'>
             {' '}
             · {formatRelative(change.at)}
@@ -154,9 +167,7 @@ export function RemoteChangeGhost({
       <span className='mt-0.5 h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-sky-500' />
       <span className='min-w-0 flex-1'>
         was{' '}
-        <span className='font-medium line-through decoration-sky-400/70'>
-          {ghostText(change.was)}
-        </span>
+        <span className='font-medium line-through decoration-sky-400/70'>{shown(change.was)}</span>
         <span className='text-sky-700/80 dark:text-sky-300/80'>
           {' '}
           · {change.by ?? 'someone'}, {formatRelative(change.at)}

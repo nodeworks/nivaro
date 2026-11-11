@@ -1443,6 +1443,7 @@ export const FieldRow = memo(function FieldRow({
       {remoteChange && (
         <RemoteChangeGhost
           change={remoteChange}
+          relatedCollection={cascadeRelatedCollection ?? null}
           onDismiss={() => affordances?.dismissRemoteChange(field.field)}
           onTakeTheirs={
             affordances?.takeRemoteChange
