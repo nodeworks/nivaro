@@ -530,38 +530,47 @@ export async function drill(
         [key],
         limit
       )
-      return out(
+      const first = t(s?.f)
+      const last = t(s?.la)
+      const account = str(u.status)
+      const day = out(
         `${name(u) ?? u.email}'s day`,
-        'Their errors, refusals and slow requests in the window; open any one for its full detail.',
-        REQ_COLS,
+        'How their day went in the app. The list holds every request of theirs that failed, was refused or took 3 s or more; open one for its full detail.',
+        // Every row is theirs: no Person column.
+        REQ_COLS.filter((c) => c.key !== 'person'),
         r.rows,
         r.total,
         {
           fields: [
-            { label: 'Email', value: str(u.email) },
-            { label: 'Role', value: str(u.role) },
-            { label: 'Title', value: str(u.title) },
-            { label: 'Department', value: str(u.department) },
-            { label: 'Account', value: str(u.status) },
-            { label: 'Requests', value: num(s?.n) },
-            { label: 'First seen', value: t(s?.f) },
-            { label: 'Last seen', value: t(s?.la) },
-            { label: 'Average response', value: `${num(s?.av)} ms` },
-            { label: 'Server errors', value: num(s?.e5) },
-            { label: 'Refused (4xx)', value: num(s?.e4) },
-            { label: 'Over 5 s', value: num(s?.slow) },
-            { label: 'Workflow moves', value: num(moves?.n) },
+            { label: 'Email', value: str(u.email), kind: 'meta' },
+            { label: 'Role', value: str(u.role), kind: 'meta' },
+            { label: 'Title', value: str(u.title), kind: 'meta' },
+            { label: 'Department', value: str(u.department), kind: 'meta' },
+            ...(account && account !== 'active'
+              ? [{ label: 'Account', value: `Account ${account}`, kind: 'meta' as const }]
+              : []),
+            { label: 'Profile', value: 'Open profile', link: `/users/${key}`, kind: 'meta' },
+            { label: 'Requests', value: num(s?.n), kind: 'stat', format: 'number' },
+            { label: 'Average response', value: num(s?.av), kind: 'stat', format: 'ms' },
+            { label: 'Server errors', value: num(s?.e5), kind: 'stat', tone: 'bad' },
+            { label: 'Refused', value: num(s?.e4), kind: 'stat', tone: 'warn' },
+            { label: 'Over 5 s', value: num(s?.slow), kind: 'stat', tone: 'warn' },
+            { label: 'Workflow moves', value: num(moves?.n), kind: 'stat', format: 'number' },
+            {
+              label: 'In the app',
+              value: first && last ? (first === last ? first : `${first} – ${last}`) : 'No requests'
+            },
             {
               label: 'Signed in today',
               value: signins.length
                 ? signins.map((x) => `${t(x.created_at)} (${x.method})`).join(', ')
                 : 'No — still signed in from an earlier day'
-            },
-            { label: 'Profile', value: 'Open', link: `/users/${key}` }
+            }
           ],
           blocks: []
         }
       )
+      return { ...day, rows_title: 'Requests that failed, were refused or ran slow' }
     }
     case 'login': {
       if (!key) throw new DrillError(400, 'Name the sign-in')

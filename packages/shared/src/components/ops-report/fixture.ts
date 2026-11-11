@@ -704,17 +704,40 @@ export function fixtureDrill(metric: OpsDrillMetric, key: string | null): OpsDri
       ...base,
       title: `${key} — their day`,
       description: 'Their requests in the window.',
-      columns: [col('at', 'At', 'time'), col('route', 'Route'), col('status', 'Status', 'status')],
+      columns: [
+        col('at', 'At', 'time'),
+        col('route', 'Route'),
+        col('status', 'Status', 'status'),
+        col('ms', 'Time taken', 'ms')
+      ],
       rows: [
         {
           at: '2:15 PM',
           route: 'POST /api/items/:c',
-          status: 'failed 500',
+          status: 500,
+          ms: 6200,
           _drill_metric: 'request',
           _drill_key: 'req-2'
         }
       ],
-      total: 1
+      rows_title: 'Requests that failed, were refused or ran slow',
+      total: 1,
+      detail: {
+        fields: [
+          { label: 'Email', value: 'dana@example.com', kind: 'meta' },
+          { label: 'Role', value: 'Planner', kind: 'meta' },
+          { label: 'Profile', value: 'Open profile', link: '/users/u-1', kind: 'meta' },
+          { label: 'Requests', value: 41_799, kind: 'stat', format: 'number' },
+          { label: 'Average response', value: 44, kind: 'stat', format: 'ms' },
+          { label: 'Server errors', value: 0, kind: 'stat', tone: 'bad' },
+          { label: 'Refused', value: 118, kind: 'stat', tone: 'warn' },
+          { label: 'Over 5 s', value: 9, kind: 'stat', tone: 'warn' },
+          { label: 'Workflow moves', value: 9, kind: 'stat', format: 'number' },
+          { label: 'In the app', value: '7:12 AM – 10:59 PM' },
+          { label: 'Signed in today', value: 'No — still signed in from an earlier day' }
+        ],
+        blocks: []
+      }
     }
   if (metric === 'requests')
     return {

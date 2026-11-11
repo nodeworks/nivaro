@@ -110,8 +110,10 @@ describe('OpsReportView', () => {
     const { host, client } = await mount()
     await click(host.querySelector('[data-ops-kpi="server_errors"]')?.closest('button') ?? null)
     await settle()
-    expect(panel()?.textContent).toContain('POST /api/items/:c')
+    expect(panel()?.textContent).toContain('/api/items/:c')
     expect(client.calls.some((c) => c._params?.metric === 'server_errors')).toBe(true)
+    // one level deep: no path line repeating the title
+    expect(panel()?.querySelector('nav[aria-label="Drill path"]')).toBeNull()
 
     // level 2: the route's requests
     await click(panel()?.querySelector('[data-ops-drill-row="slow_route"]') ?? null)
@@ -132,6 +134,14 @@ describe('OpsReportView', () => {
     await click(panel()?.querySelector('[data-ops-drill-row="person"]') ?? null)
     await settle()
     expect(panel()?.textContent).toContain('their day')
+    // the day reads as a strip of figures, an identity line and a titled list
+    const stats = panel()?.querySelector('[data-ops-drill-stats]')
+    expect(stats?.textContent).toContain('41,799')
+    expect(stats?.textContent).toContain('44 ms')
+    expect(panel()?.querySelector('[data-ops-drill-meta]')?.textContent).toContain(
+      'dana@example.com'
+    )
+    expect(panel()?.textContent).toContain('Requests that failed, were refused or ran slow')
     await click(panel()?.querySelector('[data-ops-drill-back]') ?? null)
     await settle()
     expect(panel()?.querySelector('[data-ops-block="json"]')).not.toBeNull()

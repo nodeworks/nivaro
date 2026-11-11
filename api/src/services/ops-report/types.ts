@@ -613,6 +613,20 @@ export interface OpsDrillColumn {
   type?: 'text' | 'number' | 'ms' | 'usd' | 'time' | 'status'
 }
 
+/** One fact on a leaf level. */
+export interface OpsDrillField {
+  label: string
+  value: string | number | null
+  link?: string | null
+  /** 'meta' = the identity line under the title (label not shown); 'stat' = a figure in the
+   *  summary strip. Unset = a labelled row. */
+  kind?: 'meta' | 'stat'
+  /** How a stat figure formats: 'ms' reads 44 ms / 1.2 s. */
+  format?: 'number' | 'ms'
+  /** A stat that counts trouble: coloured when it is above zero. */
+  tone?: 'bad' | 'warn'
+}
+
 export interface OpsDrill {
   metric: OpsDrillMetric
   key: string | null
@@ -628,13 +642,15 @@ export interface OpsDrill {
    *   `_link` — an app path to the real thing (issue, job run, user, ticket); offered as an
    *     "Open" action inside the drawer, not followed on row click. */
   rows: Array<Record<string, string | number | null>>
+  /** Heading over the rows when the level also has detail (a person's day → their requests). */
+  rows_title?: string
   total: number
   truncated: boolean
   /** Leaf levels (`request`, `issue`, `job_run`, `submission`, `outbound_call`, `mail_message`,
    *  `login`, `person`): the one thing's fields and long text blocks (error body, stack, payload,
    *  response, deadlock statements). Rows may still list related items (a person's requests). */
   detail?: {
-    fields: Array<{ label: string; value: string | number | null; link?: string | null }>
+    fields: OpsDrillField[]
     blocks: Array<{ title: string; text: string; kind?: 'code' | 'json' | 'text' }>
   }
 }
