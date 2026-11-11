@@ -142,6 +142,7 @@ import {
   summaryRulesNeedRole,
   summaryRulesNeedState
 } from '../lib/summary-mode'
+import { FORM_NOT_READY_MESSAGE, formReadyToSave } from '../lib/form-ready'
 import { requestMoveState } from '../lib/move-state'
 import { isReloadingForUpdate, useUnsavedWork } from '../lib/unsaved-work'
 import {
@@ -8708,6 +8709,14 @@ function ItemEditFormView({
 
   // ── Client-side validation ─────────────────────────────────────────────────
   function validateAll(): boolean {
+    // Nothing to check is not "all valid": until the field config and layout
+    // have loaded, allFields is [] and every required field would pass. A slow
+    // network let a person press Create on a blank new Inventory Request and
+    // save it with no zone, project or locations (INV-37593, 2026-11-11).
+    if (!formReadyToSave(allFields)) {
+      toast.info(FORM_NOT_READY_MESSAGE)
+      return false
+    }
     const errs: Record<string, string> = {}
     const changedThisSession = (k: string) => !valuesEqual(draft[k], initialDataRef.current[k])
     for (const f of allFields) {
