@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-11T15:38:52.165Z",
+  "generated_at": "2026-11-11T16:00:05.919Z",
   "releases": [
+    {
+      "version": "0.3.134",
+      "tag": "v0.3.134",
+      "date": "2026-11-11T10:59:43-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "⋯ Move to state targets the addendum being viewed",
+              "hash": "9c0cfb17c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.133",
       "tag": "v0.3.133",
-      "date": "2026-11-11T10:38:32-05:00",
+      "date": "2026-11-11T10:38:52-05:00",
       "sections": [
         {
           "label": "Added",
