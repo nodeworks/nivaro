@@ -1144,7 +1144,13 @@ export async function drill(
             ? [{ title: 'Error', text: scrubText(String(x.error)), kind: 'code' as const }]
             : []),
           ...(x.outcome
-            ? [{ title: 'Outcome', text: scrubText(String(x.outcome)).slice(0, 8000), kind: 'json' as const }]
+            ? [
+                {
+                  title: 'Outcome',
+                  text: scrubText(String(x.outcome)).slice(0, 8000),
+                  kind: 'json' as const
+                }
+              ]
             : []),
           ...(x.progress
             ? [
@@ -1451,7 +1457,9 @@ export async function drill(
             { label: 'Status', value: str(x.status) },
             { label: 'Error', value: str(x.error) }
           ],
-          blocks: text ? [{ title: 'Message', text: scrubText(text).slice(0, 8000), kind: 'text' }] : []
+          blocks: text
+            ? [{ title: 'Message', text: scrubText(text).slice(0, 8000), kind: 'text' }]
+            : []
         }
       )
     }
