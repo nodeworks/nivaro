@@ -198,7 +198,15 @@ describe('BOM upload → Ship-To Contact (M2A internal_contact)', () => {
         </QueryClientProvider>
       )
     )
-    await settle(() => links > 0 && save != null)
+    // Wait for the fields too: a save pressed before the form's fields load is
+    // refused on purpose ("The form is still loading", INV-37593 guard).
+    await settle(
+      () =>
+        links > 0 &&
+        save != null &&
+        !!host.textContent?.includes('Ship-To Contact') &&
+        !!host.textContent?.includes('Title')
+    )
     expect(links).toBe(1)
     await act(async () => save?.())
     await settle(() => srv.created.length > 0, 250)
