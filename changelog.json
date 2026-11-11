@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-11T20:03:24.545Z",
+  "generated_at": "2026-11-11T21:08:50.281Z",
   "releases": [
+    {
+      "version": "0.3.141",
+      "tag": "v0.3.141",
+      "date": "2026-11-11T16:08:34-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "erp",
+              "text": "external contact emails reach MDSi",
+              "hash": "c0340c91a"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.140",
       "tag": "v0.3.140",
-      "date": "2026-11-11T15:03:02-05:00",
+      "date": "2026-11-11T15:03:24-05:00",
       "sections": [
         {
           "label": "Added",
