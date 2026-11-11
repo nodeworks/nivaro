@@ -52,6 +52,50 @@ function allowedList(rel: CMSRelation | undefined): string[] {
   return parseAllowedCollections(rel?.one_allowed_collections)
 }
 
+/** The junction column naming each link's collection on an M2A leg; null for a plain M2M. */
+export function m2aDiscriminator(otherRel: CMSRelation | undefined): string | null {
+  if (!otherRel || otherRel.one_collection) return null
+  if (allowedList(otherRel).length < 2) return null
+  return otherRel.one_collection_field || 'collection'
+}
+
+/**
+ * The collection one junction row's item lives in. On an M2A leg each row names
+ * its own (a ship-to contact is a person OR an external email); legacy
+ * `directus_users` rows live in nivaro_users. Anything else = the picker's table.
+ */
+export function m2aRowCollection(
+  row: Record<string, unknown> | null | undefined,
+  discriminator: string | null,
+  fallback: string | null
+): string | null {
+  if (!discriminator || !row) return fallback
+  const v = row[discriminator]
+  if (typeof v !== 'string' || !v.trim()) return fallback
+  const c = v.trim()
+  return c === 'directus_users' || c === 'nivaro_users' ? 'nivaro_users' : c
+}
+
+/** A linked record labelled by its OWN collection's display template (an M2A
+ *  link outside the picker's table, e.g. an external email: `{{email}}`). */
+export function OwnCollectionLabel({ collection, id }: { collection: string; id: unknown }) {
+  const client = useNivaroClient()
+  const { data: meta } = useQuery({
+    queryKey: ['col-meta', collection],
+    queryFn: () =>
+      client
+        .request<{ data: { display_template?: string } }>(get(`/collections/${collection}`))
+        .then((r) => r.data),
+    staleTime: 300_000,
+    retry: false
+  })
+  return (
+    <span data-m2a-collection={collection}>
+      <RelatedItemLabel collection={collection} id={id} displayTemplate={meta?.display_template} />
+    </span>
+  )
+}
+
 /** How many collections an M2A companion leg allows (0 for a plain M2M). */
 export function m2aAllowedCount(otherRel: CMSRelation | undefined): number {
   if (!otherRel || otherRel.one_collection) return 0
@@ -127,6 +171,8 @@ export function M2MCombobox({
   const junctionField = relation.junction_field ?? ''
   const manyField = relation.many_field ?? ''
   const stagingKey = relation.one_field ?? `${relation.many_collection}.${junctionField}`
+  // M2A: each link names its own collection (a person OR an external email).
+  const disc = m2aDiscriminator(otherRel)
 
   const { data: colMeta } = useQuery({
     queryKey: ['col-meta', relatedCollection],
@@ -140,20 +186,30 @@ export function M2MCombobox({
   })
 
   const { data: junctionItems = [] } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['m2m-items', relation.many_collection, manyField, parentId],
+    // An M2A read carries the discriminator: its own key (same prefix, so every
+    // ['m2m-items', junction, …] invalidation still refreshes it).
+    queryKey: [
+      'm2m-items',
+      relation.many_collection,
+      manyField,
+      parentId,
+      ...(disc ? ['m2a'] : [])
+    ],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
           get(`/items/${relation.many_collection}`, {
             filter: JSON.stringify({ [manyField]: { _eq: parentId } }),
             limit: 200,
-            fields: `id,${junctionField}`
+            fields: `id,${junctionField}${disc ? `,${disc}` : ''}`
           })
         )
         .then((r) => r.data ?? []),
     staleTime: 30_000,
     enabled: !!parentId && parentId !== 'new'
   })
+  const rowCollection = (ji: Record<string, unknown>) =>
+    m2aRowCollection(ji, disc, relatedCollection)
 
   // nivaro_users options mirror listUsers(): redacted accounts never appear
   // and suspended users are not pickable (committed values still display).
@@ -196,7 +252,15 @@ export function M2MCombobox({
   const stagedUnlinks = staging?.getStagedUnlinks(stagingKey) ?? new Set()
   const committedItems = junctionItems.filter((i) => !stagedUnlinks.has(i.id))
   const committedIds = new Set(committedItems.map((i) => String(i[junctionField])))
-  const committedIdsList = [...committedIds]
+  // Only links into the picker's own table can be checked against its options
+  // (an external email is never "no longer an available option" for people).
+  const committedIdsList = [
+    ...new Set(
+      committedItems
+        .filter((i) => rowCollection(i) === relatedCollection)
+        .map((i) => String(i[junctionField]))
+    )
+  ]
 
   const multiAvailabilityFilter = extraFilter
     ? JSON.stringify({ _and: [{ id: { _in: committedIdsList } }, extraFilter] })
@@ -319,7 +383,9 @@ export function M2MCombobox({
               >
                 {committedItems.map((ji) => {
                   const relId = ji[junctionField]
-                  const isStaleTag = staleCommittedIds.has(String(relId))
+                  const own = rowCollection(ji)
+                  const foreign = own !== relatedCollection
+                  const isStaleTag = !foreign && staleCommittedIds.has(String(relId))
                   return (
                     <span
                       key={String(ji.id)}
@@ -334,14 +400,18 @@ export function M2MCombobox({
                       )}
                     >
                       {isStaleTag && <AlertTriangle className='h-3 w-3 shrink-0 text-amber-500' />}
-                      {relatedCollection &&
-                        (drilldown && drill ? (
+                      {own &&
+                        (foreign ? (
+                          // An external email (or another allowed kind): its own
+                          // table, its own label — never read as a person.
+                          <OwnCollectionLabel collection={own} id={relId} />
+                        ) : drilldown && drill ? (
                           <button
                             type='button'
                             title='Open detail panel'
                             onClick={() =>
                               drill.open({
-                                collection: relatedCollection,
+                                collection: own,
                                 itemId: String(relId),
                                 layoutId: drilldown.layout_id,
                                 width: drilldown.width
@@ -350,14 +420,14 @@ export function M2MCombobox({
                             className='underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-nvr-cyan dark:hover:text-nvr-cyan'
                           >
                             <RelatedItemLabel
-                              collection={relatedCollection}
+                              collection={own}
                               id={relId}
                               displayTemplate={colMeta?.display_template}
                             />
                           </button>
                         ) : (
                           <RelatedItemLabel
-                            collection={relatedCollection}
+                            collection={own}
                             id={relId}
                             displayTemplate={colMeta?.display_template}
                           />
@@ -645,17 +715,25 @@ export function M2MSingleSelectCombobox({
     retry: false
   })
 
+  // M2A: the link names its own collection (a person OR an external email).
+  const disc = m2aDiscriminator(otherRel)
   const { data: junctionItems = [], isFetching: isLoadingJunction } = useQuery<
     Record<string, unknown>[]
   >({
-    queryKey: ['m2m-items', relation.many_collection, manyField, parentId],
+    queryKey: [
+      'm2m-items',
+      relation.many_collection,
+      manyField,
+      parentId,
+      ...(disc ? ['m2a'] : [])
+    ],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
           get(`/items/${relation.many_collection}`, {
             filter: JSON.stringify({ [manyField]: { _eq: parentId } }),
             limit: 1,
-            fields: `id,${junctionField}`
+            fields: `id,${junctionField}${disc ? `,${disc}` : ''}`
           })
         )
         .then((r) => r.data ?? []),
@@ -715,13 +793,29 @@ export function M2MSingleSelectCombobox({
     singleOnCountChangeRef.current?.(currentRelatedId != null ? 1 : 0)
   }, [currentRelatedId])
 
-  const { data: currentItemData } = useQuery<Record<string, unknown>>({
-    queryKey: ['relation-single', relatedCollection, String(currentRelatedId)],
+  // A picked value is always from the picker's table; the stored link names its own.
+  const currentCollection =
+    stagedRelatedId != null
+      ? relatedCollection
+      : m2aRowCollection(committedItem, disc, relatedCollection)
+  const currentForeign = currentCollection !== relatedCollection
+  const { data: ownMeta } = useQuery({
+    queryKey: ['col-meta', currentCollection],
     queryFn: () =>
-      readRow(relatedCollection as string, currentRelatedId as string | number) as Promise<
+      client
+        .request<{ data: { display_template?: string } }>(get(`/collections/${currentCollection}`))
+        .then((r) => r.data),
+    enabled: currentForeign && !!currentCollection,
+    staleTime: 300_000,
+    retry: false
+  })
+  const { data: currentItemData } = useQuery<Record<string, unknown>>({
+    queryKey: ['relation-single', currentCollection, String(currentRelatedId)],
+    queryFn: () =>
+      readRow(currentCollection as string, currentRelatedId as string | number) as Promise<
         Record<string, unknown>
       >,
-    enabled: !!relatedCollection && currentRelatedId != null,
+    enabled: !!currentCollection && currentRelatedId != null,
     staleTime: 60_000
   })
 
@@ -742,10 +836,12 @@ export function M2MSingleSelectCombobox({
           })
         )
         .then((r) => r.data ?? []),
-    enabled: !!relatedCollection && currentRelatedId != null && !!currentItemData,
+    enabled:
+      !!relatedCollection && !currentForeign && currentRelatedId != null && !!currentItemData,
     staleTime: 30_000
   })
-  const isSingleStale = singleAvailabilityData !== undefined && singleAvailabilityData.length === 0
+  const isSingleStale =
+    !currentForeign && singleAvailabilityData !== undefined && singleAvailabilityData.length === 0
   const singleStaleTip = useStaleTip(isSingleStale)
 
   // Reads colMeta, not a const declared below: useM2MOptions calls it first.
@@ -755,10 +851,15 @@ export function M2MSingleSelectCombobox({
       ? applyDisplayTemplate(tmpl, item)
       : String(item.name ?? item.title ?? item.label ?? item.id ?? '')
   }
-  const currentOpt =
-    options.find((o) => String(o.id) === String(currentRelatedId)) ?? currentItemData
+  const currentOpt = currentForeign
+    ? currentItemData
+    : (options.find((o) => String(o.id) === String(currentRelatedId)) ?? currentItemData)
   const isLoadingLabel = currentRelatedId != null && !currentItemData && !currentOpt
-  const currentLabel = currentOpt ? getLabel(currentOpt) : null
+  const currentLabel = currentOpt
+    ? currentForeign
+      ? applyDisplayTemplate(ownMeta?.display_template ?? null, currentOpt)
+      : getLabel(currentOpt)
+    : null
 
   if (readOnly) {
     return (
