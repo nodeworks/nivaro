@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-11-11T16:11:19.315Z",
+  "generated_at": "2026-11-11T16:59:04.537Z",
   "releases": [
+    {
+      "version": "0.3.136",
+      "tag": "v0.3.136",
+      "date": "2026-11-11T11:58:44-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "bulk push",
+              "text": "long pushes run in the background with live row progress",
+              "hash": "ec0ff19f2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ops-report",
+              "text": "backlog and SLA drills open from the tile; keyed drills find records",
+              "hash": "6f7197968"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "ops-report",
+              "text": "format drill.ts",
+              "hash": "05afac746"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.135",
       "tag": "v0.3.135",
-      "date": "2026-11-11T11:10:58-05:00",
+      "date": "2026-11-11T11:11:19-05:00",
       "sections": [
         {
           "label": "Fixed",
