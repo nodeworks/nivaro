@@ -34,6 +34,11 @@ vi.mock('../../../services/addendum-render.js', () => ({
   buildAddendumRenderOverlay: overlay
 }))
 
+const applyKeys = new Set(['workflow_lines'])
+vi.mock('../../../services/addendum-approve.js', () => ({
+  addendumApplyKeys: async () => applyKeys
+}))
+
 import { fetchRecordForConditions } from '../../../services/workflow-conditions.js'
 
 describe('fetchRecordForConditions — addendums', () => {
@@ -41,11 +46,23 @@ describe('fetchRecordForConditions — addendums', () => {
     const rec = await fetchRecordForConditions('nivaro_addendums', 'A2EDFAAF')
     expect(rec.requisition_amount).toBe(0)
     expect(rec.project).toBe(7895)
+    // Only the keys approval would apply are overlaid (data is author-writable).
     expect(overlay).toHaveBeenCalledWith(
       'workflows',
       expect.objectContaining({ id: 371403 }),
-      'A2EDFAAF'
+      'A2EDFAAF',
+      applyKeys
     )
+  })
+
+  it('never lets the overlay change the record id', async () => {
+    overlay.mockResolvedValueOnce({
+      item: { ...parent, id: 1, requisition_amount: 0 },
+      childRowsOverride: {},
+      title: null
+    } as never)
+    const rec = await fetchRecordForConditions('nivaro_addendums', 'A2EDFAAF')
+    expect(rec.id).toBe(371403)
   })
 
   it('keeps the stored parent when the overlay has nothing to say', async () => {

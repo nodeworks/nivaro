@@ -1852,7 +1852,13 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
         const { getApp } = await import('./io-holder.js')
         // An auto transition has no person; the last one who moved it approves,
         // or its line changes are skipped (TP26-79847).
-        const approver = opts.userId ?? (await addendumMachineApprover(String(instance.id)))
+        const author = (
+          (await db('nivaro_addendums').where({ id: instance.item }).first('created_by')) as
+            | { created_by: string | null }
+            | undefined
+        )?.created_by
+        const approver =
+          opts.userId ?? (await addendumMachineApprover(String(instance.id), author ?? null))
         await applyAddendumApproval(String(instance.item), approver, {
           allowedFromStatuses: ['draft', 'review'],
           app: getApp()

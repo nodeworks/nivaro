@@ -83,7 +83,11 @@ function rowMatches(row: Record<string, unknown>, filter: FilterSpec | undefined
 export async function buildAddendumRenderOverlay(
   collection: string,
   item: Record<string, unknown>,
-  addendumId: string
+  addendumId: string,
+  /** Only these `data` keys (scalars and line aliases) are overlaid — the keys
+   *  approval would actually apply. Rules judge with it so a hand-edited
+   *  `data` can't steer a transition with values approval would drop. */
+  onlyKeys?: Set<string>
 ): Promise<AddendumRenderOverlay | null> {
   const info = (await loadAddendums([addendumId])).get(addendumId)
   if (!info || info.parentCollection !== collection) return null
@@ -102,6 +106,7 @@ export async function buildAddendumRenderOverlay(
   const childRowsOverride: Record<string, Record<string, unknown>[]> = {}
   for (const [key, value] of Object.entries(data)) {
     if (key.startsWith('__')) continue
+    if (onlyKeys && (!onlyKeys.has(key) || key === 'id')) continue
     if (Array.isArray(value)) childRowsOverride[key] = value as Record<string, unknown>[]
     else if (value !== undefined) merged[key] = value
   }

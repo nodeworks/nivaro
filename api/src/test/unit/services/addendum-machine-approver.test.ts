@@ -17,10 +17,21 @@ vi.mock('../../../db/index.js', () => {
       Object.assign(state, a as object)
       return q
     }
+    let notUser: string | null = null
     q.whereNotNull = () => q
+    q.whereNot = (_c: string, v: string) => {
+      notUser = v
+      return q
+    }
+    q.modify = (fn: (x: unknown) => void) => {
+      fn(q)
+      return q
+    }
     q.orderBy = () => q
     q.first = async () =>
-      [...rows].reverse().find((r) => r.user != null && r.origin !== 'machine') ?? undefined
+      [...rows]
+        .reverse()
+        .find((r) => r.user != null && r.origin !== 'machine' && r.user !== notUser) ?? undefined
     q.select = () => q
     return q
   }
@@ -39,6 +50,17 @@ describe('addendumMachineApprover', () => {
     ]
     await expect(addendumMachineApprover('inst-1')).resolves.toBe('submitter')
     expect(calls[0]).toEqual({ where: { instance: 'inst-1' } })
+  })
+
+  it('never names the author as approver of their own change', async () => {
+    rows = [
+      { user: 'level5', origin: 'person' },
+      { user: 'author', origin: 'person' },
+      { user: null, origin: 'machine' }
+    ]
+    await expect(addendumMachineApprover('inst-3', 'author')).resolves.toBe('level5')
+    rows = [{ user: 'author', origin: 'person' }]
+    await expect(addendumMachineApprover('inst-4', 'author')).resolves.toBeNull()
   })
 
   it('is null when no person ever moved it', async () => {

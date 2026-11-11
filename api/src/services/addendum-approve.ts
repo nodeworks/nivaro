@@ -88,6 +88,20 @@ export async function getAllowedAddendumFields(
   )
 }
 
+/** The `data` keys approval would write for this addendum (layout allow-list
+ *  minus blocked columns) — what transition rules may judge it by. */
+export async function addendumApplyKeys(
+  collection: string,
+  addendumId: string
+): Promise<Set<string>> {
+  const row = (await db('nivaro_addendums')
+    .where({ id: addendumId })
+    .first('addendum_layout_id')) as { addendum_layout_id: number | null } | undefined
+  if (!row) return new Set()
+  const allowed = await getAllowedAddendumFields(collection, row.addendum_layout_id)
+  return new Set([...allowed].filter((k) => !PARENT_WRITE_BLOCKED_COLUMNS.has(k)))
+}
+
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /**
@@ -168,12 +182,19 @@ async function applyGuardedLineChanges(
  * changes have nobody to land as and were skipped while the addendum still
  * read Approved (TP26-79847, 2026-11-11). Null when no person ever moved it.
  */
-export async function addendumMachineApprover(instanceId: string): Promise<string | null> {
+export async function addendumMachineApprover(
+  instanceId: string,
+  /** The addendum's author — never stands in for an approver of their own change. */
+  authorId?: string | null
+): Promise<string | null> {
   try {
     const row = (await db('nivaro_workflow_history')
       .where({ instance: instanceId })
       .whereNotNull('user')
       .where((q) => q.whereNull('origin').orWhereNot('origin', 'machine'))
+      .modify((q) => {
+        if (authorId) q.whereNot('user', authorId)
+      })
       .orderBy('id', 'desc')
       .first('user')) as { user: string | null } | undefined
     return row?.user ? String(row.user) : null

@@ -421,8 +421,11 @@ export async function fetchRecordForConditions(
   if (addendumId && row(record)) {
     try {
       const { buildAddendumRenderOverlay } = await import('./addendum-render.js')
-      const overlay = await buildAddendumRenderOverlay(collection, record, addendumId)
-      if (overlay) record = { ...overlay.item }
+      const { addendumApplyKeys } = await import('./addendum-approve.js')
+      // Only what approval would apply — `data` is author-writable JSON.
+      const keys = await addendumApplyKeys(collection, addendumId)
+      const overlay = await buildAddendumRenderOverlay(collection, record, addendumId, keys)
+      if (overlay) record = { ...overlay.item, id: record.id }
     } catch (err) {
       if (opts.strict) throw err
     }
