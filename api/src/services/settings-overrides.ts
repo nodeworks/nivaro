@@ -56,6 +56,8 @@ export const INSTANCE_RESERVED_KEYS = [
   'huddle',
   'chaos',
   'recovery',
+  // Daily operations report (services/ops-report/settings.ts): on/off, window, model, cap.
+  'ops_report',
   // Phone push relay (services/push-relay.ts): relay key + content mode.
   'mobile_push',
   // Label house style for the layout lint (services/layout-style.ts, #3184).

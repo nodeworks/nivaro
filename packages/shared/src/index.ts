@@ -470,6 +470,8 @@ export {
   type TuningSummary
 } from './components/ops/DbTuningView'
 export { type OpsTaskRow, type OpsTaskRun, OpsTasksView } from './components/ops/OpsTasksView'
+export type { OpsTab } from './components/ops-report/format'
+export { OpsReportView, type OpsReportViewProps } from './components/ops-report/OpsReportView'
 export type {
   PageRendererPage,
   PageRendererProps,

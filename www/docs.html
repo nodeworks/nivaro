@@ -574,6 +574,7 @@
           <a class="docs-nav-item" data-section="journey-trail" href="#journey-trail">Journey Trail</a>
           <a class="docs-nav-item" data-section="session-replay" href="#session-replay">Session Replay</a>
           <a class="docs-nav-item" data-section="health-dashboard" href="#health-dashboard">Health Dashboard</a>
+          <a class="docs-nav-item" data-section="ops-daily-report" href="#ops-daily-report">Daily Report</a>
           <a class="docs-nav-item" data-section="realtime-pipeline" href="#realtime-pipeline">Realtime Event Pipeline</a>
           <a class="docs-nav-item" data-section="realtime-load-test" href="#realtime-load-test">Realtime Load Test</a>
           <a class="docs-nav-item" data-section="realtime-presence-load" href="#realtime-presence-load">Presence Load &amp; Stall Alerts</a>
@@ -17831,6 +17832,16 @@ GET /api/global-search/preview?collection=customers&amp;id=cust-123
   "state": { "label": "In review", "color": "#00ceff" }, "owners": [{ "id": "…", "name": "Sam Ray" }],
   "fields": [{ "label": "City", "value": "Denver" }], "updated_at": "…", "updated_by": "Ana Acme" } }
 
+// Linked records for the preview's "Linked" section, both ways, read as you: what the record
+// points at (project, vendor …), what points at it, and what a junction links (a PO's
+// workflows). Up to 5 per group with the group's total; groups you cannot read are left out;
+// system and junction tables never listed. 404 when you cannot open the record itself.
+GET /api/global-search/preview/linked?collection=purchase_orders&amp;id=158658
+{ "data": [ { "collection": "workflows", "title": "Workflows", "direction": "from", "total": 1,
+    "items": [{ "id": "372896", "label": "MM26-67370" }] },
+  { "collection": "projects", "title": "Projects", "direction": "to", "total": 1,
+    "items": [{ "id": "7917", "label": "201174 - FREEDOM REGION METRO E" }] } ] }
+
 // Labels for records shown without one (recents / pins saved with a bare id), read as you,
 // batched (at most 100). A record never shows its id: its label, else a business id
 // column (workflow_id…), else the collection's name alone — also when you cannot read it.
@@ -19477,6 +19488,44 @@ scrape_configs:
           <p class="doc-p">GET /api/extensions also carries each extension’s <code class="doc-code">build</code>: the export’s own <code class="doc-code">build</code> value, or else the <code class="doc-code">.release-sha</code> file a deploy writes beside the extension. A deploy gate compares it with the release it mounted.</p>
           <div class="doc-note">GET /api/health remains the lightweight unauthenticated liveness check; it reports latency as degraded, so do not use it for routing. The detailed endpoint requires authentication.</div>
           <!-- /SYNC:health-dashboard -->
+        </div>
+
+        <!-- DAILY REPORT -->
+        <div class="doc-section" id="s-ops-daily-report" data-toc='[{"id":"ops-daily-report","label":"Daily report"},{"id":"ops-daily-report-how","label":"How a report is made"},{"id":"ops-daily-report-settings","label":"Settings and email"},{"id":"ops-daily-report-api","label":"API"},{"id":"ops-daily-report-extensions","label":"Extension sections"}]'>
+          <!-- SYNC:ops-daily-report -->
+          <h1 class="doc-h1" id="ops-daily-report">Daily report</h1>
+          <p class="doc-p">Every night Nivaro writes a post-mortem of the day: what people did, how fast the app answered, what failed, what partners refused, what changed, and why. It lives at Health → Daily report (/health/daily-report; efp-new hosts it at /admin/daily-report). Every number on the page opens the rows behind it in a side drawer, down to a single request, issue, job run, partner send or person — you never leave the page, and a row that is a record opens in the record drawer with "Open full record".</p>
+          <h2 class="doc-h2" id="ops-daily-report-how">How a report is made</h2>
+          <ul class="doc-ul">
+            <li>The window: one day of the instance, 7 AM to 8 PM by default (the SLA time zone). The nightly run fires at :05 after the window closes; Run now works any time.</li>
+            <li>The numbers (no AI): people (active vs signed in today vs still signed in from an earlier day vs new accounts, View-as, machine callers), traffic, speed, errors, deploys and drains, deadlocks, issues, jobs, partner sends and calls against their 7-day normal, imports, mail, notifications, work done, backlog and SLA misses, search, config changes, security, capacity, pages, browser errors, feature adoption, support, AI use, data quality, who holds the waiting work, tomorrow's watch list, and extension sections such as business volume.</li>
+            <li>Leads (no AI): for every slow burst, deadlock, server error and cluster of partner refusals, what else happened at that minute — writes by origin, jobs, deploys, admin bulk actions, partner calls — and, for an "Invalid column" error, what the data model says.</li>
+            <li>The bug tracker (no AI): today's errors become stable keys and are matched with yesterday's, so each bug reads new, open, fixed (with the version deployed after it stopped) or came back.</li>
+            <li>The health score (no AI): 100 minus capped points for server errors, deadlocks, slow requests, failed sends, alarms, failed jobs, freezes, people who hit trouble and browser errors. The verdict falls back to it when AI is off.</li>
+            <li>The investigation (AI, the chat model): reads the numbers, leads and tracker and drills into the same rows an administrator can click (about 24 drill calls), then hands in a verdict, headline, summary, incidents with cause and evidence, people to contact and a watch list. Cost is recorded on each report (about $0.50 a night on EFP's gateway).</li>
+          </ul>
+          <h2 class="doc-h2" id="ops-daily-report-settings">Settings and email</h2>
+          <ul class="doc-ul">
+            <li>Off until turned on (Daily report → Settings): window start/end hour, model, token cap, in-app notice, and a master switch for email.</li>
+            <li>Email is opt-in per administrator: "Email me this report" on the page (preferences.ops_report_email). Everyone else gets the in-app notice only.</li>
+            <li>Stored per instance under the <code class="doc-code">ops_report</code> key of nivaro_settings_overrides, so a copied database never turns it on.</li>
+          </ul>
+          <h2 class="doc-h2" id="ops-daily-report-api">API</h2>
+          <pre class="doc-pre"><code>GET   /api/ops-reports?limit=60                 // admin; newest first
+GET   /api/ops-reports/trends?days=90            // one point per day (newest run), oldest first
+GET   /api/ops-reports/:id                       // the report: digest, analysis, tracker, comparison
+GET   /api/ops-reports/:id/drill?metric=&amp;key=    // rows behind one number; leaf metrics return detail
+POST  /api/ops-reports/run {day?}                // 202 { id }; poll GET /:id
+GET   /api/ops-reports/settings                  // + email_me for the caller
+PATCH /api/ops-reports/settings                  // 400 { error, fields: { &lt;setting&gt;: message } }
+PATCH /api/users/me/preferences { ops_report_email: true | null }</code></pre>
+          <h2 class="doc-h2" id="ops-daily-report-extensions">Extension sections</h2>
+          <pre class="doc-pre"><code>ctx.opsReport?.registerSection('business', 'Business volume', async (win) =&gt; [
+  { key: 'requested_usd', label: 'Amount requested', value: 35_882_471, unit: 'usd', week_avg: 1_329_985 }
+])
+// each row also becomes a KPI "business.requested_usd" that Trends and Compare chart</code></pre>
+          <div class="doc-note">Reports are kept a year in nivaro_ops_reports (migration 525), a per-environment table that config promotion never copies.</div>
+          <!-- /SYNC:ops-daily-report -->
         </div>
 
         <div class="doc-section" id="s-realtime-pipeline" data-toc='[{"id":"realtime-pipeline","label":"Realtime Event Pipeline"},{"id":"realtime-pipeline-journal","label":"Catching up after a long absence"},{"id":"realtime-pipeline-stream","label":"Across servers"},{"id":"realtime-pipeline-raw","label":"Changes made outside the API"},{"id":"realtime-pipeline-probe","label":"Delivery probe"}]'>

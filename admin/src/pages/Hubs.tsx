@@ -33,7 +33,8 @@ const SCREENS: Record<string, Screens> = {
     monitors: lazy(() => import('@/pages/Monitors')),
     telemetry: page(() => import('@/pages/Telemetry'), 'TelemetryPage'),
     errors: page(() => import('@/pages/ErrorClusters'), 'ErrorClustersPage'),
-    'request-story': page(() => import('@/pages/RequestStory'), 'RequestStoryPage')
+    'request-story': page(() => import('@/pages/RequestStory'), 'RequestStoryPage'),
+    'daily-report': page(() => import('@/pages/DailyReport'), 'DailyReportPage')
   },
   '/environments': {
     '': lazy(() => import('@/pages/Environments')),

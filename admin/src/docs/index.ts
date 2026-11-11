@@ -59,6 +59,7 @@ export * from './sections/low-code.js'
 export * from './sections/mobile-app.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
+export * from './sections/ops-daily-report.js'
 export * from './sections/offline-popout.js'
 export * from './sections/ops-observability.js'
 export * from './sections/ops-tooling.js'
@@ -348,6 +349,7 @@ import {
   obsTrafficMapPlatform
 } from './sections/observability.js'
 import { collabOfflinePopout } from './sections/offline-popout.js'
+import { opsDailyReportDocs } from './sections/ops-daily-report.js'
 import {
   dbHealthDocs,
   deploysVersionsDocs,
@@ -953,6 +955,7 @@ export const navSections: NavGroup[] = [
       journeyTrailDocs,
       sessionReplayDocs,
       obsHealthDashboard,
+      opsDailyReportDocs,
       obsRealtimePipeline,
       realtimeLoadTest,
       realtimePresenceLoad,

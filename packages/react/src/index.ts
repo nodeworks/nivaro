@@ -369,6 +369,8 @@ export {
   type ImportStats,
   INTEGRATIONS_FILTER_OPTIONS,
   InactiveUserLinksView,
+  OpsReportView,
+  type OpsReportViewProps,
   InboundCallersView,
   InboundRequestPopover,
   InboundView,

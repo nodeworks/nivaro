@@ -306,6 +306,7 @@ import { syncJobsRoutes } from './sync-jobs.js'
 import { tasksRoutes } from './tasks.js'
 import { teamMiscRoutes, teamUserRoutes } from './team.js'
 import { teamsBotRoutes } from './teams-bot.js'
+import { opsReportRoutes } from './ops-reports.js'
 import { telemetryRoutes } from './telemetry.js'
 import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
@@ -716,6 +717,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(remindersRoutes, { prefix: '/reminders' })
   await app.register(opsDbRoutes, { prefix: '/ops-db' })
   await app.register(telemetryRoutes, { prefix: '/telemetry' })
+  // Daily operations report (Health → Daily report): admin only.
+  await app.register(opsReportRoutes, { prefix: '/ops-reports' })
   await app.register(infrastructureRoutes, { prefix: '/infrastructure' })
   await app.register(opsRuntimeRoutes, { prefix: '/ops-runtime' })
   // Cache switches as configuration (Database → Caches); also starts their 15 s re-read.

@@ -1,0 +1,58 @@
+{% layout 'base' %}
+{% block content %}
+{%- comment -%}
+  The daily operations report, sent to administrators who opted in, after the nightly run
+  (services/ops-report/run.ts tellAdmins). Built to read on a phone: one column, nothing side by
+  side that can squeeze a sentence into a word per line.
+  Data: day_label, verdict (Healthy | Watch | Bad day), score, headline, people [{label, value}],
+  incidents [{title, when, severity: high|medium|low, impact}], worse [{label, points}],
+  more_incidents (count not shown), report_url.
+{%- endcomment -%}
+{%- assign f = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" -%}
+{%- assign vc = '#15803d' -%}{%- if verdict == 'Bad day' -%}{%- assign vc = '#b91c1c' -%}{%- elsif verdict == 'Watch' -%}{%- assign vc = '#b45309' -%}{%- endif -%}
+{% assign _heading = 'Daily report · ' | append: day_label %}{% render 'partials/heading', text: _heading %}
+<p style="margin:0 0 6px;font-family:{{ f }};font-size:14px;line-height:1.4;font-weight:600;color:{{ vc }};">{{ verdict }} &middot; health {{ score }}/100</p>
+<p style="margin:0 0 22px;font-family:{{ f }};font-size:15px;line-height:1.55;color:#1e293b;">{{ headline }}</p>
+
+{%- if people.size > 0 -%}
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 24px;border:1px solid #dde3ea;border-radius:8px;border-collapse:separate;">
+{%- for p in people -%}
+  <tr>
+    <td style="padding:10px 14px;{% unless forloop.first %}border-top:1px solid #eef2f6;{% endunless %}font-family:{{ f }};font-size:13px;line-height:1.4;color:#475569;">{{ p.label }}</td>
+    <td align="right" style="padding:10px 14px;{% unless forloop.first %}border-top:1px solid #eef2f6;{% endunless %}font-family:{{ f }};font-size:15px;font-weight:600;color:#172940;white-space:nowrap;">{{ p.value }}</td>
+  </tr>
+{%- endfor -%}
+</table>
+{%- endif -%}
+
+{%- if incidents.size > 0 -%}
+<p style="margin:0 0 10px;font-family:{{ f }};font-size:15px;font-weight:600;color:#172940;">What happened</p>
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 24px;">
+{%- for i in incidents -%}
+  {%- assign sc = '#64748b' -%}{%- assign sw = 'Low' -%}
+  {%- if i.severity == 'high' -%}{%- assign sc = '#b91c1c' -%}{%- assign sw = 'High' -%}{%- elsif i.severity == 'medium' -%}{%- assign sc = '#b45309' -%}{%- assign sw = 'Medium' -%}{%- endif -%}
+  <tr>
+    <td style="padding:12px 0;{% unless forloop.first %}border-top:1px solid #eef2f6;{% endunless %}font-family:{{ f }};">
+      <div style="font-size:14px;line-height:1.45;font-weight:600;color:#0f172a;">{{ i.title }}</div>
+      <div style="margin-top:3px;font-size:12.5px;line-height:1.5;color:#475569;"><span style="color:{{ sc }};font-weight:600;">{{ sw }}</span> &middot; {{ i.when }}{% if i.impact and i.impact != '' %} &middot; {{ i.impact }}{% endif %}</div>
+    </td>
+  </tr>
+{%- endfor -%}
+</table>
+{%- endif -%}
+
+{%- if worse.size > 0 -%}
+<p style="margin:0 0 10px;font-family:{{ f }};font-size:15px;font-weight:600;color:#172940;">What took points off</p>
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 24px;">
+{%- for w in worse -%}
+  <tr>
+    <td style="padding:7px 0;{% unless forloop.first %}border-top:1px solid #eef2f6;{% endunless %}font-family:{{ f }};font-size:13px;line-height:1.45;color:#334155;">{{ w.label }}</td>
+    <td align="right" style="padding:7px 0 7px 12px;{% unless forloop.first %}border-top:1px solid #eef2f6;{% endunless %}font-family:{{ f }};font-size:13px;font-weight:600;color:#b91c1c;white-space:nowrap;">&minus;{{ w.points }}</td>
+  </tr>
+{%- endfor -%}
+</table>
+{%- endif -%}
+
+{% render 'partials/button', url: report_url, label: 'Open the full report' %}
+<p style="margin:0;font-family:{{ f }};font-size:12px;line-height:1.5;color:#64748b;">Every number in the report opens the rows behind it. You get this email because you turned on &ldquo;Email me this report&rdquo; in Health &rsaquo; Daily report.</p>
+{% endblock %}

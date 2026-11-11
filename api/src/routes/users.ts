@@ -1510,6 +1510,14 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.ai_weekly_summary = v === true ? true : null
     }
+    if ('ops_report_email' in body) {
+      // Daily operations report by email (administrators; opt-in, off until they turn it on).
+      const v = body.ops_report_email
+      if (v !== null && typeof v !== 'boolean') {
+        return reply.code(400).send({ error: 'ops_report_email must be true, false or null' })
+      }
+      patch.ops_report_email = v === true ? true : null
+    }
     if ('traffic_pins' in body) {
       // #1125 — the Traffic Map watch list: entity keys (`<lane>/<entity>`), at most 40.
       const v = body.traffic_pins

@@ -1,4 +1,5 @@
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { registerOpsSection } from '../services/ops-report/sections.js'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
@@ -1020,6 +1021,9 @@ export function registrationMembers(
           }
         }
       }
+    },
+    opsReport: {
+      registerSection: (key, title, build) => registerOpsSection(key, title, build)
     },
     pipelines: {
       ownedItemIds: (userId, collection) =>

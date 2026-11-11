@@ -424,6 +424,27 @@ export interface ExtensionContext {
       opts?: { label?: string }
     ): (req: Req, reply: Reply) => Promise<R>
   }
+  /** The daily operations report (Health → Daily report). Optional: older APIs do not offer it. */
+  opsReport?: {
+    /** Add a section of numbers to every daily report (e.g. business volume). `build` gets the
+     *  report window and returns rows; each row also becomes a KPI `<key>.<row key>` that trends
+     *  and Compare chart. A throwing build leaves the section out of that day's report. */
+    registerSection(
+      key: string,
+      title: string,
+      build: (win: { day: string; start: Date; end: Date; tz: string }) => Promise<
+        Array<{
+          key?: string
+          label: string
+          value: number
+          unit?: 'ms' | 'usd' | 'count' | 'pct'
+          week_avg?: number | null
+          note?: string
+          better?: 'up' | 'down' | null
+        }>
+      >
+    ): void
+  }
   /** Who holds what in the pipelines. Optional: older APIs do not offer it. */
   pipelines?: {
     /** Record ids of `collection` whose CURRENT step `userId` owns — the My

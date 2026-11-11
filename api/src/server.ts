@@ -2609,6 +2609,40 @@ export async function buildServer() {
             "Nightly 03:30 — reads every procedure, function, view and trigger definition (plus import definitions' stored procedure bodies and custom queries), checks them for NULL-unsafe MERGE keys (with live NULL and duplicate counts), writes without WHERE, transactions without XACT_ABORT, local-time clocks, NOT IN over nullable columns and SELECT * on wide tables, optionally lints them through the SQLFluff sidecar (SQL_LINT_URL), and records findings on SQL checks. Reads only. Runs when SQL checks are turned on (setting, or SQL_CHECKS=on)."
         }
       )
+      // Daily operations report: hourly at :05, runs once the instance day's window has closed
+      // (window_end_hour, default 11 PM) and no report for the day exists yet. Off by default.
+      app.cron.schedule(
+        'ops-daily-report',
+        '5 * * * *',
+        async () => {
+          const [{ getOpsReportSettings }, { dayIn, hourIn, instanceZone }, store, { startOpsReport }] =
+            await Promise.all([
+              import('./services/ops-report/settings.js'),
+              import('./services/ops-report/window.js'),
+              import('./services/ops-report/store.js'),
+              import('./services/ops-report/run.js')
+            ])
+          if (!(await store.reportsTableReady())) return
+          await store.failStaleRuns()
+          const s = await getOpsReportSettings()
+          if (!s.enabled) return
+          const tz = await instanceZone()
+          const now = new Date()
+          if (hourIn(now, tz) !== s.window_end_hour % 24) return
+          const day = dayIn(new Date(now.getTime() - 30 * 60_000), tz)
+          const done = await store.latestPerDay(1)
+          if (done[0]?.day === day) return
+          const { id } = await startOpsReport(app, { day, trigger: 'cron', wait: true })
+          app.log.info(`ops-daily-report: report ${id} for ${day}`)
+          await store.pruneReports()
+        },
+        {
+          heavy: true,
+          idempotent: 'safe',
+          description:
+            'Hourly at :05 — once the day\'s report window has closed (Health → Daily report settings; 6 AM–11 PM by default, so 11:05 PM), builds the daily operations report: the day\'s numbers from the request log, issues, jobs, partner sends, mail, work and security (read-only SQL), the bug tracker and the comparison with earlier days, then an AI investigation that drills into the rows behind them; stores it and tells administrators (in-app and email). Off until turned on in its settings.'
+        }
+      )
       // #2801 — nightly restore drill: restores the newest database backup into a scratch
       // database, smoke-checks it, records the restore time, drops the copy. Off by default.
       app.cron.schedule(

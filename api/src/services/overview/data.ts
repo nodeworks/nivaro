@@ -744,6 +744,50 @@ export async function loadConfigChanges(limit = 5): Promise<Array<Record<string,
   return activityPageRows(ids.map((r) => Number(r.id)))
 }
 
+/** Config writes inside a window, oldest first (the daily operations report). */
+export async function configChangesBetween(
+  from: Date,
+  to: Date,
+  limit = 60
+): Promise<
+  Array<{ at: Date; who: string | null; action: string; collection: string; item: string | null }>
+> {
+  const rows = (await db('nivaro_activity as a')
+    .leftJoin('nivaro_users as u', 'u.id', 'a.user')
+    .whereIn('a.collection', CONFIG_CHANGE_TABLES)
+    .whereNotIn('a.action', NOISE_ACTIONS)
+    .modify((q) => onlyConfigWrites(q, 'a.action'))
+    .where('a.timestamp', '>=', from)
+    .where('a.timestamp', '<', to)
+    .orderBy([
+      { column: 'a.timestamp', order: 'asc' },
+      { column: 'a.id', order: 'asc' }
+    ])
+    .limit(limit)
+    .select(
+      'a.timestamp',
+      'a.action',
+      'a.collection',
+      'a.item',
+      'u.first_name',
+      'u.last_name'
+    )) as Array<{
+    timestamp: Date
+    action: string
+    collection: string
+    item: string | null
+    first_name: string | null
+    last_name: string | null
+  }>
+  return rows.map((r) => ({
+    at: r.timestamp,
+    who: `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || null,
+    action: r.action,
+    collection: r.collection,
+    item: r.item == null ? null : String(r.item)
+  }))
+}
+
 // ─── People waiting (admin) ──────────────────────────────────────────────────
 
 export interface WaitingPerson {
