@@ -1,13 +1,14 @@
 import { type NivaroClient, readItems } from '@nivaro/sdk'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch as patch2, post } from '../../lib/commands'
 import { isDndActive } from '../../lib/dnd'
 import { useLiveRefetchInterval } from '../../lib/live-queries'
 import { playNotificationSound } from '../../lib/notification-sound'
+import { useTabAttention } from '../../lib/tab-attention'
 import { announceLocalPrefs } from '../../lib/user-sync'
+import { dismissChatCard, showChatMessageCard } from './ChatMessageToast'
 import { bindChatOutbox, enqueueChatOutbox } from './chat-outbox'
 import { holdNotification, huddleHolds } from './huddle/huddle-hold'
 
@@ -1012,6 +1013,36 @@ export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
   const prefs = useMyPreferences()
   const prefsRef = useRef(prefs)
   prefsRef.current = prefs
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  // The card's Reply / Mark read run after this render, from a toast that lives
+  // outside the provider tree: they read the client through a ref.
+  const actionsRef = useRef({
+    client,
+    qc,
+    me: cfg.me,
+    markRead: (_room: string) => {}
+  })
+  actionsRef.current = {
+    client,
+    qc,
+    me: cfg.me,
+    markRead: (room: string) => {
+      void client
+        .request(post(`/chat/rooms/${encodeURIComponent(room)}/read`))
+        .then(() => qc.invalidateQueries({ queryKey: ['nvr-chat-rooms'] }))
+        .catch(() => {})
+    }
+  }
+  // Unread conversations show in the tab title too — "(2) Nivaro" — for a
+  // person working in another tab. Muted rooms do not count.
+  useTabAttention(
+    rooms
+      ? rooms
+          .filter((r) => isConversation(r) && !r.muted && !isReading(r.room))
+          .reduce((n, r) => n + r.unread, 0)
+      : 0
+  )
   useEffect(() => {
     // Without rooms the hook only knows the total — keep the old behaviour.
     // Rooms the person is reading are left out of both the sound and the toast.
@@ -1031,9 +1062,6 @@ export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
       // First pass seeds the watermarks; toasting then would announce every
       // unread that already existed when the app loaded.
       const seeded = prevByRoom.size > 0
-      // With a conversation open the composer sits bottom-right, exactly where
-      // toasts stack — show them at the top instead.
-      const anyRoomOpen = openRooms.size > 0
       for (const r of rooms) {
         const before = prevByRoom.get(r.room) ?? 0
         if (
@@ -1045,35 +1073,46 @@ export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
           !isReading(r.room)
         ) {
           const last = r.lastMessage
-          const who = last?.sender_name ? String(last.sender_name).trim() : null
-          toast(
-            r.kind === 'dm'
-              ? `New message from ${who || r.label}`
-              : `New message in ${r.label}${who ? ` — ${who}` : ''}`,
-            {
-              description: last?.message
-                ? String(last.message)
-                    .replace(/<[^>]*>/g, '')
-                    .slice(0, 90)
-                : undefined,
-              duration: 4000,
-              ...(anyRoomOpen ? { position: 'top-center' as const } : {}),
-              // Reading the message is the whole reason the toast exists, so
-              // it opens the conversation — only when a host has somewhere to
-              // open it, otherwise the click would do nothing.
-              ...(canOpenChatRoom()
-                ? {
-                    className: 'cursor-pointer',
-                    onDismiss: undefined,
-                    action: {
-                      label: 'Open',
-                      onClick: () => openChatRoom(r.room, r.label)
-                    }
-                  }
-                : {})
-            }
-          )
+          if (last) {
+            const room = r.room
+            // One card per conversation: the whole message, a reply box and
+            // Open / Mark read (ChatMessageToast.tsx).
+            showChatMessageCard(
+              {
+                room,
+                label: r.label,
+                kind: r.kind,
+                mentioned: (r.mentions ?? 0) > 0
+              },
+              last,
+              {
+                reply: (text) => {
+                  const ctx = actionsRef.current
+                  bindChatOutbox(ctx.client, ctx.qc, ctx.me?.id ?? null)
+                  enqueueChatOutbox({
+                    client_id: newClientId(),
+                    room,
+                    text,
+                    mentions: [],
+                    attachments: [],
+                    parent_id: null,
+                    quote_id: null,
+                    urgent: false,
+                    created_at: new Date().toISOString(),
+                    sender: ctx.me?.id ?? '',
+                    sender_name: ctx.me?.name ?? null
+                  })
+                  ctx.markRead(room)
+                },
+                markRead: () => actionsRef.current.markRead(room),
+                // Only when the host has somewhere to open it.
+                ...(canOpenChatRoom() ? { open: () => openChatRoom(room, r.label) } : {})
+              }
+            )
+          }
         }
+        // Read here or anywhere: its card goes.
+        if (r.unread === 0 || isReading(r.room)) dismissChatCard(r.room)
         prevByRoom.set(r.room, r.unread)
       }
     }
