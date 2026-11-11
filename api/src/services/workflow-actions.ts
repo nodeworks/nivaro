@@ -27,6 +27,7 @@ import {
   resolveObligation,
   skipReason
 } from './integration-obligations.js'
+import { m2aReadCollection, parseAllowedList } from './m2a-expand.js'
 import {
   addCalendarDays,
   calendarDay,
@@ -232,6 +233,56 @@ function collectionAllowed(name: string | undefined): name is string {
   return !/^(nivaro|directus)_/i.test(name) || CONTEXT_SAFE_SYSTEM.has(name)
 }
 
+/** The discriminator column + allowed list when `junction.itemCol` is an M2A item column. */
+async function m2aItemLeg(
+  junction: string,
+  itemCol: string
+): Promise<{ discriminator: string; allowed: string[] } | null> {
+  const leg = (await db('nivaro_relations')
+    .where({ many_collection: junction, many_field: itemCol })
+    .whereNotNull('one_collection_field')
+    .first('one_collection_field', 'one_allowed_collections')) as
+    | { one_collection_field: string | null; one_allowed_collections: unknown }
+    | undefined
+  const discriminator = leg?.one_collection_field
+  if (!discriminator || !IDENTIFIER_RE.test(discriminator)) return null
+  return { discriminator, allowed: parseAllowedList(leg?.one_allowed_collections) }
+}
+
+/**
+ * Pure: which collection each context row's item is read from. Without an M2A
+ * leg every row reads from the configured collection; with one, the row's
+ * discriminator decides (legacy `directus_users` = the people table, which is
+ * what the configured collection names); a row whose discriminator is not
+ * allowed is left out (its <fk>_data stays null).
+ */
+export function groupM2aRows<R extends Record<string, unknown>>(
+  rows: R[],
+  fk: string,
+  configured: string,
+  m2a: { discriminator: string; allowed: string[] } | null
+): Map<string, R[]> {
+  const out = new Map<string, R[]>()
+  for (const r of rows) {
+    if (r[fk] == null) continue
+    let target: string | null = configured
+    if (m2a) {
+      const read = m2aReadCollection(r[m2a.discriminator], m2a.allowed)
+      target = read === 'nivaro_users' ? configured : read
+    }
+    if (!target) continue
+    out.set(target, [...(out.get(target) ?? []), r])
+  }
+  return out
+}
+
+/** The asked-for fields a table actually has (an M2A target may lack some). */
+async function existingColumns(table: string, fields: string[]): Promise<string[]> {
+  const info = (await db(table).columnInfo()) as Record<string, unknown>
+  const have = new Set(Object.keys(info ?? {}).map((c) => c.toLowerCase()))
+  return fields.filter((f) => have.has(f.toLowerCase()))
+}
+
 /** The action `context` lookups for one record (also used by payload template previews). */
 export async function buildContext(
   defs: TransitionActionDef['context'],
@@ -283,21 +334,31 @@ export async function buildContext(
         Record<string, unknown>
       >
 
-      // Batched M2O expansion: each configured fk column gains a <fk>_data object
+      // Batched M2O expansion: each configured fk column gains a <fk>_data object.
+      // When the queried table is an M2A junction and the fk is its item column,
+      // each row is read from the collection its discriminator names (a ship-to
+      // contact is a person OR an external email): reading every row from the
+      // one configured collection left external emails empty, and MDSi refused
+      // the deployment request ("Contact email is required").
       for (const [fk, exp] of Object.entries(cfg.expand ?? {})) {
         if (!IDENTIFIER_RE.test(fk) || !collectionAllowed(exp?.collection)) continue
         const fields = (exp.fields ?? []).filter((f) => IDENTIFIER_RE.test(f))
         if (fields.length === 0) continue
-        const ids = [...new Set(rows.map((r) => r[fk]).filter((v) => v != null))]
-        if (ids.length === 0) continue
+        if (!rows.some((r) => r[fk] != null)) continue
         try {
-          const related = (await db(exp.collection)
-            .whereIn('id', ids as never[])
-            .select(['id', ...fields])) as Array<Record<string, unknown>>
-          const byId = new Map(related.map((r) => [String(r.id), r]))
-          for (const r of rows) {
-            const hit = r[fk] != null ? byId.get(String(r[fk])) : undefined
-            r[`${fk}_data`] = hit ?? null
+          const m2a = await m2aItemLeg(cfg.collection, fk)
+          const groups = groupM2aRows(rows, fk, exp.collection, m2a)
+          for (const r of rows) r[`${fk}_data`] = null
+          for (const [target, members] of groups) {
+            if (!collectionAllowed(target)) continue
+            const cols = target === exp.collection ? fields : await existingColumns(target, fields)
+            if (cols.length === 0) continue
+            const ids = [...new Set(members.map((r) => r[fk]))]
+            const related = (await db(target)
+              .whereIn('id', ids as never[])
+              .select(['id', ...cols])) as Array<Record<string, unknown>>
+            const byId = new Map(related.map((x) => [String(x.id).toUpperCase(), x]))
+            for (const r of members) r[`${fk}_data`] = byId.get(String(r[fk]).toUpperCase()) ?? null
           }
         } catch {
           /* expansion is best-effort */

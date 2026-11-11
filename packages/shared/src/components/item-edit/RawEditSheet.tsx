@@ -13,7 +13,7 @@ import {
   changeReasonChallenge
 } from './ChangeReasonDialog'
 import { FieldRenderer } from './FieldRenderer'
-import { M2MCombobox, m2aWriteMeta } from './M2MCombobox'
+import { M2MCombobox, m2aAllowedCount, m2aWriteMeta } from './M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './M2MStagingContext'
 import { invalidateM2MFor } from './m2m-invalidate'
 import type { CMSField, CMSRelation } from './types'
@@ -127,6 +127,17 @@ export function RawEditSheet({
     relations.find(
       (r) => r.one_collection === collection && r.one_field === key && r.junction_field != null
     )
+  /** An M2A alias whose links may name more than one collection. */
+  const linksSeveralKinds = (rel: (typeof relations)[number]) => {
+    const companion = relations.find(
+      (c) =>
+        c.many_collection === rel.many_collection &&
+        c.many_field === rel.junction_field &&
+        c.id !== rel.id
+    )
+    if (!companion || companion.one_collection) return false
+    return m2aAllowedCount(companion) > 1
+  }
 
   const stagingCtx = useMemo<M2MStagingCtx>(
     () => ({
@@ -305,6 +316,16 @@ export function RawEditSheet({
                     {field.field === 'id' ? (
                       <p className='pt-1.5 font-mono text-[12px] text-slate-500'>
                         {String(raw ?? '')}
+                      </p>
+                    ) : alias && m2mRel && linksSeveralKinds(m2mRel) ? (
+                      // A ship-to contact is a person OR an external email: the
+                      // picker here reads every link as a person, so an external
+                      // email showed "Record not found". The normal form edits it.
+                      <p
+                        className='pt-1.5 text-[11.5px] italic text-slate-400'
+                        data-raw-m2a={field.field}
+                      >
+                        Links to more than one kind of record — edit through the normal form
                       </p>
                     ) : alias && m2mRel ? (
                       <M2MStagingContext.Provider value={stagingCtx}>

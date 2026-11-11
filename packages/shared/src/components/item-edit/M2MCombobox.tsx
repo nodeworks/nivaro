@@ -52,6 +52,12 @@ function allowedList(rel: CMSRelation | undefined): string[] {
   return parseAllowedCollections(rel?.one_allowed_collections)
 }
 
+/** How many collections an M2A companion leg allows (0 for a plain M2M). */
+export function m2aAllowedCount(otherRel: CMSRelation | undefined): number {
+  if (!otherRel || otherRel.one_collection) return 0
+  return allowedList(otherRel).length
+}
+
 export function resolveM2MRelatedCollection(otherRel: CMSRelation | undefined): string | null {
   if (!otherRel) return null
   if (otherRel.one_collection) return otherRel.one_collection

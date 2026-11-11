@@ -6,7 +6,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../db/index.js', () => ({ db: vi.fn() }))
 
 import { db } from '../db/index.js'
-import { buildContext, erpActionGate, erpActionGateDetail } from './workflow-actions.js'
+import {
+  buildContext,
+  erpActionGate,
+  erpActionGateDetail,
+  groupM2aRows
+} from './workflow-actions.js'
 
 afterEach(() => vi.clearAllMocks())
 
@@ -85,5 +90,82 @@ describe('buildContext', () => {
     )
     expect(Object.keys(out).sort()).toEqual(['d', 'e'])
     expect(vi.mocked(db).mock.calls.map((c) => c[0])).toEqual(['nivaro_users', 'orders'])
+  })
+
+  it('reads an M2A contact from the collection its row names (person or external email)', async () => {
+    const tables: Record<string, Record<string, unknown>> = {}
+    const builder = (table: string) => {
+      const b: Record<string, unknown> = {}
+      for (const m of ['where', 'whereNull', 'whereNotNull', 'orderBy', 'whereIn'])
+        b[m] = vi.fn(() => b)
+      if (table === 'inventory_request_internal_contact')
+        b.limit = vi.fn(() =>
+          Promise.resolve([
+            { id: 1, item: 'aaaa-1', collection: 'directus_users' },
+            { id: 2, item: '10', collection: 'additional_emails' }
+          ])
+        )
+      if (table === 'nivaro_relations')
+        b.first = vi.fn(() =>
+          Promise.resolve({
+            one_collection_field: 'collection',
+            one_allowed_collections: 'additional_emails,directus_users'
+          })
+        )
+      if (table === 'nivaro_users')
+        b.select = vi.fn(() =>
+          Promise.resolve([
+            { id: 'AAAA-1', email: 'pat@corp.com', first_name: 'Pat', last_name: 'Ng' }
+          ])
+        )
+      if (table === 'additional_emails') {
+        b.columnInfo = vi.fn(() =>
+          Promise.resolve({ id: {}, email: {}, first_name: {}, last_name: {} })
+        )
+        b.select = vi.fn(() =>
+          Promise.resolve([{ id: 10, email: 'b@vendor.com', first_name: 'B', last_name: 'S' }])
+        )
+      }
+      tables[table] = b
+      return b
+    }
+    vi.mocked(db).mockImplementation(builder as never)
+    const out = await buildContext(
+      {
+        internal_contact: {
+          collection: 'inventory_request_internal_contact',
+          filter: { inventory_request_id: '$id' },
+          expand: {
+            item: { collection: 'nivaro_users', fields: ['email', 'first_name', 'last_name'] }
+          }
+        }
+      },
+      '36664',
+      {}
+    )
+    const rows = out.internal_contact as Array<Record<string, any>>
+    expect(rows[0].item_data?.email).toBe('pat@corp.com')
+    expect(rows[1].item_data?.email).toBe('b@vendor.com')
+    expect(rows[1].item_data?.first_name).toBe('B')
+  })
+})
+
+describe('groupM2aRows', () => {
+  const m2a = { discriminator: 'collection', allowed: ['additional_emails', 'directus_users'] }
+  it('sends people to the configured table and external emails to theirs', () => {
+    const rows = [
+      { item: 'u1', collection: 'directus_users' },
+      { item: '10', collection: 'additional_emails' },
+      { item: '11', collection: 'not_allowed' },
+      { item: null, collection: 'additional_emails' }
+    ]
+    const g = groupM2aRows(rows, 'item', 'nivaro_users', m2a)
+    expect([...g.keys()].sort()).toEqual(['additional_emails', 'nivaro_users'])
+    expect(g.get('nivaro_users')?.map((r) => r.item)).toEqual(['u1'])
+    expect(g.get('additional_emails')?.map((r) => r.item)).toEqual(['10'])
+  })
+  it('without an M2A leg every row reads from the configured table', () => {
+    const g = groupM2aRows([{ fk: 1 }, { fk: 2 }], 'fk', 'units', null)
+    expect(g.get('units')?.length).toBe(2)
   })
 })
