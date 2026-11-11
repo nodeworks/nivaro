@@ -236,6 +236,16 @@ describe('settings', () => {
     ).toMatchObject({ enabled: true, window_end_hour: 21 })
   })
 
+  it('saves a form that sends back the GET answer whole (email_me is read-only, not refused)', () => {
+    const next = mergeOpsReportPatch(OPS_REPORT_DEFAULTS, {
+      ...OPS_REPORT_DEFAULTS,
+      window_start_hour: 5,
+      email_me: true
+    })
+    expect(next.window_start_hour).toBe(5)
+    expect(next).not.toHaveProperty('email_me')
+  })
+
   it('emails only administrators who opted in', () => {
     expect(emailOptedIn('{"ops_report_email":true}')).toBe(true)
     expect(emailOptedIn({ ops_report_email: true })).toBe(true)

@@ -77,7 +77,10 @@ export function normalizeOpsReportSettings(raw: unknown): OpsReportSettings {
 
 /** An admin's PATCH: every bad field is named, never silently dropped. */
 export function mergeOpsReportPatch(stored: OpsReportSettings, patch: unknown): OpsReportSettings {
-  const p = obj(patch)
+  const p = { ...obj(patch) }
+  // The GET's read-only answer (the caller's own email opt-in) may come back with a
+  // form that saved what it loaded: drop it rather than refuse the save.
+  delete p.email_me
   const bad: Record<string, string> = {}
   for (const k of Object.keys(p)) if (!(k in OPS_REPORT_DEFAULTS)) bad[k] = `${k} is not a setting`
   for (const k of ['enabled', 'email', 'notify'] as const)

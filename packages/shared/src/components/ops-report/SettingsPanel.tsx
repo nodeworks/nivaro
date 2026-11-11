@@ -291,7 +291,11 @@ export function OpsSettingsPopover() {
                 size='sm'
                 className='h-8'
                 disabled={save.isPending}
-                onClick={() => save.mutate(form)}
+                onClick={() => {
+                  // email_me rides the GET only (the caller's own opt-in); it is not a setting.
+                  const { email_me: _mine, ...body } = form
+                  save.mutate(body)
+                }}
               >
                 {save.isPending ? 'Saving…' : 'Save'}
               </Button>
