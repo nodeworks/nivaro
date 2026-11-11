@@ -83,6 +83,11 @@ function apply(p: BulkRowsPayload): void {
     const cur = run.rows.get(String(p.running))
     if (!cur || cur.status === 'queued') run.rows.set(String(p.running), { status: 'running' })
   }
+  // A background run (the request answered 202 long ago) ends with the server's `finished`.
+  if (p.finished && !run.finished) {
+    endBulkProgress(run.id)
+    return
+  }
   emit()
 }
 

@@ -22,9 +22,15 @@ import {
   setBuiltin,
   transitionLabelsFor
 } from '../services/bulk-actions.js'
-import { BULK_PUSH_MAX, retryFailedPushes, runItemActionOver } from '../services/bulk-push.js'
+import {
+  BULK_PUSH_MAX,
+  BULK_PUSH_SYNC_MAX,
+  retryFailedPushes,
+  runItemActionOver
+} from '../services/bulk-push.js'
 import { recordWriteRefusal } from '../services/edit-lock.js'
 import { canUpdateItem } from '../services/items.js'
+import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
 import type { User } from '../types.js'
 
@@ -348,6 +354,60 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
     if (!actionId) return reply.code(400).send({ error: 'action_id is required' })
     const payload =
       req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : null
+    const progress = (req.query as { progress?: unknown } | undefined)?.progress
+    // A real run of several records outlives the proxy's ~60 s request limit (every
+    // record is a partner call, ~10 s each): 12 MDSi submissions all landed while
+    // the browser got a timeout and a bare red "!" (2026-11-11). Several records
+    // run in the background: 202 at once, rows tick live (?progress=), and a
+    // notification says how it ended.
+    if (!g.dryRun && g.ids.length > BULK_PUSH_SYNC_MAX) {
+      const userId = req.user?.id ?? null
+      void (async () => {
+        try {
+          const result = await runItemActionOver({
+            actionId,
+            collection: g.collection,
+            ids: g.ids,
+            payload,
+            req,
+            progress
+          })
+          await logActivity({
+            action: 'bulk-action-execute',
+            user: userId,
+            collection: g.collection,
+            comment: `push ${actionId} on ${g.ids.length} item(s): ${result.succeeded} done, ${result.skipped} skipped, ${result.failed} failed`,
+            req
+          })
+          if (userId) {
+            const parts = [`${result.succeeded} done`]
+            if (result.skipped) parts.push(`${result.skipped} skipped`)
+            if (result.failed) parts.push(`${result.failed} failed`)
+            const why = result.errors
+              .slice(0, 3)
+              .map((e) => `${e.label ?? e.item}: ${e.error}`)
+              .join('\n')
+            await notifyUser(app, userId, {
+              subject: `Bulk push finished: ${parts.join(' · ')}`,
+              message: `${g.ids.length} ${g.collection} record(s).${why ? `\n${why}` : ''}`,
+              collection: g.collection,
+              category: 'system',
+              always_inbox: true
+            }).catch(() => undefined)
+          }
+        } catch (err) {
+          if (userId)
+            await notifyUser(app, userId, {
+              subject: 'Bulk push stopped',
+              message: err instanceof Error ? err.message.slice(0, 300) : 'The run stopped',
+              collection: g.collection,
+              category: 'system',
+              always_inbox: true
+            }).catch(() => undefined)
+        }
+      })()
+      return reply.code(202).send({ data: { background: true, total: g.ids.length } })
+    }
     let result: Awaited<ReturnType<typeof runItemActionOver>>
     try {
       result = await runItemActionOver({
@@ -356,7 +416,8 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
         ids: g.ids,
         payload,
         req,
-        dryRun: g.dryRun
+        dryRun: g.dryRun,
+        progress
       })
     } catch (err) {
       const code = (err as { statusCode?: number }).statusCode ?? 400

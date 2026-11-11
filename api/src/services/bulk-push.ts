@@ -31,6 +31,9 @@ import { callAsCallerFor } from './caller-inject.js'
  */
 
 export const BULK_PUSH_MAX = 200
+/** Real runs with more records than this go to the background (202) — each record is a
+ *  partner call, and several outlive the proxy's ~60 s request limit. */
+export const BULK_PUSH_SYNC_MAX = 2
 
 type Outcome = BulkRunResult['outcomes'][number]
 
@@ -92,6 +95,8 @@ export async function runItemActionOver(opts: {
   payload?: Record<string, unknown> | null
   req: FastifyRequest
   dryRun?: boolean
+  /** Client-made `?progress=` id: each row's spinner → tick / reason (#1827). */
+  progress?: unknown
 }): Promise<BulkRunResult> {
   const { actionId, collection, ids, req } = opts
   const action = itemActionRegistry.get(actionId)
@@ -111,9 +116,17 @@ export async function runItemActionOver(opts: {
     })
   const result = emptyResult()
   const rec = recorder(result)
+  const { openBulkRowProgress } = await import('./live-progress.js')
+  const rp = openBulkRowProgress(opts.dryRun ? null : opts.progress, req.user?.id, () => ({
+    ok: result.succeeded,
+    failed: result.failed,
+    skipped: result.skipped,
+    reason: result.errors[result.errors.length - 1]?.error ?? null
+  }))
 
   for (const rawId of ids) {
     const item = String(rawId)
+    rp.next(item)
     try {
       const refused = await pushRefusal(req, collection, item)
       if (refused) {
@@ -166,6 +179,7 @@ export async function runItemActionOver(opts: {
       rec.fail(item, err instanceof Error ? err.message : String(err))
     }
   }
+  rp.end()
   return result
 }
 

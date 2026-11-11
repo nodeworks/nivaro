@@ -54,4 +54,14 @@ describe('bulk row progress (client)', () => {
     endBulkProgress(id, 10_000)
     expect(stateOf('2')).toEqual({ status: 'done' })
   })
+
+  it("a background run (the request answered 202) ends with the server's finished event", () => {
+    const id = newBulkProgressId()
+    startBulkProgress(id, [1, 2])
+    __applyBulkRows({ progress: id, rows: [{ id: '1', status: 'done' }], running: '2' })
+    expect(stateOf('2')).toEqual({ status: 'running' })
+    __applyBulkRows({ progress: id, rows: [{ id: '2', status: 'done' }] })
+    __applyBulkRows({ progress: id, rows: [], running: null, finished: true })
+    expect(stateOf('2')).toEqual({ status: 'done', reason: undefined })
+  })
 })

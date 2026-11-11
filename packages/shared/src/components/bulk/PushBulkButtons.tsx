@@ -3,6 +3,7 @@ import { AlertCircle, CheckCircle2, Loader2, MinusCircle, Send } from 'lucide-re
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
+import { endBulkProgress, newBulkProgressId, startBulkProgress } from '../../lib/bulk-progress'
 import { get, post } from '../../lib/commands'
 import { userErrorMessage } from '../../lib/safe-error'
 import { cn } from '../../lib/utils'
@@ -156,16 +157,22 @@ export function PushBulkButtons({
     return t?.label ? String(t.label) : `#${id}`
   }
 
+  // Records handed to the server's background run in the current run() call.
+  let background = 0
   const runOp = async (op: Op, dryRun: boolean): Promise<PushRunOutcome> => {
     const cols = op.kind === 'push' ? op.action.collections : op.collections
     const runs: Array<{ collection: string; data: PushRunOutcome }> = []
     for (const c of cols) {
       const ids = targets.filter((t) => t.collection === c).map((t) => t.id)
       if (ids.length === 0) continue
+      // A real push ticks each row as it lands (#1827); several records run in
+      // the background on the server (202) and the rows keep ticking.
+      const progress = !dryRun && op.kind === 'push' ? newBulkProgressId() : null
+      if (progress) startBulkProgress(progress, ids)
       const res =
         op.kind === 'push'
           ? await client.request<{ data: PushRunOutcome }>(
-              post('/bulk-actions/push', {
+              post(`/bulk-actions/push${progress ? `?progress=${progress}` : ''}`, {
                 collection: c,
                 action_id: op.action.id,
                 ids,
@@ -176,6 +183,13 @@ export function PushBulkButtons({
           : await client.request<{ data: PushRunOutcome }>(
               post('/bulk-actions/retry-push', { collection: c, ids, dry_run: dryRun })
             )
+      const bg = (res.data as { background?: boolean } | null)?.background === true
+      // Background: the server's `finished` event closes the rows; a direct answer closes them now.
+      if (progress && !bg) endBulkProgress(progress)
+      if (bg) {
+        background += ids.length
+        continue
+      }
       runs.push({ collection: c, data: res.data })
     }
     return mergeRuns(runs)
@@ -199,11 +213,19 @@ export function PushBulkButtons({
     const id = idOf(op)
     setRunning(id)
     try {
+      background = 0
       const r = await runOp(op, false)
-      setResults((p) => ({ ...p, [id]: r }))
-      const msg = describe(labelOf(op), r)
-      if (r.failed > 0) toast.warning(msg, { duration: 8000 })
-      else toast.success(msg, { duration: 4000 })
+      if (background === 0) setResults((p) => ({ ...p, [id]: r }))
+      if (background > 0)
+        toast.info(
+          `${labelOf(op)}: running on ${background} record${background === 1 ? '' : 's'} — each row updates as it finishes, and a notification tells you how it ended.`,
+          { duration: 8000 }
+        )
+      if (background === 0 || r.succeeded + r.failed + r.skipped > 0) {
+        const msg = describe(labelOf(op), r)
+        if (r.failed > 0) toast.warning(msg, { duration: 8000 })
+        else if (background === 0) toast.success(msg, { duration: 4000 })
+      }
       for (const key of [
         'erp-submissions',
         'row-push-state',
