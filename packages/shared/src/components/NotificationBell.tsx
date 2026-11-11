@@ -504,7 +504,7 @@ export function NotificationBell({
         subscriptionsPath={subscriptionsPath}
         rulesPath={rulesPath}
         onNavigate={navigateAndClose}
-        className={`-mt-1 pb-2 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}
+        className={`pb-3 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}
       />
     </Fragment>
   )
