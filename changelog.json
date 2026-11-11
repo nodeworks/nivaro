@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-11T16:00:05.919Z",
+  "generated_at": "2026-11-11T16:11:19.315Z",
   "releases": [
+    {
+      "version": "0.3.135",
+      "tag": "v0.3.135",
+      "date": "2026-11-11T11:10:58-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "form",
+              "text": "no save while the form's fields have not loaded",
+              "hash": "7466b4d4c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.134",
       "tag": "v0.3.134",
-      "date": "2026-11-11T10:59:43-05:00",
+      "date": "2026-11-11T11:00:05-05:00",
       "sections": [
         {
           "label": "Fixed",
