@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-11T15:06:19.635Z",
+  "generated_at": "2026-11-11T15:38:52.165Z",
   "releases": [
+    {
+      "version": "0.3.133",
+      "tag": "v0.3.133",
+      "date": "2026-11-11T10:38:32-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Move to state in the record ⋯ menu; addendums show their pipeline state",
+              "hash": "c6355cc6a"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "Move to state lives in the record ⋯ menu",
+              "hash": "0e6f8a63a"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.132",
       "tag": "v0.3.132",
-      "date": "2026-11-11T10:06:00-05:00",
+      "date": "2026-11-11T10:06:19-05:00",
       "sections": [
         {
           "label": "Added",
