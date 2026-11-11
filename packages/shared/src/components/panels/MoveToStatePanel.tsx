@@ -1,13 +1,13 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Loader2, MoveRight } from 'lucide-react'
+import { AlertTriangle, Loader2, MoveRight } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
 import { Button } from '../ui/button'
+import { Input } from '../ui/input'
 import { SimpleSelect } from '../ui/SimpleSelect'
-import { Textarea } from '../ui/textarea'
 
 export const MOVE_REASON_MIN = 5
 
@@ -131,63 +131,85 @@ export function MoveToStatePanel({
   }
 
   return (
-    <div
-      className='space-y-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-500/25 dark:bg-amber-500/[0.06]'
+    <form
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
       data-move-to-state-form
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (canMove) move.mutate()
+      }}
     >
-      <div className='space-y-1'>
-        <p className='text-[12px] font-medium text-slate-800 dark:text-slate-200'>Move to state</p>
-        <p className='text-[11px] leading-relaxed text-slate-600 dark:text-slate-400'>
-          Administrators only. Puts this record straight into the state you pick. No transition
-          steps run: no Fusion or MWF pushes, emails or flows. Automatic rules are checked again
-          afterwards, so it may move on by itself.
+      <div className='flex items-start gap-2.5 border-b border-slate-100 px-4 py-3 dark:border-border/60'>
+        <MoveRight className='mt-0.5 h-4 w-4 shrink-0 text-slate-400' />
+        <div className='min-w-0 space-y-0.5'>
+          <p className='text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+            Move to state
+          </p>
+          <p className='flex items-center gap-1.5 text-[12px] text-amber-700 dark:text-amber-300'>
+            <AlertTriangle className='h-3.5 w-3.5 shrink-0' />
+            Skips the transition: no Fusion or MWF pushes, emails or flows run.
+          </p>
+        </div>
+      </div>
+      <div className='space-y-3 px-4 py-3.5'>
+        <div className='flex flex-wrap items-start gap-x-4 gap-y-3'>
+          <div className='w-full space-y-1.5 sm:w-60'>
+            <span className='block text-[12px] font-medium text-slate-600 dark:text-slate-300'>
+              New state
+            </span>
+            <SimpleSelect
+              value={target}
+              onChange={setTarget}
+              options={options}
+              ariaLabel='New state'
+              className='h-8 text-[12.5px]'
+              disabled={move.isPending || (!givenStates && isLoading)}
+            />
+          </div>
+          <div className='min-w-0 flex-1 basis-72 space-y-1.5'>
+            <span className='block text-[12px] font-medium text-slate-600 dark:text-slate-300'>
+              Reason
+            </span>
+            <Input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder='Why it moves — saved in the history'
+              maxLength={500}
+              disabled={move.isPending}
+              className='h-8 text-[12.5px]'
+              aria-label='Reason'
+              aria-describedby='move-state-hint'
+            />
+          </div>
+        </div>
+        <p id='move-state-hint' className='text-[11.5px] text-slate-500 dark:text-slate-400'>
+          {!reasonOk && reason.length > 0
+            ? `A few more words, please (${MOVE_REASON_MIN} characters or more).`
+            : 'Automatic rules are checked again afterwards, so the record may move on by itself.'}
         </p>
+        <div className='flex items-center gap-2'>
+          <Button
+            type='submit'
+            size='sm'
+            className='h-8 gap-1.5 bg-nvr-cyan px-3.5 text-[12.5px] text-white hover:bg-nvr-cyan/90'
+            disabled={!canMove}
+            data-move-to-state-submit
+          >
+            {move.isPending && <Loader2 className='h-3.5 w-3.5 animate-spin' />}
+            Move
+          </Button>
+          <Button
+            type='button'
+            size='sm'
+            variant='ghost'
+            className='h-8 text-[12.5px]'
+            onClick={() => (standalone ? onCancel?.() : setOpen(false))}
+            disabled={move.isPending}
+          >
+            Cancel
+          </Button>
+        </div>
       </div>
-      <div className='grid gap-2 sm:grid-cols-[minmax(0,220px)_1fr]'>
-        <SimpleSelect
-          value={target}
-          onChange={setTarget}
-          options={options}
-          ariaLabel='New state'
-          disabled={move.isPending || (!givenStates && isLoading)}
-        />
-        <Textarea
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder='Why? Saved in the history.'
-          rows={2}
-          maxLength={500}
-          disabled={move.isPending}
-          className='min-h-[38px] text-[12px]'
-          aria-label='Reason'
-        />
-      </div>
-      <div className='flex items-center justify-end gap-2'>
-        {!reasonOk && reason.length > 0 && (
-          <span className='mr-auto text-[11px] text-slate-500'>
-            A few more words, please ({MOVE_REASON_MIN} characters or more).
-          </span>
-        )}
-        <Button
-          size='sm'
-          variant='ghost'
-          className='h-7 text-[12px]'
-          onClick={() => (standalone ? onCancel?.() : setOpen(false))}
-          disabled={move.isPending}
-        >
-          Cancel
-        </Button>
-        <Button
-          size='sm'
-          className='h-7 gap-1.5 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan/90'
-          onClick={() => move.mutate()}
-          disabled={!canMove}
-          data-move-to-state-submit
-        >
-          {move.isPending && <Loader2 className='h-3 w-3 animate-spin' />}
-          Move
-        </Button>
-      </div>
-    </div>
+    </form>
   )
 }

@@ -49,9 +49,9 @@ function render() {
   return { request }
 }
 
-const typeInto = (el: HTMLTextAreaElement, value: string) =>
+const typeInto = (el: HTMLInputElement, value: string) =>
   act(() => {
-    const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
     set.call(el, value)
     el.dispatchEvent(new Event('input', { bubbles: true }))
   })
@@ -74,7 +74,7 @@ describe('MoveToStatePanel', () => {
     expect(document.querySelector('[data-move-to-state-form]')).toBeNull()
     act(() => (document.querySelector('[data-move-to-state-open]') as HTMLButtonElement).click())
     const form = document.querySelector('[data-move-to-state-form]')
-    expect(form?.textContent).toContain('No transition steps run')
+    expect(form?.textContent).toContain('Skips the transition')
   })
 
   it('keeps Move off until a state is picked and a reason is given', async () => {
@@ -82,7 +82,10 @@ describe('MoveToStatePanel', () => {
     act(() => (document.querySelector('[data-move-to-state-open]') as HTMLButtonElement).click())
     const submit = document.querySelector('[data-move-to-state-submit]') as HTMLButtonElement
     expect(submit.disabled).toBe(true)
-    await typeInto(document.querySelector('textarea') as HTMLTextAreaElement, 'Completed too early')
+    await typeInto(
+      document.querySelector('input[aria-label="Reason"]') as HTMLInputElement,
+      'Completed too early'
+    )
     // Still no state picked.
     expect(submit.disabled).toBe(true)
     expect(request).not.toHaveBeenCalled()
