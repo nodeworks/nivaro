@@ -193,7 +193,7 @@ Reading: "approve a 25k budget from the South division"
     },
     {
       type: 'p',
-      text: 'To repair a record that ended up in the wrong state, an administrator opens the record, expands its pipeline panel and picks **Move to state…** at the bottom. Choose the state, say why, and press Move. The reason is saved in the transition history with your name.'
+      text: 'To repair a record that ended up in the wrong state, an administrator opens the record and picks **⋯ → Move to state…** (or **Move to state…** at the bottom of the expanded pipeline panel). Choose the state, say why, and press Move. The reason is saved in the transition history with your name.'
     },
     {
       type: 'ul',
