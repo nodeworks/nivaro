@@ -1,10 +1,57 @@
 {
-  "generated_at": "2026-11-11T18:17:38.730Z",
+  "generated_at": "2026-11-11T20:03:24.545Z",
   "releases": [
+    {
+      "version": "0.3.140",
+      "tag": "v0.3.140",
+      "date": "2026-11-11T15:03:02-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "chat",
+              "text": "new-message card you can read and answer in place",
+              "hash": "b2357072e"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "daily-report",
+              "text": "settings save no longer refused for email_me",
+              "hash": "865b096ca"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "record",
+              "text": "flags only beside the state, not in the action row",
+              "hash": "25dc54c6d"
+            },
+            {
+              "section": "Other",
+              "scope": "daily-report",
+              "text": "calmer person-day drawer",
+              "hash": "d24abb619"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.3.139",
       "tag": "v0.3.139",
-      "date": "2026-11-11T13:17:18-05:00",
+      "date": "2026-11-11T13:17:38-05:00",
       "sections": [
         {
           "label": "Fixed",
