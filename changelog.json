@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-11T16:59:04.537Z",
+  "generated_at": "2026-11-11T17:42:09.716Z",
   "releases": [
+    {
+      "version": "0.3.137",
+      "tag": "v0.3.137",
+      "date": "2026-11-11T12:41:50-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "readiness",
+              "text": "judge only this deployment's hosts and AI provider; let extensions retire checks",
+              "hash": "c98f2be8c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.136",
       "tag": "v0.3.136",
-      "date": "2026-11-11T11:58:44-05:00",
+      "date": "2026-11-11T11:59:04-05:00",
       "sections": [
         {
           "label": "Fixed",
