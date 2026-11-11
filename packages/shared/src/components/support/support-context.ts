@@ -6,8 +6,8 @@ import { formatReplayTail, getReplayTail, type ReplayTail } from '../../lib/repl
  *
  *  - the replay: with error replay on, the recorder's rolling buffer cut into
  *    an app='support-clip' recording (the last ~minute); with full recording
- *    on, the live recording and the moment of asking. The ticket's 'Watch
- *    what they saw' link opens it seeked there.
+ *    on, the live recording and the moment of asking. The ticket's 'Replay
+ *    their screen' link opens it seeked there.
  *  - a plain-text attachment: the page, the console tail and the last twenty
  *    requests (method, route pattern, status, ms) — no bodies, no query
  *    strings, secrets redacted (replay-context.ts).
@@ -16,10 +16,23 @@ import { formatReplayTail, getReplayTail, type ReplayTail } from '../../lib/repl
  * could not be gathered.
  */
 
-/** The attachment's file — `what-they-saw-2026-10-10T14-03-11.txt`. */
+/** Whether a ticket file is this automatic attachment (old name or new). */
+export function isSupportContextFile(f: {
+  filename_download?: string | null
+  title?: string | null
+}): boolean {
+  const name = String(f.filename_download ?? '')
+  return (
+    /^(what-they-saw|technical-details)-\d{4}-/.test(name) ||
+    f.title === 'What they saw' ||
+    f.title === 'Technical details'
+  )
+}
+
+/** The attachment's file — `technical-details-2026-10-10T14-03-11.txt`. */
 export function supportContextFile(text: string, when = new Date()): File {
   const stamp = when.toISOString().slice(0, 19).replace(/:/g, '-')
-  return new File([text], `what-they-saw-${stamp}.txt`, { type: 'text/plain' })
+  return new File([text], `technical-details-${stamp}.txt`, { type: 'text/plain' })
 }
 
 export interface SupportContext {

@@ -122,7 +122,7 @@ export function ReportProblemButton({
         ? await collectSupportContext({
             clip: m?.clip ?? null,
             route,
-            upload: (file) => client.upload(file, { title: 'What they saw' }),
+            upload: (file) => client.upload(file, { title: 'Technical details' }),
             userAgent: navigator.userAgent
           })
         : null

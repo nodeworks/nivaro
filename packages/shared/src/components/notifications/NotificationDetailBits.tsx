@@ -281,7 +281,7 @@ export function NotificationDetailBits({
   const toggle = (k: 'changes' | 'why') => setOpen((o) => (o === k ? null : k))
   return (
     <div className={cn('text-[10.5px]', className)} data-notification-bits>
-      <div className='flex flex-wrap items-center gap-2'>
+      <div className='flex flex-wrap items-center gap-1'>
         {(changes.length > 0 || live) && (
           <button
             type='button'
@@ -291,7 +291,7 @@ export function NotificationDetailBits({
             }}
             aria-expanded={open === 'changes'}
             data-notification-changes
-            className='inline-flex items-center gap-0.5 rounded px-1 py-px font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-100'
+            className='-ml-1.5 inline-flex h-6 items-center gap-1 rounded-md px-1.5 font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-100'
           >
             {changes.length > 0
               ? `${changes.length} change${changes.length === 1 ? '' : 's'}`
@@ -310,9 +310,9 @@ export function NotificationDetailBits({
             }}
             aria-expanded={open === 'why'}
             data-notification-why
-            className='inline-flex items-center gap-0.5 rounded px-1 py-px font-medium text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
+            className='inline-flex h-6 items-center gap-1 rounded-md px-1.5 font-medium text-slate-500 transition-colors first:-ml-1.5 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-100'
           >
-            <HelpCircle className='h-3 w-3' />
+            <HelpCircle className='h-3.5 w-3.5 shrink-0' />
             Why?
           </button>
         )}

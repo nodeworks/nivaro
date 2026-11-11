@@ -91,7 +91,7 @@ describe('collectSupportContext', () => {
     })
     expect(ctx.fileId).toBe('file-1')
     expect(ctx.replay).toEqual({ recording_id: 'r1', offset_ms: 30_000 })
-    expect(uploaded[0].name).toBe('what-they-saw-2026-10-10T14-03-11.txt')
+    expect(uploaded[0].name).toBe('technical-details-2026-10-10T14-03-11.txt')
     expect(uploaded[0].size).toBe(ctx.text.length)
     expect(ctx.text).toContain('/api/support/tickets')
   })

@@ -106,7 +106,7 @@ export function SupportRequestDialog({
     return collectSupportContext({
       clip: m?.clip ?? null,
       route: m?.route ?? (typeof window !== 'undefined' ? window.location.pathname : ''),
-      upload: (file) => client.upload(file, { title: 'What they saw' }),
+      upload: (file) => client.upload(file, { title: 'Technical details' }),
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null
     })
   }

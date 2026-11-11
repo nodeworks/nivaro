@@ -9,6 +9,7 @@ import { TaskDoButton } from '../ai/TaskDo'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet'
+import { isSupportContextFile } from './support-context'
 import { TicketTraffic } from './TicketTraffic'
 import {
   STATUS_TONE,
@@ -154,7 +155,7 @@ export function TicketDetailSheet({
           </div>
         ) : (
           <>
-            <SheetHeader className='border-b border-slate-200 px-5 py-4 dark:border-border'>
+            <SheetHeader className='space-y-1.5 border-b border-slate-200 px-5 py-4 text-left dark:border-border'>
               <div className='flex items-center gap-2 pr-6'>
                 <span className='font-mono text-[11.5px] text-slate-400'>#{t.id}</span>
                 <StatusPill status={t.status} label={t.status_label} />
@@ -164,14 +165,14 @@ export function TicketDetailSheet({
                   </span>
                 )}
               </div>
-              <SheetTitle className='mt-1 text-left text-[16px] font-semibold text-slate-900 dark:text-slate-100'>
+              <SheetTitle className='text-left text-[16px] font-semibold leading-snug text-slate-900 dark:text-slate-100'>
                 {t.title}
               </SheetTitle>
               <SheetDescription className='text-left text-[12px] text-slate-500 dark:text-muted-foreground'>
                 {t.requester_name ?? 'Someone'} · {when(t.created_at)}
                 {t.category_name ? ` · ${t.category_name}` : ''}
               </SheetDescription>
-              <div className='mt-1 text-[12px]'>
+              <div className='text-left text-[12px]'>
                 {t.collection && t.item ? (
                   <a
                     href={urlFor({ collection: t.collection, itemId: t.item })}
@@ -181,7 +182,7 @@ export function TicketDetailSheet({
                       openItem({ collection: t.collection as string, itemId: t.item as string })
                     }}
                     data-ticket-record
-                    className='font-medium text-[#00789a] hover:underline dark:text-nvr-cyan'
+                    className='inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 font-medium text-[#00789a] hover:bg-slate-200/70 dark:bg-white/[0.06] dark:text-nvr-cyan dark:hover:bg-white/10'
                   >
                     {t.record_label ?? t.item}
                   </a>
@@ -203,14 +204,14 @@ export function TicketDetailSheet({
               )}
             </SheetHeader>
 
-            <div className='flex-1 space-y-5 overflow-y-auto px-5 py-4'>
+            <div className='flex-1 space-y-6 overflow-y-auto px-5 py-5'>
               {t.can.work && (
                 <div
                   data-ticket-controls
-                  className='grid grid-cols-2 gap-3 rounded-lg border border-slate-200 p-3 dark:border-border'
+                  className='grid grid-cols-2 gap-x-3 gap-y-3.5 rounded-lg border border-slate-200/80 bg-slate-50/70 p-4 dark:border-border dark:bg-white/[0.03]'
                 >
-                  <div className='col-span-2 flex items-center justify-between gap-2'>
-                    <span className='text-[12px] text-slate-600 dark:text-slate-300'>
+                  <div className='col-span-2 flex items-center gap-2'>
+                    <span className='mr-auto text-[12.5px] text-slate-600 dark:text-slate-300'>
                       {t.assignee_name ? (
                         <>
                           Assigned to <b className='font-medium'>{t.assignee_name}</b>
@@ -246,7 +247,7 @@ export function TicketDetailSheet({
                       </button>
                     )}
                   </div>
-                  <div className='block text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
+                  <div className='block text-[11.5px] font-medium text-slate-500 dark:text-slate-400'>
                     Status
                     <SimpleSelect
                       value={t.status}
@@ -256,7 +257,7 @@ export function TicketDetailSheet({
                       className='mt-1'
                     />
                   </div>
-                  <div className='block text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
+                  <div className='block text-[11.5px] font-medium text-slate-500 dark:text-slate-400'>
                     Type
                     <SimpleSelect
                       value={t.category_id != null ? String(t.category_id) : ''}
@@ -269,7 +270,7 @@ export function TicketDetailSheet({
                       className='mt-1'
                     />
                   </div>
-                  <div className='col-span-2 text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
+                  <div className='col-span-2 text-[11.5px] font-medium text-slate-500 dark:text-slate-400'>
                     Assignee
                     <div className='mt-1'>
                       <RelationCombobox
@@ -284,7 +285,7 @@ export function TicketDetailSheet({
               )}
 
               <section>
-                <h3 className='mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
+                <h3 className='mb-2 text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
                   Request
                 </h3>
                 <p className='whitespace-pre-wrap text-[13px] leading-relaxed text-slate-800 dark:text-slate-200'>
@@ -307,7 +308,7 @@ export function TicketDetailSheet({
                         className='mt-2 inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/50 bg-nvr-cyan/10 px-2 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/15 dark:text-nvr-cyan'
                       >
                         <PlayCircle className='h-3.5 w-3.5' />
-                        Watch what they saw
+                        Replay their screen
                       </a>
                     )
                   })()}
@@ -330,33 +331,48 @@ export function TicketDetailSheet({
                       </a>
                     )
                   })()}
-                {t.files.length > 0 && (
-                  <ul className='mt-2 flex flex-wrap gap-1.5'>
-                    {t.files.map((f) => (
-                      <li key={f.id}>
-                        <a
-                          href={`${apiBase}/files/${f.id}`}
-                          target='_blank'
-                          rel='noreferrer'
-                          className='inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[11.5px] text-slate-700 hover:underline dark:bg-white/10 dark:text-slate-200'
-                        >
-                          <Paperclip className='h-3 w-3' />
-                          {f.title || f.filename_download || 'File'}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                {(() => {
+                  // The automatic technical-details text (page, console errors, recent
+                  // requests) helps whoever works the ticket, not the person asking.
+                  const files = t.files.filter((f) => t.can.work || !isSupportContextFile(f))
+                  if (files.length === 0) return null
+                  return (
+                    <ul className='mt-2 flex flex-wrap gap-1.5'>
+                      {files.map((f) => (
+                        <li key={f.id}>
+                          <a
+                            href={`${apiBase}/files/${f.id}`}
+                            target='_blank'
+                            rel='noreferrer'
+                            data-tip={
+                              isSupportContextFile(f)
+                                ? 'The page they were on, browser errors and their last 20 requests when they asked'
+                                : undefined
+                            }
+                            className='inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[11.5px] text-slate-700 hover:underline dark:bg-white/10 dark:text-slate-200'
+                          >
+                            <Paperclip className='h-3 w-3' />
+                            {isSupportContextFile(f)
+                              ? 'Technical details'
+                              : f.title || f.filename_download || 'File'}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  )
+                })()}
               </section>
 
               {t.can.work && <TicketTraffic ticketId={t.id} />}
 
               <section data-ticket-thread>
-                <h3 className='mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
+                <h3 className='mb-2 text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
                   Conversation
                 </h3>
                 {t.thread.length === 0 ? (
-                  <p className='text-[12px] text-slate-400'>No replies yet.</p>
+                  <p className='text-[12.5px] text-slate-500 dark:text-slate-400'>
+                    No replies yet.
+                  </p>
                 ) : (
                   <ul className='space-y-2.5'>
                     {t.thread.map((c) => (
@@ -398,7 +414,7 @@ export function TicketDetailSheet({
                       }}
                       rows={3}
                       placeholder='Write a reply'
-                      className='w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-[12.5px] text-slate-900 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-100'
+                      className='min-h-[76px] w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-[12.5px] text-slate-900 outline-none placeholder:text-slate-400 focus:border-nvr-cyan focus:ring-2 focus:ring-nvr-cyan/20 dark:border-border dark:bg-background dark:text-slate-100'
                     />
                     {presence.replying.length > 0 && (
                       <p
@@ -409,7 +425,7 @@ export function TicketDetailSheet({
                         {signalSentence(presence.replying, 'replying')}…
                       </p>
                     )}
-                    <div className='mt-1.5 flex items-center justify-end gap-2'>
+                    <div className='mt-2 flex items-center justify-end gap-2'>
                       {t.can.cancel && !t.can.work && (
                         <button
                           type='button'
@@ -434,7 +450,7 @@ export function TicketDetailSheet({
                         type='submit'
                         data-ticket-send
                         disabled={!reply.trim() || send.isPending}
-                        className='h-7 rounded-md border border-nvr-cyan/60 bg-nvr-cyan/10 px-2.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/15 disabled:opacity-50 dark:text-nvr-cyan'
+                        className='h-8 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40'
                       >
                         Reply
                       </button>
@@ -449,14 +465,14 @@ export function TicketDetailSheet({
               </section>
 
               <section data-ticket-history>
-                <h3 className='mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
+                <h3 className='mb-2 text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
                   History
                 </h3>
-                <ol className='space-y-1.5 border-l border-slate-200 pl-3 dark:border-border'>
+                <ol className='space-y-2 border-l border-slate-200 pl-3.5 dark:border-border'>
                   {t.history.map((h) => (
                     <li key={h.id} className='text-[12px] text-slate-600 dark:text-slate-300'>
                       <span className='text-slate-800 dark:text-slate-100'>{h.text}</span>
-                      <span className='text-slate-400'>
+                      <span className='text-slate-500 dark:text-slate-400'>
                         {' '}
                         · {h.user_name ?? 'System'} · {when(h.at)}
                       </span>
