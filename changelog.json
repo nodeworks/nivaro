@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-11T21:08:50.281Z",
+  "generated_at": "2026-11-11T21:38:45.926Z",
   "releases": [
+    {
+      "version": "0.3.142",
+      "tag": "v0.3.142",
+      "date": "2026-11-11T16:38:29-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "forms",
+              "text": "pick an external email as a ship-to or additional contact",
+              "hash": "96e55ade7"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "forms",
+              "text": "ship-to contacts that are external emails show as themselves",
+              "hash": "b6440f219"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.141",
       "tag": "v0.3.141",
-      "date": "2026-11-11T16:08:34-05:00",
+      "date": "2026-11-11T16:08:50-05:00",
       "sections": [
         {
           "label": "Fixed",
