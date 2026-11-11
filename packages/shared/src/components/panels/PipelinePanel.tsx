@@ -722,47 +722,10 @@ const FLAG_TONE: Record<string, string> = {
     'border-violet-200 bg-violet-50 text-violet-800 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300'
 }
 
-const FLAG_TEXT: Record<string, string> = {
-  red: 'text-red-700 dark:text-red-300',
-  amber: 'text-amber-700 dark:text-amber-300',
-  yellow: 'text-yellow-700 dark:text-yellow-300',
-  green: 'text-emerald-700 dark:text-emerald-300',
-  blue: 'text-sky-700 dark:text-sky-300',
-  purple: 'text-violet-700 dark:text-violet-300'
-}
-
-/** The record's highlight flags as chips beside its state ("On hold"). `inline`:
- *  quiet status text before the header's action buttons — chips there read as
- *  more buttons squeezed between Save and Submit (Rob 2026-11-11). */
-export function RecordFlagChips({
-  flags,
-  variant = 'chip'
-}: {
-  flags?: RecordFlag[] | null
-  variant?: 'chip' | 'inline'
-}) {
+/** The record's highlight flags as chips beside its state in the Pipeline panel
+ *  ("On hold"). Shown there only, not again in the header's action row. */
+export function RecordFlagChips({ flags }: { flags?: RecordFlag[] | null }) {
   if (!flags || flags.length === 0) return null
-  if (variant === 'inline')
-    return (
-      <span
-        className='inline-flex h-6 shrink-0 items-center gap-3 self-center border-x border-slate-200 px-3 dark:border-border'
-        data-record-flags-inline
-      >
-        {flags.map((f) => (
-          <span
-            key={f.name}
-            data-record-flag={f.name}
-            className={cn(
-              'inline-flex items-center gap-1.5 whitespace-nowrap text-[12px] font-medium',
-              FLAG_TEXT[f.color] ?? FLAG_TEXT.amber
-            )}
-          >
-            <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-current' aria-hidden />
-            {f.name}
-          </span>
-        ))}
-      </span>
-    )
   return (
     <>
       {flags.map((f) => (
@@ -3966,8 +3929,9 @@ function PipelineTransitionButtonsInner({
               : 'flex shrink-0 items-center justify-end gap-2'
           }
         >
-          {/* A hold is seen where Approve is pressed (army 11 a1 F-2). */}
-          <RecordFlagChips flags={data?.flags} variant='inline' />
+          {/* Flags (On hold, Sent back) show once, beside the state in the
+              Pipeline panel — a second copy here squeezed the action row
+              (Rob 2026-11-11). */}
           {Array.from(byLabel.entries()).map(([label, txs]) => {
             // A partner order never wears an approval colour (army 11 a2 F2):
             // neutral outline + a send glyph, and it always asks first.
