@@ -451,6 +451,40 @@ export function NotificationCenterView({
   const renderRow = (n: NotificationRow, indent = false) => {
     const unread = !n.read
     const target = resolveNotificationTargetFor(n, routes)
+    const head = (
+      <>
+        <div className='flex items-baseline gap-2'>
+          {n.lane === 'critical' && (
+            <span className='shrink-0 rounded bg-red-500/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-red-600 dark:text-red-400'>
+              Critical
+            </span>
+          )}
+          {n.lane === 'needs_you' && unread && (
+            <span className='shrink-0 rounded bg-nvr-cyan/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-nvr-navy dark:text-nvr-cyan'>
+              Needs you
+            </span>
+          )}
+          <span
+            className={cn(
+              'truncate text-[13px]',
+              unread
+                ? 'font-medium text-slate-900 dark:text-slate-100'
+                : 'font-normal text-slate-600 dark:text-slate-400'
+            )}
+          >
+            {n.subject ?? n.title ?? '—'}
+          </span>
+          <span className='shrink-0 text-[10.5px] text-slate-400'>
+            {formatRelative(n.created_at ?? new Date())}
+          </span>
+        </div>
+        {n.message && (
+          <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
+            {n.message.replace(/<[^>]+>/g, '')}
+          </p>
+        )}
+      </>
+    )
     return (
       <div
         className={cn(
@@ -475,42 +509,18 @@ export function NotificationCenterView({
           )}
         />
         <div className='min-w-0 flex-1'>
-          <button
-            type='button'
-            onClick={() => void handleRowClick(n)}
-            className='block w-full text-left'
-          >
-            <div className='flex items-baseline gap-2'>
-              {n.lane === 'critical' && (
-                <span className='shrink-0 rounded bg-red-500/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-red-600 dark:text-red-400'>
-                  Critical
-                </span>
-              )}
-              {n.lane === 'needs_you' && unread && (
-                <span className='shrink-0 rounded bg-nvr-cyan/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-nvr-navy dark:text-nvr-cyan'>
-                  Needs you
-                </span>
-              )}
-              <span
-                className={cn(
-                  'truncate text-[13px]',
-                  unread
-                    ? 'font-medium text-slate-900 dark:text-slate-100'
-                    : 'font-normal text-slate-600 dark:text-slate-400'
-                )}
-              >
-                {n.subject ?? n.title ?? '—'}
-              </span>
-              <span className='shrink-0 text-[10.5px] text-slate-400'>
-                {formatRelative(n.created_at ?? new Date())}
-              </span>
-            </div>
-            {n.message && (
-              <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
-                {n.message.replace(/<[^>]+>/g, '')}
-              </p>
-            )}
-          </button>
+          {target || unread ? (
+            <button
+              type='button'
+              onClick={() => void handleRowClick(n)}
+              className='block w-full text-left'
+            >
+              {head}
+            </button>
+          ) : (
+            // Read, with nowhere to open: plain text, never a button that does nothing.
+            <div data-notification-plain>{head}</div>
+          )}
           <div className='mt-1 flex flex-wrap items-center gap-2'>
             {n.sender_name && (
               <span className='text-[11px] text-slate-400'>From {n.sender_name}</span>

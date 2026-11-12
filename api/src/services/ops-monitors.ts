@@ -335,6 +335,30 @@ async function evalDeployRegression(
   }
 }
 
+/**
+ * Where a "Monitor failing" notice opens: the admin's Monitors tab. An in-app path on an
+ * `external` target is made absolute on the admin host when the row is stored, so the admin
+ * app navigates in place and any other app opens it in a new tab. Only people who can open
+ * that page get it — for anyone else the notice stays plain text, never a link that 403s.
+ */
+export const MONITOR_NOTICE_TARGET = {
+  kind: 'external',
+  url: '/health/monitors',
+  action: 'open'
+} as const
+
+/** Which of these people are administrators. A failed lookup answers none: the notice still
+ *  goes out, it just opens nothing. */
+async function adminsAmong(userIds: string[]): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set()
+  try {
+    const { activeAdminIds } = await import('./ops-room-guard.js')
+    return await activeAdminIds(userIds)
+  } catch {
+    return new Set()
+  }
+}
+
 async function raiseIssue(
   monitor: MonitorRow,
   detail: string,
@@ -390,10 +414,12 @@ async function raiseIssue(
         .catch(() => [] as string[])
       const recipients = new Set<string>(subscribers.map(String))
       if (monitor.created_by) recipients.add(String(monitor.created_by))
+      const admins = await adminsAmong([...recipients])
       for (const userId of recipients) {
         await notifyUser(app, userId, {
           subject: `Monitor failing: ${monitor.name}`,
-          message: withDrillNote(detail.slice(0, 500), drill)
+          message: withDrillNote(detail.slice(0, 500), drill),
+          ...(admins.has(userId.toUpperCase()) ? { target: MONITOR_NOTICE_TARGET } : {})
         }).catch(() => {})
       }
       if (drill)

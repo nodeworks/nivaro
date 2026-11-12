@@ -376,20 +376,17 @@ export function NotificationBell({
   }
 
   /** One notification row + its action strip and detail bits. `hasRecord`
-   *  rows open their target on click; `indent` is the bundle expand list. */
-  const renderRow = (n: BellNotification, hasRecord: boolean, indent = false) => (
-    <Fragment key={n.id}>
-      <button
-        type='button'
-        onClick={() => {
-          if (!n.read) markRead.mutate(n.id)
-          openTarget(n)
-        }}
-        className={`flex w-full items-start gap-2.5 py-2 pr-3 text-left transition-colors ${
-          indent ? 'pl-7' : 'pl-3'
-        } ${hasRecord ? 'hover:bg-slate-50 dark:hover:bg-muted' : 'cursor-default'}`}
-        data-notification-row={n.id}
-      >
+   *  rows open their target on click; `indent` is the bundle expand list.
+   *
+   *  A row is a button only when ITS target resolves in this app. One with
+   *  nowhere to go (a monitor notice, a broadcast) is plain text with its own
+   *  Mark read button: a row-sized button that does nothing once the row is
+   *  read was clicked again and again on the first day live. */
+  const renderRow = (n: BellNotification, hasRecord: boolean, indent = false) => {
+    const opens = resolveNotificationTargetFor(n, routes) != null
+    const pad = `py-2 pr-3 ${indent ? 'pl-7' : 'pl-3'}`
+    const body = (
+      <>
         <span
           className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
             n.read ? 'bg-transparent' : n.lane === 'critical' ? 'bg-red-500' : 'bg-nvr-cyan'
@@ -450,64 +447,102 @@ export function NotificationBell({
             )}
           </span>
         </span>
-        {!hasRecord && !n.read && (
-          // biome-ignore lint/a11y/useSemanticElements: nested inside the row's <button> — a real <button> is invalid there
-          <span
-            role='button'
-            tabIndex={-1}
-            title='Mark read'
-            onClick={(e) => {
-              e.stopPropagation()
-              markRead.mutate(n.id)
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                e.stopPropagation()
-                markRead.mutate(n.id)
-              }
-            }}
-            className='mt-0.5 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
-          >
-            <Check className='h-3 w-3' />
-          </span>
-        )}
-      </button>
-      {n.ack?.required && !n.ack.at && (
-        <div className={`pb-2 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}>
+      </>
+    )
+    const markReadClass =
+      'mt-0.5 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
+    return (
+      <Fragment key={n.id}>
+        {opens ? (
           <button
             type='button'
-            disabled={acknowledge.isPending}
-            onClick={() => acknowledge.mutate(n.id)}
-            data-notification-acknowledge={n.id}
-            className='inline-flex items-center gap-1 rounded-md bg-nvr-cyan px-2 py-1 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50'
+            onClick={() => {
+              if (!n.read) markRead.mutate(n.id)
+              openTarget(n)
+            }}
+            className={`flex w-full items-start gap-2.5 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted ${pad}`}
+            data-notification-row={n.id}
           >
-            <ShieldCheck className='h-3 w-3' />
-            Acknowledge
+            {body}
+            {!hasRecord && !n.read && (
+              // biome-ignore lint/a11y/useSemanticElements: nested inside the row's <button> — a real <button> is invalid there
+              <span
+                role='button'
+                tabIndex={-1}
+                title='Mark read'
+                onClick={(e) => {
+                  e.stopPropagation()
+                  markRead.mutate(n.id)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    markRead.mutate(n.id)
+                  }
+                }}
+                className={markReadClass}
+              >
+                <Check className='h-3 w-3' />
+              </span>
+            )}
           </button>
-        </div>
-      )}
-      {n.actions && n.actions.length > 0 && !n.read && (
-        <NotificationActions
-          actions={n.actions}
+        ) : (
+          <div
+            className={`flex w-full items-start gap-2.5 text-left ${pad}`}
+            data-notification-row={n.id}
+            data-notification-plain
+          >
+            {body}
+            {!n.read && (
+              <button
+                type='button'
+                title='Mark read'
+                aria-label='Mark read'
+                onClick={() => markRead.mutate(n.id)}
+                className={markReadClass}
+              >
+                <Check className='h-3 w-3' />
+              </button>
+            )}
+          </div>
+        )}
+        {n.ack?.required && !n.ack.at && (
+          <div className={`pb-2 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}>
+            <button
+              type='button'
+              disabled={acknowledge.isPending}
+              onClick={() => acknowledge.mutate(n.id)}
+              data-notification-acknowledge={n.id}
+              className='inline-flex items-center gap-1 rounded-md bg-nvr-cyan px-2 py-1 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50'
+            >
+              <ShieldCheck className='h-3 w-3' />
+              Acknowledge
+            </button>
+          </div>
+        )}
+        {n.actions && n.actions.length > 0 && !n.read && (
+          <NotificationActions
+            actions={n.actions}
+            notificationId={n.id}
+            onError={onActionError}
+            className={`pb-2 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}
+          />
+        )}
+        <NotificationDetailBits
+          detail={n.detail}
+          why={n.why}
+          delivery={n.delivery}
           notificationId={n.id}
-          onError={onActionError}
-          className={`pb-2 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}
+          recordChanges={offersChanges(n)}
+          subscriptionsPath={subscriptionsPath}
+          rulesPath={rulesPath}
+          onNavigate={navigateAndClose}
+          className={`pb-3 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}
         />
-      )}
-      <NotificationDetailBits
-        detail={n.detail}
-        why={n.why}
-        delivery={n.delivery}
-        notificationId={n.id}
-        recordChanges={offersChanges(n)}
-        subscriptionsPath={subscriptionsPath}
-        rulesPath={rulesPath}
-        onNavigate={navigateAndClose}
-        className={`pb-3 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}
-      />
-    </Fragment>
-  )
+      </Fragment>
+    )
+  }
 
   /** #1256 — a record bundle: "N things on <record>", category chips, the
    *  most urgent lane's colour; expand lists the rows, open goes to the

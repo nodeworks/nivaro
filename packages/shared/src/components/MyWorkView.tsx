@@ -954,22 +954,30 @@ export function MyWorkView({
                           <span className='mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[9px] font-semibold text-slate-500 dark:bg-muted' />
                         }
                       />
-                      <button
-                        type='button'
-                        onClick={() => open(n.collection, n.item)}
-                        className={
-                          notificationTargetFor(n.collection, n.item)
-                            ? 'min-w-0 flex-1 cursor-pointer text-left hover:opacity-80'
-                            : 'min-w-0 flex-1 cursor-default text-left'
-                        }
-                      >
-                        <p className='truncate text-[12.5px] font-medium'>{n.subject}</p>
-                        {n.message && (
-                          <p className='truncate text-[11.5px] text-muted-foreground'>
-                            {n.message}
-                          </p>
-                        )}
-                      </button>
+                      {notificationTargetFor(n.collection, n.item) ? (
+                        <button
+                          type='button'
+                          onClick={() => open(n.collection, n.item)}
+                          className='min-w-0 flex-1 cursor-pointer text-left hover:opacity-80'
+                        >
+                          <p className='truncate text-[12.5px] font-medium'>{n.subject}</p>
+                          {n.message && (
+                            <p className='truncate text-[11.5px] text-muted-foreground'>
+                              {n.message}
+                            </p>
+                          )}
+                        </button>
+                      ) : (
+                        // Nowhere to open: plain text, never a button that does nothing.
+                        <div className='min-w-0 flex-1' data-notification-plain>
+                          <p className='truncate text-[12.5px] font-medium'>{n.subject}</p>
+                          {n.message && (
+                            <p className='truncate text-[11.5px] text-muted-foreground'>
+                              {n.message}
+                            </p>
+                          )}
+                        </div>
+                      )}
                       <button
                         type='button'
                         title='Mark read'
