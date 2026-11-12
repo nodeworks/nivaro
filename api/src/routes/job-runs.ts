@@ -4,19 +4,10 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { cronTicksEnabled } from '../plugins/cron.js'
 import { withDeadlockRetry } from '../services/deadlock-retry.js'
+import { countsAsBusy } from '../services/job-busy.js'
 import { describeJobRunRow, parseProgress, skippedRows } from '../services/job-run-sentences.js'
 import { readJobLog } from '../services/job-runs.js'
 
-/** Kinds that hold real capacity: while one runs, admins see "System busy". */
-const BUSY_KINDS = new Set([
-  'backfill',
-  'recalc',
-  'bulk',
-  'export',
-  'tuning',
-  'render',
-  'remediation'
-])
 const BUSY_WINDOW_MS = 2 * 3_600_000
 
 const median = (xs: number[]): number | null => {
@@ -100,9 +91,9 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
         .orderBy('id', 'desc')
         .limit(50)
     )) as Array<Record<string, unknown>>
-    const hot = running.filter(
-      (r) =>
-        BUSY_KINDS.has(String(r.kind)) || (r.kind === 'cron' && heavyCrons.has(String(r.job_id)))
+    // The same rule the run's own job:update events carry as `busy` (services/job-busy.ts).
+    const hot = running.filter((r) =>
+      countsAsBusy(String(r.kind), String(r.job_id), (id) => heavyCrons.has(id))
     )
     const now = Date.now()
     const items = await Promise.all(

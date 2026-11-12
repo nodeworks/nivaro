@@ -749,6 +749,11 @@ export class CronManager {
     }
   }
 
+  /** Is this job registered as heavy? One map read: job-runs asks it for every run it starts. */
+  isHeavy(id: string): boolean {
+    return this.entries.get(id)?.heavy === true
+  }
+
   /** Who holds the heavy slot right now (null = free / unknown). */
   async heavySlotHolder(): Promise<string | null> {
     const redis = this.leader.client()

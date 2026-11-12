@@ -5,6 +5,7 @@ import { cronTicksEnabled } from './cron-ticks.js'
 import { instanceKey } from './instance-key.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { getApp, getIo } from './io-holder.js'
+import { countsAsBusy } from './job-busy.js'
 import { progressJson } from './job-run-sentences.js'
 import { emitJobProgress } from './live-progress.js'
 import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
@@ -190,6 +191,16 @@ function emitJobEvent(
   }
 }
 
+/** Asked once per run; a registry that is not up yet (boot, a script) just answers no. */
+function runCountsAsBusy(kind: string, jobId: string): boolean {
+  try {
+    const cron = getApp()?.cron as { isHeavy?: (id: string) => boolean } | undefined
+    return countsAsBusy(kind, jobId, (id) => cron?.isHeavy?.(id) === true)
+  } catch {
+    return false
+  }
+}
+
 export async function startJobRun(
   kind: JobRunKind,
   jobId: string,
@@ -210,7 +221,11 @@ export async function startJobRun(
   const startedAt = new Date()
   // The run's own tenant: later log lines (cron callbacks, timers) key by it, not by whoever is current.
   const tenant = currentTenantKey()
-  const emitRun = (payload: Record<string, unknown>) => emitJobEvent(payload, 'job:update', tenant)
+  // Runs the "System busy" pill counts say so on every lifecycle event (services/job-busy.ts):
+  // an open admin tab re-reads the pill for those only, not for every light cron tick.
+  const busy = runCountsAsBusy(kind, jobId)
+  const emitRun = (payload: Record<string, unknown>) =>
+    emitJobEvent(busy ? { ...payload, busy: true } : payload, 'job:update', tenant)
   let id: number | null = null
   try {
     const origin = await originFields(jobId, opts?.trigger, opts?.leaseHolder)

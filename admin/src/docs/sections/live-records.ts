@@ -263,7 +263,11 @@ export const collabLiveOps: DocSection = {
           '`watch:conformance` (administrators; per tenant in cloud)',
           '`{run, collection, status, checked, violations, total}`'
         ],
-        ['`job:update`', '`watch:jobs` (administrators)', 'run id, kind, job id, status, progress'],
+        [
+          '`job:update`',
+          '`watch:jobs` (administrators)',
+          'run id, kind, job id, status, progress; `busy: true` on runs the System busy pill counts (long-running kinds and heavy cron jobs)'
+        ],
         [
           '`job:log`',
           '`watch:jobs` (administrators)',

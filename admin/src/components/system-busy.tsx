@@ -13,8 +13,15 @@ import { useAuth } from '@/lib/auth'
  * flight a small pill says so, so a slow screen has an explanation. The
  * estimate is the median of the same job's last completed runs
  * (`GET /job-runs/busy`); no history means no estimate, only "running".
- * Start/finish events from the jobs watch room refresh it; the poll is the
- * safety net and pauses with the tab.
+ *
+ * What keeps it current: the jobs watch room says when heavy work starts and
+ * ends (`job:update` with `busy: true`), and only those events re-read. Every
+ * other run's start and finish is ignored: a busy instance records over a
+ * thousand light cron ticks an hour, and re-reading for each made every open
+ * admin tab call this route every ten seconds, day and night. A slow poll
+ * covers what the room does not carry (a collection import starting) and the
+ * "minutes left" text. A hidden tab asks nothing and reads once when it shows
+ * again.
  */
 
 interface BusyItem {
@@ -52,6 +59,34 @@ export function busyText(items: BusyItem[]): string {
   return `System busy: ${name} running${est ? `, ${est}` : ''}`
 }
 
+/** A `job:update` payload: the run, its state, and whether the pill counts it. */
+export interface JobUpdateEvent {
+  id?: unknown
+  status?: unknown
+  progress?: unknown
+  busy?: unknown
+}
+
+/**
+ * Does this `job:update` change what the pill shows? A run the server marks `busy` starting
+ * or ending does; so does the end of a run already on the pill. Progress reports and every
+ * other run do not.
+ */
+export function busyEventMatters(
+  p: JobUpdateEvent | null | undefined,
+  shownIds: readonly number[]
+): boolean {
+  if (!p || p.progress) return false
+  if (p.busy === true) return true
+  return typeof p.id === 'number' && shownIds.includes(p.id)
+}
+
+/** The backstop poll: a minute or slower with the watch room, never under 30 s without it. */
+export function busyPollMs(live: boolean, busy: boolean | undefined): number {
+  if (live) return busy ? 60_000 : 120_000
+  return busy ? 30_000 : 60_000
+}
+
 export function SystemBusy() {
   const { user } = useAuth()
   if (!user?.is_admin) return null
@@ -65,11 +100,10 @@ function SystemBusyPill() {
   const q = useQuery({
     queryKey: ['system-busy'],
     queryFn: () => api.get<{ data: BusyPayload }>('/job-runs/busy').then((r) => r.data.data),
-    refetchInterval: (query) => {
-      const busy = query.state.data?.busy
-      if (live) return busy ? 30_000 : 120_000
-      return busy ? 10_000 : 45_000
-    },
+    refetchInterval: (query) => busyPollMs(live, query.state.data?.busy),
+    // The poll stops while the tab is hidden; coming back to it reads once.
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: 'always',
     // The chip is decoration: a failed read never toasts or retries loudly.
     retry: false
   })
@@ -80,11 +114,13 @@ function SystemBusyPill() {
     },
     []
   )
+  const shownIds = useRef<number[]>([])
+  shownIds.current = (q.data?.items ?? []).map((i) => i.id)
   useLiveEvent(
     'job:update',
-    (p: { progress?: unknown }) => {
-      // Progress reports do not change what is running; starts and finishes do.
-      if (p?.progress || timer.current) return
+    (p: JobUpdateEvent) => {
+      if (timer.current || document.visibilityState === 'hidden') return
+      if (!busyEventMatters(p, shownIds.current)) return
       timer.current = setTimeout(() => {
         timer.current = null
         void qc.invalidateQueries({ queryKey: ['system-busy'] })
