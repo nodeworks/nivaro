@@ -22,7 +22,10 @@ vi.mock('../../../hooks/registry.js', () => ({
 vi.mock('../../../services/unit-of-work.js', () => ({
   deferEffect: (_l: string, run: () => Promise<unknown>) => run()
 }))
-vi.mock('../../../services/instance-start.js', () => ({ writeStartHistory: vi.fn(async () => {}) }))
+const writeStartHistory = vi.hoisted(() => vi.fn(async () => {}))
+vi.mock('../../../services/instance-start.js', () => ({ writeStartHistory }))
+const trackError = vi.hoisted(() => vi.fn(async (_issue: Record<string, unknown>) => {}))
+vi.mock('../../../services/error-tracking.js', () => ({ trackError }))
 const emitWorkflowStartEvent = vi.hoisted(() => vi.fn(async () => {}))
 vi.mock('../../../services/workflow-transitions.js', () => ({
   emitWorkflowStartEvent,
@@ -65,6 +68,8 @@ async function create(ctx: Record<string, unknown>) {
 
 beforeEach(() => {
   emitWorkflowStartEvent.mockClear()
+  writeStartHistory.mockClear()
+  trackError.mockClear()
   state.inserted.length = 0
   state.binding = {
     collection: 'inventory_request',
@@ -114,6 +119,48 @@ describe('autostart into a later state', () => {
     await create({ user: PERSON, req: req() })
     expect(state.inserted).toHaveLength(1)
     expect(emitWorkflowStartEvent).not.toHaveBeenCalled()
+  })
+})
+
+describe('an auto-start that fails part-way is recorded', () => {
+  // Production 2026-11: two of 261 inventory request creates stalled ~15 s in auto-start.
+  // The instance row was written, the start history row was not, the state's owners were
+  // never told, and the catch dropped the error without a trace.
+  it('files an issue naming the record and the step, and still does not fail the create', async () => {
+    writeStartHistory.mockRejectedValueOnce(
+      new Error('Timeout: Request failed to complete in 15000ms')
+    )
+    await expect(create({ user: PERSON, req: req() })).resolves.toBeUndefined()
+    expect(state.inserted).toHaveLength(1)
+    expect(emitWorkflowStartEvent).not.toHaveBeenCalled()
+    expect(trackError).toHaveBeenCalledTimes(1)
+    const issue = trackError.mock.calls[0][0]
+    expect(issue.route).toBe('pipeline/autostart')
+    expect(issue.message).toContain('inventory_request 37653')
+    expect(issue.message).toContain('start history')
+    expect(issue.message).toContain('Request failed to complete in 15000ms')
+    // The record sits in its start state with nobody told: someone has to look.
+    expect(issue.severity).toBe('high')
+    expect(issue.userId).toBe('U-MIKE')
+  })
+
+  it('a failure before anything was written is recorded as a lesser issue', async () => {
+    // Reading the binding's settings fails: nothing was started, nothing is half-done.
+    state.binding = {
+      get auto_start(): boolean {
+        throw new Error('connection lost')
+      }
+    }
+    await expect(create({ user: PERSON, req: req() })).resolves.toBeUndefined()
+    expect(state.inserted).toHaveLength(0)
+    expect(trackError).toHaveBeenCalledTimes(1)
+    expect(trackError.mock.calls[0][0].severity).toBe('medium')
+    expect(String(trackError.mock.calls[0][0].message)).toContain('connection lost')
+  })
+
+  it('a start that works files nothing', async () => {
+    await create({ user: PERSON, req: req() })
+    expect(trackError).not.toHaveBeenCalled()
   })
 })
 
