@@ -227,7 +227,7 @@ ctx.importProcessors.register({
     },
     {
       type: 'note',
-      text: 'The staging table is still loaded before a processor runs, so it stays the record of the last file and post-run flows that read it keep working. The records a run changed are handed to those flows as `affected` in the payload. If the extension that owns the processor is not loaded on an instance, the definition falls back to its procedure and the run says so.'
+      text: 'A processor reads the parsed rows, never the staging table. Post-run flows get the records the run changed as `affected` in the payload, and an extension flow op reads the file itself by run id (`ctx.importProcessors.runRows(run_id)`, kept about 30 minutes in the process that ran the import). If the extension that owns the processor is not loaded on an instance, the definition falls back to its procedure and the run says so.'
     },
     { type: 'h3', id: 'imports-table-config', text: 'Configuring a table import' },
     {
@@ -304,7 +304,7 @@ ctx.importProcessors.register({
         ],
         [
           'keep_staging',
-          'Also fill the staging table, for a post-run flow or procedure that reads it. Off by default — the items-service paths work from the parsed rows and never read the table.'
+          'Also fill the staging table, for a procedure or an older flow that still reads it. Off by default and rarely needed: the items-service paths work from the parsed rows, and a post-run flow op reads the run rows by run id (`ctx.importProcessors.runRows`). Two runs of one import share the table, so a copy there is the last file, not necessarily this run.'
         ]
       ]
     },

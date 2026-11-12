@@ -355,7 +355,12 @@ export interface ExtensionContext {
   importParsers: { register(def: ImportParserDef): void }
   /** Processors for staged imports whose file spans several collections;
    *  `key` is `<extension>:<name>` and is what an import definition names. */
-  importProcessors: { register(def: ImportProcessorDef): void }
+  importProcessors: {
+    register(def: ImportProcessorDef): void
+    /** A finished run's parsed rows (keyed by the definition's staging column names) for
+     *  its post-run flow ops; null once gone (kept ~30 min, in the process that ran it). */
+    runRows(runId: string | number | null | undefined): Array<Record<string, string>> | null
+  }
   validators: { register(def: ValidatorDef): void }
   approvalBrief: {
     /** One short line on the transition confirm's approval brief. */

@@ -4,6 +4,7 @@ import { activityGroupKey, withActivityScope } from './activity-scope.js'
 import { newChainId, startChain } from './chain.js'
 import { getFile, readFileBuffer } from './files.js'
 import { loadQueueStanding, publishQueueStanding } from './import-queue-standing.js'
+import { rememberRunRows } from './import-run-rows.js'
 import { emitImportProgress, emitJobProgress } from './live-progress.js'
 import { notifyUser } from './notification-channels.js'
 import type { ImportDefinition } from './staged-imports.js'
@@ -310,7 +311,7 @@ async function runOne(
         on_behalf_of: next.created_by ? String(next.created_by) : null
       }
     }
-    const { rowCount, durationSeconds, summary, affected, matched } = await startChain(
+    const { rowCount, durationSeconds, summary, affected, matched, rows } = await startChain(
       chainRoot,
       () =>
         withActivityScope(importScope, () =>
@@ -385,6 +386,11 @@ async function runOne(
       outcome: summary ? summary.split('\n')[0].slice(0, 300) : `Imported ${rowCount} rows.`,
       href: `/imports?run=${next.id}`
     })
+    // Post-run flow ops read this run's file values by run id (import-run-rows.ts) instead
+    // of a shared staging table. Only kept when the definition names flows to read them.
+    if (rows && parsePostRunFlows(definition.post_run_flows).length > 0) {
+      rememberRunRows(String(next.id), rows)
+    }
     startChain(
       chainRoot,
       () =>

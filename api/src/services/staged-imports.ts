@@ -677,6 +677,8 @@ export async function runStagedImport({
   affected?: Record<string, Array<string | number>>
   /** Every stored record the file named, changed or not, per collection. */
   matched?: Record<string, Array<string | number>>
+  /** The parsed, header-mapped rows — the worker keeps them for the post-run flows. */
+  rows?: Array<Record<string, string>>
 }> {
   const began = Date.now()
 
@@ -758,7 +760,8 @@ export async function runStagedImport({
       durationSeconds,
       summary: withNote(summary.log),
       affected: summary.affected,
-      matched: summary.matched
+      matched: summary.matched,
+      rows
     }
   }
 
@@ -815,7 +818,8 @@ export async function runStagedImport({
       rowCount: rows.length,
       durationSeconds,
       summary: withNote(result.log),
-      affected: result.affected
+      affected: result.affected,
+      rows
     }
   }
 
@@ -855,6 +859,9 @@ export async function runStagedImport({
   return {
     rowCount: rows.length,
     durationSeconds,
-    ...(notes.length > 0 ? { summary: [`Imported ${rows.length} rows.`, ...notes].join('\n') } : {})
+    ...(notes.length > 0
+      ? { summary: [`Imported ${rows.length} rows.`, ...notes].join('\n') }
+      : {}),
+    rows
   }
 }

@@ -776,7 +776,10 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     fieldTypes: { register: (d) => registered.fieldTypes.push(d) },
     collectionViews: { register: (d) => registered.collectionViews.push(d) },
     importParsers: { register: (d) => registered.importParsers.push(d) },
-    importProcessors: { register: (d) => registered.importProcessors.push(d) },
+    importProcessors: {
+      register: (d) => registered.importProcessors.push(d),
+      runRows: () => null
+    },
     validators: { register: (d) => registered.validators.push(d) },
     approvalBrief: {
       registerLine: (collection, fn) => registered.briefLines.push({ collection, fn })

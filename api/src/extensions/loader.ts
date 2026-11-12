@@ -33,6 +33,7 @@ import {
 } from '../services/extension-schema-steps.js'
 import { type CallOptions, callExternalApi } from '../services/external-apis.js'
 import { registerImportProcessor } from '../services/import-processors.js'
+import { runRows } from '../services/import-run-rows.js'
 import { registerEventSource } from '../services/integration-event-sources.js'
 import { registerIntegrityCheck } from '../services/integrity-checks.js'
 import { registerMailTemplateRoot, renderMailTemplate } from '../services/mail.js'
@@ -902,7 +903,8 @@ export function registrationMembers(
         note('import-processors')
         own('import_processors', `${def.key} · ${def.label}`)
         registerImportProcessor(def)
-      }
+      },
+      runRows: (runId) => runRows(runId)
     },
     importParsers: {
       register: (def) => {
