@@ -88,6 +88,85 @@ export interface PushPayload {
   /** Chaos (#2861): one-time token behind the notification's Stop action, which ends every
    *  fault on the instance (`POST /api/chaos/stop-all/push`). */
   stop_token?: string | null
+  /** The inbox row this push is about: the notification's Mark as read action
+   *  and a click both mark it read. */
+  id?: number | null
+  /** Notification category — picks the icon (`/push/<key>.png`, PUSH_ICON_CATEGORIES). */
+  category?: string | null
+  /** Inbox lane: critical stays on screen, FYI arrives silently, needs-you
+   *  and critical carry a corner dot on the icon. */
+  lane?: 'critical' | 'needs_you' | 'fyi' | null
+  /** When it happened (ISO); the notification shows this time, not the arrival. */
+  at?: string | null
+  /** The record it is about: a newer push about the same record replaces the
+   *  older one instead of stacking (the inbox keeps every row). */
+  collection?: string | null
+  item?: string | number | null
+}
+
+/**
+ * Categories with their own notification icon (scripts/push-icons.mjs draws
+ * them into admin/public/push and efp-new/public/push). Anything else shows
+ * the app's own mark (`default`).
+ */
+export const PUSH_ICON_CATEGORIES = [
+  'workflow',
+  'approvals',
+  'tasks',
+  'mentions',
+  'watch',
+  'alerts',
+  'anomaly',
+  'sla',
+  'reports',
+  'integrations',
+  'system',
+  'security',
+  'chat',
+  'huddle',
+  'chaos'
+] as const
+
+const ICON_ALIASES: Record<string, (typeof PUSH_ICON_CATEGORIES)[number]> = {
+  approval: 'approvals',
+  task: 'tasks',
+  mention: 'mentions',
+  alert: 'alerts',
+  audit: 'security',
+  access: 'security',
+  report: 'reports',
+  integration: 'integrations'
+}
+
+/** The icon file key for a category + lane, e.g. `sla-needs`, `default`. */
+export function pushIconKey(category: string | null | undefined, lane?: string | null): string {
+  const c = String(category ?? '').toLowerCase()
+  const base = (PUSH_ICON_CATEGORIES as readonly string[]).includes(c)
+    ? c
+    : (ICON_ALIASES[c] ?? 'default')
+  return lane === 'critical' ? `${base}-critical` : lane === 'needs_you' ? `${base}-needs` : base
+}
+
+/** The JSON the service workers read (admin/public/sw.js, efp-new/public/sw.js). */
+export function pushBody(payload: PushPayload): string {
+  const recordTag =
+    payload.collection && payload.item != null && payload.item !== ''
+      ? `rec-${payload.collection}-${payload.item}`
+      : null
+  const category = payload.category ?? (payload.room ? 'chat' : payload.stop_token ? 'chaos' : null)
+  return JSON.stringify({
+    title: payload.title.slice(0, 120),
+    body: payload.body.slice(0, 300),
+    url: payload.url ?? null,
+    tag: payload.tag ?? recordTag ?? (payload.id != null ? `n-${payload.id}` : null),
+    room: payload.room ?? null,
+    reply_token: payload.reply_token ?? null,
+    stop_token: payload.stop_token ?? null,
+    id: payload.id ?? null,
+    icon: pushIconKey(category, payload.lane),
+    lane: payload.lane ?? null,
+    at: payload.at ?? null
+  })
 }
 
 /**
@@ -111,7 +190,9 @@ export async function sendWebPush(userId: string, payload: PushPayload): Promise
         ...payload,
         title: `${routed.prefix}${payload.title}`,
         reply_token: undefined,
-        stop_token: undefined
+        stop_token: undefined,
+        // Not their row: Mark as read would 404 for the test recipient.
+        id: undefined
       }
     }
     // Phones share the table (services/phone-push.ts) and go out through Expo or the push relay.
@@ -127,15 +208,7 @@ export async function sendWebPush(userId: string, payload: PushPayload): Promise
     if (subs.length === 0) return 0
 
     const vapid = await getVapidKeys()
-    const body = JSON.stringify({
-      title: payload.title.slice(0, 120),
-      body: payload.body.slice(0, 300),
-      url: payload.url ?? null,
-      tag: payload.tag ?? null,
-      room: payload.room ?? null,
-      reply_token: payload.reply_token ?? null,
-      stop_token: payload.stop_token ?? null
-    })
+    const body = pushBody(payload)
 
     let sent = 0
     for (const sub of subs) {

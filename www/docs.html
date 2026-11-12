@@ -17370,7 +17370,7 @@ TWILIO_FROM=+15551234567</code></pre>
           <!-- /SYNC:sms-push-channels -->
         </div>
 
-        <div class="doc-section" id="s-web-push" data-toc='[{"id":"web-push","label":"Browser Push Notifications"},{"id":"phone-push","label":"Phone alerts (mobile apps)"}]'>
+        <div class="doc-section" id="s-web-push" data-toc='[{"id":"web-push","label":"Browser Push Notifications"},{"id":"web-push-look","label":"What a browser notification looks like"},{"id":"phone-push","label":"Phone alerts (mobile apps)"}]'>
           <!-- SYNC:web-push -->
           <h1 class="doc-h1" id="web-push">Browser Push Notifications</h1>
           <p class="doc-p">Native browser push (Web Push / VAPID) delivers notifications even when the admin tab is closed. Every in-app notification also fans out to each browser the user enabled push on.</p>
@@ -17383,7 +17383,16 @@ POST /api/push/test               # sends a test push to your browsers</code></p
             <li>Enable per device from Profile → Browser Notifications; a badge shows how many devices are registered.</li>
             <li>VAPID keys resolve from VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY env vars first, then nivaro_settings; with neither set a keypair is generated once and stored — zero setup.</li>
             <li>Dead subscriptions (404/410 from the push service) are pruned automatically on send.</li>
-            <li>Clicking a push focuses the admin and navigates to the related record or the Notifications Center.</li>
+            <li>Clicking a push focuses the admin and navigates to the related record or the Notifications Center, and marks the notification read.</li>
+          </ul>
+          <h2 class="doc-h2" id="web-push-look">What a browser notification looks like</h2>
+          <ul class="doc-ul">
+            <li>Each notification carries an icon for its category (workflow, approvals, tasks, mentions, field watches, alerts, anomalies, SLA, reports, integrations, system, security, chat, huddles, chaos drills); anything else shows the app mark. A corner dot gives the lane: amber = needs you, red = critical, none = FYI.</li>
+            <li>Two actions: Open and Mark as read. Mark as read clears the inbox row without opening the app.</li>
+            <li>A newer notification about the same record replaces the older one instead of stacking; the inbox still keeps every row.</li>
+            <li>FYI notifications arrive without a sound. Critical ones stay on screen until dismissed (where the system allows it).</li>
+            <li>The time shown is when the event happened, not when the browser received it.</li>
+            <li>Icons are PNG files in /push (Chrome draws no SVG in a notification); regenerate them with node scripts/push-icons.mjs (admin) or --brand efp --out ../efp-new/public/push (EFP).</li>
           </ul>
           <h2 class="doc-h2" id="phone-push">Phone alerts (mobile apps)</h2>
           <p class="doc-p">A phone app built with Expo registers its push token, and every notification that would go to the person's browsers also goes to their phones through the Expo push service — the same Push column in Profile → Notification rules, the same quiet hours, escalation reminders and test mode. A phone is stored as a push subscription whose endpoint is <code class="doc-code">expo:&lt;token&gt;</code>, so it counts as a push device everywhere (delivery chips, Notification Bench, Test my rules); no migration.</p>

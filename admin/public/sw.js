@@ -1,4 +1,25 @@
-/* Nivaro service worker — web push display + click-through. */
+/* Nivaro service worker — web push display + click-through. Push only: no
+   fetch handler, so it never caches or intercepts app requests, and a new
+   version can take over at once. */
+
+self.addEventListener('install', () => self.skipWaiting())
+self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
+
+// Raster icons from scripts/push-icons.mjs: Chrome draws no SVG in a notification.
+const BADGE = '/push/badge.png'
+const iconFor = (key) =>
+  `/push/${/^[a-z]+(-needs|-critical)?$/.test(key || '') ? key : 'default'}.png`
+
+/** Mark the inbox row read, as the signed-in person (session cookie). */
+function markRead(id) {
+  if (id == null) return Promise.resolve()
+  return fetch(`/api/notifications/${encodeURIComponent(id)}/read`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  }).catch(() => undefined)
+}
 
 self.addEventListener('push', (event) => {
   let data = {}
@@ -15,17 +36,31 @@ async function show(data) {
   const url =
     data.url || (data.room ? `/chat?room=${encodeURIComponent(data.room)}` : '/notifications')
   if (!data.room) {
+    const at = data.at ? Date.parse(data.at) : Number.NaN
     const options = {
       body: data.body || '',
-      tag: data.tag || undefined,
-      icon: '/favicon.svg',
-      badge: '/favicon.svg',
-      data: { url, stop_token: data.stop_token || null }
+      icon: iconFor(data.icon),
+      badge: BADGE,
+      // FYI arrives without a sound; critical stays until it is dealt with.
+      silent: data.lane === 'fyi',
+      requireInteraction: data.lane === 'critical',
+      data: { url, id: data.id ?? null, stop_token: data.stop_token || null }
     }
-    // Chaos drills (#2861): Stop ends every fault on the instance, no sign-in needed.
+    if (Number.isFinite(at)) options.timestamp = at
+    // A newer push about the same record replaces the older one (and still sounds).
+    if (data.tag) {
+      options.tag = data.tag
+      options.renotify = true
+    }
     if (data.stop_token) {
+      // Chaos drills (#2861): Stop ends every fault on the instance, no sign-in needed.
       options.actions = [{ action: 'chaos-stop', title: 'Stop all faults' }]
       options.requireInteraction = true
+    } else if (data.id != null) {
+      options.actions = [
+        { action: 'open', title: 'Open' },
+        { action: 'read', title: 'Mark as read' }
+      ]
     }
     return self.registration.showNotification(title, options)
   }
@@ -41,8 +76,8 @@ async function show(data) {
     body,
     tag,
     renotify: true,
-    icon: '/favicon.svg',
-    badge: '/favicon.svg',
+    icon: iconFor(data.icon || 'chat'),
+    badge: BADGE,
     data: { url, room: data.room, count, reply_token: data.reply_token || null }
   }
   // Reply from the notification (#956) where the browser offers a text action.
@@ -76,7 +111,8 @@ self.addEventListener('notificationclick', (event) => {
               ? `${(b.data && b.data.stopped && b.data.stopped.length) || 0} fault(s) stopped on this instance.`
               : (b && b.error) || 'Open the chaos console to stop them.',
             tag: 'chaos-stop-result',
-            icon: '/favicon.svg',
+            icon: iconFor('chaos'),
+            badge: BADGE,
             data: { url: '/chaos' }
           })
         )
@@ -84,7 +120,8 @@ self.addEventListener('notificationclick', (event) => {
           self.registration.showNotification('Stop did not go through', {
             body: 'Open the chaos console to stop them.',
             tag: 'chaos-stop-result',
-            icon: '/favicon.svg',
+            icon: iconFor('chaos'),
+            badge: BADGE,
             data: { url: '/chaos' }
           })
         )
@@ -107,7 +144,8 @@ self.addEventListener('notificationclick', (event) => {
             : self.registration.showNotification('Reply not sent', {
                 body: 'Open the conversation to send it.',
                 tag: `chat-${d.room}-failed`,
-                icon: '/favicon.svg',
+                icon: iconFor('chat'),
+                badge: BADGE,
                 data: { url: d.url }
               })
         )
@@ -115,23 +153,33 @@ self.addEventListener('notificationclick', (event) => {
     )
     return
   }
+  if (event.action === 'read') {
+    event.notification.close()
+    event.waitUntil(markRead(d.id))
+    return
+  }
+  // A click (or Open) goes to the target and counts as reading it.
   event.notification.close()
+  const read = markRead(d.id)
   const raw = d.url || '/notifications'
   const url = new URL(raw, self.location.origin)
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
-      // A link into another app (a headless frontend) opens a new tab; only
-      // this app's own pages reuse an open tab.
-      if (url.origin === self.location.origin) {
-        for (const win of wins) {
-          if ('focus' in win) {
-            win.focus()
-            if ('navigate' in win) return win.navigate(url.href)
-            return
+    Promise.all([
+      read,
+      clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
+        // A link into another app (a headless frontend) opens a new tab; only
+        // this app's own pages reuse an open tab.
+        if (url.origin === self.location.origin) {
+          for (const win of wins) {
+            if ('focus' in win) {
+              win.focus()
+              if ('navigate' in win) return win.navigate(url.href)
+              return
+            }
           }
         }
-      }
-      return clients.openWindow(url.href)
-    })
+        return clients.openWindow(url.href)
+      })
+    ])
   )
 })

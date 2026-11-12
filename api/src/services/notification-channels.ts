@@ -1144,6 +1144,12 @@ export async function notifyUser(
           title: opts.subject.slice(0, 120),
           body: opts.message.slice(0, 300),
           url,
+          id: notifId,
+          category: decision.category,
+          lane,
+          at: now.toISOString(),
+          collection: opts.collection ?? null,
+          item: opts.item ?? null,
           // The phone app opens the record itself (and marks this row read).
           phone: {
             id: notifId,

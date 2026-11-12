@@ -142,7 +142,19 @@ POST /api/push/test               # sends a test push to your browsers`
         'Enable per device from Profile → Browser Notifications; a badge shows how many devices are registered.',
         'VAPID keys resolve from VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY env vars first, then nivaro_settings; with neither set a keypair is generated once and stored — zero setup.',
         'Dead subscriptions (404/410 from the push service) are pruned automatically on send.',
-        'Clicking a push focuses the admin and navigates to the related record or the Notifications Center.'
+        'Clicking a push focuses the admin and navigates to the related record or the Notifications Center, and marks the notification read.'
+      ]
+    },
+    { type: 'h2', id: 'web-push-look', text: 'What a browser notification looks like' },
+    {
+      type: 'ul',
+      items: [
+        'Each notification carries an icon for its category (workflow, approvals, tasks, mentions, field watches, alerts, anomalies, SLA, reports, integrations, system, security, chat, huddles, chaos drills); anything else shows the app mark. A corner dot gives the lane: amber = needs you, red = critical, none = FYI.',
+        'Two actions: Open and Mark as read. Mark as read clears the inbox row without opening the app.',
+        'A newer notification about the same record replaces the older one instead of stacking; the inbox still keeps every row.',
+        'FYI notifications arrive without a sound. Critical ones stay on screen until dismissed (where the system allows it).',
+        'The time shown is when the event happened, not when the browser received it.',
+        'Icons are PNG files in /push (Chrome draws no SVG in a notification); regenerate them with node scripts/push-icons.mjs (admin) or --brand efp --out ../efp-new/public/push (EFP).'
       ]
     },
     { type: 'h2', id: 'phone-push', text: 'Phone alerts (mobile apps)' },

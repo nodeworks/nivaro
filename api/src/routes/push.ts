@@ -163,9 +163,12 @@ export async function pushRoutes(app: FastifyInstance) {
 
   app.post('/test', { preHandler: requireAuth }, async (req, reply) => {
     const sent = await sendWebPush(req.user!.id, {
-      title: 'Nivaro test notification',
-      body: 'Browser push is working.',
-      url: '/notifications'
+      title: 'Browser notifications are on',
+      body: 'This is how Nivaro will reach you when something needs you and the tab is in the background.',
+      url: '/notifications',
+      category: 'alerts',
+      lane: 'needs_you',
+      tag: 'push-test'
     })
     return reply.send({ data: { sent } })
   })
