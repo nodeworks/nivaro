@@ -22,6 +22,7 @@ import {
   needsStreamingCap,
   routeBodyLimit
 } from './lib/body-limits.js'
+import { clientLeft } from './lib/client-left.js'
 import { describeDbRefusal, errorText, isPoolBusy, serverFaultMessage } from './lib/db-refusal.js'
 import { applyEarlyHints, loadEarlyHints } from './lib/early-hints.js'
 import { registerJsonBodyParser } from './lib/json-body.js'
@@ -642,6 +643,13 @@ export async function buildServer() {
           { code: err.code, url: maskUrlQuery(req.url), status: reply.statusCode },
           'error after the response was sent (a handler sent without returning reply)'
         )
+        return
+      }
+      // The browser went away (a navigation, a closed tab) before a streamed answer was
+      // written, and the stream closing early is all this error says (lib/client-left.ts).
+      // Nothing failed and nobody is left to answer: no issue, no error line, no second send.
+      if (clientLeft(err, reply.raw)) {
+        req.log.debug({ url: maskUrlQuery(req.url) }, 'client left before the response was written')
         return
       }
       // A write the database refused over the caller's data (a link to a
