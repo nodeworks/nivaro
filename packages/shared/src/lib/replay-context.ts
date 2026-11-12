@@ -146,8 +146,31 @@ export function requestRoute(url: string, base?: string): string | null {
 }
 
 /**
- * The recorder's own uploads (`/session-recordings/…`) and the RUM beacon
- * (`/rum`) would otherwise log themselves into every recording.
+ * Calls the app makes on a timer, whoever is at the tab: presence beats, "is anything
+ * running", "is there a newer build", the unread badge. They say nothing about what the
+ * person did, and a tab cut off from the server fails every one of them, so logging them made
+ * an idle or unreachable tab produce a chunk a minute (production 2026-11-12: 79% of logged
+ * requests, 530 failed beats in one tab's hour off the network).
+ * The last entry is a host's own presence table written through /items.
+ */
+const HEARTBEAT_PATHS: RegExp[] = [
+  /\/api\/presence\/(ping|online|disconnect)\/?$/,
+  /\/api\/job-runs\/busy\/?$/,
+  /\/api\/announcements\/active\/?$/,
+  /\/api\/realtime\/build-status\/?$/,
+  /\/api\/notifications\/unread-count\/?$/,
+  /\/api\/auth\/ws-token\/?$/,
+  /\/api\/analytics\/pageview(\/[^/]*)?\/?$/,
+  /\/api\/layout-usage\/beacon\/?$/,
+  /\/api\/(health|ready|version)\/?$/,
+  /\/version\.json$/,
+  /\/api\/items\/[^/]*_presence(\/[^/]*)?\/?$/
+]
+
+/**
+ * Traffic the request log leaves out: the recorder's own uploads
+ * (`/session-recordings/…`) and the RUM beacon (`/rum`), which would otherwise
+ * log themselves into every recording, and the app's heartbeats.
  */
 export function isRecorderNoise(url: string, base?: string): boolean {
   try {
@@ -157,7 +180,8 @@ export function isRecorderNoise(url: string, base?: string): boolean {
         ? window.location.href
         : 'http://localhost/')
     const p = new URL(url, origin).pathname
-    return /\/session-recordings(\/|$)/.test(p) || /\/rum\/?$/.test(p)
+    if (/\/session-recordings(\/|$)/.test(p) || /\/rum\/?$/.test(p)) return true
+    return HEARTBEAT_PATHS.some((re) => re.test(p))
   } catch {
     return false
   }

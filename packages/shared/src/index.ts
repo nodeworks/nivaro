@@ -1062,6 +1062,15 @@ export {
   requestRoute
 } from './lib/replay-context'
 export {
+  createReplayIdleState,
+  noteReplayIdle,
+  REPLAY_IDLE_PAUSE_MS,
+  REPLAY_IDLE_RESTART_MS,
+  REPLAY_IDLE_RESUME_WAIT_MS,
+  type ReplayIdleAction,
+  type ReplayIdleState
+} from './lib/replay-idle'
+export {
   buildReplayMaskingOptions,
   DEFAULT_REPLAY_MASKING,
   isReplayFieldAllowed,

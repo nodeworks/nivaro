@@ -20,9 +20,7 @@ describe('redactSecrets', () => {
     expect(redactSecrets('sent Bearer abc.def-123')).toBe(`sent Bearer ${REDACTED}`)
     expect(redactSecrets('Basic dXNlcjpwYXNz')).toBe(`Basic ${REDACTED}`)
     expect(redactSecrets('hash 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b')).toBe(`hash ${REDACTED}`)
-    expect(redactSecrets('key Zq7Xw2Lm9Pt4Vr8Ks3Nd6Hb1Jf5Gc0Ya')).toBe(
-      `key ${REDACTED}`
-    )
+    expect(redactSecrets('key Zq7Xw2Lm9Pt4Vr8Ks3Nd6Hb1Jf5Gc0Ya')).toBe(`key ${REDACTED}`)
   })
 
   it('redacts the value of a secret-named key, in every common shape', () => {
@@ -90,6 +88,47 @@ describe('requestRoute / isRecorderNoise', () => {
     expect(isRecorderNoise('/api/rum', BASE)).toBe(true)
     expect(isRecorderNoise('/api/rum/summary', BASE)).toBe(false)
     expect(isRecorderNoise('/api/items/x', BASE)).toBe(false)
+  })
+
+  it('treats the app’s own heartbeats as noise, never a page’s real reads', () => {
+    // Production 2026-11-12: 79% of logged requests were these, and 16% of upload calls
+    // carried nothing else.
+    for (const url of [
+      '/api/presence/ping',
+      '/api/presence/online',
+      '/api/presence/disconnect',
+      '/api/job-runs/busy',
+      '/api/announcements/active',
+      '/api/realtime/build-status',
+      '/api/notifications/unread-count',
+      '/api/auth/ws-token',
+      '/api/analytics/pageview',
+      '/api/analytics/pageview/8812',
+      '/api/layout-usage/beacon',
+      '/api/health',
+      '/api/ready',
+      '/api/version',
+      '/version.json',
+      'https://cms.example.com/api/presence/ping',
+      // A host's own presence table, written on a timer through /items.
+      '/api/items/user_presence/12',
+      '/api/items/user_presence?limit=1'
+    ]) {
+      expect(isRecorderNoise(url, BASE), url).toBe(true)
+    }
+    for (const url of [
+      '/api/batch-get',
+      '/api/items/workflows/42',
+      '/api/items/presentations/3',
+      '/api/presence/sessions',
+      '/api/job-runs/77/log',
+      '/api/notifications',
+      '/api/auth/me',
+      '/api/version/history',
+      '/api/analytics/api'
+    ]) {
+      expect(isRecorderNoise(url, BASE), url).toBe(false)
+    }
   })
 })
 
@@ -171,6 +210,24 @@ describe('instrumentRequests', () => {
     expect(JSON.stringify(emit.mock.calls)).not.toContain('secret')
     undo()
     expect(g.fetch).toBe(inner)
+  })
+
+  it('does not log a heartbeat, failed or not', async () => {
+    // A tab cut off from the server logged 530 failed heartbeats in an hour, each one a new
+    // chunk to upload (production, 2026-11-12).
+    vi.stubGlobal('window', { location: { href: BASE } })
+    g.fetch = vi.fn(async () => {
+      throw new TypeError('Failed to fetch')
+    })
+    const emit = vi.fn()
+    const undo = instrumentRequests(emit)
+    await expect(fetch('/api/presence/ping', { method: 'POST' })).rejects.toThrow()
+    await expect(fetch('/api/items/workflows/42')).rejects.toThrow()
+    await Promise.resolve()
+    expect(emit.mock.calls.map((c) => `${c[1].route} ${c[1].status}`)).toEqual([
+      '/api/items/workflows/:id 0'
+    ])
+    undo()
   })
 
   it('logs XMLHttpRequest calls on loadend and restores the prototype', () => {

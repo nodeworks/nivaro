@@ -10,6 +10,7 @@ import {
   buildReplayMaskingOptions,
   clipEndOffset,
   createReplayCheckoutState,
+  createReplayIdleState,
   currentReplayRoute,
   emitReplayTap,
   instrumentConsole,
@@ -19,6 +20,8 @@ import {
   normalizeReplayMasking,
   normalizeReplaySampling,
   noteReplayEvent,
+  noteReplayIdle,
+  REPLAY_IDLE_RESTART_MS,
   type ReplayClipKind,
   type ReplayMaskingRules,
   type ReplaySampling,
@@ -477,6 +480,31 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       return state.inFlight
     }
 
+    /**
+     * Back after a long break (REPLAY_IDLE_RESTART_MS without input): what
+     * follows is a new recording. What the old one still has queued goes
+     * first; when it cannot (offline, backing off) or no new recording can
+     * be started, the old recording carries on.
+     */
+    async function restartRecording(): Promise<void> {
+      const previous = uploader.recordingId
+      if (!previous || state.dead) return
+      await flush(true).catch(() => {})
+      if (cancelled || state.dead || uploader.recordingId !== previous || uploader.hasPending()) {
+        return
+      }
+      try {
+        const started = await api.request(startSessionRecording(appLabel))
+        if (cancelled || state.dead) return
+        void api.request(endSessionRecording(previous)).catch(() => {})
+        uploader.begin(started.data.id)
+        state.startedAt = Date.now()
+        saveResume()
+      } catch {
+        /* the old recording carries on */
+      }
+    }
+
     /** Timer / count-triggered flush: yield to page work first. */
     function scheduleFlush() {
       const ric = (
@@ -540,10 +568,34 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       // (packages/shared replay-checkout.ts) — rrweb's own 60 s checkout filled the 15 MB
       // per-recording cap from a tab left on a self-updating page.
       const checkout = createReplayCheckoutState()
+      // Nothing is recorded while nobody is at the tab (packages/shared replay-idle.ts):
+      // five minutes without input pauses, the first input resumes from a full snapshot.
+      const idle = createReplayIdleState()
+      const resumeFromIdle = (idleMs: number) => {
+        // Outside rrweb's emit: the snapshot emits through this same callback.
+        setTimeout(() => {
+          void (async () => {
+            if (idleMs >= REPLAY_IDLE_RESTART_MS) await restartRecording()
+            if (cancelled || state.dead) return
+            try {
+              ;(
+                record as unknown as { takeFullSnapshot?: (c?: boolean) => void }
+              ).takeFullSnapshot?.(true)
+            } catch {
+              /* the idle gate records again after its wait */
+            }
+          })()
+        }, 0)
+      }
       state.stop =
         record({
           emit(event: unknown) {
+            const idleAction = noteReplayIdle(idle, event)
             if (!state.sampled) return
+            if (idleAction !== 'keep') {
+              if (idleAction === 'resume') resumeFromIdle(idle.idleMs)
+              return
+            }
             if (state.buffer.length === 0) state.bufferRoute = state.route
             state.buffer.push(event)
             if (state.buffer.length >= FLUSH_COUNT) scheduleFlush()

@@ -180,7 +180,7 @@ describe('useSessionRecorder: a refused recording stops', () => {
 })
 
 describe('useSessionRecorder: checkouts follow activity (2026-10-24 size cap)', () => {
-  it('no rrweb 60 s checkout; a self-updating idle page snapshots every 15 min, a click after 1 min', async () => {
+  it('no rrweb 60 s checkout; an idle page takes none; back at the tab, one a minute while in use', async () => {
     const { client } = fakeClient(Object.assign(new Error('no'), { status: 500 }))
     await mount(client)
     expect(rr.opts).not.toBeNull()
@@ -190,16 +190,17 @@ describe('useSessionRecorder: checkouts follow activity (2026-10-24 size cap)', 
     try {
       const t0 = Date.now()
       rr.emit?.({ type: 2, timestamp: t0 })
-      // A live page changing itself every 30 s, nobody there, for 14 minutes: no snapshot.
-      for (let m = 1; m <= 28; m++) {
+      // A live page changing itself every 30 s, nobody there, for 16 minutes: no snapshot.
+      // (Past five minutes without input nothing is recorded at all: replay-idle.ts.)
+      for (let m = 1; m <= 32; m++) {
         vi.setSystemTime(t0 + m * 30_000)
         rr.emit?.({ type: 3, data: { source: 0 } })
       }
       vi.runOnlyPendingTimers()
       expect(rr.takeFullSnapshot).not.toHaveBeenCalled()
-      // Past 15 minutes: one.
-      vi.setSystemTime(t0 + 15 * 60_000 + 1)
-      rr.emit?.({ type: 3, data: { source: 0 } })
+      // Someone is back: recording resumes from one snapshot.
+      vi.setSystemTime(t0 + 17 * 60_000)
+      rr.emit?.({ type: 3, data: { source: 2 } })
       vi.runOnlyPendingTimers()
       expect(rr.takeFullSnapshot).toHaveBeenCalledTimes(1)
       expect(rr.takeFullSnapshot).toHaveBeenCalledWith(true)
@@ -216,5 +217,118 @@ describe('useSessionRecorder: checkouts follow activity (2026-10-24 size cap)', 
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+/**
+ * A fake instance that takes every upload and remembers which recording got which events.
+ * Each start call answers a new recording id (R1, R2…).
+ */
+function acceptingClient() {
+  const calls: string[] = []
+  const uploads: Array<{ recording: string; ids: string[] }> = []
+  let started = 0
+  const client = {
+    request: vi.fn(async (cmd: Cmd & { _body?: { events?: Array<{ id?: string }> } }) => {
+      calls.push(`${cmd._method} ${cmd._path}`)
+      if (cmd._path === '/session-recordings/enabled') return { data: { enabled: true } }
+      if (cmd._path === '/session-recordings/start') return { data: { id: `R${++started}` } }
+      const m = /^\/session-recordings\/([^/]+)\/events$/.exec(cmd._path ?? '')
+      if (m) {
+        uploads.push({ recording: m[1], ids: (cmd._body?.events ?? []).map((e) => String(e.id)) })
+        return { data: { ok: true } }
+      }
+      return { data: null }
+    })
+  }
+  return { client: client as unknown as NivaroClient, calls, uploads }
+}
+
+const ev = (id: string, type: number, source?: number) => ({
+  id,
+  type,
+  ...(source === undefined ? {} : { data: { source } })
+})
+
+/** Settle promise chains while setTimeout is faked. */
+const microtasks = async () => {
+  for (let i = 0; i < 60; i++) await Promise.resolve()
+}
+
+async function unmountAndUpload() {
+  await act(async () => {
+    root?.unmount()
+    await flushPromises()
+  })
+  root = null
+}
+
+describe('useSessionRecorder: nothing is recorded while nobody is at the tab (2026-11-12)', () => {
+  it('stops after five minutes without input and goes on from a fresh snapshot when someone is back', async () => {
+    const { client, calls, uploads } = acceptingClient()
+    await mount(client)
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout'] })
+    try {
+      const t0 = Date.now()
+      rr.emit?.(ev('meta1', 4))
+      rr.emit?.(ev('snap1', 2))
+      vi.setSystemTime(t0 + 60_000)
+      rr.emit?.(ev('m1', 3, 0))
+      // Five minutes without input: the page keeps changing by itself, none of it is kept.
+      vi.setSystemTime(t0 + 5 * 60_000 + 1)
+      rr.emit?.(ev('m2', 3, 0))
+      vi.setSystemTime(t0 + 10 * 60_000)
+      rr.emit?.(ev('m3', 3, 0))
+      rr.emit?.(ev('console1', 5))
+      vi.runOnlyPendingTimers()
+      expect(rr.takeFullSnapshot).not.toHaveBeenCalled()
+      // Someone is back: a snapshot is asked for, and recording goes on from it.
+      vi.setSystemTime(t0 + 12 * 60_000)
+      rr.emit?.(ev('move', 3, 1))
+      vi.runOnlyPendingTimers()
+      await microtasks()
+      expect(rr.takeFullSnapshot).toHaveBeenCalledTimes(1)
+      expect(rr.takeFullSnapshot).toHaveBeenCalledWith(true)
+      rr.emit?.(ev('meta2', 4))
+      rr.emit?.(ev('snap2', 2))
+      rr.emit?.(ev('m4', 3, 0))
+    } finally {
+      vi.useRealTimers()
+    }
+    await unmountAndUpload()
+    expect(uploads.flatMap((u) => u.ids)).toEqual(['meta1', 'snap1', 'm1', 'meta2', 'snap2', 'm4'])
+    expect([...new Set(uploads.map((u) => u.recording))]).toEqual(['R1'])
+    expect(calls.filter((c) => c === 'POST /session-recordings/start')).toHaveLength(1)
+  })
+
+  it('back after a long break, what follows is a new recording', async () => {
+    const { client, calls, uploads } = acceptingClient()
+    await mount(client)
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout'] })
+    try {
+      const t0 = Date.now()
+      rr.emit?.(ev('meta1', 4))
+      rr.emit?.(ev('snap1', 2))
+      vi.setSystemTime(t0 + 60_000)
+      rr.emit?.(ev('m1', 3, 0))
+      vi.setSystemTime(t0 + 6 * 60_000)
+      rr.emit?.(ev('m2', 3, 0))
+      vi.setSystemTime(t0 + 45 * 60_000)
+      rr.emit?.(ev('click', 3, 2))
+      vi.runOnlyPendingTimers()
+      await microtasks()
+      expect(calls.filter((c) => c === 'POST /session-recordings/start')).toHaveLength(2)
+      expect(calls).toContain('POST /session-recordings/R1/end')
+      expect(rr.takeFullSnapshot).toHaveBeenCalledTimes(1)
+      rr.emit?.(ev('meta2', 4))
+      rr.emit?.(ev('snap2', 2))
+      rr.emit?.(ev('m3', 3, 0))
+    } finally {
+      vi.useRealTimers()
+    }
+    await unmountAndUpload()
+    const of = (rec: string) => uploads.filter((u) => u.recording === rec).flatMap((u) => u.ids)
+    expect(of('R1')).toEqual(['meta1', 'snap1', 'm1'])
+    expect(of('R2')).toEqual(['meta2', 'snap2', 'm3'])
   })
 })

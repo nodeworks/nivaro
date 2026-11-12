@@ -68,7 +68,7 @@ export function evaluateReplayHealth(
     const causes: Array<[number, string]> = [
       [
         u.client_failures,
-        `${u.client_failures} attempt(s) failed before reaching the server — network, a proxy or a deploy's 5xx between browsers and the API (the recorders retried)`
+        `${u.client_failures} attempt(s) failed before reaching the server — network, a proxy or a deploy's 5xx between browsers and the API (the recorders retried; a tab cut off for a long stretch counts at most 5)`
       ],
       [
         u.rejected_too_large,

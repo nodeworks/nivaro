@@ -47,6 +47,10 @@ const NOISE = new Set([
   'time:sync',
   'chat:typing',
   'presence:update',
+  // Sent to every tab whenever anyone comes or goes: 77% of logged frames (production 2026-11-12).
+  'presence:changed',
+  // One frame per log line of a running job; job:update still says what changed.
+  'job:log',
   'catchup:cursor'
 ])
 

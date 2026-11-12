@@ -11,6 +11,8 @@
  * Now: every minute while someone is using the tab (input in the stream since the last
  * snapshot), every 15 minutes otherwise — often enough that any stretch of the recording
  * still starts from a whole page. Changes in between still record as small mutations.
+ * Since 2026-11-12 a tab without input for five minutes records nothing (replay-idle.ts), so
+ * the 15-minute checkout only matters for a recorder that does not use that gate.
  * The recorder calls `noteReplayEvent` for each emitted event and takes a snapshot when it
  * answers true.
  */
@@ -26,6 +28,12 @@ export const REPLAY_CHECKOUT_IDLE_MS = 15 * 60_000
 const FULL_SNAPSHOT = 2
 const INCREMENTAL = 3
 const INPUT_SOURCES = new Set([1, 2, 3, 4, 5, 6, 12, 14])
+
+/** Whether an emitted rrweb event is a person at the tab (not the page changing by itself). */
+export function isReplayInputEvent(event: unknown): boolean {
+  const e = event as { type?: unknown; data?: { source?: unknown } } | null
+  return e?.type === INCREMENTAL && INPUT_SOURCES.has(Number(e.data?.source))
+}
 
 export interface ReplayCheckoutState {
   /** When the last full snapshot was emitted (ms). */
@@ -49,14 +57,14 @@ export function noteReplayEvent(
   event: unknown,
   now = Date.now()
 ): boolean {
-  const e = event as { type?: unknown; data?: { source?: unknown } } | null
+  const e = event as { type?: unknown } | null
   if (e?.type === FULL_SNAPSHOT) {
     state.lastFullAt = now
     state.interacted = false
     state.pending = false
     return false
   }
-  if (e?.type === INCREMENTAL && INPUT_SOURCES.has(Number(e.data?.source))) state.interacted = true
+  if (isReplayInputEvent(event)) state.interacted = true
   if (state.pending) return false
   const since = now - state.lastFullAt
   const due = state.interacted

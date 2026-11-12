@@ -41,9 +41,25 @@ export type ChunkOutcome =
 export interface ChunkMeta {
   route: string
   build: string
-  /** Upload attempts the recorder saw fail since its last success (client-reported). */
+  /**
+   * Upload attempts the recorder saw fail since its last success (client-reported),
+   * at most STRETCH_RETRY_CAP of one stretch.
+   */
   retries: number
 }
+
+/**
+ * How many failed attempts one stretch of failures adds to `client_failures`.
+ * A recorder retries about once a minute for as long as it cannot reach the
+ * server and reports the whole stretch on its first success, so a tab left
+ * running on a machine that lost its network (standby, a dropped VPN) used to
+ * add hundreds at once: production 2026-11-12 read 3,589 failures in a day
+ * while the server answered 200 on 99.98% of uploads, which tripped the
+ * upload-failure readiness check. Past the first few attempts a stretch says
+ * "this tab was cut off", not "uploads are failing"; many tabs failing together
+ * still add up.
+ */
+export const STRETCH_RETRY_CAP = 5
 
 export const utcDay = (d: Date = new Date()): string => d.toISOString().slice(0, 10)
 
@@ -86,7 +102,7 @@ export function chunkMeta(body: unknown): ChunkMeta {
   return {
     route: sanitizeReplayRoute(b.route),
     build: sanitizeReplayBuild(b.build),
-    retries: Number.isFinite(r) && r > 0 ? Math.min(Math.trunc(r), 1000) : 0
+    retries: Number.isFinite(r) && r > 0 ? Math.min(Math.trunc(r), STRETCH_RETRY_CAP) : 0
   }
 }
 

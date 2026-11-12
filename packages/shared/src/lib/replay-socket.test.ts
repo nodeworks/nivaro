@@ -43,6 +43,16 @@ describe('instrumentSocket', () => {
       'socket:connection:reconnected'
     ])
   })
+  it('skips presence and job-log chatter', () => {
+    // Production 2026-11-12: presence:changed alone was 77% of logged socket frames.
+    const got: string[] = []
+    const undo = instrumentSocket((_t, p) => got.push((p as { name: string }).name))
+    reportSocketEvent('presence:changed', { user_ids: ['a'] })
+    reportSocketEvent('job:log', { id: 1 })
+    reportSocketEvent('job:update', { id: 1 })
+    undo()
+    expect(got).toEqual(['job:update'])
+  })
   it('stops at its own cap with one marker', () => {
     const got: any[] = []
     const undo = instrumentSocket((_t, p) => got.push(p), 3)

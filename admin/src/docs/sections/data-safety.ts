@@ -181,6 +181,7 @@ export const sessionReplayDocs: DocSection = {
       items: [
         'Privacy: every input and every record field value is masked client-side before events leave the browser (see Masking rules below); add the nvr-no-record class to block any element entirely.',
         'Events batch every 10 seconds; a full DOM snapshot every 60 seconds keeps replays seekable.',
+        'Nothing is recorded while nobody is at the tab: after five minutes without a click, a key, a scroll or a mouse move the recorder pauses, and the first input brings it back with a full snapshot, so a replay never plays an idle stretch. Back after 30 minutes or more, what follows is a new recording.',
         'A long session never stops recording: once a recording holds 15MB, the server carries on in a next part (opened with the last full snapshot), and the list, the player and exports show the parts as one recording. Error and support clips still stop at 15MB. Recordings purge after the retention period (7 days unless changed on the Session Replays page), a session with all its parts; after 3 days they move from the database to file storage.',
         'Watching, listing and deleting are admin-only; a recording can only be appended to by its own user.',
         'Tell your team before enabling — this records their screens.'
@@ -191,10 +192,14 @@ export const sessionReplayDocs: DocSection = {
       type: 'p',
       text: 'A chunk that cannot be sent — the browser is offline, the request fails or the server answers 5xx — waits in the browser (IndexedDB, at most about 20MB per tab, oldest dropped first) and is retried with backoff from 2 seconds up to a minute, and as soon as the browser comes back online. Reloading the tab within 10 minutes continues the same recording instead of starting a new one, and whatever the previous page had not sent goes first. When a page is closed or reloaded, the last few seconds are sent with the request that outlives the page (fetch keepalive); anything that does not fit goes on the next load. A recording that is closed or has reached its size cap still stops for good, and the next page load starts a new one. The headless hook in @nivaro/react does the same.'
     },
+    {
+      type: 'p',
+      text: 'The Network list of a replay leaves out the calls the app makes by itself on a timer (presence beats, the unread badge, announcements, build and health checks), failed or not, so it shows what the person’s actions asked for and a tab that lost its network does not fill a recording with its own failed beats.'
+    },
     { type: 'h2', id: 'session-replay-socket', text: 'Realtime events in a replay' },
     {
       type: 'p',
-      text: 'A recording also notes the realtime events the page received: the event name, the room, up to ten record ids and up to twenty field names, never a value. Reconnects, missed-event catch-up and full reloads after a long gap show too. In the player they are the Live tab beside Console and Network, and a connection change is a violet tick on the scrubber, so a screen that changed by itself points at the event that did it. The track has its own limit of 800 entries per page load, after which one note says the log is full. Only the first tab of a browser (the one holding the live connection) records these.'
+      text: 'A recording also notes the realtime events the page received: the event name, the room, up to ten record ids and up to twenty field names, never a value. Reconnects, missed-event catch-up and full reloads after a long gap show too. In the player they are the Live tab beside Console and Network, and a connection change is a violet tick on the scrubber, so a screen that changed by itself points at the event that did it. The track has its own limit of 800 entries per page load, after which one note says the log is full. Presence changes and the log lines of a running job are left out. Only the first tab of a browser (the one holding the live connection) records these.'
     },
     { type: 'h2', id: 'session-replay-masking', text: 'Masking rules' },
     {
@@ -250,7 +255,7 @@ export const sessionReplayDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'more than 5% of chunk uploads failed since yesterday (at least 20 uploads) — refusals the server saw (too large, recording closed or at its size cap) plus failed attempts the recorders report on their next successful upload. A browser that never gets through again cannot report, so the real figure can be higher;',
+        'more than 5% of chunk uploads failed since yesterday (at least 20 uploads) — refusals the server saw (too large, recording closed or at its size cap) plus failed attempts the recorders report on their next successful upload. One stretch of failures counts at most 5 attempts, so a tab left running on a machine that lost its network for hours (standby, a dropped VPN) does not read as hundreds of failed uploads. A browser that never gets through again cannot report, so the real figure can be higher;',
         'no recording started in the last 24 hours while people were signed in (the recorder is blocked, starts are failing, or sampling records nobody);',
         'the daily recording cap was reached, naming the page that stored the most that day;',
         'the oldest recording is more than a day past the retention period (the daily purge is not running).'

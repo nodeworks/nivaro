@@ -49,6 +49,7 @@ import {
   noteChunk,
   parseReplaySampling,
   resetReplayCostState,
+  STRETCH_RETRY_CAP,
   samplingRateFor,
   sanitizeReplayBuild,
   sanitizeReplayRoute,
@@ -91,6 +92,17 @@ describe('route attribution', () => {
       retries: 0
     })
     expect(sanitizeReplayBuild('nivaro-react@0.2.26')).toBe('nivaro-react@0.2.26')
+  })
+
+  it('counts at most the first few failed attempts of one stretch', () => {
+    // A tab cut off for hours (standby, a dropped VPN) retries about once a minute and reports
+    // the whole stretch on its first success. Production 2026-11-12: 3,589 "failures" in a day
+    // from a handful of such tabs, while the server answered 200 on 99.98% of uploads.
+    expect(STRETCH_RETRY_CAP).toBe(5)
+    expect(chunkMeta({ retries: 3 }).retries).toBe(3)
+    expect(chunkMeta({ retries: 5 }).retries).toBe(5)
+    expect(chunkMeta({ retries: 540 }).retries).toBe(5)
+    expect(chunkMeta({ retries: 4.9 }).retries).toBe(4)
   })
 })
 
