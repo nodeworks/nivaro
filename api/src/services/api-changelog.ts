@@ -10,8 +10,9 @@ import { currentTenantKey } from './tenant-rooms.js'
 /**
  * API surface changelogs: GraphQL (#163) — type/field diffs on every schema
  * rebuild; REST (#315) — route inventory diffs per release. Removals are
- * flagged breaking and notify admins so integrations hear about it before
- * their calls start failing.
+ * flagged breaking in the log. Admins are notified only when a removal hits
+ * something a partner (API key / machine account) actually called in the
+ * request log's window — a dropped table nobody queries is not news.
  */
 
 function snapshotGraphQL(schema: GraphQLSchema): Record<string, string[]> {
@@ -83,7 +84,7 @@ async function notifyAdminsOfBreak(subject: string, message: string): Promise<vo
           message: message.slice(0, 500),
           category: 'system',
           always_inbox: true,
-          target: { kind: 'external', url: '/api-changelog', action: 'review' },
+          target: { kind: 'external', url: '/analytics/api', action: 'review' },
           source: { kind: 'api_changelog', label: 'GraphQL schema change' },
           why: 'You are an administrator; a schema change can break an integration.'
         })
@@ -161,6 +162,117 @@ export async function shouldNotifyBreak(
   return true
 }
 
+/** The removed half of a GraphQL diff as `type X` / `X.field` keys. */
+export function removedKeys(lines: readonly string[]): Set<string> {
+  const out = new Set<string>()
+  for (const l of lines) if (l.startsWith('- ')) out.add(l.slice(2).trim())
+  return out
+}
+
+interface BreakFinding {
+  severity: string
+  caller: string
+  collection: string
+  field: string | null
+  message: string
+}
+
+/**
+ * The partner break findings THIS removal caused (pre-existing breaks are the
+ * readiness check's business, not a fresh notice). A finding counts when the
+ * diff removed its type, its `Type.field`, its root field, or a field of the
+ * same name on another type (M2M row types carry the target's fields).
+ */
+export function findingsHitByRemoval<T extends BreakFinding>(
+  findings: readonly T[],
+  removed: ReadonlySet<string>
+): T[] {
+  if (removed.size === 0) return []
+  const removedFieldNames = new Set<string>()
+  for (const k of removed) {
+    if (k.startsWith('type ')) continue
+    const dot = k.lastIndexOf('.')
+    if (dot > 0) removedFieldNames.add(k.slice(dot + 1))
+  }
+  return findings.filter((f) => {
+    if (f.severity !== 'break') return false
+    if (f.collection === '(graphql)') {
+      return (
+        !!f.field &&
+        (removed.has(`Query.${f.field}`) ||
+          removed.has(`Mutation.${f.field}`) ||
+          removed.has(`Subscription.${f.field}`))
+      )
+    }
+    if (removed.has(`type ${f.collection}`)) return true
+    if (!f.field) return false
+    return removed.has(`${f.collection}.${f.field}`) || removedFieldNames.has(f.field)
+  })
+}
+
+/** Partner breaks caused by this GraphQL removal; [] when the check can't run. */
+async function partnerBreaksFrom(lines: readonly string[]): Promise<BreakFinding[]> {
+  try {
+    const { runInBackgroundPool } = await import('../db/pool-context.js')
+    const { checkDependencies } = await import('./partner-dependencies.js')
+    const r = await runInBackgroundPool(() => checkDependencies({ fresh: true }))
+    return findingsHitByRemoval(r.findings, removedKeys(lines))
+  } catch {
+    return []
+  }
+}
+
+/** Removed REST routes ("- GET /x") a partner called in the logged window. */
+export function routesUsedByPartners(
+  lines: readonly string[],
+  used: ReadonlyArray<{ method: string; path: string }>
+): string[] {
+  const calls = used.map((e) => ({
+    method: e.method.toUpperCase(),
+    path: e.path.replace(/\/$/, '')
+  }))
+  const out: string[] = []
+  for (const l of lines) {
+    if (!l.startsWith('- ')) continue
+    const route = l.slice(2).trim()
+    const sp = route.indexOf(' ')
+    if (sp < 0) continue
+    const method = route.slice(0, sp).toUpperCase()
+    // Fastify template → pattern: `:param` is one segment (matches a logged `{id}`), `*` the rest.
+    const pattern = new RegExp(
+      `^${route
+        .slice(sp + 1)
+        .replace(/\/$/, '')
+        .split('/')
+        .map((seg) =>
+          seg === '*'
+            ? '.*'
+            : seg.startsWith(':')
+              ? '[^/]+'
+              : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        )
+        .join('/')}$`
+    )
+    if (calls.some((c) => (c.method === method || method === 'ALL') && pattern.test(c.path)))
+      out.push(route)
+  }
+  return out
+}
+
+async function partnerRoutesHit(lines: readonly string[]): Promise<string[]> {
+  try {
+    const { runInBackgroundPool } = await import('../db/pool-context.js')
+    const { dependencyMap } = await import('./partner-dependencies.js')
+    const map = await runInBackgroundPool(() => dependencyMap(14, { fresh: true }))
+    return routesUsedByPartners(
+      lines,
+      map.callers.filter((c) => c.partner).flatMap((c) => c.endpoints)
+    )
+  } catch {
+    return []
+  }
+}
+
 /** Record the GraphQL schema shape; diff + notify on change (#163). */
 export async function recordGraphQLSchema(schema: GraphQLSchema): Promise<void> {
   try {
@@ -179,10 +291,17 @@ export async function recordGraphQLSchema(schema: GraphQLSchema): Promise<void> 
         breaking
       })
       if (breaking && (await shouldNotifyBreak('graphql', lines))) {
-        await notifyAdminsOfBreak(
-          'GraphQL schema change removed types or fields',
-          `The rebuilt GraphQL schema removed ${lines.filter((l) => l.startsWith('-')).length} type(s)/field(s). Integrations querying them will now error. See /api/dev-tools/graphql-changelog.`
-        )
+        const hits = await partnerBreaksFrom(lines)
+        if (hits.length > 0) {
+          const callers = [...new Set(hits.map((h) => h.caller))]
+          await notifyAdminsOfBreak(
+            `GraphQL change breaks ${callers.length === 1 ? callers[0] : `${callers.length} integrations`}`,
+            `The rebuilt GraphQL schema removed something an integration called recently: ${hits
+              .slice(0, 3)
+              .map((h) => h.message)
+              .join('; ')}${hits.length > 3 ? ` (+${hits.length - 3} more)` : ''}.`
+          )
+        }
       }
     } else {
       await db('nivaro_graphql_schema_log').insert({
@@ -241,10 +360,15 @@ export async function recordRestRoutes(version: string, routes: string[]): Promi
       breaking
     })
     if (breaking && (await shouldNotifyBreak('rest', lines))) {
-      await notifyAdminsOfBreak(
-        `Release ${version} removed REST routes`,
-        `The new release removed routes that existed in the previous one — integrations calling them now 404. See /api/dev-tools/api-changelog.`
-      )
+      const used = await partnerRoutesHit(lines)
+      if (used.length > 0) {
+        await notifyAdminsOfBreak(
+          `Release ${version} removed REST routes an integration calls`,
+          `The new release removed routes an integration called recently, so those calls now 404: ${used
+            .slice(0, 3)
+            .join('; ')}${used.length > 3 ? ` (+${used.length - 3} more)` : ''}.`
+        )
+      }
     }
   } catch {
     /* best-effort */

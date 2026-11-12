@@ -164,7 +164,7 @@ export const obsApiAnalytics: DocSection = {
     },
     {
       type: 'p',
-      text: 'The break check compares every partner’s used set — API keys, and static-token accounts marked as machine accounts — with the schema as it is now. A used collection or field that no longer exists, or a GraphQL root field the schema dropped, is a break; a used field carrying a deprecation stamp is a warning. The same findings feed the readiness scorecard (“Partner integrations still find the fields they use”, a warning, never a failure), the release preflight prints a one-line summary without blocking, and the field-removal confirm in the Table Editor lists the callers that used the field.'
+      text: 'The break check compares every partner’s used set — API keys, and static-token accounts marked as machine accounts — with the schema as it is now. A used collection or field that no longer exists, or a GraphQL root field the schema dropped, is a break; a used field carrying a deprecation stamp is a warning. The same findings feed the readiness scorecard (“Partner integrations still find the fields they use”, a warning, never a failure), the release preflight prints a one-line summary without blocking, and the field-removal confirm in the Table Editor lists the callers that used the field. Administrators get an inbox notice for a GraphQL schema or REST route removal only when it breaks something a partner called in the last 14 days (the notice names the caller); every other removal is just recorded in the API changelog.'
     },
     {
       type: 'pre',
