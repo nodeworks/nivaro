@@ -408,6 +408,129 @@ describe('getUserScopeEnforcement — defaults are advisory, restrictions are no
     })
   })
 
+  describe('a membership junction that also carries attributes', () => {
+    // Production 2026-11-10: an item ↔ category membership row gained a Zone and a
+    // Kind column. Pairing every two legs read it as "kinds ⇄ zones", so a lookup
+    // linked to kinds took its Zone from membership rows that had no kind set,
+    // matched nothing, and every Zone-restricted person lost the lookup (its
+    // label read "Record not found", its picker was empty).
+    const membership = [
+      {
+        many_collection: 'items_categories',
+        many_field: 'items_id',
+        one_collection: 'items',
+        one_field: 'categories',
+        junction_field: 'categories_id'
+      },
+      {
+        many_collection: 'items_categories',
+        many_field: 'categories_id',
+        one_collection: 'categories',
+        one_field: 'members',
+        junction_field: null
+      },
+      {
+        many_collection: 'items_categories',
+        many_field: 'divisions_id',
+        one_collection: 'divisions',
+        one_field: null,
+        junction_field: null
+      },
+      {
+        many_collection: 'items_categories',
+        many_field: 'kinds_id',
+        one_collection: 'kinds',
+        one_field: null,
+        junction_field: null
+      }
+    ]
+    const lookupToKinds = [
+      {
+        many_collection: 'unit_types_kinds',
+        many_field: 'unit_types_id',
+        one_collection: 'unit_types',
+        one_field: 'kinds',
+        junction_field: 'kinds_id'
+      },
+      {
+        many_collection: 'unit_types_kinds',
+        many_field: 'kinds_id',
+        one_collection: 'kinds',
+        one_field: 'unit_types',
+        junction_field: 'unit_types_id'
+      }
+    ]
+    const restrict = [scopeRow({ mode: 'restrict', values: JSON.stringify([10]) })]
+
+    it('does not link its attributes to each other', async () => {
+      installDb({
+        dimensions: [{ ...ZONE_DIM }],
+        scopes: restrict,
+        relations: [...membership, ...lookupToKinds]
+      })
+
+      expect(await getUserScopeEnforcement(makeUser(), 'unit_types')).toEqual({
+        filters: [],
+        deny: false
+      })
+    })
+
+    it('still links the two sides its marker pairs', async () => {
+      installDb({
+        dimensions: [{ ...ZONE_DIM, target_collection: 'categories' }],
+        scopes: restrict,
+        relations: membership
+      })
+
+      const out = await getUserScopeEnforcement(makeUser(), 'items')
+
+      expect(out.filters).toHaveLength(1)
+      expect(out.filters[0].hops).toEqual([
+        {
+          kind: 'junction',
+          from: 'items',
+          to: 'categories',
+          junction: 'items_categories',
+          parentFk: 'items_id',
+          targetFk: 'categories_id'
+        }
+      ])
+    })
+
+    it('leaves the route to a real link between the two, whatever the names', async () => {
+      // The real link has the longer name; the name tie-break used to hand the
+      // route to the membership table.
+      const realLink = [
+        {
+          many_collection: 'kind_division_availability',
+          many_field: 'kind',
+          one_collection: 'kinds',
+          one_field: 'divisions',
+          junction_field: 'division'
+        },
+        {
+          many_collection: 'kind_division_availability',
+          many_field: 'division',
+          one_collection: 'divisions',
+          one_field: null,
+          junction_field: 'kind'
+        }
+      ]
+      installDb({
+        dimensions: [{ ...ZONE_DIM }],
+        scopes: restrict,
+        relations: [...membership, ...lookupToKinds, ...realLink]
+      })
+
+      const out = await getUserScopeEnforcement(makeUser(), 'unit_types')
+
+      expect(out.filters).toHaveLength(1)
+      expect(out.filters[0].hops.map((h) => (h.kind === 'junction' ? h.junction : h.kind))).toEqual(
+        ['unit_types_kinds', 'kind_division_availability']
+      )
+    })
+  })
+
   it('DENIES an excluded collection on a strict dimension — exclusion is not an exemption', async () => {
     // Sharp edge worth knowing: scopeHopsFor() returns null both for "explicitly
     // excluded" and for "no route found", and getUserScopeEnforcement cannot tell

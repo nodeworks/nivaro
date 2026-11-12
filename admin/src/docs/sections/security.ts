@@ -575,6 +575,7 @@ export const securityUserScopes: DocSection = {
         'The **coverage table** previews how the dimension resolves per collection: `self` (the target itself), `auto` (derived route via relations), `override` (pinned field path), `excluded`, or `unreachable`.',
         '`strict` — restricted users are DENIED (zero rows) on collections the dimension cannot reach, instead of being left unfiltered.',
         '`overrides` pin an explicit field path per collection; `exclusions` opt a collection out entirely.',
+        'A link table is a route only between the two sides it pairs. One that also carries other columns (a membership row with a zone or a type on it) never links those columns to each other, so a lookup cannot pick up a dimension from them. Shared lookups that still reach a dimension by accident belong in `exclusions`.',
         'Another dimension\'s target table (e.g. `projects` when a Project dimension exists) is reference data: other dimensions leave it unfiltered so labels and pickers keep working — unless a dimension names an override path for that table, which opts it in (e.g. Zone → `projects: ["divisions"]` makes projects follow the person\'s zones).'
       ]
     },

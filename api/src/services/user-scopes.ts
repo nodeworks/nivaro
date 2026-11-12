@@ -235,11 +235,32 @@ async function getAdjacency(): Promise<Map<string, Edge[]>> {
       legsByJunction.set(r.many_collection, legs)
     }
   }
+  // The pairs a junction's own markers name: leg `many_field` ⇄ `junction_field`.
+  const markedPairs = new Map<string, Set<string>>()
+  for (const r of rels) {
+    if (!r.many_collection || !r.many_field || !r.junction_field) continue
+    const pairs = markedPairs.get(r.many_collection) ?? new Set<string>()
+    pairs.add(`${r.many_field}|${r.junction_field}`)
+    pairs.add(`${r.junction_field}|${r.many_field}`)
+    markedPairs.set(r.many_collection, pairs)
+  }
   // pair every two legs of a junction → bidirectional junction edges
   for (const [junction, legs] of legsByJunction) {
+    // A two-leg junction is a plain many-to-many: its legs link to each other
+    // whichever of them carries the marker (legacy data marks one, both or the
+    // other). A junction with MORE legs is a membership row that also carries
+    // attributes (an item ↔ category row with a zone and a project type): only
+    // the legs its marker pairs are a link. Pairing all of them read the
+    // attributes as "project types ⇄ zones", and with the shortest table name
+    // it took that route from the real link between the two; its attribute
+    // column was empty on every row, so every lookup scoped through it
+    // vanished for every restricted person (production 2026-11-10: unit type
+    // labels read "Record not found", their pickers were empty).
+    const marked = legs.length > 2 ? markedPairs.get(junction) : undefined
     for (const a of legs) {
       for (const b of legs) {
         if (a === b || a.target === b.target) continue
+        if (marked && !marked.has(`${a.field}|${b.field}`)) continue
         push({
           kind: 'junction',
           from: a.target,
