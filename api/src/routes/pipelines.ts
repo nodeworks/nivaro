@@ -50,6 +50,7 @@ import {
 } from '../services/record-transition.js'
 import { labelSeatFilters } from '../services/seat-labels.js'
 import { skippedSendBackTargets, withoutSkippedSendBacks } from '../services/send-back-skips.js'
+import { type TransitionAdvisory, transitionAdvisories } from '../services/transition-checks.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
 import {
   pickRerunAction,
@@ -2684,6 +2685,23 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       )
     }
 
+    // What an extension's transition check would answer for each move on
+    // offer, said before it is pressed (transition-checks.ts): the panel shows
+    // it beside the move. Asked as the caller; a role preview has no person to
+    // judge. A failure here never costs the panel its buttons. Started now and
+    // awaited with the answer, so it rides beside the history read below.
+    const advisoriesAsked: Promise<Map<string, TransitionAdvisory>> =
+      asRole || offeredTransitions.length === 0
+        ? Promise.resolve(new Map<string, TransitionAdvisory>())
+        : transitionAdvisories({
+            collection,
+            item: String(item),
+            currentState,
+            transitions: offeredTransitions,
+            user: req.user,
+            isAdmin
+          }).catch(() => new Map<string, TransitionAdvisory>())
+
     // Get history with joined state labels. #645: a delegate's move names the
     // out-of-office owner it stood in for (migration 395 — probed, so a
     // tenant behind it still answers).
@@ -2744,6 +2762,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
     const currentStateObj = states.find((s) => s.id === currentState)
     const branches = await loadBranchLanes(instance, history, states).catch(() => null)
+    const advisories = await advisoriesAsked
     // Whether THIS caller may change the record right now (edit-lock.ts) — the
     // form shows read-only from it; the write itself is judged again.
     const editLock =
@@ -2768,7 +2787,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         // ONLY on the server after a transition lands; the panel never reads
         // them, and on a template with dozens of integration pushes they were
         // 70 KB of a 90 KB response fetched on every record open.
-        available_transitions: offeredTransitions.map(stripTransitionActions),
+        available_transitions: offeredTransitions.map((t) => {
+          const advisory = advisories.get(String(t.id))
+          return advisory ? { ...stripTransitionActions(t), advisory } : stripTransitionActions(t)
+        }),
         all_transitions: transitions.map((t) => stripTransitionActions(formatTransition(t))),
         history,
         binding: effectiveBinding,

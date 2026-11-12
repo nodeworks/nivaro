@@ -69,6 +69,13 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { deniedToastAction, isAccessRefusal, WhyOwnersButton } from './AccessInsights'
 import { BranchLanes, type BranchLanesData } from './BranchLanes'
 import { joinLabels, landingSkipGroups, landingState } from './landing-state'
+import {
+  distinctAdvisories,
+  type MoveAdvisory,
+  MoveAdvisoryNotice,
+  REFUSAL_FIX_ACTIONS,
+  useRecordFixAction
+} from './MoveAdvisory'
 import { MoveToStatePanel } from './MoveToStatePanel'
 import { SlaClockLine } from './SlaClock'
 import type { TransitionRequirementsPayload } from './TransitionRequirementsDialog'
@@ -107,6 +114,9 @@ interface PipelineTransition {
   /** Partners this move places an ORDER with (blocking pushes) — styled apart
    *  from approvals and always confirmed, naming the partner (army 11 a2 F2). */
   order_partners?: string[]
+  /** What a registered check would answer if this move were pressed now — shown
+   *  beside the move before it is (MoveAdvisory.tsx). */
+  advisory?: MoveAdvisory | null
 }
 interface PipelineHistoryEntry {
   id: number
@@ -348,19 +358,8 @@ export function lockedMoveOffer(err: unknown): { message: string; holder: string
   return { message, holder }
 }
 
-/**
- * A refusal the record page can fix in place: the refusal code → the key of
- * the registry action that fixes it. Offered only when that action is
- * available to the caller for this collection (/bulk-actions/available judges
- * access), so a person who cannot fix it just reads the message (army4 a15-2:
- * Priority could only be set from the list's row menu).
- */
-export const REFUSAL_FIX_ACTIONS: Readonly<Record<string, string>> = {
-  PRIORITY_REQUIRED: 'priority',
-  // A held record does not move forward (efp-ops hold-gate, army 11): taking
-  // the hold off is one deliberate, noted step, then the move is tried again.
-  ON_HOLD: 'remove-hold'
-}
+// The refusal code → fix action map lives with the advisory notice (MoveAdvisory.tsx).
+export { REFUSAL_FIX_ACTIONS }
 
 export interface RefusalFixOffer {
   code: string
@@ -375,7 +374,13 @@ export function refusalFixFor(
   vars: { transition_id: string; comment?: string }
 ): RefusalFixOffer | null {
   const code = refusalCode(err)
-  const actionKey = code ? REFUSAL_FIX_ACTIONS[code] : undefined
+  const resp = (
+    err as { response?: { fix?: { action?: unknown }; data?: { fix?: { action?: unknown } } } }
+  )?.response
+  // The check may name the action that clears its refusal; the code map is the fallback.
+  const named = resp?.fix?.action ?? resp?.data?.fix?.action
+  const actionKey =
+    (typeof named === 'string' && named.trim()) || (code ? REFUSAL_FIX_ACTIONS[code] : undefined)
   if (!code || !actionKey) return null
   return { code, actionKey, transitionId: vars.transition_id, comment: vars.comment }
 }
@@ -955,6 +960,28 @@ export function latestSendBack(
   return newest
 }
 
+/** The glyph on a move a registered check would refuse right now. */
+function BlockedMark({ className }: { className?: string }) {
+  return (
+    <AlertTriangle
+      aria-hidden
+      data-move-blocked-mark
+      className={cn('h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400', className)}
+    />
+  )
+}
+
+/** A blocked move says why before it is pressed: the check's words as its tip and description. */
+function blockedMoveProps(tx: Pick<PipelineTransition, 'advisory'>) {
+  return tx.advisory
+    ? {
+        'data-move-blocked': tx.advisory.code,
+        'data-tip': tx.advisory.message,
+        'aria-description': tx.advisory.message
+      }
+    : {}
+}
+
 function SendBackNotice({ entry }: { entry: PipelineHistoryEntry }) {
   const who =
     [entry.first_name, entry.last_name].filter(Boolean).join(' ') || entry.user_email || 'Someone'
@@ -1004,38 +1031,11 @@ function RefusalFixPanel({
   className?: string
   style?: CSSProperties
 }) {
-  const client = useNivaroClient()
-  const queryClient = useQueryClient()
   const [reason, setReason] = useState('')
-  const { data: action, isLoading } = useQuery({
-    queryKey: ['bulk-actions-available-one', collection, offer.actionKey],
-    queryFn: async () => {
-      const res = await client.request<{
-        data: Array<{ key: string; label: string; require_reason: boolean; source: string }>
-      }>(get('/bulk-actions/available', { collection }))
-      return (res.data ?? []).find((a) => a.key === offer.actionKey) ?? null
-    },
-    staleTime: 60_000
-  })
+  const { action, isLoading, run: runFix } = useRecordFixAction(collection, item, offer.actionKey)
   const run = useMutation({
-    mutationFn: async () => {
-      const body = { collection, ids: [item], reason: reason.trim() || null }
-      const res =
-        action?.source === 'extension'
-          ? await client.request<{
-              data: { succeeded?: number; errors?: Array<{ error: string }> }
-            }>(post(`/bulk-actions/${offer.actionKey}/execute`, body))
-          : await client.request<{
-              data: { succeeded?: number; errors?: Array<{ error: string }> }
-            }>(post('/bulk-actions/run', { ...body, key: offer.actionKey }))
-      const r = res.data ?? {}
-      if (action?.source !== 'extension' && !(r.succeeded && r.succeeded > 0))
-        throw new Error(
-          r.errors?.[0]?.error || `${action?.label ?? 'The fix'} did not change the record`
-        )
-    },
+    mutationFn: () => runFix(reason),
     onSuccess: () => {
-      invalidateRecordData(queryClient, collection, item)
       toast.success(`${action?.label ?? 'Done'} — trying again`)
       onFixed()
     },
@@ -2691,6 +2691,8 @@ function PipelinePanelInner({
   const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
   // A refusal the caller can fix here (REFUSAL_FIX_ACTIONS), e.g. PRIORITY_REQUIRED.
   const [fixOffer, setFixOffer] = useState<RefusalFixOffer | null>(null)
+  // A move pressed while a check would refuse it (its advisory): the notice opens on the fix.
+  const [armedMove, setArmedMove] = useState<string | null>(null)
   // Brief lines that warned before a forward move (army6 D6): the confirm says "<move> anyway".
   const [forwardWarning, setForwardWarning] = useState<BriefLineView[]>([])
   const checkForwardMove = useForwardMoveCheck(collection, String(item))
@@ -2726,12 +2728,26 @@ function PipelinePanelInner({
       }
     })
   }
-  const trySetPending = async (txId: string) => {
+  const trySetPending = async (txId: string, opts?: { cleared?: boolean }) => {
     if (transitionBusyRef.current) return
     if (pendingTransition === txId) {
       setPendingTransition(null)
       return
     }
+    // The server already said this move would be refused (its advisory): show why, and the
+    // fix, instead of sending it off to be refused. Ask again in the background in case that
+    // has changed. `cleared` = the fix just ran, the cached advisory is the old answer.
+    if (
+      !opts?.cleared &&
+      (data?.available_transitions ?? []).some((t) => t.id === txId && t.advisory)
+    ) {
+      setPendingTransition(null)
+      setFixOffer(null)
+      setArmedMove(txId)
+      void queryClient.invalidateQueries({ queryKey: ['pipeline-instance', collection, item] })
+      return
+    }
+    setArmedMove(null)
     // The guard may save the form first, so it can be async — awaiting it is
     // what lets one click mean "save, then transition".
     if (onBeforeTransition) {
@@ -3066,6 +3082,8 @@ function PipelinePanelInner({
         skippedStates
       )
   const hasTransitions = visibleTransitions.length > 0
+  const moveNotices = distinctAdvisories(visibleTransitions)
+  const armedTx = armedMove ? visibleTransitions.find((t) => t.id === armedMove) : null
 
   const renderTransitionButtons = (txList: PipelineTransition[], small = false) => {
     const byLabel = new Map<string, PipelineTransition[]>()
@@ -3098,11 +3116,16 @@ function PipelinePanelInner({
             aria-disabled={freshTx.dimmed(tx.id) || undefined}
             data-fresh={freshTx.dimmed(tx.id) || undefined}
             {...freshTx.bind(tx.id)}
+            {...blockedMoveProps(tx)}
             onClick={() => {
               if (freshTx.press(tx.id)) void trySetPending(tx.id)
             }}
           >
-            {running && <Loader2 className='h-3 w-3 animate-spin' />}
+            {running ? (
+              <Loader2 className='h-3 w-3 animate-spin' />
+            ) : (
+              tx.advisory && <BlockedMark />
+            )}
             {label}
           </Button>
         )
@@ -3129,7 +3152,11 @@ function PipelinePanelInner({
                   (stateById.get(b.to_state)?.sort ?? 999)
               )
               .map((tx) => (
-                <DropdownMenuItem key={tx.id} onSelect={() => trySetPending(tx.id)}>
+                <DropdownMenuItem
+                  key={tx.id}
+                  onSelect={() => trySetPending(tx.id)}
+                  {...blockedMoveProps(tx)}
+                >
                   {tx.color && (
                     <span
                       className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
@@ -3137,6 +3164,7 @@ function PipelinePanelInner({
                     />
                   )}
                   {stateById.get(tx.to_state)?.label ?? tx.to_state}
+                  {tx.advisory && <BlockedMark className='ml-auto' />}
                 </DropdownMenuItem>
               ))}
           </DropdownMenuContent>
@@ -3327,6 +3355,26 @@ function PipelinePanelInner({
             )}
           />
         </div>
+        {/* A move a check would refuse says so here, before it is pressed — open or folded. */}
+        {moveNotices.map(({ advisory, moves }) => (
+          <MoveAdvisoryNotice
+            key={`${advisory.code}:${advisory.message}`}
+            collection={collection}
+            item={String(item)}
+            advisory={advisory}
+            armedMove={
+              armedTx && moves.some((m) => m.id === armedTx.id)
+                ? { id: armedTx.id, label: armedTx.label }
+                : null
+            }
+            onDismiss={() => setArmedMove(null)}
+            onFixed={(thenMove) => {
+              setArmedMove(null)
+              void queryClient.invalidateQueries({ queryKey })
+              if (thenMove) void trySetPending(thenMove.id, { cleared: true })
+            }}
+          />
+        ))}
         {!expanded && pendingTransition && (
           <div className='border-t border-slate-100 dark:border-border/60 px-4 py-3'>
             {confirmForm}
@@ -3544,6 +3592,8 @@ function PipelineTransitionButtonsInner({
   const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
   // A refusal the caller can fix here (REFUSAL_FIX_ACTIONS), e.g. PRIORITY_REQUIRED.
   const [fixOffer, setFixOffer] = useState<RefusalFixOffer | null>(null)
+  // A move pressed while a check would refuse it (its advisory): the notice opens on the fix.
+  const [armedMove, setArmedMove] = useState<string | null>(null)
   // Brief lines that warned before a forward move (army6 D6): the confirm says "<move> anyway".
   const [forwardWarning, setForwardWarning] = useState<BriefLineView[]>([])
   const checkForwardMove = useForwardMoveCheck(collection, String(item))
@@ -3572,12 +3622,26 @@ function PipelineTransitionButtonsInner({
       }
     })
   }
-  const trySetPending = async (txId: string) => {
+  const trySetPending = async (txId: string, opts?: { cleared?: boolean }) => {
     if (transitionBusyRef.current) return
     if (pendingTransition === txId) {
       setPendingTransition(null)
       return
     }
+    // The server already said this move would be refused (its advisory): show why, and the
+    // fix, instead of sending it off to be refused. Ask again in the background in case that
+    // has changed. `cleared` = the fix just ran, the cached advisory is the old answer.
+    if (
+      !opts?.cleared &&
+      (data?.available_transitions ?? []).some((t) => t.id === txId && t.advisory)
+    ) {
+      setPendingTransition(null)
+      setFixOffer(null)
+      setArmedMove(txId)
+      void queryClient.invalidateQueries({ queryKey: ['pipeline-instance', collection, item] })
+      return
+    }
+    setArmedMove(null)
     // The guard may save the form first, so it can be async — awaiting it is
     // what lets one click mean "save, then transition".
     if (onBeforeTransition) {
@@ -3843,6 +3907,7 @@ function PipelineTransitionButtonsInner({
   const stateById = new Map((data.states ?? []).map((s) => [s.id, s]))
   const currentState = data.instance.current_state_obj ?? null
   const pendingTx = pendingTransition ? transitions.find((t) => t.id === pendingTransition) : null
+  const armedTx = armedMove ? transitions.find((t) => t.id === armedMove) : null
   const pendingToState = pendingTx ? stateById.get(pendingTx.to_state) : null
   const landing = confirmLanding(pendingTx, currentState, data.states ?? [], chainOwners)
   const landedState = landing?.state ?? pendingToState
@@ -3889,7 +3954,10 @@ function PipelineTransitionButtonsInner({
                   {/* A plain step right after a labelled group is set apart
                     from it, or it reads as one more target of that group. */}
                   {gi > 0 && all[gi - 1][1].length > 1 && <DropdownMenuSeparator />}
-                  <DropdownMenuItem onSelect={() => trySetPending(txs[0].id)}>
+                  <DropdownMenuItem
+                    onSelect={() => trySetPending(txs[0].id)}
+                    {...blockedMoveProps(txs[0])}
+                  >
                     {txs[0].color && (
                       <span
                         className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
@@ -3897,6 +3965,7 @@ function PipelineTransitionButtonsInner({
                       />
                     )}
                     {label}
+                    {txs[0].advisory && <BlockedMark className='ml-auto' />}
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
               ) : (
@@ -3906,7 +3975,11 @@ function PipelineTransitionButtonsInner({
                     {label}
                   </DropdownMenuLabel>
                   {sortByTarget(txs).map((tx) => (
-                    <DropdownMenuItem key={tx.id} onSelect={() => trySetPending(tx.id)}>
+                    <DropdownMenuItem
+                      key={tx.id}
+                      onSelect={() => trySetPending(tx.id)}
+                      {...blockedMoveProps(tx)}
+                    >
                       {tx.color && (
                         <span
                           className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
@@ -3914,6 +3987,7 @@ function PipelineTransitionButtonsInner({
                         />
                       )}
                       {stateById.get(tx.to_state)?.label ?? tx.to_state}
+                      {tx.advisory && <BlockedMark className='ml-auto' />}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuGroup>
@@ -3959,12 +4033,15 @@ function PipelineTransitionButtonsInner({
                   aria-disabled={freshTx.dimmed(tx.id) || undefined}
                   data-fresh={freshTx.dimmed(tx.id) || undefined}
                   {...freshTx.bind(tx.id)}
+                  {...blockedMoveProps(tx)}
                   onClick={() => {
                     if (freshTx.press(tx.id)) void trySetPending(tx.id)
                   }}
                 >
                   {running ? (
                     <Loader2 className='h-3 w-3 animate-spin' />
+                  ) : tx.advisory ? (
+                    <BlockedMark />
                   ) : (
                     isOrder && <Send className='h-3 w-3' aria-hidden />
                   )}
@@ -4003,7 +4080,11 @@ function PipelineTransitionButtonsInner({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align='start'>
                   {sortByTarget(txs).map((tx) => (
-                    <DropdownMenuItem key={tx.id} onSelect={() => trySetPending(tx.id)}>
+                    <DropdownMenuItem
+                      key={tx.id}
+                      onSelect={() => trySetPending(tx.id)}
+                      {...blockedMoveProps(tx)}
+                    >
                       {tx.color && (
                         <span
                           className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
@@ -4011,6 +4092,7 @@ function PipelineTransitionButtonsInner({
                         />
                       )}
                       {stateById.get(tx.to_state)?.label ?? tx.to_state}
+                      {tx.advisory && <BlockedMark className='ml-auto' />}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -4097,6 +4179,23 @@ function PipelineTransitionButtonsInner({
             </Button>
           </div>
         </div>
+      )}
+      {armedTx?.advisory && !pendingTransition && (
+        <MoveAdvisoryNotice
+          floating
+          collection={collection}
+          item={String(item)}
+          advisory={armedTx.advisory}
+          armedMove={{ id: armedTx.id, label: armedTx.label }}
+          className='absolute right-0 top-full z-50 mt-1'
+          style={{ width: confirmWidth }}
+          onDismiss={() => setArmedMove(null)}
+          onFixed={(thenMove) => {
+            setArmedMove(null)
+            void queryClient.invalidateQueries({ queryKey })
+            if (thenMove) void trySetPending(thenMove.id, { cleared: true })
+          }}
+        />
       )}
       {fixOffer && !pendingTransition && (
         <RefusalFixPanel

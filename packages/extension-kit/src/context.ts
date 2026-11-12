@@ -285,12 +285,17 @@ export interface ExtensionContext {
   itemActions: { register(def: ItemActionDef): void }
   /** Veto manual workflow/pipeline moves. Checks run at every manual path (record panel, branch,
    *  bulk, GraphQL, workflow mutation) right after the admin-only gate; automatic engine
-   *  transitions are not checked. Checks also run when the search command offer list is built,
-   *  so keep them cheap. `toState` is the transition's nominal target (branch skips not resolved). */
+   *  transitions are not checked. Checks also run when the search command offer list is built
+   *  and when a record's moves are listed (the record page shows a refusal beside the move
+   *  BEFORE it is pressed), so keep them cheap: one small read at most, none for a move the
+   *  check does not concern. `toState` is the transition's nominal target (branch skips not
+   *  resolved). */
   transitions: {
     /** Register this extension's check (re-registering replaces it). Return a refusal to block
      *  the move, or null to allow. `fromState` / `toState` are state keys. A throwing check
-     *  refuses with 503 `TRANSITION_CHECK_FAILED`. */
+     *  refuses with 503 `TRANSITION_CHECK_FAILED`. `fix` names a record action (a bulk-action
+     *  key registered for the collection) that clears the refusal: the record page offers it
+     *  beside the move, only to a person the action registry lets run it. */
     registerCheck(
       fn: (args: {
         collection: string
@@ -300,7 +305,12 @@ export interface ExtensionContext {
         toState: string | null
         user: { id?: string; role?: string | null } | undefined
         isAdmin: boolean
-      }) => Promise<{ status: number; error: string; code: string } | null>
+      }) => Promise<{
+        status: number
+        error: string
+        code: string
+        fix?: { action: string; label?: string | null } | null
+      } | null>
     ): void
   }
   /** Partner payload templates (spec 2026-10-22): bodies editable in the admin, versioned,
