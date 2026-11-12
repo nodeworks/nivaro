@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-11T21:38:45.926Z",
+  "generated_at": "2026-11-12T15:50:33.861Z",
   "releases": [
+    {
+      "version": "0.3.143",
+      "tag": "v0.3.143",
+      "date": "2026-11-12T10:50:15-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "post-run flows read the run's own rows",
+              "hash": "fc67ce570"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "forms",
+              "text": "BOM-upload ship-to test waits for the form's fields",
+              "hash": "9c48adfaf"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.142",
       "tag": "v0.3.142",
-      "date": "2026-11-11T16:38:29-05:00",
+      "date": "2026-11-11T16:38:45-05:00",
       "sections": [
         {
           "label": "Added",
