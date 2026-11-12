@@ -1,4 +1,6 @@
+import type { Knex } from 'knex'
 import { db } from '../../db/index.js'
+import { apiLogSource } from '../api-log-source.js'
 
 /**
  * Command Center system health (administrators only — names internal jobs and error counts).
@@ -20,23 +22,35 @@ export interface SystemHealthAnswer {
 
 type Pingable = { ping: () => Promise<string> }
 
+/**
+ * Server errors and all requests in the request log since `since`. Both go through
+ * `apiLogSource` (no shared locks on SQL Server): the pair ran side by side over the newest
+ * hour of the log, the pages the logger is inserting into, and under locking READ COMMITTED
+ * both lost one deadlock to that insert. Exported so a test can read the SQL.
+ */
+export function requestLogCounts(
+  knex: Knex,
+  since: Date
+): { errors: Knex.QueryBuilder; all: Knex.QueryBuilder } {
+  return {
+    errors: apiLogSource(knex)
+      .where('created_at', '>', since)
+      .where('status', '>=', 500)
+      .count('* as n')
+      .first(),
+    all: apiLogSource(knex).where('created_at', '>', since).count('* as n').first()
+  }
+}
+
 export async function readSystemHealth(
   redis: Pingable | null | undefined
 ): Promise<SystemHealthAnswer> {
   const hourAgo = new Date(Date.now() - 3600_000)
   const n = (r: unknown) => Number((r as { n?: number } | undefined)?.n ?? 0)
+  const counts = requestLogCounts(db, hourAgo)
   const [errRow, reqRow, running, failedJobs] = await Promise.all([
-    db('nivaro_api_logs')
-      .where('created_at', '>', hourAgo)
-      .where('status', '>=', 500)
-      .count('* as n')
-      .first()
-      .catch(() => undefined),
-    db('nivaro_api_logs')
-      .where('created_at', '>', hourAgo)
-      .count('* as n')
-      .first()
-      .catch(() => undefined),
+    counts.errors.catch(() => undefined),
+    counts.all.catch(() => undefined),
     db('nivaro_job_runs')
       .where('status', 'running')
       .count('* as n')

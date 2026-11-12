@@ -27,9 +27,11 @@ import {
   isScalarType,
   isUnionType
 } from 'graphql'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { CMSField } from '../types.js'
+import { apiLogSource } from './api-log-source.js'
 import { getRelations, listCollections } from './collections.js'
 import { selectInChunks } from './db-batch.js'
 import { accountKindOf } from './machine-accounts.js'
@@ -246,6 +248,72 @@ function recordUsages(acc: Acc, usages: FieldUsage[], calls: number, at: number)
 
 const isGraphQLPath = (p: string) => /^\/(api\/)?graphql\/?$/.test(p)
 
+/**
+ * The two scans of the request log behind the map: calls per caller + endpoint, and one row
+ * per distinct stored body. Each covers the whole window (two weeks by default, most of the
+ * table), so both read through `apiLogSource` (no shared locks on SQL Server): under locking
+ * READ COMMITTED the first one was the deadlock victim against the logger's insert five times
+ * in a production install's first week. Exported so a test can read the SQL.
+ */
+export function dependencyLogReads(
+  knex: Knex,
+  from: Date,
+  cols: { hasQuery: boolean; hasGql: boolean }
+): { groups: Knex.QueryBuilder; bodies: Knex.QueryBuilder } {
+  const base = () =>
+    apiLogSource(knex, 'l')
+      .where('l.created_at', '>=', from)
+      .whereIn('l.auth', ['token', 'api_key'])
+      .where((w) => w.whereNotNull('l.user').orWhereNotNull('l.api_key_id'))
+
+  const groupCols = ['l.auth', 'l.user', 'l.api_key_id', 'l.method', 'l.path']
+  if (cols.hasQuery) groupCols.push('l.query')
+  if (cols.hasGql) groupCols.push('l.graphql_operation', 'l.graphql_kind')
+
+  return {
+    groups: base()
+      .select(groupCols)
+      .count('* as calls')
+      .sum({ errors: knex.raw('CASE WHEN l.status >= 400 THEN 1 ELSE 0 END') })
+      .sum({ bodied: knex.raw('CASE WHEN l.request_body IS NULL THEN 0 ELSE 1 END') })
+      .min({ first_at: 'l.created_at' })
+      .max({ last_at: 'l.created_at' })
+      .groupBy(groupCols)
+      .limit(GROUP_ROW_CAP),
+    // One row per distinct body (CHECKSUM) per caller + endpoint: a partner
+    // repeating the same write or document is read once, not N times — the
+    // raw bodies of two weeks run to tens of megabytes.
+    bodies: base()
+      .whereNotNull('l.request_body')
+      .where((w) =>
+        w
+          .where('l.path', 'like', '/api/items/%')
+          .orWhere('l.path', 'like', '/items/%')
+          .orWhere('l.path', 'like', '%graphql')
+      )
+      .select('l.auth', 'l.user', 'l.api_key_id', 'l.method', 'l.path')
+      .count('* as calls')
+      .sum({ errors: knex.raw('CASE WHEN l.status >= 400 THEN 1 ELSE 0 END') })
+      .min({ id: 'l.id' })
+      .max({ last_at: 'l.created_at' })
+      .groupBy(
+        'l.auth',
+        'l.user',
+        'l.api_key_id',
+        'l.method',
+        'l.path',
+        knex.raw('CHECKSUM(l.request_body)')
+      )
+      .orderBy('last_at', 'desc')
+      .limit(BODY_ROW_CAP)
+  }
+}
+
+/** The stored bodies of the given log rows (same lock-free read as the scans above). */
+export function logBodiesById(knex: Knex, ids: number[]): Knex.QueryBuilder {
+  return apiLogSource(knex).whereIn('id', ids).select('id', 'request_body')
+}
+
 async function buildMap(days: number): Promise<DependencyMap> {
   const from = new Date(Date.now() - days * 86_400_000)
   const [hasQuery, hasGql, relations, collectionRows, schema] = await Promise.all([
@@ -258,52 +326,10 @@ async function buildMap(days: number): Promise<DependencyMap> {
   const rel: RelationIndex = buildRelationIndex(relations)
   const collections = new Set(collectionRows.map((c) => c.collection))
 
-  const base = () =>
-    db('nivaro_api_logs as l')
-      .where('l.created_at', '>=', from)
-      .whereIn('l.auth', ['token', 'api_key'])
-      .where((w) => w.whereNotNull('l.user').orWhereNotNull('l.api_key_id'))
-
-  const groupCols = ['l.auth', 'l.user', 'l.api_key_id', 'l.method', 'l.path']
-  if (hasQuery) groupCols.push('l.query')
-  if (hasGql) groupCols.push('l.graphql_operation', 'l.graphql_kind')
-
+  const reads = dependencyLogReads(db, from, { hasQuery, hasGql })
   const [groups, bodies, persistedRows] = await Promise.all([
-    base()
-      .select(groupCols)
-      .count('* as calls')
-      .sum({ errors: db.raw('CASE WHEN l.status >= 400 THEN 1 ELSE 0 END') })
-      .sum({ bodied: db.raw('CASE WHEN l.request_body IS NULL THEN 0 ELSE 1 END') })
-      .min({ first_at: 'l.created_at' })
-      .max({ last_at: 'l.created_at' })
-      .groupBy(groupCols)
-      .limit(GROUP_ROW_CAP) as Promise<Array<Record<string, unknown>>>,
-    // One row per distinct body (CHECKSUM) per caller + endpoint: a partner
-    // repeating the same write or document is read once, not N times — the
-    // raw bodies of two weeks run to tens of megabytes.
-    base()
-      .whereNotNull('l.request_body')
-      .where((w) =>
-        w
-          .where('l.path', 'like', '/api/items/%')
-          .orWhere('l.path', 'like', '/items/%')
-          .orWhere('l.path', 'like', '%graphql')
-      )
-      .select('l.auth', 'l.user', 'l.api_key_id', 'l.method', 'l.path')
-      .count('* as calls')
-      .sum({ errors: db.raw('CASE WHEN l.status >= 400 THEN 1 ELSE 0 END') })
-      .min({ id: 'l.id' })
-      .max({ last_at: 'l.created_at' })
-      .groupBy(
-        'l.auth',
-        'l.user',
-        'l.api_key_id',
-        'l.method',
-        'l.path',
-        db.raw('CHECKSUM(l.request_body)')
-      )
-      .orderBy('last_at', 'desc')
-      .limit(BODY_ROW_CAP) as Promise<Array<Record<string, unknown>>>,
+    reads.groups as Promise<Array<Record<string, unknown>>>,
+    reads.bodies as Promise<Array<Record<string, unknown>>>,
     db('nivaro_persisted_queries')
       .select('id', 'hash', 'query')
       .catch(() => [] as Array<Record<string, unknown>>) as Promise<Array<Record<string, unknown>>>
@@ -315,7 +341,7 @@ async function buildMap(days: number): Promise<DependencyMap> {
         bodies.map((b) => Number(b.id)),
         500,
         (ids) =>
-          db('nivaro_api_logs').whereIn('id', ids).select('id', 'request_body') as Promise<
+          logBodiesById(db, ids) as Promise<
             Array<{ id: number | string; request_body: string | null }>
           >
       )
