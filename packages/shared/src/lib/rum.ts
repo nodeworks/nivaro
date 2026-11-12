@@ -234,15 +234,32 @@ export function rumWidget(opts: {
   })
 }
 
-/** Route-change timing: from the navigation to a settled double-rAF frame. */
+/**
+ * Route-change timing: from the navigation to a settled double-rAF frame.
+ *
+ * Only while the tab is on screen. A hidden tab paints no frames, so the two
+ * frames arrive when the person first looks at it and the figure would be how
+ * long the tab sat in the background, not how long the page took: a replay
+ * opened in a background tab once logged 243 s for a page whose requests had
+ * all answered within 100 ms. A change that starts hidden, or is hidden before
+ * the second frame, reports nothing.
+ */
 export function rumRouteChange(pathname: string): void {
   if (!started || typeof window === 'undefined') return
+  if (document.visibilityState === 'hidden') return
   const began = performance.now()
+  let wasHidden = false
+  const noteHidden = () => {
+    if (document.visibilityState === 'hidden') wasHidden = true
+  }
+  document.addEventListener('visibilitychange', noteHidden)
   // Two rAFs: the first fires before paint of the new route's first frame,
   // the second after it — a cheap "render settled" proxy that tracks what a
   // person perceives far better than the synchronous route switch does.
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
+      document.removeEventListener('visibilitychange', noteHidden)
+      if (wasHidden) return
       const ms = Math.round(performance.now() - began)
       enqueue({ route: toPattern(pathname), kind: 'route', duration_ms: ms })
     })
