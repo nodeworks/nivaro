@@ -1,3 +1,4 @@
+import { guardLazyImport } from '@nivaro/shared'
 import {
   type ComponentType,
   isValidElement,
@@ -7,6 +8,7 @@ import {
   useMemo
 } from 'react'
 import { createRoutesFromChildren, matchRoutes, type RouteObject, Routes } from 'react-router'
+import { StaleBuildNotice } from '@/components/stale-build-notice'
 
 /**
  * Nav-hover route preload (#2448). `lazy` here is React's lazy that also remembers its loader,
@@ -14,6 +16,11 @@ import { createRoutesFromChildren, matchRoutes, type RouteObject, Routes } from 
  * can find the lazy screen(s) a path renders and start loading their chunks before the click.
  * Each chunk loads at most once; the loader is the same dynamic import React.lazy runs, so the
  * click reuses the module already in flight. Static assets only — no API call.
+ *
+ * A screen made here also survives a deploy: when its chunk is gone (this tab runs the
+ * previous build) the tab reloads once onto the new one, and where a reload cannot happen
+ * (just tried, or unsaved work) the "Nivaro was updated" notice takes the screen's place
+ * instead of a crash (guardLazyImport, packages/shared lib/stale-chunk.ts).
  */
 
 type AnyComponent = ComponentType<any>
@@ -23,7 +30,7 @@ const started = new WeakSet<object>()
 export function lazy<T extends AnyComponent>(
   factory: () => Promise<{ default: T }>
 ): LazyExoticComponent<T> {
-  const C = reactLazy(factory)
+  const C = reactLazy(guardLazyImport(factory, StaleBuildNotice as unknown as T))
   loaders.set(C, factory)
   return C
 }

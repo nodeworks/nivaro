@@ -19,6 +19,9 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+// Monaco's editor, JSON and GraphQL workers: without them the editors have no validation or
+// completion and every visit raised "Cannot read properties of undefined (reading 'toUrl')".
+import '@/lib/graphql-editor-workers'
 import { useTheme } from '@/lib/theme'
 
 interface KeyRow {

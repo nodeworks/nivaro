@@ -1,7 +1,9 @@
-import { type ComponentType, lazy } from 'react'
+import type { ComponentType } from 'react'
 import { Navigate, useLocation } from 'react-router'
 import { HubPage } from '@/components/hub-page'
 import { hubForPath } from '@/lib/hubs'
+// React's lazy with the after-deploy recovery every other route has (lib/route-preload.tsx).
+import { lazy } from '@/lib/route-preload'
 
 /**
  * Every hub's screens (lib/hubs.ts holds the hubs themselves). App.tsx routes

@@ -126,7 +126,10 @@ export default defineConfig(({ command }) => ({
   },
   optimizeDeps: {
     include: ['graphiql', '@graphiql/react', '@graphiql/plugin-explorer'],
-    exclude: ['@nivaro/react', '@nivaro/shared', '@nivaro/sdk']
+    // `@graphiql/react/setup-workers` imports Monaco's workers with Vite's `?worker` suffix
+    // (src/lib/graphql-editor-workers.ts). The pre-bundler cannot read those and stops the
+    // dev server at start, so that one module is served as it is.
+    exclude: ['@nivaro/react', '@nivaro/shared', '@nivaro/sdk', '@graphiql/react/setup-workers']
   },
   worker: {
     format: 'es'

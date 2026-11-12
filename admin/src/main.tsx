@@ -10,6 +10,7 @@ import { toast } from 'sonner'
 import './globals.css'
 import { disableRecordOutbox, guardErrorToasts, installStaleChunkRecovery } from '@nivaro/shared'
 import App from './App'
+import { STALE_BUILD_TOAST } from './components/stale-build-notice'
 import { registerCloudPlugin, registerExtensionPlugin } from './extensions/store'
 import { installGlobalErrorReport } from './lib/global-error-report'
 import { readMasquerade } from './lib/masquerade'
@@ -20,10 +21,18 @@ import { installPageContextFetch } from './lib/page-context'
 // a failed save there shows the normal error.
 if (readMasquerade()) disableRecordOutbox()
 // A tab opened before a deploy asks for the previous build's screen files, which the new
-// release no longer serves: reload onto the current build (once — a second failure says so).
+// release no longer serves: reload onto the current build (once — a second failure says so),
+// and never over unsaved work (the person is told, and reloads once it is saved).
 installStaleChunkRecovery({
   onGiveUp: () =>
     toast.error('Nivaro was updated and this page could not load part of it.', {
+      id: STALE_BUILD_TOAST,
+      duration: Number.POSITIVE_INFINITY,
+      action: { label: 'Reload', onClick: () => window.location.reload() }
+    }),
+  onHeld: () =>
+    toast.warning('Nivaro was updated. Save your work, then reload to get the new version.', {
+      id: STALE_BUILD_TOAST,
       duration: Number.POSITIVE_INFINITY,
       action: { label: 'Reload', onClick: () => window.location.reload() }
     })

@@ -324,6 +324,7 @@ export {
   groupActivity,
   guardErrorToasts,
   guardIdentityCall,
+  guardLazyImport,
   HelpVideoButton,
   type HelpVideoContext,
   type HelpVideoDto,

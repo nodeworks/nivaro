@@ -8,8 +8,14 @@
  * `installStaleChunkRecovery()` reloads the tab onto the current build when a chunk fails to
  * load. A second failure within the window means a reload does not help (the server really
  * is missing the file, or the network is down): it stops reloading and calls `onGiveUp`, so
- * the host can say so instead of looping.
+ * the host can say so instead of looping. A tab holding unsaved work is never reloaded: the
+ * host is told (`onHeld`) and the person reloads when they have saved.
+ *
+ * `guardLazyImport()` wraps a lazily loaded screen so the same failure never reaches the
+ * error boundary as a crash: the screen stays loading while the tab reloads, and when no
+ * reload can happen it renders the host's "updated, reload" notice in the screen's place.
  */
+import { unsavedWorkLabels } from './unsaved-work'
 
 const KEY = 'nvr-stale-chunk-reload'
 const WINDOW_MS = 60_000
@@ -34,21 +40,42 @@ export function isStaleChunkError(reason: unknown): boolean {
   return STALE_CHUNK_MESSAGES.some((re) => re.test(message))
 }
 
+/** What one recovery step did: reloaded, would only loop, or held back for unsaved work. */
+export type StaleChunkOutcome = 'reload' | 'gave-up' | 'held'
+
 export interface StaleChunkRecoveryOptions {
   /** Called instead of a second reload inside the window. */
   onGiveUp?: () => void
+  /** Called instead of a reload while the tab holds unsaved work (the labels say what).
+   *  A host without one gets `onGiveUp`. */
+  onHeld?: (labels: string[]) => void
   /** Test seams. */
   storage?: Pick<Storage, 'getItem' | 'setItem'> | null
   reload?: () => void
   now?: () => number
   target?: Pick<Window, 'addEventListener' | 'removeEventListener'>
+  /** What a reload would lose, by label; the unsaved-work registry when not given. */
+  unsaved?: () => string[]
 }
 
 /**
- * One recovery step: reload, or give up when the last reload was less than a minute ago.
- * Returns what it did. Exported for the tests; hosts use `installStaleChunkRecovery`.
+ * One recovery step: reload, give up when the last reload was less than a minute ago, or
+ * hold back while the tab has unsaved work. Returns what it did. Exported for the tests;
+ * hosts use `installStaleChunkRecovery`.
  */
-export function recoverFromStaleChunk(opts: StaleChunkRecoveryOptions = {}): 'reload' | 'gave-up' {
+export function recoverFromStaleChunk(opts: StaleChunkRecoveryOptions = {}): StaleChunkOutcome {
+  let unsaved: string[] = []
+  try {
+    unsaved = (opts.unsaved ?? unsavedWorkLabels)()
+  } catch {
+    unsaved = []
+  }
+  if (unsaved.length > 0) {
+    // Not counted as the one reload: once the work is saved, the next failure reloads.
+    if (opts.onHeld) opts.onHeld(unsaved)
+    else opts.onGiveUp?.()
+    return 'held'
+  }
   const now = (opts.now ?? Date.now)()
   const storage = opts.storage === undefined ? safeSessionStorage() : opts.storage
   let last = 0
@@ -70,19 +97,41 @@ export function recoverFromStaleChunk(opts: StaleChunkRecoveryOptions = {}): 're
   return 'reload'
 }
 
+/** One failure reaches us several ways within a moment (Vite's event, the import's own
+ *  rejection, the screen guard): they share one decision. */
+const BURST_MS = 2000
+/** How long a started reload is given to take the page away before it counts as not
+ *  having happened (blocked, or a leave prompt answered "stay"). */
+const RELOAD_GRACE_MS = 10_000
+
+function burstRecovery(opts: StaleChunkRecoveryOptions): () => StaleChunkOutcome {
+  let last: { outcome: StaleChunkOutcome; at: number } | null = null
+  return () => {
+    const now = (opts.now ?? Date.now)()
+    // A reload is under way, or this is the same failure again.
+    const holds = last?.outcome === 'reload' ? RELOAD_GRACE_MS : BURST_MS
+    if (last && now - last.at < holds) return last.outcome
+    const outcome = recoverFromStaleChunk(opts)
+    last = { outcome, at: now }
+    return outcome
+  }
+}
+
+/** The recovery the host installed; screen guards decide through it. */
+let installed: (() => StaleChunkOutcome) | null = null
+let uninstalled: (() => StaleChunkOutcome) | null = null
+
 /** Listen for chunk-load failures (Vite's preload error and unhandled import rejections). */
 export function installStaleChunkRecovery(opts: StaleChunkRecoveryOptions = {}): () => void {
   const target = opts.target ?? (typeof window !== 'undefined' ? window : undefined)
   if (!target) return () => {}
-  let handled = false
-  const handle = () => {
-    if (handled) return
-    handled = true
-    if (recoverFromStaleChunk(opts) === 'gave-up') handled = false
-  }
-  const onPreloadError = (event: Event) => {
-    // Vite rethrows the import error unless the event is cancelled.
-    event.preventDefault()
+  const handle = burstRecovery(opts)
+  installed = handle
+  const onPreloadError = () => {
+    // The event is left alone on purpose. Cancelling it makes Vite swallow the failure and
+    // RESOLVE the import with nothing, and the caller then crashes on its first read of the
+    // module ("Cannot read properties of undefined (reading 'CollectionsPage')", 2026-11-11).
+    // Uncancelled, the import fails as a failed import, which every caller can tell.
     handle()
   }
   const onRejection = (event: PromiseRejectionEvent) => {
@@ -95,7 +144,45 @@ export function installStaleChunkRecovery(opts: StaleChunkRecoveryOptions = {}):
   return () => {
     target.removeEventListener('vite:preloadError', onPreloadError)
     target.removeEventListener('unhandledrejection', onRejection as EventListener)
+    if (installed === handle) installed = null
   }
+}
+
+/**
+ * Wrap the loader of a lazily shown screen (`React.lazy(guardLazyImport(load, Notice))`).
+ *
+ * A chunk that cannot be fetched, or that loads without the screen it should export, means
+ * this tab runs a build the server no longer serves. The tab reloads once and the screen
+ * stays in its loading state meanwhile. When no reload can happen (it was just tried, the
+ * tab holds unsaved work, or the reload did not go through) the loader resolves with
+ * `fallback`, the host's notice, so the rest of the page stays as it is. Any other error is
+ * the screen's own and is rethrown.
+ */
+export function guardLazyImport<T>(
+  load: () => Promise<{ default: T }>,
+  fallback: T,
+  opts?: StaleChunkRecoveryOptions
+): () => Promise<{ default: T }> {
+  const own = opts ? burstRecovery(opts) : null
+  const stale = (): Promise<{ default: T }> => {
+    uninstalled ??= burstRecovery({})
+    const recover = own ?? installed ?? uninstalled
+    if (recover() !== 'reload') return Promise.resolve({ default: fallback })
+    // Reloading: the screen stays loading while the page is on its way out. Should the
+    // reload not happen after all, the notice appears instead of a screen that never loads.
+    return new Promise<{ default: T }>((resolve) => {
+      const timer = setTimeout(() => resolve({ default: fallback }), RELOAD_GRACE_MS)
+      ;(timer as { unref?: () => void }).unref?.()
+    })
+  }
+  return () =>
+    load().then(
+      (mod) => (mod && mod.default !== undefined ? mod : stale()),
+      (err: unknown) => {
+        if (!isStaleChunkError(err)) throw err
+        return stale()
+      }
+    )
 }
 
 function safeSessionStorage(): Storage | null {
