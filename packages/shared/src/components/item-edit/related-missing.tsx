@@ -1,3 +1,6 @@
+import { useQuery } from '@tanstack/react-query'
+import { useOptionalNivaroClient } from '../../context'
+import { get } from '../../lib/commands'
 import { describeError } from '../../lib/error-message'
 import { cn } from '../../lib/utils'
 
@@ -9,7 +12,9 @@ import { cn } from '../../lib/utils'
  *
  * The API answers 404 both for a row that no longer exists and for one the
  * reader's access hides (it never says which), so a 404 is worded to cover
- * both; only a refusal (403) or an empty answer is about access.
+ * both; only a refusal (403) or an empty answer is about access. A label
+ * that knows which record it stands for asks the server which of the two it
+ * is (useRelatedMissing) and says that instead.
  */
 export type RelatedMissingKind = 'no-access' | 'not-found' | 'failed'
 
@@ -52,8 +57,100 @@ export function retryRelatedRead(failures: number, error: unknown): boolean {
   return failures < 2
 }
 
-export function RelatedMissingLabel({ error, className }: { error: unknown; className?: string }) {
-  const m = relatedMissing(error)
+/** GET /access-explain's answer: which gate hid the record, or that it is gone. */
+export interface AccessExplainAnswer {
+  access: boolean
+  reasons: Array<{ type: string; message?: string }>
+}
+
+/**
+ * The wording for a 404 once the server has said which it was. A record a
+ * gate hides (User Scope, row rule, role) is "Not available to you" with the
+ * server's own sentence as the hint; one that does not exist stays "Record
+ * not found". Null when the answer settles nothing (no answer, or the server
+ * says the reader can see it — the read failed for another reason).
+ */
+export function explainedMissing(
+  answer: AccessExplainAnswer | null | undefined
+): RelatedMissing | null {
+  const reasons = answer?.reasons ?? []
+  if (reasons.length === 0) return null
+  if (reasons.some((r) => r.type === 'not_found'))
+    return { kind: 'not-found', text: 'Record not found', tip: 'This record was removed.' }
+  const said = reasons.find((r) => r.message?.trim())?.message?.trim()
+  return {
+    kind: 'no-access',
+    text: 'Not available to you',
+    tip: said ?? 'Your access does not include this record.'
+  }
+}
+
+/** System tables are never explained (the route refuses them). */
+const SYSTEM_TABLE = /^(nivaro|directus)_/i
+
+/**
+ * relatedMissing, made exact for a 404 when the label knows its record: one
+ * read of /access-explain says whether the row is hidden from the reader or
+ * gone. `settling` is true while that read is out, so the label can wait
+ * instead of showing one wording and then another. A refusal, a failed load
+ * and a label with no record to ask about are answered at once, unchanged.
+ */
+export function useRelatedMissing(
+  error: unknown,
+  collection?: string | null,
+  id?: unknown
+): { missing: RelatedMissing; settling: boolean } {
+  const client = useOptionalNivaroClient()
+  const base = relatedMissing(error)
+  const ask =
+    !!client &&
+    base.kind === 'not-found' &&
+    !!collection &&
+    !SYSTEM_TABLE.test(collection) &&
+    id != null &&
+    id !== ''
+  const { data, isLoading } = useQuery<AccessExplainAnswer | null>({
+    // Its own key: the denied panel keeps a differently shaped answer for a
+    // record page under 'access-explain'.
+    queryKey: ['related-missing-explain', collection, String(id)],
+    queryFn: () =>
+      (client as NonNullable<typeof client>)
+        .request<{ data: AccessExplainAnswer | null }>(
+          get(`/access-explain/${collection}/${encodeURIComponent(String(id))}`)
+        )
+        .then((r) => r.data ?? null)
+        // No answer is not an error the person can act on: the 404 wording stands.
+        .catch(() => null),
+    enabled: ask,
+    staleTime: 5 * 60_000,
+    retry: false
+  })
+  if (!ask) return { missing: base, settling: false }
+  return { missing: explainedMissing(data) ?? base, settling: isLoading }
+}
+
+export function RelatedMissingLabel({
+  error,
+  collection,
+  id,
+  className
+}: {
+  error: unknown
+  /** The linked record, when known: lets a 404 say "hidden from you" or "removed". */
+  collection?: string | null
+  id?: unknown
+  className?: string
+}) {
+  const { missing: m, settling } = useRelatedMissing(error, collection, id)
+  if (settling)
+    return (
+      <span
+        aria-hidden='true'
+        data-related-unavailable-settling=''
+        // The brighter skeleton step in dark: the plain one disappears on a field's muted box.
+        className='inline-block h-3.5 w-24 animate-pulse rounded bg-[hsl(var(--nvr-skeleton))] align-middle dark:bg-[hsl(var(--nvr-skeleton-hi))]'
+      />
+    )
   return (
     <span
       className={cn('italic text-muted-foreground', className)}

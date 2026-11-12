@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { relatedMissing, retryRelatedRead } from './related-missing'
+import { explainedMissing, relatedMissing, retryRelatedRead } from './related-missing'
 
 // army8 review M8: every unreadable link said "Not available to you", so a
 // deleted record or a failed read looked like a permissions problem.
@@ -33,5 +33,41 @@ describe('relatedMissing', () => {
     expect(retryRelatedRead(0, err(403))).toBe(false)
     expect(retryRelatedRead(0, err(503))).toBe(true)
     expect(retryRelatedRead(2, err(503))).toBe(false)
+  })
+})
+
+// Production review 2026-11-12: a unit type hidden by the reader's access read
+// "Record not found". Once the server says which it was, the label says that.
+describe('explainedMissing', () => {
+  it('a record a gate hides is an access matter, in the server’s words', () => {
+    const m = explainedMissing({
+      access: false,
+      reasons: [{ type: 'scope', message: 'Your Zone access covers Zone 1.' }]
+    })
+    expect(m).toEqual({
+      kind: 'no-access',
+      text: 'Not available to you',
+      tip: 'Your Zone access covers Zone 1.'
+    })
+  })
+
+  it('a record that does not exist stays not found, never an access matter', () => {
+    const m = explainedMissing({
+      access: false,
+      reasons: [{ type: 'not_found', message: 'This record does not exist.' }]
+    })
+    expect(m?.kind).toBe('not-found')
+    expect(m?.text).toBe('Record not found')
+  })
+
+  it('settles nothing without an answer or without a reason', () => {
+    expect(explainedMissing(null)).toBeNull()
+    expect(explainedMissing({ access: true, reasons: [] })).toBeNull()
+  })
+
+  it('falls back to plain words when a reason carries no sentence', () => {
+    expect(explainedMissing({ access: false, reasons: [{ type: 'row_filter' }] })?.tip).toBe(
+      'Your access does not include this record.'
+    )
   })
 })

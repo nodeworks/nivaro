@@ -206,10 +206,22 @@ export function RelationCombobox({
     }
   }, [open])
 
+  const refocusRef = useRef(false)
   const closeAndRefocus = () => {
     setOpen(false)
     triggerRef.current?.focus()
+    refocusRef.current = true
   }
+  // The trigger is a different element while the value cannot be read (the
+  // "Change" control beside the words). A pick or a clear made from it swaps
+  // the element that holds the focus, which drops the focus to the page: hand
+  // it to the trigger that took its place so Tab carries on from this field.
+  useEffect(() => {
+    if (!refocusRef.current) return
+    refocusRef.current = false
+    const active = document.activeElement
+    if (!active || active === document.body) triggerRef.current?.focus()
+  })
 
   // Escape closes the list (army8 b01 HIGH: it did nothing, the open list hung
   // over the next field and the next click picked a row under it). Listened
@@ -857,43 +869,72 @@ export function RelationCombobox({
     // Stale tooltip binds on the WRAPPER: a disabled trigger button swallows
     // mouse events, so a locked-but-stale field would never show the hint.
     <div ref={rootRef} className='relative' {...staleTip.bind}>
-      <button
-        ref={triggerRef}
-        type='button'
-        disabled={disabled}
-        aria-haspopup='listbox'
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        onKeyDown={onTriggerKeyDown}
-        className={cn(
-          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 disabled:pointer-events-none disabled:opacity-50',
-          isStale ? 'border-amber-300 dark:border-amber-600' : 'border-input'
-        )}
-      >
-        {showLoader ? (
-          <Loader2 className='h-3.5 w-3.5 animate-spin text-muted-foreground' />
-        ) : (
-          <span
-            className={cn(
-              'flex items-center gap-1.5 truncate min-w-0',
-              (!selectedLabel || selectedLabel === NAMELESS_LABEL) && 'text-muted-foreground'
-            )}
-          >
-            {isStale && (
-              <>
-                <AlertTriangle aria-hidden='true' className='h-3.5 w-3.5 shrink-0 text-amber-500' />
-                <span className='sr-only'>Not an available option: </span>
-              </>
-            )}
-            {selectedUnreadable ? (
-              <RelatedMissingLabel error={selectedError} className='truncate' />
-            ) : (
-              <span className='truncate'>{selectedLabel ?? placeholder ?? 'Select…'}</span>
-            )}
+      {selectedUnreadable ? (
+        // A value the reader cannot open is words, not a button: the field
+        // says the value is hidden from them (or gone) and, when it may be
+        // edited, offers the one thing they can do about it. It used to be
+        // the picker's own button reading "Record not found" — a broken
+        // record with a control that explained nothing (production review
+        // 2026-11-12); locked, that button was dead as well.
+        <div
+          data-related-unavailable-field=''
+          className='flex h-9 w-full items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm dark:border-border dark:bg-muted/40'
+        >
+          <span className='min-w-0 flex-1 truncate'>
+            <RelatedMissingLabel error={selectedError} collection={collection} id={value} />
           </span>
-        )}
-        <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
-      </button>
+          {!disabled && (
+            <button
+              ref={triggerRef}
+              type='button'
+              aria-haspopup='listbox'
+              aria-expanded={open}
+              onClick={() => setOpen((v) => !v)}
+              onKeyDown={onTriggerKeyDown}
+              className='-mr-1.5 shrink-0 rounded px-1.5 py-0.5 text-[12px] font-medium text-slate-600 hover:bg-slate-200/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-slate-300 dark:hover:bg-white/10'
+            >
+              Change
+            </button>
+          )}
+        </div>
+      ) : (
+        <button
+          ref={triggerRef}
+          type='button'
+          disabled={disabled}
+          aria-haspopup='listbox'
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          onKeyDown={onTriggerKeyDown}
+          className={cn(
+            'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 disabled:pointer-events-none disabled:opacity-50',
+            isStale ? 'border-amber-300 dark:border-amber-600' : 'border-input'
+          )}
+        >
+          {showLoader ? (
+            <Loader2 className='h-3.5 w-3.5 animate-spin text-muted-foreground' />
+          ) : (
+            <span
+              className={cn(
+                'flex items-center gap-1.5 truncate min-w-0',
+                (!selectedLabel || selectedLabel === NAMELESS_LABEL) && 'text-muted-foreground'
+              )}
+            >
+              {isStale && (
+                <>
+                  <AlertTriangle
+                    aria-hidden='true'
+                    className='h-3.5 w-3.5 shrink-0 text-amber-500'
+                  />
+                  <span className='sr-only'>Not an available option: </span>
+                </>
+              )}
+              <span className='truncate'>{selectedLabel ?? placeholder ?? 'Select…'}</span>
+            </span>
+          )}
+          <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
+        </button>
+      )}
       {staleTip.tip}
       {open &&
         panelStyle &&
@@ -1247,11 +1288,16 @@ function PickerNarrowingNote({
 export function RelatedItemLabel({
   collection,
   id,
-  displayTemplate
+  displayTemplate,
+  explainMissing
 }: {
   collection: string
   id: unknown
   displayTemplate?: string | null
+  /** A row that cannot be read asks the server whether it is hidden from the
+   *  reader or gone (one extra read). For a record's own single value — not
+   *  for lists of chips, where every unreadable row would ask. */
+  explainMissing?: boolean
 }) {
   const client = useNivaroClient()
   const readRow = useRecordReader()
@@ -1285,7 +1331,14 @@ export function RelatedItemLabel({
   if (isLoading) return <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
   // A row the reader can't open says why in words (refused / not found /
   // failed to load) — never its raw id (army8 b01 "Find a Unit 273025").
-  if (!data) return id == null || id === '' ? null : <RelatedMissingLabel error={error} />
+  if (!data)
+    return id == null || id === '' ? null : (
+      <RelatedMissingLabel
+        error={error}
+        collection={explainMissing ? collection : null}
+        id={explainMissing ? id : null}
+      />
+    )
   if (isFiles) {
     const label = (data.title ||
       data.filename_download ||

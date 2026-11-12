@@ -274,7 +274,7 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
     )
   // Never the raw id (army8 b01 "Find a Unit #273025"); a gone or failed read
   // is not worded as an access problem (army8 review M8).
-  if (!row) return <RelatedMissingLabel error={error} />
+  if (!row) return <RelatedMissingLabel error={error} collection={collection} id={id} />
   let label = ''
   const template = meta?.display_template
   if (template) {

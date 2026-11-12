@@ -370,7 +370,9 @@ describe('RelationCombobox review fixes', () => {
     forbiddenIds = ['4034']
     await mount(4034)
     await tick()
-    expect(trigger()?.textContent).toContain('Not available to you')
-    expect(trigger()?.textContent).not.toContain('4034')
+    // The words sit beside the picker's control, not on it (the control says "Change").
+    const field = document.querySelector('[data-related-unavailable-field]')
+    expect(field?.textContent).toContain('Not available to you')
+    expect(field?.textContent).not.toContain('4034')
   })
 })

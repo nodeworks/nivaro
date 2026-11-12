@@ -266,7 +266,12 @@ function useDisplayTemplate(collection: string | null | undefined) {
 export function M2OSummaryValue({ collection, id }: { collection: string; id: unknown }) {
   const template = useDisplayTemplate(collection)
   return (
-    <RelatedItemLabel collection={collection} id={id} displayTemplate={template ?? undefined} />
+    <RelatedItemLabel
+      collection={collection}
+      id={id}
+      displayTemplate={template ?? undefined}
+      explainMissing
+    />
   )
 }
 
