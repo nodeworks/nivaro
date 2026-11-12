@@ -413,10 +413,20 @@ function registerEventFlowHook(app: FastifyInstance, flow: Flow) {
             app.log.error({ err, flowId: flow.id }, 'Before-event flow failed')
           }
         } else {
-          void deferEffect(`event-flow:${flow.id}`, () =>
-            executeFlow(execCtx).catch((err) =>
-              app.log.error({ err, flowId: flow.id }, 'Event flow execution failed')
-            )
+          // "After — async, post-save processing": the writer never waits for
+          // the run. Inside a create's unit of work it still starts only once
+          // the whole create has landed (and is dropped when it is undone),
+          // but the create answers without it — a flow that ends in a partner
+          // call held every such create for the length of that call. The run
+          // records itself (nivaro_flow_runs, its partner obligation, dead
+          // letters), so nothing about a failure is lost by not waiting.
+          void deferEffect(
+            `event-flow:${flow.id}`,
+            () =>
+              executeFlow(execCtx).catch((err) =>
+                app.log.error({ err, flowId: flow.id }, 'Event flow execution failed')
+              ),
+            { detached: true }
           )
         }
       }

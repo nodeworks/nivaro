@@ -19,12 +19,36 @@
  * Row-bound hooks (rollups, integrity, queue materialization, activity) stay
  * inline: they describe the row itself and compensation reverses them by
  * deleting the row.
+ *
+ * A DETACHED effect is one the writer never waited for before units existed
+ * (an "after" event flow — "async, post-save processing"): it is held and
+ * dropped with the unit like any other, but once the unit commits it only
+ * STARTS in its turn and the unit returns without it. Running every queued
+ * effect to the end made a create answer only after its event flows' partner
+ * calls had come back (production 2026-11-12: an inventory request create
+ * averaged 2.3 s, 1.5 s of it one flow's push to a partner that nothing in
+ * the answer or the next page read depends on).
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { runInBackgroundPool } from '../db/pool-context.js'
+
+export interface EffectOptions {
+  /**
+   * The writer does not wait for this effect. Inside a unit it starts when
+   * the unit commits — after every effect queued before it has finished and
+   * after the detached effects before it (one at a time, so a batch never
+   * fans them out) — on the background pool, and the unit returns without
+   * it. Outside a unit it runs at once like any effect. Only for work that
+   * records its own outcome and that neither the caller's answer nor the next
+   * read of the record depends on.
+   */
+  detached?: boolean
+}
 
 interface Effect {
   label: string
   run: () => Promise<unknown> | unknown
+  detached?: boolean
 }
 
 interface Unit {
@@ -60,11 +84,33 @@ async function runEffect(e: Effect): Promise<void> {
  * it outside a unit awaits the effect (the historic behaviour); inside a unit
  * it resolves at once.
  */
-export function deferEffect(label: string, run: () => Promise<unknown> | unknown): Promise<void> {
+export function deferEffect(
+  label: string,
+  run: () => Promise<unknown> | unknown,
+  opts?: EffectOptions
+): Promise<void> {
   const unit = als.getStore()
   if (!unit) return runEffect({ label, run })
-  if (!unit.discarded) unit.effects.push({ label, run })
+  if (!unit.discarded) unit.effects.push({ label, run, detached: opts?.detached === true })
   return Promise.resolve()
+}
+
+/**
+ * Run a committed unit's effects in the order they were queued. The unit
+ * waits for each plain effect; a detached one is started in its turn (behind
+ * the detached effects before it) and left to finish on the background pool.
+ */
+async function releaseEffects(queued: Effect[]): Promise<void> {
+  let detachedTail: Promise<void> | null = null
+  for (const e of queued) {
+    if (!e.detached) {
+      await runEffect(e)
+      continue
+    }
+    const start = () => runInBackgroundPool(() => runEffect(e))
+    // runEffect never rejects, so the chain needs no catch of its own.
+    detachedTail = detachedTail ? detachedTail.then(start) : start()
+  }
 }
 
 /**
@@ -99,10 +145,7 @@ export async function runUnit<T>(label: string, fn: (unit: UnitHandle) => Promis
     unit.effects.length = 0
     throw err
   }
-  if (!unit.discarded) {
-    const queued = unit.effects.splice(0)
-    for (const e of queued) await runEffect(e)
-  }
+  if (!unit.discarded) await releaseEffects(unit.effects.splice(0))
   return result
 }
 
