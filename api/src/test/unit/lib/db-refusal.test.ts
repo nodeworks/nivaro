@@ -195,6 +195,32 @@ describe('serverFaultMessage (army 7 b15: no driver text in a 5xx body)', () => 
     expect(DB_FAULT_MESSAGE).not.toMatch(/column|select|\[/i)
   })
 
+  // Production 2026-11-12: 26 answers carried "Login failed for user '<the database login>'."
+  it('never shows the login or the server address of a connection that would not open', () => {
+    const refused = Object.assign(new Error("Login failed for user 'app_rw'."), { code: 'ELOGIN' })
+    expect(serverFaultMessage(refused)).toBe(DB_FAULT_MESSAGE)
+    const unreachable = Object.assign(
+      new Error('Failed to connect to db.internal:1433 - connect ECONNREFUSED 10.0.0.5:1433'),
+      { code: 'ESOCKET' }
+    )
+    expect(serverFaultMessage(unreachable)).toBe(DB_FAULT_MESSAGE)
+    const slow = Object.assign(new Error('Failed to connect to db.internal:1433 in 15000ms'), {
+      code: 'ETIMEOUT'
+    })
+    expect(serverFaultMessage(slow)).toBe(DB_FAULT_MESSAGE)
+    const dropped = Object.assign(new Error('Connection lost - read ECONNRESET'), {
+      code: 'ESOCKET'
+    })
+    expect(serverFaultMessage(dropped)).toBe(DB_FAULT_MESSAGE)
+  })
+
+  it('keeps a statement timeout readable (the near-timeout lens reads it from the log)', () => {
+    const timeout = Object.assign(new Error('Timeout: Request failed to complete in 15000ms'), {
+      code: 'ETIMEOUT'
+    })
+    expect(serverFaultMessage(timeout)).toBe('Timeout: Request failed to complete in 15000ms')
+  })
+
   it('keeps an app error and a coded error of our own', () => {
     expect(serverFaultMessage(new Error('Something broke'))).toBe('Something broke')
     const ours = Object.assign(new Error('The list took too long'), {

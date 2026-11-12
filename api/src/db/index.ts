@@ -4,6 +4,7 @@ import knex from 'knex'
 import { config } from '../config.js'
 import { attachChaosSeam } from './chaos-seam.js'
 import { attachConfigEpoch } from './config-epoch.js'
+import { attachConnectRetry } from './connect-retry.js'
 import { attachMetadataQueryCache } from './metadata-query-cache.js'
 import { recordEffects } from './migration-effects.js'
 import { migrateFreeingStaleLock, underSessionAppLock } from './migration-lock.js'
@@ -182,6 +183,14 @@ if (!cloudMode) attachChaosSeam(_staticDb)
 attachMetadataQueryCache(_staticDb)
 // A configuration write moves one number that every other process polls.
 attachConfigEpoch(_staticDb)
+// A login the server refuses while a NEW connection opens (the database is back in a moment:
+// an ALTER DATABASE, a failover) is tried again for a few seconds instead of failing the
+// request at once — see the module. Per pool, never the driver prototype: the health probe's
+// pool above stays without it, so a database that is really away is still noticed on time.
+if (!cloudMode) {
+  attachConnectRetry(_staticDb)
+  if (_backgroundDb) attachConnectRetry(_backgroundDb)
+}
 
 // In cloud mode, background tasks (crons, timers) run outside request context
 // and getTenantDb() returns undefined. Rather than crashing with a pool error,

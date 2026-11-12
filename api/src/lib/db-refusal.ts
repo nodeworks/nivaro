@@ -230,9 +230,12 @@ export function messageWithoutSql(err: unknown): string {
 export const DB_FAULT_MESSAGE =
   'The server could not finish this request. The problem was recorded; try again, or ask for help if it keeps happening.'
 
+const CONNECT_FAULT = /^(Login failed|Failed to connect to |Connection lost - )/
+
 /**
  * Whether an error came from the database driver: a statement knex prefixed (the driver's
- * reason after it), a tedious RequestError (`number`, `EREQUEST`), or an AggregateError of them.
+ * reason after it), a tedious RequestError (`number`, `EREQUEST`), a connection that would
+ * not open, or an AggregateError of them.
  */
 export function isDriverFault(err: unknown): boolean {
   const e = err as {
@@ -246,6 +249,10 @@ export function isDriverFault(err: unknown): boolean {
   // An error that carries its own status is ours (LIST_TIMEOUT, a coded refusal).
   if (e.statusCode != null) return false
   const message = typeof e.message === 'string' ? e.message : ''
+  // A connection that would not open or was dropped (tedious ConnectionError): its message
+  // names the database login ("Login failed for user '…'") or the server's host and port.
+  // A statement timeout shares the ETIMEOUT code and stays readable (the log lenses read it).
+  if (e.code === 'ELOGIN' || e.code === 'EINSTLOOKUP' || CONNECT_FAULT.test(message)) return true
   if (message && messageWithoutSql(err) !== message) return true
   if (typeof e.number === 'number' || e.code === 'EREQUEST') return true
   return (
