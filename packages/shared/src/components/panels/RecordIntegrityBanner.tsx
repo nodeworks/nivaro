@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
+import { hasRecordExtras } from '../../lib/system-collections'
 import { cn, formatDateTime, formatRelative, titleCase } from '../../lib/utils'
 import type { CMSField } from '../item-edit/types'
 
@@ -43,8 +44,10 @@ interface IntegrityResult {
  * invalidation (Fix, save, RecordLiveSync) refreshes both. Shared by the
  * banner and the Summary-mode field marks so the two never disagree.
  */
-export function useRecordIntegrity(collection: string, itemId: string, enabled = true) {
+export function useRecordIntegrity(collection: string, itemId: string, wanted = true) {
   const client = useNivaroClient()
+  // The check is refused for system tables by name: never asked for one.
+  const enabled = wanted && hasRecordExtras(collection)
   const { data: stored } = useQuery<IntegrityResult>({
     queryKey: ['record-integrity', collection, itemId],
     enabled,

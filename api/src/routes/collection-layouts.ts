@@ -1253,12 +1253,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
   // GET /collection-layouts/active?collection=x — MUST be before /:id
   app.get('/active', { preHandler: authenticate }, async (req, reply) => {
-    const { collection, slug, item, viewport } = req.query as {
+    const { collection, slug, item, viewport, optional } = req.query as {
       collection?: string
       slug?: string
       item?: string
       /** 'phone' / 'tablet' from a smaller screen: a form's phone (#2715) or tablet (#3183) version opens instead. */
       viewport?: string
+      /** '1' / 'true': a collection without a form answers 200 `{ data: null }`, not 404. */
+      optional?: string
     }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
 
@@ -1274,12 +1276,17 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const { row: layout } = resolved
     // No form set up for this collection (Zone / Region / Task records on EFP): every caller
     // falls back to the automatic all-fields form, so this is expected, not a missing record.
-    if (!layout)
+    if (!layout) {
+      // Our own forms ask on every record open and say the form is optional: the answer is
+      // then "none" (200, no data), not a 404 filling the request log. A call without the
+      // flag keeps the 404 that integrations written against this route already handle.
+      if (optional === '1' || optional === 'true') return reply.send({ data: null })
       return reply.code(404).send({
         error: 'No form is set up for this collection',
         code: 'NO_LAYOUT',
         hint: 'All of its fields are shown instead.'
       })
+    }
     // army11 f3: `?layout=<name>` that names no form this person may open fell
     // back to the default form without a word. The answer says so; the form
     // tells the person.

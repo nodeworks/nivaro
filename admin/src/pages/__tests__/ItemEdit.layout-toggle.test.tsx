@@ -11,8 +11,12 @@ const state = vi.hoisted(() => ({
   user: null as { id: string; is_admin: boolean } | null,
   chunkLoads: 0,
   noLayout: false,
+  // A server that knows `optional`: no form answers 200 with no data instead of 404.
+  noLayoutOk: false,
+  // The table is not a registered collection (a system table reached by a link).
+  unregistered: false,
   activeStatus: 0,
-  requests: [] as Array<{ method: string; url: string }>,
+  requests: [] as Array<{ method: string; url: string; params?: Record<string, unknown> }>,
   // The editor's last save, as the mocked editor hands it to onClose.
   release: null as null | (() => void)
 }))
@@ -91,6 +95,7 @@ const LAYOUTS = [
 function answer(config: AxiosRequestConfig): unknown {
   const url = String(config.url ?? '').split('?')[0]
   const params = (config.params ?? {}) as Record<string, unknown>
+  if (url === '/collection-layouts/active' && state.noLayoutOk) return { data: null }
   if (url === '/collection-layouts/active')
     return {
       data: {
@@ -114,12 +119,20 @@ function answer(config: AxiosRequestConfig): unknown {
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   const adapter: AxiosAdapter = async (config) => {
-    state.requests.push({ method: (config.method ?? 'get').toUpperCase(), url: config.url ?? '' })
-    const status = String(config.url ?? '').startsWith('/collection-layouts/active')
+    state.requests.push({
+      method: (config.method ?? 'get').toUpperCase(),
+      url: config.url ?? '',
+      params: config.params as Record<string, unknown> | undefined
+    })
+    const url = String(config.url ?? '')
+    const status = url.startsWith('/collection-layouts/active')
       ? state.activeStatus || (state.noLayout ? 404 : 0)
-      : 0
+      : state.unregistered && /^\/(collections|items|draft-publish|attributes)\/orders/.test(url)
+        ? 404
+        : 0
     if (status) {
-      // Shaped like the real API: 404 { error: 'No layout found' }.
+      // Shaped like the API's answer to a call without `optional` (and an older server's
+      // answer to any call): 404 with an error body.
       throw new axios.AxiosError(
         `Request failed with status code ${status}`,
         'ERR_BAD_REQUEST',
@@ -191,6 +204,8 @@ beforeEach(async () => {
   state.requests.length = 0
   state.chunkLoads = 0
   state.noLayout = false
+  state.noLayoutOk = false
+  state.unregistered = false
   state.activeStatus = 0
   vi.resetModules()
   ItemEditPage = (await import('@/pages/ItemEdit')).ItemEditPage
@@ -219,6 +234,15 @@ describe('record page Edit layout toggle', () => {
     const row = await screen.findByRole('button', { name: /create the first form/i })
     expect(row.closest('[data-testid="more-menu"]')).not.toBeNull()
     expect(state.chunkLoads).toBe(0)
+  })
+
+  it('asks for the form as optional and reads "none" (200, no data) as no layout yet', async () => {
+    state.user = { id: 'u1', is_admin: true }
+    state.noLayoutOk = true
+    renderWith(<ItemEditPage />, HostProvider)
+    await screen.findByRole('button', { name: /create the first form/i })
+    const ask = state.requests.find((r) => r.url === '/collection-layouts/active')
+    expect(ask?.params).toMatchObject({ collection: 'orders', item: '5', optional: 1 })
   })
 
   it('does not offer the first-form link when the layout read fails with a 500', async () => {
@@ -283,5 +307,38 @@ describe('record page Edit layout toggle', () => {
     })
     expect(form()).toBe('true')
     await waitFor(() => expect(form()).toBe('false'), { timeout: LAYOUT_PUSH_SETTLE_MS + 1500 })
+  })
+})
+
+// A link to a record of a table that is not a registered collection (nivaro_saved_views,
+// nivaro_addendums in the first week live) made the page ask for its draft/publish setting
+// and its custom attributes too; both can only answer 404 for a collection that is not
+// there. They wait for the collection to answer.
+describe('record page on a table that is not a registered collection', () => {
+  it('asks for the collection, and not for its publish setting or attributes', async () => {
+    state.user = { id: 'u1', is_admin: true }
+    state.unregistered = true
+    renderWith(<ItemEditPage />, HostProvider)
+    await screen.findByTestId('item-form')
+    await waitFor(() =>
+      expect(state.requests.some((r) => r.url === '/collections/orders')).toBe(true)
+    )
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 80))
+    })
+    const asked = state.requests.map((r) => r.url)
+    expect(asked.filter((u) => u.startsWith('/draft-publish/'))).toEqual([])
+    expect(asked.filter((u) => u.startsWith('/attributes/'))).toEqual([])
+  })
+
+  it('a registered collection still gets both', async () => {
+    state.user = { id: 'u1', is_admin: true }
+    renderWith(<ItemEditPage />, HostProvider)
+    await screen.findByTestId('item-form')
+    await waitFor(() => {
+      const asked = state.requests.map((r) => r.url)
+      expect(asked).toContain('/draft-publish/orders/config')
+      expect(asked).toContain('/attributes/orders/5')
+    })
   })
 })

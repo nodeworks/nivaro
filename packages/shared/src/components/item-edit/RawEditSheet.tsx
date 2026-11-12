@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { isFileCollection } from '../../lib/system-collections'
 import { titleCase } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
@@ -140,6 +141,18 @@ export function RawEditSheet({
     if (!companion || companion.one_collection || m2aAllowedCount(companion) < 2) return null
     return companion.one_collection_field || 'collection'
   }
+
+  /** A record's files: the junction points at the files table, which is read through /files
+   *  and is never a collection the link picker can list. */
+  const linksFiles = (rel: (typeof relations)[number]): boolean =>
+    isFileCollection(
+      relations.find(
+        (c) =>
+          c.many_collection === rel.many_collection &&
+          c.many_field === rel.junction_field &&
+          c.id !== rel.id
+      )?.one_collection
+    )
 
   const stagingCtx = useMemo<M2MStagingCtx>(
     () => ({
@@ -331,6 +344,10 @@ export function RawEditSheet({
                           discriminator={severalKindsDiscriminator(m2mRel) as string}
                         />
                       </M2MStagingContext.Provider>
+                    ) : alias && m2mRel && linksFiles(m2mRel) ? (
+                      <p className='pt-1.5 text-[11.5px] italic text-slate-400'>
+                        Files — edit through the normal form
+                      </p>
                     ) : alias && m2mRel ? (
                       <M2MStagingContext.Provider value={stagingCtx}>
                         <M2MCombobox relation={m2mRel} parentId={itemId} allRelations={relations} />

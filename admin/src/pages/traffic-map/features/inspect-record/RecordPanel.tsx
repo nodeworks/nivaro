@@ -45,7 +45,7 @@ async function fetchReadLayout(collection: string, item: string): Promise<ReadVi
   const tries = [
     `/collection-layouts/summary/${c}`,
     `/collection-layouts/detail/${c}`,
-    `/collection-layouts/active?collection=${c}&item=${encodeURIComponent(item)}`
+    `/collection-layouts/active?collection=${c}&item=${encodeURIComponent(item)}&optional=1`
   ]
   for (const url of tries) {
     try {

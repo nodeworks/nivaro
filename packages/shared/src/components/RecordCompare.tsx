@@ -3,7 +3,7 @@ import { X } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
-import { get } from '../lib/commands'
+import { get, getActiveLayout } from '../lib/commands'
 import type { CompareFieldMeta } from '../lib/compare-value'
 import {
   type FormSection,
@@ -194,9 +194,7 @@ export function RecordCompareDialog({
       queryKey: ['compare-form', collection, String(id)],
       queryFn: () =>
         client
-          .request<{ data: ActiveForm | null }>(
-            get('/collection-layouts/active', { collection, item: String(id) })
-          )
+          .request<{ data: ActiveForm | null }>(getActiveLayout({ collection, item: String(id) }))
           .then((r) => r.data ?? null)
           .catch(() => null),
       staleTime: 30_000

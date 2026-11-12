@@ -7,6 +7,16 @@ export function get<T>(path: string, params?: Record<string, unknown>): Command<
   return { _method: 'GET', _path: path, _params: params } as Command<T>
 }
 
+/**
+ * "Which form does this record get?" (GET /collection-layouts/active), asked as optional: a
+ * collection without a form then answers 200 with no data instead of a 404. An older server
+ * ignores the flag and still answers 404, so callers keep their catch. Twin of the shared
+ * helper (packages/shared/src/lib/commands.ts).
+ */
+export function getActiveLayout<T>(params: Record<string, unknown>): Command<T> {
+  return get<T>('/collection-layouts/active', { ...params, optional: 1 })
+}
+
 export function post<T>(path: string, body?: unknown): Command<T> {
   return { _method: 'POST', _path: path, _body: body } as Command<T>
 }

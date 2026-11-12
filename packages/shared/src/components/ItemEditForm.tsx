@@ -57,7 +57,7 @@ import {
 } from '../context'
 import { useSlowReason } from '../hooks/useSlowReason'
 import { formatApiPayload } from '../lib/api-payload'
-import { del, get, patch, post, put } from '../lib/commands'
+import { del, get, getActiveLayout, patch, post, put } from '../lib/commands'
 import type { FieldSource } from '../lib/config-sentences'
 import {
   deleteDraft,
@@ -132,6 +132,7 @@ import { invalidateRecordTasks } from '../lib/record-tasks'
 import { reimportAllowed } from '../lib/reimport-visibility'
 import { reportCodeError, userErrorMessage } from '../lib/safe-error'
 import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
+import { hasRecordExtras, mayHavePipeline } from '../lib/system-collections'
 import { stagedRowLabel } from '../lib/staged-row-labels'
 import {
   holdSummaryReresolve,
@@ -1945,8 +1946,8 @@ function ItemEditFormView({
   onDuplicate,
   showRevisions = true,
   showClone = true,
-  showPipeline = true,
-  showWorkflow = true,
+  showPipeline: showPipelineProp = true,
+  showWorkflow: showWorkflowProp = true,
   showComments = true,
   showTasks = true,
   showLockBanner = true,
@@ -1967,6 +1968,14 @@ function ItemEditFormView({
   design,
   layoutEditing = false
 }: ItemEditFormProps) {
+  // A system table (nivaro_*, directus_*) has none of a business record's extras: the API
+  // refuses last touch, origin, links, references, views and the integrity check for it by
+  // name, and among system tables only addendums carry a pipeline. A record page on one
+  // does not ask (lib/system-collections.ts); every server check stays as it is.
+  const recordExtras = hasRecordExtras(collection)
+  const pipelineApplies = mayHavePipeline(collection)
+  const showPipeline = showPipelineProp && pipelineApplies
+  const showWorkflow = showWorkflowProp && pipelineApplies
   const designOn = design != null
   const designCtx = design?.context ?? null
   const designMode = designCtx != null
@@ -2006,7 +2015,7 @@ function ItemEditFormView({
     queryFn: () =>
       client
         .request<{ data: ActiveLayoutData | null }>(
-          get('/collection-layouts/active', {
+          getActiveLayout({
             collection,
             ...(layoutSlug ? { slug: layoutSlug } : itemId !== 'new' ? { item: itemId } : {}),
             ...(viewport ? { viewport } : {})
@@ -5931,7 +5940,7 @@ function ItemEditFormView({
         .catch(() => null),
     staleTime: 30_000,
     // After the record answered (army 10): a missing record's instance read only 404s.
-    enabled: editLockConfigured && !isNew && !designOn && recordAnswered
+    enabled: editLockConfigured && !isNew && !designOn && recordAnswered && pipelineApplies
   })
   const editLock = editLockInstance?.edit_lock
   const editLockMessage =
@@ -6104,7 +6113,7 @@ function ItemEditFormView({
     queryFn: fetchPipelineInstanceLock,
     staleTime: 30_000,
     // Waits for the record to answer, like the entry prefetch below (army 10).
-    enabled: stateLookupNeeded && !isNew && recordAnswered && !designStateKey
+    enabled: stateLookupNeeded && !isNew && recordAnswered && !designStateKey && pipelineApplies
   })
   // Record-page waterfall (#C5): both lookups above wait for the layout (and
   // the collection meta) to say they are needed. A collection whose last
@@ -6132,7 +6141,7 @@ function ItemEditFormView({
   }, [collection, itemId])
   // biome-ignore lint/correctness/useExhaustiveDependencies: once the record answered
   useEffect(() => {
-    if (isNew || designCtx || !recordAnswered) return
+    if (isNew || designCtx || !recordAnswered || !pipelineApplies) return
     const want = recordLookupsFor(collection)
     if (want?.state)
       void qc.prefetchQuery({
@@ -8277,7 +8286,7 @@ function ItemEditFormView({
         .then((r) => r.data ?? null)
         .catch(() => null),
     // After the record answered (army 10: it 404'd beside a missing record's read).
-    enabled: !isNew && !!itemId && recordAnswered,
+    enabled: !isNew && !!itemId && recordAnswered && recordExtras,
     staleTime: 60_000,
     // The stale-record banner rides this read — one indexed row a minute without a live
     // socket, paused while the tab is hidden (react-query default).
@@ -8312,6 +8321,7 @@ function ItemEditFormView({
     !isNew &&
       !!itemId &&
       !designOn &&
+      recordExtras &&
       !!itemData &&
       !activeLayoutData?.layout?.hide_integrity_banner
   )
@@ -8403,7 +8413,7 @@ function ItemEditFormView({
         }>(get(`/provenance/${collection}/${encodeURIComponent(String(itemId))}`))
         .then((r) => r.data)
         .catch(() => null),
-    enabled: !isNew && !!itemId && recordAnswered,
+    enabled: !isNew && !!itemId && recordAnswered && recordExtras,
     staleTime: 5 * 60_000
   })
   // Someone else saved while this record was open. Baseline = the last touch
@@ -11580,7 +11590,7 @@ function ItemEditFormView({
         />
       )
     }
-    if (key === '__referenced_by__' && !isNew && itemId) {
+    if (key === '__referenced_by__' && !isNew && itemId && recordExtras) {
       return (
         <ReferencedByPanel
           key='__referenced_by__'
@@ -11591,7 +11601,7 @@ function ItemEditFormView({
         />
       )
     }
-    if (key === '__related_records__' && !isNew && itemId) {
+    if (key === '__related_records__' && !isNew && itemId && recordExtras) {
       return (
         <RelatedRecordsPanel
           key='__related_records__'
@@ -12350,7 +12360,7 @@ function ItemEditFormView({
             onRemoveQueuedTask={isNew ? handleRemoveQueuedTask : undefined}
           />
         )}
-        {!isNew && itemId && (
+        {!isNew && itemId && recordExtras && (
           <>
             {!relatedRecordsSlot && (
               <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />
@@ -12791,7 +12801,7 @@ function ItemEditFormView({
             onRemoveQueuedTask={isNew ? handleRemoveQueuedTask : undefined}
           />
         )}
-        {!isNew && itemId && (
+        {!isNew && itemId && recordExtras && (
           <>
             {!relatedRecordsSlot && (
               <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />
@@ -13614,12 +13624,16 @@ function ItemEditFormView({
                                               />
                                             )}
                                             {/* Admin-only: the route 403s everyone else anyway. */}
-                                            {isAdmin && !isNew && itemId && !designOn && (
-                                              <RecordViewersChip
-                                                collection={collection}
-                                                itemId={String(itemId)}
-                                              />
-                                            )}
+                                            {isAdmin &&
+                                              !isNew &&
+                                              itemId &&
+                                              !designOn &&
+                                              recordExtras && (
+                                                <RecordViewersChip
+                                                  collection={collection}
+                                                  itemId={String(itemId)}
+                                                />
+                                              )}
                                           </p>
                                         )}
                                         {subtitleParts.length > 0 && !headerCondensed && (
@@ -15922,7 +15936,7 @@ function ItemEditFormView({
                                       recap, and an EMPTY sibling inside this space-y stack still
                                       costs a 16px gap above the next banner (the "more top
                                       padding than side padding"). */}
-                                      {!isNew && itemId && !designOn && (
+                                      {!isNew && itemId && !designOn && recordExtras && (
                                         <RecordRecapStrip
                                           collection={collection}
                                           itemId={String(itemId)}
@@ -15930,6 +15944,7 @@ function ItemEditFormView({
                                       )}
                                       {!isNew &&
                                         itemId &&
+                                        recordExtras &&
                                         // Design mode: the live check stores its result.
                                         !designOn &&
                                         !activeLayoutData?.layout?.hide_integrity_banner &&
@@ -15951,6 +15966,8 @@ function ItemEditFormView({
                                       )}
                                       {!isNew &&
                                         itemId &&
+                                        // The deadline clock follows the pipeline: none on a system table.
+                                        mayHavePipeline(pipelineCollection) &&
                                         !activeLayoutData?.layout?.hide_sla_banner && (
                                           // No wrapper div — an EMPTY sibling in this space-y stack
                                           // still costs a 16px gap (the banner is null unless breached).

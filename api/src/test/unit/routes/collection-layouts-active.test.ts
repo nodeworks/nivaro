@@ -765,3 +765,55 @@ describe('PATCH /collection-layouts/:id — default_values validation', () => {
     expect(JSON.parse(res.body).data.default_values).toBeNull()
   })
 })
+
+// ─── GET /collection-layouts/active — a collection without a form ──────────
+// A lookup collection with no designed form is a normal state: the record page shows every
+// field. Our own forms asked on every open and each ask was a 404 in the request log (322 in
+// four days in the first week live). They now ask with ?optional=1; the plain call keeps the
+// 404 other callers of this route know.
+
+describe('GET /collection-layouts/active — no form set up', () => {
+  const noForm = () =>
+    vi.mocked(db).mockImplementation(makeActiveDbMock({ layouts: [] }) as unknown as typeof db)
+
+  it('stays a coded 404 for a caller that does not ask for an optional form', async () => {
+    noForm()
+    const res = await getActive({ collection: 'warehouses', item: '6' })
+    expect(res.statusCode).toBe(404)
+    expect(JSON.parse(res.body).code).toBe('NO_LAYOUT')
+  })
+
+  it('answers 200 with no data when the caller says the form is optional', async () => {
+    noForm()
+    const res = await getActive({ collection: 'warehouses', item: '6', optional: '1' })
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({ data: null })
+  })
+
+  it('reads optional=true the same way, and ignores any other value', async () => {
+    noForm()
+    expect((await getActive({ collection: 'warehouses', optional: 'true' })).statusCode).toBe(200)
+    noForm()
+    expect((await getActive({ collection: 'warehouses', optional: '0' })).statusCode).toBe(404)
+  })
+
+  it('optional changes nothing when the collection has a form', async () => {
+    vi.mocked(db).mockImplementation(
+      makeActiveDbMock({
+        layouts: [
+          {
+            id: 3,
+            is_active: 1,
+            sort: 0,
+            conditions: null,
+            record_conditions: null,
+            default_values: null
+          }
+        ]
+      }) as unknown as typeof db
+    )
+    const res = await getActive({ collection: 'workflows', optional: '1' })
+    expect(res.statusCode).toBe(200)
+    expect((JSON.parse(res.body).data.layout as { id: number }).id).toBe(3)
+  })
+})

@@ -736,7 +736,7 @@ export const collectionLayouts: DocSection = {
     {
       type: 'pre',
       code: `GET  /api/collection-layouts?collection=articles[&layout_type=grouped]
-GET  /api/collection-layouts/active?collection=articles[&item=42|&slug=x]
+GET  /api/collection-layouts/active?collection=articles[&item=42|&slug=x][&optional=1]
 GET  /api/collection-layouts/overview?collection=articles     (admin)
 GET  /api/collection-layouts/explain?collection=articles&item=42[&role_id=]   (admin)
 POST /api/collection-layouts                    { collection, name, layout_type?, slug?, seed_fields? }
@@ -748,6 +748,10 @@ POST /api/collection-layouts/:id/ops            (admin) { ops, base_rev, note? }
 GET  /api/collection-layouts/:id/assignments
 PUT  /api/collection-layouts/:id/assignments    { assignments: [{field, group_key, sort}] }
 DELETE /api/collection-layouts/:id`
+    },
+    {
+      type: 'p',
+      text: 'A collection without a form answers `/active` with 404 and code `NO_LAYOUT` (every field is shown instead). Send `optional=1` to get 200 with `data: null` for that case; the record page and the form components ask this way, so a missing form is not an error in the request log.'
     },
     { type: 'h3', text: 'SDK' },
     {

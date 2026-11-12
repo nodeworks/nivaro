@@ -549,7 +549,9 @@ export function ItemEditPage() {
       api
         .get<{ data: { draft_publish_enabled: boolean } }>(`/draft-publish/${collection}/config`)
         .then((r) => r.data.data),
-    enabled: !!collection,
+    // Once the collection answered: for a table that is not a registered collection (a
+    // system table reached by a link) this could only 404 beside the collection read.
+    enabled: !!collection && !!colMeta,
     staleTime: 60_000
   })
 
@@ -621,17 +623,19 @@ export function ItemEditPage() {
               allow_schedule?: boolean | number
               allow_disable_pickers?: boolean | number
             }
-          }
+          } | null
         }>('/collection-layouts/active', {
           params: {
             collection,
             ...(layoutSlug ? { slug: layoutSlug } : !isNew ? { item: id } : {}),
-            ...(viewport ? { viewport } : {})
+            ...(viewport ? { viewport } : {}),
+            // "No form" is a normal answer here: 200 with no data, not a 404 in the log.
+            optional: 1
           }
         })
-        .then((r) => r.data.data)
-        // The API answers 404 when a collection has no layout; only that is
-        // "no layout yet". Any other failure stays unknown (null).
+        .then((r) => r.data.data ?? { layout: null })
+        // An older server ignores `optional` and answers 404 for a collection without a
+        // layout; only that is "no layout yet". Any other failure stays unknown (null).
         .catch((e) => (e?.response?.status === 404 ? { layout: null } : null)),
     enabled: !!collection,
     staleTime: 0
@@ -641,7 +645,8 @@ export function ItemEditPage() {
     queryKey: ['attribute-values', collection, id],
     queryFn: () =>
       api.get<{ data: AttributeDef[] }>(`/attributes/${collection}/${id}`).then((r) => r.data.data),
-    enabled: !!collection && !!id && !isNew
+    // Waits for the collection like the publish setting above.
+    enabled: !!collection && !!id && !isNew && !!colMeta
   })
 
   const saveAttributes = useMutation({

@@ -151,6 +151,7 @@ import { midairCollisionOf } from '../../lib/record-outbox'
 import { restoreSkippedNote } from '../../lib/restore-skipped'
 import type { RuleProvenance } from '../../lib/rule-provenance'
 import { userErrorMessage } from '../../lib/safe-error'
+import { isFileCollection } from '../../lib/system-collections'
 import { cn, formatRelative, titleCase, toLocalDateString } from '../../lib/utils'
 import { formulaInputsChanged } from '../../lib/write-formula'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
@@ -4033,6 +4034,9 @@ export function InlineTableField({
     const result = new Map<string, string[]>()
     const push = (oneCollection: string, id: unknown) => {
       if (id == null || id === '') return
+      // A file column: the files table is read through /files, never as a collection. Its
+      // label read could only 404, and one failed read loses every other column's labels.
+      if (isFileCollection(oneCollection)) return
       if (!result.has(oneCollection)) result.set(oneCollection, [])
       result.get(oneCollection)!.push(String(id))
     }
@@ -5086,7 +5090,8 @@ export function InlineTableField({
     // the line was saved (army8 b01).
     if (editState?.draft) addendumRows.push(editState.draft)
     for (const [field, rel] of m2oRelMap) {
-      if (!rel.one_collection) continue
+      // No label read for a file column (see summaryM2oLookupIds).
+      if (!rel.one_collection || isFileCollection(rel.one_collection)) continue
       const rowIds = allRows
         .map((r) => r[field])
         .filter((v) => v != null)

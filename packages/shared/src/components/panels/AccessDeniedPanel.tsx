@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { hasRecordExtras } from '../../lib/system-collections'
 
 // ─── Access denied explanation ───────────────────────────────────────────────
 // Rendered by ItemEditForm when the record load 403/404s. A scoped user used
@@ -93,6 +94,8 @@ export function AccessDeniedPanel({
         )
         .then((r) => r.data ?? null)
         .catch((err: unknown) => (explainMissing(err) ? NOT_FOUND_EXPLAIN : null)),
+    // "Why can't I see this" is refused for system tables by name: the plain message stands.
+    enabled: hasRecordExtras(collection),
     staleTime: 30_000
   })
 

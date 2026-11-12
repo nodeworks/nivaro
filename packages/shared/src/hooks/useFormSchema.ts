@@ -1,6 +1,6 @@
 import type { NivaroClient } from '@nivaro/sdk'
 import { useEffect, useRef, useState } from 'react'
-import { get } from '../lib/commands'
+import { get, getActiveLayout } from '../lib/commands'
 import type {
   FormFieldDescriptor,
   FormFieldType,
@@ -432,17 +432,21 @@ export async function fetchSchema(
     return schema
   }
 
+  // No form set up: the API answers "none" (200, no data; 404 from an older server), and
+  // every field is shown.
+  const noForm = (): { data: ActiveLayoutData } => ({
+    data: {
+      groups: [] as CMSGroupRow[],
+      assignments: [],
+      ungrouped_sort: null
+    } as ActiveLayoutData
+  })
   const [collectionRes, activeRes] = await Promise.all([
     client.request<{ data: CMSCollectionResponse }>(get(`/collections/${collection}`)),
     client
-      .request<{ data: ActiveLayoutData }>(get('/collection-layouts/active', { collection }))
-      .catch(() => ({
-        data: {
-          groups: [] as CMSGroupRow[],
-          assignments: [],
-          ungrouped_sort: null
-        } as ActiveLayoutData
-      }))
+      .request<{ data: ActiveLayoutData | null }>(getActiveLayout({ collection }))
+      .then((r) => (r.data ? { data: r.data } : noForm()))
+      .catch(noForm)
   ])
 
   const assignmentMap = new Map<string, AssignmentEntry>()

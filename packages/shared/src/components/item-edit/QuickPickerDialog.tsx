@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useCallback, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
-import { get } from '../../lib/commands'
+import { get, getActiveLayout } from '../../lib/commands'
 import { titleCase } from '../../lib/utils'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
@@ -26,7 +26,7 @@ export function useQuickPickerSteps(
     queryFn: () =>
       client
         .request<{ data: ActiveLayoutData | null }>(
-          get('/collection-layouts/active', {
+          getActiveLayout({
             collection: collection as string,
             ...(layoutSlug ? { slug: layoutSlug } : {})
           })

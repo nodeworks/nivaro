@@ -2,7 +2,7 @@ import { type NivaroClient, withSignal } from '@nivaro/sdk'
 import { type QueryClient, type QueryKey, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef } from 'react'
 import { useOptionalNivaroClient } from '../context'
-import { get } from './commands'
+import { get, getActiveLayout } from './commands'
 
 /**
  * Prefetch on intent (#2448).
@@ -238,7 +238,7 @@ export function prefetchRecord(
       (signal) =>
         client
           .request<{ data: unknown }>(
-            withSignal(get('/collection-layouts/active', { collection, item: String(id) }), signal)
+            withSignal(getActiveLayout({ collection, item: String(id) }), signal)
           )
           .then((r) => r.data ?? null),
       Date.now(),
