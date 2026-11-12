@@ -12,6 +12,10 @@
  * A head blocker is a session that blocks others and is not blocked itself; the sessions in
  * between are part of the chain, not heads. An idle head (a transaction left open) has no
  * running request, so its text is the last statement its connection ran.
+ *
+ * A session of ANOTHER database is named by its database and program only. Its statement can
+ * carry that application's data, and its login and host are not this app's to store in its
+ * issue log; the queries below do not read them at all for such a session.
  */
 import type { Knex } from 'knex'
 
@@ -54,13 +58,20 @@ const yes = (v: boolean | number | null | undefined) => v === true || v === 1
 
 function describeSession(id: number, s: ChainSession | undefined): string {
   if (!s) return `#${id}`
-  const who = [s.database_name, s.program_name, s.host_name, s.login_name]
+  const own = yes(s.mine)
+  const who = (
+    own
+      ? [s.database_name, s.program_name, s.host_name, s.login_name]
+      : [s.database_name, s.program_name]
+  )
     .map((x) => (x ?? '').trim())
     .filter(Boolean)
     .join(' · ')
   const open = Number(s.open_transaction_count) || 0
   const tran = open > 0 ? `, ${open} open transaction(s)` : ''
-  return `#${id}${who ? ` [${who}]` : ''}${tran}: ${s.sql_text?.trim() || '(no statement)'}`
+  const head = `#${id}${who ? ` [${who}]` : ''}${tran}`
+  // Another database's statement is not shown, even if a caller passed one in.
+  return own ? `${head}: ${s.sql_text?.trim() || '(no statement)'}` : head
 }
 
 /** The issue to raise for what is blocked right now, or null when nothing here is. */
@@ -129,7 +140,7 @@ export async function blockingReport(db: Knex): Promise<BlockingReport | null> {
       SELECT r.session_id, r.blocking_session_id, r.wait_time, r.wait_type,
              CASE WHEN r.database_id = DB_ID() THEN 1 ELSE 0 END AS mine,
              DB_NAME(r.database_id) AS database_name,
-             LEFT(t.text, 300) AS sql_text
+             CASE WHEN r.database_id = DB_ID() THEN LEFT(t.text, 300) END AS sql_text
       FROM sys.dm_exec_requests r
       OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) t
       WHERE r.blocking_session_id > 0
@@ -145,8 +156,11 @@ export async function blockingReport(db: Knex): Promise<BlockingReport | null> {
       `SELECT s.session_id,
               CASE WHEN s.database_id = DB_ID() THEN 1 ELSE 0 END AS mine,
               DB_NAME(s.database_id) AS database_name,
-              s.program_name, s.host_name, s.login_name, s.open_transaction_count,
-              LEFT(COALESCE(rt.text, ct.text), 300) AS sql_text
+              s.program_name, s.open_transaction_count,
+              CASE WHEN s.database_id = DB_ID() THEN s.host_name END AS host_name,
+              CASE WHEN s.database_id = DB_ID() THEN s.login_name END AS login_name,
+              CASE WHEN s.database_id = DB_ID()
+                   THEN LEFT(COALESCE(rt.text, ct.text), 300) END AS sql_text
        FROM sys.dm_exec_sessions s
        LEFT JOIN sys.dm_exec_requests r ON r.session_id = s.session_id
        OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) rt

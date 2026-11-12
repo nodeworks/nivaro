@@ -79,6 +79,28 @@ describe('summarizeBlocking', () => {
     expect(r?.stack).toContain('php')
   })
 
+  it("keeps another database's statement, login and host out of the report", () => {
+    // The head belongs to another application: its SQL text can carry that application's
+    // data, and its login and host are not this app's to store. Where it is and what
+    // program it is are enough to know whom to call.
+    const requests = [req(11, 70, 130, true)]
+    const sessions = [
+      ses(70, false, {
+        sql_text: "update customers set ssn = '123-45-6789' where id = 7",
+        host_name: 'their-host',
+        login_name: 'their_login',
+        open_transaction_count: 1
+      }),
+      ses(11, true)
+    ]
+    const r = summarizeBlocking(requests, sessions)
+    expect(r?.stack).toContain('#70 [Other · php]')
+    expect(r?.stack).toContain('1 open transaction(s)')
+    expect(r?.stack).not.toContain('ssn')
+    expect(r?.stack).not.toContain('their_login')
+    expect(r?.stack).not.toContain('their-host')
+  })
+
   it('counts as head blockers only the sessions nobody else is blocking', () => {
     // 10 blocks 11, 11 blocks 12 and 13: one head (10), not two.
     const requests = [req(11, 10, 60, true), req(12, 11, 50, true), req(13, 11, 45, true)]
