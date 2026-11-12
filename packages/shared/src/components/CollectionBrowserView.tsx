@@ -186,6 +186,7 @@ import {
   userLabel
 } from './cbv/export-rows'
 import { FormulaColumnAdder } from './cbv/FormulaColumnAdder'
+import { FoundElsewhere } from './cbv/FoundElsewhere'
 import { HierarchyScopePicker, useHierarchyScope } from './cbv/HierarchyScope'
 import { rowFocusTarget, tabStopRowKey } from './cbv/row-focus'
 import { riskFilterEntry, splitRiskFilter } from './cbv/saved-view-risk'
@@ -9693,6 +9694,12 @@ export function CollectionBrowserView({
                                   Try adjusting your search or filters.
                                 </p>
                               )}
+                              {/* An id typed into the wrong list (or hidden by this list's
+                                  filters): say where the record is. One lookup, only here. */}
+                              <FoundElsewhere
+                                term={appliedSearch}
+                                enabled={total === 0 && !isFetching && !aiResult && !!appliedSearch}
+                              />
                               {(filters.length > 0 ||
                                 Object.keys(colFilters).length > 0 ||
                                 Object.values(appliedQuick).some((v) => v.length > 0) ||

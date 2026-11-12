@@ -123,7 +123,9 @@ import { fallbackSearchColumns, narrowSearchColumns, parseSearchFields } from '.
 import { BINARY_COLLATION, fastContainsKind, fastLike, textKindOf } from './search-like.js'
 import {
   groupSearchRelations,
+  isPersonDirectory,
   judgeSearchRelations,
+  PERSON_SEARCH_FIELDS,
   parseSearchRelations,
   type SearchRelationDeps,
   type SearchRelationGroup,
@@ -4769,6 +4771,10 @@ export async function searchRelationPlan(
       }
     },
     isTextColumn: async (c, f) => {
+      // The person directory is served from virtual metadata (no field rows): its two name
+      // columns are text by definition, when the table has them.
+      if (isPersonDirectory(c))
+        return PERSON_SEARCH_FIELDS.includes(f.toLowerCase()) && (await getColumnTypes(c)).has(f)
       const [meta, types] = await Promise.all([getFields(c), getColumnTypes(c)])
       return meta.some((m) => m.field === f && ['string', 'text'].includes(m.type) && types.has(f))
     },
@@ -4822,6 +4828,9 @@ function relationFarMatch(
 
 /** Related records a search word reaches before the search falls back to the EXISTS form. */
 export const RELATION_SEARCH_RESOLVE_MAX = 2000
+/** Up-front related reads one search runs at once: each takes a connection from the request
+ *  pool, and several words over several relations would otherwise take a dozen together. */
+export const RELATION_SEARCH_PARALLEL = 6
 
 /**
  * The root rows one related-label group matches for one pattern, as `column IN ids`, read
@@ -4835,14 +4844,29 @@ export async function resolveRelationSearch(
   group: SearchRelationPlan['groups'][number],
   pattern: string,
   gate: FilterScopeGate | undefined,
-  like: RelationLike
+  like: RelationLike,
+  /** One search's far reads: single-hop groups that land on the same collection and fields
+   *  (a record's contact and its creator are both people) share one read per word. */
+  farCache?: Map<string, Promise<Array<string | number>>>
 ): Promise<{ column: string; ids: Array<string | number> } | null> {
   const hop = group.hops[0]
-  const farQ = db(hop.to)
-    .select(db.raw('??.?? as id', [hop.to, 'id']))
-    .limit(RELATION_SEARCH_RESOLVE_MAX + 1)
-  relationFarMatch(farQ, group, 0, pattern, gate, like)
-  const far = ((await farQ) as Array<{ id: string | number }>).map((r) => r.id)
+  const readFar = async () => {
+    const farQ = db(hop.to)
+      .select(db.raw('??.?? as id', [hop.to, 'id']))
+      .limit(RELATION_SEARCH_RESOLVE_MAX + 1)
+    relationFarMatch(farQ, group, 0, pattern, gate, like)
+    return ((await farQ) as Array<{ id: string | number }>).map((r) => r.id)
+  }
+  const farKey =
+    farCache && group.hops.length === 1
+      ? `${hop.to.toLowerCase()}\u0000${group.fields.join(',').toLowerCase()}\u0000${pattern}`
+      : null
+  let farRead = farKey ? farCache?.get(farKey) : undefined
+  if (!farRead) {
+    farRead = readFar()
+    if (farKey) farCache?.set(farKey, farRead)
+  }
+  const far = await farRead
   if (far.length > RELATION_SEARCH_RESOLVE_MAX) return null
   if (hop.kind === 'm2o') return { column: hop.column, ids: far }
   if (!far.length) return { column: 'id', ids: [] }
@@ -5304,16 +5328,18 @@ export async function readItems(
         const patterns = new Set<string>()
         for (const v of variants)
           for (const slot of v) for (const alt of slot) patterns.add(`%${likeEscape(alt)}%`)
-        await Promise.all(
-          relPlan.groups.flatMap((g, gi) =>
-            [...patterns].map(async (p) => {
+        const farCache = new Map<string, Promise<Array<string | number>>>()
+        const lookups = relPlan.groups.flatMap((g, gi) => [...patterns].map((p) => ({ g, gi, p })))
+        for (let i = 0; i < lookups.length; i += RELATION_SEARCH_PARALLEL) {
+          await Promise.all(
+            lookups.slice(i, i + RELATION_SEARCH_PARALLEL).map(async ({ g, gi, p }) => {
               relResolved.set(
                 `${gi}\u0000${p}`,
-                await resolveRelationSearch(g, p, relPlan.gate, likeOn).catch(() => null)
+                await resolveRelationSearch(g, p, relPlan.gate, likeOn, farCache).catch(() => null)
               )
             })
           )
-        )
+        }
       }
       const slotWhere = (w: Knex.QueryBuilder, slot: string[]) => {
         for (const alt of slot) {

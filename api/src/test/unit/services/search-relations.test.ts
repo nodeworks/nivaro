@@ -34,7 +34,7 @@ describe('parseSearchRelations', () => {
   })
 
   it('keeps at most MAX_PATHS paths', () => {
-    const many = Array.from({ length: 10 }, (_, i) => `rel${i}.name`)
+    const many = Array.from({ length: MAX_PATHS + 4 }, (_, i) => `rel${i}.name`)
     expect(parseSearchRelations({ search_relations: many })?.length).toBe(MAX_PATHS)
   })
 })
@@ -144,6 +144,146 @@ describe('judgeSearchRelations (as the caller, hop by hop)', () => {
     expect(
       await judgeSearchRelations('projects', p, null, deps({ allowedFields: async () => [] }))
     ).toEqual([])
+  })
+
+  describe('the person directory (a record known by a person on it)', () => {
+    const CONTACT: SearchHop = { kind: 'm2o', to: 'nivaro_users', column: 'contact' }
+    const WATCHERS: SearchHop = {
+      kind: 'm2m',
+      to: 'nivaro_users',
+      column: 'watchers',
+      junction: 'project_watchers',
+      fkToParent: 'project',
+      fkToOther: 'user'
+    }
+    const MANAGER: SearchHop = { kind: 'm2o', to: 'nivaro_users', column: 'manager_id' }
+    const people = (over: Partial<SearchRelationDeps> = {}) =>
+      deps({
+        hop: async (c, seg) =>
+          c === 'projects' && seg === 'contact'
+            ? CONTACT
+            : c === 'projects' && seg === 'watchers'
+              ? WATCHERS
+              : c === 'nivaro_users' && seg === 'manager_id'
+                ? MANAGER
+                : c === 'projects' && seg === 'log'
+                  ? { kind: 'm2o', to: 'nivaro_activity', column: 'log' }
+                  : null,
+        isTextColumn: async (c) => c === 'nivaro_users' || c === 'nivaro_activity',
+        ...over
+      })
+
+    it('a to-one hop may end on a person’s first or last name', async () => {
+      const out = await judgeSearchRelations(
+        'projects',
+        [
+          ['contact', 'first_name'],
+          ['contact', 'last_name']
+        ],
+        null,
+        people()
+      )
+      expect(out.map((o) => o.segments.join('.'))).toEqual([
+        'contact.first_name',
+        'contact.last_name'
+      ])
+      expect(groupSearchRelations(out)).toEqual([
+        { hops: [CONTACT], fields: ['first_name', 'last_name'] }
+      ])
+    })
+
+    it('never any other column of the directory, whatever the caller may read', async () => {
+      for (const field of ['email', 'static_token', 'password_hash', 'title', 'preferences'])
+        expect(
+          await judgeSearchRelations('projects', [['contact', field]], null, people())
+        ).toEqual([])
+    })
+
+    it('only as the last hop, only to-one, and no other system table', async () => {
+      // On from a person (their manager), through a junction, into another system table.
+      expect(
+        await judgeSearchRelations(
+          'projects',
+          [['contact', 'manager_id', 'last_name']],
+          null,
+          people()
+        )
+      ).toEqual([])
+      expect(
+        await judgeSearchRelations('projects', [['watchers', 'last_name']], null, people())
+      ).toEqual([])
+      expect(await judgeSearchRelations('projects', [['log', 'comment']], null, people())).toEqual(
+        []
+      )
+    })
+
+    it('still judged as the caller: the FK and the name must be readable to them', async () => {
+      const p = [['contact', 'last_name']]
+      expect(await judgeSearchRelations('projects', p, ['id', 'name'], people())).toEqual([])
+      expect(
+        await judgeSearchRelations(
+          'projects',
+          p,
+          null,
+          people({ allowedFields: async () => ['id', 'email'] })
+        )
+      ).toEqual([])
+      expect(
+        await judgeSearchRelations('projects', p, null, people({ canRead: async () => false }))
+      ).toEqual([])
+    })
+  })
+
+  it('asks who may read what once per collection, for every collection reached at once', async () => {
+    // Judged one await after another, each new path cost a scoped person two more round
+    // trips before the search itself began (measured on a workflows list, 2026-11-12).
+    let inFlight = 0
+    let most = 0
+    const asked: string[] = []
+    const slow = async <T>(c: string, kind: string, v: T): Promise<T> => {
+      asked.push(`${kind}:${c}`)
+      inFlight++
+      most = Math.max(most, inFlight)
+      await new Promise((r) => setTimeout(r, 5))
+      inFlight--
+      return v
+    }
+    const out = await judgeSearchRelations(
+      'projects',
+      [
+        ['regions', 'name'],
+        ['regions', 'short_name'],
+        ['division', 'region', 'name']
+      ],
+      null,
+      deps({
+        canRead: (c) => slow(c, 'can', true),
+        allowedFields: (c) => slow(c, 'fields', null)
+      })
+    )
+    expect(out).toHaveLength(3)
+    expect([...asked].sort()).toEqual(
+      ['can:divisions', 'can:regions', 'fields:divisions', 'fields:regions'].sort()
+    )
+    // All four were in flight together: one round trip, not four.
+    expect(most).toBe(4)
+  })
+
+  it('never asks about a system table it will not reach', async () => {
+    const asked: string[] = []
+    await judgeSearchRelations(
+      'projects',
+      [['log', 'comment']],
+      null,
+      deps({
+        hop: async () => ({ kind: 'm2o', to: 'nivaro_activity', column: 'log' }),
+        canRead: async (c) => {
+          asked.push(c)
+          return true
+        }
+      })
+    )
+    expect(asked).toEqual([])
   })
 
   it('refuses an O2M / unknown hop and a failing lookup (fails closed)', async () => {

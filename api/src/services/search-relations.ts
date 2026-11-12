@@ -16,7 +16,12 @@
  *     collection, the related collection is readable to them (API key scopes
  *     included) and the last segment is a string/text column they may read
  *     there. A collection with no read policy for them reads nothing;
- *   - system tables (nivaro_ / directus_) are never reached;
+ *   - system tables (nivaro_ / directus_) are never reached — except the person
+ *     directory, and only so far: a to-one hop may END on a person's first or last
+ *     name (`internal_contact.last_name`), because a record is as often known by a
+ *     person on it as by its own number. Nothing else of that table is searched
+ *     (never an email, a title, a credential), no path goes on from a person, and
+ *     the name must still be a field the caller may read there;
  *   - rows: the compiler's filter scope gate puts the caller's read row filter
  *     and User Scopes on every hop (services/filter-scope-gate.ts), exactly as a
  *     relational filter the caller sent would be judged (H12).
@@ -28,8 +33,15 @@
 
 /** Hops a path may take before its field (`division.region.name` = 2). */
 export const MAX_HOPS = 3
-/** Paths a collection may list (each adds an EXISTS per word). */
-export const MAX_PATHS = 6
+/** Paths a collection may list. Paths that take the same hops share one lookup per word
+ *  (`contact.first_name` + `contact.last_name`), so the cost is per hop group, not per path. */
+export const MAX_PATHS = 10
+
+/** The person directory, and the only columns of it a search path may end on. */
+export const PERSON_DIRECTORY = 'nivaro_users'
+export const PERSON_SEARCH_FIELDS: readonly string[] = ['first_name', 'last_name']
+export const isPersonDirectory = (collection: string) =>
+  collection.toLowerCase() === PERSON_DIRECTORY
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 
@@ -144,6 +156,37 @@ export async function judgeSearchRelations(
     }
     return hit
   }
+  const hopCache = new Map<string, Promise<SearchHop | null>>()
+  const hopOf = (c: string, seg: string) => {
+    const k = `${c}\u0000${seg}`
+    let hit = hopCache.get(k)
+    if (!hit) {
+      hit = deps.hop(c, seg).catch(() => null)
+      hopCache.set(k, hit)
+    }
+    return hit
+  }
+  // Who may read what, asked once per collection and for every collection the paths reach
+  // at the same time. Judged one await after another, each path cost a person with a role
+  // policy two more round trips before the search itself began. A system table the judge
+  // refuses below is never asked about.
+  const reached = new Set<string>()
+  await Promise.all(
+    paths.map(async (segments) => {
+      let current = collection
+      for (let i = 0; i < segments.length - 1; i++) {
+        const hop = await hopOf(current, segments[i])
+        if (!hop) return
+        const person = hop.kind === 'm2o' && isPersonDirectory(hop.to) && i === segments.length - 2
+        if (deps.isSystem(hop.to) && !person) return
+        reached.add(hop.to)
+        current = hop.to
+      }
+    })
+  )
+  await Promise.all(
+    [...reached].flatMap((c) => [canOf(c).catch(() => false), allowedOf(c).catch(() => null)])
+  )
   const out: JudgedSearchRelation[] = []
   for (const segments of paths) {
     let current = collection
@@ -159,13 +202,16 @@ export async function judgeSearchRelations(
     let ok = true
     for (let i = 0; i < segments.length - 1; i++) {
       const seg = segments[i]
-      const hop = await deps.hop(current, seg).catch(() => null)
+      const hop = await hopOf(current, seg)
+      // The one system table a path may reach: a person, to-one, as its last hop.
+      const person =
+        !!hop && hop.kind === 'm2o' && isPersonDirectory(hop.to) && i === segments.length - 2
       if (
         !hop ||
         !(readableIn(allowed, seg) || readableIn(allowed, hop.column)) ||
         (hop.kind === 'm2m' && (!fresh(hop.junction) || deps.isSystem(hop.junction))) ||
         !fresh(hop.to) ||
-        deps.isSystem(hop.to) ||
+        (deps.isSystem(hop.to) && !person) ||
         !(await canOf(hop.to).catch(() => false))
       ) {
         ok = false
@@ -182,6 +228,7 @@ export async function judgeSearchRelations(
     }
     if (!ok) continue
     const field = segments[segments.length - 1]
+    if (isPersonDirectory(current) && !PERSON_SEARCH_FIELDS.includes(field.toLowerCase())) continue
     if (!readableIn(allowed, field)) continue
     if (!(await deps.isTextColumn(current, field).catch(() => false))) continue
     out.push({ segments, hops, field })

@@ -28,6 +28,14 @@ const RELS = vi.hoisted(() => [
     one_field: null,
     junction_field: null
   },
+  // projects.sponsor → nivaro_users (a second person on the record)
+  {
+    many_collection: 'projects',
+    many_field: 'sponsor',
+    one_collection: 'nivaro_users',
+    one_field: null,
+    junction_field: null
+  },
   // projects.program → programs (M2O)
   {
     many_collection: 'projects',
@@ -39,11 +47,23 @@ const RELS = vi.hoisted(() => [
 ])
 
 const COLS: Record<string, Record<string, string>> = vi.hoisted(() => ({
-  projects: { id: 'int', name: 'varchar', program: 'int', owner: 'uniqueidentifier' },
+  projects: {
+    id: 'int',
+    name: 'varchar',
+    program: 'int',
+    owner: 'uniqueidentifier',
+    sponsor: 'uniqueidentifier'
+  },
   projects_divisions: { id: 'int', projects_id: 'int', divisions_id: 'int' },
   divisions: { id: 'int', short_name: 'varchar', budget: 'decimal' },
   programs: { id: 'int', title: 'varchar' },
-  nivaro_users: { id: 'uniqueidentifier', last_name: 'nvarchar' }
+  nivaro_users: {
+    id: 'uniqueidentifier',
+    first_name: 'nvarchar',
+    last_name: 'nvarchar',
+    email: 'nvarchar',
+    static_token: 'nvarchar'
+  }
 }))
 
 const META: Record<string, Array<{ field: string; type: string }>> = vi.hoisted(() => ({
@@ -52,6 +72,7 @@ const META: Record<string, Array<{ field: string; type: string }>> = vi.hoisted(
     { field: 'name', type: 'string' },
     { field: 'program', type: 'integer' },
     { field: 'owner', type: 'uuid' },
+    { field: 'sponsor', type: 'uuid' },
     { field: 'divisions', type: 'alias' }
   ],
   divisions: [
@@ -93,7 +114,7 @@ vi.mock('../../../db/index.js', async (orig) => {
         }))
       }
       // resolveRelationSearch: the far side's ids, then the junction's root ids
-      if (/^select top \(\?\) \[(divisions|programs)\]\.\[id\] as \[?id\]?/i.test(sql))
+      if (/^select top \(\?\) \[(divisions|programs|nivaro_users)\]\.\[id\] as \[?id\]?/i.test(sql))
         return Array.from({ length: state.farRows }, (_, i) => ({ id: i + 1 }))
       if (/^select distinct .*from \[projects_divisions\]/i.test(sql)) return [{ id: 42 }]
       return []
@@ -263,11 +284,57 @@ describe('list search through search_relations', () => {
 
   it('never into a system table, nor to a non-text field, nor through an unknown hop', async () => {
     state.config = {
-      search_relations: ['owner.last_name', 'divisions.budget', 'nothing.name', 'name.x']
+      search_relations: [
+        'owner.static_token',
+        'owner.email',
+        'divisions.budget',
+        'nothing.name',
+        'name.x'
+      ]
     }
     for (const s of await searchSql('Central')) {
       expect(s).not.toMatch(/nivaro_users|divisions|nothing/i)
     }
+  })
+
+  it('a person on the record is found by name: the FK against the people read up front', async () => {
+    state.config = { search_relations: ['owner.first_name', 'owner.last_name'] }
+    state.farRows = 2
+    const people = await farReads('Callis', 'nivaro_users')
+    // One read of the directory for the word, over both name columns.
+    expect(people).toHaveLength(1)
+    expect(people[0]).toMatch(/\[nivaro_users\]\.\[first_name\]/)
+    expect(people[0]).toMatch(/\[nivaro_users\]\.\[last_name\]/)
+    const reads = await searchSql('Callis')
+    expect(reads.length).toBeGreaterThan(0)
+    for (const s of reads) {
+      // No join and no per-row subquery: one row per project, however many people match.
+      expect(s).toMatch(/\[projects\]\.\[owner\] in \(\?, \?\)/i)
+      expect(s).not.toMatch(/join|exists/i)
+    }
+  })
+
+  it('two people fields on one record share one read of the directory per word', async () => {
+    state.config = {
+      search_relations: [
+        'owner.first_name',
+        'owner.last_name',
+        'sponsor.first_name',
+        'sponsor.last_name'
+      ]
+    }
+    state.farRows = 2
+    expect(await farReads('Callis', 'nivaro_users')).toHaveLength(1)
+    for (const s of await searchSql('Callis')) {
+      expect(s).toMatch(/\[projects\]\.\[owner\] in \(\?, \?\)/i)
+      expect(s).toMatch(/\[projects\]\.\[sponsor\] in \(\?, \?\)/i)
+    }
+  })
+
+  it('a person the caller’s field list hides is not searched', async () => {
+    state.config = { search_relations: ['owner.last_name'] }
+    state.allowed = { nivaro_users: ['id', 'email'] }
+    for (const s of await searchSql('Callis')) expect(s).not.toMatch(/nivaro_users|owner/i)
   })
 
   it('an M2O path matches the FK against the related ids read up front', async () => {
