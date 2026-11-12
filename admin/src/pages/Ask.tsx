@@ -56,6 +56,7 @@ import {
   AddToDashboard,
   answerChart,
   CopyAsCode,
+  exportShortfall,
   LiveFromOthers,
   pinSourceFor,
   useAnswerCodeAccess,
@@ -388,6 +389,9 @@ async function downloadAnswer(conversationId: string, messageId: string, format:
     a.download = name
     a.click()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
+    // A file that holds fewer rows than match says so (the server caps a download).
+    const cut = exportShortfall(r.headers['x-export-rows'], r.headers['x-export-total'])
+    if (cut) toast.warning(cut.title, { description: cut.description })
   } catch (err) {
     let msg = 'Export failed'
     const data = (err as { response?: { data?: unknown } })?.response?.data
@@ -677,6 +681,8 @@ function AskPageInner() {
             messages: [{ role: 'user', content }],
             conversation_id: target,
             fresh: freshRef.current,
+            // This page shows CSV / Excel under answers that read records.
+            downloads: true,
             ...harderBody,
             ...(opts.command ? { command: opts.command } : {})
           }
@@ -684,6 +690,7 @@ function AskPageInner() {
             messages: [{ role: 'user', content }],
             save: true,
             fresh: freshRef.current,
+            downloads: true,
             ...harderBody,
             ...(opts.command ? { command: opts.command } : {})
           }

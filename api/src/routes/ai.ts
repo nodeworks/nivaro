@@ -1821,8 +1821,10 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         .code(503)
         .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
     }
-    const { messages, conversation_id, save, command, context, try_harder, retry_of } =
+    const { messages, conversation_id, save, command, context, try_harder, retry_of, downloads } =
       req.body as {
+        /** The asking screen shows CSV / Excel buttons under answers that read records. */
+        downloads?: boolean
         /** #1884 — a slash command that shapes the answer (chart, table, explain, steps). */
         command?: string
         /** #2471 — "Try harder": the feature's main model from the start, no cache. */
@@ -1967,7 +1969,18 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     const promptParts = await buildChatSystemParts(req.user!, {
       playbooks: formatPlaybooksForPrompt(playbooks, String(req.user!.id)),
       question,
-      ...(docsShare ? { catalogues: false } : {})
+      // An answer kept for everyone must not describe one screen's buttons.
+      ...(docsShare
+        ? { catalogues: false }
+        : {
+            // Rows are downloadable only from a kept conversation (the export
+            // re-runs a stored answer's query); the buttons are the page's own.
+            downloads: !turn
+              ? ('none' as const)
+              : downloads === true
+                ? ('buttons' as const)
+                : ('ask_page' as const)
+          })
     })
     // Two system blocks (review 2026-10-27): the stable prefix carries the
     // cache marker, the per-question tail (playbooks, guides for this

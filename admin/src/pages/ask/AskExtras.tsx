@@ -54,6 +54,24 @@ export function answerChart(content: string) {
 const ok = (t: TraceLike) => !t.summary?.startsWith('error:')
 
 /**
+ * What to say when a download holds fewer rows than match (the server caps a file), in the
+ * words a list export uses for the same thing. Null when the file holds every row.
+ */
+export function exportShortfall(
+  rows: unknown,
+  total: unknown
+): { title: string; description: string } | null {
+  if (rows == null || total == null) return null
+  const n = Number(rows)
+  const of = Number(total)
+  if (!Number.isFinite(n) || !Number.isFinite(of) || of <= n) return null
+  return {
+    title: `Exported the first ${n.toLocaleString('en-US')} rows`,
+    description: `${of.toLocaleString('en-US')} match — narrow the question to export the rest.`
+  }
+}
+
+/**
  * The read a chart came from: a grouped aggregate (preferring one with as many groups as the
  * chart has points), else the last saved query. Null = nothing to pin (the chart was drawn
  * from rows the model shaped by hand).

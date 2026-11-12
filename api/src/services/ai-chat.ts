@@ -10,6 +10,8 @@ import {
 } from './ai-aggregate-guard.js'
 import { settingsRow } from './ai-client.js'
 import { CONTEXT_TOOLS } from './ai-context-tool-defs.js'
+import { localizeFilterDates } from './ai-field-info.js'
+import { localDay } from './ai-local-dates.js'
 import { PANEL_TOOLS } from './ai-panel-tool-defs.js'
 import { describePlanStepKinds, type ProposePlanInput, proposePlan } from './ai-plans.js'
 import { UNTRUSTED_DATA_RULE } from './ai-untrusted.js'
@@ -65,12 +67,23 @@ export interface ToolTraceEntry {
 
 const MAX_ROUNDS = 12
 const MAX_ROWS = 50
+/**
+ * The most rows one answer's download holds. A download re-runs the answer's
+ * record query for every matching row, not only the page the model read.
+ */
+export const EXPORT_MAX_ROWS = 10_000
+/** Rows per read while a download pages through the matches (the items read cap). */
+const EXPORT_PAGE_ROWS = 1000
+/** Columns a query may name: few for the model's context, more for a file. */
+const MAX_QUERY_FIELDS = 15
+const EXPORT_MAX_FIELDS = 60
 const MAX_OBLIGATION_ROWS = 40
 
 const FILTER_DOC =
   'Filter shape: {"field": {"_op": value}} with _op one of _eq,_neq,_gt,_gte,_lt,_lte,_contains,_ncontains,_starts_with,_ends_with,_in,_nin,_null,_nnull. ' +
   'A field may be a dotted path through a relation ("project.project_type.name", "regions.short_name"). ' +
   'Pipeline/workflow state is NOT a column: filter it with {"$state": {"_in": ["state_key"]}} using the keys list_collections returns as pipeline_states. ' +
+  'Write a date or time as the person\'s own clock time with no zone ("2026-11-09" or "2026-11-09T17:00:00"): on timestamp fields it is read in their time zone, and a bare date means that whole local day. ' +
   'Unknown fields are an error, not ignored — call list_collections with the collection to see its fields.'
 
 export const CHAT_TOOLS: Anthropic.Tool[] = [
@@ -700,12 +713,13 @@ function validateQueryFields(
   requested: unknown,
   valid: Set<string>,
   physical: Set<string>,
-  rel: ChatRelations
+  rel: ChatRelations,
+  max = MAX_QUERY_FIELDS
 ): string[] | undefined {
   if (!Array.isArray(requested)) return undefined
   const links = new Map(rel.m2o.map((r) => [r.field, r.collection]))
   const out: string[] = []
-  for (const raw of requested.slice(0, 15)) {
+  for (const raw of requested.slice(0, max)) {
     const f = String(raw)
     if (f.includes('.')) {
       const head = f.split('.')[0]
@@ -1022,17 +1036,29 @@ export async function savedQueryCatalogue(user: User): Promise<string[]> {
 export async function executeChatTool(
   user: User,
   name: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  opts: ChatToolOptions = {}
 ): Promise<{ result: unknown; summary: string }> {
-  const out = await runChatTool(user, name, input)
+  const out = await runChatTool(user, name, input, opts)
   const { withAccessNote } = await import('./access-narrowing.js')
   return withAccessNote(user, name, input, out).catch(() => out)
+}
+
+export interface ChatToolOptions {
+  /**
+   * A download of an answer's rows (never set for the model): query_items
+   * returns every matching row up to this many instead of the page the model
+   * read, every column the query named, and links labelled for the reader.
+   * A query that set its own small limit ("the 10 newest") keeps it.
+   */
+  exportRows?: number
 }
 
 async function runChatTool(
   user: User,
   name: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  opts: ChatToolOptions = {}
 ): Promise<{ result: unknown; summary: string }> {
   switch (name) {
     case 'list_collections': {
@@ -1064,32 +1090,66 @@ async function runChatTool(
         physicalColumns(collection),
         relationsFor(collection)
       ])
-      const conditions = await compileChatFilter(collection, input.filter, valid)
+      // "Today" is the asker's day: zone-less dates on timestamp columns are
+      // read in their time zone before the filter compiles.
+      const conditions = await compileChatFilter(
+        collection,
+        await localizeFilterDates(user, collection, input.filter),
+        valid
+      )
+      const exportRows = Math.max(0, Math.floor(Number(opts.exportRows) || 0))
       const fields = validateQueryFields(
         collection,
         input.fields,
         valid,
         new Set(physical.map((c) => c.name)),
-        rel
+        rel,
+        exportRows ? EXPORT_MAX_FIELDS : MAX_QUERY_FIELDS
       )
       const sort = Array.isArray(input.sort)
         ? (input.sort as string[]).filter((s) => valid.has(s.replace(/^-/, ''))).slice(0, 3)
         : undefined
-      const limit = Math.min(MAX_ROWS, Math.max(1, Number(input.limit) || 25))
+      // A download pages through the matches: rows that tie on the sort need
+      // a fixed order between pages, or one is read twice and another never.
+      if (exportRows && sort?.length && valid.has('id') && !sort.some((f) => /^-?id$/.test(f)))
+        sort.push('id')
+      const asked = Number(input.limit) || 0
+      const limit = Math.min(MAX_ROWS, Math.max(1, asked || 25))
+      // A download wants every match — unless the query itself asked for a
+      // short list ("the 10 newest"), which the file keeps.
+      const want = exportRows && !(asked > 0 && asked < MAX_ROWS) ? exportRows : limit
+      const pageSize = Math.min(want, EXPORT_PAGE_ROWS)
       const search = typeof input.search === 'string' ? input.search.trim().slice(0, 200) : ''
       const fakeReq = {
         query: conditions.length ? { conditions: JSON.stringify(conditions) } : {}
       } as never
-      const res = (await readItems(
-        user,
-        collection,
-        { fields: fields?.length ? fields : undefined, sort, limit, ...(search ? { search } : {}) },
-        fakeReq
-      )) as { data?: unknown[]; total?: number }
-      const rows = await labelForeignKeys(user, res.data ?? [], rel, {
-        labels: input.link_labels !== false
-      })
-      const total = typeof res.total === 'number' ? res.total : rows.length
+      const data: unknown[] = []
+      let total: number | null = null
+      for (let offset = 0; offset < want; offset += pageSize) {
+        const res = (await readItems(
+          user,
+          collection,
+          {
+            fields: fields?.length ? fields : undefined,
+            sort,
+            limit: Math.min(pageSize, want - offset),
+            ...(offset ? { offset } : {}),
+            ...(search ? { search } : {})
+          },
+          fakeReq
+        )) as { data?: unknown[]; total?: number }
+        const page = res.data ?? []
+        if (total == null && typeof res.total === 'number') total = res.total
+        // Labels are read per page (one read per linked collection), as the asker.
+        data.push(
+          ...(await labelForeignKeys(user, page, rel, {
+            labels: exportRows ? true : input.link_labels !== false
+          }))
+        )
+        if (page.length < pageSize) break
+      }
+      const rows = data
+      if (total == null) total = rows.length
       return {
         result: { total, rows },
         summary: `${rows.length} of ${total} row(s) from ${collection}`
@@ -1172,7 +1232,11 @@ async function runChatTool(
       }
       // Compile against every column so a hidden one is named as "no access",
       // then check each condition's path against the role's readable fields.
-      const conditions = await compileChatFilter(collection, input.filter, allFields)
+      const conditions = await compileChatFilter(
+        collection,
+        await localizeFilterDates(user, collection, input.filter),
+        allFields
+      )
       const hidden = new Set([...allFields].filter((f) => !valid.has(f)))
       await assertFilterReadable(
         user,
@@ -1921,6 +1985,11 @@ export async function buildChatSystemParts(
      * replays.
      */
     catalogues?: boolean
+    /**
+     * What the screen asking can do with an answer's rows (see
+     * downloadInstructions). Left out = say nothing about files, as before.
+     */
+    downloads?: AnswerDownloads
   } = {}
 ): Promise<{ stable: string; perQuestion: string }> {
   const catalogues = opts.catalogues !== false
@@ -1962,9 +2031,12 @@ export async function buildChatSystemParts(
       ? `${c.collection} (${c.display_name})`
       : c.collection
   )
+  const { today, tomorrow } = localDay(new Date(), zone)
   const stable = `${CHAT_SYSTEM_PROMPT}
 
-Today is ${new Date().toLocaleDateString('en-CA', { timeZone: zone })} — resolve "this year", "last month" and similar against that date.
+Today is ${today} — resolve "this year", "last month" and similar against that date.
+
+Date filters: write dates and times as the person's own clock time, with no zone and no conversion — "created today" is {"_gte": "${today}T00:00:00", "_lt": "${tomorrow}T00:00:00"}. On timestamp fields (created, updated and the like) the tools read such a value in the person's time zone, so a day is their local day. Never shift a value to UTC yourself and never describe a day as a UTC day.
 
 ${timeInstructions(zone)}
 
@@ -2000,10 +2072,39 @@ ${views.join('\n')}`
     : ''
 }`
   // Per-question content last (prompt caching keys on the prefix).
-  const perQuestion = `${opts.playbooks ? `\n\n${opts.playbooks}` : ''}${
+  const downloads = opts.downloads ? `\n\n${downloadInstructions(opts.downloads)}` : ''
+  const perQuestion = `${downloads}${opts.playbooks ? `\n\n${opts.playbooks}` : ''}${
     knowledge.perQuestion ? `\n\n${knowledge.perQuestion}` : ''
   }`
   return { stable, perQuestion }
+}
+
+/**
+ * What the asking screen can do with the rows behind an answer:
+ *  - buttons: it shows CSV and Excel under every answer that read records
+ *    (the Ask AI page on a kept conversation);
+ *  - ask_page: the conversation is kept but this screen has no buttons (the
+ *    side panel) — the Ask AI page has them;
+ *  - none: nothing is kept, so there is nothing to download.
+ */
+export type AnswerDownloads = 'buttons' | 'ask_page' | 'none'
+
+/**
+ * How to answer "give me an Excel of …". Without this the model said it could
+ * not make files, sent people to an export button it guessed at on another
+ * screen, and answered "why can't you?" with a search for help videos — while
+ * the Excel button sat under its own answer.
+ */
+export function downloadInstructions(mode: AnswerDownloads): string {
+  if (mode === 'none') {
+    return 'Downloads: this chat cannot create or attach a file. When someone asks for an Excel, CSV or spreadsheet, say so in one sentence and give the rows here instead. Never describe an export button or menu on another screen unless the instance guide above, search_docs or a help video names it.'
+  }
+  const file = `The file is the rows of the LAST data call of that answer, read again with the person's own access. For query_items that is every matching row, up to ${EXPORT_MAX_ROWS.toLocaleString('en-US')} — not only the ones you were shown — with linked records as names, dates in their time zone and the fields' labels as headers. A query_items limit under ${MAX_ROWS} is kept ("the 10 newest" stays 10).`
+  const how =
+    'So when someone asks for an Excel, CSV, spreadsheet, export or download: make ONE query_items call with exactly the filter and the columns they want (ask for link.column, e.g. vendor.name, so the file shows names) as your last data call, give the count and at most a short sample, and tell them where the button is. Never say you cannot make a file, never paste the whole list as a table instead, and never send them to another screen to export.'
+  return mode === 'buttons'
+    ? `Downloads: under every answer that read records this page shows two buttons, CSV and Excel (typing /export or /export xlsx does the same). ${file} ${how}`
+    : `Downloads: this panel has no download button, but the conversation is kept — "Open in Ask AI" at the top of the panel opens it on the Ask AI page, where every answer that read records has CSV and Excel buttons under it. ${file} ${how}`
 }
 
 /**

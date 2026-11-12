@@ -6,12 +6,10 @@ import {
   applyConversationSearch,
   clearVisibilityCache,
   exportFileName,
-  flattenRow,
   historyFromView,
   messagesForViewer,
   rowsFromToolResult,
-  titleFromQuestion,
-  toCsv
+  titleFromQuestion
 } from '../../../services/ai-conversations.js'
 import { hashToolResult, TOOL_RESULT_MODEL_CHARS } from '../../../services/ai-result-hash.js'
 
@@ -307,15 +305,22 @@ describe('historyFromView', () => {
 })
 
 describe('export helpers (#1841)', () => {
-  it('finds the rows in a tool result and flattens labelled relations', () => {
+  // What a cell shows (a linked record as its name, never JSON) is
+  // ai-export-table.test.ts; this only finds the rows.
+  it('finds the rows in a tool result, as the tool returned them', () => {
     expect(rowsFromToolResult(rowsA)).toHaveLength(2)
     expect(rowsFromToolResult([{ a: 1 }])).toEqual([{ a: 1 }])
     expect(rowsFromToolResult({ count: 12 })).toEqual([{ count: 12 }])
     expect(rowsFromToolResult({ groups: [{ vendor: { id: 7, label: 'Acme' }, n: 3 }] })).toEqual([
-      { vendor: 'Acme', n: 3 }
+      { vendor: { id: 7, label: 'Acme' }, n: 3 }
     ])
     expect(rowsFromToolResult('text')).toEqual([])
-    expect(flattenRow({ tags: ['a', 'b'] })).toEqual({ tags: '["a","b"]' })
+  })
+
+  it('keeps the note about the asker’s access out of a single-figure row', () => {
+    expect(
+      rowsFromToolResult({ value: 64, access_note: 'limited to Zone 1 by your access' })
+    ).toEqual([{ value: 64 }])
   })
 
   it('names the file after the question and time', () => {
@@ -324,14 +329,6 @@ describe('export helpers (#1841)', () => {
       'open-purchase-orders-by-vendor-2026-10-12-1430'
     )
     expect(exportFileName('???', at)).toBe('ask-ai-answer-2026-10-12-1430')
-  })
-
-  it('writes CSV with every column, numbers as numbers and formula-safe text', () => {
-    const csv = toCsv([{ a: -5, b: '=SUM(A1)' }, { c: 'x,y' }])
-    const [head, r1, r2] = csv.split('\r\n')
-    expect(head).toBe('"a","b","c"')
-    expect(r1).toBe('-5,"\'=SUM(A1)",""')
-    expect(r2).toBe('"","","x,y"')
   })
 })
 

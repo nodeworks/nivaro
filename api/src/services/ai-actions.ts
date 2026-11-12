@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { localizeFilterDates } from './ai-field-info.js'
 import { createOne, readItems, updateOne } from './items.js'
 import { can, isAdminRole } from './permissions.js'
 
@@ -135,9 +136,12 @@ export async function buildAction(user: User, input: ProposeActionInput): Promis
   if (Object.keys(changes).length === 0) {
     throw new Error('changes must set at least one valid field')
   }
-  // Resolve affected ids through the permission-checked read path (RLS applies)
+  // Resolve affected ids through the permission-checked read path (RLS applies).
+  // Dates read as they do in query_items (the asker's local day on timestamp
+  // columns), so the records proposed are the records the answer listed.
+  const filter = await localizeFilterDates(user, collection, input.filter)
   const res = await readItems(user, collection, {
-    filter: (input.filter as Record<string, unknown>) ?? {},
+    filter: (filter as Record<string, unknown>) ?? {},
     limit: MAX_AFFECTED + 1
   })
   const rows = ((res as { data?: Array<Record<string, unknown>> }).data ?? []) as Array<

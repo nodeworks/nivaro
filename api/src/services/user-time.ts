@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { zonedWallTime } from './ai-local-dates.js'
 
 /**
  * The time zone a person reads times in: their own profile setting
@@ -63,7 +64,21 @@ export function formatForPerson(d: Date, timeZone: string): string {
   return `${day} at ${time}`
 }
 
+/**
+ * "UTC-05:00" — the zone's offset on that day. A zone has two (standard and
+ * daylight); an assistant left to remember which is in force used the summer
+ * one a week after the clocks went back and wrote every time an hour late.
+ */
+export function utcOffsetLabel(timeZone: string, at = new Date()): string {
+  const w = zonedWallTime(at, timeZone)
+  const wall = Date.UTC(w.y, w.m - 1, w.d, w.h, w.mi, w.s)
+  const minutes = Math.round((wall - Math.floor(at.getTime() / 1000) * 1000) / 60_000)
+  const abs = Math.abs(minutes)
+  const two = (n: number) => String(n).padStart(2, '0')
+  return `UTC${minutes < 0 ? '-' : '+'}${two(Math.floor(abs / 60))}:${two(abs % 60)}`
+}
+
 /** The instruction every assistant prompt carries about writing times. */
 export function timeInstructions(timeZone: string, now = new Date()): string {
-  return `The person you are answering is in the ${timeZone} time zone; it is now ${formatForPerson(now, timeZone)} for them. Write every date and time for them in that zone, in 12-hour form with AM/PM (for example "Tue, Sep 29 at 8:03 PM" or "8:03 PM today") — never UTC, never ISO timestamps, never 24-hour times. When a tool gives a time in UTC or ISO form, convert it before you write it.`
+  return `The person you are answering is in the ${timeZone} time zone; it is now ${formatForPerson(now, timeZone)} for them. Write every date and time for them in that zone, in 12-hour form with AM/PM (for example "Tue, Sep 29 at 8:03 PM" or "8:03 PM today") — never UTC, never ISO timestamps, never 24-hour times. When a tool gives a time in UTC or ISO form, convert it before you write it: their clock is ${utcOffsetLabel(timeZone, now)} today, so apply exactly that and check which day the time lands on.`
 }

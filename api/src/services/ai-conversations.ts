@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
-import { csvCell } from '../lib/csv-cell.js'
 import type { User } from '../types.js'
 import type { ChatTraceEntry } from './ai-chat-loop.js'
 import { hashToolResult } from './ai-result-hash.js'
@@ -690,37 +689,31 @@ export async function pruneConversations(): Promise<number> {
 
 export { sameId as sameUserId }
 
-/** Rows for export (#1841): the first array of objects in a tool result. */
+/**
+ * Rows for export (#1841): the first array of objects in a tool result, as
+ * the tool returned them. Turning a row into readable cells (a linked record
+ * as its name, a timestamp in the reader's zone) is ai-export-table.ts.
+ */
 export function rowsFromToolResult(result: unknown): Array<Record<string, unknown>> {
   const pick = (v: unknown): Array<Record<string, unknown>> | null =>
     Array.isArray(v) && v.every((r) => r && typeof r === 'object' && !Array.isArray(r))
       ? (v as Array<Record<string, unknown>>)
       : null
   const direct = pick(result)
-  if (direct) return direct.map(flattenRow)
+  if (direct) return direct
   if (result && typeof result === 'object') {
     const obj = result as Record<string, unknown>
     for (const k of ['rows', 'data', 'groups', 'items', 'results', 'records', 'hits']) {
       const v = pick(obj[k])
-      if (v) return v.map(flattenRow)
+      if (v) return v
     }
-    // A single aggregate row ({count: 12}) exports as one row.
-    if (Object.values(obj).every((v) => v == null || typeof v !== 'object')) return [obj]
+    // A single aggregate row ({count: 12}) exports as one row. The access
+    // note that rides a result is about the answer, not a column of it.
+    const { access_note: _note, ...row } = obj
+    if (Object.values(row).every((v) => v == null || typeof v !== 'object' || v instanceof Date))
+      return [row]
   }
   return []
-}
-
-/** Relation values the chat labels as {id, label} export as their label. */
-export function flattenRow(row: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(row)) {
-    if (v && typeof v === 'object' && !Array.isArray(v) && 'label' in v) {
-      out[k] = (v as { label: unknown }).label
-    } else if (v && typeof v === 'object') {
-      out[k] = JSON.stringify(v)
-    } else out[k] = v
-  }
-  return out
 }
 
 /** "Open purchase orders by vendor" + time → open-purchase-orders-by-vendor-2026-10-12-1430 */
@@ -734,16 +727,4 @@ export function exportFileName(question: string, at = new Date()): string {
       .replace(/-+$/, '') || 'ask-ai-answer'
   const p = (n: number) => String(n).padStart(2, '0')
   return `${slug}-${at.getFullYear()}-${p(at.getMonth() + 1)}-${p(at.getDate())}-${p(at.getHours())}${p(at.getMinutes())}`
-}
-
-export function toCsv(rows: Array<Record<string, unknown>>): string {
-  const cols: string[] = []
-  for (const r of rows) for (const k of Object.keys(r)) if (!cols.includes(k)) cols.push(k)
-  // Real numbers stay numbers (a negative amount must not become text);
-  // everything else goes through the formula-injection-safe cell.
-  const cell = (v: unknown) =>
-    typeof v === 'number' && Number.isFinite(v) ? String(v) : csvCell(v)
-  return [cols.map(cell).join(','), ...rows.map((r) => cols.map((c) => cell(r[c])).join(','))].join(
-    '\r\n'
-  )
 }

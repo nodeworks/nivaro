@@ -4,6 +4,7 @@ import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import type { AnswerExport } from '../services/ai-answer-export.js'
 import {
   branchConversation,
   type ConversationRow,
@@ -17,9 +18,7 @@ import {
   messagesForViewer,
   namesFor,
   parseJsonArray,
-  rowsFromToolResult,
   sameUserId,
-  toCsv,
   tombstoneMessage
 } from '../services/ai-conversations.js'
 import type { User } from '../types.js'
@@ -376,16 +375,27 @@ export async function aiConversationRoutes(app: FastifyInstance) {
           ? exportable.find(({ i }) => i === Number(q.step))
           : exportable[exportable.length - 1]
       if (!step) return reply.code(400).send({ error: 'This answer has no rows to export' })
-      const { executeChatTool } = await import('../services/ai-chat.js')
-      let data: Array<Record<string, unknown>>
+      const [{ executeChatTool, EXPORT_MAX_ROWS }, { answerExportTable }, tableOut] =
+        await Promise.all([
+          import('../services/ai-chat.js'),
+          import('../services/ai-answer-export.js'),
+          import('../services/ai-export-table.js')
+        ])
+      let table: AnswerExport
       try {
-        const { result } = await executeChatTool(req.user!, step.t.tool, step.t.input ?? {})
-        data = rowsFromToolResult(result)
+        // Every matching row (not the page the model read), read as the caller.
+        const input = step.t.input ?? {}
+        const { result } = await executeChatTool(req.user!, step.t.tool, input, {
+          exportRows: EXPORT_MAX_ROWS
+        })
+        table = await answerExportTable(req.user!, step.t.tool, input, result)
       } catch (err) {
         return reply
           .code(422)
           .send({ error: err instanceof Error ? err.message : 'The query could not be re-run' })
       }
+      const count = table.rows.length
+      const cut = table.total != null && table.total > count
       const question = [...rows.slice(0, idx)].reverse().find((r) => r.role === 'user')?.content
       const name = exportFileName(question ?? found.conv.title)
       await logActivity({
@@ -393,12 +403,17 @@ export async function aiConversationRoutes(app: FastifyInstance) {
         user: req.user!.id,
         collection: 'nivaro_ai_conversations',
         item: found.conv.id,
-        comment: `${data.length} row(s) as ${format} (${step.t.tool})`,
+        comment: `${count}${cut ? ` of ${table.total}` : ''} row(s) as ${format} (${step.t.tool})`,
         req
       })
+      // The page says so when the file holds fewer rows than match.
+      reply.header('x-export-rows', String(count))
+      if (table.total != null) reply.header('x-export-total', String(table.total))
       if (format === 'xlsx') {
+        const sheet = XLSX.utils.aoa_to_sheet(tableOut.tableToAoa(table))
+        sheet['!cols'] = tableOut.columnWidths(table)
         const wb = XLSX.utils.book_new()
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Answer')
+        XLSX.utils.book_append_sheet(wb, sheet, 'Answer')
         const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer
         return reply
           .header(
@@ -411,7 +426,7 @@ export async function aiConversationRoutes(app: FastifyInstance) {
       return reply
         .header('Content-Type', 'text/csv; charset=utf-8')
         .header('Content-Disposition', `attachment; filename="${name}.csv"`)
-        .send(`﻿${toCsv(data)}`)
+        .send(`\ufeff${tableOut.tableToCsv(table)}`)
     }
   )
 

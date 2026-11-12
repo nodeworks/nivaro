@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { answerChart, pinSourceFor } from './AskExtras'
+import { answerChart, exportShortfall, pinSourceFor } from './AskExtras'
 
 // #2738 — which read a chart answer pins: the grouping the chart was drawn from.
 
@@ -36,5 +36,22 @@ describe('answerChart', () => {
       'By vendor:\n```chart\n{"type":"pie","data":[{"label":"A","value":1},{"label":"B","value":2}]}\n```'
     expect(answerChart(content)?.type).toBe('pie')
     expect(answerChart('No chart here')).toBeNull()
+  })
+})
+
+// A download the server cut says so; one that holds every row says nothing.
+describe('exportShortfall', () => {
+  it('names how many rows the file holds out of how many match', () => {
+    expect(exportShortfall('10000', '34512')).toEqual({
+      title: 'Exported the first 10,000 rows',
+      description: '34,512 match — narrow the question to export the rest.'
+    })
+  })
+
+  it('is silent when the file holds everything or the server did not say', () => {
+    expect(exportShortfall('64', '64')).toBeNull()
+    expect(exportShortfall('64', undefined)).toBeNull()
+    expect(exportShortfall(undefined, '64')).toBeNull()
+    expect(exportShortfall('x', '64')).toBeNull()
   })
 })
