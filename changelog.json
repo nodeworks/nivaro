@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-11-12T15:50:33.861Z",
+  "generated_at": "2026-11-12T17:17:34.620Z",
   "releases": [
+    {
+      "version": "0.3.144",
+      "tag": "v0.3.144",
+      "date": "2026-11-12T12:17:14-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "web app manifest so the admin installs as an app",
+              "hash": "3b8eeaa5c"
+            },
+            {
+              "section": "Added",
+              "scope": "push",
+              "text": "styled browser notifications",
+              "hash": "4f90da96d"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "api-changelog",
+              "text": "notify admins only when a removal breaks a partner",
+              "hash": "311cb34a6"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.143",
       "tag": "v0.3.143",
-      "date": "2026-11-12T10:50:15-05:00",
+      "date": "2026-11-12T10:50:33-05:00",
       "sections": [
         {
           "label": "Added",
