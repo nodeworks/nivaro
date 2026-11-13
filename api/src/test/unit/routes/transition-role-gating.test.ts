@@ -70,18 +70,21 @@ vi.mock('../../../services/queue-materialization.js', () => ({
   syncMaterializedQueueItem: vi.fn(async () => {})
 }))
 vi.mock('../../../services/collections.js', () => ({ getCollection: vi.fn(async () => undefined) }))
-vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+// One db mock, held where the other mock factories can reach it without
+// importing it again: the bulk route moves several records at a time, and an
+// import() made inside a factory while another record's move is loading a
+// partly-real module (edit-lock below) has answered with the real database.
+const dbMock = vi.hoisted(() => ({ db: vi.fn() }))
+vi.mock('../../../db/index.js', () => ({ db: dbMock.db }))
 // The record's instance through the same table mock (branch exclusion has its
 // own unit test in services/branch-instances.test.ts).
 vi.mock('../../../services/branch-instances.js', () => ({
-  findRecordInstance: async (collection: string, item: string) => {
-    const { db } = await import('../../../db/index.js')
-    return (db as unknown as (t: string) => { where: (w: unknown) => { first: () => unknown } })(
+  findRecordInstance: async (collection: string, item: string) =>
+    (dbMock.db as unknown as (t: string) => { where: (w: unknown) => { first: () => unknown } })(
       'nivaro_workflow_instances'
     )
       .where({ collection, item })
       .first()
-  }
 }))
 // The start/advance gate (instance-guard) is unit-tested on its own; here it
 // allows unless a test sets `guard.deny`.
@@ -197,7 +200,10 @@ function makeDbMock(fx: DbFixture) {
         // where/whereNot/orderBy arm serves runAutoTransitions(), which the
         // route fires after a successful transition. Without it the engine
         // logs a swallowed TypeError and pollutes test output.
+        // `whereIn` serves the bulk route, which reads every candidate
+        // transition by id in one go (several may share a label).
         return {
+          whereIn: vi.fn(() => Promise.resolve(transition ? [transition] : [])),
           where: vi.fn(() => ({
             first: vi.fn(() => Promise.resolve(transition)),
             where: vi.fn(() => ({
@@ -213,6 +219,14 @@ function makeDbMock(fx: DbFixture) {
         return { where: vi.fn(() => ({ first: vi.fn(() => Promise.resolve(undefined)) })) }
       case 'nivaro_fields':
         return { where: vi.fn(() => ({ select: vi.fn(() => Promise.resolve([])) })) }
+      // After a move lands, the state-subscription hook reads who subscribed
+      // (a join, a where, a select). Nobody did.
+      case 'nivaro_notification_subscriptions as ns':
+        return {
+          join: vi.fn(() => ({
+            where: vi.fn(() => ({ select: vi.fn(() => Promise.resolve([])) }))
+          }))
+        }
       default:
         return {
           where: vi.fn(() => ({

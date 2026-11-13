@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { clearAutoFailures } from './auto-transition-memory.js'
@@ -12,11 +13,18 @@ import {
   manualTransitionRefusal
 } from './manual-transition-gate.js'
 import { claimTransition, TransitionDuplicateError } from './transition-guard.js'
+import {
+  runsInBackground,
+  type TransitionRunHandle,
+  TransitionRunningError,
+  takeTransitionRun
+} from './transition-runs.js'
 import { TransitionBlockedError } from './workflow-actions.js'
 import {
   applyTransition,
   type DeferredTransitionEvent,
   flushChainEvents,
+  resolveFriendlyId,
   runAutoTransitions
 } from './workflow-transitions.js'
 
@@ -52,6 +60,7 @@ interface WorkflowTransition {
   id: string
   template: string
   label: string
+  actions?: string | null
 }
 
 function parseJson(val: string | null | undefined): unknown {
@@ -101,6 +110,11 @@ export interface RecordTransitionOptions {
   /** No HTTP request, but a person pressed it (a Teams card): the edit lock
    *  binds them like a session. */
   lockAsPerson?: boolean
+  /** The caller can take "it is running" for an answer. Only then, and only
+   *  for a transition marked to run in the background, the move is answered
+   *  202 once every check has passed and finishes on the background pool.
+   *  Every other caller waits for it as before. */
+  acceptPending?: boolean
 }
 
 /** Who the edit lock judges for this move: the request, or — for a person
@@ -145,6 +159,14 @@ export function lockedMoveRefusal(
     }
   }
 }
+
+/**
+ * Background moves this process is finishing right now. They borrow from the
+ * background pool, which scheduled jobs and imports share: past the cap, a
+ * caller waits for its move as it always did instead of adding to it.
+ */
+let backgroundMoves = 0
+export const BACKGROUND_MOVES_MAX = 8
 
 /** Run one manual transition on a record as `user`. The body of
  *  POST /pipelines/instance/:collection/:item/transition, moved here so the
@@ -200,6 +222,30 @@ export async function runRecordTransition(
     }
   }
 
+  // A transition marked "runs in the background" (transition-runs.ts): this
+  // record's run is held from here until the move has ended, so everyone who
+  // has the record open sees it running and a second run by anyone is refused.
+  // Every check above has already answered as it always does. A transition
+  // without the mark takes no run and goes on exactly as before.
+  let run: TransitionRunHandle | null = null
+  const pending = opts.acceptPending === true && backgroundMoves < BACKGROUND_MOVES_MAX
+  if (runsInBackground(transition.actions)) {
+    try {
+      run = await takeTransitionRun({
+        instance,
+        transition,
+        userId: user?.id ?? null,
+        mode: pending ? 'background' : 'inline',
+        recordLabel: pending ? await resolveFriendlyId(collection, item).catch(() => null) : null
+      })
+    } catch (err) {
+      if (err instanceof TransitionRunningError) {
+        return { status: 409, body: { error: err.message, code: err.code, run: err.run } }
+      }
+      throw err
+    }
+  }
+
   // Shared mutation chain (instance update, history, materialized queue
   // sync, state_field mirror incl. state_field_map, transition actions).
   // A blocking action failure (e.g. an ERP submission) aborts BEFORE any
@@ -215,6 +261,7 @@ export async function runRecordTransition(
       label: transition.label
     })
   } catch (err) {
+    await run?.cancel()
     if (err instanceof TransitionDuplicateError) {
       return { status: 409, body: { error: err.message, code: err.code, first: err.first } }
     }
@@ -224,6 +271,49 @@ export async function runRecordTransition(
   // #1217: a person acting on the record is the retry the engine was
   // waiting for — held auto transitions on it may fire again.
   await clearAutoFailures({ instanceId: String(instance.id) })
+
+  // The move itself. One body for both ways of running it, so a background
+  // run is attributed (history user, origin, activity with the caller's
+  // request) and chained exactly as the run a person waits for.
+  const finish = () => finishRecordTransition({ opts, instance, transition, claim, run, displaced })
+  if (run && pending) {
+    // Answer now. The actions (the partner call) and the state change run on
+    // the background pool; the record moves only if they succeed, and a
+    // refusal is stored and told to this person by the run (its `refused`).
+    const held = run
+    backgroundMoves++
+    void runInBackgroundPool(() =>
+      finish()
+        .catch((err) => {
+          // A refusal thrown rather than answered (a move with nowhere to go)
+          // is on the run already; anything else is ours to look at.
+          log.error({ err, collection, item, run: held.id }, 'background transition failed')
+        })
+        .finally(() => {
+          backgroundMoves--
+        })
+    )
+    return { status: 202, body: { data: { background: true, run: held.view } } }
+  }
+  return finish()
+}
+
+/**
+ * Apply a transition whose every check has passed: the mutation chain, the
+ * automatic moves it sets off, the activity row and the notice to an editor
+ * the move displaced. Answers what the route answers.
+ */
+async function finishRecordTransition(a: {
+  opts: RecordTransitionOptions
+  instance: WorkflowInstance
+  transition: WorkflowTransition
+  claim: Awaited<ReturnType<typeof claimTransition>>
+  run: TransitionRunHandle | null
+  displaced: { locked_by: string; locked_by_name: string | null } | null
+}): Promise<{ status: number; body: unknown }> {
+  const { opts, instance, transition, claim, displaced } = a
+  const { user, collection, item, req } = opts
+  const body = { comment: opts.comment }
 
   // This move and any automatic moves it sets off are ONE chain: their
   // events fire together once the chain settles, so people are told only
@@ -237,7 +327,8 @@ export async function runRecordTransition(
       userId: user?.id ?? null,
       comment: body.comment ?? null,
       source: 'manual',
-      deferEvents: chainEvents
+      deferEvents: chainEvents,
+      ...(a.run ? { run: a.run } : {})
     })
   } catch (err) {
     // The move did not happen — an immediate retry must be allowed.

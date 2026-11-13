@@ -38,6 +38,12 @@ import { getLabels } from './queues.js'
 import { announceAddendumChange, announceRecordAspect } from './record-events.js'
 import { isSendBackMove } from './send-back-skips.js'
 import { MACHINE_TRANSITION_COMMENT } from './transition-comment.js'
+import {
+  runsInBackground,
+  type TransitionRunHandle,
+  TransitionRunningError,
+  takeTransitionRun
+} from './transition-runs.js'
 import { TRIGGER_SAFE } from './trigger-safe.js'
 import { runTransitionActions, TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
@@ -1436,10 +1442,29 @@ export interface ApplyTransitionResult {
  * user-facing gates; the auto engine applies condition rules only.
  */
 export async function applyTransition(opts: ApplyTransitionOpts): Promise<ApplyTransitionResult> {
+  // A move marked "runs in the background" holds the record's run for as long
+  // as it runs, whoever runs it and however (transition-runs.ts): a second run
+  // is refused here, before anything is sent, and the run's row says how this
+  // one ended. A caller that took the run itself (to answer before the move
+  // finishes) hands it in. A transition without the mark takes none.
+  let run = opts.run ?? null
+  if (!run && runsInBackground(opts.transition.actions)) {
+    run = await takeTransitionRun({
+      instance: opts.instance,
+      transition: opts.transition,
+      userId: opts.userId ?? null,
+      mode: opts.source === 'auto' ? 'auto' : 'inline'
+    })
+  }
   const key = flightKey(opts.instance.collection, opts.instance.item)
   transitionsInFlight.set(key, (transitionsInFlight.get(key) ?? 0) + 1)
   try {
-    return await applyTransitionInner(opts)
+    const applied = await applyTransitionInner(opts)
+    await run?.moved(applied.newStateObj?.label ?? null)
+    return applied
+  } catch (err) {
+    await run?.refused(err)
+    throw err
   } finally {
     const left = (transitionsInFlight.get(key) ?? 1) - 1
     if (left > 0) transitionsInFlight.set(key, left)
@@ -1456,6 +1481,9 @@ interface ApplyTransitionOpts {
   /** Collect the `workflow-transition` event instead of firing it — the auto
    *  chain fires every hop's event once the chain settles (flushChainEvents). */
   deferEvents?: DeferredTransitionEvent[]
+  /** The record's run, already held by the caller (a background move that
+   *  answered before it finished). Closed here with how the move ended. */
+  run?: TransitionRunHandle | null
 }
 
 export interface DeferredTransitionEvent {
@@ -1948,6 +1976,9 @@ export async function runAutoTransitions(
             })
         )
       } catch (err) {
+        // Someone's run of a background move holds the record: nothing was
+        // sent and nothing failed. The next evaluation looks again.
+        if (err instanceof TransitionRunningError) return
         if (!(err instanceof TransitionBlockedError)) throw err
         // Remember the refusal with what the blocking actions would send NOW —
         // after the on_failure writebacks landed — so the next evaluation

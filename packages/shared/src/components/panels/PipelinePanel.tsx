@@ -67,6 +67,17 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { deniedToastAction, isAccessRefusal, WhyOwnersButton } from './AccessInsights'
+import {
+  type MoveProblem,
+  MoveProblemNotice,
+  pendingOptIn,
+  type RunningMove,
+  RunningMoveNotice,
+  runningMovePoll,
+  sameMoveId,
+  startedInBackground,
+  useRunEnded
+} from './BackgroundMove'
 import { BranchLanes, type BranchLanesData } from './BranchLanes'
 import { joinLabels, landingSkipGroups, landingState } from './landing-state'
 import {
@@ -117,6 +128,9 @@ interface PipelineTransition {
   /** What a registered check would answer if this move were pressed now — shown
    *  beside the move before it is (MoveAdvisory.tsx). */
   advisory?: MoveAdvisory | null
+  /** Marked to run in the background: asked for with `accept_pending`, shown
+   *  as running instead of holding the click (BackgroundMove.tsx). */
+  background?: boolean
 }
 interface PipelineHistoryEntry {
   id: number
@@ -226,6 +240,10 @@ interface PipelinePanelData {
   auto_held?: HeldAutoTransition[]
   /** Highlight rules this record matches ("On hold", "Sent back"). */
   flags?: RecordFlag[]
+  /** A background move running on this record now (anyone's). */
+  running_move?: RunningMove | null
+  /** The last background move that did not move the record, since it came to this step. */
+  last_move_problem?: MoveProblem | null
 }
 interface RecordFlag {
   name: string
@@ -2730,6 +2748,8 @@ function PipelinePanelInner({
   }
   const trySetPending = async (txId: string, opts?: { cleared?: boolean }) => {
     if (transitionBusyRef.current) return
+    // A background move is running on this record: every move waits for it.
+    if (data?.running_move) return
     if (pendingTransition === txId) {
       setPendingTransition(null)
       return
@@ -2820,7 +2840,14 @@ function PipelinePanelInner({
               binding: null
             }
         ),
-    staleTime: 10_000
+    staleTime: 10_000,
+    refetchInterval: (query) => runningMovePoll(query.state.data)
+  })
+  // A background move ended: read what it wrote (as a move that was waited for does).
+  useRunEnded(!!data?.running_move, () => {
+    invalidateRecordInsights(queryClient, collection, String(item))
+    invalidateRecordData(queryClient, collection, String(item))
+    invalidateOwnerReads(queryClient, collection, String(item))
   })
   // army6 M19 — a button that newly appears in the slot is inert for a beat.
   const freshTx = useFreshTransitions(
@@ -2902,7 +2929,8 @@ function PipelinePanelInner({
           transition_id,
           comment,
           ...(reviewed ? { reviewed: true } : {}),
-          ...(lock_ack ? { lock_ack: true } : {})
+          ...(lock_ack ? { lock_ack: true } : {}),
+          ...pendingOptIn(data?.available_transitions, transition_id)
         })
       ),
     onMutate: (variables) => ({
@@ -2928,7 +2956,16 @@ function PipelinePanelInner({
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)
-      toast.success(transitionToastText(data, variables.transition_id, res), context?.slow.done())
+      // A move that runs in the background has only started: the record's
+      // pipeline row says so until it ends, and a refusal comes as a notification.
+      const started = startedInBackground(res)
+      if (started)
+        toast.info(
+          `${started.transition_label ?? 'The move'} started. You will be told if it does not go through.`,
+          context?.slow.done()
+        )
+      else
+        toast.success(transitionToastText(data, variables.transition_id, res), context?.slow.done())
     },
     onError: (err: unknown, variables, context) => {
       context?.slow.fail()
@@ -2936,6 +2973,15 @@ function PipelinePanelInner({
       // request): nothing was done twice — refresh quietly, no error toast.
       if (isDuplicateTransition(err)) {
         queryClient.invalidateQueries({ queryKey })
+        return
+      }
+      // A background move already holds the record (someone pressed it a moment
+      // before this page knew): nothing was sent. Say who, and show it running.
+      if (refusalCode(err) === 'TRANSITION_RUNNING') {
+        queryClient.invalidateQueries({ queryKey })
+        setPendingTransition(null)
+        setRequirementsDialog(null)
+        toast.info(userErrorMessage(err, 'This move is already running on this record.'))
         return
       }
       // Someone else is editing it right now (army 11 f4 M4): say who, and let
@@ -3084,6 +3130,13 @@ function PipelinePanelInner({
   const hasTransitions = visibleTransitions.length > 0
   const moveNotices = distinctAdvisories(visibleTransitions)
   const armedTx = armedMove ? visibleTransitions.find((t) => t.id === armedMove) : null
+  // A background move on this record (BackgroundMove.tsx): while one runs,
+  // every move waits; one that did not move the record stays until it does.
+  const runningMove = data?.running_move ?? null
+  const moveProblem = runningMove ? null : (data?.last_move_problem ?? null)
+  const problemTx = moveProblem
+    ? visibleTransitions.find((t) => sameMoveId(t.id, moveProblem.transition_id))
+    : null
 
   const renderTransitionButtons = (txList: PipelineTransition[], small = false) => {
     const byLabel = new Map<string, PipelineTransition[]>()
@@ -3104,7 +3157,8 @@ function PipelinePanelInner({
       if (txs.length === 1) {
         const tx = txs[0]
         const running =
-          executeTransition.isPending && executeTransition.variables?.transition_id === tx.id
+          (executeTransition.isPending && executeTransition.variables?.transition_id === tx.id) ||
+          sameMoveId(runningMove?.transition_id, tx.id)
         return (
           <Button
             key={label}
@@ -3112,7 +3166,7 @@ function PipelinePanelInner({
             variant={isActive ? 'default' : 'outline'}
             className={`${small ? 'h-7 text-[11px]' : 'text-[12px]'} gap-1.5 data-[fresh=true]:opacity-60`}
             style={colorStyle(isActive)}
-            disabled={executeTransition.isPending || settling}
+            disabled={executeTransition.isPending || settling || !!runningMove}
             aria-disabled={freshTx.dimmed(tx.id) || undefined}
             data-fresh={freshTx.dimmed(tx.id) || undefined}
             {...freshTx.bind(tx.id)}
@@ -3138,7 +3192,7 @@ function PipelinePanelInner({
               variant={isActive ? 'default' : 'outline'}
               className={`${small ? 'h-7 text-[11px]' : 'text-[12px]'} gap-1.5`}
               style={colorStyle(isActive)}
-              disabled={executeTransition.isPending || settling}
+              disabled={executeTransition.isPending || settling || !!runningMove}
             >
               {label}
               <ChevronDown className='h-3 w-3' />
@@ -3234,6 +3288,7 @@ function PipelinePanelInner({
           // A required note that can be skipped is not required.
           disabled={
             executeTransition.isPending ||
+            !!runningMove ||
             (String((pendingTx as { comment_mode?: string } | undefined)?.comment_mode ?? '') ===
               'required' &&
               comment.trim() === '')
@@ -3375,6 +3430,15 @@ function PipelinePanelInner({
             }}
           />
         ))}
+        {/* A background move: running now, or the last one that did not move the record. */}
+        {runningMove && <RunningMoveNotice run={runningMove} />}
+        {moveProblem && (
+          <MoveProblemNotice
+            problem={moveProblem}
+            retryDisabled={executeTransition.isPending || settling}
+            onRetry={problemTx ? () => void trySetPending(problemTx.id) : undefined}
+          />
+        )}
         {!expanded && pendingTransition && (
           <div className='border-t border-slate-100 dark:border-border/60 px-4 py-3'>
             {confirmForm}
@@ -3624,6 +3688,8 @@ function PipelineTransitionButtonsInner({
   }
   const trySetPending = async (txId: string, opts?: { cleared?: boolean }) => {
     if (transitionBusyRef.current) return
+    // A background move is running on this record: every move waits for it.
+    if (data?.running_move) return
     if (pendingTransition === txId) {
       setPendingTransition(null)
       return
@@ -3708,7 +3774,14 @@ function PipelineTransitionButtonsInner({
               binding: null
             }
         ),
-    staleTime: 10_000
+    staleTime: 10_000,
+    refetchInterval: (query) => runningMovePoll(query.state.data)
+  })
+  // A background move ended: read what it wrote (as a move that was waited for does).
+  useRunEnded(!!data?.running_move, () => {
+    invalidateRecordInsights(queryClient, collection, String(item))
+    invalidateRecordData(queryClient, collection, String(item))
+    invalidateOwnerReads(queryClient, collection, String(item))
   })
   // army6 M19 — a button that newly appears in the slot is inert for a beat.
   const freshTx = useFreshTransitions(
@@ -3754,7 +3827,8 @@ function PipelineTransitionButtonsInner({
           transition_id,
           comment,
           ...(reviewed ? { reviewed: true } : {}),
-          ...(lock_ack ? { lock_ack: true } : {})
+          ...(lock_ack ? { lock_ack: true } : {}),
+          ...pendingOptIn(data?.available_transitions, transition_id)
         })
       ),
     onMutate: (variables) => ({
@@ -3780,7 +3854,16 @@ function PipelineTransitionButtonsInner({
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)
-      toast.success(transitionToastText(data, variables.transition_id, res), context?.slow.done())
+      // A move that runs in the background has only started: the record's
+      // pipeline row says so until it ends, and a refusal comes as a notification.
+      const started = startedInBackground(res)
+      if (started)
+        toast.info(
+          `${started.transition_label ?? 'The move'} started. You will be told if it does not go through.`,
+          context?.slow.done()
+        )
+      else
+        toast.success(transitionToastText(data, variables.transition_id, res), context?.slow.done())
     },
     onError: (err: unknown, variables, context) => {
       context?.slow.fail()
@@ -3788,6 +3871,15 @@ function PipelineTransitionButtonsInner({
       // request): nothing was done twice — refresh quietly, no error toast.
       if (isDuplicateTransition(err)) {
         queryClient.invalidateQueries({ queryKey })
+        return
+      }
+      // A background move already holds the record (someone pressed it a moment
+      // before this page knew): nothing was sent. Say who, and show it running.
+      if (refusalCode(err) === 'TRANSITION_RUNNING') {
+        queryClient.invalidateQueries({ queryKey })
+        setPendingTransition(null)
+        setRequirementsDialog(null)
+        toast.info(userErrorMessage(err, 'This move is already running on this record.'))
         return
       }
       // Someone else is editing it right now (army 11 f4 M4): say who, and let
@@ -3908,6 +4000,9 @@ function PipelineTransitionButtonsInner({
   const currentState = data.instance.current_state_obj ?? null
   const pendingTx = pendingTransition ? transitions.find((t) => t.id === pendingTransition) : null
   const armedTx = armedMove ? transitions.find((t) => t.id === armedMove) : null
+  // A background move is running on this record: every move waits for it
+  // (the Progress panel's row says who started it and when).
+  const runningMove = data.running_move ?? null
   const pendingToState = pendingTx ? stateById.get(pendingTx.to_state) : null
   const landing = confirmLanding(pendingTx, currentState, data.states ?? [], chainOwners)
   const landedState = landing?.state ?? pendingToState
@@ -3939,10 +4034,12 @@ function PipelineTransitionButtonsInner({
               size='sm'
               variant='outline'
               className='shrink-0 gap-1.5 text-[12px]'
-              disabled={executeTransition.isPending || settling}
+              disabled={executeTransition.isPending || settling || !!runningMove}
               data-transitions-folded
             >
-              {executeTransition.isPending && <Loader2 className='h-3 w-3 animate-spin' />}
+              {(executeTransition.isPending || runningMove) && (
+                <Loader2 className='h-3 w-3 animate-spin' />
+              )}
               Actions
               <ChevronDown className='h-3 w-3' />
             </Button>
@@ -4020,8 +4117,11 @@ function PipelineTransitionButtonsInner({
                 : undefined
             if (txs.length === 1) {
               const tx = txs[0]
+              const inBackground = sameMoveId(runningMove?.transition_id, tx.id)
               const running =
-                executeTransition.isPending && executeTransition.variables?.transition_id === tx.id
+                (executeTransition.isPending &&
+                  executeTransition.variables?.transition_id === tx.id) ||
+                inBackground
               const button = (
                 <Button
                   key={label}
@@ -4029,7 +4129,8 @@ function PipelineTransitionButtonsInner({
                   variant={isActive ? 'default' : 'outline'}
                   className='gap-1.5 text-[12px] data-[fresh=true]:opacity-60'
                   style={colorStyle(isActive)}
-                  disabled={executeTransition.isPending || settling}
+                  disabled={executeTransition.isPending || settling || !!runningMove}
+                  data-move-running={inBackground || undefined}
                   aria-disabled={freshTx.dimmed(tx.id) || undefined}
                   data-fresh={freshTx.dimmed(tx.id) || undefined}
                   {...freshTx.bind(tx.id)}
@@ -4072,7 +4173,7 @@ function PipelineTransitionButtonsInner({
                     variant={isActive ? 'default' : 'outline'}
                     className='gap-1.5 text-[12px]'
                     style={colorStyle(isActive)}
-                    disabled={executeTransition.isPending || settling}
+                    disabled={executeTransition.isPending || settling || !!runningMove}
                   >
                     {label}
                     <ChevronDown className='h-3 w-3' />
@@ -4153,6 +4254,7 @@ function PipelineTransitionButtonsInner({
               // filled in before this commits.
               disabled={
                 executeTransition.isPending ||
+                !!runningMove ||
                 (String((pendingTx as { comment_mode?: string } | null)?.comment_mode ?? '') ===
                   'required' &&
                   comment.trim() === '')

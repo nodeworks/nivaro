@@ -31,6 +31,8 @@ export type JobRunKind =
   | 'ai'
   | 'tuning'
   | 'render'
+  /** One background run of a workflow move (services/transition-runs.ts). */
+  | 'transition'
 
 /**
  * How a run started (#1050 / #1051): `schedule` = the clock fired it; `run-now` = someone

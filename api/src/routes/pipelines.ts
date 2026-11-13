@@ -52,6 +52,7 @@ import { labelSeatFilters } from '../services/seat-labels.js'
 import { skippedSendBackTargets, withoutSkippedSendBacks } from '../services/send-back-skips.js'
 import { type TransitionAdvisory, transitionAdvisories } from '../services/transition-checks.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
+import { runsInBackground, transitionRunState } from '../services/transition-runs.js'
 import {
   pickRerunAction,
   runTransitionActions,
@@ -326,7 +327,7 @@ export async function recordFlags(
 
 export function stripTransitionActions<T extends { actions?: unknown }>(
   t: T
-): Omit<T, 'actions'> & { pushes: number; order_partners: string[] } {
+): Omit<T, 'actions'> & { pushes: number; order_partners: string[]; background?: true } {
   const { actions, ...rest } = t
   const erp = Array.isArray(actions)
     ? (actions.filter(
@@ -345,7 +346,14 @@ export function stripTransitionActions<T extends { actions?: unknown }>(
         .filter(Boolean)
     )
   ]
-  return { ...rest, pushes: erp.length, order_partners }
+  // A move marked to run in the background (transition-runs.ts): the panel
+  // asks for it that way and does not hold the click. Absent when not marked.
+  return {
+    ...rest,
+    pushes: erp.length,
+    order_partners,
+    ...(runsInBackground(actions) ? { background: true as const } : {})
+  }
 }
 
 function formatTransition(t: WorkflowTransition) {
@@ -2763,6 +2771,15 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const currentStateObj = states.find((s) => s.id === currentState)
     const branches = await loadBranchLanes(instance, history, states).catch(() => null)
     const advisories = await advisoriesAsked
+    // Moves that run in the background (transition-runs.ts): the run holding
+    // this record now, and the last one that did not move it since the record
+    // came to this step. Read only when this pipeline has such a move, so a
+    // pipeline without one answers exactly what it always did.
+    const runState = transitions.some((t) => runsInBackground(t.actions))
+      ? await transitionRunState(String(instance.id), {
+          since: (history[0] as { timestamp?: Date | string } | undefined)?.timestamp ?? null
+        }).catch(() => null)
+      : null
     // Whether THIS caller may change the record right now (edit-lock.ts) — the
     // form shows read-only from it; the write itself is judged again.
     const editLock =
@@ -2797,6 +2814,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         // #1217: auto transitions the engine stopped re-firing because their
         // blocking push failed and nothing it would send has changed.
         auto_held: await heldForInstance(String(instance.id)),
+        ...(runState
+          ? { running_move: runState.running, last_move_problem: runState.problem }
+          : {}),
         edit_lock: editLock?.locked ? editLock : null,
         // The collection's highlight rules this record matches ("On hold",
         // "Sent back") — chips beside the state, so an approver sees a hold
@@ -2975,10 +2995,15 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         reviewed?: boolean
         /** "<name> is editing this record" was shown and the person moves it anyway. */
         lock_ack?: boolean
+        /** The caller can show "it is running": a transition marked to run in
+         *  the background then answers 202 `{background, run}` once its checks
+         *  have passed, instead of holding the request until it has moved. */
+        accept_pending?: boolean
       }
 
       if (!body.transition_id) return reply.code(400).send({ error: 'transition_id is required' })
       const r = await runRecordTransition({
+        acceptPending: body.accept_pending === true,
         lockAck: lockAckFrom(body.lock_ack),
         user: req.user!,
         isAdmin: req.isAdmin ?? false,
