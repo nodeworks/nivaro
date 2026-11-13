@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ItemEditAuthContext, NivaroProvider, useNivaroClient } from '../../context'
 import {
   type MoveProblem,
+  partnerOutcome,
   partnerWords,
   pendingOptIn,
   problemReason,
@@ -218,8 +219,25 @@ describe('helpers', () => {
           'HTTP 400: {"status":"ERROR","message":"The project is not valid for this org","trace":"abc'
         )
       ).toBe('Submission failed: The project is not valid for this org')
+      // The sentence itself was cut: it says so, instead of stopping mid-word.
       expect(said('HTTP 400: "The ship-to location is not set up for this wareh')).toBe(
-        'Submission failed: The ship-to location is not set up for this wareh'
+        'Submission failed: The ship-to location is not set up for this wareh…'
+      )
+      expect(said('HTTP 400: {"message":"The ship-to location is not set up for thi')).toBe(
+        'Submission failed: The ship-to location is not set up for thi…'
+      )
+    })
+
+    it('a sentence longer than the row keeps is cut with a mark, never mid-word without one', () => {
+      const long = `${'The supplier site is not active for this business unit. '.repeat(8)}End.`
+      const shown = said(`HTTP 400: ${JSON.stringify({ message: long })}`) as string
+      const sentence = shown.replace('Submission failed: ', '')
+      expect(sentence.length).toBeLessThanOrEqual(300)
+      expect(sentence.endsWith('…')).toBe(true)
+      expect(long.startsWith(sentence.slice(0, -1))).toBe(true)
+      // A sentence that fits is left exactly as it was said.
+      expect(said('HTTP 400: "The project is not valid."')).toBe(
+        'Submission failed: The project is not valid.'
       )
     })
 
@@ -251,6 +269,59 @@ describe('helpers', () => {
       expect(partnerWords('Contact email is required')).toBeNull()
       expect(partnerWords('fetch failed (Error: connect ECONNREFUSED 10.0.0.1:443)')).toBeNull()
       expect(partnerWords('')).toBeNull()
+    })
+  })
+
+  // Design review round 3: with no sentence to show, the status is the OTHER system's answer
+  // to this app. Read like the person's own request it said "You've been signed out",
+  // "Someone else changed this", or Node's own words.
+  describe('what a partner call’s failure means when its answer held no words', () => {
+    const outcome = (answer: string) => partnerOutcome(`Submission failed — ${answer}`)
+    const SIGN_IN =
+      'The other system did not accept this app’s sign-in. An administrator needs to check the connection.'
+
+    it('a refused sign-in is this app’s, never the person’s', () => {
+      expect(outcome('HTTP 401: ""')).toBe(SIGN_IN)
+      expect(outcome('HTTP 403: {"ok":false}')).toBe(SIGN_IN)
+      expect(outcome('Token exchange failed (HTTP 401): invalid_client')).toBe(SIGN_IN)
+    })
+
+    it('a refusal is the other system’s, not "someone else changed this"', () => {
+      for (const answer of [
+        'HTTP 409: {"code":17}',
+        'HTTP 423: null',
+        'HTTP 404: null',
+        'HTTP 400: null'
+      ])
+        expect(outcome(answer)).toBe('The other system refused the request.')
+    })
+
+    it('a system that is away, slow, or broken says which', () => {
+      expect(outcome('HTTP 502: null')).toBe('The other system is not answering right now.')
+      expect(outcome('HTTP 503: ""')).toBe('The other system is not answering right now.')
+      expect(outcome('HTTP 504: null')).toBe('The other system took too long to answer.')
+      expect(outcome('HTTP 408: null')).toBe('The other system took too long to answer.')
+      expect(outcome('HTTP 500: {"ok":false}')).toBe(
+        'The other system ran into a problem of its own.'
+      )
+    })
+
+    it('a call that got no answer at all, in plain words instead of Node’s', () => {
+      expect(outcome('fetch failed')).toBe('The other system could not be reached.')
+      expect(outcome('fetch failed (after 2 retries)')).toBe(
+        'The other system could not be reached.'
+      )
+      expect(outcome('fetch failed (Error: connect ECONNREFUSED 10.0.0.1:443)')).toBe(
+        'The other system could not be reached.'
+      )
+      expect(outcome('Timed out after 30000ms')).toBe('The other system took too long to answer.')
+    })
+
+    it('nothing for a reason that is not a partner call’s failure', () => {
+      expect(partnerOutcome('Contact email is required')).toBeNull()
+      expect(partnerOutcome("Invalid column name 'vendor_site'.")).toBeNull()
+      expect(partnerOutcome('Submission failed — Partner responded with status: ERROR')).toBeNull()
+      expect(partnerOutcome('')).toBeNull()
     })
   })
 
@@ -457,14 +528,41 @@ describe('the reason a run did not go through', () => {
     expect(problemNotice()?.querySelector('[data-error-details]')).not.toBeNull()
   })
 
-  it('falls back to the plain sentence when the answer holds no words', async () => {
+  it('says what the failure means about the other system when its answer holds no words', async () => {
     render('panel', {
       marked: true,
       problem: { ...PROBLEM, reason: 'Submit order: submission failed — HTTP 502: null' }
     })
     await until(() => !!problemNotice())
-    expect(problemWords()?.textContent).toContain('Submission failed')
-    expect(problemWords()?.textContent).not.toMatch(/HTTP|502|null/)
+    expect(problemWords()?.textContent).toBe('The other system is not answering right now.')
+  })
+
+  it('never tells the person they were signed out when the other system refused this app', async () => {
+    render('panel', {
+      marked: true,
+      problem: { ...PROBLEM, reason: 'Submit order: submission failed — HTTP 401: ""' }
+    })
+    await until(() => !!problemNotice())
+    expect(problemWords()?.textContent).toBe(
+      'The other system did not accept this app’s sign-in. An administrator needs to check the connection.'
+    )
+    expect(problemNotice()?.textContent).not.toMatch(/signed out/i)
+  })
+
+  it('a call that never got an answer says so in plain words', async () => {
+    render('panel', {
+      marked: true,
+      problem: {
+        ...PROBLEM,
+        result: 'failed',
+        reason:
+          'Submit order: submission failed — fetch failed (Error: connect ECONNREFUSED 10.0.0.1:443)'
+      }
+    })
+    await until(() => !!problemNotice())
+    expect(problemWords()?.textContent).toBe('The other system could not be reached.')
+    // The text as stored is still there for support.
+    expect(problemNotice()?.querySelector('[data-error-details]')).not.toBeNull()
   })
 
   it('shows plain words as they are, with nothing folded away', async () => {

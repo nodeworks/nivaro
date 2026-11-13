@@ -157,21 +157,59 @@ export function partnerWords(reason: string): string | null {
   if (!mark) return null
   const body = reason.slice(mark.index + mark[0].length).trim()
   let words: string | null = null
+  // The sentence did not end where it stops: the stored body was cut inside it.
+  let cut = false
   try {
     words = sentenceIn(JSON.parse(body))
   } catch {
     // Cut short: the sentence under a known key, else a body that is one (unfinished) string.
     const keyed = KEYED_SENTENCE.exec(body)
-    if (keyed) words = unescapeJson(keyed[1])
-    else if (body.startsWith('"')) words = unescapeJson(body.slice(1).replace(/"$/, ''))
+    if (keyed) {
+      words = unescapeJson(keyed[1])
+      cut = body[keyed.index + keyed[0].length] !== '"'
+    } else if (body.startsWith('"')) {
+      words = unescapeJson(body.slice(1).replace(/"$/, ''))
+      cut = body.length < 2 || !body.endsWith('"')
+    }
   }
-  const said = (words ?? '').replace(/\s+/g, ' ').trim().slice(0, 300)
-  if (said.length < 3 || /<[a-z!/]/i.test(said) || isRawErrorText(said)) return null
+  const full = (words ?? '').replace(/\s+/g, ' ').trim()
+  // A cut sentence says so: it must never just stop mid-word as if that were all of it.
+  const said = cut || full.length > 300 ? `${full.slice(0, 299).trimEnd()}…` : full
+  if (full.length < 3 || /<[a-z!/]/i.test(said) || isRawErrorText(said)) return null
   const lead = reason
     .slice(0, mark.index)
     .replace(/[\s:·—–-]+$/, '')
     .trim()
   return lead ? `${lead}: ${said}` : said
+}
+
+/** The other system's status anywhere in a stored reason: "… — HTTP 502: …", "… (HTTP 401): …". */
+const PARTNER_STATUS = /\bHTTP (\d{3})\b/
+/** A call that got no answer at all, in Node's and the API's own words. */
+const NO_ANSWER =
+  /\b(?:fetch failed|Timed out after \d+ms|socket hang up|E(?:CONN[A-Z]+|NOTFOUND|AI_AGAIN|TIMEDOUT|HOSTUNREACH))\b/
+
+/**
+ * What a partner call's failure means when its answer held no words a person can
+ * read. Said about the other system: the sentences every other error is read with
+ * are about the person's own request ("You've been signed out", "Someone else
+ * changed this"), and here the status is the other system's answer to this app.
+ * Null for a reason that is not a partner call's failure.
+ */
+export function partnerOutcome(reason: string): string | null {
+  const status = Number(PARTNER_STATUS.exec(reason)?.[1] ?? 0)
+  if (!status) {
+    if (!NO_ANSWER.test(reason)) return null
+    return /Timed out after|ETIMEDOUT/.test(reason)
+      ? 'The other system took too long to answer.'
+      : 'The other system could not be reached.'
+  }
+  if (status === 401 || status === 403)
+    return 'The other system did not accept this app’s sign-in. An administrator needs to check the connection.'
+  if (status === 408 || status === 504) return 'The other system took too long to answer.'
+  if (status === 502 || status === 503) return 'The other system is not answering right now.'
+  if (status >= 500) return 'The other system ran into a problem of its own.'
+  return 'The other system refused the request.'
 }
 
 const rowBase = 'flex items-start gap-2.5'
@@ -269,9 +307,13 @@ export function MoveProblemNotice({
   const label = problem.transition_label?.trim() || 'The move'
   const reason = problemReason(problem)
   const said = useMemo(() => (reason ? describeError({ message: reason }, '') : null), [reason])
-  // A partner's own answer shows in its words; anything else is read like every other error.
+  // A partner's own answer shows in its words, or failing that as what it means about the
+  // other system; anything else is read like every other error.
   const words = useMemo(
-    () => (reason ? partnerWords(reason) : null) ?? said?.title.trim() ?? '',
+    () =>
+      (reason ? (partnerWords(reason) ?? partnerOutcome(reason)) : null) ??
+      said?.title.trim() ??
+      '',
     [reason, said]
   )
   // The full words on hover only while the three lines cut them.
