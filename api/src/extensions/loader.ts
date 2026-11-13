@@ -31,6 +31,7 @@ import {
   runSchemaChecks,
   runSchemaSteps
 } from '../services/extension-schema-steps.js'
+import { extensionSendMembers } from '../services/extension-sends.js'
 import { type CallOptions, callExternalApi } from '../services/external-apis.js'
 import { registerImportProcessor } from '../services/import-processors.js'
 import { runRows } from '../services/import-run-rows.js'
@@ -1133,6 +1134,9 @@ export function registrationMembers(
       // #1114 (spread: the member is typed in the kit source; a build of the kit is not needed)
       ...trafficNodeMembers(extId, note, own),
       ...readableOpsMembers(extId, note, own),
+      // Write-ahead + the unanswered-send guard for partner calls an extension makes itself
+      // (services/extension-sends.ts; spread so the kit source types them).
+      ...extensionSendMembers(),
       registerObligationKind: (def) => {
         void import('../services/integration-obligations.js').then(({ registerObligationKind }) =>
           registerObligationKind(def)

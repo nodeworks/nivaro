@@ -18,9 +18,11 @@ import { requesterInsertFields } from '../services/erp-requester-columns.js'
 import { hasResendableBody, NO_BODY, NoBodyToResendError } from '../services/erp-resend-guard.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import {
+  answerByFor,
   answerDeadline,
   checkFailedReason,
   isUnansweredStale,
+  payloadWithAnswerBy,
   RESEND_TIMEOUT_MS,
   SENDING_STATUS,
   sendingLabel,
@@ -362,8 +364,18 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       body: safeBody,
       secret_paths: secretPathsOf(safeBody)
     }
-    const outcome = await sendPayload(external_api, stored, req.user?.id)
+    // Another send of this push on the record with no answer (or none could be checked): the
+    // partner may already have it — nothing goes out (erp-unanswered.ts).
+    const hold = await unansweredHold({
+      collection,
+      item: String(item),
+      apiId: Number(external_api),
+      endpointPath: endpoint_path
+    })
+    if (hold) return reply.code(409).send({ error: hold.reason, code: 'UNANSWERED' })
 
+    // Write-ahead: the row exists (`sending`, answer_by) before the partner can have the
+    // request, and the answer lands on it; a process that stops mid-call leaves it `sending`.
     const now = new Date()
     // Probed once per tenant — a column this database hasn't run
     // migration 350 for fails the WHOLE insert, not just these two fields.
@@ -377,25 +389,39 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         collection,
         item: String(item),
         external_api,
-        external_ref: outcome.external_ref,
-        status: outcome.status,
-        response: await scrubSecretsFor(external_api, serializeResponseBody(outcome.response)),
-        attempts: 1,
-        last_error: outcome.error,
-        payload: JSON.stringify(stored),
+        external_ref: null,
+        status: SENDING_STATUS,
+        response: null,
+        attempts: 0,
+        last_error: null,
+        payload: payloadWithAnswerBy(JSON.stringify(stored), answerByFor(now, RESEND_TIMEOUT_MS)),
         ...requesterFields,
         ...(await chainFields('nivaro_erp_submissions')),
         created_at: now,
         updated_at: now
       })
       .returning('*')
+    const createdId = Number(
+      inserted && typeof inserted === 'object' ? (inserted as ErpSubmissionRow).id : inserted
+    )
 
-    const created =
-      inserted && typeof inserted === 'object'
-        ? (inserted as ErpSubmissionRow)
-        : ((await db('nivaro_erp_submissions')
-            .where({ id: inserted as number })
-            .first()) as ErpSubmissionRow)
+    const outcome = await withChainStep(`submission:${createdId}`, async () => {
+      const sent = await sendPayload(external_api, stored, req.user?.id)
+      const { applySendOutcome } = await import('../services/erp-submission-status.js')
+      await applySendOutcome({
+        submissionId: createdId,
+        outcome: sent,
+        priorExternalRef: null,
+        priorAttempts: 0,
+        requestedBy: req.user?.id ?? null,
+        requestedVia: 'api'
+      })
+      return sent
+    })
+
+    const created = (await db('nivaro_erp_submissions')
+      .where({ id: createdId })
+      .first()) as ErpSubmissionRow
 
     await logActivity({
       action: 'create',

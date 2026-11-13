@@ -1777,7 +1777,7 @@ export function serializeResponseBody(body: unknown): string | null {
 /** Who sent a push and how — migration 350's requested_by / requested_via. */
 interface SubmissionRequester {
   by: string | null
-  via: RequestedVia
+  via: RequestedVia | null
 }
 
 export async function recordSubmission(
@@ -1900,7 +1900,8 @@ async function afterSubmissionRecorded(
   item: string,
   externalApi: number,
   status: string,
-  error: string | null
+  error: string | null,
+  source = 'transition action'
 ): Promise<void> {
   // #1825: the record's Integrations chip refreshes the moment a push lands.
   announceRecordAspect(collection, item, '$integrations')
@@ -1909,7 +1910,7 @@ async function afterSubmissionRecorded(
     collection: 'nivaro_erp_submissions',
     item: `${collection}/${item}`,
     user: null,
-    comment: `transition action → api:${externalApi} (${status}${error ? `: ${error.slice(0, 120)}` : ''})`
+    comment: `${source} → api:${externalApi} (${status}${error ? `: ${error.slice(0, 120)}` : ''})`
   })
   // A failed partner push says so in the record's chat room (#933), when
   // the room type opted in to activity lines.
@@ -2015,6 +2016,10 @@ export async function finishSubmission(
     responseBody?: unknown
     signature?: string | null
     httpStatus?: number | null
+    /** The partner's reference for what it made (an order / requisition number). */
+    externalRef?: string | null
+    /** Who sent it, for the activity line ("Fusion requisition push → api:7 (accepted)"). */
+    source?: string
   }
 ): Promise<boolean> {
   try {
@@ -2022,6 +2027,7 @@ export async function finishSubmission(
     await db('nivaro_erp_submissions')
       .where({ id: submissionId })
       .update({
+        ...(outcome.externalRef != null ? { external_ref: outcome.externalRef } : {}),
         status: outcome.status,
         last_error: outcome.error,
         response: serializeResponseBody(applyScrub(outcome.responseBody, secrets)),
@@ -2048,7 +2054,8 @@ export async function finishSubmission(
     outcome.item,
     outcome.externalApi,
     outcome.status,
-    outcome.error
+    outcome.error,
+    outcome.source
   ).catch(() => {})
   return true
 }

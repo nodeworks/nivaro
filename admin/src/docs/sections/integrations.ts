@@ -51,6 +51,10 @@ GET  /api/erp-submissions/:id       # one push in full (admin): partner, obligat
       text: 'To settle it, check the other system, then open the send on the ERP submissions tab (`/integration-health?tab=erp&collection=…&item=…`) and press Received or Not received. Not received marks the row failed ("Checked by <name>: not received"), so the next press of the move sends again; it is never picked up by an automatic retry. Received marks it accepted and keeps the order number you note as its external reference; the record\'s own fields (order number, status) are not changed, so set them on the record. Only an administrator signed in as themselves can do this (not an API key, a connected app or View-as), and only once the send can no longer answer. Unanswered sends past their time show on the Integrations console as two signals you can alert on like the others: Orders with no answer (critical: an order a blocking move sent) and Sends with no answer (every other send); a row\'s Details links to the send on the ERP tab.'
     },
     {
+      type: 'p',
+      text: "An extension that calls a partner itself uses the same write-ahead and guard through `ctx.integrations` (optional members: an older core has none, and the extension then records after the call as before): `holdSend({collection, item, api, endpointPath})` answers the sentence when the push must wait (`checkFailed` when earlier sends could not be read: an order-creating send should wait then), `beginSend({…, body, timeoutMs, blocking})` writes the `sending` row with answer_by from that call's own timeout, and `finishSend(id, {status, error, response, externalRef})` writes the answer onto it. The admin's ad-hoc `POST /api/erp-submissions` writes ahead and waits the same way (409 UNANSWERED)."
+    },
+    {
       type: 'pre',
       code: `POST /api/erp-submissions/:id/resolve-unanswered   # administrators, own session only
 { "outcome": "received" | "not_received", "order_ref": "SO-1001", "note": "Seen in Acuity" }

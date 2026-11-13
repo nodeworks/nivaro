@@ -54,7 +54,14 @@ function query(_name: string) {
       const hit = matched()
       for (const r of hit) Object.assign(r, patch)
       return hit.length
-    }
+    },
+    insert: (row: Row) => ({
+      returning: async () => {
+        const created = { ...row, id: 900 }
+        store.rows.push(created)
+        return [{ ...created }]
+      }
+    })
   }
   return q
 }
@@ -71,7 +78,8 @@ vi.mock('../../../services/erp-unanswered.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../services/erp-unanswered.js')>()),
   unansweredHold: vi.fn(async () => null)
 }))
-vi.mock('../../../services/chain.js', () => ({
+vi.mock('../../../services/chain.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/chain.js')>()),
   withChainStep: async (_k: string, fn: () => unknown) => fn()
 }))
 vi.mock('../../../services/send-skip-rules.js', () => ({ sendSkipReason: async () => null }))
@@ -318,5 +326,53 @@ describe('POST /:id/retry of a failed send while another send of it has no answe
     expect(res.statusCode).toBe(200)
     expect(order).toEqual(['mark', 'send'])
     expect(markResendStarting).toHaveBeenCalledWith(51, 1, 30_000)
+  })
+})
+
+describe('POST / — an admin’s ad-hoc push', () => {
+  const RECORD = { id: 'r9', title: 'Order 9' }
+  const push = () =>
+    app().inject({
+      method: 'POST',
+      url: '/',
+      headers: ADMIN,
+      payload: { collection: 'orders', item: 'r9', external_api: 5, endpoint_path: '/orders' }
+    })
+
+  it('waits on an unanswered send of the same push: 409, nothing written or sent', async () => {
+    store.rows = [RECORD]
+    const reason =
+      'An earlier send to MDSi is still waiting for its answer (started 40 seconds ago). Wait for it to finish.'
+    vi.mocked(unansweredHold).mockResolvedValueOnce({ reason, send: null, checkFailed: false })
+    const res = await push()
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toEqual({ error: reason, code: 'UNANSWERED' })
+    expect(unansweredHold).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: 'orders',
+        item: 'r9',
+        apiId: 5,
+        endpointPath: '/orders'
+      })
+    )
+    expect(store.rows).toHaveLength(1)
+    expect(callExternalApi).not.toHaveBeenCalled()
+  })
+
+  it('writes the row as `sending` before the call; a call that never answers leaves it so', async () => {
+    store.rows = [RECORD]
+    let seen: Row | undefined
+    vi.mocked(callExternalApi).mockImplementationOnce((() => {
+      seen = { ...store.rows.find((r) => r.id === 900) }
+      return new Promise(() => {})
+    }) as never)
+    void push()
+    await vi.waitFor(() => expect(callExternalApi).toHaveBeenCalled())
+    expect(seen).toMatchObject({ status: 'sending', attempts: 0, collection: 'orders', item: 'r9' })
+    const payload = JSON.parse(String(seen?.payload))
+    expect(payload).toMatchObject({ endpoint_path: '/orders' })
+    // 30 s resend call + 60 s margin.
+    expect(Math.abs(Date.parse(payload.answer_by) - (NOW.getTime() + 90_000))).toBeLessThan(1_000)
+    expect(store.rows.find((r) => r.id === 900)?.status).toBe('sending')
   })
 })

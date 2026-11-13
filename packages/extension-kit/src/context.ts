@@ -578,6 +578,55 @@ export interface ExtensionContext {
     /** Partner rules that turn a failed call into one plain sentence + a Fix it target; they run
      *  before the core rules. Optional: an older core has no such member. */
     registerErrorExplainers?(rules: IntegrationErrorRule[]): void
+    /**
+     * A partner call the extension makes itself: ask first whether it must wait. Non-null =
+     * an earlier send of the same push (same record, API, endpoint) has no answer yet (`stale`
+     * false: still in flight; true: the partner may already have it — an administrator marks it
+     * on the ERP tab), or `checkFailed`: the earlier sends could not be read (an order-creating
+     * send should wait then). `reason` is the sentence for the person. Optional: an older core
+     * has no such member.
+     */
+    holdSend?(opts: {
+      collection: string
+      item: string | number
+      api: string | number
+      endpointPath: string
+      moveLabel?: string | null
+    }): Promise<{ reason: string; stale: boolean | null; checkFailed: boolean } | null>
+    /**
+     * Write the submission row BEFORE the call (status `sending`, answer_by = now + `timeoutMs`
+     * + a margin), so a process that stops mid-call leaves it `sending` rather than nothing.
+     * The request is stored as core stores it (body secrets as placeholders, secret_paths).
+     * Null = not written (unknown API, a database error): record the outcome the old way.
+     * Optional: an older core has no such member.
+     */
+    beginSend?(opts: {
+      collection: string
+      item: string | number
+      api: string | number
+      endpointPath: string
+      body: Record<string, unknown>
+      timeoutMs: number
+      blocking?: boolean
+      requestedBy?: string | null
+      requestedVia?: string | null
+    }): Promise<number | null>
+    /** The answer, written onto the row beginSend wrote. False = not written (it stays
+     *  `sending`). Optional: an older core has no such member. */
+    finishSend?(
+      id: number,
+      outcome: {
+        collection: string
+        item: string | number
+        api: string | number
+        status: 'pending' | 'accepted' | 'failed'
+        error: string | null
+        response?: unknown
+        httpStatus?: number | null
+        externalRef?: string | null
+        source?: string
+      }
+    ): Promise<boolean>
   }
   traffic: {
     /** A Traffic Map lens: node badges + an inspector panel from data `read` returns (#2229). */
