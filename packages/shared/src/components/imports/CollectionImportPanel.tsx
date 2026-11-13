@@ -26,7 +26,14 @@ import {
 } from '../../lib/utils'
 import { type Column, DataTable } from '../DataTable'
 import { Button } from '../ui/button'
-import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '../ui/command'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,6 +47,13 @@ import { SimpleSelect } from '../ui/SimpleSelect'
 import { Sheet, SheetContent } from '../ui/sheet'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
+import {
+  collectionPickerOptions,
+  fieldPickerOptions,
+  type ImportCollectionRow,
+  type ImportFieldRow,
+  type PickOption
+} from './import-picker-options'
 import type { ImportJob, ImportJobStatus } from './types'
 
 const PAGE_SIZE = 25
@@ -197,60 +211,82 @@ function PickCombobox({
   onChange,
   options,
   placeholder = 'Select…',
-  className
+  className,
+  wide = false
 }: {
   value: string
   onChange: (v: string) => void
-  options: { value: string; label: string }[]
+  options: PickOption[]
   placeholder?: string
   className?: string
+  /** A wider list (long collection names in folders). */
+  wide?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const current = options.find((o) => o.value === value)
+  // Options keep their order; each run of the same group gets one heading.
+  const groups: Array<{ name: string | undefined; items: PickOption[] }> = []
+  for (const o of options) {
+    const last = groups[groups.length - 1]
+    if (last && last.name === o.group) last.items.push(o)
+    else groups.push({ name: o.group, items: [o] })
+  }
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type='button'
           className={cn(
-            'flex h-8 w-full items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-left text-[12px] transition-colors hover:border-slate-300 dark:border-border dark:bg-card',
+            'flex h-8 w-full items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-left text-[12.5px] transition-colors hover:border-slate-300 dark:border-border dark:bg-card',
             className
           )}
         >
           <span
             className={cn(
-              'truncate font-mono',
-              current ? 'text-slate-800 dark:text-foreground' : 'text-slate-400'
+              'truncate',
+              current?.value ? 'text-slate-800 dark:text-foreground' : 'text-slate-400'
             )}
+            title={current?.hint}
           >
             {current?.label ?? placeholder}
           </span>
           <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
         </button>
       </PopoverTrigger>
-      <PopoverContent className='w-[240px] p-0' align='start'>
+      <PopoverContent className={cn('p-0', wide ? 'w-[320px]' : 'w-[260px]')} align='start'>
         <Command>
-          <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
-          <CommandList>
+          <CommandInput placeholder='Search by name…' className='h-8 text-[12px]' />
+          <CommandList className='max-h-[340px]'>
             <CommandEmpty>Nothing matches.</CommandEmpty>
-            {options.map((o) => (
-              <CommandItem
-                key={o.value || '__skip__'}
-                value={o.label}
-                onSelect={() => {
-                  onChange(o.value)
-                  setOpen(false)
-                }}
-                className='text-[12px]'
-              >
-                <Check
-                  className={cn(
-                    'h-3.5 w-3.5',
-                    o.value === value ? 'text-nvr-cyan opacity-100' : 'opacity-0'
-                  )}
-                />
-                <span className='font-mono'>{o.label}</span>
-              </CommandItem>
+            {groups.map((g, gi) => (
+              <CommandGroup key={`${g.name ?? ''}-${gi}`} heading={g.name}>
+                {g.items.map((o) => (
+                  <CommandItem
+                    key={o.value || '__skip__'}
+                    value={`${o.label} ${o.hint ?? ''} ${o.value}`}
+                    onSelect={() => {
+                      onChange(o.value)
+                      setOpen(false)
+                    }}
+                    className='items-start text-[12.5px]'
+                  >
+                    <Check
+                      className={cn(
+                        'mt-0.5 h-3.5 w-3.5 shrink-0',
+                        o.value === value ? 'text-nvr-cyan opacity-100' : 'opacity-0'
+                      )}
+                    />
+                    <span className='min-w-0'>
+                      <span className='block truncate'>{o.label}</span>
+                      {o.hint && (
+                        <span className='block truncate font-mono text-[10.5px] text-slate-400 dark:text-slate-500'>
+                          {o.hint}
+                        </span>
+                      )}
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
             ))}
           </CommandList>
         </Command>
@@ -762,12 +798,33 @@ function ImportWizard({
 
   const collectionsQuery = useQuery({
     queryKey: ['import-collections'],
-    queryFn: () => client.request(get<{ data: { collection: string }[] }>('/collections')),
+    queryFn: () => client.request(get<{ data: ImportCollectionRow[] }>('/collections')),
     staleTime: 60_000
   })
-  const collectionOptions = (collectionsQuery.data?.data ?? [])
-    .filter((c) => !c.collection.toLowerCase().startsWith('nivaro_'))
-    .map((c) => ({ value: c.collection, label: c.collection }))
+  // Link tables come from the Collections page's own stats (best effort: without them the
+  // picker still drops system, folder, hidden and singleton rows).
+  const linkStatsQuery = useQuery({
+    queryKey: ['import-collections-links'],
+    queryFn: () =>
+      client
+        .request(get<{ data: Record<string, { link?: boolean }> }>('/collections/overview-stats'))
+        .then(
+          (r) =>
+            new Set(
+              Object.entries(r.data ?? {})
+                .filter(([, v]) => v?.link)
+                .map(([k]) => k)
+            )
+        )
+        .catch(() => new Set<string>()),
+    staleTime: 5 * 60_000,
+    retry: false
+  })
+  const collectionOptions = collectionPickerOptions(
+    collectionsQuery.data?.data ?? [],
+    linkStatsQuery.data,
+    collection
+  )
 
   const metaQuery = useQuery({
     queryKey: ['import-collection-meta', collection],
@@ -775,24 +832,32 @@ function ImportWizard({
       client.request(
         get<{
           data: {
-            fields?: {
-              field: string
-              hidden?: boolean
-              special?: string | null
-              interface?: string | null
-            }[]
+            fields?: ImportFieldRow[]
           }
         }>(`/collections/${collection}`)
       ),
     enabled: !!collection,
     staleTime: 60_000
   })
-  const fields = (metaQuery.data?.data?.fields ?? []).filter((f) => !f.hidden).map((f) => f.field)
+  // Fields a file can fill, by label (hidden, read-only, calculated, automatic and one-to-many
+  // fields stay out); `fields` = their names, for the AI mapper and mapping memory.
+  const fieldOptions = fieldPickerOptions(metaQuery.data?.data?.fields ?? [])
+  const fields = fieldOptions.map((o) => o.value)
+  // A mapping saved before (mapping memory, AI) to a field no longer offered still shows.
+  const fieldOptionsWith = (current: string | undefined) =>
+    current && !fieldOptions.some((o) => o.value === current)
+      ? [
+          ...fieldOptions,
+          ...fieldPickerOptions(metaQuery.data?.data?.fields ?? [], current).filter(
+            (o) => o.value === current
+          )
+        ]
+      : fieldOptions
   // A relation column names the related record(s) by name or id; a link to many takes a
   // comma-separated list ("Cran, HQ Funded").
   const linkHint = (field: string | undefined): string | null => {
     const meta = field ? metaQuery.data?.data?.fields?.find((f) => f.field === field) : undefined
-    const kind = `${meta?.special ?? ''} ${meta?.interface ?? ''}`.toLowerCase()
+    const kind = `${[meta?.special ?? ''].flat().join(' ')} ${meta?.interface ?? ''}`.toLowerCase()
     if (/m2m|many-to-many/.test(kind)) return 'Links several: separate names (or ids) with commas'
     if (/m2o|many-to-one/.test(kind)) return 'Matched by name or id'
     return null
@@ -1084,6 +1149,7 @@ function ImportWizard({
                     onChange={setCollection}
                     options={collectionOptions}
                     placeholder='Choose a collection…'
+                    wide
                   />
                 </div>
                 <p className='text-[11px] text-slate-400'>
@@ -1149,10 +1215,10 @@ function ImportWizard({
                                 value={columnMap[h] ?? ''}
                                 onChange={(v) => setMapping(h, v)}
                                 options={[
-                                  { value: '', label: '— skip this column —' },
-                                  ...fields.map((f) => ({ value: f, label: f }))
+                                  { value: '', label: 'Skip this column' },
+                                  ...fieldOptionsWith(columnMap[h])
                                 ]}
-                                placeholder='— skip this column —'
+                                placeholder='Skip this column'
                               />
                             ) : (
                               <Input
@@ -1247,10 +1313,14 @@ function ImportWizard({
                 value={idField}
                 onChange={setIdField}
                 options={[
-                  { value: '', label: '— always create new records —' },
-                  ...fields.map((f) => ({ value: f, label: f }))
+                  { value: '', label: 'Always create new records' },
+                  // Match on a plain value: the record's id or any field a link list is not.
+                  { value: 'id', label: 'ID', hint: 'id' },
+                  ...fieldOptions.filter(
+                    (o) => o.value !== 'id' && !/links several/.test(o.hint ?? '')
+                  )
                 ]}
-                placeholder='— always create new records —'
+                placeholder='Always create new records'
                 className='w-[260px]'
               />
               <p className='text-[11px] leading-snug text-slate-400'>
