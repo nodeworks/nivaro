@@ -81,6 +81,7 @@ import {
   registerChatMessageAction,
   unregisterChatMessageActions
 } from '../services/chat-message-actions.js'
+import { dropCustomQueryCache } from '../services/custom-query-cache.js'
 import {
   describeExtensionTools,
   registerExtensionTool,
@@ -91,6 +92,11 @@ import {
   registerLayoutDependency
 } from '../services/layout-dependencies.js'
 import { clientGoneSignal, gateServerTiming, withReadGate } from '../services/read-gate.js'
+import {
+  forgetRecordChangeListeners,
+  onRecordChangeNotice,
+  setRecordChangeOwnerEnabled
+} from '../services/record-change-notices.js'
 import { runLongSql } from '../services/run-long.js'
 import { registerSearchScopes } from '../services/search-scopes.js'
 import { registerExtensionSignal, registerExtensionSignalAction } from './signal-registration.js'
@@ -989,6 +995,26 @@ export function registrationMembers(
         } catch (err) {
           console.warn(`[extensions] ${extId}: cache warmer skipped —`, (err as Error).message)
         }
+      },
+      // Cached runs of a custom query go after a write: all of them, or only the
+      // ones a changed parameter value can be in (services/custom-query-cache.ts).
+      dropQuery: async (slug, match) => {
+        note('cache')
+        try {
+          return await dropCustomQueryCache(
+            ctx.app.redis,
+            String(slug),
+            match && typeof match.param === 'string' && Array.isArray(match.values) ? match : null
+          )
+        } catch {
+          return 0
+        }
+      },
+      // The change notices open pages get, in process (services/record-change-notices.ts):
+      // the writes a hook never sees — pipeline moves, announced raw writes — included.
+      onRecordChange: (fn) => {
+        note('cache')
+        return onRecordChangeNotice(fn, extId)
       }
     },
     // Global-search prefix scopes (search program 2026-10-28): defaults under the
@@ -1477,6 +1503,7 @@ async function loadExtension(
     void import('../services/chat-commands.js').then((m) => m.unregisterChatCommands(extId))
     unregisterChatMessageActions(extId)
     unregisterExtensionTools(extId)
+    forgetRecordChangeListeners(extId)
 
     // Capability manifest (#660): the ctx members register() touches are noted
     // as observed capabilities, compared against the declared list in the UI.
@@ -1517,6 +1544,7 @@ async function loadExtension(
     if (!enabled) {
       hooks.setExtensionEnabled(extId, false)
       ctx.app.cron.setExtensionEnabled(extId, false)
+      setRecordChangeOwnerEnabled(extId, false)
     }
 
     if (Array.isArray(ext.settings) && ext.settings.length > 0)
@@ -1926,6 +1954,7 @@ export function setExtensionEnabled(id: string, enabled: boolean): boolean {
   entry.enabled = enabled
   hooks.setExtensionEnabled(id, enabled)
   _app?.cron.setExtensionEnabled(id, enabled)
+  setRecordChangeOwnerEnabled(id, enabled)
 
   const config = readConfig()
   config[id] = enabled
@@ -1944,6 +1973,7 @@ export function removeExtension(id: string): boolean {
   hooks.removeExtensionHooks(id)
   unregisterExtensionLenses(id)
   forgetLayoutDependencies(id)
+  forgetRecordChangeListeners(id)
   void import('../services/chat-commands.js').then((m) => m.unregisterChatCommands(id))
   unregisterChatMessageActions(id)
   unregisterExtensionTools(id)

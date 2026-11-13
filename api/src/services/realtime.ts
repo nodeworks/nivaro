@@ -12,6 +12,7 @@ import {
 import { type EmitResult, journaledEmit } from './event-journal.js'
 import { publishCollectionTouched, publishItemEvent } from './item-events.js'
 import { noteCollectionWrite, readCachesActive } from './read-caches.js'
+import { emitRecordChangeNotice, recordChangeListenerCount } from './record-change-notices.js'
 import { noteRealtimeEmit } from './request-trace.js'
 import { publishSseEvent } from './sse-hub.js'
 import { noteCollectionChanged, tempCacheActive } from './traffic-actions/temp-cache.js'
@@ -78,6 +79,9 @@ export function broadcastCollectionUpdate(
     ...(source ? { source } : {}),
     ...(extra?.bulk != null ? { bulk: extra.bulk } : {})
   }
+  // In-process listeners (an extension's cache over these records) hear the same notice,
+  // whatever the collection's realtime switch says: a cache goes stale either way.
+  if (recordChangeListenerCount() > 0) emitRecordChangeNotice({ ...payload })
   // #2490 — the collection's realtime switch: every write live (default), one batched id list
   // per window, or nothing live at all (lists on it poll).
   const deliver = (mode: LiveMode): Promise<EmitResult | null> => {

@@ -135,6 +135,33 @@ export interface CacheWarmContext {
 
 export type CacheWarmFn = (ctx: CacheWarmContext) => Promise<unknown> | unknown
 
+/** Which cached runs of a custom query `ctx.cache.dropQuery` takes. */
+export interface CacheDropMatch {
+  /** The query parameter that says which records a run covers (e.g. `projects`). */
+  param: string
+  /** The values whose rows changed. A run bound to a list naming one of them goes,
+   *  and so does every run this parameter did not narrow (it spans every value). */
+  values: Array<string | number>
+}
+
+/** A change the API told open pages about (`ctx.cache.onRecordChange`): ids and
+ *  field NAMES, never values. */
+export interface RecordChangeNotice {
+  collection: string
+  /** The record id, or '*' for "records in this collection changed". */
+  item: string | number
+  /** Set for a write; absent for a record aspect. */
+  action?: 'create' | 'update' | 'delete'
+  /** Field names, or `$`-named aspects: `$state` (a pipeline moved), `$addendums`,
+   *  `$comments`, `$tasks`, `$integrations`, `$lock`. */
+  changed_fields?: string[]
+  /** 'raw' = written outside the items service (a procedure, an import, a rollup
+   *  recalc — no hook ran); 'import' = a staged import writing through it. */
+  source?: 'raw' | 'import'
+  /** With item '*': how many records the write touched. */
+  bulk?: number
+}
+
 /** One thing wrong with a payload template render, anchored to its field-map row. */
 export type PayloadTemplateProblem = {
   field_id: string
@@ -403,6 +430,22 @@ export interface ExtensionContext {
    *  (`ctx.sql.runLong(sql, { timeoutMs })`). Not run in cloud mode. */
   cache: {
     registerWarm(name: string, fn: CacheWarmFn, opts?: { budgetMs?: number }): void
+    /** Drop cached runs of a custom query after a write: every run of `slug`, or
+     *  with `match` only the runs one of the changed values can be in — the runs
+     *  bound to a list naming it, plus every run `match.param` did not narrow. A
+     *  write to one record then leaves every other record's cached run in place.
+     *  Resolves how many entries went; never throws. In cloud mode a drop reaches
+     *  every tenant's entries of the slug. Optional: older APIs do not offer it. */
+    dropQuery?(slug: string, match?: CacheDropMatch): Promise<number>
+    /** Hear every change the API tells open pages about, in the process that made
+     *  it and once per change: an items-service write, a record aspect (`$state`
+     *  when a pipeline moves, `$addendums`…), an announced raw write. For caches
+     *  the extension keeps over records — a hook on the items service never sees
+     *  the last two. A notice carries no row: a deleted record cannot be read
+     *  back from it (the delete hook has `previousData`). A listener that throws
+     *  never reaches the writer; it stops with the extension. Returns an
+     *  unsubscribe. Optional: older APIs do not offer it. */
+    onRecordChange?(fn: (notice: RecordChangeNotice) => unknown): () => void
   }
   /** Global-search prefix scopes (`wf: canton` searches workflows only): a map of
    *  prefix → collection, e.g. `{ wf: 'workflows' }`. These are defaults — the

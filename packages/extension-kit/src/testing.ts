@@ -789,7 +789,10 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     tasks: { register: (d) => registered.tasks.push(d) },
     tuning: { registerObserver: (d) => registered.tuningObservers.push(d) },
     cache: {
-      registerWarm: (name, fn, opts) => registered.cacheWarmers.push({ name, fn, opts })
+      registerWarm: (name, fn, opts) => registered.cacheWarmers.push({ name, fn, opts }),
+      // Nothing is cached and nothing changes in the harness.
+      dropQuery: async () => 0,
+      onRecordChange: () => () => {}
     },
     layouts: { dependsOn: () => {} },
     search: { registerScopes: () => {} },
