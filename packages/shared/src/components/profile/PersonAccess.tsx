@@ -15,11 +15,12 @@ import {
   Trash2,
   Undo2
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post, put } from '../../lib/commands'
-import { cn, formatRelative } from '../../lib/utils'
+import { toastError } from '../../lib/error-toast'
+import { cn, formatNumber, formatRelative } from '../../lib/utils'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { ConfirmButton, EmptyLine, SectionCard } from './primitives'
 import { errorText, type PersonProfile, useInvalidatePerson } from './types'
@@ -230,23 +231,16 @@ interface ScopesInfo {
 
 type Opt = { id: string | number; label: string }
 
-function ValuePills({
-  dimension,
-  selected,
-  accent,
-  onToggle
-}: {
-  dimension: ScopesInfo['dimensions'][number]
-  selected: Array<string | number>
-  accent: 'cyan' | 'amber'
-  onToggle: (values: Array<string | number>) => void
-}) {
+type ScopeDimensionInfo = ScopesInfo['dimensions'][number]
+
+const rowsToOpts = (rows: Array<Record<string, unknown>>, lf: string): Opt[] =>
+  rows.map((row) => ({ id: row.id as string | number, label: String(row[lf] ?? row.id) }))
+
+/** The first 200 values of a dimension (the pill wall), shared by every reader. */
+function useScopeOptions(dimension: ScopeDimensionInfo): Opt[] {
   const client = useNivaroClient()
   const lf = dimension.display_field ?? 'name'
-  const [q, setQ] = useState('')
-  const rowsToOpts = (rows: Array<Record<string, unknown>>): Opt[] =>
-    rows.map((row) => ({ id: row.id as string | number, label: String(row[lf] ?? row.id) }))
-  const { data: options = [] } = useQuery<Opt[]>({
+  const { data = [] } = useQuery<Opt[]>({
     queryKey: ['nvr-scope-options', dimension.name],
     queryFn: () =>
       client
@@ -257,8 +251,67 @@ function ValuePills({
             ...(dimension.options_sort ? { sort: dimension.options_sort } : {})
           })
         )
-        .then((r) => rowsToOpts(r.data ?? []))
+        .then((r) => rowsToOpts(r.data ?? [], lf))
   })
+  return data
+}
+
+/** id → label for `values`: the options list, any extra known rows, then a
+ *  by-id read for the rest. */
+function useScopeLabelMap(
+  dimension: ScopeDimensionInfo,
+  values: Array<string | number>,
+  extra: Opt[] = []
+): Map<string, string> {
+  const client = useNivaroClient()
+  const lf = dimension.display_field ?? 'name'
+  const options = useScopeOptions(dimension)
+  const known = new Map(options.map((o) => [String(o.id), o.label]))
+  for (const m of extra) known.set(String(m.id), m.label)
+  const missing = values.filter((v) => !known.has(String(v)))
+  const { data: extraLabels = [] } = useQuery<Opt[]>({
+    queryKey: ['nvr-scope-selected-labels', dimension.name, missing.map(String).sort().join(',')],
+    queryFn: () =>
+      client
+        .request<{ data: Array<Record<string, unknown>> }>(
+          get(`/items/${dimension.target_collection}`, {
+            fields: `id,${lf}`,
+            limit: 100,
+            filter: JSON.stringify({ id: { _in: missing } })
+          })
+        )
+        .then((r) => rowsToOpts(r.data ?? [], lf)),
+    enabled: missing.length > 0
+  })
+  for (const e of extraLabels) known.set(String(e.id), e.label)
+  return known
+}
+
+function ValuePills({
+  dimension,
+  selected,
+  accent,
+  disabled,
+  staged,
+  removing,
+  onToggle
+}: {
+  dimension: ScopeDimensionInfo
+  selected: Array<string | number>
+  accent: 'cyan' | 'amber'
+  disabled?: boolean
+  /** Values picked but not applied yet: drawn dashed until Apply. */
+  staged?: Array<string | number>
+  /** Applied values the draft drops: dashed and struck through until Apply. */
+  removing?: Array<string | number>
+  onToggle: (values: Array<string | number>) => void
+}) {
+  const client = useNivaroClient()
+  const lf = dimension.display_field ?? 'name'
+  const [q, setQ] = useState('')
+  const stagedSet = new Set((staged ?? []).map(String))
+  const removingSet = new Set((removing ?? []).map(String))
+  const options = useScopeOptions(dimension)
   // Big value spaces get a search-to-add picker instead of a pill wall.
   const pickerMode = options.length > 24
   const { data: matches = [], isFetching: searching } = useQuery<Opt[]>({
@@ -273,28 +326,11 @@ function ValuePills({
             ...(dimension.options_sort ? { sort: dimension.options_sort } : {})
           })
         )
-        .then((r) => rowsToOpts(r.data ?? [])),
+        .then((r) => rowsToOpts(r.data ?? [], lf)),
     enabled: pickerMode && q.trim().length > 0,
     placeholderData: (prev) => prev
   })
-  const known = new Map(options.map((o) => [String(o.id), o.label]))
-  for (const m of matches) known.set(String(m.id), m.label)
-  const missing = selected.filter((v) => !known.has(String(v)))
-  const { data: extraLabels = [] } = useQuery<Opt[]>({
-    queryKey: ['nvr-scope-selected-labels', dimension.name, missing.map(String).sort().join(',')],
-    queryFn: () =>
-      client
-        .request<{ data: Array<Record<string, unknown>> }>(
-          get(`/items/${dimension.target_collection}`, {
-            fields: `id,${lf}`,
-            limit: 100,
-            filter: JSON.stringify({ id: { _in: missing } })
-          })
-        )
-        .then((r) => rowsToOpts(r.data ?? [])),
-    enabled: missing.length > 0
-  })
-  for (const e of extraLabels) known.set(String(e.id), e.label)
+  const known = useScopeLabelMap(dimension, selected, matches)
 
   const sel = new Set(selected.map(String))
   const toggle = (id: string | number) =>
@@ -316,12 +352,17 @@ function ValuePills({
               key={String(o.id)}
               type='button'
               aria-pressed={on}
+              disabled={disabled}
               onClick={() => toggle(o.id)}
               className={cn(
-                'rounded-full border px-2.5 py-0.5 text-[11.5px] transition-colors',
+                // No colour transition: a press shows its new state at once.
+                'rounded-full border px-2.5 py-0.5 text-[11.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:cursor-wait',
                 on
                   ? onCls
-                  : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border dark:text-slate-400'
+                  : removingSet.has(String(o.id))
+                    ? 'border-dashed border-amber-400 text-amber-800 line-through decoration-amber-500/70 dark:border-amber-500/60 dark:text-amber-300'
+                    : 'border-slate-200 text-slate-600 hover:border-slate-300 dark:border-border dark:text-slate-400 dark:hover:border-slate-500',
+                on && stagedSet.has(String(o.id)) && 'border-dashed'
               )}
             >
               {o.label}
@@ -340,12 +381,14 @@ function ValuePills({
               key={String(v)}
               className={cn(
                 'inline-flex items-center gap-1 rounded-full border py-0.5 pl-2.5 pr-1 text-[11.5px]',
-                onCls
+                onCls,
+                stagedSet.has(String(v)) && 'border-dashed'
               )}
             >
               {known.get(String(v)) ?? String(v)}
               <button
                 type='button'
+                disabled={disabled}
                 onClick={() => toggle(v)}
                 aria-label={`Remove ${known.get(String(v)) ?? v}`}
                 className='rounded-full px-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
@@ -359,6 +402,7 @@ function ValuePills({
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
+        disabled={disabled}
         placeholder={`Search ${dimension.label.toLowerCase()} to add…`}
         className='h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-card'
       />
@@ -370,6 +414,7 @@ function ValuePills({
               <button
                 key={String(m.id)}
                 type='button'
+                disabled={disabled}
                 onClick={() => toggle(m.id)}
                 className={cn(
                   'flex w-full items-center justify-between px-2.5 py-1.5 text-left text-[12px] hover:bg-muted',
@@ -394,8 +439,10 @@ function ValuePills({
   )
 }
 
-type Impact = Array<{
+type ImpactRow = {
   collection: string
+  /** Display name (newer servers); the table name in words otherwise. */
+  label?: string
   total: number
   current: number
   proposed: number
@@ -403,51 +450,199 @@ type Impact = Array<{
   lost?: number
   gained_sample?: Array<{ id: string; label: string }>
   lost_sample?: Array<{ id: string; label: string }>
-}>
+}
+type ImpactAnswer = {
+  impact: ImpactRow[]
+  /** Collections the server's time budget cut (newer servers). */
+  partial?: Array<{ collection: string; label: string }>
+}
+type ScopeValues = Array<string | number>
+type SaveVars = { dimension: string; mode: 'default' | 'restrict'; values: ScopeValues }
 
-export function UserScopesCard({ userId }: { userId: string }) {
+const sameSet = (a: ScopeValues, b: ScopeValues) => {
+  if (a.length !== b.length) return false
+  const s = new Set(a.map(String))
+  return b.every((v) => s.has(String(v)))
+}
+const valuesKey = (dimension: string, values: ScopeValues) =>
+  `${dimension}:${values.map(String).sort().join(',')}`
+const words = (s: string) => s.replace(/_/g, ' ').replace(/^\w/, (m) => m.toUpperCase())
+const plural = (noun: string) => (/s$/i.test(noun) ? noun : `${noun}s`)
+/** "East", "East and West", "East, West and North" — every name. */
+function listAll(labels: string[]): string {
+  if (labels.length <= 1) return labels[0] ?? ''
+  return `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`
+}
+
+type RowStatus = 'saving' | 'saved' | 'failed'
+
+export function UserScopesCard({
+  userId,
+  previewDelayMs = 400
+}: {
+  userId: string
+  /** How long a burst of restriction clicks settles before the preview is asked for. */
+  previewDelayMs?: number
+}) {
   const client = useNivaroClient()
   const qc = useQueryClient()
+  const scopesKey = useMemo(() => ['nvr-user-scopes', userId], [userId])
   const { data: scopes } = useQuery<ScopesInfo>({
-    queryKey: ['nvr-user-scopes', userId],
+    queryKey: scopesKey,
     queryFn: () =>
       client.request<{ data: ScopesInfo }>(get(`/user-scopes/${userId}`)).then((r) => r.data)
   })
+
+  // ── saving: optimistic, serial, rolled back on failure ─────────────────────
+  // What the pills show while a save is on its way (dimension:mode → values):
+  // the server's answer and the refetch then agree with it, so nothing jumps.
+  const [optimistic, setOptimistic] = useState<Record<string, ScopeValues>>({})
+  // Per slot (dimension:mode). "Saved" fades after a moment; "Not saved"
+  // stays, with Retry, until the next change to that slot.
+  const [status, setStatus] = useState<Record<string, RowStatus>>({})
+  const failedVars = useRef<Record<string, SaveVars>>({})
+  const inFlight = useRef<Record<string, number>>({})
+  const savedTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  useEffect(() => {
+    const timers = savedTimers.current
+    return () => {
+      for (const t of Object.values(timers)) clearTimeout(t)
+    }
+  }, [])
+  const setRowStatus = (slot: string, next: RowStatus | null) => {
+    clearTimeout(savedTimers.current[slot])
+    setStatus((s) => {
+      const { [slot]: _drop, ...rest } = s
+      return next ? { ...rest, [slot]: next } : rest
+    })
+    if (next === 'saved')
+      savedTimers.current[slot] = setTimeout(() => setRowStatus(slot, null), 2400)
+  }
+  const writeCache = (b: SaveVars) =>
+    qc.setQueryData<ScopesInfo>(scopesKey, (old) => {
+      if (!old) return old
+      const field = b.mode === 'restrict' ? 'restricted' : 'defaults'
+      return { ...old, [field]: { ...old[field], [b.dimension]: b.values } }
+    })
   const save = useMutation({
-    mutationFn: (body: {
-      dimension: string
-      mode: 'default' | 'restrict'
-      values: Array<string | number>
-    }) => client.request(put(`/user-scopes/${userId}`, body)),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['nvr-user-scopes', userId] })
+    // One person's scope saves go out one after another, in click order.
+    scope: { id: `nvr-user-scopes:${userId}` },
+    mutationFn: (b: SaveVars) => client.request(put(`/user-scopes/${userId}`, b)),
+    onMutate: (b) => {
+      const slot = `${b.dimension}:${b.mode}`
+      const field = b.mode === 'restrict' ? 'restricted' : 'defaults'
+      const before = qc.getQueryData<ScopesInfo>(scopesKey)?.[field]?.[b.dimension] ?? []
+      inFlight.current[slot] = (inFlight.current[slot] ?? 0) + 1
+      delete failedVars.current[slot]
+      setOptimistic((o) => ({ ...o, [slot]: b.values }))
+      setRowStatus(slot, 'saving')
+      void qc.cancelQueries({ queryKey: scopesKey })
+      writeCache(b)
+      return { before }
+    },
+    onSuccess: (_r, b) => writeCache(b),
+    onError: (e, b, ctx) => {
+      const slot = `${b.dimension}:${b.mode}`
+      const field = b.mode === 'restrict' ? 'restricted' : 'defaults'
+      // Put back what was there — unless a later click already changed it.
+      const now = qc.getQueryData<ScopesInfo>(scopesKey)?.[field]?.[b.dimension] ?? []
+      if (ctx && sameSet(now, b.values)) writeCache({ ...b, values: ctx.before })
+      setOptimistic((o) => {
+        if (!o[slot] || !sameSet(o[slot], b.values)) return o
+        const { [slot]: _drop, ...rest } = o
+        return rest
+      })
+      failedVars.current[slot] = b
+      toastError(
+        e,
+        b.mode === 'restrict' ? 'Could not apply the restriction' : 'Could not save the default',
+        { retry: () => save.mutate(b) }
+      )
+    },
+    onSettled: (_r, e, b) => {
+      const slot = `${b.dimension}:${b.mode}`
+      inFlight.current[slot] = Math.max(0, (inFlight.current[slot] ?? 1) - 1)
+      if (!e)
+        setOptimistic((o) => {
+          if (!o[slot] || !sameSet(o[slot], b.values)) return o
+          const { [slot]: _drop, ...rest } = o
+          return rest
+        })
+      if (inFlight.current[slot] === 0) setRowStatus(slot, e ? 'failed' : 'saved')
+      void qc.invalidateQueries({ queryKey: scopesKey })
       void qc.invalidateQueries({ queryKey: ['nvr-person-profile', userId] })
       // When the admin edits their OWN row, the filter seeding and the
       // self-serve defaults card read these keys.
       void qc.invalidateQueries({ queryKey: ['nvr-my-scopes'] })
       void qc.invalidateQueries({ queryKey: ['nvr-profile-scopes'] })
-    },
-    onError: (e) => toast.error(errorText(e, 'Could not save scopes'))
-  })
-  // Restriction edits are the scariest change in the system — a wrong value
-  // is a quiet total denial. They stage through a blast-radius preview
-  // instead of saving on click. Defaults stay instant — they enforce nothing.
-  const [pending, setPending] = useState<{
-    dimension: string
-    values: Array<string | number>
-    loading: boolean
-    impact: Impact | null
-  } | null>(null)
-  const stageRestrict = async (dimension: string, values: Array<string | number>) => {
-    setPending({ dimension, values, loading: true, impact: null })
-    try {
-      const r = await client.request<{ data: { impact: Impact } }>(
-        post(`/user-scopes/${userId}/impact`, { dimension, values })
-      )
-      setPending({ dimension, values, loading: false, impact: r.data.impact })
-    } catch {
-      setPending({ dimension, values, loading: false, impact: null })
     }
+  })
+  const shown = (dimension: string, mode: 'default' | 'restrict'): ScopeValues =>
+    optimistic[`${dimension}:${mode}`] ??
+    (mode === 'restrict' ? scopes?.restricted[dimension] : scopes?.defaults[dimension]) ??
+    []
+
+  // ── restriction drafts: staged behind a blast-radius preview ───────────────
+  // Restriction edits are the scariest change in the system — a wrong value is
+  // a quiet total denial. Clicks build a draft; one preview is asked for once
+  // the clicks settle; an answer for an older draft is dropped.
+  const [draft, setDraft] = useState<{ dimension: string; values: ScopeValues } | null>(null)
+  const [result, setResult] = useState<{
+    key: string
+    answer: ImpactAnswer | null
+    error: unknown
+  } | null>(null)
+  const [retryTick, setRetryTick] = useState(0)
+  const lastAsked = useRef(0)
+  const draftKey = draft ? valuesKey(draft.dimension, draft.values) : null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: draftKey carries the draft; retryTick asks again after a failure
+  useEffect(() => {
+    if (!draft || !draftKey) return
+    const asked = ++lastAsked.current
+    const t = setTimeout(() => {
+      client
+        .request<{ data: ImpactAnswer }>(
+          post(`/user-scopes/${userId}/impact`, {
+            dimension: draft.dimension,
+            values: draft.values
+          })
+        )
+        .then(
+          (r) => {
+            if (asked === lastAsked.current)
+              setResult({ key: draftKey, answer: r.data, error: null })
+          },
+          (error: unknown) => {
+            if (asked === lastAsked.current) setResult({ key: draftKey, answer: null, error })
+          }
+        )
+    }, previewDelayMs)
+    return () => clearTimeout(t)
+  }, [draftKey, retryTick, client, userId, previewDelayMs])
+  const stageRestrict = (dimension: string, values: ScopeValues) => {
+    if (sameSet(values, shown(dimension, 'restrict'))) {
+      lastAsked.current++ // drop any answer still on its way
+      setDraft(null)
+      setResult(null)
+      return
+    }
+    if (draft && draft.dimension !== dimension) setResult(null)
+    setDraft({ dimension, values })
+  }
+  const cancelDraft = () => {
+    lastAsked.current++
+    setDraft(null)
+    setResult(null)
+  }
+  const applyDraft = () => {
+    if (!draft) return
+    save.mutate({ dimension: draft.dimension, mode: 'restrict', values: draft.values })
+    cancelDraft()
+  }
+
+  const retrySlot = (slot: string) => {
+    const b = failedVars.current[slot]
+    if (b) save.mutate(b)
   }
 
   if (!scopes || scopes.dimensions.length === 0) return null
@@ -458,129 +653,412 @@ export function UserScopesCard({ userId }: { userId: string }) {
       hint='Defaults pre-fill their filters; restrictions limit what they can see'
       testId='scopes'
     >
-      <div className='space-y-4'>
-        {scopes.dimensions.map((d) => (
-          <div key={d.name}>
-            <p className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
-              {d.label}
-            </p>
-            <div className='mt-1.5 space-y-2'>
-              <div>
-                <p className='mb-1 text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>
-                  Defaults
-                </p>
-                <ValuePills
-                  dimension={d}
-                  selected={scopes.defaults[d.name] ?? []}
-                  accent='cyan'
-                  onToggle={(values) => save.mutate({ dimension: d.name, mode: 'default', values })}
-                />
-              </div>
-              <div>
-                <p className='mb-1 flex items-center gap-1 text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>
-                  <ShieldAlert className='h-3 w-3 text-amber-500' /> Restricted to
-                  <span className='normal-case tracking-normal'>
-                    (empty = unrestricted; enforced on every read)
-                  </span>
-                </p>
-                <ValuePills
-                  dimension={d}
-                  selected={
-                    pending?.dimension === d.name
-                      ? pending.values
-                      : (scopes.restricted[d.name] ?? [])
-                  }
-                  accent='amber'
-                  onToggle={(values) => void stageRestrict(d.name, values)}
-                />
-                {pending?.dimension === d.name && (
-                  <div className='mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-400/10 dark:text-amber-200'>
-                    {pending.loading ? (
-                      <p>Computing impact…</p>
+      <div className='space-y-5'>
+        {scopes.dimensions.map((d) => {
+          const restrictSaving = optimistic[`${d.name}:restrict`] != null
+          const isDraft = draft?.dimension === d.name
+          return (
+            <div key={d.name}>
+              <p className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+                {d.label}
+              </p>
+              <div className='mt-1.5 space-y-2.5'>
+                <div data-scope-defaults={d.name}>
+                  <p className='mb-1 flex min-h-4 items-center gap-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                    Defaults
+                    <span className='font-normal text-slate-500 dark:text-slate-400'>
+                      pre-filled in their filters
+                    </span>
+                    <RowStatusChip
+                      slot={`${d.name}:default`}
+                      status={status[`${d.name}:default`]}
+                      onRetry={retrySlot}
+                    />
+                  </p>
+                  <ValuePills
+                    dimension={d}
+                    selected={shown(d.name, 'default')}
+                    accent='cyan'
+                    onToggle={(values) =>
+                      save.mutate({ dimension: d.name, mode: 'default', values })
+                    }
+                  />
+                </div>
+                <div data-scope-restrict={d.name}>
+                  <p className='mb-1 flex min-h-4 items-center gap-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                    <ShieldAlert className='h-3 w-3 text-amber-500' aria-hidden />
+                    Restricted to
+                    {shown(d.name, 'restrict').length === 0 && !isDraft ? (
+                      <span className='font-medium text-slate-700 dark:text-slate-200'>
+                        none — sees every {d.label.toLowerCase()}
+                      </span>
                     ) : (
-                      <>
-                        {(pending.impact ?? []).map((i) => (
-                          <div key={i.collection} data-scope-impact-row={i.collection}>
-                            <p>
-                              <span className='font-mono'>{i.collection}</span>:{' '}
-                              {i.current.toLocaleString()} → {i.proposed.toLocaleString()} of{' '}
-                              {i.total.toLocaleString()} visible
-                              {i.proposed === 0 && (
-                                <span className='ml-1 font-semibold text-red-600 dark:text-red-400'>
-                                  (sees nothing)
-                                </span>
-                              )}
-                            </p>
-                            {((i.gained ?? 0) > 0 || (i.lost ?? 0) > 0) && (
-                              <div className='ml-3 mt-0.5 space-y-0.5 text-[11px]'>
-                                {(i.gained ?? 0) > 0 && (
-                                  <p data-scope-impact-gained={i.gained}>
-                                    <span className='font-semibold text-emerald-700 dark:text-emerald-300'>
-                                      +{(i.gained ?? 0).toLocaleString()} gained
-                                    </span>
-                                    {(i.gained_sample?.length ?? 0) > 0 && (
-                                      <span className='opacity-80'>
-                                        {' '}
-                                        · {i.gained_sample!.map((r) => r.label).join(', ')}
-                                        {(i.gained ?? 0) > i.gained_sample!.length ? ' …' : ''}
-                                      </span>
-                                    )}
-                                  </p>
-                                )}
-                                {(i.lost ?? 0) > 0 && (
-                                  <p data-scope-impact-lost={i.lost}>
-                                    <span className='font-semibold text-red-700 dark:text-red-300'>
-                                      −{(i.lost ?? 0).toLocaleString()} lost
-                                    </span>
-                                    {(i.lost_sample?.length ?? 0) > 0 && (
-                                      <span className='opacity-80'>
-                                        {' '}
-                                        · {i.lost_sample!.map((r) => r.label).join(', ')}
-                                        {(i.lost ?? 0) > i.lost_sample!.length ? ' …' : ''}
-                                      </span>
-                                    )}
-                                  </p>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                        {(pending.impact?.length ?? 0) === 0 && (
-                          <p>Impact preview unavailable — apply with care.</p>
-                        )}
-                        <div className='mt-1.5 flex gap-2'>
-                          <button
-                            type='button'
-                            className='rounded bg-amber-600 px-2 py-0.5 text-[11px] font-medium text-white'
-                            onClick={() => {
-                              save.mutate({
-                                dimension: d.name,
-                                mode: 'restrict',
-                                values: pending.values
-                              })
-                              setPending(null)
-                            }}
-                          >
-                            Apply restriction
-                          </button>
-                          <button
-                            type='button'
-                            className='text-[11px] text-slate-500 underline decoration-dotted underline-offset-2'
-                            onClick={() => setPending(null)}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </>
+                      <span className='font-normal text-slate-500 dark:text-slate-400'>
+                        enforced on every read
+                      </span>
                     )}
-                  </div>
-                )}
+                    <RowStatusChip
+                      slot={`${d.name}:restrict`}
+                      status={status[`${d.name}:restrict`]}
+                      onRetry={retrySlot}
+                    />
+                  </p>
+                  <ValuePills
+                    dimension={d}
+                    selected={isDraft && draft ? draft.values : shown(d.name, 'restrict')}
+                    accent='amber'
+                    disabled={restrictSaving}
+                    staged={
+                      isDraft && draft
+                        ? draft.values.filter(
+                            (v) => !shown(d.name, 'restrict').some((x) => String(x) === String(v))
+                          )
+                        : undefined
+                    }
+                    removing={
+                      isDraft && draft
+                        ? shown(d.name, 'restrict').filter(
+                            (v) => !draft.values.some((x) => String(x) === String(v))
+                          )
+                        : undefined
+                    }
+                    onToggle={(values) => stageRestrict(d.name, values)}
+                  />
+                  {isDraft && draft && (
+                    <RestrictPreview
+                      dimension={d}
+                      saved={shown(d.name, 'restrict')}
+                      values={draft.values}
+                      result={result?.key === draftKey ? result : null}
+                      stale={result && result.key !== draftKey ? result.answer : null}
+                      onApply={applyDraft}
+                      onCancel={cancelDraft}
+                      onRetry={() => setRetryTick((n) => n + 1)}
+                    />
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </SectionCard>
+  )
+}
+
+function RowStatusChip({
+  slot,
+  status,
+  onRetry
+}: {
+  slot: string
+  status?: RowStatus
+  onRetry: (slot: string) => void
+}) {
+  return (
+    <span
+      data-scope-status={slot}
+      aria-live='polite'
+      className={cn(
+        'inline-flex items-center gap-1 font-normal',
+        status === 'saved' && 'text-emerald-700 dark:text-emerald-400',
+        status === 'failed' && 'font-medium text-red-700 dark:text-red-400',
+        status === 'saving' && 'text-slate-600 dark:text-slate-300'
+      )}
+    >
+      {status === 'saving' && (
+        <>
+          <Loader2 className='h-3 w-3 animate-spin motion-reduce:animate-none' aria-hidden />
+          Saving…
+        </>
+      )}
+      {status === 'saved' && (
+        <>
+          <Check className='h-3 w-3' aria-hidden />
+          Saved
+        </>
+      )}
+      {status === 'failed' && (
+        <>
+          Not saved
+          <button
+            type='button'
+            onClick={() => onRetry(slot)}
+            className='rounded font-medium underline decoration-dotted underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40'
+          >
+            Retry
+          </button>
+        </>
+      )}
+    </span>
+  )
+}
+
+function RestrictPreview({
+  dimension,
+  saved,
+  values,
+  result,
+  stale,
+  onApply,
+  onCancel,
+  onRetry
+}: {
+  dimension: ScopeDimensionInfo
+  saved: ScopeValues
+  values: ScopeValues
+  /** The answer for exactly this draft (null while it is worked out). */
+  result: { answer: ImpactAnswer | null; error: unknown } | null
+  /** The last answer, for an earlier draft — shown dimmed while the new one comes. */
+  stale: ImpactAnswer | null
+  onApply: () => void
+  onCancel: () => void
+  onRetry: () => void
+}) {
+  const labels = useScopeLabelMap(dimension, [...saved, ...values])
+  const nameOf = (v: string | number) => labels.get(String(v)) ?? `#${v}`
+  const noun = dimension.label.toLowerCase()
+  const savedSet = new Set(saved.map(String))
+  const nextSet = new Set(values.map(String))
+  const added = values.filter((v) => !savedSet.has(String(v))).map(nameOf)
+  const removed = saved.filter((v) => !nextSet.has(String(v))).map(nameOf)
+  const answer = result?.answer ?? stale
+  const state: 'loading' | 'updating' | 'ready' | 'error' = result
+    ? result.error
+      ? 'error'
+      : 'ready'
+    : stale
+      ? 'updating'
+      : 'loading'
+  const rows = answer?.impact ?? []
+  const blind = rows.filter((r) => r.proposed === 0 && r.total > 0)
+  const lifting = values.length === 0
+  const nameList = (names: string[], max = 5) =>
+    names.length <= max
+      ? listAll(names)
+      : `${names.slice(0, max - 1).join(', ')} and ${names.length - (max - 1)} more`
+
+  const headline = lifting
+    ? `Remove the ${noun} restriction`
+    : saved.length === 0
+      ? `Limit them to ${nameList(values.map(nameOf))}`
+      : [
+          added.length > 0 ? `Also let them see ${nameList(added)}` : null,
+          removed.length > 0
+            ? `${added.length > 0 ? 'stop' : 'Stop'} them seeing ${nameList(removed)}`
+            : null
+        ]
+          .filter(Boolean)
+          .join('; ')
+  const consequence = lifting
+    ? `They will see records in every ${noun}.`
+    : `After this they only see records in ${nameList(values.map(nameOf))}.`
+  const dimmed = state === 'updating' ? 'opacity-40' : ''
+  const blindNames = blind.map((r) => r.label ?? words(r.collection))
+  const loss =
+    blindNames.length <= 2
+      ? `they lose all ${listAll(blindNames)}`
+      : `they lose ${blindNames.length} record types`
+
+  return (
+    <div
+      data-scope-preview={state}
+      className='mt-2 rounded-md border border-amber-300 bg-amber-50 text-[12px] text-amber-950 dark:border-amber-500/30 dark:bg-amber-400/[0.07] dark:text-amber-50'
+    >
+      <div className='flex items-start gap-3 px-3 pt-2.5'>
+        <div className='min-w-0 flex-1'>
+          <p className='font-semibold'>{headline}</p>
+          <p className='mt-0.5 text-amber-900 dark:text-amber-200'>{consequence}</p>
+        </div>
+        {(state === 'loading' || state === 'updating') && (
+          <span className='mt-0.5 inline-flex shrink-0 items-center gap-1 text-[11px] text-amber-900 dark:text-amber-200'>
+            <Loader2 className='h-3 w-3 animate-spin motion-reduce:animate-none' aria-hidden />
+            {state === 'loading' ? 'Counting records…' : 'Recounting — showing the last count'}
+          </span>
+        )}
+      </div>
+
+      {blind.length > 0 && (
+        <p
+          className={cn(
+            'mx-3 mt-2 flex items-start gap-1.5 font-semibold text-red-700 dark:text-red-300',
+            dimmed
+          )}
+          data-scope-blind
+        >
+          <ShieldAlert className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
+          They would see nothing in {listAll(blind.map((r) => r.label ?? words(r.collection)))}.
+        </p>
+      )}
+
+      {state === 'error' ? (
+        <div className='mx-3 mt-2 text-amber-900 dark:text-amber-200'>
+          <p>
+            Couldn’t count what changes. Count again, or check the {plural(noun)} above before
+            applying.
+          </p>
+        </div>
+      ) : rows.length > 0 ? (
+        <ul
+          className={cn(
+            'mx-3 mt-2 w-fit max-w-[calc(100%-1.5rem)] border-t border-amber-200 dark:border-amber-500/20',
+            dimmed
+          )}
+          aria-busy={state === 'updating'}
+        >
+          {rows.map((r) => (
+            <ImpactLine key={r.collection} row={r} />
+          ))}
+        </ul>
+      ) : state === 'loading' ? (
+        <div className='mx-3 mt-2 space-y-1.5' aria-hidden>
+          {[0, 1, 2].map((i) => (
+            <div key={i} className='h-4 max-w-md rounded bg-amber-200/60 dark:bg-amber-400/10' />
+          ))}
+        </div>
+      ) : (
+        <p className='mx-3 mt-2'>
+          No records route to {plural(noun)}, so nothing they see changes.
+        </p>
+      )}
+      {(answer?.partial?.length ?? 0) > 0 && (
+        <p className='mx-3 mt-1.5 text-[11px] text-amber-900 dark:text-amber-200'>
+          Not counted in time: {answer?.partial?.map((p) => p.label).join(', ')}.
+        </p>
+      )}
+
+      <div className='flex flex-wrap items-center gap-2 px-3 pb-2.5 pt-2.5'>
+        {state === 'error' ? (
+          <>
+            <button
+              type='button'
+              onClick={onRetry}
+              className='inline-flex h-7 items-center rounded-md bg-amber-700 px-3 text-[11.5px] font-medium text-[#fff] hover:bg-amber-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50 focus-visible:ring-offset-1 dark:bg-amber-400 dark:text-[#1c1003] dark:hover:bg-amber-300'
+            >
+              Count again
+            </button>
+            <button
+              type='button'
+              data-scope-apply
+              onClick={onApply}
+              className='inline-flex h-7 items-center rounded-md border border-amber-400 px-3 text-[11.5px] font-medium text-amber-900 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40 dark:border-amber-500/50 dark:text-amber-200 dark:hover:bg-amber-400/10'
+            >
+              Apply without counts
+            </button>
+          </>
+        ) : blind.length > 0 && state === 'ready' ? (
+          <span data-scope-apply-danger>
+            <ConfirmButton
+              onConfirm={onApply}
+              confirmLabel={`Press again — ${loss}`}
+              className='inline-flex h-7 items-center rounded-md bg-red-600 px-3 text-[11.5px] font-medium text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/50 focus-visible:ring-offset-1 dark:bg-red-700 dark:hover:bg-red-600'
+              armedClassName='bg-red-700 dark:bg-red-800'
+            >
+              Apply — {loss}
+            </ConfirmButton>
+          </span>
+        ) : (
+          <button
+            type='button'
+            data-scope-apply
+            disabled={!result}
+            onClick={onApply}
+            className='inline-flex h-7 items-center rounded-md bg-amber-700 px-3 text-[11.5px] font-medium text-[#fff] hover:bg-amber-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:bg-amber-700/45 dark:bg-amber-400 dark:text-[#1c1003] dark:hover:bg-amber-300 dark:disabled:bg-amber-400/40'
+          >
+            {lifting ? 'Remove restriction' : 'Apply restriction'}
+          </button>
+        )}
+        <button
+          type='button'
+          onClick={onCancel}
+          className='inline-flex h-7 items-center rounded-md px-2 text-[11.5px] text-amber-900 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40 dark:text-amber-200 dark:hover:bg-amber-400/10'
+        >
+          Cancel
+        </button>
+        {!result && (
+          <span className='text-[11px] text-amber-900 dark:text-amber-200'>
+            Apply opens once the count is in.
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** A sample record's name; a bare number reads as an id. */
+function SampleLabels({ items }: { items: Array<{ id: string; label: string }> }) {
+  return (
+    <>
+      {items.map((s, i) => (
+        <span key={s.id}>
+          {i > 0 && ', '}
+          {/^\d+$/.test(s.label) ? (
+            <span className='font-mono text-[10.5px]'>#{s.label}</span>
+          ) : (
+            s.label
+          )}
+        </span>
+      ))}
+    </>
+  )
+}
+
+function ImpactLine({ row: r }: { row: ImpactRow }) {
+  const name = r.label ?? words(r.collection)
+  const gained = r.gained ?? 0
+  const lost = r.lost ?? 0
+  const delta = r.proposed - r.current
+  const more = (n: number, shown: number) =>
+    n > shown ? ` and ${formatNumber(n - shown)} more` : ''
+  return (
+    <li
+      className='grid grid-cols-[minmax(9rem,16rem)_9.5rem_5.5rem] items-baseline justify-start gap-x-4 border-b border-amber-200 py-1.5 dark:border-amber-500/20'
+      data-scope-impact-row={r.collection}
+    >
+      <span className='min-w-0 truncate font-medium'>{name}</span>
+      <span className='text-right tabular-nums'>
+        {r.proposed === 0 && r.total > 0 ? (
+          <span className='font-semibold text-red-700 dark:text-red-300'>none</span>
+        ) : (
+          formatNumber(r.proposed)
+        )}
+        <span className='text-amber-900 dark:text-amber-200'> of {formatNumber(r.total)}</span>
+      </span>
+      <span
+        className={cn(
+          'text-right text-[11.5px] tabular-nums',
+          delta > 0
+            ? 'font-semibold text-emerald-700 dark:text-emerald-400'
+            : delta < 0
+              ? 'font-semibold text-red-700 dark:text-red-400'
+              : 'text-amber-900 dark:text-amber-200'
+        )}
+      >
+        {delta > 0
+          ? `+${formatNumber(delta)}`
+          : delta < 0
+            ? `−${formatNumber(-delta)}`
+            : 'no change'}
+      </span>
+      {gained > 0 && (r.gained_sample?.length ?? 0) > 0 && (
+        <p
+          className='col-span-3 mt-0.5 truncate text-[11px] text-amber-900 dark:text-amber-200'
+          data-scope-impact-gained={gained}
+        >
+          Newly visible: <SampleLabels items={r.gained_sample ?? []} />
+          {more(gained, r.gained_sample?.length ?? 0)}
+        </p>
+      )}
+      {lost > 0 && (r.lost_sample?.length ?? 0) > 0 && (
+        <p
+          className='col-span-3 mt-0.5 truncate text-[11px] text-amber-900 dark:text-amber-200'
+          data-scope-impact-lost={lost}
+        >
+          No longer visible: <SampleLabels items={r.lost_sample ?? []} />
+          {more(lost, r.lost_sample?.length ?? 0)}
+        </p>
+      )}
+    </li>
   )
 }
 
