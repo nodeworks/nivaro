@@ -20169,7 +20169,7 @@ PATCH  /api/realtime/auto-reload {auto_reload_idle?, idle_seconds?}</code></pre>
           <!-- /SYNC:deploys-versions -->
         </div>
 
-        <div class="doc-section" id="s-instance-overrides" data-toc='[{"id":"instance-overrides","label":"Per-Instance Settings Overrides"}]'>
+        <div class="doc-section" id="s-instance-overrides" data-toc='[{"id":"instance-overrides","label":"Per-Instance Settings Overrides"},{"id":"environment-notice","label":"Environment notice"}]'>
           <!-- SYNC:instance-overrides -->
           <h1 class="doc-h1" id="instance-overrides">Per-Instance Settings Overrides</h1>
           <p class="doc-p">When several environments share one database — a local machine and a staging server pointed at the same instance, for example — they also share the one settings row, which makes "use a local mail server in dev but keep the real relay on staging" impossible. Settings → This Instance solves that: each environment can overlay its own values on top of the shared settings, visible only to itself.</p>
@@ -20184,6 +20184,9 @@ PATCH  /api/realtime/auto-reload {auto_reload_idle?, idle_seconds?}</code></pre>
           </ul>
           <div class="doc-note doc-warn">The other Settings tabs (Email, SMS) keep showing and editing the shared row — deliberately, since that row serves every environment. So the Email tab can display SMTP values this particular instance is not actually using; check This Instance to see what is overlaid here.</div>
           <div class="doc-note">Both the read (GET /api/settings/instance-overrides) and the save (PUT) are admin-only, and every save is audit-logged with the instance key and the keys it set.</div>
+          <h3 class="doc-h3" id="environment-notice">Environment notice</h3>
+          <p class="doc-p">The Environment notice card on This Instance puts a hazard-tape band across the top of the sign-in pages (admin and portal) and a tape frame around them, so nobody mistakes staging for production. Automatic shows it on every environment except production; Always show and Never show decide it for this environment only. Label (default: the environment name), sentence and a "Go to production" link (https, default NIVARO_PRODUCTION_URL) are optional; a switch also marks the signed-in admin app with a striped top edge and the label in the tab title. The card previews the band as you type.</p>
+          <div class="doc-note">Stored under the environment_notice key of this instance's override row (GET/PATCH /api/environment-notice, admin, audit-logged). Sign-in pages read it from the public GET /api/app-info (environment_notice). ENVIRONMENT_NOTICE=on|off on the server wins over the setting. Never shown in cloud mode.</div>
           <!-- /SYNC:instance-overrides -->
         </div>
 
