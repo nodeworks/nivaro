@@ -82,7 +82,7 @@ describe('a failed move’s toast when another system refused it', () => {
   it('without a name from the caller, the title still reads as a sentence', () => {
     expect(partnerMoveFailure(refused('HTTP 400: "The project is not valid"'), null)).toEqual({
       title: 'The move did not go through',
-      description: 'Submit to Warehouse: submission failed: The project is not valid'
+      description: 'Submission failed: The project is not valid'
     })
   })
 

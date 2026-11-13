@@ -137,3 +137,20 @@ export function partnerOutcome(reason: string): string | null {
 export function partnerFailureText(reason: string): string | null {
   return partnerWords(reason) ?? partnerOutcome(reason)
 }
+
+/** What the API stores and answers for a move whose own call to another system failed:
+ *  "<move>: submission failed — <what happened>". */
+const PARTNER_CALL = /(?:^|: )submission failed\s+[—–-]\s/i
+
+/**
+ * The reading of a text of that one shape, without the move's name in front of it; null for
+ * any other text. A fault of this app's own (a 500 whose text names a socket error or a
+ * status) is not the other system's and is never read as one.
+ */
+export function partnerCallText(text: string): string | null {
+  const shape = PARTNER_CALL.exec(text)
+  if (!shape) return null
+  // From "submission failed" on: the move's own name in front of it is the caller's to say.
+  const rest = text.slice(shape.index + (shape[0].startsWith(': ') ? 2 : 0))
+  return partnerFailureText(rest.charAt(0).toUpperCase() + rest.slice(1))
+}

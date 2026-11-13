@@ -1,8 +1,5 @@
-import { partnerFailureText, withoutMoveLabel } from './partner-failure'
+import { partnerCallText } from './partner-failure'
 import { serverErrorText } from './safe-error'
-
-/** What the API answers for a move whose own call to another system failed. */
-const PARTNER_CALL = /(?:^|: )submission failed\s+[—–-]\s/i
 
 /**
  * The toast for a move another system refused, pressed the ordinary way: the move by name,
@@ -19,10 +16,9 @@ export function partnerMoveFailure(
 ): { title: string; description: string } | null {
   const said = serverErrorText(err)
   // Only a move's own call to another system, which the API answers as
-  // "<move>: submission failed — <what happened>". A fault of this app's own (a 500 whose
-  // text names a socket error or a status) is not the other system's: it keeps its toast.
-  if (!said || !PARTNER_CALL.test(said)) return null
-  const description = partnerFailureText(withoutMoveLabel(said, label))
+  // "<move>: submission failed — <what happened>" (partnerCallText). A fault of this app's
+  // own (a 500 whose text names a socket error or a status) keeps its usual toast.
+  const description = said ? partnerCallText(said) : null
   if (!description) return null
   return { title: `${label?.trim() || 'The move'} did not go through`, description }
 }

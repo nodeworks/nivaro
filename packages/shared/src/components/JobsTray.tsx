@@ -14,6 +14,7 @@ import { createPortal } from 'react-dom'
 import { useNavigation, useOptionalNivaroClient } from '../context'
 import { clock } from '../lib/background-runs'
 import { get, post } from '../lib/commands'
+import { jobFailureText } from '../lib/job-failure-text'
 import {
   applyJobUpdate,
   dismissFinishedJobs,
@@ -159,7 +160,8 @@ function JobRow({
           : undefined
       )
     : failed
-      ? job.error
+      ? // Read, never shown as stored: a job's error is written for the log (lib/job-failure-text).
+        jobFailureText(job.error)
       : done
         ? job.outcome
         : job.kind === 'background-run'
