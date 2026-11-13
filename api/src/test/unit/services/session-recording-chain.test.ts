@@ -7,6 +7,7 @@ import {
   chainSummary,
   isContinuationPart,
   type PartRow,
+  planBatches,
   rollsOver,
   stripChainKeys
 } from '../../../services/session-recording-chain.js'
@@ -116,6 +117,67 @@ describe('chainReadOrder', () => {
 
   it('live follow reads only newer recorder seqs, across parts', () => {
     expect(chainReadOrder([H, P2, P3], chunks, { afterSeq: 4 })).toEqual([c(P2, 5), c(P3, 6)])
+  })
+})
+
+describe('planBatches', () => {
+  const ref = (recording: string, seq: number, size = 100) => ({ recording, seq, size })
+
+  it('reads nothing for an empty plan', () => {
+    expect(planBatches([])).toEqual([])
+  })
+
+  it('fills a batch up to the size limit, then starts the next', () => {
+    const plan = [ref(H, 0, 400), ref(H, 1, 400), ref(H, 2, 400), ref(H, 3, 100)]
+    expect(planBatches(plan, { maxChars: 1000 })).toEqual([
+      { recording: H, fromSeq: 0, toSeq: 1, rows: 2 },
+      { recording: H, fromSeq: 2, toSeq: 3, rows: 2 }
+    ])
+  })
+
+  it('gives a chunk bigger than the limit a batch of its own', () => {
+    const plan = [ref(H, 0, 10), ref(H, 1, 5000), ref(H, 2, 10), ref(H, 3, 10)]
+    expect(planBatches(plan, { maxChars: 1000 })).toEqual([
+      { recording: H, fromSeq: 0, toSeq: 0, rows: 1 },
+      { recording: H, fromSeq: 1, toSeq: 1, rows: 1 },
+      { recording: H, fromSeq: 2, toSeq: 3, rows: 2 }
+    ])
+  })
+
+  it('caps the rows of a batch', () => {
+    const plan = [0, 1, 2, 3, 4].map((seq) => ref(H, seq, 1))
+    expect(planBatches(plan, { maxRows: 2 })).toEqual([
+      { recording: H, fromSeq: 0, toSeq: 1, rows: 2 },
+      { recording: H, fromSeq: 2, toSeq: 3, rows: 2 },
+      { recording: H, fromSeq: 4, toSeq: 4, rows: 1 }
+    ])
+  })
+
+  it('never mixes two parts in one batch, and keeps a first part’s copied opening', () => {
+    const plan = [ref(P2, CARRIED_SEQ), ref(P2, 4), ref(P2, 5), ref(P3, 6), ref(P3, 7)]
+    expect(planBatches(plan)).toEqual([
+      { recording: P2, fromSeq: CARRIED_SEQ, toSeq: 5, rows: 3 },
+      { recording: P3, fromSeq: 6, toSeq: 7, rows: 2 }
+    ])
+  })
+
+  it('never splits two rows that share a seq: a batch is read as a seq range', () => {
+    // A retried upload that raced its first copy left the same seq twice.
+    const plan = [ref(H, 0, 600), ref(H, 1, 600), ref(H, 1, 600), ref(H, 2, 600)]
+    expect(planBatches(plan, { maxChars: 1000 })).toEqual([
+      { recording: H, fromSeq: 0, toSeq: 0, rows: 1 },
+      { recording: H, fromSeq: 1, toSeq: 1, rows: 2 },
+      { recording: H, fromSeq: 2, toSeq: 2, rows: 1 }
+    ])
+    expect(planBatches(plan, { maxRows: 2 })).toEqual([
+      { recording: H, fromSeq: 0, toSeq: 1, rows: 3 },
+      { recording: H, fromSeq: 2, toSeq: 2, rows: 1 }
+    ])
+  })
+
+  it('reads everything in one go when the database gave no sizes', () => {
+    const plan = [0, 1, 2].map((seq) => ref(H, seq, 0))
+    expect(planBatches(plan)).toEqual([{ recording: H, fromSeq: 0, toSeq: 2, rows: 3 }])
   })
 })
 

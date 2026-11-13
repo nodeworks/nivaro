@@ -1,4 +1,4 @@
-import { gzipSync } from 'node:zlib'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
@@ -135,10 +135,10 @@ import {
   moveRecordingCold,
   packReplayChunks,
   purgeColdObjects,
+  replayObjectLines,
   resetReplayStorageState,
   runReplayTiering,
   setReplayObjectStore,
-  unpackReplayChunks,
   validateColdAfterDays
 } from '../../../services/session-replay-storage.js'
 
@@ -162,6 +162,12 @@ const store = {
 const NOW = new Date('2026-10-10T12:00:00Z')
 const DAY = 86_400_000
 const gz = (json: string) => `gz:${gzipSync(Buffer.from(json)).toString('base64')}`
+/** A stored object's chunks: inflate, then read it line by line. */
+const unpack = (body: Buffer) =>
+  [...replayObjectLines(gunzipSync(body))].map((l) => ({
+    seq: l.seq,
+    json: l.json.toString('utf8')
+  }))
 
 function recording(id: string, ageDays: number, over: Row = {}): Row {
   const started = new Date(NOW.getTime() - ageDays * DAY)
@@ -208,11 +214,51 @@ describe('object format', () => {
       { seq: 0, events: gz('[{"type":4,"data":{"href":"x\\ny"}}]') },
       { seq: 3, events: '[{"type":3,"timestamp":5}]' }
     ])
-    expect(unpackReplayChunks(body)).toEqual([
+    expect(unpack(body)).toEqual([
       { seq: 0, json: '[{"type":4,"data":{"href":"x\\ny"}}]' },
       { seq: 3, json: '[{"type":3,"timestamp":5}]' }
     ])
-    expect(() => unpackReplayChunks(gzipSync(Buffer.from('nope\n')))).toThrow()
+    expect(() => unpack(gzipSync(Buffer.from('nope\n')))).toThrow()
+  })
+
+  it('reads the object line by line as bytes: every chunk, its seq, its text untouched', () => {
+    const first = '[{"type":4,"data":{"href":"x\\ny","t":"naïve — 日本語 — 😀\\ttab"}}]'
+    const body = packReplayChunks('R1', [
+      { seq: 0, events: gz(first) },
+      { seq: -1, events: gz('[{"type":2}]') },
+      { seq: 12, events: '[{"type":3,"timestamp":5}]' }
+    ])
+    const lines = [...replayObjectLines(gunzipSync(body))]
+    for (const l of lines) expect(Buffer.isBuffer(l.json)).toBe(true)
+    expect(lines.map((l) => ({ seq: l.seq, json: l.json.toString('utf8') }))).toEqual([
+      { seq: 0, json: first },
+      { seq: -1, json: '[{"type":2}]' },
+      { seq: 12, json: '[{"type":3,"timestamp":5}]' }
+    ])
+  })
+
+  it('refuses an object without its header at once, and skips lines that are not chunks', () => {
+    // At once: a reload checks the object before it deletes any row.
+    expect(() => replayObjectLines(Buffer.from('nope\n0\t[1]\n'))).toThrow(
+      'Not a session replay object'
+    )
+    expect(() => replayObjectLines(Buffer.from(''))).toThrow('Not a session replay object')
+    const raw = Buffer.from(
+      [
+        '#nivaro-replay v1 R1',
+        '0\t[1]',
+        '',
+        'no tab here',
+        'x\t[2]',
+        '\t[3]',
+        '1.5\t[4]',
+        '7\t[5]'
+      ].join('\n')
+    )
+    expect([...replayObjectLines(raw)].map((l) => [l.seq, l.json.toString()])).toEqual([
+      [0, '[1]'],
+      [7, '[5]']
+    ])
   })
 
   it('keys objects by start month', () => {
@@ -306,6 +352,91 @@ describe('opening a cold recording', () => {
     expect(String(back[0].events).startsWith('gz:')).toBe(true)
     const later = new Date((rec('R1').rehydrated_at as Date).getTime() + 60_000)
     expect(await ensureRecordingHot('R1', { now: later })).toEqual({ state: 'hot' })
+  })
+
+  // A recording from before gzip storage can hold a chunk that was cut short. While it was
+  // plain text every reader skipped it. Moved to storage it rides along as a line, and a
+  // reload stores every line as a gzip chunk, which the events answer joins as stored,
+  // without parsing: that one chunk would make the whole recording unreadable.
+  it('leaves out a chunk that is not a JSON array, so the rest still plays', async () => {
+    h.tables.nivaro_session_recordings.push(recording('R1', 5))
+    h.tables.nivaro_session_events.push(
+      chunk('R1', 0, [{ type: 4, n: 0 }], true),
+      { recording: 'R1', seq: 1, events: '[{"type":3,', created_at: NOW },
+      { recording: 'R1', seq: 2, events: '{"not":"an array"}', created_at: NOW },
+      chunk('R1', 3, [{ type: 3, n: 3 }], true)
+    )
+    await moveRecordingCold('R1', NOW)
+    expect(await ensureRecordingHot('R1', { now: NOW })).toEqual({ state: 'loading' })
+    await vi.waitFor(() => expect(rec('R1').rehydrated_at).toBeTruthy())
+    const back = events('R1').sort((a, b) => (a.seq as number) - (b.seq as number))
+    expect(back.map((r) => r.seq)).toEqual([0, 3])
+    for (const r of back) {
+      const text = gunzipSync(Buffer.from(String(r.events).slice(3), 'base64')).toString('utf8')
+      expect(Array.isArray(JSON.parse(text))).toBe(true)
+    }
+  })
+
+  it('puts back chunks that read as exactly the events that were moved', async () => {
+    const first = [
+      { type: 4, data: { href: 'https://app.test/a\nb', title: 'naïve — 日本語 — 😀' } }
+    ]
+    const second = [{ type: 3, timestamp: 5, data: { text: 'tab\there "quoted" \\ \u2028' } }]
+    h.tables.nivaro_session_recordings.push(recording('R1', 5))
+    h.tables.nivaro_session_events.push(
+      chunk('R1', 0, first),
+      chunk('R1', 1, second, true),
+      chunk('R1', -1, [{ type: 2 }])
+    )
+    await moveRecordingCold('R1', NOW)
+    expect(await ensureRecordingHot('R1', { wait: true, now: NOW })).toEqual({ state: 'hot' })
+    const back = events('R1').sort((a, b) => (a.seq as number) - (b.seq as number))
+    const decode = (stored: unknown) =>
+      JSON.parse(gunzipSync(Buffer.from(String(stored).slice(3), 'base64')).toString('utf8'))
+    expect(back.map((r) => r.seq)).toEqual([-1, 0, 1])
+    for (const r of back) expect(String(r.events).startsWith('gz:')).toBe(true)
+    expect(decode(back[0].events)).toEqual([{ type: 2 }])
+    expect(decode(back[1].events)).toEqual(first)
+    expect(decode(back[2].events)).toEqual(second)
+  })
+
+  it('reloads many chunks in batches, all of them, in order', async () => {
+    h.tables.nivaro_session_recordings.push(recording('R1', 5))
+    for (let seq = 0; seq < 60; seq++) {
+      h.tables.nivaro_session_events.push(chunk('R1', seq, [{ type: 3, n: seq }]))
+    }
+    await moveRecordingCold('R1', NOW)
+    expect(await ensureRecordingHot('R1', { wait: true, now: NOW })).toEqual({ state: 'hot' })
+    expect(events('R1').map((r) => r.seq)).toEqual(Array.from({ length: 60 }, (_, i) => i))
+  })
+
+  it('lets other work run while it reloads: nothing is inflated or packed on the event loop', async () => {
+    h.tables.nivaro_session_recordings.push(recording('R1', 5))
+    for (let seq = 0; seq < 40; seq++) {
+      h.tables.nivaro_session_events.push(chunk('R1', seq, [{ type: 3, n: seq }]))
+    }
+    await moveRecordingCold('R1', NOW)
+    // Something already waiting on the event loop gets its turn before the reload is done.
+    let otherWorkRanAt: number | null = null
+    setImmediate(() => {
+      otherWorkRanAt = events('R1').length
+    })
+    expect(await ensureRecordingHot('R1', { wait: true, now: NOW })).toEqual({ state: 'hot' })
+    expect(events('R1')).toHaveLength(40)
+    expect(otherWorkRanAt).not.toBeNull()
+    expect(otherWorkRanAt).toBeLessThan(40)
+  })
+
+  it('touches no row when the stored object is not a replay object', async () => {
+    await coldRecording()
+    const key = rec('R1').cold_key as string
+    objects.set(key, gzipSync(Buffer.from('something else entirely\n0\t[1]\n')))
+    // A leftover row from an earlier reload must survive a reload that cannot be read.
+    h.tables.nivaro_session_events.push(chunk('R1', 9, [{ type: 3 }]))
+    expect(await ensureRecordingHot('R1', { wait: true, now: NOW })).toMatchObject({
+      state: 'failed'
+    })
+    expect(events('R1').map((r) => r.seq)).toEqual([9])
   })
 
   it('waits for the reload when asked (the Playwright export)', async () => {

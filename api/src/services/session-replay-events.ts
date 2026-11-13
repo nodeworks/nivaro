@@ -3,9 +3,9 @@
  * masked at recording time), and the window cut an export (#1375) or a spec
  * (#1393) is made from.
  */
-import { gunzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
 import { chainChunks, chainParts, ensureChainHot } from './session-recording-chain.js'
+import { parsedChunks } from './session-replay-chunks.js'
 import { ensureRecordingHot } from './session-replay-storage.js'
 
 export type RrwebEvent = { type: number; timestamp: number; data?: Record<string, unknown> }
@@ -13,14 +13,6 @@ export type RrwebEvent = { type: number; timestamp: number; data?: Record<string
 /** rrweb EventType values this file cares about. */
 const FULL_SNAPSHOT = 2
 const META = 4
-
-/** Chunks written before gzip storage are plain JSON — both shapes read. */
-export function decodeChunk(stored: string): string {
-  if (stored.startsWith('gz:')) {
-    return gunzipSync(Buffer.from(stored.slice(3), 'base64')).toString('utf8')
-  }
-  return stored
-}
 
 /**
  * Every event of a recording in order; a corrupt chunk is skipped (a partial
@@ -40,17 +32,15 @@ export async function loadRecordingEvents(recordingId: string): Promise<RrwebEve
           .orderBy('seq', 'asc')
           .select('events')) as Array<{ events: string }>)
   const events: RrwebEvent[] = []
-  for (const c of chunks) {
-    try {
-      const parsed = JSON.parse(decodeChunk(c.events)) as unknown
-      if (!Array.isArray(parsed)) continue
-      for (const e of parsed) {
-        if (e && typeof e === 'object' && typeof (e as RrwebEvent).timestamp === 'number') {
-          events.push(e as RrwebEvent)
-        }
+  // An export or a spec is cut from the events themselves, so they are parsed — one chunk
+  // at a time, inflated off the event loop, the loop free in between
+  // (./session-replay-chunks). A corrupt chunk is skipped there.
+  for await (const parsed of parsedChunks(chunks)) {
+    if (!Array.isArray(parsed)) continue
+    for (const e of parsed) {
+      if (e && typeof e === 'object' && typeof (e as RrwebEvent).timestamp === 'number') {
+        events.push(e as RrwebEvent)
       }
-    } catch {
-      /* skip corrupt chunk */
     }
   }
   return events

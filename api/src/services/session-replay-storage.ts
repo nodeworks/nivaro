@@ -19,8 +19,20 @@
  * a `#nivaro-replay v1 <id>` header. JSON.stringify output never contains a
  * raw newline or tab, so lines split without parsing the (large) events.
  */
-import { gunzipSync, gzipSync } from 'node:zlib'
+import { promisify } from 'node:util'
+import { gunzip, gunzipSync, gzip, gzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
+import { yieldToEventLoop } from './session-replay-chunks.js'
+
+// Off the event loop (zlib's thread pool): what a reload inflates and re-packs is megabytes.
+// With zlib's default 16 KB output buffer that is a trip to the pool and back per 16 KB (a
+// 100 MB object took seconds); these sizes make it about as quick as the synchronous calls.
+const gunzipAsync = promisify(gunzip)
+const gzipAsync = promisify(gzip)
+const OBJECT_INFLATE_BUFFER = 1024 * 1024
+const CHUNK_PACK_BUFFER = 256 * 1024
+const NEWLINE = 0x0a
+const TAB = 0x09
 
 export const DEFAULT_COLD_AFTER_DAYS = 3
 /** How long a rehydrated recording's chunks stay in the table. */
@@ -80,10 +92,6 @@ export async function coldAfterDays(): Promise<number> {
 
 // ── Chunk codec (same storage shape as routes/session-recordings.ts) ─────────
 
-function encodeChunk(json: string): string {
-  return `gz:${gzipSync(Buffer.from(json, 'utf8')).toString('base64')}`
-}
-
 function decodeChunk(stored: string): string {
   if (stored.startsWith('gz:')) {
     return gunzipSync(Buffer.from(stored.slice(3), 'base64')).toString('utf8')
@@ -112,23 +120,36 @@ export function packReplayChunks(
   return gzipSync(Buffer.concat(parts))
 }
 
-export function unpackReplayChunks(body: Buffer): Array<{ seq: number; json: string }> {
-  const text = gunzipSync(body).toString('utf8')
-  const out: Array<{ seq: number; json: string }> = []
-  let first = true
-  for (const line of text.split('\n')) {
-    if (first) {
-      first = false
-      if (!line.startsWith(HEADER)) throw new Error('Not a session replay object')
-      continue
-    }
-    if (!line) continue
-    const tab = line.indexOf('\t')
-    const seq = Number(line.slice(0, tab))
-    if (tab < 1 || !Number.isInteger(seq)) continue
-    out.push({ seq, json: line.slice(tab + 1) })
+/**
+ * The lines of an INFLATED object as bytes: each chunk's seq and its JSON, without turning
+ * the object into one string. A big recording's object inflates to 75–100 MB; decoding and
+ * splitting that as text held the process for a quarter of a second when a cold recording
+ * was opened, and re-packing its chunks held it again, batch after batch (2026-11-12).
+ *
+ * Splitting bytes gives the same lines as splitting the text (a newline or a tab byte never
+ * sits inside a UTF-8 character). Lines that are not `<seq>\t<json>` are skipped. The header
+ * is checked at once, before the caller touches any row.
+ */
+export function replayObjectLines(raw: Buffer): Generator<{ seq: number; json: Buffer }> {
+  const header = Buffer.from(HEADER, 'utf8')
+  if (raw.length < header.length || !raw.subarray(0, header.length).equals(header)) {
+    throw new Error('Not a session replay object')
   }
-  return out
+  const firstBreak = raw.indexOf(NEWLINE)
+  return (function* () {
+    let pos = firstBreak < 0 ? raw.length : firstBreak + 1
+    while (pos < raw.length) {
+      const brk = raw.indexOf(NEWLINE, pos)
+      const end = brk < 0 ? raw.length : brk
+      const line = raw.subarray(pos, end)
+      pos = end + 1
+      if (line.length === 0) continue
+      const tab = line.indexOf(TAB)
+      const seq = Number(line.subarray(0, Math.max(tab, 0)).toString('latin1'))
+      if (tab < 1 || !Number.isInteger(seq)) continue
+      yield { seq, json: line.subarray(tab + 1) }
+    }
+  })()
 }
 
 export function coldKeyFor(recordingId: string, startedAt: Date | string | null): string {
@@ -256,21 +277,47 @@ export function resetReplayStorageState(): void {
   failures.clear()
 }
 
+/** Whether these bytes are the JSON text of an array (what every stored chunk must be). */
+function isJsonArray(json: Buffer): boolean {
+  try {
+    return Array.isArray(JSON.parse(json.toString('utf8')))
+  } catch {
+    return false
+  }
+}
+
 async function rehydrate(recordingId: string, key: string): Promise<void> {
   try {
-    const chunks = unpackReplayChunks(await objectStore.get(key))
+    // Opening a cold recording must not hold the process (the 202 poll and every other
+    // request share it): the object is inflated and each chunk re-packed on zlib's thread
+    // pool, and the object is read as bytes, a line at a time. The stored rows are the same
+    // `gz:` chunks as before.
+    const lines = replayObjectLines(
+      await gunzipAsync(await objectStore.get(key), { chunkSize: OBJECT_INFLATE_BUFFER })
+    )
     await db('nivaro_session_events').where({ recording: recordingId }).del()
     const now = new Date()
-    for (let i = 0; i < chunks.length; i += INSERT_BATCH) {
-      await db('nivaro_session_events').insert(
-        chunks.slice(i, i + INSERT_BATCH).map((c) => ({
-          recording: recordingId,
-          seq: c.seq,
-          events: encodeChunk(c.json),
-          created_at: now
-        }))
-      )
+    let batch: Array<{ recording: string; seq: number; events: string; created_at: Date }> = []
+    for (const line of lines) {
+      // Only a JSON array goes back. A recording from before gzip storage can carry a
+      // chunk that was cut short: readers skipped it while it was plain text, but here it
+      // would come back as a gzip chunk, and the events answer joins gzip chunks as stored
+      // without parsing them — one such chunk would make the whole recording unreadable.
+      // One chunk's parse at a time, the event loop free in between.
+      const keep = isJsonArray(line.json)
+      await yieldToEventLoop()
+      if (!keep) continue
+      batch.push({
+        recording: recordingId,
+        seq: line.seq,
+        events: `gz:${(await gzipAsync(line.json, { chunkSize: CHUNK_PACK_BUFFER })).toString('base64')}`,
+        created_at: now
+      })
+      if (batch.length < INSERT_BATCH) continue
+      await db('nivaro_session_events').insert(batch)
+      batch = []
     }
+    if (batch.length > 0) await db('nivaro_session_events').insert(batch)
     await db('nivaro_session_recordings')
       .where({ id: recordingId })
       .update({ rehydrated_at: new Date(), rehydrate_started_at: null })

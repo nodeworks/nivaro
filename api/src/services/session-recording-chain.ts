@@ -29,7 +29,9 @@
  */
 import { randomUUID } from 'node:crypto'
 import { gunzipSync, gzipSync } from 'node:zlib'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { parsedChunks } from './session-replay-chunks.js'
 import { ensureRecordingHot, type HotState } from './session-replay-storage.js'
 
 const RECORDINGS = 'nivaro_session_recordings'
@@ -308,19 +310,143 @@ export async function chainChunks(
   return chainReadOrder(ids, rows, opts)
 }
 
+// ── Reading a recording a batch at a time (the events answer) ───────────────
+
+/** One stored chunk a read will cover: where it is and about how big, never its text. */
+export interface ChunkRef {
+  recording: string
+  seq: number
+  /** Stored size in characters (0 when the database did not say). */
+  size: number
+}
+
+/** Chunks of one recording read together: every row from `fromSeq` to `toSeq`. */
+export interface ChunkBatch {
+  recording: string
+  fromSeq: number
+  toSeq: number
+  /** How many rows the plan saw in that range. */
+  rows: number
+}
+
+/** About 1M stored characters a batch: a few MB in memory, ~15 round trips for a full part. */
+export const CHUNK_BATCH_CHARS = 1_000_000
+export const CHUNK_BATCH_ROWS = 200
+
+/**
+ * The chunks a read covers, in read order, without their text: which rows and how big each
+ * is. One recording reads its own chunks in seq order (its copied opening included: it is
+ * read alone); a chain reads as chainReadOrder says. `afterSeq` is live follow.
+ */
+export async function chunkPlan(
+  partIds: string[],
+  opts: { afterSeq?: number } = {}
+): Promise<ChunkRef[]> {
+  if (partIds.length === 0) return []
+  const incremental = typeof opts.afterSeq === 'number' && Number.isFinite(opts.afterSeq)
+  const single = partIds.length === 1
+  // The size comes from the row's own length field: the chunk text is not read for it.
+  const size = db.raw(isMssql(db) ? 'DATALENGTH(events) / 2 AS size' : 'LENGTH(events) AS size')
+  const rows = (await db(EVENTS)
+    .modify((qb) => {
+      if (single) qb.where({ recording: partIds[0] })
+      else qb.whereIn('recording', partIds)
+      if (incremental) qb.where('seq', '>', opts.afterSeq as number)
+    })
+    .orderBy('seq', 'asc')
+    .select('recording', 'seq', size)) as Array<{
+    recording?: string
+    seq: number
+    size?: number | string | null
+  }>
+  const refs = rows.map((r) => ({
+    // One recording is named as the caller named it: the database compares ids without
+    // regard to letter case, a JavaScript Map does not.
+    recording: single ? partIds[0] : String(r.recording),
+    seq: Number(r.seq),
+    size: Number(r.size) || 0
+  }))
+  return single ? refs : chainReadOrder(partIds, refs, opts)
+}
+
+/**
+ * The plan cut into batches: runs of one recording's chunks, in order, of at most
+ * `maxChars` stored characters (a single bigger chunk is a batch of its own) and `maxRows`
+ * rows. Two rows with the same seq are never split: a batch is read as a seq range.
+ */
+export function planBatches(
+  plan: ChunkRef[],
+  opts: { maxChars?: number; maxRows?: number } = {}
+): ChunkBatch[] {
+  const maxChars = opts.maxChars ?? CHUNK_BATCH_CHARS
+  const maxRows = opts.maxRows ?? CHUNK_BATCH_ROWS
+  const out: ChunkBatch[] = []
+  let cur: ChunkBatch | null = null
+  let chars = 0
+  for (const ref of plan) {
+    const fits =
+      cur !== null &&
+      cur.recording === ref.recording &&
+      ref.seq >= cur.toSeq &&
+      (ref.seq === cur.toSeq || (chars + ref.size <= maxChars && cur.rows < maxRows))
+    if (cur !== null && fits) {
+      cur.toSeq = ref.seq
+      cur.rows++
+    } else {
+      cur = { recording: ref.recording, fromSeq: ref.seq, toSeq: ref.seq, rows: 1 }
+      out.push(cur)
+      chars = 0
+    }
+    chars += ref.size
+  }
+  return out
+}
+
+/**
+ * The planned chunks' text, in plan order, one batch in memory at a time. The next batch is
+ * read only when the caller asks for its first row, and no connection is held in between —
+ * so a response that waits on a slow reader holds nothing, and one that ends stops the read.
+ *
+ * The read is no longer one statement, so the recording can change under it: chunks go when
+ * a recording is deleted, purged, or its hot cache is dropped (hourly, for a recording kept
+ * in storage). A batch that comes back with fewer rows than the plan saw fails the read
+ * (409 before the answer started, a cut-short answer after) — the caller opens it again and
+ * gets the whole recording, never a quietly shorter replay. More rows than planned is a
+ * live recording still being written, and fine.
+ */
+export async function* readPlannedChunks(
+  plan: ChunkRef[],
+  opts: { maxChars?: number; maxRows?: number } = {}
+): AsyncGenerator<{ recording: string; seq: number; events: string }> {
+  for (const batch of planBatches(plan, opts)) {
+    const rows = (await db(EVENTS)
+      .where({ recording: batch.recording })
+      .where('seq', '>=', batch.fromSeq)
+      .where('seq', '<=', batch.toSeq)
+      .orderBy('seq', 'asc')
+      .select('seq', 'events')) as Array<{ seq: number; events: string }>
+    if (rows.length < batch.rows) {
+      throw Object.assign(new Error('This recording changed while it was being read'), {
+        statusCode: 409,
+        code: 'RECORDING_CHANGED'
+      })
+    }
+    for (const row of rows) {
+      yield { recording: batch.recording, seq: Number(row.seq), events: row.events }
+    }
+  }
+}
+
 /** Every event of the chain `anyId` belongs to, in order (a corrupt chunk is skipped). */
 export async function loadChainEvents<T = unknown>(anyId: string): Promise<T[]> {
   const parts = await chainParts(anyId)
   await ensureChainHot(parts, { wait: true }).catch(() => null)
   const chunks = await chainChunks(parts)
   const out: T[] = []
-  for (const c of chunks) {
-    try {
-      const parsed = JSON.parse(decode(c.events)) as unknown
-      if (Array.isArray(parsed)) out.push(...(parsed as T[]))
-    } catch {
-      /* a partial replay beats none */
-    }
+  // One chunk at a time, the event loop free in between (./session-replay-chunks).
+  for await (const parsed of parsedChunks(chunks)) {
+    if (!Array.isArray(parsed)) continue
+    for (const e of parsed) out.push(e as T)
   }
   return out
 }

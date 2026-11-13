@@ -10,14 +10,17 @@ import {
   chainMetaOf,
   chainParts,
   chainSummary,
+  chunkPlan,
   endChain,
   ensureChainHot,
   laterPartIds,
   newestPart,
   type PartRow,
+  readPlannedChunks,
   rollOver,
   rollsOver
 } from '../services/session-recording-chain.js'
+import { eventsBodyStream, parsedChunks, primeFirst } from '../services/session-replay-chunks.js'
 import { chunkMeta, dailyCapStatus, noteChunk } from '../services/session-replay-cost.js'
 import { scheduleReplayIndex } from '../services/session-replay-index.js'
 import { replayClientPolicy } from '../services/session-replay-policy.js'
@@ -615,12 +618,12 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
 
       const chunks = await chainChunks(parts)
       const events: RrwebEventLike[] = []
-      for (const c of chunks) {
-        try {
-          events.push(...(JSON.parse(decodeChunk(c.events)) as RrwebEventLike[]))
-        } catch {
-          /* skip corrupt chunk — a partial replay beats none */
-        }
+      // The script is built from the events themselves, so they are parsed — one chunk at
+      // a time, the event loop free in between; a corrupt chunk is skipped (a partial
+      // replay beats none).
+      for await (const parsed of parsedChunks(chunks)) {
+        if (!Array.isArray(parsed)) continue
+        for (const e of parsed) events.push(e as RrwebEventLike)
       }
       if (events.length === 0) return reply.code(404).send({ error: 'No events' })
 
@@ -671,30 +674,29 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       if (hot.state === 'failed') {
         return reply.code(502).send({ error: 'Could not load this recording from storage' })
       }
-      const chunks =
-        parts.length > 1
-          ? await chainChunks(parts, incremental ? { afterSeq } : {})
-          : ((await db('nivaro_session_events')
-              .where({ recording: req.params.id })
-              .modify((qb) => {
-                if (incremental) qb.where('seq', '>', afterSeq)
-              })
-              .orderBy('seq', 'asc')
-              .select('seq', 'events')) as Array<{ seq: number; events: string }>)
-      if (chunks.length === 0) {
+      // Which chunks, and how big: their text is not read yet. A big recording is 75–100 MB
+      // of JSON; parsing and re-stringifying it here held the whole process for a second or
+      // more (2026-11-12, services/session-replay-chunks.ts). The answer is the same JSON,
+      // written as a stream: each chunk's text joined as stored, read from the database a
+      // batch at a time and only as fast as the caller takes it.
+      const plan = await chunkPlan(
+        parts.length > 1 ? parts.map((p) => p.id) : [req.params.id],
+        incremental ? { afterSeq } : {}
+      )
+      if (plan.length === 0) {
         // Incremental polls with nothing new are a normal empty answer.
         if (incremental) return reply.send({ data: { events: [], last_seq: afterSeq } })
         return reply.code(404).send({ error: 'No events' })
       }
-      const events: unknown[] = []
-      for (const c of chunks) {
-        try {
-          events.push(...(JSON.parse(decodeChunk(c.events)) as unknown[]))
-        } catch {
-          /* skip corrupt chunk */
-        }
-      }
-      return reply.send({ data: { events, last_seq: chunks[chunks.length - 1].seq } })
+      // The first batch is read before the answer starts, so a database failure is still an
+      // ordinary error answer. No heavy-read slot: nothing is held between batches, and a
+      // slot kept for as long as a slow caller reads would starve the reads the gate is for.
+      const chunks = await primeFirst(readPlannedChunks(plan))
+      // A stream, so the compression plugin compresses it as it goes (brotli or gzip, as
+      // before) and Fastify ends the read when the caller leaves.
+      return reply
+        .type('application/json; charset=utf-8')
+        .send(eventsBodyStream(chunks, plan[plan.length - 1].seq))
     }
   )
 

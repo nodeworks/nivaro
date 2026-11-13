@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
-import { decodeChunk, encodeChunk } from '../routes/session-recordings.js'
+import { encodeChunk } from '../routes/session-recordings.js'
 import { chainParts, loadChainEvents, stripChainKeys } from './session-recording-chain.js'
+import { parsedChunks } from './session-replay-chunks.js'
 import {
   type CutResult,
   chunkEvents,
@@ -57,12 +58,12 @@ export async function loadRecordingEvents(recordingId: string): Promise<unknown[
     .orderBy('seq', 'asc')
     .select('events')) as Array<{ events: string }>
   const events: unknown[] = []
-  for (const c of chunks) {
-    try {
-      events.push(...(JSON.parse(decodeChunk(c.events)) as unknown[]))
-    } catch {
-      /* a partial cut beats none */
-    }
+  // A cut is made from the events themselves (a window by time), so they are parsed — one
+  // chunk at a time, the event loop free in between (./session-replay-chunks); a corrupt
+  // chunk is skipped: a partial cut beats none.
+  for await (const parsed of parsedChunks(chunks)) {
+    if (!Array.isArray(parsed)) continue
+    for (const e of parsed) events.push(e)
   }
   return events
 }
