@@ -3,6 +3,7 @@ import type { NivaroClient } from '@nivaro/sdk'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ItemEditAuthContext, NivaroProvider, useNivaroClient } from '../../context'
 import {
@@ -64,6 +65,8 @@ interface Scene {
   problem?: MoveProblem | null
   /** The Progress panel starts open. */
   expanded?: boolean
+  /** The move's POST is refused (422) with this stored reason, as a blocked partner call is. */
+  refuse?: string
 }
 const instance = (s: Scene) => ({
   instance: { id: 'i-1', current_state: 'S-WH', current_state_obj: STATES[0], completed_at: null },
@@ -108,6 +111,11 @@ function render(ui: 'header' | 'panel', scene: Scene) {
       if (cmd._path.endsWith('/owners')) return { data: [] }
       if (cmd._path.endsWith('/owners/all') || cmd._path.endsWith('/creator')) return { data: null }
       if (cmd._path.endsWith('/transition') && cmd._method === 'POST') {
+        if (scene.refuse)
+          throw Object.assign(new Error('Request failed with status 422'), {
+            status: 422,
+            response: { status: 422, error: scene.refuse }
+          })
         if (cmd._body?.accept_pending === true) {
           now.running = { ...RUN, started_by: ME, started_by_name: 'Ada Park' }
           now.problem = null
@@ -642,4 +650,39 @@ describe('the header buttons, held by a run', () => {
     await until(() => !!button('Submit order'))
     expect(button('Submit order')?.closest('[data-tip]')).toBeNull()
   })
+})
+
+// Owner's call (2026-11-12): the toast of a move pressed the ordinary way says what the row
+// for a background move says. Before, the status line hid the other system's sentence.
+describe('a move another system refused, pressed the ordinary way', () => {
+  const REFUSED = 'Submit order: submission failed — HTTP 400: "The project is not valid"'
+  const failed = (said: { mock: { calls: unknown[][] } }) =>
+    said.mock.calls.map((c) => [c[0], (c[1] as { description?: unknown } | undefined)?.description])
+
+  for (const ui of ['header', 'panel'] as const) {
+    it(`${ui}: the toast names the move and shows the other system’s words`, async () => {
+      const said = vi.spyOn(toast, 'error')
+      const { calls } = render(ui, { refuse: REFUSED, expanded: true })
+      await until(() => !!button('Submit order'))
+      await act(async () => button('Submit order')?.click())
+      await until(() => posts(calls).length > 0 && said.mock.calls.length > 0)
+      expect(failed(said)).toContainEqual([
+        'Submit order did not go through',
+        'Submission failed: The project is not valid'
+      ])
+      expect(JSON.stringify(failed(said))).not.toMatch(/HTTP|400/)
+    })
+
+    it(`${ui}: a refusal that is not another system’s keeps its own words`, async () => {
+      const said = vi.spyOn(toast, 'error')
+      const { calls } = render(ui, {
+        refuse: 'Submit order: contact email is required',
+        expanded: true
+      })
+      await until(() => !!button('Submit order'))
+      await act(async () => button('Submit order')?.click())
+      await until(() => posts(calls).length > 0 && said.mock.calls.length > 0)
+      expect(failed(said).map((c) => c[0])).toContain('Submit order: contact email is required')
+    })
+  }
 })

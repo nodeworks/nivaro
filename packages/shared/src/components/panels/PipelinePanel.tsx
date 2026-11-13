@@ -37,6 +37,7 @@ import {
   useRecordSignalWhile
 } from '../../lib/presence-signals'
 import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
+import { partnerMoveFailure } from '../../lib/move-failure'
 import { userErrorMessage } from '../../lib/safe-error'
 import { serverNow } from '../../lib/server-clock'
 import { userCardQuery } from '../../lib/user-cards'
@@ -3088,10 +3089,20 @@ function PipelinePanelInner({
       const resp = (err as { response?: { status?: number } })?.response
       // A refusal the caller may be able to fix right here (Priority flag).
       setFixOffer(refusalFixFor(err, variables))
-      toast.error(userErrorMessage(err, 'Failed to execute transition'), {
+      // A move another system refused: the move by name, and under it that system's own
+      // words — what the row for a background move says (lib/move-failure.ts). Read as an
+      // ordinary 422 it said "Some values need fixing". Any other failure keeps its title.
+      const refusedBy = partnerMoveFailure(
+        err,
+        [...(data?.available_transitions ?? []), ...(data?.all_transitions ?? [])].find(
+          (t) => t.id === variables.transition_id
+        )?.label
+      )
+      toast.error(refusedBy?.title ?? userErrorMessage(err, 'Failed to execute transition'), {
         duration: 12000,
         // What to do next + Copy details (lib/error-toast.ts); "Why?" below wins the action slot.
         ...errorToastOptions(err, { action: 'Transition' }),
+        ...(refusedBy ? { description: refusedBy.description } : {}),
         // #1867: a refusal carries "Why?" — the role, owner or access rule
         // that stopped it, and who can change it.
         ...(isAccessRefusal(err)
@@ -4034,10 +4045,20 @@ function PipelineTransitionButtonsInner({
       const resp = (err as { response?: { status?: number } })?.response
       // A refusal the caller may be able to fix right here (Priority flag).
       setFixOffer(refusalFixFor(err, variables))
-      toast.error(userErrorMessage(err, 'Failed to execute transition'), {
+      // A move another system refused: the move by name, and under it that system's own
+      // words — what the row for a background move says (lib/move-failure.ts). Read as an
+      // ordinary 422 it said "Some values need fixing". Any other failure keeps its title.
+      const refusedBy = partnerMoveFailure(
+        err,
+        [...(data?.available_transitions ?? []), ...(data?.all_transitions ?? [])].find(
+          (t) => t.id === variables.transition_id
+        )?.label
+      )
+      toast.error(refusedBy?.title ?? userErrorMessage(err, 'Failed to execute transition'), {
         duration: 12000,
         // What to do next + Copy details (lib/error-toast.ts); "Why?" below wins the action slot.
         ...errorToastOptions(err, { action: 'Transition' }),
+        ...(refusedBy ? { description: refusedBy.description } : {}),
         // #1867: a refusal carries "Why?" — the role, owner or access rule
         // that stopped it, and who can change it.
         ...(isAccessRefusal(err)

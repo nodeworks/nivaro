@@ -44,8 +44,12 @@ describe('transition refusal toast text', () => {
       new URL('../components/panels/PipelinePanel.tsx', import.meta.url),
       'utf8'
     )
+    expect(src.match(/userErrorMessage\(err, 'Failed to execute transition'\)/g)).toHaveLength(2)
+    // …and both first ask whether another system refused the move (lib/move-failure.ts).
     expect(
-      src.match(/toast\.error\(userErrorMessage\(err, 'Failed to execute transition'\)/g)
+      src.match(
+        /toast\.error\(refusedBy\?\.title \?\? userErrorMessage\(err, 'Failed to execute transition'\)/g
+      )
     ).toHaveLength(2)
     expect(src).not.toMatch(/resp\?\.error \?\? resp\?\.data\?\.error/)
   })

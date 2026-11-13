@@ -55,6 +55,15 @@ function serverText(err: unknown): string | null {
 }
 
 /**
+ * The server's own words for a failed request, as answered (`error`, else `message`), or
+ * null. Unfiltered: for a caller that reads a known shape out of it (lib/move-failure.ts).
+ * What a person is shown still goes through userErrorMessage / describeError.
+ */
+export function serverErrorText(err: unknown): string | null {
+  return serverText(err)
+}
+
+/**
  * The sentence to show for a failed action: the server's explanation when it
  * gave one, the plain "something went wrong" for a code error, else the
  * error's own message (or `fallback`). Never raw text: a status line, a
