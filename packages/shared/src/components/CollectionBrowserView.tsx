@@ -147,6 +147,7 @@ import { type CellShape, type SkeletonColumn, shapeForField } from '../lib/skele
 import { knownTotalFrom } from '../lib/slow-reason'
 import { nextSortValue } from '../lib/sort-cycle'
 import { isFileCollection } from '../lib/system-collections'
+import { templateRelationPaths } from '../lib/template-paths'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
@@ -637,16 +638,7 @@ const relBatches = new Map<
   }
 >()
 
-/** The dotted tokens of a display template (`{{core_category.name}}`): fields that live on a
- *  linked record, which a plain `fields=*` read returns only as an id. */
-export function templateRelationPaths(template: string | null | undefined): string[] {
-  if (!template) return []
-  return [
-    ...new Set(
-      [...template.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1]).filter((t) => t.includes('.'))
-    )
-  ]
-}
+export { templateRelationPaths } from '../lib/template-paths'
 
 function fetchRelationRow(
   client: ReturnType<typeof useNivaroClient>,

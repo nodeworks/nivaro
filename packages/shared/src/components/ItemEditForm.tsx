@@ -133,7 +133,6 @@ import { invalidateRecordTasks } from '../lib/record-tasks'
 import { reimportAllowed } from '../lib/reimport-visibility'
 import { reportCodeError, userErrorMessage } from '../lib/safe-error'
 import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
-import { hasRecordExtras, mayHavePipeline } from '../lib/system-collections'
 import { stagedRowLabel } from '../lib/staged-row-labels'
 import {
   holdSummaryReresolve,
@@ -146,6 +145,8 @@ import {
   summaryRulesNeedRole,
   summaryRulesNeedState
 } from '../lib/summary-mode'
+import { hasRecordExtras, mayHavePipeline } from '../lib/system-collections'
+import { templateRelationPaths, withLinkedFields } from '../lib/template-paths'
 import { isReloadingForUpdate, useUnsavedWork } from '../lib/unsaved-work'
 import {
   choiceLabel,
@@ -2347,6 +2348,27 @@ function ItemEditFormView({
   })
   // Design mode: the preview record stands in for the fetched one.
   const itemData = designOn ? (design.record ?? undefined) : fetchedItemData
+  // The heading's display template may read through links ("{{core_category.name}} -
+  // {{sub_category.name}}" on categories): the record read carries only their ids, so those
+  // fields come in one small read of their own (Rob 2026-11-13: "Categories (no number)").
+  const headingPaths = templateRelationPaths(colMeta?.display_template)
+  const { data: headingLinked } = useQuery<Record<string, unknown> | null>({
+    queryKey: ['item-heading-links', collection, itemId, headingPaths.join(',')],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown> }>(
+          get(`/items/${collection}/${itemId}`, { fields: ['id', ...headingPaths].join(',') })
+        )
+        .then((r) => r.data ?? null)
+        .catch(() => null),
+    enabled: !isNew && !recordGone && !designOn && headingPaths.length > 0,
+    staleTime: 30_000,
+    retry: false
+  })
+  const headingRow = withLinkedFields(
+    itemData as Record<string, unknown> | undefined,
+    headingLinked
+  )
   // #3229 — the form's own shape for its loading placeholder, from the layout alone (it
   // resolves before the record, or a hover prefetch already put it in the cache).
   const loadingPlan = useMemo(
@@ -13156,7 +13178,7 @@ function ItemEditFormView({
     const t =
       itemData && colMeta?.display_template
         ? recordHeadingText(
-            applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>),
+            applyDisplayTemplate(colMeta.display_template, headingRow),
             itemData as Record<string, unknown>,
             colMeta?.singular || colMeta?.display_name || titleCase(collection ?? '')
           )
@@ -13167,7 +13189,7 @@ function ItemEditFormView({
     return () => {
       document.title = prev
     }
-  }, [itemData, colMeta, collection, isNew, documentTitle, designOn])
+  }, [itemData, headingLinked, colMeta, collection, isNew, documentTitle, designOn])
 
   // ── Lost access while open (#1925, F7) ────────────────────────────────────
   // No fields, no cached values, no unsaved edits — RecordLiveSync dropped
@@ -13288,7 +13310,7 @@ function ItemEditFormView({
   const itemTitle =
     !isNew && itemData && colMeta?.display_template
       ? recordHeadingText(
-          applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>),
+          applyDisplayTemplate(colMeta.display_template, headingRow),
           itemData as Record<string, unknown>,
           singularTitle
         )
