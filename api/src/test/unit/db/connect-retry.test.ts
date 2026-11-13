@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   attachConnectRetry,
   isLoginRefused,
-  openWithLoginRetry
+  isRetriableLoginRefusal,
+  openWithLoginRetry,
+  retryWarnLine
 } from '../../../db/connect-retry.js'
 
 /** What tedious raises when the server answers a login with an error (token/handler.js). */
@@ -92,6 +94,95 @@ describe('openWithLoginRetry', () => {
       expect(open).toHaveBeenCalledTimes(1)
       expect(time.sleeps).toEqual([])
     }
+  })
+})
+
+// Security review of the retry (2026-11-12): tedious says ELOGIN for EVERY refused login and
+// carries no error number. A login the server refuses because of the ACCOUNT will be refused
+// again, and each further attempt counts against a lockout policy.
+describe('a login refused because of the account is not tried again', () => {
+  const refusedWith = (message: string) => Object.assign(new Error(message), { code: 'ELOGIN' })
+  const ACCOUNT_FAULTS = [
+    // SQL Server 18486
+    "Login failed for user 'app_rw' because the account is currently locked out. The system administrator can unlock it.",
+    // 18487
+    "Login failed for user 'app_rw'.  Reason: The password of the account has expired.",
+    // 18488
+    "Login failed for user 'app_rw'.  Reason: The password of the account must be changed.",
+    // 18470
+    "Login failed for user 'app_rw'. Reason: The account is disabled.",
+    // the same wordings, however the server cases them
+    "LOGIN FAILED FOR USER 'APP_RW' BECAUSE THE ACCOUNT IS CURRENTLY LOCKED OUT.",
+    'Login failed. The Account Is Disabled.'
+  ]
+
+  it('opens once and throws the refusal unchanged', async () => {
+    for (const message of ACCOUNT_FAULTS) {
+      const time = fakeTime()
+      const err = refusedWith(message)
+      const open = vi.fn(async () => {
+        throw err
+      })
+      const onRetry = vi.fn()
+      await expect(openWithLoginRetry(open, { ...time, onRetry }), message).rejects.toBe(err)
+      expect(open, message).toHaveBeenCalledTimes(1)
+      expect(time.sleeps, message).toEqual([])
+      expect(onRetry, message).not.toHaveBeenCalled()
+    }
+  })
+
+  it('reads the account fault from the message, and from the error number when one is there', () => {
+    for (const message of ACCOUNT_FAULTS)
+      expect(isRetriableLoginRefusal(refusedWith(message)), message).toBe(false)
+    for (const number of [18486, 18487, 18488, 18470])
+      expect(
+        isRetriableLoginRefusal(Object.assign(refusedWith('Login failed.'), { number })),
+        String(number)
+      ).toBe(false)
+  })
+
+  it('still retries the plain refusal a database that is briefly not taking logins gives', () => {
+    for (const message of [
+      "Login failed for user 'app_rw'.",
+      'Login failed.',
+      // 4060 then 18456: the database is offline or mid-restore for a moment
+      'Cannot open database "app" requested by the login. The login failed.',
+      // 18401: the server is still starting after a restart
+      "Login failed for user 'app_rw'. Reason: Server is in script upgrade mode. Only administrator can connect at this time."
+    ])
+      expect(isRetriableLoginRefusal(refusedWith(message)), message).toBe(true)
+    expect(isRetriableLoginRefusal({ code: 'ESOCKET' })).toBe(false)
+    expect(isRetriableLoginRefusal(new Error("Login failed for user 'x'."))).toBe(false)
+  })
+})
+
+describe('the retry warning', () => {
+  it('never names the database login or the server it was opening', () => {
+    const line = retryWarnLine(
+      2,
+      Object.assign(new Error("Login failed for user 'app_rw'."), { code: 'ELOGIN' })
+    )
+    expect(line).toContain('attempt 2')
+    expect(line).toContain('Login failed.')
+    expect(line).not.toMatch(/app_rw|for user/)
+
+    const addressed = retryWarnLine(
+      1,
+      new Error(
+        "Login failed for user 'CORP\\svc-app'. Failed to connect to sql01.corp.example:1433 - connect ECONNREFUSED 10.0.0.5:1433"
+      )
+    )
+    expect(addressed).not.toMatch(/svc-app|sql01|corp\.example|10\.0\.0\.5|1433/)
+    expect(addressed).toContain('ECONNREFUSED')
+  })
+
+  it('keeps the rest of the reason', () => {
+    expect(
+      retryWarnLine(
+        1,
+        new Error('Cannot open database "app" requested by the login. The login failed.')
+      )
+    ).toContain('Cannot open database "app" requested by the login. The login failed.')
   })
 })
 
