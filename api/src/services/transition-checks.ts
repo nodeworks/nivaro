@@ -70,6 +70,7 @@ export function registerTransitionCheck(owner: string, fn: TransitionCheck): voi
 export function clearTransitionChecks(): void {
   checks.clear()
   keyCache().clear()
+  advisoryFlights().clear()
 }
 
 const KEY_TTL_MS = 60_000
@@ -141,15 +142,12 @@ export async function registeredTransitionRefusal(
   return null
 }
 
-/**
- * The moves on offer that a registered check would refuse, keyed by transition
- * id — asked through `registeredTransitionRefusal` itself with the arguments the
- * gate passes (the record's current state, the move's target), so the advisory
- * is the refusal, said early. A check that fails gives no advisory: the page
- * stays quiet and the gate answers if the move is tried. No checks registered =
- * no database read.
- */
-export async function transitionAdvisories(args: {
+/** How long the record's pipeline read waits for the advisories before it answers without them. */
+export const ADVISORY_WAIT_MS = 1_500
+/** A run of the checks that has not ended after this long is given up on: the next ask starts anew. */
+export const ADVISORY_FLIGHT_MAX_MS = 30_000
+
+interface AdvisoryArgs {
   collection: string
   item: string
   /** State ID the record is in. */
@@ -157,9 +155,32 @@ export async function transitionAdvisories(args: {
   transitions: Array<{ id: unknown; to_state?: string | null }>
   user: TransitionCheckArgs['user']
   isAdmin: boolean
-}): Promise<Map<string, TransitionAdvisory>> {
+}
+
+interface AdvisoryFlight {
+  answer: Promise<Map<string, TransitionAdvisory>>
+  /** The "took too long" line is written once per run, not once per ask that waited on it. */
+  warned: boolean
+}
+
+// Runs of the checks under way, per tenant. Only while they run: an answer is never kept.
+const advisoryFlights = tenantState(() => new Map<string, AdvisoryFlight>())
+
+/** Everything a check's answer may depend on: the record, its state, the person, the moves. */
+function advisoryKey(args: AdvisoryArgs): string {
+  return JSON.stringify([
+    args.collection,
+    args.item,
+    args.currentState,
+    args.user?.id ?? null,
+    args.user?.role ?? null,
+    args.isAdmin,
+    args.transitions.map((t) => [String(t.id), t.to_state ?? null])
+  ])
+}
+
+async function runAdvisories(args: AdvisoryArgs): Promise<Map<string, TransitionAdvisory>> {
   const out = new Map<string, TransitionAdvisory>()
-  if (checks.size === 0) return out
   // The moves are asked side by side (a record offers a handful): the read that lists them
   // waits for the slowest check, not for all of them in a row. Listed in the order offered.
   const answers = await Promise.all(
@@ -184,4 +205,63 @@ export async function transitionAdvisories(args: {
     out.set(String(t.id), { code: body.code, message: body.error, ...(fix ? { fix } : {}) })
   })
   return out
+}
+
+/**
+ * The moves on offer that a registered check would refuse, keyed by transition
+ * id — asked through `registeredTransitionRefusal` itself with the arguments the
+ * gate passes (the record's current state, the move's target), so the advisory
+ * is the refusal, said early. A check that fails gives no advisory: the page
+ * stays quiet and the gate answers if the move is tried. No checks registered =
+ * no database read.
+ *
+ * This rides the record's pipeline read, which every record page makes and
+ * makes again on each live update, and a check is an extension's code. So:
+ * - The read waits at most ADVISORY_WAIT_MS. Past that it answers without
+ *   advisories (the same quiet page a failed check gives); the gate still
+ *   refuses the move if it is pressed.
+ * - Asks that arrive while the checks are running for the same record, state,
+ *   person and moves share that run, so a page that refetches, or many tabs on
+ *   one record, cannot multiply a slow check. Nothing is kept once the run has
+ *   answered: the ask after a hold was cleared runs the checks again.
+ * - A run that has not ended after ADVISORY_FLIGHT_MAX_MS is given up on, so a
+ *   check that hangs once does not leave the record without advisories.
+ */
+export async function transitionAdvisories(
+  args: AdvisoryArgs
+): Promise<Map<string, TransitionAdvisory>> {
+  if (checks.size === 0) return new Map()
+  const flights = advisoryFlights()
+  const key = advisoryKey(args)
+  let flight = flights.get(key)
+  if (!flight) {
+    const started: AdvisoryFlight = { answer: runAdvisories(args), warned: false }
+    flight = started
+    flights.set(key, started)
+    const forget = (): void => {
+      if (flights.get(key) === started) flights.delete(key)
+    }
+    const giveUp = setTimeout(forget, ADVISORY_FLIGHT_MAX_MS)
+    giveUp.unref?.()
+    void started.answer.then(forget, forget).finally(() => clearTimeout(giveUp))
+  }
+  const run = flight
+  let wait: ReturnType<typeof setTimeout> | undefined
+  const tooLong = new Promise<null>((resolve) => {
+    wait = setTimeout(() => resolve(null), ADVISORY_WAIT_MS)
+    wait.unref?.()
+  })
+  try {
+    const answer = await Promise.race([run.answer, tooLong])
+    if (answer) return new Map(answer)
+    if (!run.warned) {
+      run.warned = true
+      console.warn(
+        `[transition-checks] the checks for ${args.collection} took longer than ${ADVISORY_WAIT_MS} ms: the page shows no advisories, the gate still answers`
+      )
+    }
+    return new Map()
+  } finally {
+    if (wait) clearTimeout(wait)
+  }
 }
