@@ -151,7 +151,7 @@ export const journeyTrailDocs: DocSection = {
     },
     {
       type: 'pre',
-      code: `GET /api/journeys/user/:id?date=YYYY-MM-DD&app=   # sessions + steps for one day
+      code: `GET /api/journeys/user/:id?date=YYYY-MM-DD&tz_offset=&app=   # sessions + labelled steps for one day
 GET /api/journeys/days/:id?app=                     # which of the last 30 days have data, + apps seen`
     },
     {
@@ -159,9 +159,11 @@ GET /api/journeys/days/:id?app=                     # which of the last 30 days 
       items: [
         'Admin-only — this is user tracking; the API refuses non-admins.',
         'Durations stamp when the user moves to the next page or disconnects (capped at 8h against dangling sessions).',
-        'UI: the Journey Trail card on a user profile (admin view), with a day picker of active days.',
+        'UI: the Pages visited card on a user profile (admin view): a day stepper over the active days, an app filter, and one block per session (time span, length, page views).',
+        'Places, not routes: each step carries a label resolved on the server AS THE VIEWER — a record reads "Workflow CM26-365984 · Roof replacement" only when the viewer may read it (else "A workflow record", no id, no link), a queue by its name only when the viewer may open it, query strings as meaning ("Addendum open", "People tab") or dropped. Ids and GUIDs never become words. Lookups are batched per collection, capped (200 records per collection, 100 queues) and kept 30 s.',
+        'The card folds consecutive visits to one place into one row with total time ("2 visits"), leaves out pages open for under a second (and says how many), links records in the app the viewer is in, and marks pages held five minutes or more. tz_offset makes the day the viewer\'s own calendar day.',
         'Rows purge automatically after 30 days in the daily retention pass.',
-        "Portals too: a front end built on @nivaro/react calls usePageAt({ app: 'efp', path }) inside its realtime provider and its pages land in the same trail, labelled with the app. ?app= narrows either route to one front end ('admin' includes rows from before the label existed); the card shows an app filter and a per-session app chip once a person has used more than one. Portal pages are listed, not linked."
+        "Portals too: a front end built on @nivaro/react calls usePageAt({ app: 'efp', path }) inside its realtime provider and its pages land in the same trail, labelled with the app. ?app= narrows either route to one front end ('admin' includes rows from before the label existed); the card shows an app filter and a per-session app chip once a person has used more than one. Portal pages that are not records are listed, not linked."
       ]
     }
   ]

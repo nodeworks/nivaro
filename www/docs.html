@@ -19238,14 +19238,16 @@ socket  admin:join {room: 'traffic-map', frames: 'batch'} → one 'traffic-map:b
           <!-- SYNC:journey-trail -->
           <h1 class="doc-h1" id="journey-trail">Journey Trail</h1>
           <p class="doc-p">A session-by-session breadcrumb of every admin page a user visited, with time spent on each — session-replay insight without recording anything on screen. Built from the same presence pings that power the live map, persisted with 30-day retention.</p>
-          <pre class="doc-pre"><code>GET /api/journeys/user/:id?date=YYYY-MM-DD&amp;app=   # sessions + steps for one day
+          <pre class="doc-pre"><code>GET /api/journeys/user/:id?date=YYYY-MM-DD&amp;tz_offset=&amp;app=   # sessions + labelled steps for one day
 GET /api/journeys/days/:id?app=                     # which of the last 30 days have data, + apps seen</code></pre>
           <ul class="doc-ul">
             <li>Admin-only — this is user tracking; the API refuses non-admins.</li>
             <li>Durations stamp when the user moves to the next page or disconnects (capped at 8h against dangling sessions).</li>
-            <li>UI: the Journey Trail card on a user profile (admin view), with a day picker of active days.</li>
+            <li>UI: the Pages visited card on a user profile (admin view): a day stepper over the active days, an app filter, and one block per session (time span, length, page views).</li>
+            <li>Places, not routes: each step carries a label resolved on the server AS THE VIEWER — a record reads "Workflow CM26-365984 · Roof replacement" only when the viewer may read it (else "A workflow record", no id, no link), a queue by its name only when the viewer may open it, query strings as meaning ("Addendum open", "People tab") or dropped. Ids and GUIDs never become words. Lookups are batched per collection, capped (200 records per collection, 100 queues) and kept 30 s.</li>
+            <li>The card folds consecutive visits to one place into one row with total time ("2 visits"), leaves out pages open for under a second (and says how many), links records in the app the viewer is in, and marks pages held five minutes or more. tz_offset makes the day the viewer's own calendar day.</li>
             <li>Rows purge automatically after 30 days in the daily retention pass.</li>
-            <li>Portals too: a front end built on @nivaro/react calls usePageAt({ app: 'efp', path }) inside its realtime provider and its pages land in the same trail, labelled with the app. ?app= narrows either route to one front end ('admin' includes rows from before the label existed); the card shows an app filter and a per-session app chip once a person has used more than one. Portal pages are listed, not linked.</li>
+            <li>Portals too: a front end built on @nivaro/react calls usePageAt({ app: 'efp', path }) inside its realtime provider and its pages land in the same trail, labelled with the app. ?app= narrows either route to one front end ('admin' includes rows from before the label existed); the card shows an app filter and a per-session app chip once a person has used more than one. Portal pages that are not records are listed, not linked.</li>
           </ul>
           <!-- /SYNC:journey-trail -->
         </div>

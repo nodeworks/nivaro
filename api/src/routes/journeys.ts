@@ -1,10 +1,11 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import type { JourneyLabel } from '../services/journey-labels.js'
 import { cleanAppLabel } from '../services/page-at.js'
 import { frustrationForDay } from '../services/session-frustration.js'
 
@@ -369,6 +370,23 @@ export async function loadPersonDay(userId: string, w: DayWindow, app?: string) 
   }
 }
 
+/**
+ * Words for stored routes, read as the caller (pages-visited card, Day view). A failure answers
+ * no labels — the client then says the route's own words, still without ids.
+ */
+async function journeyLabelsFor(
+  paths: string[],
+  req: FastifyRequest
+): Promise<Map<string, JourneyLabel>> {
+  if (!req.user || paths.length === 0) return new Map()
+  try {
+    const { resolveJourneyLabels } = await import('../services/journey-labels.js')
+    return await resolveJourneyLabels(paths, req.user, !!req.isAdmin)
+  } catch {
+    return new Map()
+  }
+}
+
 export async function journeyRoutes(app: FastifyInstance) {
   // #42 — live "who else is here": the page-presence pings admin pages send
   // (page:at), filtered to one path. The caller is excluded client-side.
@@ -383,54 +401,71 @@ export async function journeyRoutes(app: FastifyInstance) {
       return { data: usersOnPath(path) }
     }
   )
-  // GET /journeys/user/:id?date=YYYY-MM-DD&app=  (defaults to today, every app)
-  app.get<{ Params: { id: string }; Querystring: { date?: string; app?: string } }>(
-    '/user/:id',
-    { preHandler: requireAdmin },
-    async (req, reply) => {
-      const dateStr = req.query.date ?? new Date().toISOString().slice(0, 10)
+  // GET /journeys/user/:id?date=YYYY-MM-DD&tz_offset=<minutes>&app=  (defaults to today, every
+  // app). With tz_offset the day is the VIEWER's calendar day (as /day); without, the server's.
+  // Each step carries `label` — the place in words, resolved as the viewer (journey-labels.ts).
+  app.get<{
+    Params: { id: string }
+    Querystring: { date?: string; app?: string; tz_offset?: string }
+  }>('/user/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    let dateStr: string
+    let dayStart: Date
+    let dayEnd: Date
+    if (req.query.tz_offset != null && req.query.tz_offset !== '') {
+      const w = dayWindow(req.query.date, req.query.tz_offset)
+      if ('error' in w) return reply.code(400).send({ error: w.error })
+      dateStr = w.date
+      dayStart = w.start
+      dayEnd = w.end
+    } else {
+      dateStr = req.query.date ?? new Date().toISOString().slice(0, 10)
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
         return reply.code(400).send({ error: 'date must be YYYY-MM-DD' })
       }
-      const dayStart = new Date(`${dateStr}T00:00:00`)
-      const dayEnd = new Date(dayStart.getTime() + 86_400_000)
-
-      const q = db('nivaro_admin_journeys')
-        .where({ user: req.params.id })
-        .where('entered_at', '>=', dayStart)
-        .where('entered_at', '<', dayEnd)
-        .orderBy('entered_at', 'asc')
-        .limit(2000)
-      await applyAppFilter(q, req.query.app)
-      const rows = (await q) as JourneyRow[]
-
-      // Group into sessions, ordered by first entry
-      const sessions = new Map<string, JourneyRow[]>()
-      for (const r of rows) {
-        const list = sessions.get(r.session_id) ?? []
-        list.push(r)
-        sessions.set(r.session_id, list)
-      }
-
-      return reply.send({
-        data: {
-          date: dateStr,
-          sessions: [...sessions.values()].map((steps) => ({
-            session_id: steps[0].session_id,
-            started_at: steps[0].entered_at,
-            // One socket is one tab of one front end, so a session has one app.
-            app: steps[0].app ?? 'admin',
-            steps: steps.map((s) => ({
-              path: s.path,
-              entered_at: s.entered_at,
-              duration_seconds: s.duration_seconds,
-              app: s.app ?? 'admin'
-            }))
-          }))
-        }
-      })
+      dayStart = new Date(`${dateStr}T00:00:00`)
+      dayEnd = new Date(dayStart.getTime() + 86_400_000)
     }
-  )
+
+    const q = db('nivaro_admin_journeys')
+      .where({ user: req.params.id })
+      .where('entered_at', '>=', dayStart)
+      .where('entered_at', '<', dayEnd)
+      .orderBy('entered_at', 'asc')
+      .limit(2000)
+    await applyAppFilter(q, req.query.app)
+    const rows = (await q) as JourneyRow[]
+
+    // Group into sessions, ordered by first entry
+    const sessions = new Map<string, JourneyRow[]>()
+    for (const r of rows) {
+      const list = sessions.get(r.session_id) ?? []
+      list.push(r)
+      sessions.set(r.session_id, list)
+    }
+
+    const labels = await journeyLabelsFor(
+      rows.map((r) => r.path),
+      req
+    )
+    return reply.send({
+      data: {
+        date: dateStr,
+        sessions: [...sessions.values()].map((steps) => ({
+          session_id: steps[0].session_id,
+          started_at: steps[0].entered_at,
+          // One socket is one tab of one front end, so a session has one app.
+          app: steps[0].app ?? 'admin',
+          steps: steps.map((s) => ({
+            path: s.path,
+            entered_at: s.entered_at,
+            duration_seconds: s.duration_seconds,
+            app: s.app ?? 'admin',
+            ...(labels.has(s.path) ? { label: labels.get(s.path) } : {})
+          }))
+        }))
+      }
+    })
+  })
 
   // GET /journeys/day/:id?date=YYYY-MM-DD&tz_offset=<minutes>&app= — #1367, the
   // People page's Day view: recordings, pages, requests per minute,
@@ -444,6 +479,15 @@ export async function journeyRoutes(app: FastifyInstance) {
     const w = dayWindow(req.query.date, req.query.tz_offset)
     if ('error' in w) return reply.code(400).send({ error: w.error })
     const data = await loadPersonDay(req.params.id, w, req.query.app)
+    if (data.pages?.length) {
+      const labels = await journeyLabelsFor(
+        data.pages.map((p) => p.path),
+        req
+      )
+      data.pages = data.pages.map((p) =>
+        labels.has(p.path) ? { ...p, label: labels.get(p.path) } : p
+      )
+    }
     void logActivity({
       action: 'person-day-read',
       user: req.user?.id,

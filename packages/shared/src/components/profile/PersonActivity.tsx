@@ -1,11 +1,36 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { Activity, ArrowDownAZ, ArrowUpAZ, Flame, Footprints, Globe, LogIn, X } from 'lucide-react'
-import { useState } from 'react'
+import {
+  Activity,
+  ArrowDownAZ,
+  ArrowUpAZ,
+  ChevronLeft,
+  ChevronRight,
+  Flame,
+  Footprints,
+  Globe,
+  LogIn,
+  X
+} from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn, formatDateTime, formatRelative } from '../../lib/utils'
+import { ErrorNotice } from '../ErrorNotice'
+import { SkeletonBar } from '../Skeletons'
 import { SimpleSelect } from '../ui/SimpleSelect'
-import { EmptyLine, SectionCard } from './primitives'
+import { isSafeAdminPath, localDateKey, localDayOffset, shiftDate } from './dayTimelineLayout'
+import {
+  fallbackJourneyLabel,
+  fmtClock,
+  fmtDuration,
+  fmtSpan,
+  foldJourneySession,
+  type JourneyRow,
+  type JourneySessionView,
+  type JourneyStepIn,
+  words
+} from './journey-view'
+import { EmptyLine, SectionCard, usePersonUrl } from './primitives'
 import type { PersonProfile } from './types'
 
 // ─── Rhythm (eight weeks) ────────────────────────────────────────────────────
@@ -559,39 +584,21 @@ export function ActivityFeedCard({ userId }: { userId: string }) {
   )
 }
 
-// ─── Journey trail (admin pages visited) ─────────────────────────────────────
+// ─── Pages visited (journey trail) ───────────────────────────────────────────
 
-interface JourneyStep {
-  path: string
-  entered_at: string
-  duration_seconds: number | null
-  /** #1391 — 'admin' or the portal's app label. */
-  app?: string
-}
 interface JourneySession {
   session_id: string
   started_at: string
   app?: string
-  steps: JourneyStep[]
+  steps: JourneyStepIn[]
 }
 
+/** A route in words, for callers that have only the path (the Day view's fallback). */
 export function pageLabel(path: string): string {
-  if (path === '/') return 'Dashboard'
-  const parts = path.split('/').filter(Boolean)
-  if (parts[0] === 'collections' && parts[1]) {
-    return parts[2] ? `${parts[1]} · record ${parts[2]}` : `${parts[1]} (browser)`
-  }
-  return parts
-    .map((p) => p.replace(/-/g, ' '))
-    .join(' › ')
-    .replace(/\b\w/g, (c) => c.toUpperCase())
+  const l = fallbackJourneyLabel(path)
+  return l.section && l.kind === 'page' ? `${l.section} › ${l.title}` : l.title
 }
-export function fmtDuration(seconds: number | null): string {
-  if (seconds == null) return ''
-  if (seconds < 60) return `${seconds}s`
-  const m = Math.floor(seconds / 60)
-  return m < 60 ? `${m}m ${seconds % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`
-}
+export { fmtDuration }
 
 /** Days with page data (last 30) and the front ends seen — shared by the
  *  Pages visited card and the Day view, keyed ['nvr-journey-days', id, app]. */
@@ -608,10 +615,51 @@ export function fetchJourneyDays(
     .catch(() => ({ days: [], apps: [] }))
 }
 
+/**
+ * An app's name for people: the admin is "Admin"; a portal reads "Portal" when it is the only
+ * one, else its label in words ("Field portal"), never a raw key like "efp-new".
+ */
+function appNamer(apps: string[]): (a: string | null | undefined) => string {
+  const portals = apps.filter((a) => a !== 'admin')
+  return (a) => {
+    if (!a || a === 'admin') return 'Admin'
+    return portals.length <= 1 ? 'Portal' : words(a)
+  }
+}
+
+/** A duration as fmtDuration shows it, in seconds — so a day total adds up to what its sessions say. */
+function shownSeconds(s: number): number {
+  return s < 600 ? s : Math.floor(s / 60) * 60
+}
+
+/** "Today", "Yesterday", "Wed, Nov 11". */
+function dayName(date: string, today: string): string {
+  if (date === today) return 'Today'
+  if (date === shiftDate(today, -1)) return 'Yesterday'
+  const [y, m, d] = date.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    ...(Number(today.slice(0, 4)) !== y ? { year: 'numeric' } : {})
+  })
+}
+
+/** "yesterday", "Wed, Nov 11" ("on Wed, Nov 11" with `on`) — for use inside a sentence. */
+function midSentenceDay(date: string, today: string, on = false): string {
+  const name = dayName(date, today)
+  if (name === 'Today' || name === 'Yesterday') return name.toLowerCase()
+  return on ? `on ${name}` : name
+}
+
+/** Rows shown before a long session folds behind "Show more". */
+const SESSION_PREVIEW = 8
+/** Time on one page that reads as real work rather than passing through. */
+const LONG_DWELL_S = 5 * 60
+
 export function JourneyCard({ userId }: { userId: string }) {
   const client = useNivaroClient()
-  const nav = useNavigation()
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localDateKey(new Date())
   const [date, setDate] = useState(today)
   // #1391 — journeys cover the admin and the portal; null = every app.
   const [appFilter, setAppFilter] = useState<string | null>(null)
@@ -621,136 +669,362 @@ export function JourneyCard({ userId }: { userId: string }) {
   })
   const days = dayData?.days ?? []
   const apps = dayData?.apps ?? []
-  const { data, isLoading } = useQuery<{ sessions: JourneySession[] } | null>({
-    queryKey: ['nvr-journey', userId, date, appFilter],
+  const tzOffset = localDayOffset(date)
+  const { data, isLoading, isError, error, refetch } = useQuery<{ sessions: JourneySession[] }>({
+    queryKey: ['nvr-journey', userId, date, tzOffset, appFilter],
     queryFn: () =>
       client
         .request<{ data: { sessions: JourneySession[] } }>(
-          get(`/journeys/user/${userId}`, appFilter ? { date, app: appFilter } : { date })
+          get(`/journeys/user/${userId}`, {
+            date,
+            tz_offset: tzOffset,
+            ...(appFilter ? { app: appFilter } : {})
+          })
         )
-        .then((r) => r.data)
-        .catch(() => null)
+        .then((r) => r.data ?? { sessions: [] }),
+    retry: false
   })
   const multiApp = apps.length > 1 || (apps.length === 1 && apps[0] !== 'admin')
-  const sessions = data?.sessions ?? []
-  const adminHref = (path: string) => (nav.consoleUrl ? nav.consoleUrl(path) : path)
+
+  // The picker offers today plus every day with pages, newest first.
+  const dayKeys = useMemo(
+    () => [...new Set([today, ...days.map((d) => d.date)])].sort().reverse(),
+    [today, days]
+  )
+  const at = dayKeys.indexOf(date)
+  const newer = at > 0 ? dayKeys[at - 1] : null
+  const older = at >= 0 && at < dayKeys.length - 1 ? dayKeys[at + 1] : null
+
+  const sessions = useMemo(
+    () =>
+      (data?.sessions ?? [])
+        .map((s) => ({ s, v: foldJourneySession(s.steps) }))
+        .filter((x) => x.v.rows.length > 0)
+        .sort((a, b) => a.v.start.localeCompare(b.v.start)),
+    [data]
+  )
+  const maxDwell = Math.max(60, ...sessions.flatMap((x) => x.v.rows.map((r) => r.seconds ?? 0)))
+  const totalSeconds = sessions.reduce((n, x) => n + shownSeconds(x.v.seconds), 0)
+  const appName = appNamer(apps)
+  const latestDay = days.find((d) => d.date !== date)?.date ?? null
+
+  const stepButton =
+    'inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 disabled:pointer-events-none disabled:opacity-30 dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-100'
+  const dayControls = (
+    <div className='flex items-center gap-0.5' data-journey-day-picker>
+      <button
+        type='button'
+        aria-label='Earlier day'
+        disabled={!older}
+        onClick={() => older && setDate(older)}
+        className={stepButton}
+      >
+        <ChevronLeft className='h-3.5 w-3.5' />
+      </button>
+      <SimpleSelect
+        value={date}
+        onChange={setDate}
+        ariaLabel='Day'
+        options={dayKeys.map((k) => ({ value: k, label: dayName(k, today) }))}
+        className='h-7 w-[124px] gap-1 rounded-md border-slate-200 bg-white px-2 text-[12px] font-medium text-slate-700 dark:border-border dark:bg-card dark:text-slate-200 [&>svg]:h-3.5 [&>svg]:w-3.5'
+        triggerProps={{ 'data-journey-day': date }}
+      />
+      <button
+        type='button'
+        aria-label='Later day'
+        disabled={!newer}
+        onClick={() => newer && setDate(newer)}
+        className={stepButton}
+      >
+        <ChevronRight className='h-3.5 w-3.5' />
+      </button>
+    </div>
+  )
+
   return (
     <SectionCard
       icon={<Footprints className='h-4 w-4' />}
       title='Pages visited'
-      hint='Their path through the admin and the portal, per session — kept 30 days'
+      hint='Session by session, kept 30 days'
       testId='journey'
+      actions={dayControls}
     >
-      {multiApp && (
-        <div className='mb-2 flex flex-wrap items-center gap-1.5' data-journey-apps>
-          {[null, ...apps].map((a) => (
-            <button
-              key={a ?? '__all'}
-              type='button'
-              aria-pressed={appFilter === a}
-              data-journey-app-filter={a ?? 'all'}
-              onClick={() => setAppFilter(a)}
-              className={cn(
-                'rounded-md border px-2 py-0.5 text-[11px]',
-                appFilter === a
-                  ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
-                  : 'border-slate-200 text-slate-500 dark:border-border dark:text-slate-400'
-              )}
+      {(multiApp || sessions.length > 0) && (
+        <div className='mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2'>
+          {multiApp ? (
+            <fieldset
+              className='inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'
+              data-journey-apps
             >
-              {a ?? 'All apps'}
-            </button>
-          ))}
-        </div>
-      )}
-      {days.length > 0 && (
-        <div className='mb-3 flex flex-wrap gap-1.5'>
-          {days.slice(0, 14).map((d) => (
-            <button
-              key={d.date}
-              type='button'
-              aria-pressed={date === d.date}
-              onClick={() => setDate(d.date)}
-              className={cn(
-                'rounded-full border px-2 py-0.5 text-[11px]',
-                date === d.date
-                  ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
-                  : 'border-slate-200 text-slate-500 dark:border-border dark:text-slate-400'
-              )}
-              title={`${d.steps} page views`}
+              <legend className='sr-only'>App</legend>
+              {[null, ...apps].map((a) => (
+                <button
+                  key={a ?? '__all'}
+                  type='button'
+                  aria-pressed={appFilter === a}
+                  data-journey-app-filter={a ?? 'all'}
+                  onClick={() => setAppFilter(a)}
+                  className={cn(
+                    'h-6 rounded px-2.5 text-[11.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40',
+                    appFilter === a
+                      ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                      : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                  )}
+                >
+                  {a ? appName(a) : 'All apps'}
+                </button>
+              ))}
+            </fieldset>
+          ) : (
+            <span />
+          )}
+          {sessions.length > 0 && (
+            <p
+              className='text-[11.5px] tabular-nums text-slate-500 dark:text-slate-400'
+              data-journey-summary
             >
-              {d.date === today ? 'Today' : d.date.slice(5)}
-            </button>
-          ))}
+              {sessions.length} session{sessions.length === 1 ? '' : 's'} ·{' '}
+              {fmtDuration(totalSeconds) || 'under a minute'}
+            </p>
+          )}
         </div>
       )}
       {isLoading ? (
-        <EmptyLine>Loading…</EmptyLine>
+        <JourneySkeleton />
+      ) : isError ? (
+        <ErrorNotice error={error} what='the pages visited' onRetry={() => void refetch()} />
       ) : sessions.length === 0 ? (
-        <EmptyLine>No pages recorded {date === today ? 'today' : `on ${date}`}.</EmptyLine>
+        <div className='flex flex-wrap items-center gap-x-2 gap-y-1' data-journey-empty>
+          <EmptyLine>
+            No pages recorded {date === today ? 'today' : midSentenceDay(date, today, true)}.
+          </EmptyLine>
+          {latestDay && (
+            <button
+              type='button'
+              onClick={() => setDate(latestDay)}
+              className='text-[12px] font-medium text-nvr-navy underline decoration-nvr-navy/30 underline-offset-2 hover:decoration-nvr-navy focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-nvr-cyan dark:decoration-nvr-cyan/40 dark:hover:decoration-nvr-cyan'
+            >
+              Show {midSentenceDay(latestDay, today)}
+            </button>
+          )}
+        </div>
       ) : (
-        <div className='space-y-4'>
-          {sessions.map((s, si) => (
-            <div key={s.session_id}>
-              <p className='mb-1.5 text-[11px] font-medium text-slate-400'>
-                Session {si + 1} · started {formatRelative(s.started_at)} · {s.steps.length} page
-                {s.steps.length === 1 ? '' : 's'}
-                {multiApp && (
-                  <span
-                    className='ml-1.5 rounded bg-slate-100 px-1.5 py-px text-[10px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
-                    data-journey-app={s.app ?? 'admin'}
-                  >
-                    {s.app ?? 'admin'}
-                  </span>
-                )}
-              </p>
-              <ol className='relative ml-2 border-l border-slate-200 dark:border-border'>
-                {s.steps.map((step, i) => {
-                  // A portal page is not an admin route — show it, don't link it.
-                  const safe =
-                    (step.app ?? 'admin') === 'admin' &&
-                    step.path.startsWith('/') &&
-                    !step.path.startsWith('//') &&
-                    !step.path.includes(':')
-                  const href = safe ? adminHref(step.path) : null
-                  return (
-                    <li key={`${step.entered_at}-${i}`} className='relative py-1 pl-4'>
-                      <span className='absolute -left-[3.5px] top-[13px] h-1.5 w-1.5 rounded-full bg-nvr-cyan' />
-                      <div className='flex items-baseline gap-2'>
-                        {href ? (
-                          <a
-                            href={href}
-                            onClick={(e) => {
-                              if (e.metaKey || e.ctrlKey) return
-                              e.preventDefault()
-                              nav.navigate(href)
-                            }}
-                            className='truncate text-[12.5px] text-slate-700 hover:text-nvr-navy hover:underline dark:text-slate-300 dark:hover:text-nvr-cyan'
-                          >
-                            {pageLabel(step.path)}
-                          </a>
-                        ) : (
-                          <span className='truncate text-[12.5px] text-slate-700 dark:text-slate-300'>
-                            {pageLabel(step.path)}
-                          </span>
-                        )}
-                        <span className='shrink-0 text-[10.5px] tabular-nums text-slate-400'>
-                          {new Date(step.entered_at).toLocaleTimeString(undefined, {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
-                          {step.duration_seconds != null &&
-                            ` · ${fmtDuration(step.duration_seconds)}`}
-                        </span>
-                      </div>
-                    </li>
-                  )
-                })}
-              </ol>
-            </div>
+        <div className='divide-y divide-slate-100 dark:divide-border/60'>
+          {sessions.map(({ s, v }) => (
+            <JourneySessionBlock
+              key={s.session_id}
+              app={s.app ?? 'admin'}
+              appName={appName(s.app ?? 'admin')}
+              view={v}
+              showApp={multiApp}
+              maxDwell={maxDwell}
+            />
           ))}
         </div>
       )}
     </SectionCard>
+  )
+}
+
+function JourneySkeleton() {
+  return (
+    <div className='space-y-3' role='status' aria-busy='true' aria-label='Loading pages visited'>
+      <SkeletonBar width={160} className='h-3.5' />
+      {[72, 54, 64, 46].map((w) => (
+        <div key={w} className='flex items-center gap-3'>
+          <SkeletonBar width={48} />
+          <SkeletonBar width={`${w}%`} />
+          <SkeletonBar width={40} className='ml-auto' />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function JourneySessionBlock({
+  app,
+  appName,
+  view,
+  showApp,
+  maxDwell
+}: {
+  app: string
+  appName: string
+  view: JourneySessionView
+  showApp: boolean
+  maxDwell: number
+}) {
+  const [all, setAll] = useState(false)
+  const folded = view.rows.length > SESSION_PREVIEW + 2 && !all
+  const rows = folded ? view.rows.slice(0, SESSION_PREVIEW) : view.rows
+  return (
+    <section className='py-4 first:pt-0 last:pb-0' data-journey-session>
+      <header className='mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5'>
+        <h4 className='text-[13px] font-semibold tabular-nums text-slate-800 dark:text-slate-100'>
+          {fmtSpan(view.start, view.end)}
+        </h4>
+        <p className='text-[11.5px] tabular-nums text-slate-500 dark:text-slate-400'>
+          {fmtDuration(view.seconds) || 'under a minute'} · {view.views} page view
+          {view.views === 1 ? '' : 's'}
+        </p>
+        {showApp && (
+          <span
+            className='ml-auto rounded bg-slate-100 px-1.5 py-px text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
+            data-journey-app={app}
+          >
+            {appName}
+          </span>
+        )}
+      </header>
+      <ol className='-mx-2'>
+        {rows.map((r) => (
+          <JourneyRowItem
+            key={`${r.start}-${r.label.key}`}
+            row={r}
+            maxDwell={maxDwell}
+            appName={appName}
+          />
+        ))}
+      </ol>
+      {(folded || view.skipped > 0) && (
+        <div className='mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px]'>
+          {folded && (
+            <button
+              type='button'
+              onClick={() => setAll(true)}
+              className='font-medium text-nvr-navy hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-nvr-cyan'
+            >
+              Show {view.rows.length - SESSION_PREVIEW} more
+            </button>
+          )}
+          {view.skipped > 0 && (
+            <span className='text-slate-500 dark:text-slate-400' data-journey-skipped>
+              {view.skipped === 1
+                ? '1 page open for less than a second isn’t shown'
+                : `${view.skipped} pages open for less than a second aren’t shown`}
+            </span>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function JourneyRowItem({
+  row,
+  maxDwell,
+  appName
+}: {
+  row: JourneyRow
+  maxDwell: number
+  appName: string
+}) {
+  const nav = useNavigation()
+  const { urlFor, open } = useItemNavigation()
+  const personUrl = usePersonUrl()
+  const l = row.label
+  const consoleHref = (p: string) => (nav.consoleUrl ? nav.consoleUrl(p) : p)
+
+  // Records open in the app the VIEWER is in; queues and admin pages through the console map.
+  // A portal page that is not a record has no address here, so it is shown, not linked.
+  let href: string | null = null
+  let go: (() => void) | null = null
+  if (l.record) {
+    const target = { collection: l.record.collection, itemId: l.record.id }
+    href = urlFor(target)
+    go = () => open(target)
+  } else if (l.queue_id) {
+    href = consoleHref(`/queues/${encodeURIComponent(l.queue_id)}`)
+  } else if (l.person_id) {
+    href = personUrl(l.person_id)
+  } else if (row.app === 'admin' && l.kind !== 'record' && isSafeAdminPath(row.path)) {
+    href = consoleHref(row.path)
+  }
+  // A record's title already names its kind ("Workflow CM26-1"), and a section named like the
+  // session's app ("Admin" under an Admin session) says nothing — both are left out.
+  const section =
+    l.kind === 'record' ||
+    l.kind === 'new-record' ||
+    l.section?.toLowerCase() === appName.toLowerCase()
+      ? null
+      : l.section
+  const meta = [section, ...row.details, row.visits > 1 ? `${row.visits} visits` : null].filter(
+    Boolean
+  ) as string[]
+  const long = (row.seconds ?? 0) >= LONG_DWELL_S
+  // The bar shows where the time went; a stop under a minute gets none (a stub reads as a dash).
+  const bar =
+    (row.seconds ?? 0) >= 60
+      ? Math.max(15, Math.round(Math.sqrt((row.seconds ?? 0) / maxDwell) * 100))
+      : 0
+  const title = <span className='line-clamp-2 break-words'>{l.title}</span>
+  return (
+    <li
+      className='grid grid-cols-[52px_minmax(0,1fr)_auto] items-start gap-x-2 rounded-md px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-muted/40'
+      data-journey-row={l.kind}
+    >
+      <time
+        dateTime={row.start}
+        className='pt-px text-[11.5px] tabular-nums text-slate-500 dark:text-slate-400'
+      >
+        {fmtClock(row.start)}
+      </time>
+      <div className='min-w-0'>
+        {href ? (
+          <a
+            href={href}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
+              e.preventDefault()
+              if (go) go()
+              else if (href) nav.navigate(href)
+            }}
+            className='block text-[12.5px] font-medium leading-snug text-slate-800 underline-offset-2 hover:text-nvr-navy hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-100 dark:hover:text-nvr-cyan'
+          >
+            {title}
+          </a>
+        ) : (
+          <span
+            className={cn(
+              'block text-[12.5px] leading-snug',
+              l.record || l.kind === 'page' || l.kind === 'list' || l.queue_id || l.person_id
+                ? 'font-medium text-slate-800 dark:text-slate-100'
+                : 'text-slate-600 dark:text-slate-300'
+            )}
+          >
+            {title}
+          </span>
+        )}
+        {meta.length > 0 && (
+          <p className='mt-0.5 truncate text-[11px] text-slate-500 dark:text-slate-400'>
+            {meta.join(' · ')}
+          </p>
+        )}
+      </div>
+      <div className='flex items-center justify-end gap-2 pt-px'>
+        <span aria-hidden className='hidden h-1 w-8 justify-end sm:flex'>
+          {bar > 0 && (
+            <span
+              className={cn(
+                'h-1 rounded-full',
+                long ? 'bg-slate-500 dark:bg-slate-400' : 'bg-slate-300 dark:bg-slate-600'
+              )}
+              style={{ width: `${bar}%` }}
+            />
+          )}
+        </span>
+        <span
+          className={cn(
+            'min-w-[44px] text-right text-[11.5px] tabular-nums',
+            long
+              ? 'font-semibold text-slate-800 dark:text-slate-100'
+              : 'text-slate-500 dark:text-slate-400'
+          )}
+        >
+          {row.seconds != null ? fmtDuration(row.seconds) : row.open ? 'still open' : ''}
+        </span>
+      </div>
+    </li>
   )
 }
 

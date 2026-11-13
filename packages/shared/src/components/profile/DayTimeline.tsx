@@ -20,6 +20,7 @@ import {
   shiftDate,
   type TimeView
 } from './dayTimelineLayout'
+import { fmtClock, type JourneyLabel } from './journey-view'
 import { fetchJourneyDays, fmtDuration, pageLabel } from './PersonActivity'
 import { EmptyLine, SectionCard } from './primitives'
 
@@ -45,6 +46,8 @@ interface DayPage {
   duration_seconds: number | null
   /** #1391 — 'admin' or the portal's app label. */
   app?: string
+  /** The place in words, as the viewer may read it (absent on an older API). */
+  label?: JourneyLabel
 }
 interface DayTransition {
   id: number
@@ -93,8 +96,12 @@ const ROW_GAP = 3
 const LANE_PAD = 6
 const REQUEST_LANE_H = 34
 
-const fmtTime = (t: number | string) =>
-  new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+const fmtTime = (t: number | string) => fmtClock(new Date(t).toISOString())
+/** "Nov 11" for a YYYY-MM-DD key, in the viewer's calendar. */
+const shortDay = (date: string) => {
+  const [y, m, d] = date.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
 const fmtHour = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: 'numeric' })
 const plural = (n: number, one: string, many = `${one}s`) =>
   `${n.toLocaleString()} ${n === 1 ? one : many}`
@@ -284,7 +291,7 @@ export function DayTimelineCard({ userId, initialDate }: { userId: string; initi
               )}
               title={`${d.steps} page views`}
             >
-              {d.date === today ? 'Today' : d.date.slice(5)}
+              {d.date === today ? 'Today' : shortDay(d.date)}
             </button>
           ))}
         </div>
@@ -407,10 +414,23 @@ export function DayTimelineCard({ userId, initialDate }: { userId: string; initi
                     })}
                   {l.key === 'pages' &&
                     layout.pages.map(({ p, box, row }) => {
-                      // A portal page is not an admin route — show it, don't link it.
+                      // A readable record opens in this app; another admin page through the
+                      // console map; a portal page that is not a record is shown, not linked.
                       const portal = (p.app ?? 'admin') !== 'admin'
-                      const href = !portal && isSafeAdminPath(p.path) ? adminHref(p.path) : null
-                      const text = `${portal ? `${p.app} · ` : ''}${pageLabel(p.path)} · ${fmtTime(p.start)}${
+                      const rec = p.label?.record
+                      const href = rec
+                        ? urlFor({ collection: rec.collection, itemId: rec.id })
+                        : !portal && p.label?.kind !== 'record' && isSafeAdminPath(p.path)
+                          ? adminHref(p.path)
+                          : null
+                      const place = p.label
+                        ? p.label.section && p.label.kind === 'page'
+                          ? `${p.label.section} › ${p.label.title}`
+                          : p.label.title
+                        : pageLabel(p.path)
+                      const text = `${portal ? `${p.app} · ` : ''}${place}${
+                        p.label?.detail ? ` (${p.label.detail})` : ''
+                      } · ${fmtTime(p.start)}${
                         p.duration_seconds != null ? ` · ${fmtDuration(p.duration_seconds)}` : ''
                       }`
                       return (
@@ -418,7 +438,11 @@ export function DayTimelineCard({ userId, initialDate }: { userId: string; initi
                           <SegLink
                             href={href}
                             label={href ? `Open ${text}` : text}
-                            onGo={() => href && nav.navigate(href)}
+                            onGo={() =>
+                              rec
+                                ? open({ collection: rec.collection, itemId: rec.id })
+                                : href && nav.navigate(href)
+                            }
                             className='bg-nvr-cyan/70 hover:bg-nvr-cyan'
                           />
                         </Seg>

@@ -132,6 +132,42 @@ describe('GET /journeys/user/:id?app=', () => {
     expect(state.calls.some(([m, a]) => m === 'where' && a[0] === 'app')).toBe(false)
     expect(res.json().data.sessions[0].steps[0].app).toBe('admin')
   })
+
+  it('reads the viewer day from tz_offset and labels each step in words', async () => {
+    state.rows.set('nivaro_admin_journeys', [
+      [
+        {
+          id: 1,
+          user: 'U1',
+          session_id: 's1',
+          path: '/invoice-approvals?tab=mine',
+          entered_at: new Date('2026-10-10T13:00:00Z'),
+          duration_seconds: 9,
+          app: 'efp'
+        }
+      ]
+    ])
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: '/api/journeys/user/U1?date=2026-10-10&tz_offset=240'
+    })
+    expect(res.statusCode).toBe(200)
+    // 2026-10-10 at UTC−4 starts 04:00Z.
+    expect(state.calls).toContainEqual([
+      'where',
+      ['entered_at', '>=', new Date('2026-10-10T04:00:00.000Z')]
+    ])
+    expect(res.json().data.sessions[0].steps[0].label).toMatchObject({
+      title: 'Invoice approvals',
+      detail: 'Mine tab',
+      kind: 'page'
+    })
+    const bad = await (await app()).inject({
+      method: 'GET',
+      url: '/api/journeys/user/U1?date=2026-02-31&tz_offset=0'
+    })
+    expect(bad.statusCode).toBe(400)
+  })
 })
 
 describe('GET /journeys/days/:id', () => {
