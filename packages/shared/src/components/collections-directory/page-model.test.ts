@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildPageModel, nearSpellings } from './page-model'
-import type { Collection, OverviewStats, PageState } from './types'
+import type { DirectoryCollection as Collection, OverviewStats, PageState } from './types'
 
 const col = (collection: string, extra: Partial<Collection> = {}): Collection =>
   ({

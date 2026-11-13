@@ -1,8 +1,8 @@
 import { LayoutGrid, Rows3, Search } from 'lucide-react'
-import { useRef } from 'react'
-import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
-import { cn } from '@/lib/utils'
+import { useEffect, useRef } from 'react'
+import { cn } from '../../lib/utils'
+import { Input } from '../ui/input'
+import { Switch } from '../ui/switch'
 import type { ChipKey, Density, PageState, ViewMode } from './types'
 
 interface Props {
@@ -18,6 +18,12 @@ interface Props {
   onClearSelection: () => void
   /** Admin tools shown before Arrange / Select (new table, schema views, proposals). */
   adminActions?: React.ReactNode
+  /** The page's name (default "Collections"). */
+  title?: string
+  /** Arrange (drag folders) — only when the host can save an order. */
+  canArrange?: boolean
+  /** Select → Move to folder — only when the host can move collections. */
+  canSelect?: boolean
 }
 
 const VIEWS: Array<{ key: ViewMode; label: string; adminOnly?: boolean }> = [
@@ -55,9 +61,25 @@ export function CollectionsToolbar({
   selectedCount,
   onMoveSelected,
   onClearSelection,
-  adminActions
+  adminActions,
+  title = 'Collections',
+  canArrange = true,
+  canSelect = true
 }: Props) {
   const innerRef = useRef<HTMLInputElement | null>(null)
+  const groupRef = useRef<HTMLDivElement | null>(null)
+
+  // Keep the chosen view in sight when the row scrolls (phones).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run when the view changes
+  useEffect(() => {
+    const g = groupRef.current
+    const b = g?.querySelector<HTMLElement>('[aria-checked="true"]')
+    if (!g || !b) return
+    const left = b.offsetLeft
+    const right = left + b.offsetWidth
+    if (left < g.scrollLeft) g.scrollLeft = Math.max(0, left - 4)
+    else if (right > g.scrollLeft + g.clientWidth) g.scrollLeft = right - g.clientWidth + 24
+  }, [state.view])
 
   const setRefs = (el: HTMLInputElement | null) => {
     innerRef.current = el
@@ -111,18 +133,20 @@ export function CollectionsToolbar({
     )
 
   return (
-    <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-3 dark:border-white/[0.08] dark:bg-[#0f1923] md:px-8 md:py-4'>
+    <div
+      className='border-b border-slate-200 bg-white px-4 py-3 dark:border-white/[0.08] dark:bg-[#0f1923] md:[&[data-cdr]]:px-8 md:[&[data-cdr]]:py-4'
+      data-cdr=''
+    >
       <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
         <div className='flex items-center gap-2'>
-          <h1 className='text-[18px] font-semibold text-slate-900 dark:text-slate-100'>
-            Collections
-          </h1>
+          <h1 className='text-[18px] font-semibold text-slate-900 dark:text-slate-100'>{title}</h1>
           <span className='rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-slate-500 dark:bg-white/10 dark:text-slate-400'>
             {counts.total}
           </span>
         </div>
 
-        <div className='relative'>
+        {/* Phones: the search takes the whole row. */}
+        <div data-cdr='' className='relative w-full md:[&[data-cdr]]:w-auto'>
           <Search className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
           <Input
             ref={setRefs}
@@ -130,14 +154,18 @@ export function CollectionsToolbar({
             onChange={(e) => onFilterChange(e.target.value)}
             placeholder='Filter collections'
             aria-label='Filter collections'
-            className='h-8 w-56 border-slate-200 bg-slate-50 pl-8 text-[13px] placeholder:text-slate-400 focus-visible:ring-nvr-cyan dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-slate-200 dark:placeholder:text-slate-500'
+            data-cdr=''
+            className='h-8 w-full border-slate-200 md:[&[data-cdr]]:w-56 bg-slate-50 pl-8 text-[13px] placeholder:text-slate-400 focus-visible:ring-nvr-cyan dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-slate-200 dark:placeholder:text-slate-500'
           />
         </div>
 
         <div
+          ref={groupRef}
           role='radiogroup'
           aria-label='View'
-          className='flex flex-wrap items-center gap-0.5 rounded-lg bg-slate-100 p-0.5 dark:bg-white/[0.06]'
+          data-cdr=''
+          // Phones: one scrolling row, faded at the right edge so it reads as "more this way".
+          className='relative flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg bg-slate-100 p-0.5 [mask-image:linear-gradient(to_right,#000_calc(100%-24px),transparent)] [scrollbar-width:none] md:[&[data-cdr]]:[mask-image:none] dark:bg-white/[0.06]'
         >
           {views.map((v, i) => {
             const on = state.view === v.key
@@ -154,7 +182,7 @@ export function CollectionsToolbar({
                 onKeyDown={(e) => onRadioKey(e, i)}
                 className={cn(
                   btnBase,
-                  'disabled:cursor-not-allowed disabled:opacity-40',
+                  'shrink-0 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-40',
                   on
                     ? 'bg-white text-slate-900 shadow-sm dark:bg-white/15 dark:text-slate-100'
                     : idle
@@ -189,25 +217,29 @@ export function CollectionsToolbar({
           </button>
         </div>
 
-        {isAdmin && (
+        {isAdmin && (adminActions || canArrange || canSelect) && (
           <div className='ml-auto flex items-center gap-1'>
             {adminActions}
-            <button
-              type='button'
-              aria-pressed={state.arranging}
-              onClick={toggleArrange}
-              className={cn(btnBase, state.arranging ? active : idle)}
-            >
-              {state.arranging ? 'Done arranging' : 'Arrange'}
-            </button>
-            <button
-              type='button'
-              aria-pressed={state.selecting}
-              onClick={toggleSelect}
-              className={cn(btnBase, state.selecting ? active : idle)}
-            >
-              Select
-            </button>
+            {canArrange && (
+              <button
+                type='button'
+                aria-pressed={state.arranging}
+                onClick={toggleArrange}
+                className={cn(btnBase, state.arranging ? active : idle)}
+              >
+                {state.arranging ? 'Done arranging' : 'Arrange'}
+              </button>
+            )}
+            {canSelect && (
+              <button
+                type='button'
+                aria-pressed={state.selecting}
+                onClick={toggleSelect}
+                className={cn(btnBase, state.selecting ? active : idle)}
+              >
+                Select
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -278,7 +310,7 @@ export function CollectionsToolbar({
         </div>
       </div>
 
-      {isAdmin && state.selecting && (
+      {isAdmin && canSelect && state.selecting && (
         <div className='mt-2 flex items-center gap-3 rounded-md bg-nvr-cyan/10 px-3 py-1.5 text-[12px] text-slate-700 dark:text-slate-200'>
           <span className='font-medium tabular-nums'>{selectedCount} selected</span>
           <button

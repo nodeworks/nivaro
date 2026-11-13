@@ -1,41 +1,65 @@
+// @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, renderHook, waitFor } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { act } from 'react'
 import { toast } from 'sonner'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '@/lib/api'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { NivaroProvider } from '../../context'
 import { movePin, useSharedPins } from './shared-pins'
+import { cleanup, mount, waitFor } from './test-kit'
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 const toastError = vi.fn()
-vi.mock('@nivaro/shared', async (orig) => ({
-  ...(await orig<typeof import('@nivaro/shared')>()),
+vi.mock('../../lib/error-toast', () => ({
   toastError: (...a: unknown[]) => toastError(...a)
 }))
 
+type Cmd = { _method: string; _path: string; _body?: unknown }
+const getPins = vi.fn()
 const put = vi.fn()
-beforeEach(() => {
-  ;(api as unknown as { put: typeof put }).put = put
-  put.mockReset()
-  vi.mocked(api.get).mockReset()
-  vi.mocked(toast.error).mockClear()
-  toastError.mockClear()
-  vi.mocked(toast.success).mockClear()
-})
-
-function wrapper() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+const client = {
+  request: vi.fn((cmd: Cmd) =>
+    cmd._method === 'PUT' ? put(cmd._path, cmd._body) : getPins(cmd._path)
   )
 }
 
+beforeEach(() => {
+  put.mockReset()
+  getPins.mockReset()
+  client.request.mockClear()
+  vi.mocked(toast.error).mockClear()
+  vi.mocked(toast.success).mockClear()
+  toastError.mockClear()
+})
+afterEach(cleanup)
+
+type Pins = ReturnType<typeof useSharedPins>
+
+/** renderHook: the hook's latest answer, read through `result.current`. */
+function renderPins(enabled = true) {
+  const result = { current: null as unknown as Pins }
+  function Probe() {
+    result.current = useSharedPins(enabled)
+    return null
+  }
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  mount(
+    <QueryClientProvider client={qc}>
+      <NivaroProvider client={client as never}>
+        <Probe />
+      </NivaroProvider>
+    </QueryClientProvider>
+  )
+  return { result }
+}
+
 async function ready(initial: string[]) {
-  vi.mocked(api.get).mockResolvedValue({ data: { data: { collections: initial } } })
-  const hook = renderHook(() => useSharedPins(true), { wrapper: wrapper() })
-  await waitFor(() => expect(hook.result.current.pins).toEqual(initial))
+  getPins.mockResolvedValue({ data: { collections: initial } })
+  const hook = renderPins()
+  await waitFor(() => JSON.stringify(hook.result.current.pins) === JSON.stringify(initial))
   return hook
 }
+
+const same = (a: string[], b: string[]) => JSON.stringify(a) === JSON.stringify(b)
 
 describe('movePin', () => {
   it('moves one name up or down and stops at the ends', () => {
@@ -49,7 +73,7 @@ describe('movePin', () => {
 describe('useSharedPins', () => {
   it('reads the shared list', async () => {
     const { result } = await ready(['workflows', 'invoices'])
-    expect(api.get).toHaveBeenCalledWith('/collection-pins')
+    expect(getPins).toHaveBeenCalledWith('/collection-pins')
     expect(result.current.pins).toEqual(['workflows', 'invoices'])
   })
 
@@ -61,14 +85,11 @@ describe('useSharedPins', () => {
       void result.current.pin('vendors', 'Vendors')
     })
     // Shown before the server has answered (the PUT is still pending).
-    await waitFor(() => expect(result.current.pins).toEqual(['workflows', 'vendors']))
-    await waitFor(() =>
-      expect(put).toHaveBeenCalledWith('/collection-pins', {
-        collections: ['workflows', 'vendors']
-      })
-    )
+    await waitFor(() => same(result.current.pins, ['workflows', 'vendors']))
+    await waitFor(() => put.mock.calls.length > 0)
+    expect(put).toHaveBeenCalledWith('/collection-pins', { collections: ['workflows', 'vendors'] })
     await act(async () => {
-      answer({ data: { data: { collections: ['workflows', 'vendors'] } } })
+      answer({ data: { collections: ['workflows', 'vendors'] } })
     })
     expect(result.current.pins).toEqual(['workflows', 'vendors'])
     expect(toast.success).toHaveBeenCalledWith('Pinned Vendors for everyone')
@@ -80,7 +101,7 @@ describe('useSharedPins', () => {
     await act(async () => {
       await result.current.unpin('workflows', 'Workflows')
     })
-    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1))
+    await waitFor(() => toastError.mock.calls.length === 1)
     expect(toastError.mock.calls[0][1]).toBe('Could not save the pinned collections')
     expect(result.current.pins).toEqual(['workflows', 'invoices'])
   })
@@ -92,16 +113,16 @@ describe('useSharedPins', () => {
     act(() => {
       void result.current.reorder(['c', 'a', 'b'])
     })
-    await waitFor(() => expect(result.current.pins).toEqual(['c', 'a', 'b']))
-    await waitFor(() => expect(put).toHaveBeenCalled())
+    await waitFor(() => same(result.current.pins, ['c', 'a', 'b']))
+    await waitFor(() => put.mock.calls.length > 0)
     await act(async () => {
       fail(new Error('Network Error'))
     })
-    await waitFor(() => expect(result.current.pins).toEqual(['a', 'b', 'c']))
+    await waitFor(() => same(result.current.pins, ['a', 'b', 'c']))
   })
 
   it('does not read the list when switched off', () => {
-    renderHook(() => useSharedPins(false), { wrapper: wrapper() })
-    expect(api.get).not.toHaveBeenCalled()
+    renderPins(false)
+    expect(getPins).not.toHaveBeenCalled()
   })
 })

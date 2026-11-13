@@ -1,3 +1,4 @@
+import { collectionMatchesFilter as matchesFilter } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronDown,
@@ -22,7 +23,6 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { type DBTableSummary, schemaApi } from '@/lib/schema-api'
 import { cn } from '@/lib/utils'
-import { matchesFilter } from './page-model'
 
 /**
  * The data-model tools that used to live on the Data Model list page, now on

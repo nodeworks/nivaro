@@ -1,4 +1,7 @@
-import type { Collection, FolderOption } from './types'
+import type {
+  DirectoryCollection as Collection,
+  DirectoryFolder as FolderOption
+} from '@nivaro/shared'
 
 export interface FolderSuggestion {
   folder: FolderOption

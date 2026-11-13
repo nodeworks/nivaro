@@ -1,3 +1,4 @@
+import type { DirectoryFolder as FolderOption } from '@nivaro/shared'
 import { useQueryClient } from '@tanstack/react-query'
 import { Check, Folder, FolderX, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -20,7 +21,6 @@ import {
   DialogTitle
 } from '@/components/ui/dialog'
 import { moveCollections } from './overview-data'
-import type { FolderOption } from './types'
 
 const NONE = '__none__'
 

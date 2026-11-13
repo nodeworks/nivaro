@@ -194,6 +194,29 @@ export {
   useClientChaosGate,
   usePretendDownVersion
 } from './components/client-chaos-gate'
+export { HostLink } from './components/collections-directory/CollectionRow'
+export {
+  CollectionsDirectory,
+  type CollectionsDirectoryProps
+} from './components/collections-directory/CollectionsDirectory'
+export {
+  favoriteCollectionsOf,
+  recordCollectionOpen,
+  useNavFavoriteCollections
+} from './components/collections-directory/directory-data'
+export {
+  label as collectionLabel,
+  matchesFilter as collectionMatchesFilter
+} from './components/collections-directory/page-model'
+export type {
+  CollectionFavorites,
+  CollectionStat as DirectoryCollectionStat,
+  CollectionsDirectoryAdminTools,
+  DirectoryCollection,
+  ExtraSectionSpec as DirectoryExtraSection,
+  FolderOption as DirectoryFolder,
+  RowMenuLink as DirectoryRowMenuLink
+} from './components/collections-directory/types'
 export { CommandCenterView } from './components/command-center/CommandCenterView'
 export * from './components/DataTable'
 export { DndMark, DoNotDisturbRow, useDndActive } from './components/DoNotDisturb'
