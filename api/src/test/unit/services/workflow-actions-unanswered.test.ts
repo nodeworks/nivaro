@@ -11,6 +11,8 @@ const store = vi.hoisted(() => ({
   tables: {} as Record<string, Array<Record<string, unknown>>>,
   nextId: 100,
   failSubmissionUpdate: false,
+  /** The guard's read of earlier sends fails (the joined read of nivaro_erp_submissions). */
+  failSendingRead: false,
   /** What the submissions table held while the partner call was in flight. */
   seenDuringCall: [] as Array<Record<string, unknown>>
 }))
@@ -67,7 +69,11 @@ function query(name: string) {
       cap = n
       return q
     },
-    select: async () => matched(),
+    select: async () => {
+      if (table === 'nivaro_erp_submissions' && joinApis && store.failSendingRead)
+        throw new Error('Timeout: Request failed to complete in 15000ms')
+      return matched()
+    },
     first: async () => matched()[0],
     insert: (row: Row) => ({
       returning: async () => {
@@ -172,6 +178,7 @@ beforeEach(() => {
   }
   store.nextId = 100
   store.failSubmissionUpdate = false
+  store.failSendingRead = false
   store.seenDuringCall = []
 })
 
@@ -318,5 +325,34 @@ describe('an unanswered send holds the next send of the same push', () => {
       77,
       expect.objectContaining({ outcome: 'skipped', reason: expect.stringMatching(/^MDSi may/) })
     )
+  })
+})
+
+describe('when the earlier sends cannot be read', () => {
+  it('a blocking push fails closed: refused as a blocked move, nothing sent', async () => {
+    store.failSendingRead = true
+    const res = await run()
+    expect(callExternalApi).not.toHaveBeenCalled()
+    expect(res.blockedError).toBe(
+      "Submit to Warehouse: Couldn't check earlier sends to MDSi. Try again in a minute."
+    )
+    // Not one the automatic engine retries on its own (auto-transition-memory RETRYABLE).
+    expect(res.blockedClass).toBe('check_failed')
+    expect(submissions()).toHaveLength(0)
+  })
+
+  it('a non-blocking push fails open and sends as before', async () => {
+    store.failSendingRead = true
+    const res = await run({ ...action, blocking: false })
+    expect(res.blockedError).toBeNull()
+    expect(callExternalApi).toHaveBeenCalledTimes(1)
+  })
+
+  it('a blocking push marks its row so the stale-send alert ranks it as an order', async () => {
+    await run()
+    expect(JSON.parse(String(store.seenDuringCall[0].payload)).blocking).toBe(true)
+    await run({ ...action, blocking: false })
+    const last = store.seenDuringCall.at(-1) as Row
+    expect(JSON.parse(String(last.payload)).blocking).toBeUndefined()
   })
 })

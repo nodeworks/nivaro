@@ -23,6 +23,8 @@ export const SENDING_STATUS = 'sending'
 export const DEFAULT_SEND_TIMEOUT_MS = 120_000
 export const MAX_SEND_TIMEOUT_MS = 10 * 60_000
 const MIN_SEND_TIMEOUT_MS = 5_000
+/** The partner-call timeout of a resend of a stored request (routes/erp-submissions sendPayload). */
+export const RESEND_TIMEOUT_MS = 30_000
 /** How long past its timeout a call may still be finishing its own row. */
 export const ANSWER_MARGIN_MS = 60_000
 
@@ -140,33 +142,169 @@ async function sendingRows(
     )) as SendingRow[]
 }
 
-/**
- * The newest unanswered send of THIS push (same API, same endpoint) on a record,
- * other than the ones this run began itself (`ignoreIds`). Null = nothing holds
- * the send. A read that fails answers null: the guard is a safety net on top of
- * the action's own guard, and must not stop every push when the table cannot
- * be read.
- */
-export async function findUnansweredSend(opts: {
+/** A stored request with `answer_by` set: when a send of it started now stops reading in flight. */
+export function payloadWithAnswerBy(payload: string | null, answerBy: Date): string | null {
+  if (payload == null) return payload
+  try {
+    const p = JSON.parse(payload) as Record<string, unknown>
+    if (!p || typeof p !== 'object' || Array.isArray(p)) return payload
+    return JSON.stringify({ ...p, answer_by: answerBy.toISOString() })
+  } catch {
+    return payload
+  }
+}
+
+/** A resend refused because an earlier send of the same push has no answer (or could not be
+ *  checked). `message` is the sentence for the person. */
+export class UnansweredSendError extends Error {
+  readonly code = 'UNANSWERED'
+  constructor(message: string) {
+    super(message)
+    this.name = 'UnansweredSendError'
+  }
+}
+
+/** The earlier sends could not be read: whether one is unanswered is not known. */
+export class UnansweredCheckError extends Error {
+  constructor(cause: unknown) {
+    super(`could not read earlier sends: ${cause instanceof Error ? cause.message : String(cause)}`)
+    this.name = 'UnansweredCheckError'
+  }
+}
+
+interface SendKey {
   collection: string
   item: string
   apiId: number
   endpointPath: string
+  /** Rows the caller began itself (a run's own unfinished row never holds it). */
   ignoreIds?: ReadonlySet<number>
   now?: number
-}): Promise<UnansweredSend | null> {
+}
+
+/**
+ * The newest unanswered send of THIS push (same API, same endpoint) on a record,
+ * other than `ignoreIds`. Null = nothing holds the send. Throws
+ * UnansweredCheckError when the table cannot be read: the caller decides whether
+ * not knowing means wait (a blocking order, a person's resend) or go on.
+ */
+export async function findUnansweredSendStrict(opts: SendKey): Promise<UnansweredSend | null> {
   const now = opts.now ?? Date.now()
+  let rows: SendingRow[]
   try {
-    const rows = await sendingRows(opts.collection, opts.item, opts.apiId)
-    for (const row of rows) {
-      if (opts.ignoreIds?.has(Number(row.id))) continue
-      if (endpointOf(row.payload) !== opts.endpointPath) continue
-      return toUnanswered(row, now)
-    }
+    rows = await sendingRows(opts.collection, opts.item, opts.apiId)
+  } catch (err) {
+    throw new UnansweredCheckError(err)
+  }
+  for (const row of rows) {
+    if (opts.ignoreIds?.has(Number(row.id))) continue
+    if (endpointOf(row.payload) !== opts.endpointPath) continue
+    return toUnanswered(row, now)
+  }
+  return null
+}
+
+/** findUnansweredSendStrict that answers null when the table cannot be read. */
+export async function findUnansweredSend(opts: SendKey): Promise<UnansweredSend | null> {
+  try {
+    return await findUnansweredSendStrict(opts)
   } catch {
     return null
   }
-  return null
+}
+
+async function apiName(apiId: number): Promise<string | null> {
+  try {
+    const row = (await db('nivaro_external_apis').where({ id: apiId }).first('name')) as
+      | { name?: string | null }
+      | undefined
+    return row?.name?.trim() || null
+  } catch {
+    return null
+  }
+}
+
+/** What a send that could not check for earlier unanswered sends answers. */
+export function checkFailedReason(api: string | null): string {
+  return `Couldn't check earlier sends to ${api ?? 'the other system'}. Try again in a minute.`
+}
+
+/**
+ * Whether this push must wait, and the sentence that says why: an unanswered
+ * earlier send of it (young or stale), or — `checkFailed` — the earlier sends
+ * could not be read. Null = send. `user` decides the time zone of the sentence
+ * (their preference, else the instance's).
+ */
+export async function unansweredHold(
+  opts: SendKey & { moveLabel?: string | null; user?: { preferences?: unknown } | null }
+): Promise<{ reason: string; send: UnansweredSend | null; checkFailed: boolean } | null> {
+  let send: UnansweredSend | null
+  try {
+    send = await findUnansweredSendStrict(opts)
+  } catch {
+    return { reason: checkFailedReason(await apiName(opts.apiId)), send: null, checkFailed: true }
+  }
+  if (!send) return null
+  const { formatForPerson, userTimeZone } = await import('./user-time.js')
+  const zone = await userTimeZone(opts.user ?? null).catch(() => 'America/New_York')
+  const when = formatForPerson(new Date(send.started_at), zone)
+  return {
+    reason: unansweredRefusal({ send, moveLabel: opts.moveLabel, when, now: opts.now }),
+    send,
+    checkFailed: false
+  }
+}
+
+/** A `sending` row past its time, for the integration signals. */
+export interface StaleUnansweredRow {
+  id: number
+  collection: string
+  item: string
+  api_name: string | null
+  endpoint_path: string | null
+  started_at: string
+  /** Written by a blocking (order-creating) push: the move waits on it. */
+  blocking: boolean
+}
+
+/** Every unanswered send past its time, newest first (at most `cap`). */
+export async function staleUnansweredSends(
+  cap = 2000,
+  now = Date.now()
+): Promise<StaleUnansweredRow[]> {
+  const rows = (await db('nivaro_erp_submissions as s')
+    .leftJoin('nivaro_external_apis as a', 'a.id', 's.external_api')
+    .where('s.status', SENDING_STATUS)
+    .orderBy('s.id', 'desc')
+    .limit(cap)
+    .select(
+      's.id',
+      's.collection',
+      's.item',
+      's.created_at',
+      's.payload',
+      'a.name as api_name'
+    )) as Array<SendingRow & { collection: string; item: string }>
+  const out: StaleUnansweredRow[] = []
+  for (const r of rows) {
+    if (!isUnansweredStale(r, now)) continue
+    let blocking = false
+    try {
+      blocking = (JSON.parse(r.payload ?? '{}') as { blocking?: unknown }).blocking === true
+    } catch {
+      blocking = false
+    }
+    out.push({
+      id: Number(r.id),
+      collection: r.collection,
+      item: String(r.item),
+      api_name: r.api_name ?? null,
+      endpoint_path: endpointOf(r.payload),
+      started_at: new Date(r.created_at).toISOString(),
+      blocking
+    })
+  }
+  return out
 }
 
 /** The newest unanswered send of any push on a record (the pipeline row's warning). */
@@ -205,8 +343,12 @@ export function unansweredRefusal(opts: {
   const name = opts.send.api_name?.trim() || null
   const api = name ?? 'the other system'
   if (!opts.send.stale) {
-    const move = opts.moveLabel?.trim() || 'This step'
-    return `${move} is still being sent to ${api} (started ${agoText(opts.send.started_at, opts.now)}). Wait for it to finish.`
+    const ago = agoText(opts.send.started_at, opts.now)
+    const move = opts.moveLabel?.trim()
+    // Without a move (Send now, a retry) it is the earlier send that is still out.
+    return move
+      ? `${move} is still being sent to ${api} (started ${ago}). Wait for it to finish.`
+      : `An earlier send to ${api} is still waiting for its answer (started ${ago}). Wait for it to finish.`
   }
   return `${name ?? 'The other system'} may already have this order: the last send on ${opts.when} got no answer before the app stopped. Check ${api} before sending again, then mark that send as received or not received in ${RESOLVE_PLACE}.`
 }

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
+import { db } from '../../../db/index.js'
 import {
   ANSWER_MARGIN_MS,
   answerByFor,
@@ -10,6 +11,8 @@ import {
   isUnansweredStale,
   MAX_SEND_TIMEOUT_MS,
   sendingLabel,
+  staleUnansweredSends,
+  unansweredHold,
   unansweredRefusal
 } from '../../../services/erp-unanswered.js'
 
@@ -81,5 +84,104 @@ describe('the refusal', () => {
     })
     expect(text.startsWith('The other system may already have this order')).toBe(true)
     expect(text).toContain('Check the other system before')
+  })
+})
+
+/** A knex-ish chain whose read answers `rows` (or throws `fail`). */
+function reads(rows: unknown[], fail?: Error) {
+  const q: Record<string, unknown> = {}
+  for (const m of ['leftJoin', 'where', 'orderBy', 'limit']) q[m] = () => q
+  q.select = async () => {
+    if (fail) throw fail
+    return rows
+  }
+  q.first = async () => ({ name: 'MDSi' })
+  return q
+}
+
+describe('unansweredHold', () => {
+  const key = { collection: 'inventory_request', item: 'r1', apiId: 5, endpointPath: '/orders' }
+
+  it('earlier sends that cannot be read: a hold that says so, naming the partner', async () => {
+    vi.mocked(db).mockImplementation(((t: string) =>
+      t.startsWith('nivaro_erp_submissions')
+        ? reads([], new Error('timeout'))
+        : reads([])) as never)
+    expect(await unansweredHold(key)).toEqual({
+      reason: "Couldn't check earlier sends to MDSi. Try again in a minute.",
+      send: null,
+      checkFailed: true
+    })
+  })
+
+  it('nothing unanswered: no hold', async () => {
+    vi.mocked(db).mockImplementation((() => reads([])) as never)
+    expect(await unansweredHold(key)).toBeNull()
+  })
+
+  it('a young one without a move to name (Send now, a retry): the earlier send is still out', async () => {
+    const created = new Date(Date.now() - 40_000)
+    vi.mocked(db).mockImplementation((() =>
+      reads([
+        {
+          id: 50,
+          external_api: 5,
+          created_at: created,
+          api_name: 'MDSi',
+          payload: JSON.stringify({
+            endpoint_path: '/orders',
+            answer_by: new Date(created.getTime() + 180_000).toISOString()
+          })
+        }
+      ])) as never)
+    const hold = await unansweredHold(key)
+    expect(hold?.checkFailed).toBe(false)
+    expect(hold?.reason).toMatch(
+      /^An earlier send to MDSi is still waiting for its answer \(started \d+ seconds ago\)\. Wait for it to finish\.$/
+    )
+  })
+})
+
+describe('staleUnansweredSends (the alert)', () => {
+  it('lists only sends past their time, and says which came from a blocking push', async () => {
+    const now = Date.parse('2026-11-13T15:00:00Z')
+    const row = (id: number, minutesAgo: number, extra: Record<string, unknown> = {}) => {
+      const created = new Date(now - minutesAgo * 60_000)
+      return {
+        id,
+        collection: 'inventory_request',
+        item: String(id),
+        external_api: 5,
+        api_name: 'MDSi',
+        created_at: created,
+        payload: JSON.stringify({
+          endpoint_path: '/orders',
+          answer_by: new Date(created.getTime() + 180_000).toISOString(),
+          ...extra
+        })
+      }
+    }
+    vi.mocked(db).mockImplementation((() =>
+      reads([row(3, 1), row(2, 30, { blocking: true }), row(1, 60)])) as never)
+    expect(await staleUnansweredSends(2000, now)).toEqual([
+      {
+        id: 2,
+        collection: 'inventory_request',
+        item: '2',
+        api_name: 'MDSi',
+        endpoint_path: '/orders',
+        started_at: new Date(now - 30 * 60_000).toISOString(),
+        blocking: true
+      },
+      {
+        id: 1,
+        collection: 'inventory_request',
+        item: '1',
+        api_name: 'MDSi',
+        endpoint_path: '/orders',
+        started_at: new Date(now - 60 * 60_000).toISOString(),
+        blocking: false
+      }
+    ])
   })
 })

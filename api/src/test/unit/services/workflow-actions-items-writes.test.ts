@@ -50,7 +50,7 @@ function fakeDb(tables: Record<string, Array<Record<string, unknown>>>) {
   const fn = vi.fn((table: string) => {
     const rows = tables[table] ?? []
     const b: Builder = {}
-    for (const m of ['where', 'whereIn', 'whereNull', 'orderBy', 'limit', 'orWhere'])
+    for (const m of ['where', 'whereIn', 'whereNull', 'orderBy', 'limit', 'orWhere', 'leftJoin'])
       b[m] = vi.fn(() => b)
     b.select = vi.fn(() => Promise.resolve(rows))
     b.first = vi.fn(() => Promise.resolve(rows[0]))

@@ -23,9 +23,8 @@ import type { RequestedVia } from './erp-submission-status.js'
 import {
   answerByFor,
   erpActionTimeoutMs,
-  findUnansweredSend,
   SENDING_STATUS,
-  unansweredRefusal
+  unansweredHold
 } from './erp-unanswered.js'
 import { callExternalApi } from './external-apis.js'
 import {
@@ -1233,31 +1232,31 @@ export async function runTransitionActions(opts: {
     // An earlier send of this same push that never got an answer (erp-unanswered.ts): the
     // partner may already have it, so nothing is sent until that one is settled.
     const timeoutMs = erpActionTimeoutMs(action as { timeout_ms?: unknown })
-    const unanswered = await findUnansweredSend({
+    // When the earlier sends cannot be read, a blocking (order-creating) push waits — it
+    // cannot know the partner does not already have it; any other push goes on (fail open).
+    const hold = await unansweredHold({
       collection,
       item: String(item),
       apiId,
       endpointPath: action.endpoint_path,
-      ignoreIds: ownSends
+      ignoreIds: ownSends,
+      moveLabel: opts.transition.label,
+      user: acting.user
     })
-    if (unanswered) {
-      const { formatForPerson, userTimeZone } = await import('./user-time.js')
-      const when = formatForPerson(
-        new Date(unanswered.started_at),
-        await userTimeZone(acting.user).catch(() => 'America/New_York')
-      )
-      const reason = unansweredRefusal({
-        send: unanswered,
-        moveLabel: opts.transition.label,
-        when
-      })
+    if (hold && !(hold.checkFailed && action.blocking !== true)) {
+      const reason = hold.reason
       skippedReason = reason
       await resolveObligation(obligationId, { outcome: 'skipped', reason })
       if (action.blocking === true) {
         await journalTick(`blocked: ${reason}`)
         return {
           blockedError: `${opts.transition.label}: ${reason}`,
-          blockedClass: unanswered.stale ? 'unanswered' : 'in_flight'
+          // None of these is a class the automatic engine retries on its own.
+          blockedClass: hold.checkFailed
+            ? 'check_failed'
+            : hold.send?.stale
+              ? 'unanswered'
+              : 'in_flight'
         }
       }
       continue
@@ -1316,7 +1315,8 @@ export async function runTransitionActions(opts: {
       endpointPath: action.endpoint_path,
       body,
       answerBy: answerByFor(new Date(), timeoutMs),
-      who
+      who,
+      blocking: action.blocking === true
     })
     if (begunId != null) {
       ownSends.add(begunId)
@@ -1954,11 +1954,14 @@ export async function beginSubmission(opts: {
   body: Record<string, unknown>
   answerBy: Date
   who?: SubmissionRequester
+  /** A blocking (order-creating) push: the stale-send alert ranks it highest. */
+  blocking?: boolean
 }): Promise<number | null> {
   try {
     const now = new Date()
     const { payload } = await storedRequest(opts.externalApi, opts.endpointPath, opts.body, {
-      answer_by: opts.answerBy.toISOString()
+      answer_by: opts.answerBy.toISOString(),
+      ...(opts.blocking ? { blocking: true } : {})
     })
     const requesterFields = await requesterInsertFields(
       'nivaro_erp_submissions',
