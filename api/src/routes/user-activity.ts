@@ -4,13 +4,35 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { getCollection } from '../services/collections.js'
 import { labelPathRecords } from '../services/event-path/record-labels.js'
 import type { PathStep } from '../services/event-path/types.js'
+import { junctionsOf, loadJunctionMap } from '../services/junction-map.js'
+import { accessChangeIds, describeAccessChanges } from '../services/person-access-changes.js'
 
 /**
  * Per-user activity feed (admin only).
  *
- * GET /user-activity/:userId?page=&limit=50&action=create&collection=orders&sort=asc
- * GET /user-activity/:userId/summary
+ * GET /user-activity/:userId?page=&limit=50&action=create&collection=orders&sort=asc&access=0
+ * GET /user-activity/:userId/summary?access=0
+ *
+ * Besides the rows the person wrote, both include access changes made TO them by someone
+ * else (grants, declines, User Scopes, role / status) — services/person-access-changes.ts;
+ * `access=0` leaves them out. Those rows carry `about_them: true`, a readable `summary`
+ * ("Access granted to Workflow CM26-365984 by Rob Lee"), a `detail` and `by`.
  */
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+async function extraIds(userId: string, q: Record<string, string>): Promise<number[]> {
+  if (q.access === '0' || !UUID_RE.test(userId)) return []
+  return accessChangeIds(userId).catch(() => [])
+}
+
+/** `user = id`, or one of the access changes made to them. */
+function byOrAbout(userId: string, extra: number[]) {
+  return (w: import('knex').Knex.QueryBuilder) => {
+    w.where('user', userId)
+    if (extra.length) w.orWhereIn('id', extra)
+  }
+}
 export async function userActivityRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
   app.addHook('preHandler', requireAdmin)
@@ -22,17 +44,20 @@ export async function userActivityRoutes(app: FastifyInstance) {
     const page = Math.max(q.page ? Number(q.page) : 1, 1)
     const offset = (page - 1) * limit
     const sortDir = q.sort === 'asc' ? 'asc' : 'desc'
+    const extra = await extraIds(userId, q)
 
-    let query = db('nivaro_activity').where('user', userId)
-    let countQuery = db('nivaro_activity').where('user', userId)
+    let query = db('nivaro_activity').where(byOrAbout(userId, extra))
+    let countQuery = db('nivaro_activity').where(byOrAbout(userId, extra))
 
     if (q.action) {
       query = query.where('action', q.action)
       countQuery = countQuery.where('action', q.action)
     }
     if (q.collection) {
-      query = query.where('collection', q.collection)
-      countQuery = countQuery.where('collection', q.collection)
+      // A collection's rows include its link tables' (they read as changes to it).
+      const cols = [q.collection, ...junctionsOf(q.collection, await loadJunctionMap())]
+      query = query.whereIn('collection', cols)
+      countQuery = countQuery.whereIn('collection', cols)
     }
     if (q.date_from) {
       query = query.where('timestamp', '>=', q.date_from)
@@ -53,28 +78,40 @@ export async function userActivityRoutes(app: FastifyInstance) {
     ])
 
     const total = Number((countRows[0] as { count: string | number }).count)
-    return reply.send({ data: await withFriendlyLabels(data as ActivityRow[]), total, page, limit })
+    const labelled = await withFriendlyLabels(data as ActivityRow[])
+    const about = extra.length
+      ? await describeAccessChanges(userId, labelled as never, new Set(extra)).catch(
+          () => new Map()
+        )
+      : new Map()
+    const rows = labelled.map((r) => {
+      const line = about.get(Number(r.id))
+      return line ? { ...r, about_them: true, ...line } : r
+    })
+    return reply.send({ data: rows, total, page, limit })
   })
 
   app.get('/:userId/summary', async (req, reply) => {
     const { userId } = req.params as { userId: string }
+    const extra = await extraIds(userId, req.query as Record<string, string>)
+    const mine = byOrAbout(userId, extra)
 
     const [actionRows, collectionRows, totalRows] = await Promise.all([
       db('nivaro_activity')
         .select('action')
         .count('id as count')
-        .where('user', userId)
+        .where(mine)
         .groupBy('action')
         .orderByRaw('count(id) desc'),
       db('nivaro_activity')
         .select('collection')
         .count('id as count')
-        .where('user', userId)
+        .where(mine)
         .whereNotNull('collection')
         .groupBy('collection')
         .orderByRaw('count(id) desc')
-        .limit(10),
-      db('nivaro_activity').where('user', userId).count('id as count')
+        .limit(30),
+      db('nivaro_activity').where(mine).count('id as count')
     ])
 
     return reply.send({
@@ -85,17 +122,34 @@ export async function userActivityRoutes(app: FastifyInstance) {
           count: Number(r.count)
         })),
         collections: await Promise.all(
-          (collectionRows as Array<{ collection: string; count: string | number }>).map(
-            async (r) => ({
-              collection: r.collection,
-              collection_label: await collectionLabel(r.collection),
-              count: Number(r.count)
-            })
-          )
+          foldLinkTables(
+            collectionRows as Array<{ collection: string; count: string | number }>,
+            await loadJunctionMap()
+          ).map(async (r) => ({
+            collection: r.collection,
+            collection_label: await collectionLabel(r.collection),
+            count: r.count
+          }))
         )
       }
     })
   })
+}
+
+/** Link-table counts folded into their parent collection; busiest ten. */
+function foldLinkTables(
+  rows: Array<{ collection: string; count: string | number }>,
+  junctions: Map<string, { parent: string }>
+): Array<{ collection: string; count: number }> {
+  const by = new Map<string, number>()
+  for (const r of rows) {
+    const c = junctions.get(r.collection)?.parent ?? r.collection
+    by.set(c, (by.get(c) ?? 0) + Number(r.count))
+  }
+  return [...by]
+    .map(([collection, count]) => ({ collection, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10)
 }
 
 interface ActivityRow {

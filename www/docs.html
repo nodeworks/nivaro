@@ -17317,13 +17317,15 @@ Content-Type: application/json
         </div>
 
         <!-- USER ACTIVITY FEED -->
-        <div class="doc-section" id="s-user-activity-feed" data-toc='[{"id":"user-activity-feed","label":"User Activity Feed"}]'>
+        <div class="doc-section" id="s-user-activity-feed" data-toc='[{"id":"user-activity-feed","label":"User Activity Feed"},{"id":"user-activity-what-they-did","label":"What they did"}]'>
           <!-- SYNC:user-activity-feed -->
           <h1 class="doc-h1" id="user-activity-feed">User Activity Feed</h1>
           <p class="doc-p">An "Activity" button in the user editor and profile page header opens a right sidebar with a full chronological timeline of everything that user has done: item mutations, workflow transitions, logins, lock acquire/release — including the IP address for each event.</p>
           <ul class="doc-ul">
             <li>Entries are grouped by calendar date with a sticky date separator and a vertical connector line.</li>
-            <li>Action-type chips at the top (create, update, delete, login…) act as one-click filters.</li>
+            <li>Every row is the shared activity sentence, with records named as the viewer may read them: a link-table write reads "Removed Division Zone 1 from Workflow CM26-79704", and the link rows one write made on one record fold into one line ("Changed Division on Workflow CM26-79704: Zone 1 → Zone 2"; several kinds are listed, with "Show each step").</li>
+            <li>Access changes made TO the person by someone else show too, marked "Their access": access-request grants (full and partial) and declines, User Scopes changes, role and status changes, first-access authorisation and copied access — e.g. "Access granted to Workflow CM26-365984 by Rob Lee · Added CHI to their Region filter". Older grants show too: they are found through the person's own access requests.</li>
+            <li>Action chips at the top use plain words (Opened, Edited, Signed in, Access granted…) and act as one-click filters; the collection filter folds link tables into their parent.</li>
             <li>Filter bar: action select, collection text input, sort toggle (newest/oldest first). Chip count badge shows active filters.</li>
             <li>Collection and item values link directly to the record; clicking navigates and closes the sidebar.</li>
             <li>Load-more pagination — 50 entries per page, infinite scroll.</li>
@@ -17336,10 +17338,23 @@ Content-Type: application/json
   &amp;date_from=2025-01-01 # ISO date lower bound
   &amp;date_to=2025-12-31   # ISO date upper bound
   &amp;sort=asc             # asc | desc (default desc)
+  &amp;access=0             # leave out access changes made to the person
 
 GET /api/user-activity/:userId/summary
-  # returns { total, actions: [{action, count}], collections: [{collection, count}] }</code></pre>
+  # returns { total, actions: [{action, count}], collections: [{collection, count}] }
+
+# An access change made to the person by someone else carries
+#   about_them: true, summary, detail, by
+#   e.g. { "summary": "Access granted to Workflow CM26-365984 by Rob Lee",
+#          "detail": "Added CHI to their Region filter", "by": "Rob Lee" }</code></pre>
           <div class="doc-note">Both endpoints require admin access. The summary endpoint drives the clickable action chips — it is fetched once when the panel opens and is not re-fetched on filter changes.</div>
+          <h2 class="doc-h2" id="user-activity-what-they-did">What they did</h2>
+          <p class="doc-p">The person page's "What they did" tab (administrators, and each person on their own page) lists the trail by day, then collection, in plain words: "Workflows — Edited · Approved · Opened 3". Link tables fold into their parent collection. A group opens to readable lines: repeated opens of one record are one line ("Opened Workflow CM26-372916 · Fiber build 4×"), the link rows one edit wrote ride that edit ("Changed Amount · Division Zone 1 → Zone 2"), and a record the viewer cannot read is "a workflow record" — never its id. The CSV export keeps the raw ids.</p>
+          <pre class="doc-pre"><code>GET  /api/activity/people/:userId/summary?days=30&amp;tz=America/New_York
+  # days[].collections[] = { collection, label, count, parts: [{verb, count}] }
+GET  /api/activity/people/:userId/entries?day=2026-11-12&amp;collection=workflows&amp;tz=…
+  # { data: [{ key, ids, at, first_at?, count, verb, kind, target, detail, note?, record }], truncated }
+POST /api/activity/people/:userId/export {days, tz}   # CSV, logged as activity-export</code></pre>
           <!-- /SYNC:user-activity-feed -->
         </div>
 

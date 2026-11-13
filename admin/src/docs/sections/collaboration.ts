@@ -662,7 +662,9 @@ export const collabUserActivityFeed: DocSection = {
       type: 'ul',
       items: [
         'Entries are grouped by calendar date with a sticky date separator and a vertical connector line.',
-        'Action-type chips at the top (create, update, delete, login…) act as one-click filters.',
+        'Every row is the shared activity sentence, with records named as the viewer may read them: a link-table write reads "Removed Division Zone 1 from Workflow CM26-79704", and the link rows one write made on one record fold into one line ("Changed Division on Workflow CM26-79704: Zone 1 → Zone 2"; several kinds are listed, with "Show each step").',
+        'Access changes made TO the person by someone else show too, marked "Their access": access-request grants (full and partial) and declines, User Scopes changes, role and status changes, first-access authorisation and copied access — e.g. "Access granted to Workflow CM26-365984 by Rob Lee · Added CHI to their Region filter". Older grants show too: they are found through the person\'s own access requests.',
+        'Action chips at the top use plain words (Opened, Edited, Signed in, Access granted…) and act as one-click filters; the collection filter folds link tables into their parent.',
         'Filter bar: action select, collection text input, sort toggle (newest/oldest first). Chip count badge shows active filters.',
         'Collection and item values link directly to the record; clicking navigates and closes the sidebar.',
         'Load-more pagination — 50 entries per page, infinite scroll.',
@@ -678,13 +680,32 @@ export const collabUserActivityFeed: DocSection = {
   &date_from=2025-01-01 # ISO date lower bound
   &date_to=2025-12-31   # ISO date upper bound
   &sort=asc             # asc | desc (default desc)
+  &access=0             # leave out access changes made to the person
 
 GET /api/user-activity/:userId/summary
-  # returns { total, actions: [{action, count}], collections: [{collection, count}] }`
+  # returns { total, actions: [{action, count}], collections: [{collection, count}] }
+
+# An access change made to the person by someone else carries
+#   about_them: true, summary, detail, by
+#   e.g. { "summary": "Access granted to Workflow CM26-365984 by Rob Lee",
+#          "detail": "Added CHI to their Region filter", "by": "Rob Lee" }`
     },
     {
       type: 'note',
       text: 'Both endpoints require admin access. The summary endpoint drives the clickable action chips — it is fetched once when the panel opens and is not re-fetched on filter changes.'
+    },
+    { type: 'h2', id: 'user-activity-what-they-did', text: 'What they did' },
+    {
+      type: 'p',
+      text: 'The person page\'s "What they did" tab (administrators, and each person on their own page) lists the trail by day, then collection, in plain words: "Workflows — Edited · Approved · Opened 3". Link tables fold into their parent collection. A group opens to readable lines: repeated opens of one record are one line ("Opened Workflow CM26-372916 · Fiber build 4×"), the link rows one edit wrote ride that edit ("Changed Amount · Division Zone 1 → Zone 2"), and a record the viewer cannot read is "a workflow record" — never its id. The CSV export keeps the raw ids.'
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/activity/people/:userId/summary?days=30&tz=America/New_York
+  # days[].collections[] = { collection, label, count, parts: [{verb, count}] }
+GET  /api/activity/people/:userId/entries?day=2026-11-12&collection=workflows&tz=…
+  # { data: [{ key, ids, at, first_at?, count, verb, kind, target, detail, note?, record }], truncated }
+POST /api/activity/people/:userId/export {days, tz}   # CSV, logged as activity-export`
     }
   ]
 }
