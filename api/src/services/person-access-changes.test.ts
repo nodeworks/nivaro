@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeAccessChange } from './person-access-changes.js'
+import { describeAccessChange, scopeChangeComment } from './person-access-changes.js'
 
 /** Access changes made TO a person, as lines on their profile's Activity feed. */
 
@@ -97,6 +97,42 @@ describe('describeAccessChange', () => {
         { ...ctx, dimensionLabels: new Map([['region', 'Region']]) }
       )
     ).toEqual({ summary: 'Region restriction changed by Rob Lee', detail: null })
+  })
+
+  it('names what a User Scopes save added and removed when the save logged it', () => {
+    expect(
+      describeAccessChange(
+        {
+          ...base,
+          action: 'update',
+          collection: 'nivaro_user_scopes',
+          item: `${GRANTEE}:region:restrict`,
+          comment: 'Added CHI, FLO · Removed BSO',
+          record_label: null
+        },
+        { ...ctx, dimensionLabels: new Map([['region', 'Region']]) }
+      )
+    ).toEqual({
+      summary: 'Region restriction changed by Rob Lee',
+      detail: 'Added CHI, FLO · Removed BSO'
+    })
+  })
+
+  it('words the change a save logs: added and removed values by label', () => {
+    expect(
+      scopeChangeComment(
+        [1, 2],
+        [2, 3, 4],
+        new Map([
+          ['1', 'BSO'],
+          ['3', 'CHI']
+        ])
+      )
+    ).toBe('Added CHI, 4 · Removed BSO')
+    expect(scopeChangeComment([], [], new Map())).toBe('')
+    expect(scopeChangeComment([5], [], new Map([['5', 'Zone 1']]))).toBe(
+      'Removed Zone 1 (none left)'
+    )
   })
 
   it('reads role and status changes on the person, and ignores other edits', () => {

@@ -253,7 +253,12 @@ export function describeAccessChange(
     const label = ctx.dimensionLabels.get(dim) ?? (titleWords(dim) || 'Scope')
     return {
       summary: `${label} ${mode === 'default' ? 'default' : 'restriction'} changed ${by}`,
-      detail: /^bulk\b/i.test(comment) ? 'Part of a bulk change' : null
+      // A save from the Scopes card logs what it added and removed (scopeChangeComment).
+      detail: /^bulk\b/i.test(comment)
+        ? 'Part of a bulk change'
+        : /^(Added|Removed) /.test(comment)
+          ? comment
+          : null
     }
   }
 
@@ -363,4 +368,26 @@ export async function describeAccessChanges(
     if (line) out.set(Number(r.id), { ...line, by: actor })
   }
   return out
+}
+
+/**
+ * What one User Scopes save changed, for its activity comment: "Added CHI, FLO · Removed
+ * BSO" by the values' labels (an id with no label stays as written). Empty when nothing
+ * changed. The person's Activity tab shows it under "Region restriction changed by …".
+ */
+export function scopeChangeComment(
+  before: Array<string | number>,
+  after: Array<string | number>,
+  labels: Map<string, string>
+): string {
+  const had = new Set(before.map(String))
+  const has = new Set(after.map(String))
+  const name = (v: string | number) => labels.get(String(v)) ?? String(v)
+  const added = after.filter((v) => !had.has(String(v))).map(name)
+  const removed = before.filter((v) => !has.has(String(v))).map(name)
+  const parts: string[] = []
+  if (added.length) parts.push(`Added ${added.join(', ')}`)
+  if (removed.length)
+    parts.push(`Removed ${removed.join(', ')}${after.length === 0 ? ' (none left)' : ''}`)
+  return parts.join(' · ')
 }

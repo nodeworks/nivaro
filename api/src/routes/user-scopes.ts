@@ -3,6 +3,7 @@ import { runPersonalConfigWrite } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { scopeChangeComment } from '../services/person-access-changes.js'
 import {
   bustScopeDimensionCache,
   bustScopePathCache,
@@ -498,11 +499,40 @@ export async function userScopesRoutes(app: FastifyInstance) {
       })
     }
     bustUserScopeCache(req.params.userId)
+    // Say what changed (the person's Activity tab shows it under "Region restriction changed").
+    const before = sanitizeValues(
+      (() => {
+        try {
+          return typeof existing?.values === 'string'
+            ? JSON.parse(existing.values)
+            : existing?.values
+        } catch {
+          return []
+        }
+      })()
+    )
+    const changed = [
+      ...values.filter((v) => !before.map(String).includes(String(v))),
+      ...before.filter((v) => !values.map(String).includes(String(v)))
+    ]
+    const labels = new Map<string, string>()
+    if (changed.length > 0 && changed.length <= 200) {
+      const lf = dim.display_field ?? 'name'
+      try {
+        const rows = (await db(dim.target_collection)
+          .whereIn('id', changed)
+          .select('id', lf)) as Array<Record<string, unknown>>
+        for (const r of rows) if (r[lf] != null) labels.set(String(r.id), String(r[lf]))
+      } catch {
+        /* the comment falls back to the ids */
+      }
+    }
     await logActivity({
       action: 'update',
       collection: 'nivaro_user_scopes',
       item: `${req.params.userId}:${dim.name}:${mode}`,
       user: req.user?.id,
+      comment: scopeChangeComment(before, values, labels).slice(0, 1000) || undefined,
       req
     })
     return reply.send({ data: { saved: true, values } })
