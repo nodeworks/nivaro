@@ -209,4 +209,40 @@ describe('link labels, read as the reader', () => {
       })
     ).toBe('Rob Lee removed Division from a workflow record'.replace('Division', 'a Division'))
   })
+
+  // Security review 2026-11-13: a link row's parent id is the very thing a reader who cannot
+  // see that record must not learn (which workflow a division was taken off).
+  it('never hands out the parent id of a record the reader may not see', async () => {
+    const l = await activityLabelsFor(
+      reader,
+      { refs: [{ collection: 'workflows_divisions', id: '472525' }] },
+      {},
+      deps(['divisions:1'])
+    )
+    expect(l.junctions?.['workflows_divisions:472525']?.parent_id).toBeNull()
+    expect(l.junctions?.['workflows_divisions:472525']?.value).toBeNull()
+  })
+
+  it('reads no link row of a link table the reader may not read', async () => {
+    const d = deps(['workflows:79704', 'divisions:1'])
+    d.canRead = vi.fn(async (_u: User, c: string) => c !== 'workflows_divisions')
+    const l = await activityLabelsFor(
+      reader,
+      { refs: [{ collection: 'workflows_divisions', id: '472525' }] },
+      {},
+      d
+    )
+    expect(d.junctionRows).not.toHaveBeenCalled()
+    expect(l.junctions?.['workflows_divisions:472525']).toBeUndefined()
+  })
+
+  it('an administrator still gets the parent id of a record gone from view', async () => {
+    const l = await activityLabelsFor(
+      reader,
+      { refs: [{ collection: 'workflows_divisions', id: '472525' }] },
+      { isAdmin: true },
+      deps([])
+    )
+    expect(l.junctions?.['workflows_divisions:472525']?.parent_id).toBe('79704')
+  })
 })

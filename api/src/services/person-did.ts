@@ -586,9 +586,10 @@ export function foldPersonLines(rows: PersonDidRow[], ctx: FoldContext): DidLine
     const t = parentId
       ? targetOf(j.parent, parentId, labels)
       : {
+          // No parent id: unknown, or not the viewer's to see (activityLabelsFor withholds it).
           text: `a ${lowerNoun(collectionNouns(j.parent, labels).singular)} record`,
           record: null,
-          hidden: false
+          hidden: true
         }
     const line: DidLine = {
       key: `l:${r.id}`,

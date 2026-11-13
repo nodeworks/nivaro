@@ -447,7 +447,18 @@ export async function activityLabelsFor(
     refs.length && deps.junctions
       ? await deps.junctions().catch(() => new Map<string, JunctionInfo>())
       : new Map<string, JunctionInfo>()
-  const linkRefs = refs.filter((r) => jmap.has(r.collection))
+  // Only link tables the reader may read: a link row is never read on someone's behalf
+  // when its own table is closed to them (security review 2026-11-13).
+  const linkTables = [...new Set(refs.map((r) => r.collection).filter((c) => jmap.has(c)))]
+  const openLinkTables = new Set<string>()
+  await Promise.all(
+    linkTables.map(async (c) => {
+      if (admin || (await deps.canRead(user, c).catch(() => false))) openLinkTables.add(c)
+    })
+  )
+  const linkRefs = refs.filter((r) => openLinkTables.has(r.collection))
+  // Parents and linked records join the refs below; they stay inside a fixed budget.
+  const refBudget = LABEL_LIMITS.refs * 3
   const storedLinks =
     linkRefs.length && deps.junctionRows
       ? await deps.junctionRows(jmap, linkRefs).catch(() => new Map<string, JunctionRow>())
@@ -457,11 +468,18 @@ export async function activityLabelsFor(
   for (const r of linkRefs) {
     const row = storedLinks.get(`${r.collection}:${r.id}`)
     const j = jmap.get(r.collection)!
-    if (row?.parent && !refs.some((x) => x.collection === j.parent && x.id === row.parent))
+    if (
+      row?.parent &&
+      refs.length < refBudget &&
+      !refs.some((x) => x.collection === j.parent && x.id === row.parent)
+    )
       refs.push({ collection: j.parent, id: row.parent })
     if (row?.target && row.target_collection) {
       if (FILE_TABLES.has(row.target_collection)) fileIds.add(row.target)
-      else if (!refs.some((x) => x.collection === row.target_collection && x.id === row.target))
+      else if (
+        refs.length < refBudget &&
+        !refs.some((x) => x.collection === row.target_collection && x.id === row.target)
+      )
         refs.push({ collection: row.target_collection, id: row.target })
     }
     linkCollections.add(j.parent)
@@ -623,7 +641,8 @@ export async function activityLabelsFor(
             : 'link'
       junctionLabels[`${r.collection}:${r.id}`] = {
         parent_collection: j.parent,
-        parent_id: parentId,
+        // Which record the link was on is itself private when the reader cannot see it.
+        parent_id: parentOk || admin ? parentId : null,
         noun,
         value,
         file
