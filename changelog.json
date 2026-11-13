@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-13T20:23:15.707Z",
+  "generated_at": "2026-11-13T20:45:56.722Z",
   "releases": [
+    {
+      "version": "0.3.151",
+      "tag": "v0.3.151",
+      "date": "2026-11-13T15:45:36-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "administrators edit the quick filters on the list itself",
+              "hash": "eec1a5114"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "grids",
+              "text": "a grid over 150 rows keeps its column widths",
+              "hash": "e00425c41"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.150",
       "tag": "v0.3.150",
-      "date": "2026-11-13T15:22:33-05:00",
+      "date": "2026-11-13T15:23:15-05:00",
       "sections": [
         {
           "label": "Added",
