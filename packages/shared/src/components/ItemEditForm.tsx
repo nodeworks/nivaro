@@ -785,6 +785,10 @@ export interface ItemEditFormProps {
   /** Extra rows for the record's More menu, above Delete (e.g. a host's Edit layout).
    *  Rows that open something outside the menu set `data-nvr-menu-close`. */
   moreMenuItems?: ReactNode
+  /** A host's own exports of this record (e.g. its lines as Excel): drawn right after the
+   *  record's Export PDF rows, so every export sits together. Hosts that must also work with
+   *  an older package check ITEM_EDIT_EXPORT_MENU_SLOT and fall back to moreMenuItems. */
+  moreMenuExportItems?: ReactNode
   /** Which view the record shows (Summary or Edit) and the collection's Summary layout id
    *  (null = none; Summary then renders the edit layout read-only). Hosts use it so their
    *  Edit layout opens the layout the person is looking at. */
@@ -1914,6 +1918,10 @@ function FieldContexts({
   )
 }
 
+/** This package's record form has the `moreMenuExportItems` slot (a host's exports sit
+ *  beside Export PDF). Read by hosts that run against older packages too. */
+export const ITEM_EDIT_EXPORT_MENU_SLOT = true
+
 export function ItemEditForm(props: ItemEditFormProps) {
   if (!props.design) return <ItemEditFormView {...props} />
   return (
@@ -1938,6 +1946,7 @@ function ItemEditFormView({
   showItemActions = false,
   showGrantedTools = false,
   moreMenuItems,
+  moreMenuExportItems,
   onViewModeChange,
   onDirtyChange,
   documentTitle = true,
@@ -14011,6 +14020,7 @@ function ItemEditFormView({
                                                   {fl.pdf_button_label || 'Export PDF'}
                                                 </Button>
                                               ))}
+                                              {moreMenuExportItems}
                                               {!!(
                                                 activeLayoutData?.layout as
                                                   | { dossier_enabled?: boolean | number }

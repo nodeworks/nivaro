@@ -228,7 +228,7 @@ export type {
   RenderFieldProps,
   UnsavedSummary
 } from './components/ItemEditForm'
-export { ItemEditForm } from './components/ItemEditForm'
+export { ITEM_EDIT_EXPORT_MENU_SLOT, ItemEditForm } from './components/ItemEditForm'
 export { AutofillRunsChip } from './components/import/AutofillRunsChip'
 export {
   type DocumentApplySelection,
