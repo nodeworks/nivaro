@@ -209,6 +209,11 @@ export const apiOverview: DocSection = {
           'SERVER_BUSY',
           '503',
           'No database connection came free in time (`DB_ACQUIRE_TIMEOUT_MS`, default 10 s). `Retry-After` says when to try again.'
+        ],
+        [
+          'DB_UNAVAILABLE',
+          '503',
+          'The database could not be reached: it refused or did not answer a new connection, or the server already knows it is away. `Retry-After` says when to try again. The request that failed was not sent to the database; a request that makes several changes may have saved an earlier one, so read the record again before repeating a write.'
         ]
       ]
     },

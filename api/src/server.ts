@@ -23,7 +23,7 @@ import {
   routeBodyLimit
 } from './lib/body-limits.js'
 import { clientLeft } from './lib/client-left.js'
-import { describeDbRefusal, errorText, isPoolBusy, serverFaultMessage } from './lib/db-refusal.js'
+import { describeDbRefusal, errorText, serverFaultMessage } from './lib/db-refusal.js'
 import { applyEarlyHints, loadEarlyHints } from './lib/early-hints.js'
 import { registerJsonBodyParser } from './lib/json-body.js'
 import { applySecurityHeaders } from './lib/security-headers.js'
@@ -60,6 +60,12 @@ import { pruneAiCalls } from './services/ai-log.js'
 import { bootPhase } from './services/boot-phases.js'
 import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
 import { registerMissedCronProbe } from './services/cron-misses.js'
+import {
+  answerDbUnavailable,
+  noteCutStatement,
+  requestDbFailure,
+  sendDbUnavailable
+} from './services/db-outage.js'
 import { enrichErrorPayload, noteDbRefusal } from './services/error-enrich.js'
 import { logRouteError } from './services/error-log-level.js'
 import { trackError } from './services/error-tracking.js'
@@ -464,10 +470,10 @@ export async function buildServer() {
     const DB_EXEMPT = /^\/api\/(version|health|changelog|internal\/render\/)/
     app.addHook('onRequest', async (req, reply) => {
       if (!isDbHealthy() && /^\/api([/?]|$)/.test(req.url) && !DB_EXEMPT.test(req.url)) {
-        return reply.code(503).send({
-          error: 'The database is unreachable — retrying automatically. Nothing was saved.',
-          code: 'DB_UNAVAILABLE'
-        })
+        // The one answer for a database that cannot be reached: a request that fails
+        // opening a connection before this probe has noticed gets the same status, code,
+        // Retry-After and body from the error handler (services/db-outage.ts).
+        return sendDbUnavailable(reply)
       }
     })
 
@@ -652,12 +658,18 @@ export async function buildServer() {
         req.log.debug({ url: maskUrlQuery(req.url) }, 'client left before the response was written')
         return
       }
+      // The request never got a database connection: a login still refused after the
+      // retries, a server that is not there, a pool waiting on connections that will not
+      // open. Temporary, and nothing of the statement was sent: 503 DB_UNAVAILABLE with
+      // Retry-After (the outage posture's answer), and ONE issue for the whole outage
+      // instead of one per route. The classes are in lib/db-unavailable.ts.
+      if (answerDbUnavailable(err, req, reply)) return
       // A write the database refused over the caller's data (a link to a
       // record that does not exist, a duplicate) is a 4xx with a reason —
       // not a 500, not an issue, and never the database's own names.
       // No free connection within DB_ACQUIRE_TIMEOUT_MS: busy, not broken. A short
       // honest 503 the client may retry, not an issue and not a 60 s hang.
-      if (err.statusCode == null && isPoolBusy(err)) {
+      if (err.statusCode == null && requestDbFailure(err) === 'busy') {
         req.log.warn(
           { url: maskUrlQuery(req.url) },
           'request pool busy: no connection within the wait limit'
@@ -681,7 +693,10 @@ export async function buildServer() {
         })
       }
       const status = err.statusCode ?? 500
-      if (status >= 500 && req.url.startsWith('/api/')) {
+      // A statement that lost its connection while it ran is counted with the outage's one
+      // issue, not filed under its route. Its answer below stays a 500: the write may or
+      // may not have been applied, so this is not "try again".
+      if (status >= 500 && req.url.startsWith('/api/') && !noteCutStatement(err, req)) {
         // #300 — every 5th 500 per route also captures a REDACTED request
         // sketch (query keys + body shape, never values) onto the issue, so a
         // recurring 500 carries a reproducible request without leaking data.

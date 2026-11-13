@@ -132,7 +132,8 @@ export const opsErrorTracking: DocSection = {
         'Server: any unhandled error on an /api route creates an issue with route, message, and stack.',
         'Client: the admin error boundary reports crashes via POST /api/issues/client with the component stack.',
         'Dedupe: repeats of the same error (fingerprint of source + route + message) bump occurrence_count on the open issue instead of flooding the list.',
-        'Resolving an issue and hitting the error again opens a fresh issue — regressions surface as new rows.'
+        'Resolving an issue and hitting the error again opens a fresh issue — regressions surface as new rows.',
+        'Database outage: requests that fail because the database refused or dropped connections answer 503 DB_UNAVAILABLE and are counted into one issue ("The database refused or dropped connections") instead of one per route. Its count is the number of failed requests, its occurrences name their routes, and it is written once the database answers again.'
       ]
     },
     { type: 'note', text: 'Issues appear at /issues with severity high, source server or client, and a live last-seen timestamp.' }

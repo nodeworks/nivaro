@@ -142,7 +142,7 @@ export const ERROR_HINTS: Readonly<Record<string, string>> = {
   // ── The platform ───────────────────────────────────────────────────────────
   MAINTENANCE: 'Wait until maintenance ends, then try again.',
   SERVER_BUSY: 'Try again in a few seconds.',
-  DB_UNAVAILABLE: 'The database cannot be reached right now. Try again in a minute.',
+  DB_UNAVAILABLE: 'Try again in a moment.',
   MIGRATION_PENDING: 'An update is still being applied. Try again in a few minutes.',
   NOT_CONFIGURED: 'Ask an administrator to set this up first.',
   NOT_READY: 'This is still being set up. Try again in a few minutes.',

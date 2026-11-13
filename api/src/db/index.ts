@@ -5,6 +5,7 @@ import { config } from '../config.js'
 import { attachChaosSeam } from './chaos-seam.js'
 import { attachConfigEpoch } from './config-epoch.js'
 import { attachConnectRetry } from './connect-retry.js'
+import { attachConnectState } from './connect-state.js'
 import { attachMetadataQueryCache } from './metadata-query-cache.js'
 import { recordEffects } from './migration-effects.js'
 import { migrateFreeingStaleLock, underSessionAppLock } from './migration-lock.js'
@@ -187,9 +188,17 @@ attachConfigEpoch(_staticDb)
 // an ALTER DATABASE, a failover) is tried again for a few seconds instead of failing the
 // request at once — see the module. Per pool, never the driver prototype: the health probe's
 // pool above stays without it, so a database that is really away is still noticed on time.
+// Each pool also keeps what its own opens did (connect-state.ts), so a request that gives up
+// waiting for a connection can be told "the database is not answering" instead of "the
+// server is busy" when the pool could not open one. State first: the retry then wraps the
+// tracked open, and every attempt counts.
 if (!cloudMode) {
+  attachConnectState(_staticDb, 'main')
   attachConnectRetry(_staticDb)
-  if (_backgroundDb) attachConnectRetry(_backgroundDb)
+  if (_backgroundDb) {
+    attachConnectState(_backgroundDb, 'background')
+    attachConnectRetry(_backgroundDb)
+  }
 }
 
 // In cloud mode, background tasks (crons, timers) run outside request context
@@ -293,6 +302,15 @@ export const dbRead: Database = config.DB_READ_HOST
   : cloudMode
     ? _staticDb
     : db
+
+// The replica's pool opens connections the same way the request pool does and fails the
+// same way (a failover, a restore, an ALTER DATABASE on the replica), and list reads wait on
+// it inside requests: the same refused-login retry and the same open tracking. Only when it
+// is a pool of its own; without a replica `dbRead` is the pools above. Not in cloud mode.
+if (!cloudMode && config.DB_READ_HOST) {
+  attachConnectState(dbRead, 'read')
+  attachConnectRetry(dbRead)
+}
 
 /** Graceful shutdown — destroys the static write pool, the background pool and, if separate, the read replica pool. */
 export async function closeDb(): Promise<void> {

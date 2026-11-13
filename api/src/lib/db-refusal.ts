@@ -1,3 +1,5 @@
+import { isConnectFailure, isPoolBusy } from './db-unavailable.js'
+
 /**
  * A write the DATABASE refused because of the caller's data — a foreign key
  * that points at nothing, a value that already exists under a unique index —
@@ -97,17 +99,9 @@ function refusalText(err: unknown): string {
     .join(' · ')
 }
 
-/** The request pool had no free connection within DB_ACQUIRE_TIMEOUT_MS (knex's
- *  KnexTimeoutError "Timeout acquiring a connection"): the server is busy, the
- *  database is fine — say so, and when to try again. */
-export function isPoolBusy(err: unknown): boolean {
-  const e = err as { name?: unknown; message?: unknown } | null
-  return (
-    !!e &&
-    (e.name === 'KnexTimeoutError' ||
-      /Timeout acquiring a connection\. The pool is probably full/i.test(String(e.message ?? '')))
-  )
-}
+// The busy-pool test lives with the other "could not get a connection" shapes; importers
+// keep reading it from here.
+export { isPoolBusy }
 
 export function describeDbRefusal(err: unknown): DbRefusal | null {
   const text = refusalText(err)
@@ -230,8 +224,6 @@ export function messageWithoutSql(err: unknown): string {
 export const DB_FAULT_MESSAGE =
   'The server could not finish this request. The problem was recorded; try again, or ask for help if it keeps happening.'
 
-const CONNECT_FAULT = /^(Login failed|Failed to connect to |Connection lost - )/
-
 /**
  * Whether an error came from the database driver: a statement knex prefixed (the driver's
  * reason after it), a tedious RequestError (`number`, `EREQUEST`), a connection that would
@@ -251,8 +243,11 @@ export function isDriverFault(err: unknown): boolean {
   const message = typeof e.message === 'string' ? e.message : ''
   // A connection that would not open or was dropped (tedious ConnectionError): its message
   // names the database login ("Login failed for user '…'") or the server's host and port.
-  // A statement timeout shares the ETIMEOUT code and stays readable (the log lenses read it).
-  if (e.code === 'ELOGIN' || e.code === 'EINSTLOOKUP' || CONNECT_FAULT.test(message)) return true
+  // Told by the driver's error code first, never by the words alone: a mail server says
+  // "Login failed" and a partner call "Failed to connect to …" too (lib/db-unavailable.ts,
+  // the one classifier). A statement timeout shares the ETIMEOUT code and stays readable
+  // (the log lenses read it).
+  if (isConnectFailure(err)) return true
   if (message && messageWithoutSql(err) !== message) return true
   if (typeof e.number === 'number' || e.code === 'EREQUEST') return true
   return (

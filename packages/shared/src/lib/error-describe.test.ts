@@ -162,6 +162,39 @@ describe('describeError — one shape for every failure', () => {
       }
     ],
     [
+      // The API's one answer when the database cannot be reached (the outage posture, and a
+      // request that failed opening a connection): what is wrong, then what to do, and Retry.
+      '503 database not answering',
+      sdk(503, {
+        statusCode: 503,
+        error: 'The database is not answering right now.',
+        message: 'The database is not answering right now.',
+        code: 'DB_UNAVAILABLE',
+        hint: ERROR_HINTS.DB_UNAVAILABLE
+      }),
+      {
+        kind: 'unavailable',
+        title: 'The database is not answering right now.',
+        hint: 'Try again in a moment.',
+        code: 'DB_UNAVAILABLE',
+        action: { kind: 'retry', label: 'Try again' }
+      }
+    ],
+    [
+      // An older server's body (no hint, the sentence under `error` only) reads the same way.
+      '503 database unreachable, older server',
+      sdk(503, {
+        error: 'The database is unreachable — retrying automatically. Nothing was saved.',
+        code: 'DB_UNAVAILABLE'
+      }),
+      {
+        kind: 'unavailable',
+        title: 'The database is unreachable — retrying automatically. Nothing was saved.',
+        hint: 'Try again in a moment.',
+        action: { kind: 'retry', label: 'Try again' }
+      }
+    ],
+    [
       '502 with no body',
       sdk(502, null),
       {

@@ -3,6 +3,7 @@ import {
   DB_FAULT_MESSAGE,
   describeDbRefusal,
   describeValueRefusal,
+  isDriverFault,
   messageWithoutSql,
   reasonWithoutSql,
   serverFaultMessage
@@ -212,6 +213,30 @@ describe('serverFaultMessage (army 7 b15: no driver text in a 5xx body)', () => 
       code: 'ESOCKET'
     })
     expect(serverFaultMessage(dropped)).toBe(DB_FAULT_MESSAGE)
+  })
+
+  // Security review 2026-11-12: the words alone are not the database. A mail server or a
+  // partner API fails with the same opening words; only the driver's own error code makes it
+  // a database fault (tedious sets `code`, never `name`).
+  it('does not take a mail or partner failure for a database fault', () => {
+    const smtp = Object.assign(new Error('Login failed: 535 5.7.8 Authentication failed'), {
+      code: 'EAUTH',
+      command: 'AUTH PLAIN'
+    })
+    expect(isDriverFault(smtp)).toBe(false)
+    expect(serverFaultMessage(smtp)).toBe('Login failed: 535 5.7.8 Authentication failed')
+
+    const partner = Object.assign(new Error('Failed to connect to the supplier service'), {
+      code: 'ECONNREFUSED'
+    })
+    expect(isDriverFault(partner)).toBe(false)
+    expect(serverFaultMessage(partner)).toBe('Failed to connect to the supplier service')
+
+    // No code at all, and a code another library shares with the driver.
+    expect(isDriverFault(new Error('Connection lost - the upstream closed'))).toBe(false)
+    expect(
+      isDriverFault(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ESOCKET' }))
+    ).toBe(false)
   })
 
   it('keeps a statement timeout readable (the near-timeout lens reads it from the log)', () => {

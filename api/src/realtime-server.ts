@@ -17,6 +17,7 @@ import { localBoardCollector, socketioPlugin } from './plugins/socketio.js'
 import { eventsStreamRoutes } from './routes/events-stream.js'
 import { viewStreamRoutes } from './routes/view-stream.js'
 import { bootState } from './services/boot-phases.js'
+import { answerDbUnavailable, noteCutStatement, sendDbUnavailable } from './services/db-outage.js'
 import { logRouteError } from './services/error-log-level.js'
 import { trackError } from './services/error-tracking.js'
 import { instanceKey } from './services/instance-key.js'
@@ -256,10 +257,7 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     startDbHealthProbe()
     app.addHook('onRequest', async (req, reply) => {
       if (!isDbHealthy() && /^\/api\/(events|graphql)\//.test(req.url))
-        return reply.code(503).send({
-          error: 'The database is unreachable — retrying automatically.',
-          code: 'DB_UNAVAILABLE'
-        })
+        return sendDbUnavailable(reply)
     })
   }
 
@@ -268,8 +266,12 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
   // 5xx → the issue log, as on web (without the request sketch: no request bodies here). The
   // answer has web's shape: a coded 4xx keeps its machine code.
   app.setErrorHandler((err: Error & { statusCode?: number; code?: string }, req, reply) => {
+    // As on web: a request that never got a database connection answers 503 DB_UNAVAILABLE
+    // and counts towards the outage's one issue; a statement cut off mid-run is counted
+    // there too and keeps its 500 (services/db-outage.ts).
+    if (answerDbUnavailable(err, req, reply)) return
     const status = err.statusCode ?? 500
-    if (status >= 500)
+    if (status >= 500 && !noteCutStatement(err, req))
       void trackError({
         source: 'server',
         route: `${req.method} ${req.routeOptions?.url ?? req.url} (realtime)`,
