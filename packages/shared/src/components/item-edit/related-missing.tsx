@@ -75,8 +75,15 @@ export function explainedMissing(
 ): RelatedMissing | null {
   const reasons = answer?.reasons ?? []
   if (reasons.length === 0) return null
-  if (reasons.some((r) => r.type === 'not_found'))
-    return { kind: 'not-found', text: 'Record not found', tip: 'This record was removed.' }
+  const gone = reasons.find((r) => r.type === 'not_found')
+  if (gone)
+    return {
+      kind: 'not-found',
+      text: 'Record not found',
+      // The server's sentence says when it was deleted, by whom and that it
+      // can be restored: more use than a fixed "was removed".
+      tip: gone.message?.trim() || 'This record was removed.'
+    }
   const said = reasons.find((r) => r.message?.trim())?.message?.trim()
   return {
     kind: 'no-access',
@@ -129,35 +136,52 @@ export function useRelatedMissing(
   return { missing: explainedMissing(data) ?? base, settling: isLoading }
 }
 
+/**
+ * The placeholder a linked record's label shows while its row is being read
+ * (the read view), and while the label asks which kind of missing it is: one
+ * look for the whole wait, not a second skeleton of another width and tone.
+ */
+export const RELATED_LOADING_CLASS =
+  'inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 align-middle dark:bg-[hsl(var(--nvr-skeleton))]'
+
 export function RelatedMissingLabel({
   error,
   collection,
   id,
-  className
+  className,
+  settlingClassName = RELATED_LOADING_CLASS,
+  labelId
 }: {
   error: unknown
   /** The linked record, when known: lets a 404 say "hidden from you" or "removed". */
   collection?: string | null
   id?: unknown
   className?: string
+  /** The placeholder shown while the reason is asked for; the read view's by default. */
+  settlingClassName?: string
+  /** DOM id for the words. A control beside them (the picker's "Change") names
+   *  it as its description, and the reason then rides inside for a screen
+   *  reader: the tip alone only reaches a mouse. */
+  labelId?: string
 }) {
   const { missing: m, settling } = useRelatedMissing(error, collection, id)
   if (settling)
     return (
-      <span
-        aria-hidden='true'
-        data-related-unavailable-settling=''
-        // The brighter skeleton step in dark: the plain one disappears on a field's muted box.
-        className='inline-block h-3.5 w-24 animate-pulse rounded bg-[hsl(var(--nvr-skeleton))] align-middle dark:bg-[hsl(var(--nvr-skeleton-hi))]'
-      />
+      <span aria-hidden='true' data-related-unavailable-settling='' className={settlingClassName} />
     )
   return (
     <span
-      className={cn('italic text-muted-foreground', className)}
+      id={labelId}
+      // `relative` keeps the hidden reason anchored to these words (an sr-only
+      // element is absolute and would otherwise anchor to the page).
+      className={cn('italic text-muted-foreground', labelId && 'relative', className)}
       data-related-unavailable={m.kind}
-      data-tip={m.tip}
+      // The words too: a narrow grid cell cuts them to "Not availa…", and the
+      // tip is then the only place the whole of it can be read.
+      data-tip={`${m.text}. ${m.tip}`}
     >
       {m.text}
+      {labelId && <span className='sr-only'>. {m.tip}</span>}
     </span>
   )
 }

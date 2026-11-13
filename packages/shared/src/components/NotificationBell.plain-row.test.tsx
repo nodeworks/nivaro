@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { NivaroProvider } from '../context'
 import type { NotificationRouteMap } from '../lib/notification-target'
 import { type BellNotification, NotificationBell } from './NotificationBell'
+import { NotificationCenterView } from './notifications/NotificationCenterView'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -79,7 +80,14 @@ describe('NotificationBell — a row with nowhere to go', () => {
     // Not a control: nothing for a click (or the dead-click detector) to land on.
     expect(el.tagName).toBe('DIV')
     expect(el.closest('button, a, [role="button"]')).toBeNull()
-    expect(el.querySelector('button, a, [role="button"]')).toBeNull()
+    // The Mark read slot stays in the layout once the row is read (hidden, out
+    // of the tab order): taking it away widened the text and re-wrapped it.
+    const controls = [...el.querySelectorAll<HTMLElement>('button, a, [role="button"]')]
+    expect(controls).toHaveLength(1)
+    expect(controls[0].getAttribute('aria-label')).toBe('Mark read')
+    expect(controls[0].className).toContain('invisible')
+    expect(controls[0].className).toContain('shrink-0')
+    expect(controls[0].tabIndex).toBe(-1)
     await act(async () => {
       el.click()
     })
@@ -93,6 +101,11 @@ describe('NotificationBell — a row with nowhere to go', () => {
     expect(el.tagName).toBe('DIV')
     const mark = el.querySelector('button[aria-label="Mark read"]') as HTMLButtonElement
     expect(mark).not.toBeNull()
+    expect(mark.className).not.toContain('invisible')
+    expect(mark.tabIndex).toBe(0)
+    // The instant tip, not the browser's slow one.
+    expect(mark.dataset.tip).toBe('Mark read')
+    expect(mark.hasAttribute('title')).toBe(false)
     await act(async () => {
       mark.click()
     })
@@ -112,6 +125,120 @@ describe('NotificationBell — a row with nowhere to go', () => {
     expect(el.tagName).toBe('BUTTON')
     await act(async () => {
       el.click()
+    })
+    expect(navigate).toHaveBeenCalledWith('/health/monitors')
+    cleanup()
+  })
+})
+
+// Design review 2026-11-12: in the notifications centre an unread row with
+// nowhere to go was still a row-sized button. Its click only marked the row
+// read, so the row dimmed (or left the Unread list) and opened nothing.
+describe('NotificationCenterView — a row with nowhere to go', () => {
+  async function openCentre(rows: BellNotification[]) {
+    const calls: Array<{ method: string; path: string }> = []
+    const client = {
+      request: vi.fn(async (cmd: { _method?: string; _path?: string }) => {
+        const path = String(cmd?._path ?? '')
+        calls.push({ method: String(cmd?._method ?? 'GET'), path })
+        if (path === '/notifications')
+          return { data: rows, bundles: [], pinned: [], total: rows.length }
+        if (path === '/notifications/unread-count')
+          return { unread: 0, attention: 0, lanes: { critical: 0, needs_you: 0, fyi: 0 } }
+        if (path === '/collections') return { data: [] }
+        return {}
+      })
+    }
+    const navigate = vi.fn()
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={qc}>
+          <NivaroProvider client={client as never}>
+            <NotificationCenterView routes={routes} onNavigate={navigate} changesId={null} />
+          </NivaroProvider>
+        </QueryClientProvider>
+      )
+    })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    return {
+      host,
+      navigate,
+      calls,
+      cleanup: () => {
+        act(() => root.unmount())
+        host.remove()
+      }
+    }
+  }
+  const writes = (calls: Array<{ method: string; path: string }>) =>
+    calls.filter((c) => c.method !== 'GET').map((c) => c.path)
+
+  it('an unread one is plain text with its own Mark read', async () => {
+    const { host, navigate, calls, cleanup } = await openCentre([
+      row({ id: 5, read: false, lane: 'fyi' })
+    ])
+    const el = host.querySelector('[data-notification-row="5"]') as HTMLElement
+    const plain = el.querySelector('[data-notification-plain]') as HTMLElement
+    expect(plain?.tagName).toBe('DIV')
+    expect(plain.textContent).toContain('Monitor failing: Live updates late')
+    expect(plain.closest('button')).toBeNull()
+    // A click on the words does nothing: it neither opens nor marks read.
+    await act(async () => {
+      plain.click()
+    })
+    expect(writes(calls)).toEqual([])
+    expect(navigate).not.toHaveBeenCalled()
+
+    const mark = el.querySelector('button[data-notification-mark-read="5"]') as HTMLButtonElement
+    expect(mark?.textContent).toBe('Mark read')
+    await act(async () => {
+      mark.click()
+    })
+    expect(writes(calls)).toEqual(['/notifications/5/read'])
+    cleanup()
+  })
+
+  it('a read one has no Mark read, and neither lights up under the pointer', async () => {
+    const { host, cleanup } = await openCentre([
+      row({ id: 6, read: true }),
+      row({ id: 7, read: false })
+    ])
+    for (const id of [6, 7]) {
+      const el = host.querySelector(`[data-notification-row="${id}"]`) as HTMLElement
+      expect(el.className).toContain('group')
+      expect(el.className).not.toContain('hover:bg-slate-50')
+    }
+    expect(host.querySelector('[data-notification-mark-read="6"]')).toBeNull()
+    expect(host.querySelector('[data-notification-mark-read="7"]')).not.toBeNull()
+    cleanup()
+  })
+
+  it('a row that opens something stays a button, with the hover and no pill', async () => {
+    const { host, navigate, cleanup } = await openCentre([
+      row({
+        id: 8,
+        read: false,
+        target: { kind: 'external', url: `${window.location.origin}/health/monitors` }
+      })
+    ])
+    const el = host.querySelector('[data-notification-row="8"]') as HTMLElement
+    expect(el.className).toContain('hover:bg-slate-50')
+    expect(el.querySelector('[data-notification-plain]')).toBeNull()
+    expect(el.querySelector('[data-notification-mark-read]')).toBeNull()
+    const head = [...el.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Monitor failing')
+    ) as HTMLButtonElement
+    await act(async () => {
+      head.click()
+    })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
     })
     expect(navigate).toHaveBeenCalledWith('/health/monitors')
     cleanup()

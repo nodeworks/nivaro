@@ -429,6 +429,11 @@ export function NotificationCenterView({
     onError: () => onError?.('Failed to delete notification')
   })
 
+  /** Mark one row read where it stands: the control of a row that opens nothing. */
+  const markOneRead = async (id: number) => {
+    await client.request(post(`/notifications/${id}/read`)).catch(() => undefined)
+    invalidate()
+  }
   const handleRowClick = async (n: NotificationRow) => {
     if (!n.read) {
       await client.request(post(`/notifications/${n.id}/read`)).catch(() => undefined)
@@ -488,7 +493,9 @@ export function NotificationCenterView({
     return (
       <div
         className={cn(
-          'group relative flex items-start gap-3 py-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40',
+          'group relative flex items-start gap-3 py-3',
+          // Only a row that opens something lights up under the pointer.
+          target && 'transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40',
           indent ? 'bg-slate-50/50 pl-8 pr-4 dark:bg-muted/30' : 'px-4'
         )}
         data-notification-row={n.id}
@@ -509,7 +516,7 @@ export function NotificationCenterView({
           )}
         />
         <div className='min-w-0 flex-1'>
-          {target || unread ? (
+          {target ? (
             <button
               type='button'
               onClick={() => void handleRowClick(n)}
@@ -518,7 +525,9 @@ export function NotificationCenterView({
               {head}
             </button>
           ) : (
-            // Read, with nowhere to open: plain text, never a button that does nothing.
+            // Nowhere to open: plain text, read or not. As a button its click
+            // only marked the row read, so the row dimmed (or left the Unread
+            // list) and opened nothing. Mark read is its own control below.
             <div data-notification-plain>{head}</div>
           )}
           <div className='mt-1 flex flex-wrap items-center gap-2'>
@@ -542,6 +551,17 @@ export function NotificationCenterView({
                         : n.collection
                           ? `${n.collection}${n.item ? ` #${n.item}` : ''}`
                           : 'Open'}
+              </button>
+            )}
+            {unread && !target && (
+              <button
+                type='button'
+                data-notification-mark-read={n.id}
+                onClick={() => void markOneRead(n.id)}
+                className='inline-flex items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:border-border dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-200'
+              >
+                <Check className='h-3 w-3' />
+                Mark read
               </button>
             )}
             <DeliveryChips delivery={n.delivery} mailLogUrl={mailLogUrl} onNavigate={onNavigate} />

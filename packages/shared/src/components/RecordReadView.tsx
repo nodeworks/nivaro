@@ -33,7 +33,7 @@ import { isNamelessLabel, NAMELESS_LABEL } from './item-edit/option-disambiguate
 import { PersonalDefaultMark } from './item-edit/PersonalDefaultControl'
 import { evaluateDisplayFormula, usePlacementTextContext } from './item-edit/placement-behaviour'
 import { RuleHiddenNotes } from './item-edit/RuleHiddenNotes'
-import { RelatedMissingLabel } from './item-edit/related-missing'
+import { RELATED_LOADING_CLASS, RelatedMissingLabel } from './item-edit/related-missing'
 import { groupHasReadableField, ruleHiddenGroups } from './item-edit/rule-hidden'
 import type { CMSRelation } from './item-edit/types'
 import { UserChip } from './item-edit/UserChip'
@@ -269,9 +269,8 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
   })
   if (id == null) return <Empty />
   if (!row && !error && (isPending || !meta))
-    return (
-      <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 align-middle dark:bg-[hsl(var(--nvr-skeleton))]' />
-    )
+    // The same placeholder the missing label waits with: one look for the whole wait.
+    return <span className={RELATED_LOADING_CLASS} />
   // Never the raw id (army8 b01 "Find a Unit #273025"); a gone or failed read
   // is not worded as an access problem (army8 review M8).
   if (!row) return <RelatedMissingLabel error={error} collection={collection} id={id} />

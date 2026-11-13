@@ -44,8 +44,15 @@ describe('exportShortfall', () => {
   it('names how many rows the file holds out of how many match', () => {
     expect(exportShortfall('10000', '34512')).toEqual({
       title: 'Exported the first 10,000 rows',
-      description: '34,512 match — narrow the question to export the rest.'
+      description: '34,512 match — narrow the question to export the rest.',
+      note: 'First 10,000 of 34,512 rows'
     })
+  })
+
+  // The toast goes away; this line stays beside the download buttons, so the page still
+  // says the file is not the whole answer.
+  it('has a short line to keep beside the buttons', () => {
+    expect(exportShortfall(10000, 12345)?.note).toBe('First 10,000 of 12,345 rows')
   })
 
   it('is silent when the file holds everything or the server did not say', () => {

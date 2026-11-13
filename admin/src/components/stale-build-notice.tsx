@@ -1,9 +1,10 @@
-import { subscribeUnsavedWork, unsavedWorkLabels } from '@nivaro/shared'
+import { staleChunkReloadJustTried, subscribeUnsavedWork, unsavedWorkLabels } from '@nivaro/shared'
 import { RefreshCw } from 'lucide-react'
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 
-/** The id the "Nivaro was updated" toasts share (main.tsx), so the notice can replace them. */
+/** The id the "This app was updated" toasts share (main.tsx), so the notice can replace them. */
 export const STALE_BUILD_TOAST = 'nvr-stale-build'
 
 const unsavedKey = () => unsavedWorkLabels().join('\n')
@@ -15,6 +16,8 @@ const unsavedKey = () => unsavedWorkLabels().join('\n')
  * stays as it is, so nothing typed is lost; the person reloads when they are ready.
  *
  * Laid out like the other page states (ErrorSurface) with the neutral tint: nothing broke.
+ *
+ * The words never name the product: a white-label tenant's people read them.
  */
 export function StaleBuildNotice() {
   const unsaved = useSyncExternalStore(subscribeUnsavedWork, unsavedKey, () => '')
@@ -23,6 +26,10 @@ export function StaleBuildNotice() {
     toast.dismiss(STALE_BUILD_TOAST)
   }, [])
   const waiting = unsaved ? unsaved.split('\n') : []
+  const unsavedWork = waiting.length > 0
+  // Read once, as the notice appears: a reload for this was tried within the last minute and
+  // led back here. Saying "reload" again as if it were new would send the person round again.
+  const [justReloaded] = useState(() => staleChunkReloadJustTried())
   return (
     <div
       role='status'
@@ -33,25 +40,36 @@ export function StaleBuildNotice() {
         <RefreshCw className='h-6 w-6' aria-hidden />
       </div>
       <p className='text-[15px] font-semibold text-slate-900 dark:text-foreground'>
-        Nivaro was updated
+        This app was updated
       </p>
       <p className='max-w-[440px] text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-        {waiting.length > 0
-          ? 'This page needs the new version. Save your work first, then reload.'
-          : 'This page needs the new version. Reload to open it.'}
+        {justReloaded
+          ? unsavedWork
+            ? 'Reloading did not bring the new version yet. Save your work, wait a minute, then reload again.'
+            : 'Reloading did not bring the new version yet. Wait a minute, then reload again.'
+          : unsavedWork
+            ? 'This page needs the new version. Save your work first, then reload.'
+            : 'This page needs the new version. Reload to open it.'}
       </p>
-      {waiting.length > 0 && (
+      {unsavedWork && (
         <p className='max-w-[520px] text-[12.5px] text-slate-600 dark:text-muted-foreground'>
           Not saved yet: {waiting.join(', ')}
         </p>
       )}
       <div className='mt-1'>
+        {/* With work not saved, the reload is the costly choice: it says so and is the quiet
+            button. The bright one is kept for when nothing would be lost. */}
         <button
           type='button'
           onClick={() => window.location.reload()}
-          className='rounded-md bg-nvr-cyan px-3 py-1.5 text-xs font-semibold text-white hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+          className={cn(
+            unsavedWork
+              ? 'rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-muted'
+              : 'rounded-md bg-nvr-cyan px-3 py-1.5 text-xs font-semibold text-white hover:brightness-110',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+          )}
         >
-          Reload
+          {unsavedWork ? 'Reload without saving' : 'Reload'}
         </button>
       </div>
     </div>

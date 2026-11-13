@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bot } from 'lucide-react'
+import { Bot, Check } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNavigation } from '../context'
 import { useLiveEvent } from '../lib/live'
@@ -978,13 +978,15 @@ export function MyWorkView({
                           )}
                         </div>
                       )}
+                      {/* The bell's control: for a row that opens nothing it is the only one. */}
                       <button
                         type='button'
-                        title='Mark read'
+                        aria-label='Mark read'
+                        data-tip='Mark read'
                         onClick={() => markRead.mutate([n.id])}
-                        className='text-[11px] text-muted-foreground hover:text-foreground'
+                        className='mt-0.5 shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
                       >
-                        ✓
+                        <Check className='h-3 w-3' />
                       </button>
                     </li>
                   ))}

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { installStaleChunkRecovery } from '@nivaro/shared'
+import { installStaleChunkRecovery, registerUnsavedWork } from '@nivaro/shared'
 import { act, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MemoryRouter, Route } from 'react-router'
@@ -147,19 +147,20 @@ describe('a lazy screen whose code is gone after a deploy', () => {
 
   it('says the app was updated when the tab holds unsaved work, and does not reload', async () => {
     const reload = vi.fn()
-    const uninstall = installStaleChunkRecovery({
-      storage: memoryStorage(),
-      reload,
-      unsaved: () => ['Purchase order 12']
-    })
+    // Real unsaved work, as a form reports it: the recovery and the notice both read it.
+    const forget = registerUnsavedWork('Purchase order 12', () => true)
+    const uninstall = installStaleChunkRecovery({ storage: memoryStorage(), reload })
     const Screen = lazy(() => Promise.reject(chunkGone()))
     const page = await show(Screen)
     expect(reload).not.toHaveBeenCalled()
-    expect(page.host.textContent).toMatch(/Nivaro was updated/)
-    expect(page.host.querySelector('button')?.textContent).toBe('Reload')
+    expect(page.host.textContent).toMatch(/This app was updated/)
+    expect(page.host.textContent).toMatch(/Not saved yet: Purchase order 12/)
+    // Never a plain "Reload" over unsaved work: the button says what it costs.
+    expect(page.host.querySelector('button')?.textContent).toBe('Reload without saving')
     expect(page.caught).toEqual([])
     page.done()
     uninstall()
+    forget()
   })
 
   it('still crashes on a real error in the screen, so it is reported', async () => {

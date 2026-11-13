@@ -42,7 +42,7 @@ import {
   PICKER_PAGE,
   useLatestSearch
 } from './picker-search'
-import { RelatedMissingLabel, retryRelatedRead } from './related-missing'
+import { RelatedMissingLabel, retryRelatedRead, useRelatedMissing } from './related-missing'
 
 /**
  * Instant hover tooltip for a picker whose committed value failed its
@@ -182,6 +182,8 @@ export function RelationCombobox({
   const panelRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const listId = useId()
+  // The words shown for a value that cannot be read: "Change" is described by them.
+  const missingId = useId()
   // The keyboard-highlighted option (index into the pinned + listed options).
   const [activeIndex, setActiveIndex] = useState(-1)
 
@@ -519,6 +521,14 @@ export function RelationCombobox({
   // so in words on the trigger — it used to look empty ("Select…") or show
   // its number (army9 review M7).
   const selectedUnreadable = !!value && !isLoadingSelected && selectedFetched && !selected
+  // Which it is (hidden from the reader, or gone) is asked while the field
+  // still shows its usual loading button: one loading look, then the words. It
+  // used to go spinner, grey box with a skeleton, then the words.
+  const { settling: missingSettling } = useRelatedMissing(
+    selectedError,
+    selectedUnreadable ? collection : null,
+    value
+  )
 
   const pinnedId = pinned?.id != null && pinned.id !== '' ? String(pinned.id) : null
   const { data: pinnedItem } = useQuery<Item | null>({
@@ -672,7 +682,7 @@ export function RelationCombobox({
       (tmplFields?.split(',') ?? []).map((f) => f.split('.')[0])
     )
   }, [dupRows, data, tmpl, tmplFields])
-  const showLoader = !!value && isLoadingSelected && !selected
+  const showLoader = (!!value && isLoadingSelected && !selected) || missingSettling
   const staleTip = useStaleTip(isStale)
 
   // The listed options, in display order. Rows whose display fields are all
@@ -869,19 +879,38 @@ export function RelationCombobox({
     // Stale tooltip binds on the WRAPPER: a disabled trigger button swallows
     // mouse events, so a locked-but-stale field would never show the hint.
     <div ref={rootRef} className='relative' {...staleTip.bind}>
-      {selectedUnreadable ? (
+      {selectedUnreadable && !missingSettling ? (
         // A value the reader cannot open is words, not a button: the field
         // says the value is hidden from them (or gone) and, when it may be
         // edited, offers the one thing they can do about it. It used to be
         // the picker's own button reading "Record not found" — a broken
         // record with a control that explained nothing (production review
         // 2026-11-12); locked, that button was dead as well.
+        // biome-ignore lint/a11y/noStaticElementInteractions: a pointer shortcut only; "Change" inside is the control a keyboard and a screen reader reach
+        // biome-ignore lint/a11y/useKeyWithClickEvents: as above — the keys are handled on "Change"
         <div
           data-related-unavailable-field=''
-          className='flex h-9 w-full items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm dark:border-border dark:bg-muted/40'
+          // The box is shaped like the picker it stands in for, so a click
+          // anywhere on it opens the list; a click on "Change" is its own.
+          onClick={
+            disabled
+              ? undefined
+              : (e) => {
+                  if (!(e.target as HTMLElement).closest('button')) setOpen((v) => !v)
+                }
+          }
+          className={cn(
+            'flex h-9 w-full items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm dark:border-border dark:bg-muted/40',
+            !disabled && 'cursor-pointer'
+          )}
         >
           <span className='min-w-0 flex-1 truncate'>
-            <RelatedMissingLabel error={selectedError} collection={collection} id={value} />
+            <RelatedMissingLabel
+              error={selectedError}
+              collection={collection}
+              id={value}
+              labelId={missingId}
+            />
           </span>
           {!disabled && (
             <button
@@ -889,9 +918,10 @@ export function RelationCombobox({
               type='button'
               aria-haspopup='listbox'
               aria-expanded={open}
+              aria-describedby={missingId}
               onClick={() => setOpen((v) => !v)}
               onKeyDown={onTriggerKeyDown}
-              className='-mr-1.5 shrink-0 rounded px-1.5 py-0.5 text-[12px] font-medium text-slate-600 hover:bg-slate-200/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-slate-300 dark:hover:bg-white/10'
+              className='-mr-1 shrink-0 rounded border border-slate-300 px-2 py-0.5 text-[11px] font-medium text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-slate-600'
             >
               Change
             </button>
@@ -1328,7 +1358,14 @@ export function RelatedItemLabel({
     staleTime: 60_000,
     retry: retryRelatedRead
   })
-  if (isLoading) return <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
+  // The reason for a row that cannot be read is asked under the same spinner
+  // (the label below then has it), so the wait is one look and not two.
+  const { settling } = useRelatedMissing(
+    error,
+    explainMissing && !isLoading && !data ? collection : null,
+    id
+  )
+  if (isLoading || settling) return <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
   // A row the reader can't open says why in words (refused / not found /
   // failed to load) — never its raw id (army8 b01 "Find a Unit 273025").
   if (!data)

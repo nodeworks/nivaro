@@ -56,6 +56,7 @@ import {
   AddToDashboard,
   answerChart,
   CopyAsCode,
+  type ExportShortfall,
   exportShortfall,
   LiveFromOthers,
   pinSourceFor,
@@ -374,8 +375,16 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
 }
 
 /** CSV / Excel of the rows behind an answer (#1841) — the query re-runs as you. */
-/** Download an answer's rows (#1841); errors surface as a toast. Also behind /export (#1884). */
-async function downloadAnswer(conversationId: string, messageId: string, format: 'csv' | 'xlsx') {
+/**
+ * Download an answer's rows (#1841); errors surface as a toast. Also behind /export (#1884).
+ * Answers what the file is short by: null when it holds every row, undefined when no file
+ * was made (the download failed).
+ */
+async function downloadAnswer(
+  conversationId: string,
+  messageId: string,
+  format: 'csv' | 'xlsx'
+): Promise<ExportShortfall | null | undefined> {
   try {
     const r = await api.get(`/ai/conversations/${conversationId}/messages/${messageId}/export`, {
       params: { format },
@@ -391,7 +400,9 @@ async function downloadAnswer(conversationId: string, messageId: string, format:
     setTimeout(() => URL.revokeObjectURL(url), 1000)
     // A file that holds fewer rows than match says so (the server caps a download).
     const cut = exportShortfall(r.headers['x-export-rows'], r.headers['x-export-total'])
-    if (cut) toast.warning(cut.title, { description: cut.description })
+    // Long enough to read; the caller keeps the short line on the page after it has gone.
+    if (cut) toast.warning(cut.title, { description: cut.description, duration: 12000 })
+    return cut
   } catch (err) {
     let msg = 'Export failed'
     const data = (err as { response?: { data?: unknown } })?.response?.data
@@ -403,6 +414,7 @@ async function downloadAnswer(conversationId: string, messageId: string, format:
       }
     }
     toast.error(msg)
+    return undefined
   }
 }
 
@@ -414,24 +426,29 @@ function ExportButtons({
   messageId: string
 }) {
   const [busy, setBusy] = useState<'csv' | 'xlsx' | null>(null)
+  // What the last file was short by. The toast goes away; this stays beside the buttons,
+  // so the page still says the file is not the whole answer.
+  const [cut, setCut] = useState<ExportShortfall | null>(null)
   async function download(format: 'csv' | 'xlsx') {
     setBusy(format)
     try {
-      await downloadAnswer(conversationId, messageId, format)
+      const short = await downloadAnswer(conversationId, messageId, format)
+      // A failed download made no file: what the last one was short by still stands.
+      if (short !== undefined) setCut(short)
     } finally {
       setBusy(null)
     }
   }
   return (
-    <span className='flex items-center gap-0.5' data-ask-export>
+    <span className='flex items-center gap-1.5' data-ask-export>
       {(['csv', 'xlsx'] as const).map((f) => (
         <button
           key={f}
           type='button'
           onClick={() => void download(f)}
           disabled={busy != null}
-          className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium text-slate-500 hover:bg-muted hover:text-slate-800 disabled:opacity-50 dark:text-slate-400 dark:hover:text-slate-200'
-          data-tip='Re-runs the query with your access and downloads the rows'
+          className='inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 px-2 text-[11.5px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:text-slate-300 dark:hover:bg-muted'
+          data-tip='Downloads every matching row you can see, up to 10,000'
         >
           {busy === f ? (
             <Loader2 className='h-3 w-3 animate-spin' />
@@ -441,6 +458,11 @@ function ExportButtons({
           {f === 'csv' ? 'CSV' : 'Excel'}
         </button>
       ))}
+      {cut && (
+        <span className='text-[11px] text-amber-700 dark:text-amber-300' data-ask-export-cut>
+          {cut.note}
+        </span>
+      )}
     </span>
   )
 }

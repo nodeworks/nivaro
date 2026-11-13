@@ -9661,6 +9661,7 @@ export function CollectionBrowserView({
                           }
                           // A failed read has no rows to be "no match" for: the banner above says why.
                           if (error != null) return null
+                          const foundElsewhereShown = total === 0 && !aiResult && !!appliedSearch
                           return (
                             <div className='flex flex-col items-center gap-2 text-center'>
                               <span className='flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800'>
@@ -9672,7 +9673,7 @@ export function CollectionBrowserView({
                               <p className='text-[13.5px] font-medium text-slate-600 dark:text-slate-300'>
                                 No records match
                               </p>
-                              {total === 0 && (hiddenByDefault ?? 0) > 0 ? (
+                              {total === 0 && (hiddenByDefault ?? 0) > 0 && (
                                 <p
                                   className='max-w-[52ch] text-[12px] text-slate-600 dark:text-slate-300'
                                   data-cbv-default-hiding={hiddenByDefault}
@@ -9689,16 +9690,24 @@ export function CollectionBrowserView({
                                     Show all
                                   </button>
                                 </p>
-                              ) : (
-                                <p className='text-[12px] text-slate-400'>
-                                  Try adjusting your search or filters.
-                                </p>
                               )}
                               {/* An id typed into the wrong list (or hidden by this list's
-                                  filters): say where the record is. One lookup, only here. */}
+                                  filters): say where the record is. One lookup, only here.
+                                  The answer takes the place of the usual hint, so "Clear all
+                                  filters" below does not move when it arrives; a background
+                                  refetch of the list asks nothing and leaves it where it is. */}
                               <FoundElsewhere
                                 term={appliedSearch}
-                                enabled={total === 0 && !isFetching && !aiResult && !!appliedSearch}
+                                collection={collection}
+                                show={foundElsewhereShown}
+                                ask={foundElsewhereShown && !isFetching}
+                                fallback={
+                                  total === 0 && (hiddenByDefault ?? 0) > 0 ? null : (
+                                    <p className='text-[12px] text-slate-400'>
+                                      Try adjusting your search or filters.
+                                    </p>
+                                  )
+                                }
                               />
                               {(filters.length > 0 ||
                                 Object.keys(colFilters).length > 0 ||

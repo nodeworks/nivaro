@@ -31,7 +31,13 @@ const HIT = {
   snippet: ''
 }
 
-function render(props: { term: string; enabled?: boolean }, exact: typeof HIT | null = HIT) {
+type Props = { term: string; show?: boolean; ask?: boolean; collection?: string }
+
+const FALLBACK = 'Try adjusting your search or filters.'
+
+type Hit = Omit<typeof HIT, 'display_name'> & { display_name: string | null }
+
+function render(props: Props, exact: Hit | null = HIT) {
   const calls: Cmd[] = []
   const navigate = vi.fn()
   const client = {
@@ -41,13 +47,19 @@ function render(props: { term: string; enabled?: boolean }, exact: typeof HIT | 
     })
   } as unknown as NivaroClient
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const ui = (p: { term: string; enabled?: boolean }) => (
+  const ui = (p: Props) => (
     <QueryClientProvider client={qc}>
       <NivaroProvider client={client}>
         <NavigationContext.Provider
           value={{ navigate, itemUrl: (t) => `/records/${t.collection}/${t.itemId}` }}
         >
-          <FoundElsewhere term={p.term} enabled={p.enabled ?? true} />
+          <FoundElsewhere
+            term={p.term}
+            show={p.show ?? true}
+            ask={p.ask}
+            collection={p.collection}
+            fallback={<p data-fallback=''>{FALLBACK}</p>}
+          />
         </NavigationContext.Provider>
       </NivaroProvider>
     </QueryClientProvider>
@@ -56,7 +68,7 @@ function render(props: { term: string; enabled?: boolean }, exact: typeof HIT | 
   return {
     calls,
     navigate,
-    rerender: (p: { term: string; enabled?: boolean }) => act(() => root.render(ui(p)))
+    rerender: (p: Props) => act(() => root.render(ui(p)))
   }
 }
 
@@ -64,6 +76,7 @@ const settle = async () => {
   for (let i = 0; i < 5; i++) await act(() => new Promise((r) => setTimeout(r, 5)))
 }
 const hint = () => host.querySelector('[data-found-elsewhere]') as HTMLElement | null
+const fallback = () => host.querySelector('[data-fallback]') as HTMLElement | null
 
 describe('looksLikeIdentifier', () => {
   it('one token with a digit in it, long enough to be an id', () => {
@@ -93,7 +106,7 @@ describe('looksLikeIdentifier', () => {
 
 describe('FoundElsewhere — an empty list search says where the thing is', () => {
   it('offers the record another collection holds under that exact id, as a link', async () => {
-    const { calls, navigate } = render({ term: 'CR26INV-33345' })
+    const { calls, navigate } = render({ term: 'CR26INV-33345', collection: 'workflows' })
     await settle()
     expect(hint()?.textContent).toBe('Found in Inventory Requests: CR26INV-33345')
     const link = hint()?.querySelector('a') as HTMLAnchorElement
@@ -111,7 +124,7 @@ describe('FoundElsewhere — an empty list search says where the thing is', () =
     await settle()
     expect(a.calls).toHaveLength(0)
     expect(hint()).toBeNull()
-    a.rerender({ term: 'CR26INV-33345', enabled: false })
+    a.rerender({ term: 'CR26INV-33345', show: false })
     await settle()
     expect(a.calls).toHaveLength(0)
     expect(hint()).toBeNull()
@@ -130,5 +143,76 @@ describe('FoundElsewhere — an empty list search says where the thing is', () =
     r.rerender({ term: '81307' })
     await settle()
     expect(r.calls).toHaveLength(1)
+  })
+})
+
+// Design review 2026-11-12: the line was inserted above "Clear all filters"
+// when the lookup answered, so the button dropped and the link landed where the
+// button had been; each background refetch of the list hid it and showed it again.
+describe('FoundElsewhere — the line keeps one slot', () => {
+  it('holds the usual hint until a hit is known, then takes its place', async () => {
+    render({ term: 'CR26INV-33345' })
+    expect(fallback()?.textContent).toBe(FALLBACK)
+    expect(hint()).toBeNull()
+    await settle()
+    expect(hint()).not.toBeNull()
+    expect(fallback()).toBeNull()
+  })
+
+  it('keeps the usual hint when there is nothing to say', async () => {
+    const a = render({ term: 'Perry Callis' })
+    await settle()
+    expect(fallback()?.textContent).toBe(FALLBACK)
+    a.rerender({ term: 'CR26INV-33345', show: false })
+    await settle()
+    expect(fallback()?.textContent).toBe(FALLBACK)
+    const b = render({ term: '102-3001472430' }, null)
+    await settle()
+    expect(b.calls).toHaveLength(1)
+    expect(fallback()?.textContent).toBe(FALLBACK)
+  })
+
+  it('does not ask while the list is still reading, and keeps a known hit through a refetch', async () => {
+    const r = render({ term: 'CR26INV-33345', ask: false })
+    await settle()
+    expect(r.calls).toHaveLength(0)
+    expect(fallback()).not.toBeNull()
+    r.rerender({ term: 'CR26INV-33345', ask: true })
+    await settle()
+    expect(hint()).not.toBeNull()
+    // The list refetches in the background: the hit stays where it is.
+    r.rerender({ term: 'CR26INV-33345', ask: false })
+    await settle()
+    expect(hint()).not.toBeNull()
+    expect(fallback()).toBeNull()
+    expect(r.calls).toHaveLength(1)
+  })
+
+  it('a long label is cut on one line, never wrapped', async () => {
+    render({ term: 'CR26INV-33345' })
+    await settle()
+    const link = hint()?.querySelector('a') as HTMLAnchorElement
+    for (const c of ['inline-block', 'max-w-full', 'truncate', 'align-bottom'])
+      expect(link.className.split(' ')).toContain(c)
+  })
+})
+
+describe('FoundElsewhere — what the line says', () => {
+  it('a hit in this list’s own collection is one its filters hide', async () => {
+    render({ term: 'CR26INV-33345', collection: 'inventory_request' })
+    await settle()
+    expect(hint()?.textContent).toBe("Hidden by this list's filters: CR26INV-33345")
+    expect(hint()?.querySelector('a')?.getAttribute('href')).toBe(
+      '/records/inventory_request/33345'
+    )
+  })
+
+  it('a collection with no display name is named in words, not by its table', async () => {
+    render(
+      { term: 'CR26INV-33345', collection: 'workflows' },
+      { ...HIT, collection: 'inventory_request_line_items', display_name: null }
+    )
+    await settle()
+    expect(hint()?.textContent).toBe('Found in Inventory Request Line Items: CR26INV-33345')
   })
 })

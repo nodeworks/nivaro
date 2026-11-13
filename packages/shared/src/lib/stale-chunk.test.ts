@@ -3,7 +3,8 @@ import {
   guardLazyImport,
   installStaleChunkRecovery,
   isStaleChunkError,
-  recoverFromStaleChunk
+  recoverFromStaleChunk,
+  staleChunkReloadJustTried
 } from './stale-chunk'
 
 function memoryStorage() {
@@ -93,6 +94,33 @@ function viteImport<T>(target: EventTarget, load: () => Promise<T>): Promise<T |
 
 const chunkGone = () =>
   new TypeError('Failed to fetch dynamically imported module: https://x/assets/Collections-abc.js')
+
+// The host's "updated, reload" notice must not offer the same reload as if it were new when
+// one was just tried and did not bring the new build.
+describe('a reload that was just tried', () => {
+  it('is known for the minute the recovery will not repeat it, and not after', () => {
+    const storage = memoryStorage()
+    let t = 1_000_000
+    const now = () => t
+    expect(staleChunkReloadJustTried({ storage, now })).toBe(false)
+    recoverFromStaleChunk({ storage, now, reload: () => {} })
+    t += 5_000
+    expect(staleChunkReloadJustTried({ storage, now })).toBe(true)
+    t += 60_000
+    expect(staleChunkReloadJustTried({ storage, now })).toBe(false)
+  })
+
+  it('is not claimed when storage is off or unreadable', () => {
+    expect(staleChunkReloadJustTried({ storage: null })).toBe(false)
+    const broken = {
+      getItem: () => {
+        throw new Error('blocked')
+      },
+      setItem: () => {}
+    }
+    expect(staleChunkReloadJustTried({ storage: broken })).toBe(false)
+  })
+})
 
 describe('a failed screen import', () => {
   // 2026-11-11, a day with eight deploys: "[client] /collections: Cannot read properties of

@@ -57,17 +57,24 @@ const ok = (t: TraceLike) => !t.summary?.startsWith('error:')
  * What to say when a download holds fewer rows than match (the server caps a file), in the
  * words a list export uses for the same thing. Null when the file holds every row.
  */
-export function exportShortfall(
-  rows: unknown,
-  total: unknown
-): { title: string; description: string } | null {
+export interface ExportShortfall {
+  title: string
+  description: string
+  /** The same, short enough to stay beside the download buttons once the toast has gone. */
+  note: string
+}
+
+export function exportShortfall(rows: unknown, total: unknown): ExportShortfall | null {
   if (rows == null || total == null) return null
   const n = Number(rows)
   const of = Number(total)
   if (!Number.isFinite(n) || !Number.isFinite(of) || of <= n) return null
+  const held = n.toLocaleString('en-US')
+  const all = of.toLocaleString('en-US')
   return {
-    title: `Exported the first ${n.toLocaleString('en-US')} rows`,
-    description: `${of.toLocaleString('en-US')} match — narrow the question to export the rest.`
+    title: `Exported the first ${held} rows`,
+    description: `${all} match — narrow the question to export the rest.`,
+    note: `First ${held} of ${all} rows`
   }
 }
 

@@ -23,18 +23,25 @@ if (readMasquerade()) disableRecordOutbox()
 // A tab opened before a deploy asks for the previous build's screen files, which the new
 // release no longer serves: reload onto the current build (once — a second failure says so),
 // and never over unsaved work (the person is told, and reloads once it is saved).
+// Both stay until closed (each has a close button), and neither names the product: a
+// white-label tenant's people read them.
 installStaleChunkRecovery({
   onGiveUp: () =>
-    toast.error('Nivaro was updated and this page could not load part of it.', {
+    toast.error('This page did not load fully', {
       id: STALE_BUILD_TOAST,
       duration: Number.POSITIVE_INFINITY,
+      closeButton: true,
+      description: 'This app was updated while this tab was open. Reload to get the new version.',
       action: { label: 'Reload', onClick: () => window.location.reload() }
     }),
-  onHeld: () =>
-    toast.warning('Nivaro was updated. Save your work, then reload to get the new version.', {
+  // Over unsaved work the toast names what is not saved, and its button says what it costs.
+  onHeld: (labels) =>
+    toast.warning('This app was updated', {
       id: STALE_BUILD_TOAST,
       duration: Number.POSITIVE_INFINITY,
-      action: { label: 'Reload', onClick: () => window.location.reload() }
+      closeButton: true,
+      description: `Not saved yet: ${labels.join(', ')}. Save, then reload.`,
+      action: { label: 'Reload without saving', onClick: () => window.location.reload() }
     })
 })
 // Code errors outside a render (handlers, timers, unawaited promises) reach the issue log too.

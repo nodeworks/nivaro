@@ -31,7 +31,7 @@ import {
   runNotificationTarget
 } from '../lib/notification-target'
 import { useTabAttention } from '../lib/tab-attention'
-import { formatRelative } from '../lib/utils'
+import { cn, formatRelative } from '../lib/utils'
 import { AsItWasSheet } from './notifications/AsItWasSheet'
 import {
   bundleAsNotification,
@@ -469,7 +469,8 @@ export function NotificationBell({
               <span
                 role='button'
                 tabIndex={-1}
-                title='Mark read'
+                aria-label='Mark read'
+                data-tip='Mark read'
                 onClick={(e) => {
                   e.stopPropagation()
                   markRead.mutate(n.id)
@@ -494,17 +495,19 @@ export function NotificationBell({
             data-notification-plain
           >
             {body}
-            {!n.read && (
-              <button
-                type='button'
-                title='Mark read'
-                aria-label='Mark read'
-                onClick={() => markRead.mutate(n.id)}
-                className={markReadClass}
-              >
-                <Check className='h-3 w-3' />
-              </button>
-            )}
+            {/* Kept in the layout once read (hidden, out of the tab order):
+                taking it away widened the text column, so a two-line message
+                re-wrapped to one and the rows below jumped up. */}
+            <button
+              type='button'
+              aria-label='Mark read'
+              data-tip='Mark read'
+              tabIndex={n.read ? -1 : undefined}
+              onClick={() => markRead.mutate(n.id)}
+              className={cn(markReadClass, 'shrink-0', n.read && 'invisible')}
+            >
+              <Check className='h-3 w-3' />
+            </button>
           </div>
         )}
         {n.ack?.required && !n.ack.at && (

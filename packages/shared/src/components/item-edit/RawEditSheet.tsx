@@ -345,7 +345,7 @@ export function RawEditSheet({
                         />
                       </M2MStagingContext.Provider>
                     ) : alias && m2mRel && linksFiles(m2mRel) ? (
-                      <p className='pt-1.5 text-[11.5px] italic text-slate-400'>
+                      <p className='pt-1.5 text-[11.5px] italic text-slate-500 dark:text-slate-400'>
                         Files — edit through the normal form
                       </p>
                     ) : alias && m2mRel ? (
@@ -353,7 +353,7 @@ export function RawEditSheet({
                         <M2MCombobox relation={m2mRel} parentId={itemId} allRelations={relations} />
                       </M2MStagingContext.Provider>
                     ) : alias ? (
-                      <p className='pt-1.5 text-[11.5px] italic text-slate-400'>
+                      <p className='pt-1.5 text-[11.5px] italic text-slate-500 dark:text-slate-400'>
                         Child rows (one-to-many) — edit through the normal form
                       </p>
                     ) : (

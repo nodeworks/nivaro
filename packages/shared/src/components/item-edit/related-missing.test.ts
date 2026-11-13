@@ -60,6 +60,22 @@ describe('explainedMissing', () => {
     expect(m?.text).toBe('Record not found')
   })
 
+  // Design review 2026-11-12: the server says when it was deleted, by whom and
+  // that it can be restored; the label dropped all of it for "was removed".
+  it('a removed record keeps the server’s sentence as its hint', () => {
+    const said =
+      'This record was deleted 11/3/2026 by Jane Doe. It sits in the trash for 30 days and can be restored.'
+    expect(
+      explainedMissing({ access: false, reasons: [{ type: 'not_found', message: `  ${said} ` }] })
+    ).toEqual({ kind: 'not-found', text: 'Record not found', tip: said })
+  })
+
+  it('a removed record with no sentence says it was removed', () => {
+    expect(explainedMissing({ access: false, reasons: [{ type: 'not_found' }] })?.tip).toBe(
+      'This record was removed.'
+    )
+  })
+
   it('settles nothing without an answer or without a reason', () => {
     expect(explainedMissing(null)).toBeNull()
     expect(explainedMissing({ access: true, reasons: [] })).toBeNull()

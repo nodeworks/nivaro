@@ -97,6 +97,23 @@ export function recoverFromStaleChunk(opts: StaleChunkRecoveryOptions = {}): Sta
   return 'reload'
 }
 
+/**
+ * Whether this tab was reloaded for a stale chunk within the last minute: the reload the
+ * recovery will not repeat. The host's "updated, reload" notice then says the reload did not
+ * bring the new version yet, instead of offering the same reload as if it were new.
+ */
+export function staleChunkReloadJustTried(
+  opts: Pick<StaleChunkRecoveryOptions, 'storage' | 'now'> = {}
+): boolean {
+  const storage = opts.storage === undefined ? safeSessionStorage() : opts.storage
+  try {
+    const last = Number(storage?.getItem(KEY)) || 0
+    return last > 0 && (opts.now ?? Date.now)() - last < WINDOW_MS
+  } catch {
+    return false
+  }
+}
+
 /** One failure reaches us several ways within a moment (Vite's event, the import's own
  *  rejection, the screen guard): they share one decision. */
 const BURST_MS = 2000
