@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-13T17:11:09.345Z",
+  "generated_at": "2026-11-13T18:28:59.707Z",
   "releases": [
+    {
+      "version": "0.3.147",
+      "tag": "v0.3.147",
+      "date": "2026-11-13T13:28:41-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "extension and ad-hoc sends write ahead and wait",
+              "hash": "a61a47048"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs updarte",
+              "hash": "54ca6a13c"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.146",
       "tag": "v0.3.146",
-      "date": "2026-11-13T12:10:50-05:00",
+      "date": "2026-11-13T12:11:09-05:00",
       "sections": [
         {
           "label": "Added",
