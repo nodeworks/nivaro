@@ -73,7 +73,12 @@ function fakeDb(tables: Record<string, Array<Record<string, unknown>>>) {
       inserts.push({ table, row })
       return { returning: vi.fn(() => Promise.resolve([{ id: 1 }])) }
     })
-    b.update = vi.fn(() => Promise.resolve(1))
+    // A submission is written before the call and finished in place: an update lands on the
+    // row this fake inserted (one per table in these tests).
+    b.update = vi.fn((patch: Record<string, unknown>) => {
+      for (const i of inserts) if (i.table === table) Object.assign(i.row, patch)
+      return Promise.resolve(1)
+    })
     // biome-ignore lint/suspicious/noThenProperty: deliberately thenable
     b.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
       Promise.resolve(rows).then(res, rej)
@@ -290,11 +295,16 @@ describe('erp_submit — the stored REQUEST is scrubbed too (army v3 round 2)', 
   it('an API without body secrets stores the body unchanged', async () => {
     wire()
     await run()
-    expect(storedPayload()).toEqual({
+    const { answer_by, ...stored } = storedPayload() as ReturnType<typeof storedPayload> & {
+      answer_by?: string
+    }
+    expect(stored).toEqual({
       endpoint_path: '/orders',
       body: { auth: 'S3CRET', note: 'open' },
       secret_paths: []
     })
+    // Written before the call: when it can no longer be answering (erp-unanswered.ts).
+    expect(typeof answer_by).toBe('string')
   })
 
   it('secrets that cannot be read: no body is stored (never the value, never a resendable stand-in)', async () => {

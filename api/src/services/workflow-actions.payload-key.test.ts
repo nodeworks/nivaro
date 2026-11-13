@@ -113,7 +113,12 @@ function fakeDb(tables: Record<string, Array<Record<string, unknown>>>) {
       inserts.push({ table, row })
       return { returning: vi.fn(() => Promise.resolve([{ id: 1 }])) }
     })
-    b.update = vi.fn(() => Promise.resolve(1))
+    // A submission is written before the call and finished in place: an update lands on the
+    // row this fake inserted (one per table in these tests).
+    b.update = vi.fn((patch: Record<string, unknown>) => {
+      for (const i of inserts) if (i.table === table) Object.assign(i.row, patch)
+      return Promise.resolve(1)
+    })
     // biome-ignore lint/suspicious/noThenProperty: deliberately thenable
     b.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
       Promise.resolve(rows).then(res, rej)

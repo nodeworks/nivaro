@@ -20,6 +20,13 @@ import { chainFields } from './chain-columns.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
 import type { RequestedVia } from './erp-submission-status.js'
+import {
+  answerByFor,
+  erpActionTimeoutMs,
+  findUnansweredSend,
+  SENDING_STATUS,
+  unansweredRefusal
+} from './erp-unanswered.js'
 import { callExternalApi } from './external-apis.js'
 import {
   type ObligationTrigger,
@@ -998,6 +1005,9 @@ export async function runTransitionActions(opts: {
   }
 
   const responses: unknown[] = []
+  // Submission rows this run began itself: a row of ours that could not be
+  // finished stays `sending`, and must not hold this run's own next push.
+  const ownSends = new Set<number>()
   // The reason the last SKIPPED action didn't push — meaningful when the
   // caller runs exactly one action (onlyIndex): "no submission" always means
   // one of the `continue`s below fired, and this is which.
@@ -1220,6 +1230,39 @@ export async function runTransitionActions(opts: {
       }
     }
 
+    // An earlier send of this same push that never got an answer (erp-unanswered.ts): the
+    // partner may already have it, so nothing is sent until that one is settled.
+    const timeoutMs = erpActionTimeoutMs(action as { timeout_ms?: unknown })
+    const unanswered = await findUnansweredSend({
+      collection,
+      item: String(item),
+      apiId,
+      endpointPath: action.endpoint_path,
+      ignoreIds: ownSends
+    })
+    if (unanswered) {
+      const { formatForPerson, userTimeZone } = await import('./user-time.js')
+      const when = formatForPerson(
+        new Date(unanswered.started_at),
+        await userTimeZone(acting.user).catch(() => 'America/New_York')
+      )
+      const reason = unansweredRefusal({
+        send: unanswered,
+        moveLabel: opts.transition.label,
+        when
+      })
+      skippedReason = reason
+      await resolveObligation(obligationId, { outcome: 'skipped', reason })
+      if (action.blocking === true) {
+        await journalTick(`blocked: ${reason}`)
+        return {
+          blockedError: `${opts.transition.label}: ${reason}`,
+          blockedClass: unanswered.stale ? 'unanswered' : 'in_flight'
+        }
+      }
+      continue
+    }
+
     // Outbound contracts (#352): assert the shape WE send. Missing required
     // paths raise a deduped issue naming them — drift surfaces first — but
     // the push still goes (warn, never block; the receiving system is the
@@ -1265,6 +1308,25 @@ export async function runTransitionActions(opts: {
     // failure classifies as itself (404/422/500/…) rather than as
     // "unknown"; stays null for a thrown network failure, which has none.
     let httpStatus: number | null = null
+    // Write-ahead: the row exists (status `sending`) before the partner can have the request.
+    const begunId = await beginSubmission({
+      collection,
+      item: String(item),
+      externalApi: apiId,
+      endpointPath: action.endpoint_path,
+      body,
+      answerBy: answerByFor(new Date(), timeoutMs),
+      who
+    })
+    if (begunId != null) {
+      ownSends.add(begunId)
+      // Linked from the start, so a row left `sending` still names the obligation it answers.
+      if (obligationId != null)
+        await db('nivaro_erp_submissions')
+          .where({ id: begunId })
+          .update({ obligation_id: obligationId })
+          .catch(() => {})
+    }
     try {
       const res = await callExternalApi(apiId, {
         method: (action.method as 'POST' | 'PUT') ?? 'POST',
@@ -1274,10 +1336,7 @@ export async function runTransitionActions(opts: {
         // `timeout_ms` on the action config wins; the default is generous
         // because a partner that validates each line (Fusion IIP) answers a
         // 30-line push in minutes, and a timeout here reads as a failed push.
-        timeoutMs: Math.min(
-          10 * 60_000,
-          Math.max(5_000, Number((action as { timeout_ms?: unknown }).timeout_ms) || 120_000)
-        ),
+        timeoutMs,
         _log: { triggeredBy: 'transition-action', userId: opts.userId ?? undefined }
       })
       responseBody = res.body
@@ -1326,21 +1385,39 @@ export async function runTransitionActions(opts: {
     }
 
     responses.push(responseBody)
-    const submissionId = await recordSubmission(
-      collection,
-      item,
-      apiId,
-      action.endpoint_path,
-      body,
-      status,
-      error,
-      responseBody,
-      // Only a push that LANDED defines "what they already know" — recording a
-      // signature for a failure would suppress the retry that fixes it.
-      status === 'failed' ? null : signature,
-      httpStatus,
-      who
-    )
+    // Only a push that LANDED defines "what they already know" — recording a
+    // signature for a failure would suppress the retry that fixes it.
+    const landedSignature = status === 'failed' ? null : signature
+    let submissionId: number | null
+    if (begunId != null) {
+      // The answer goes onto the row written before the call; a row that cannot be finished
+      // stays `sending` (an unknown outcome), but the obligation still learns what happened.
+      await finishSubmission(begunId, {
+        collection,
+        item: String(item),
+        externalApi: apiId,
+        status,
+        error,
+        responseBody,
+        signature: landedSignature,
+        httpStatus
+      })
+      submissionId = begunId
+    } else {
+      submissionId = await recordSubmission(
+        collection,
+        item,
+        apiId,
+        action.endpoint_path,
+        body,
+        status,
+        error,
+        responseBody,
+        landedSignature,
+        httpStatus,
+        who
+      )
+    }
     await resolveObligation(obligationId, {
       // A 2xx with no acknowledgement is not `sent` — it is `pending` until
       // the partner says so or the sweep calls it overdue.
@@ -1723,15 +1800,7 @@ export async function recordSubmission(
 ): Promise<number | null> {
   try {
     const now = new Date()
-    // The request is stored scrubbed like the response: a body-secret VALUE an admin inlined into
-    // a template (instead of its placeholder) is stored as the placeholder, and secret_paths is
-    // read from the scrubbed body, so a resend substitutes it back exactly where this send carried
-    // it. Secrets that cannot be resolved = no body stored (fail closed: a stand-in is never resent).
-    const secrets = await secretsForScrub(externalApi)
-    const storedBody =
-      body == null || secrets === null
-        ? null
-        : (applyScrub(body, secrets) as Record<string, unknown>)
+    const { payload, secrets } = await storedRequest(externalApi, endpointPath, body)
     // Probed once per tenant — naming a column this database hasn't run
     // migration 350 for yet fails the WHOLE insert, not just these two
     // fields, so the requester is spread conditionally instead of written
@@ -1750,76 +1819,235 @@ export async function recordSubmission(
         status,
         attempts: 1,
         last_error: error,
-        // secret_paths: where the template's real placeholders sit — a resend honours only those.
-        payload: JSON.stringify({
-          endpoint_path: endpointPath,
-          body: storedBody,
-          secret_paths: storedBody ? secretPathsOf(storedBody) : []
-        }),
+        payload,
         // Scrubbed before the 100k cut, so a secret straddling it cannot survive half-scrubbed.
         response: serializeResponseBody(applyScrub(responseBody, secrets)),
         change_signature: signature ?? null,
         ...requesterFields,
         ...(await chainFields('nivaro_erp_submissions')),
-        // #628 — NULL when this attempt did not fail; otherwise what kind of
-        // failure it was, which decides whether a later retry could help.
-        // A failed row with no body is a payload template that refused to render: repeating it
-        // cannot help (and there is nothing to resend), so it is 'validation' — never on a ladder.
-        error_class:
-          status !== 'failed'
-            ? null
-            : body == null
-              ? 'validation'
-              : (
-                  await import('./integration-remediation.js')
-                ).classifyError(httpStatus ?? null, responseBody, error),
+        error_class: await submissionErrorClass(status, body, httpStatus, responseBody, error),
         created_at: now,
         updated_at: now
       })
       .returning('id')) as Array<number | { id: number }>
-    // #1825: the record's Integrations chip refreshes the moment a push lands.
-    announceRecordAspect(collection, item, '$integrations')
-    await logActivity({
-      action: 'create',
-      collection: 'nivaro_erp_submissions',
-      item: `${collection}/${item}`,
-      user: null,
-      comment: `transition action → api:${externalApi} (${status}${error ? `: ${error.slice(0, 120)}` : ''})`
-    })
-    // A failed partner push says so in the record's chat room (#933), when
-    // the room type opted in to activity lines.
-    if (status === 'failed') {
-      void (async () => {
-        try {
-          const api = (await db('nivaro_external_apis').where({ id: externalApi }).first('name')) as
-            | { name?: string }
-            | undefined
-          const { postRecordActivity } = await import('./chat-records.js')
-          const { getApp } = await import('./io-holder.js')
-          const app = getApp()
-          if (app)
-            await postRecordActivity(
-              app,
-              collection,
-              item,
-              `⚠ The push to ${api?.name ?? 'a partner system'} failed${
-                error ? `: ${error.slice(0, 200)}` : ''
-              }`
-            )
-        } catch {
-          /* decoration */
-        }
-      })()
-    }
-    const first = inserted[0]
-    // tedious hands an OBJECT back from .returning on this stack.
-    return typeof first === 'object' && first !== null
-      ? Number(first.id)
-      : Number(first ?? 0) || null
+    await afterSubmissionRecorded(collection, item, externalApi, status, error)
+    return insertedId(inserted)
   } catch (err) {
     console.error({ err, collection, item }, 'failed to record ERP submission')
     return null
   }
+}
+
+/** tedious hands an OBJECT back from .returning on this stack. */
+function insertedId(inserted: Array<number | { id: number }>): number | null {
+  const first = inserted[0]
+  return typeof first === 'object' && first !== null ? Number(first.id) : Number(first ?? 0) || null
+}
+
+/**
+ * The request as a submission row stores it: scrubbed like the response, so a body-secret VALUE
+ * an admin inlined into a template (instead of its placeholder) is stored as the placeholder, and
+ * secret_paths is read from the scrubbed body, so a resend substitutes it back exactly where this
+ * send carried it. Secrets that cannot be resolved = no body stored (fail closed: a stand-in is
+ * never resent). `extra` keys ride beside them (answer_by on a write-ahead row).
+ */
+async function storedRequest(
+  externalApi: number,
+  endpointPath: string,
+  body: Record<string, unknown> | null,
+  extra: Record<string, unknown> = {}
+): Promise<{ payload: string; secrets: Record<string, string> | null }> {
+  const secrets = await secretsForScrub(externalApi)
+  const storedBody =
+    body == null || secrets === null ? null : (applyScrub(body, secrets) as Record<string, unknown>)
+  return {
+    // secret_paths: where the template's real placeholders sit — a resend honours only those.
+    payload: JSON.stringify({
+      endpoint_path: endpointPath,
+      body: storedBody,
+      secret_paths: storedBody ? secretPathsOf(storedBody) : [],
+      ...extra
+    }),
+    secrets
+  }
+}
+
+/**
+ * #628 — NULL when this attempt did not fail; otherwise what kind of failure it was, which
+ * decides whether a later retry could help. A failed row with no body is a payload template that
+ * refused to render: repeating it cannot help (and there is nothing to resend), so it is
+ * 'validation' — never on a ladder.
+ */
+async function submissionErrorClass(
+  status: string,
+  body: Record<string, unknown> | null,
+  httpStatus: number | null | undefined,
+  responseBody: unknown,
+  error: string | null
+): Promise<string | null> {
+  if (status !== 'failed') return null
+  if (body == null) return 'validation'
+  return (await import('./integration-remediation.js')).classifyError(
+    httpStatus ?? null,
+    responseBody,
+    error
+  )
+}
+
+/** What follows a send's outcome being stored: the record's chip, the activity line, the room. */
+async function afterSubmissionRecorded(
+  collection: string,
+  item: string,
+  externalApi: number,
+  status: string,
+  error: string | null
+): Promise<void> {
+  // #1825: the record's Integrations chip refreshes the moment a push lands.
+  announceRecordAspect(collection, item, '$integrations')
+  await logActivity({
+    action: 'create',
+    collection: 'nivaro_erp_submissions',
+    item: `${collection}/${item}`,
+    user: null,
+    comment: `transition action → api:${externalApi} (${status}${error ? `: ${error.slice(0, 120)}` : ''})`
+  })
+  // A failed partner push says so in the record's chat room (#933), when
+  // the room type opted in to activity lines.
+  if (status === 'failed') {
+    void (async () => {
+      try {
+        const api = (await db('nivaro_external_apis').where({ id: externalApi }).first('name')) as
+          | { name?: string }
+          | undefined
+        const { postRecordActivity } = await import('./chat-records.js')
+        const { getApp } = await import('./io-holder.js')
+        const app = getApp()
+        if (app)
+          await postRecordActivity(
+            app,
+            collection,
+            item,
+            `⚠ The push to ${api?.name ?? 'a partner system'} failed${
+              error ? `: ${error.slice(0, 200)}` : ''
+            }`
+          )
+      } catch {
+        /* decoration */
+      }
+    })()
+  }
+}
+
+/**
+ * Write-ahead half of a transition push (erp-unanswered.ts): the submission row, stored BEFORE the
+ * partner call with status `sending` — the request exactly as recordSubmission stores it, the
+ * requester and chain fields, and `answer_by` (when the call can no longer be answering). The
+ * outcome columns stay empty until finishSubmission writes them onto this same row; a process
+ * that stops mid-call leaves it `sending`, and that row holds the next send of the same push.
+ * Null when it could not be written (the caller then records the outcome the old way).
+ */
+export async function beginSubmission(opts: {
+  collection: string
+  item: string
+  externalApi: number
+  endpointPath: string
+  body: Record<string, unknown>
+  answerBy: Date
+  who?: SubmissionRequester
+}): Promise<number | null> {
+  try {
+    const now = new Date()
+    const { payload } = await storedRequest(opts.externalApi, opts.endpointPath, opts.body, {
+      answer_by: opts.answerBy.toISOString()
+    })
+    const requesterFields = await requesterInsertFields(
+      'nivaro_erp_submissions',
+      opts.who?.by ?? null,
+      opts.who?.via ?? null
+    )
+    const inserted = (await db('nivaro_erp_submissions')
+      .insert({
+        collection: opts.collection,
+        item: String(opts.item),
+        external_api: opts.externalApi,
+        external_ref: null,
+        status: SENDING_STATUS,
+        attempts: 1,
+        last_error: null,
+        payload,
+        response: null,
+        change_signature: null,
+        ...requesterFields,
+        ...(await chainFields('nivaro_erp_submissions')),
+        error_class: null,
+        created_at: now,
+        updated_at: now
+      })
+      .returning('id')) as Array<number | { id: number }>
+    // The record's Integrations chip shows the send while it is in flight.
+    announceRecordAspect(opts.collection, opts.item, '$integrations')
+    return insertedId(inserted)
+  } catch (err) {
+    console.error(
+      { err, collection: opts.collection, item: opts.item },
+      'failed to record ERP submission before sending'
+    )
+    return null
+  }
+}
+
+/**
+ * The answer half: the outcome written onto the row beginSubmission stored (status, response,
+ * error, signature, error_class), with the side effects recordSubmission has. Returns false when
+ * the row could not be written — it then stays `sending`, which is what an unknown outcome is.
+ */
+export async function finishSubmission(
+  submissionId: number,
+  outcome: {
+    collection: string
+    item: string
+    externalApi: number
+    status: 'pending' | 'accepted' | 'failed'
+    error: string | null
+    responseBody?: unknown
+    signature?: string | null
+    httpStatus?: number | null
+  }
+): Promise<boolean> {
+  try {
+    const secrets = await secretsForScrub(outcome.externalApi)
+    await db('nivaro_erp_submissions')
+      .where({ id: submissionId })
+      .update({
+        status: outcome.status,
+        last_error: outcome.error,
+        response: serializeResponseBody(applyScrub(outcome.responseBody, secrets)),
+        change_signature: outcome.signature ?? null,
+        // A begun row always carries a body: a render failure never reaches the send.
+        error_class: await submissionErrorClass(
+          outcome.status,
+          {},
+          outcome.httpStatus,
+          outcome.responseBody,
+          outcome.error
+        ),
+        updated_at: new Date()
+      })
+  } catch (err) {
+    console.error(
+      { err, submissionId, collection: outcome.collection, item: outcome.item },
+      'failed to finish ERP submission — it stays sending'
+    )
+    return false
+  }
+  await afterSubmissionRecorded(
+    outcome.collection,
+    outcome.item,
+    outcome.externalApi,
+    outcome.status,
+    outcome.error
+  ).catch(() => {})
+  return true
 }
 
 // ─── Read-only preview (#615 / #616) ────────────────────────────────────────
