@@ -560,6 +560,13 @@ export { QueueKanbanBoard } from './components/queue/QueueKanbanBoard'
 export type { QueueRealtimeAdapter, QueueWorklistProps } from './components/queue/QueueWorklist'
 export { QueueWorklist } from './components/queue/QueueWorklist'
 export { QueueWorkloadView } from './components/queue/QueueWorkloadView'
+export {
+  cleanQuickFilters,
+  mergeQuickFilters,
+  type QuickFilterDef,
+  QuickFiltersEditor,
+  quickFilterProblems
+} from './components/quick-filters'
 export { RealtimeStaleMark, RealtimeStatusBanner } from './components/RealtimeStatusBanner'
 export { RecentRecordsRail } from './components/RecentRecordsRail'
 export { RecordDrilldownSheet } from './components/RecordDrilldownSheet'

@@ -2,6 +2,7 @@ import {
   ChangeImpactStrip,
   Combobox,
   ConfigReadBack,
+  cleanQuickFilters,
   DataGuideCard,
   describeFieldChangeImpact,
   describeLockCondition,
@@ -7840,7 +7841,8 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
         <div>
           <p className='text-[12.5px] font-medium text-slate-700'>Quick filters</p>
           <p className='mb-1.5 text-[11.5px] text-slate-500'>
-            Facet dropdowns above the table. Drag to reorder — that is the order they appear in.
+            Dropdowns above the list that everyone can filter by. Drag to set their order.
+            Administrators can also change them right on the list (Edit filters).
           </p>
           <QuickFiltersEditor
             collection={tableName}
@@ -7857,15 +7859,9 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
                 className='h-7 text-[12px]'
                 onClick={async () => {
                   // Incomplete rows would render a dropdown that filters
-                  // nothing, so they are dropped rather than saved half-built.
-                  const clean = qfRows.filter(
-                    (f) =>
-                      f.key?.trim() &&
-                      f.label?.trim() &&
-                      f.collection?.trim() &&
-                      f.label_field?.trim() &&
-                      (f.path?.length || f.or_paths?.some((p) => p.length))
-                  )
+                  // nothing, so they are dropped rather than saved half-built
+                  // (the same rule the list's in-place editor saves by).
+                  const clean = cleanQuickFilters(qfRows)
                   await patch({ quick_filters: clean.length > 0 ? clean : undefined })
                   setQfRows(clean)
                   setQfDirty(false)

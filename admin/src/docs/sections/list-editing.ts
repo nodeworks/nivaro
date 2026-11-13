@@ -68,6 +68,33 @@ export const listEditing: DocSection = {
     {
       type: 'note',
       text: 'A very large view (dozens of filters) may be too long for a link — the button says so. Save it as a shared view instead.'
+    },
+
+    {
+      type: 'h2',
+      id: 'list-editing-quick-filters',
+      text: 'Edit the quick filters from the list (administrators)'
+    },
+    {
+      type: 'p',
+      text: 'The quick filters — the dropdowns above a list such as Funding Year, Zone and Region — can be changed right on the list. Administrators see **Edit filters** at the end of the bar (or **Add quick filters** beside Save view when the list has none). Everyone else sees no change.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '**Add filter** lists what the records link to. Pick one (Funding Years), or open one with › to filter by something on it (Workflow › Project › Project Type). The options and the column they show are filled in for you.',
+        '**Rename or change** a filter by clicking it: its name on the bar, the field it filters by, the column its options show, their order, and under More options the options source, value column, key and a second field to match.',
+        '**Reorder** by dragging the grip, with Alt+Left / Alt+Right on a filter, or with Move left / Move right in its settings.',
+        '**Remove** with its ✕. Nothing changes for anyone until you press **Save**; Cancel puts the bar back.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Save writes the same setting as Data Model → the collection → Settings → Collection Browser → Quick filters (`browser_config.quick_filters`, `PATCH /collections/:collection`), and both use one editor — Edit as JSON stays on the Settings page. The bar shows the new filters at once; when the save is refused, the old bar comes back and the editor reopens with your changes and the reason.'
+    },
+    {
+      type: 'note',
+      text: 'People’s picks follow a filter’s key. A rename or a move keeps them (including the YOUR DEFAULT picks from Profile → Default filters); removing a filter, or pointing it at another field, clears its picks. A list whose page passes its own quick filters cannot be edited this way.'
     }
   ]
 }

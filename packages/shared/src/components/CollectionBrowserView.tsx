@@ -224,6 +224,9 @@ import {
   RevisionsPanel
 } from './panels'
 import { ConfirmButton } from './profile/primitives'
+import { pruneQuickSelection, type QuickFilterDef } from './quick-filters/config'
+import { QuickFilterBarEditor, QuickFilterEditButton } from './quick-filters/QuickFilterBarEditor'
+import { useQuickFilterEditing } from './quick-filters/useQuickFilterEditing'
 import { RealtimeStaleMark } from './RealtimeStatusBanner'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RowHighlightLegend } from './RowHighlightLegend'
@@ -506,24 +509,8 @@ const FORMAT_PRESETS: Array<{ label: string; cfg: ColumnFormatConfig | null }> =
   { label: 'Count (related)', cfg: { type: 'count' } }
 ]
 
-export interface QuickFilterDef {
-  /** Unique key for this filter's selection state. */
-  key: string
-  label: string
-  /** Server condition path — supports M2O chains and O2M/M2M alias hops
-   *  (e.g. ['funding_years'], ['project', 'project_type']). */
-  path: string[]
-  /** When set, the selection matches if ANY of these paths hits (server _or
-   *  group) — e.g. project.project_type OR car_project_type. Overrides path. */
-  or_paths?: string[][]
-  /** Collection the options list loads from. */
-  collection: string
-  /** Option value column (default 'id'). */
-  value_field?: string
-  /** Option label column. */
-  label_field: string
-  sort?: string
-}
+/** One quick filter (`browser_config.quick_filters[]`) — the shape lives with its editors. */
+export type { QuickFilterDef } from './quick-filters/config'
 
 export interface CollectionBrowserViewProps {
   collection: string
@@ -4855,6 +4842,67 @@ export function CollectionBrowserView({
       ? Math.min(bc.page_size, 200)
       : pageSize
   const effQuickFilters = quickFilters.length > 0 ? quickFilters : (bc.quick_filters ?? [])
+  // A person's default-scope picks for these filters (Profile → Default filters).
+  const scopeSeedFor = async (defs: QuickFilterDef[]) => {
+    const seedSel: Record<string, Array<string | number>> = {}
+    if (!myScopes) return seedSel
+    for (const qf of defs) {
+      const dim = matchScopeDimension(myScopes, { key: qf.key, collection: qf.collection })
+      if (!dim) continue
+      const ids = effectiveScopeSeedIds(myScopes, dim.name)
+      if (ids.length === 0) continue
+      const vals = await translateScopeValues(client as never, dim, ids, qf.value_field).catch(
+        () => [] as Array<string | number>
+      )
+      if (vals.length > 0) seedSel[qf.key] = vals
+    }
+    return seedSel
+  }
+  // Administrators edit the bar in place. Only a bar that comes from the
+  // collection's config: a host's quickFilters prop wins over it, so an edit
+  // there would never show.
+  const canEditQuick = isAdmin && quickFilters.length === 0
+  const quickEditBtnRef = useRef<HTMLButtonElement | null>(null)
+  const quickEdit = useQuickFilterEditing({
+    collection,
+    filters: effQuickFilters,
+    onApplied: (next, prev) => {
+      // Picks of a removed filter, or of one that now reaches another field,
+      // go; renames and moves keep them. A new filter that matches one of the
+      // person's default scopes gets its default pick, as on a fresh load.
+      const snap = { sel: quickSel, applied: appliedQuick, seeded: scopeSeededKeys }
+      setQuickSel((sel) => pruneQuickSelection(sel, prev, next))
+      setAppliedQuick((sel) => pruneQuickSelection(sel, prev, next))
+      setScopeSeededKeys((keys) => {
+        const kept = pruneQuickSelection(
+          Object.fromEntries([...keys].map((k) => [k, [] as never[]])),
+          prev,
+          next
+        )
+        return new Set(Object.keys(kept))
+      })
+      setPage(1)
+      const added = next.filter((f) => !prev.some((p) => p.key === f.key))
+      if (added.length > 0 && !sharedLink && !deepLinked)
+        void scopeSeedFor(added).then((seed) => {
+          if (Object.keys(seed).length === 0) return
+          const merge = (sel: Record<string, Array<string | number>>) => {
+            const out = { ...sel }
+            for (const [k, v] of Object.entries(seed)) if (!(out[k]?.length ?? 0)) out[k] = v
+            return out
+          }
+          setQuickSel(merge)
+          setAppliedQuick(merge)
+          setScopeSeededKeys((keys) => new Set([...keys, ...Object.keys(seed)]))
+        })
+      window.setTimeout(() => quickEditBtnRef.current?.focus(), 0)
+      return () => {
+        setQuickSel(snap.sel)
+        setAppliedQuick(snap.applied)
+        setScopeSeededKeys(snap.seeded)
+      }
+    }
+  })
 
   useEffect(() => {
     if (scopeGateOpen) return
@@ -4874,17 +4922,7 @@ export function CollectionBrowserView({
       return
     }
     void (async () => {
-      const seedSel: Record<string, Array<string | number>> = {}
-      for (const qf of effQuickFilters) {
-        const dim = matchScopeDimension(scopes, { key: qf.key, collection: qf.collection })
-        if (!dim) continue
-        const ids = effectiveScopeSeedIds(scopes, dim.name)
-        if (ids.length === 0) continue
-        const vals = await translateScopeValues(client as never, dim, ids, qf.value_field).catch(
-          () => [] as Array<string | number>
-        )
-        if (vals.length > 0) seedSel[qf.key] = vals
-      }
+      const seedSel = await scopeSeedFor(effQuickFilters)
       if (Object.keys(seedSel).length > 0) {
         const merge = (prev: Record<string, Array<string | number>>) => {
           const next = { ...prev }
@@ -8867,7 +8905,10 @@ export function CollectionBrowserView({
 
       {/* Quick filters — persistent facet dropdowns; Apply commits to the
           server query (entire record set), Clear resets facets + column filters */}
-      {effQuickFilters.length > 0 && (
+      {canEditQuick && quickEdit.editing && (
+        <QuickFilterBarEditor ctl={quickEdit} collection={collection} />
+      )}
+      {effQuickFilters.length > 0 && !(canEditQuick && quickEdit.editing) && (
         <div className='flex shrink-0 flex-wrap items-center gap-1.5 border-b border-slate-100 bg-white px-4 py-1.5 dark:border-slate-800 dark:bg-slate-900'>
           {effQuickFilters.map((qf) => (
             <QuickFilterSelect
@@ -8915,6 +8956,13 @@ export function CollectionBrowserView({
           >
             Clear
           </button>
+          {canEditQuick && (
+            <QuickFilterEditButton
+              ref={quickEditBtnRef}
+              ctl={quickEdit}
+              className='ml-0.5 border-l border-slate-200 pl-2 dark:border-slate-700'
+            />
+          )}
           <span className='ml-auto text-[11px] text-slate-400'>
             {totalUnknown ? (
               'count unavailable'
@@ -9123,6 +9171,15 @@ export function CollectionBrowserView({
           >
             ☆ Save view
           </button>
+        )}
+        {/* No quick filters yet: administrators start the bar from here. */}
+        {canEditQuick && effQuickFilters.length === 0 && !quickEdit.editing && (
+          <QuickFilterEditButton
+            ref={quickEditBtnRef}
+            ctl={quickEdit}
+            label='Add quick filters'
+            className='ml-auto'
+          />
         )}
       </div>
 
