@@ -3,13 +3,7 @@ import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import {
-  activityCsv,
-  dayIn,
-  fetchActivityRows,
-  groupActivityByDay,
-  safeTimeZone
-} from '../services/activity-export.js'
+import { activityCsv, dayIn, fetchActivityRows, safeTimeZone } from '../services/activity-export.js'
 import { type ActivityFilters, likeContains, UUID_RE } from '../services/activity-filters.js'
 import {
   type ActivitySearchCatalog,
@@ -17,14 +11,27 @@ import {
   parseActivitySearch
 } from '../services/activity-nl.js'
 import { tenantState } from '../services/ai-tenant-state.js'
+import {
+  foldPersonLines,
+  groupLabel,
+  groupPersonDays,
+  junctionsOf,
+  loadJunctionMap,
+  personDidLabels,
+  readChangedFields
+} from '../services/person-did.js'
+import type { User } from '../types.js'
 
 /**
  * Activity search + the person page's "What they did" (#10/#13). Registered beside
  * activityRoutes under /api/activity.
  *
  *   POST /activity/parse {text}                     admin — words → ActivityFilters (one AI call)
- *   GET  /activity/people/:userId/summary?days=&tz= admin or the person — day → collection counts
- *   GET  /activity/people/:userId/entries?day=&collection=&tz=   the entries behind one group
+ *   GET  /activity/people/:userId/summary?days=&tz= admin or the person — day → collection,
+ *                                                   link tables folded into their parent, plain-verb
+ *                                                   counts (`parts`) and the collection's `label`
+ *   GET  /activity/people/:userId/entries?day=&collection=&tz=   one group as readable lines
+ *                                                   (services/person-did.ts; labels read as the caller)
  *   POST /activity/people/:userId/export {days, tz} the CSV; the export is itself logged
  *                                                   (action `activity-export`)
  */
@@ -159,9 +166,28 @@ export async function activityInsightRoutes(app: FastifyInstance) {
     const n = days(q.days)
     const tz = safeTimeZone(q.tz)
     const { rows, truncated } = await fetchActivityRows(personFilters(userId, n))
+    const junctions = await loadJunctionMap()
+    const grouped = groupPersonDays(rows, tz, junctions)
+    const collections = [
+      ...new Set(grouped.flatMap((d) => d.collections.map((c) => c.collection)).filter(Boolean))
+    ] as string[]
+    const labels = await personDidLabels(
+      req.user as User,
+      !!req.isAdmin,
+      collections.map((c, i) => ({
+        id: -1 - i,
+        action: '',
+        timestamp: '',
+        collection: c,
+        item: null,
+        comment: null
+      })),
+      { junctions }
+    ).catch(() => ({}))
+    for (const d of grouped) for (const c of d.collections) c.label = groupLabel(c, labels)
     return {
       data: {
-        days: groupActivityByDay(rows, tz),
+        days: grouped,
         total: rows.length,
         truncated,
         window_days: n,
@@ -185,23 +211,26 @@ export async function activityInsightRoutes(app: FastifyInstance) {
       from: new Date(start.getTime() - DAY_MS).toISOString(),
       to: new Date(start.getTime() + 2 * DAY_MS - 1).toISOString()
     }
-    // `__none__` = the group of entries with no collection (sign-ins and the like).
+    // `__none__` = the group of entries with no collection (sign-ins and the like). A parent
+    // collection's group also reads its link tables, whose writes fold into its edits.
     const none = q.collection === NO_COLLECTION
-    if (q.collection && !none) filters.collections = [q.collection]
-    const { rows } = await fetchActivityRows(filters, { limit: 2000 })
-    const data = rows
+    const junctions = await loadJunctionMap()
+    if (q.collection && !none)
+      filters.collections = [q.collection, ...junctionsOf(q.collection, junctions)]
+    const { rows, truncated } = await fetchActivityRows(filters, { limit: 2000 })
+    const dayRows = rows
       .filter((r) => dayIn(r.timestamp, tz) === q.day)
       .filter((r) => (none ? r.collection == null : true))
-      .slice(0, 500)
-      .map((r) => ({
-        id: r.id,
-        action: r.action,
-        timestamp: r.timestamp,
-        collection: r.collection,
-        item: r.item,
-        comment: r.comment
-      }))
-    return { data }
+    const fields = await readChangedFields(
+      dayRows.filter((r) => r.action === 'update').map((r) => Number(r.id))
+    )
+    // Records and link rows labelled as the caller; a link row's parent comes from its labels.
+    const labels = await personDidLabels(req.user as User, who === 'admin', dayRows, {
+      junctions,
+      fields
+    }).catch(() => ({}))
+    const lines = foldPersonLines(dayRows, { junctions, labels, fields })
+    return { data: lines.slice(0, 300), truncated: truncated || lines.length > 300 }
   })
 
   app.post('/people/:userId/export', async (req, reply) => {

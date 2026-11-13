@@ -1,5 +1,5 @@
 import Fastify from 'fastify'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /** #13 "What they did": admin or the person themself; the export is itself logged. */
 
@@ -23,6 +23,33 @@ vi.mock('../services/activity-export.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/activity-export.js')>()),
   fetchActivityRows: (...a: unknown[]) => fetchActivityRows(...a)
 }))
+
+const personDidLabels = vi.fn()
+vi.mock('../services/person-did.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../services/person-did.js')>()
+  return {
+    ...real,
+    loadJunctionMap: async () =>
+      real.buildJunctionMap([
+        {
+          many_collection: 'invoices_tags',
+          many_field: 'invoices_id',
+          one_collection: 'invoices',
+          one_field: 'tags',
+          junction_field: 'tags_id'
+        },
+        {
+          many_collection: 'invoices_tags',
+          many_field: 'tags_id',
+          one_collection: 'tags',
+          one_field: null,
+          junction_field: 'invoices_id'
+        }
+      ]),
+    readChangedFields: async () => new Map([[2, ['amount']]]),
+    personDidLabels: (...a: unknown[]) => personDidLabels(...a)
+  }
+})
 
 import { activityInsightRoutes } from './activity-insights.js'
 
@@ -58,6 +85,22 @@ afterEach(() => {
   who = { id: ME, admin: false }
   logActivity.mockClear()
   fetchActivityRows.mockReset()
+})
+beforeEach(() => {
+  personDidLabels.mockReset()
+  personDidLabels.mockResolvedValue({
+    records: { 'invoices:5': 'INV-0005 · Acme' },
+    collections: { invoices: { singular: 'Invoice', plural: 'Invoices' } },
+    fields: { 'invoices.amount': 'Amount', 'invoices.tags': 'Tags' },
+    junctions: {
+      'invoices_tags:9': {
+        parent_collection: 'invoices',
+        parent_id: '5',
+        noun: 'Tag',
+        value: 'Urgent'
+      }
+    }
+  })
 })
 
 describe('person activity', () => {
@@ -114,14 +157,66 @@ describe('person activity', () => {
     await app.close()
   })
 
-  it('returns one day’s entries in the viewer’s zone', async () => {
+  it('returns one day’s entries in the viewer’s zone, as readable lines', async () => {
     fetchActivityRows.mockResolvedValue({ rows, truncated: false })
     const app = await build()
     const r = await app.inject({
       method: 'GET',
       url: `/people/${ME}/entries?day=2026-10-28&collection=invoices&tz=UTC`
     })
-    expect(r.json().data.map((e: { id: number }) => e.id)).toEqual([1])
+    expect(r.json().data).toEqual([
+      expect.objectContaining({
+        ids: [1],
+        verb: 'Created',
+        target: 'Invoice INV-0005 · Acme',
+        record: { collection: 'invoices', id: '5' }
+      })
+    ])
+    // A parent's group reads its link tables too; labels are read as the caller.
+    expect(fetchActivityRows.mock.calls[0][0].collections).toEqual(['invoices', 'invoices_tags'])
+    expect(personDidLabels.mock.calls[0][0]).toMatchObject({ id: ME })
+    await app.close()
+  })
+
+  it('folds link-table writes into the parent edit and speaks plain verbs', async () => {
+    fetchActivityRows.mockResolvedValue({
+      rows: [
+        { ...rows[0], id: 3, collection: 'invoices_tags', item: '9', action: 'create' },
+        rows[0],
+        { ...rows[0], id: 4, action: 'read', timestamp: '2026-10-29T11:00:00.000Z' },
+        { ...rows[0], id: 5, action: 'read', timestamp: '2026-10-29T10:00:00.000Z' }
+      ],
+      truncated: false
+    })
+    const app = await build()
+    const sum = await app.inject({ method: 'GET', url: `/people/${ME}/summary?tz=UTC` })
+    const g = sum.json().data.days[0].collections
+    expect(g).toEqual([
+      expect.objectContaining({
+        collection: 'invoices',
+        label: 'Invoices',
+        parts: [
+          { verb: 'Edited', count: 1 },
+          { verb: 'Opened', count: 1 }
+        ]
+      })
+    ])
+    const r = await app.inject({
+      method: 'GET',
+      url: `/people/${ME}/entries?day=2026-10-29&collection=invoices&tz=UTC`
+    })
+    const lines = r.json().data
+    expect(
+      lines.map((l: { verb: string; count: number; detail: string | null }) => [
+        l.verb,
+        l.count,
+        l.detail
+      ])
+    ).toEqual([
+      ['Edited', 1, 'Changed Amount · added Tag Urgent'],
+      ['Opened', 2, null]
+    ])
+    expect(JSON.stringify(lines)).not.toContain('#5')
     await app.close()
   })
 

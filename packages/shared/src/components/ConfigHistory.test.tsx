@@ -127,8 +127,23 @@ describe('PersonDidPanel', () => {
         day: '2026-10-29',
         total: 3,
         collections: [
-          { collection: 'invoices', count: 2, actions: { update: 1, delete: 1 } },
-          { collection: null, count: 1, actions: { login: 1 } }
+          {
+            collection: 'invoices',
+            label: 'Invoices',
+            count: 2,
+            actions: { update: 1, delete: 1 },
+            parts: [
+              { verb: 'Edited', count: 1 },
+              { verb: 'Opened', count: 4 }
+            ]
+          },
+          {
+            collection: null,
+            label: 'Sign-ins',
+            count: 1,
+            actions: { login: 1 },
+            parts: [{ verb: 'Signed in', count: 1 }]
+          }
         ]
       }
     ],
@@ -138,19 +153,34 @@ describe('PersonDidPanel', () => {
     tz: 'UTC'
   }
 
-  it('shows days → collections with counts and expands a group to its entries', async () => {
+  it('shows days → collections in plain verbs and expands a group to readable lines', async () => {
     const { host, calls, cleanup } = mount(<PersonDidPanel userId='u1' name='Sam' />, (cmd) => {
       if (cmd._path.endsWith('/summary')) return { data: summary }
       if (cmd._path.endsWith('/entries'))
         return {
           data: [
             {
-              id: 9,
-              action: 'delete',
-              timestamp: '2026-10-29T10:00:00.000Z',
-              collection: 'invoices',
-              item: '42',
-              comment: null
+              key: 'r:9',
+              ids: [9, 8, 7, 6],
+              at: '2026-10-29T10:00:00.000Z',
+              first_at: '2026-10-29T09:00:00.000Z',
+              count: 4,
+              verb: 'Opened',
+              kind: 'read',
+              target: 'Invoice INV-42 · Acme',
+              detail: null,
+              record: { collection: 'invoices', id: '42' }
+            },
+            {
+              key: 'x:5',
+              ids: [5],
+              at: '2026-10-29T08:00:00.000Z',
+              count: 1,
+              verb: 'Requested access to',
+              kind: 'access',
+              target: 'an invoice record',
+              detail: null,
+              record: null
             }
           ]
         }
@@ -161,13 +191,19 @@ describe('PersonDidPanel', () => {
     const groups = host.querySelectorAll('[data-person-did-day] li > button')
     expect(groups).toHaveLength(2)
     expect(groups[0].textContent).toContain('Invoices')
-    expect(groups[0].textContent).toContain('2')
-    expect(groups[1].textContent).toContain('Sign-ins and other')
+    expect(groups[0].textContent).toContain('Edited')
+    expect(groups[0].textContent).toContain('Opened4')
+    expect(groups[1].textContent).toContain('Sign-ins')
     act(() => (groups[0] as HTMLButtonElement).click())
     await flush()
     const entriesCall = calls.find((c) => c._path === '/activity/people/u1/entries')
     expect(entriesCall?._params).toMatchObject({ day: '2026-10-29', collection: 'invoices' })
-    expect(host.textContent).toContain('#42')
+    const lines = host.querySelectorAll('[data-person-did-line]')
+    expect(lines[0].textContent).toContain('Opened Invoice INV-42 · Acme4×')
+    expect(lines[1].textContent).toContain('Requested access to an invoice record')
+    // Never an id: not "#42", and the unreadable record is not a link.
+    expect(host.textContent).not.toContain('#')
+    expect(lines[1].querySelector('button')).toBeNull()
     cleanup()
   })
 
