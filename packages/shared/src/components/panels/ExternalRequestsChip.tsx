@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import { integrationChipSummary } from '../../lib/integration-chip'
+import { externalRequestsShown, integrationChipSummary } from '../../lib/integration-chip'
 import { useLiveRefetchInterval } from '../../lib/live-queries'
 import { cn, formatRelative } from '../../lib/utils'
 import { type ErpSubmission, SubmissionRow } from '../integrations/console/SubmissionRow'
@@ -16,6 +16,58 @@ import { OutboundPreviewSection } from '../integrations/RecordIntegrationPreview
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { RecordEventPathSheet } from './IntegrationActivitySection'
 
+/** The record's request log — one cache for the chip, its show rule and the banners. */
+function useRecordSubmissions(
+  collection: string,
+  itemId: string,
+  refetchInterval?: number | false,
+  enabled = true
+) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: ['erp-submissions', collection, String(itemId)],
+    queryFn: () =>
+      client
+        .request<{ data: ErpSubmission[] }>(
+          get(`/erp-submissions/${collection}/${encodeURIComponent(itemId)}`)
+        )
+        .then((r) => r.data ?? []),
+    enabled: enabled && !!collection && !!itemId,
+    staleTime: 15_000,
+    refetchInterval
+  })
+}
+
+/** Last answer per collection: the next record of it starts with the same chip, no flicker. */
+const lastShown = new Map<string, boolean>()
+
+/**
+ * Whether the record header shows the chip (lib/integration-chip.ts
+ * externalRequestsShown): the two reads the chip makes anyway, so deciding
+ * costs no request of its own. While they load, the collection's last answer.
+ */
+export function useExternalRequestsShown(
+  collection: string,
+  itemId: string | null,
+  layoutOn: boolean
+): boolean {
+  const on = layoutOn && !!itemId
+  const subs = useRecordSubmissions(collection, itemId ?? '', undefined, on)
+  const obligations = useRecordObligations(collection, on ? (itemId ?? '') : '')
+  const answer = externalRequestsShown({
+    layoutOn,
+    // A viewer refused the record's integrations has nothing to see here.
+    partnerIntegration: obligations.isError ? false : obligations.partnerIntegration,
+    obligations: obligations.isError ? 0 : obligations.obligationCount,
+    submissions: subs.isError ? 0 : (subs.data?.length ?? null)
+  })
+  useEffect(() => {
+    if (answer !== null && layoutOn) lastShown.set(collection, answer)
+  }, [answer, collection, layoutOn])
+  if (!on) return false
+  return answer ?? lastShown.get(collection) ?? false
+}
+
 /**
  * Item-header "Integrations" chip: one dot per partner (was it told —
  * obligations — else the newest request's outcome), a green badge for
@@ -24,8 +76,10 @@ import { RecordEventPathSheet } from './IntegrationActivitySection'
  * (told / never told / send now — the rows the record body used to carry
  * as a banner; Rob 2026-09-24: "move the integration slot into the
  * Integrations button popup") above the full request/response log (each
- * request drills into every attempt). Always renders: a skeleton while
- * loading, a quiet 'No external requests' when there is nothing to say.
+ * request drills into every attempt). A skeleton while loading, a quiet
+ * 'No external requests' when there is nothing to say yet. The record header
+ * mounts it only where useExternalRequestsShown says (a collection with a
+ * partner integration, a record with something sent, the form's switch on).
  * Shares the ['erp-submissions', …] and ['integration-obligations','record',…]
  * caches, so transition writebacks and retries refresh it.
  */
@@ -53,18 +107,7 @@ export function ExternalRequestsChip({
   // #2450 — RecordLiveSync refreshes ['erp-submissions', collection, id] on the record's
   // `$integrations` notice; the poll is a 5-minute safety net while the socket is live.
   const submissionsPoll = useLiveRefetchInterval(60_000)
-  const { data, isLoading } = useQuery({
-    queryKey: ['erp-submissions', collection, String(itemId)],
-    queryFn: () =>
-      client
-        .request<{ data: ErpSubmission[] }>(
-          get(`/erp-submissions/${collection}/${encodeURIComponent(itemId)}`)
-        )
-        .then((r) => r.data ?? []),
-    enabled: !!collection && !!itemId,
-    staleTime: 15_000,
-    refetchInterval: submissionsPoll
-  })
+  const { data, isLoading } = useRecordSubmissions(collection, itemId, submissionsPoll)
   const retry = useMutation({
     mutationFn: (id: number) =>
       client.request<{ data: ErpSubmission }>(post(`/erp-submissions/${id}/retry`)),

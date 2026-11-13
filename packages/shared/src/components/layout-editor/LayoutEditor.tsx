@@ -24,6 +24,7 @@ import {
   UNGROUPED_KEY
 } from '../../lib/layout-ops'
 import { activeFreeze, dayWords, type LayoutFreeze } from '../../lib/layout-resolve'
+import { withAutoOwnersTile } from '../../lib/owners-header-tile'
 import { useMyUserId } from '../../lib/presence-signals'
 import { useUnsavedWork } from '../../lib/unsaved-work'
 import { cn } from '../../lib/utils'
@@ -715,7 +716,10 @@ export function LayoutEditor({
   useEffect(() => setCurrentId(layoutId), [layoutId])
   const onSaved = useSavedRefresh(collection)
   // Record / Stop (#2663) sees every apply; the draft saves as before.
-  const { draft: recorded, recorder } = useMacroRecorder(useLayoutDraft(currentId, { onSaved }))
+  const { draft: recorded, recorder } = useMacroRecorder(
+    // The record page's automatic Owners tile is listed like any header tile (Rob 2026-11-13).
+    useLayoutDraft(currentId, { onSaved, autoOwnersTile: true })
+  )
   // Recently removed (#3191): every apply is read for what it takes off the form.
   const { draft: logged, removed } = useRemovalLog(recorded, currentId)
   // #3194: linked library sections change only in the library; the guard says so
@@ -770,8 +774,10 @@ export function LayoutEditor({
   // Label house style (#3184): turn a check off from a finding, or tune it.
   const labelStyle = useLabelStyleControls(panel === 'checks')
   // History compare / Review changes on the canvas (#2591); who changed each section (#2611).
-  const { data: savedBundle } = useLayoutBundle(currentId)
-  const compareState = useCanvasCompare(bundle, savedBundle ?? null, draft.unsavedCount, currentId)
+  const { data: savedRaw } = useLayoutBundle(currentId)
+  // Same base the draft has (the automatic Owners tile listed), so it never reads as a change.
+  const savedBundle = useMemo(() => (savedRaw ? withAutoOwnersTile(savedRaw) : null), [savedRaw])
+  const compareState = useCanvasCompare(bundle, savedBundle, draft.unsavedCount, currentId)
   const { data: lastChanges } = useSectionChanges(currentId, bundle != null)
   // AI tools' findings pinned on the canvas (#2685 #2690).
   const [aiPins, setAiPins] = useState<AiPin[]>([])

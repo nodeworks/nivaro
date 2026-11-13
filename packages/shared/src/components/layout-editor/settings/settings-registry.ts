@@ -250,6 +250,15 @@ export const SETTINGS: SettingDef[] = [
     types: ON_SCREEN
   },
   {
+    key: 'layout.external_requests',
+    section: 'buttons',
+    label: 'Show external requests',
+    effect:
+      'The header shows what this record sent to partner systems, on collections that send anything.',
+    types: ON_SCREEN_RECORD,
+    keywords: 'integrations erp partner chip header'
+  },
+  {
     key: 'layout.changes_tray',
     section: 'buttons',
     label: 'Unsaved-changes tray',

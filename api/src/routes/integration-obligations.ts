@@ -8,6 +8,7 @@
  * because the record banner and Ask AI have to work for whoever owns the
  * record, not just admins.
  */
+
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
@@ -25,6 +26,7 @@ import {
 import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
+import { collectionHasPartnerIntegration } from '../services/record-header-signals.js'
 
 const MAX_LIMIT = 200
 
@@ -512,7 +514,13 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
           ...sendOptionsFor(def, r as { submission_id?: number | null })
         }
       })
-      return { data, remediation_enabled: await remediationEnabled() }
+      return {
+        data,
+        remediation_enabled: await remediationEnabled(),
+        // The header's External requests chip shows only where something can go to a
+        // partner (Rob 2026-11-13; services/record-header-signals.ts).
+        partner_integration: await collectionHasPartnerIntegration(collection)
+      }
     }
   )
 

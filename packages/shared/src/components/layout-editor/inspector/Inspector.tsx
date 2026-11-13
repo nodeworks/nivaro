@@ -531,7 +531,13 @@ function PlacementInspector({
   if (isSlotField(field))
     return (
       <SimplePanel
-        eyebrow={<Breadcrumb kind='Panel' target={target} where={where} />}
+        eyebrow={
+          groupKey === HEADER_GROUP_KEY ? (
+            'Header strip'
+          ) : (
+            <Breadcrumb kind='Panel' target={target} where={where} />
+          )
+        }
         title={slotName(field)}
         notice={notice}
         readOnly={readOnly}

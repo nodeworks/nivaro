@@ -112,6 +112,7 @@ import { useLeaveLinkGuard } from '../lib/leave-guard'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { requestMoveState } from '../lib/move-state'
 import { lockedAfterMoveText, movedNoticeId, namedMovedNoticeRecent } from '../lib/moved-notice'
+import { ownersHeaderTile } from '../lib/owners-header-tile'
 import { useRecordReader } from '../lib/record-loader'
 import {
   bindRecordOutbox,
@@ -417,6 +418,7 @@ import {
   RelatedRecordsPanel,
   RevisionsPanel,
   TaskPanel,
+  useExternalRequestsShown,
   useItemLock,
   WhyDeniedButton,
   WorkflowPanel
@@ -6996,6 +6998,14 @@ function ItemEditFormView({
   // Entry ergonomics (#2702-#2728): the layout's entry config, and the beginner / expert
   // mode of an adaptive form (guided steps for a person's first records, tabs after).
   const entryCfg = useMemo(() => entryConfigOf(layoutMeta), [layoutMeta])
+  // The header's External requests chip: only where something can go to a partner, and
+  // the form's "Show external requests" switch (entry_config.external_requests) is on.
+  // Asked once the record answered (a missing record makes exactly one failing call).
+  const externalRequestsOn = useExternalRequestsShown(
+    collection,
+    !isNew && itemId && recordAnswered ? String(itemId) : null,
+    entryCfg.external_requests !== false
+  )
   // Form density (#3182): compact tightens the form's spacing; comfortable is today's.
   const formDensity = formDensityOf(entryCfg)
   useFormDensityCss(formDensity === 'compact')
@@ -8023,7 +8033,10 @@ function ItemEditFormView({
   const widgetSlots = assignments.filter(
     (a) => a.field.startsWith('__widget_') && a.field.endsWith('__') && a.widget_id != null
   )
-  const ownersSlot = assignments.find((a) => a.field === '__owners__')
+  // The Owners PANEL — a header tile (group __header__) is its twin, drawn by headerFields.
+  const ownersSlot = assignments.find(
+    (a) => a.field === '__owners__' && a.group_key !== '__header__'
+  )
   const pdfSlot = assignments.find((a) => a.field === '__pdf__')
   const pdfSlotOverrides = pdfSlot
     ? (() => {
@@ -8532,11 +8545,58 @@ function ItemEditFormView({
     [activeLayoutData]
   )
 
+  // Whether the record's pipeline has any owner setup (owner groups, dimensions, a fallback
+  // field, owners added by hand): the pipeline panel's own read answers it, so this shares
+  // that request. A server that answers without the field predates it — read as yes.
+  const ownersCandidate =
+    showPipeline &&
+    !isNew &&
+    !designOn &&
+    ownersHeaderTile({
+      assignments: activeLayoutData?.assignments ?? [],
+      showPipeline,
+      isNew,
+      ownersConfigured: true,
+      design: false
+    }).show
+  const { data: ownersSetupAnswer } = useQuery<{
+    owners_configured?: boolean
+    binding?: unknown
+    instance?: unknown
+  } | null>({
+    queryKey: ['pipeline-instance', pipelineCollection, pipelineItem],
+    queryFn: () =>
+      client
+        .request<{
+          data: { owners_configured?: boolean; binding?: unknown; instance?: unknown } | null
+        }>(get(`/pipelines/instance/${pipelineCollection}/${pipelineItem}`))
+        .then((r) => r.data ?? null),
+    staleTime: 10_000,
+    enabled: ownersCandidate && !!pipelineItem && recordAnswered
+  })
+  // No pipeline at all (a null answer, or the panel's empty stand-in for one) has no owners.
+  const ownersConfigured: boolean | null = designOn
+    ? true
+    : ownersSetupAnswer === undefined
+      ? null
+      : !ownersSetupAnswer
+        ? false
+        : typeof ownersSetupAnswer.owners_configured === 'boolean'
+          ? ownersSetupAnswer.owners_configured
+          : !!(ownersSetupAnswer.binding || ownersSetupAnswer.instance)
+
   const headerFields = useMemo(() => {
+    const ownersTile = ownersHeaderTile({
+      assignments: activeLayoutData?.assignments ?? [],
+      showPipeline,
+      isNew,
+      ownersConfigured,
+      design: designOn
+    })
     const fromLayout = (activeLayoutData?.assignments ?? [])
       .filter(
         (a) =>
-          (a.field === '__owners__' || !a.field.startsWith('__')) &&
+          (a.field === '__owners__' ? ownersTile.show : !a.field.startsWith('__')) &&
           (a.group_key ?? null) === '__header__'
       )
       .map((a) => {
@@ -8574,7 +8634,9 @@ function ItemEditFormView({
         }
         return {
           field: a.field,
-          label: a.label_override ?? titleCase(meta?.label ?? a.field),
+          label:
+            a.label_override ??
+            (a.field === '__owners__' ? 'Owners' : titleCase(meta?.label ?? a.field)),
           sort: a.sort ?? 0,
           displayFormat,
           color,
@@ -8585,18 +8647,12 @@ function ItemEditFormView({
           cmsField: meta ?? null
         }
       })
-    // Owners are ALWAYS in the header of a record with a workflow (Rob
-    // 2026-10-26): a layout that shows the progress or owners slot but not an
-    // owners header tile gets one, first. The tile is pinned (never folds).
-    const hasWorkflow =
-      showPipeline &&
-      !isNew &&
-      (activeLayoutData?.assignments ?? []).some(
-        (a) =>
-          (a.field === '__pipeline__' || a.field === '__owners__') &&
-          !(a.is_visible === 0 || a.is_visible === false)
-      )
-    if (!hasWorkflow || fromLayout.some((f) => f.field === '__owners__')) return fromLayout
+    // Owners are in the header of a record with a workflow (Rob 2026-10-26): a layout that
+    // shows the progress or owners slot but has no owners header tile gets one, first —
+    // unless the record's pipeline has no owner setup at all (Rob 2026-11-13). A stored
+    // tile (the layout editor lists the automatic one) places or hides it like any tile;
+    // rules in lib/owners-header-tile.ts. The tile is pinned (never folds).
+    if (!ownersTile.auto) return fromLayout
     const first = fromLayout.reduce((m, f) => Math.min(m, f.sort), 0)
     return [
       {
@@ -8613,7 +8669,7 @@ function ItemEditFormView({
       },
       ...fromLayout
     ]
-  }, [activeLayoutData, fieldConfig, showPipeline, isNew])
+  }, [activeLayoutData, fieldConfig, showPipeline, isNew, ownersConfigured, designOn])
   // A header tile on a relation path (Unit = unit.name) shows the PICKED
   // record's value on a new form or after a change, not "—" until save
   // (army 11 f2 — fix11-ir-bom).
@@ -15757,7 +15813,7 @@ function ItemEditFormView({
                                                     folded={foldedCells}
                                                     rows={headerDense ? headerRows : null}
                                                   />
-                                                  {!isNew && itemId && (
+                                                  {!isNew && itemId && externalRequestsOn && (
                                                     // Below lg the Integrations chip ends the last row
                                                     // (the column dock is lg-only) — never a third shelf.
                                                     // Ordered last: tiles packed first-fit carry
@@ -15777,7 +15833,7 @@ function ItemEditFormView({
                                               )
                                             })()}
                                           </div>
-                                          {!isNew && itemId && (
+                                          {!isNew && itemId && externalRequestsOn && (
                                             <div className={HEADER_DOCK} data-header-dock>
                                               <div className={HEADER_DOCK_CELL}>
                                                 <ExternalRequestsChip

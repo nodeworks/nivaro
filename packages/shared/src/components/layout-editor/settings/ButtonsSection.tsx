@@ -1,4 +1,6 @@
-import { flag, type SectionProps } from './section-props'
+import { entryConfigOf, sanitizeEntryConfig } from '../../../lib/entry-config'
+import { Setting, Toggle } from './controls'
+import { flag, type SectionProps, toggleLabel } from './section-props'
 import { TextSetting } from './TextSetting'
 import { ToggleSetting } from './ToggleSetting'
 
@@ -42,9 +44,42 @@ export function ButtonsSection(props: SectionProps) {
       <ToggleSetting k='layout.disable_delete' props={props} />
       <ToggleSetting k='layout.hide_integrity_banner' props={props} />
       <ToggleSetting k='layout.hide_sla_banner' props={props} />
+      <ExternalRequestsSetting {...props} />
       <ToggleSetting k='layout.changes_tray' props={props} />
       <ToggleSetting k='layout.allow_schedule' props={props} />
       <ToggleSetting k='layout.allow_disable_pickers' props={props} />
     </>
+  )
+}
+
+/**
+ * The header's External requests chip (entry_config.external_requests, Rob 2026-11-13):
+ * on by default, so only "off" is stored. The record page also leaves the chip out on
+ * collections nothing is ever sent from (lib/integration-chip.ts externalRequestsShown).
+ */
+function ExternalRequestsSetting(props: SectionProps) {
+  const config = entryConfigOf(props.layout)
+  const on = config.external_requests !== false
+  return (
+    <Setting
+      k='layout.external_requests'
+      control={
+        <Toggle
+          label='Show external requests'
+          checked={on}
+          onChange={(next) =>
+            props.set(
+              {
+                entry_config: sanitizeEntryConfig({
+                  ...config,
+                  external_requests: next ? undefined : false
+                })
+              },
+              toggleLabel('layout.external_requests', next)
+            )
+          }
+        />
+      }
+    />
   )
 }

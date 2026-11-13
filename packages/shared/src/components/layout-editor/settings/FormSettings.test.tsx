@@ -751,6 +751,29 @@ describe('FormSettings: Entering data (#2707 #2708 #2710 #2728)', () => {
     expect(entryOp(apply).patch).toEqual({ entry_config: null })
   })
 
+  it('Show external requests is on by default; off is stored in entry_config, keeping the rest', async () => {
+    const { apply } = await mount(bundleOf('grouped', { entry_config: { tour: true } }))
+    const sw = setting('layout.external_requests')?.querySelector('[role="switch"]')
+    expect(sw?.getAttribute('aria-checked')).toBe('true')
+    await click(sw ?? null)
+    expect(entryOp(apply).patch).toEqual({
+      entry_config: { tour: true, external_requests: false }
+    })
+    expect((apply.mock.calls.at(-1)?.[1] as ApplyOptions).label).toBe(
+      'Turn off Show external requests'
+    )
+  })
+
+  it('turning Show external requests back on clears the key', async () => {
+    const { apply } = await mount(
+      bundleOf('grouped', { entry_config: { external_requests: false } })
+    )
+    const sw = setting('layout.external_requests')?.querySelector('[role="switch"]')
+    expect(sw?.getAttribute('aria-checked')).toBe('false')
+    await click(sw ?? null)
+    expect(entryOp(apply).patch).toEqual({ entry_config: null })
+  })
+
   it('only lets the records-before-tabs count be typed once guided steps are on', async () => {
     await mount(bundleOf('grouped'))
     const input = setting('layout.adaptive_threshold')?.querySelector('input')

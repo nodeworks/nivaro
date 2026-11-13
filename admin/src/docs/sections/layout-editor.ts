@@ -129,6 +129,10 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
+      text: 'Owners in the header strip: a record form that shows the pipeline (or the Owners panel) gets an Owners tile first in its header automatically. The editor lists it like any header tile — in the outline, on the canvas, in the inspector — so you can drag it to another spot, rename it or switch off "Show on this form" (dragging it to the trash hides it too). The first save that moves, renames or hides it stores it in the layout as an `__owners__` placement in the header; a hidden one stops the automatic tile. On the record page the automatic tile is left out when the record\'s pipeline has no owner setup at all — no owner groups, no owner dimensions, no owner fallback field and nobody added by hand (`owners_configured` on `GET /api/pipelines/instance/:collection/:item`).'
+    },
+    {
+      type: 'p',
       text: 'Pin settings you use: hover a setting and click the star at its left to pin it. Pinned settings show under Pinned at the top of their tab, for every field or section that has them, in the order you pinned them; click the star again to unpin. Pins are yours and kept in this browser. A read-only view of a parent layout’s part shows its settings in place.'
     },
     { type: 'h3', id: 'layout-editor-scope', text: 'This form only vs every form' },
@@ -143,11 +147,15 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-form-settings', text: 'Form settings' },
     {
       type: 'p',
-      text: "Layout-wide settings in short named sections, each control with a one-line effect, searchable from the box at the top: Who gets this form (kind, record rules, roles by name, link name, New-menu label and hiding) · How it's laid out (tabs or steps, check each step before Next, one section open at a time) · Buttons & panels (hide comments, tasks, revisions, clone, delete, banners; Schedule and Hide from pickers buttons for everyone) · Read view & summary · PDF (file layouts only) · Addendum · Defaults for new records · Entering data (keyboard, tab order, guided steps, badge, presets) · Inheritance · AI review, previews, version history. Only the settings that apply to the layout's kind are shown — addendum layouts get every setting that applies to them. This page calls that last section Form settings → Tools."
+      text: "Layout-wide settings in short named sections, each control with a one-line effect, searchable from the box at the top: Who gets this form (kind, record rules, roles by name, link name, New-menu label and hiding) · How it's laid out (tabs or steps, check each step before Next, one section open at a time) · Buttons & panels (hide comments, tasks, revisions, clone, delete, banners; Show external requests; Schedule and Hide from pickers buttons for everyone) · Read view & summary · PDF (file layouts only) · Addendum · Defaults for new records · Entering data (keyboard, tab order, guided steps, badge, presets) · Inheritance · AI review, previews, version history. Only the settings that apply to the layout's kind are shown — addendum layouts get every setting that applies to them. This page calls that last section Form settings → Tools."
     },
     {
       type: 'p',
       text: '"Schedule button for everyone" and "Hide from pickers button for everyone" give people who may edit the record "Schedule a change…" and "Hide from pickers" (administrators always have both). Nivaro admin shows them in the record header; the shared record form shows them in its More menu when the host turns on `showGrantedTools` (efp-new does). The server checks the same grant for both. A non-admin must be able to see the record (otherwise the answer is Not found), the form that record opens with for them must have the setting on, and they must be allowed to update this record — the update rules of their role for the collection, its row filter and any tree permission, not just access to the collection. A form opened with a `?layout=` link counts only when it is a record form their role may open and its record rules match this record; naming any other form never grants the tool. Scheduling also checks every field in the change: each must be one the person may update, and a registered field with its own column that is not read-only, computed or an audit stamp; otherwise the request is refused naming the field. People who are not administrators see the scheduled changes on a record only when they can see the record, with values of fields they may not read left out, and may cancel only their own changes on records they can still update.'
+    },
+    {
+      type: 'p',
+      text: '"Show external requests" (Buttons & panels, on by default) keeps the External requests chip in the record header — the button that lists what the record sent to partner systems. Turned off, this form never shows it; the choice is stored in the layout\'s `entry_config` (`external_requests: false`). Even when on, the chip only appears where something can go to a partner: the collection\'s pipeline has a transition that pushes to an external API (`erp_submit`), an integration obligation kind is registered for the collection, or the record already has obligations or requests. A collection that sends nothing shows no chip (`partner_integration` on `GET /api/integration-obligations/record/:collection/:item`).'
     },
     { type: 'h3', id: 'layout-editor-add-panel', text: 'Add panel' },
     {

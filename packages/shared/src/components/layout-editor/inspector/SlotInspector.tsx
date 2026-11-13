@@ -55,6 +55,8 @@ export function SlotInspector({
   const write = useSlotWriter(field, groupKey, row)
   const name = slotName(field)
   const isCard = (CANVAS_SLOT_KEYS as readonly string[]).includes(field)
+  // The Owners header tile (lib/owners-header-tile.ts): on by default, hideable here.
+  const headerOwners = field === '__owners__' && groupKey === HEADER_GROUP_KEY
   const ov = readOverrides(row)
   const setOv = (key: string, value: unknown, label: string, text?: boolean) =>
     write({ overrides: withKey(ov, key, value) }, label, text)
@@ -209,11 +211,44 @@ export function SlotInspector({
           />
         </Setting>
       )}
-      {!isCard && field !== '__pdf__' && (groupKey === null || groupKey === HEADER_GROUP_KEY) && (
-        <p className='text-[13px] text-slate-500 dark:text-muted-foreground'>
-          {name} has no settings beyond its place.
-        </p>
+      {headerOwners && (
+        <>
+          <Setting k='header.label_override' label='Label' effect={`Empty uses "${name}".`}>
+            <TextInput
+              ariaLabel='Label'
+              value={row?.label_override ?? ''}
+              placeholder={name}
+              onChange={(v) =>
+                write(
+                  { label_override: v.trim() && v !== name ? v : null },
+                  `Rename ${name} in the header`,
+                  true
+                )
+              }
+            />
+          </Setting>
+          <Toggle
+            k='slot.is_visible'
+            label='Show on this form'
+            effect='Off takes the Owners tile out of this form’s header. It shows only on records whose pipeline has owners set up.'
+            checked={row?.is_visible ?? true}
+            onChange={(v) =>
+              write(
+                { is_visible: v },
+                v ? 'Show Owners in the header' : 'Hide Owners in the header'
+              )
+            }
+          />
+        </>
       )}
+      {!isCard &&
+        !headerOwners &&
+        field !== '__pdf__' &&
+        (groupKey === null || groupKey === HEADER_GROUP_KEY) && (
+          <p className='text-[13px] text-slate-500 dark:text-muted-foreground'>
+            {name} has no settings beyond its place.
+          </p>
+        )}
     </div>
   )
 }

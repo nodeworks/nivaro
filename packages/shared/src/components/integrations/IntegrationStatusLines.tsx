@@ -113,6 +113,8 @@ export function useRecordObligations(collection: string, itemId: string | number
       client.request<{
         data: Parameters<typeof bannerLines>[0]
         remediation_enabled?: boolean
+        /** The collection has a partner integration (pipeline push or obligation kind). */
+        partner_integration?: boolean
       }>(
         get(`/integration-obligations/record/${collection}/${encodeURIComponent(String(itemId))}`)
       ),
@@ -125,7 +127,10 @@ export function useRecordObligations(collection: string, itemId: string | number
   return {
     ...query,
     lines: bannerLines(query.data?.data ?? []),
-    remediationEnabled: query.data?.remediation_enabled === true
+    remediationEnabled: query.data?.remediation_enabled === true,
+    /** Obligation rows on the record (null until answered). */
+    obligationCount: query.data ? (query.data.data ?? []).length : null,
+    partnerIntegration: query.data?.partner_integration
   }
 }
 

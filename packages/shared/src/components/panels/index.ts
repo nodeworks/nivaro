@@ -10,7 +10,7 @@ export {
   WhyOwnersButton
 } from './AccessInsights'
 export { ErpFailureBanner } from './ErpFailureBanner'
-export { ExternalRequestsChip } from './ExternalRequestsChip'
+export { ExternalRequestsChip, useExternalRequestsShown } from './ExternalRequestsChip'
 export { ItemActionButtons } from './ItemActionButtons'
 export {
   ItemActionChoiceList,

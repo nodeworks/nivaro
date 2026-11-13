@@ -150,7 +150,9 @@ export function DesignNode({
   const positioned = /(^|\s)(absolute|fixed|sticky|relative)(\s|$)/.test(childCls)
   const cls = cn(
     !positioned && 'relative',
-    'cursor-pointer rounded-md outline-offset-2',
+    'cursor-pointer rounded-md',
+    // Header tiles sit in a strip that clips what overflows it: their ring is drawn inside.
+    target.kind === 'header' ? '-outline-offset-2' : 'outline-offset-2',
     // #3193: on touch a press-and-hold picks the node up — no callout, no text selection.
     'touch-manipulation [-webkit-touch-callout:none] [@media(pointer:coarse)]:select-none',
     !child && (inline ? 'inline-block' : 'block'),

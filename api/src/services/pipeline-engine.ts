@@ -8,6 +8,7 @@ import {
   resolvePipelineSubject,
   resolvePipelineSubjectsBatch
 } from './pipeline-subject.js'
+import { bustRecordHeaderSignals } from './record-header-signals.js'
 import { markSpan, span } from './request-trace.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -346,6 +347,7 @@ const bindingsCache = new Map<
 let ownerCacheGen = 0
 
 export function bustOwnerGroupCache(): void {
+  bustRecordHeaderSignals()
   ownerCacheGen++
   ownerGroupCache.clear()
   fallbackMetaCache.clear()

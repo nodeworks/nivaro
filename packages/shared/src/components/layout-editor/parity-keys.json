@@ -387,6 +387,15 @@
     "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
+    "key": "layout.external_requests",
+    "label": "Show the External requests chip in the record header (entry_config.external_requests)",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "detail", "summary"]
+  },
+  {
     "key": "layout.changes_tray",
     "label": "Unsaved-changes tray",
     "home": "form_settings",

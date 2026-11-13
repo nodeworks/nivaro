@@ -227,7 +227,8 @@ export function UserRosterCluster({
       }}
       className='inline-flex cursor-pointer items-center'
     >
-      <span className='flex -space-x-2'>
+      {/* The header's Owners tile (nameLabel) overlaps less, so two-letter initials stay whole. */}
+      <span className={nameLabel ? 'flex -space-x-1' : 'flex -space-x-2'}>
         {shown.map((o) => (
           <RosterAvatar key={o.id} user={o} avatarCls={avatarCls} />
         ))}
@@ -244,12 +245,15 @@ export function UserRosterCluster({
             return (
               <span
                 data-roster-label=''
-                className='ml-1.5 inline-flex max-w-[170px] items-baseline gap-1 text-[12px] font-medium text-slate-700 dark:text-slate-200'
+                // Reads as a header value, like its neighbours (HEADER_VALUE).
+                className='ml-1.5 inline-flex max-w-[170px] items-baseline gap-1 text-[13px] font-semibold leading-tight text-slate-900 dark:text-slate-100'
               >
                 <span className='truncate'>{l.name}</span>
                 {l.mark && <InactiveMark mark={l.mark} />}
                 {l.more > 0 && (
-                  <span className='shrink-0 text-slate-500 dark:text-slate-400'>+{l.more}</span>
+                  <span className='shrink-0 font-normal text-slate-500 dark:text-slate-400'>
+                    +{l.more}
+                  </span>
                 )}
               </span>
             )

@@ -49,6 +49,11 @@ import {
   type PlacementPatch,
   type PlacementRow
 } from '../../lib/layout-ops'
+import {
+  materializeOwnersOps,
+  rewriteOwnersRemove,
+  withAutoOwnersTile
+} from '../../lib/owners-header-tile'
 import { plainErrorText } from '../../lib/safe-error'
 
 export type DraftStatus = 'idle' | 'saving' | 'saved' | 'error' | 'conflict'
@@ -534,6 +539,8 @@ export class LayoutDraftEngine {
   /** Labels of steps a rebase could not replay (#2652). */
   private dropped: string[] = []
   private autosave: boolean
+  /** The automatic Owners header tile rides the draft as a placement (lib/owners-header-tile.ts). */
+  private autoOwners: boolean
   private nextId = 1
   private listeners = new Set<() => void>()
   private idleWaiters: Array<() => void> = []
@@ -541,9 +548,10 @@ export class LayoutDraftEngine {
 
   constructor(
     private transport: DraftTransport,
-    opts: { autosave?: boolean } = {}
+    opts: { autosave?: boolean; autoOwnersTile?: boolean } = {}
   ) {
     this.autosave = opts.autosave ?? false
+    this.autoOwners = opts.autoOwnersTile ?? false
     this.view = this.buildView()
   }
 
@@ -570,13 +578,19 @@ export class LayoutDraftEngine {
       this.undoStack = []
       this.redoStack = []
     }
-    this.server = bundle
-    this.draft = bundle
+    this.server = this.based(bundle)
+    this.draft = this.server
     this.emit()
+  }
+
+  /** A server bundle as the draft's base: with the automatic Owners tile when it applies. */
+  private based(bundle: LayoutBundle): LayoutBundle {
+    return this.autoOwners ? withAutoOwnersTile(bundle) : bundle
   }
 
   apply(ops: LayoutOp[], opts?: ApplyOptions) {
     if (!this.draft || ops.length === 0) return
+    if (this.autoOwners) ops = rewriteOwnersRemove(this.draft, ops)
     const label = opts?.label ?? 'Edit'
     const edits = opts?.text ? textEdits(ops) : null
     if (edits) return this.autosave ? this.applyText(edits, label) : this.stageText(edits, label)
@@ -973,11 +987,12 @@ export class LayoutDraftEngine {
       this.transport.notify(CONFLICT_MESSAGE)
       return
     }
-    const r = this.refold(bundle, this.queue)
+    const base = this.based(bundle)
+    const r = this.refold(base, this.queue)
     this.queue = r.kept
-    this.server = bundle
+    this.server = base
     this.transport.saved(bundle, null)
-    this.rebaseUndo(bundle, r.inverses, new Set(r.dropped.map((d) => d.id)))
+    this.rebaseUndo(base, r.inverses, new Set(r.dropped.map((d) => d.id)))
     this.dropped = [...this.dropped, ...r.dropped.map((d) => d.note)]
     this.outcome = 'idle'
     this.error = null
@@ -1009,11 +1024,12 @@ export class LayoutDraftEngine {
       this.error = REBASE_FAILED_MESSAGE
       return
     }
-    const r = this.refold(fresh, steps)
+    const base = this.based(fresh)
+    const r = this.refold(base, steps)
     this.unsaved = r.kept
-    this.server = fresh
+    this.server = base
     this.transport.saved(fresh, null)
-    this.rebaseUndo(fresh, r.inverses, new Set(r.dropped.map((d) => d.id)))
+    this.rebaseUndo(base, r.inverses, new Set(r.dropped.map((d) => d.id)))
     this.dropped = [...this.dropped, ...r.dropped.map((d) => d.note)]
     this.outcome = 'idle'
     this.error = null
@@ -1074,10 +1090,11 @@ export class LayoutDraftEngine {
     if (this.inFlight || !this.server || this.queue.length === 0) return
     const batch = this.queue[0]
     this.inFlight = true
+    const ops = this.autoOwners ? materializeOwnersOps(this.server, batch.ops) : batch.ops
     this.transport
-      .send(batch.ops, this.server.rev, batch.note, batch.meta)
+      .send(ops, this.server.rev, batch.note, batch.meta)
       .then((bundle) => {
-        this.server = bundle
+        this.server = this.based(bundle)
         this.queue.shift()
         this.transport.saved(bundle, batch.ops)
         if (this.outcome !== 'error') this.outcome = 'saved'
@@ -1164,6 +1181,11 @@ export interface LayoutDraftOptions {
   onSaved?: (bundle: LayoutBundle, ops: LayoutOp[] | null) => void
   /** Start with autosave on (default off). Kept across layout switches until unmount. */
   autosave?: boolean
+  /**
+   * List the record page's automatic Owners header tile as a placement, stored
+   * by the first save that touches the header (lib/owners-header-tile.ts).
+   */
+  autoOwnersTile?: boolean
 }
 
 interface Live {
@@ -1185,7 +1207,7 @@ const engines = new WeakMap<
   Map<number, { engine: LayoutDraftEngine; live: { current: Live } }>
 >()
 
-function engineFor(layoutId: number, current: Live, autosave: boolean) {
+function engineFor(layoutId: number, current: Live, autosave: boolean, autoOwnersTile = false) {
   let byId = engines.get(current.qc)
   if (!byId) {
     byId = new Map()
@@ -1222,7 +1244,7 @@ function engineFor(layoutId: number, current: Live, autosave: boolean) {
         toast.warning(message)
       }
     },
-    { autosave }
+    { autosave, autoOwnersTile }
   )
   const entry = { engine, live }
   byId.set(layoutId, entry)
@@ -1267,7 +1289,12 @@ export function useLayoutDraft(layoutId: number, opts: LayoutDraftOptions = {}):
     engineRef.current = {
       id: layoutId,
       qc,
-      ...engineFor(layoutId, { client, qc, onSaved: opts.onSaved }, autosaveOn)
+      ...engineFor(
+        layoutId,
+        { client, qc, onSaved: opts.onSaved },
+        autosaveOn,
+        opts.autoOwnersTile === true
+      )
     }
   }
   // Latest client/cache/callback for the engine's transport, without rebuilding the engine.

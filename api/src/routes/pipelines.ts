@@ -42,6 +42,7 @@ import {
   offeredToActor,
   visibleIds
 } from '../services/record-access.js'
+import { ownerSetupFor } from '../services/record-header-signals.js'
 import { pickInstance } from '../services/record-state.js'
 import {
   formatWorkflowState,
@@ -2578,6 +2579,16 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const effectiveBinding =
       binding ?? ({ template: instance!.template, collection } as WorkflowBinding)
 
+    // Header Owners tile (Rob 2026-11-13): any owner setup at all on this pipeline
+    // (services/record-header-signals.ts — one remembered read per template).
+    const ownersConfigured = () =>
+      ownerSetupFor({
+        template: String(effectiveBinding.template),
+        instanceId: instance ? String(instance.id) : null,
+        fallbackField: (effectiveBinding as { owner_fallback_field?: string | null })
+          .owner_fallback_field
+      })
+
     if (!instance)
       return reply.send({
         data: {
@@ -2585,7 +2596,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           states: [],
           available_transitions: [],
           history: [],
-          binding: effectiveBinding
+          binding: effectiveBinding,
+          owners_configured: await ownersConfigured()
         }
       })
 
@@ -2834,7 +2846,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         // The collection's highlight rules this record matches ("On hold",
         // "Sent back") — chips beside the state, so an approver sees a hold
         // before pressing Approve (army 11 a1 F-2).
-        flags: await recordFlags(req.user, isAdmin, collection, String(item))
+        flags: await recordFlags(req.user, isAdmin, collection, String(item)),
+        owners_configured: await ownersConfigured()
       }
     })
   })

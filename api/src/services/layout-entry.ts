@@ -66,6 +66,8 @@ export type EntryConfig = {
   density?: 'compact'
   /** First-use tour of the form's sections (#3192). */
   tour?: boolean
+  /** The header's External requests chip (Rob 2026-11-13): absent = shown where it applies. */
+  external_requests?: false
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -110,6 +112,7 @@ export function sanitizeEntryConfig(raw: unknown): EntryConfig | null {
   if (v.glossary === false) out.glossary = false
   if (v.density === 'compact') out.density = 'compact'
   if (v.tour === true) out.tour = true
+  if (v.external_requests === false) out.external_requests = false
   if (typeof v.adaptive_threshold === 'number' && Number.isFinite(v.adaptive_threshold)) {
     const n = Math.min(ENTRY_THRESHOLD_MAX, Math.max(1, Math.round(v.adaptive_threshold)))
     if (n !== ENTRY_THRESHOLD_DEFAULT) out.adaptive_threshold = n

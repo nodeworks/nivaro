@@ -15,6 +15,9 @@
   { "name": "density compact is kept, anything else is comfortable", "in": { "density": "compact" }, "out": { "density": "compact" } },
   { "name": "density other values drop", "in": { "density": "huge", "tour": "yes" }, "out": null },
   { "name": "tour on is kept", "in": { "tour": true, "density": "comfortable" }, "out": { "tour": true } },
+  { "name": "external requests off is kept, on is the default", "in": { "external_requests": false, "tour": true }, "out": { "tour": true, "external_requests": false } },
+  { "name": "external requests on drops", "in": { "external_requests": true }, "out": null },
+  { "name": "external requests junk drops", "in": { "external_requests": "no" }, "out": null },
   {
     "name": "presets",
     "in": {

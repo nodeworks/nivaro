@@ -74,3 +74,26 @@ export function integrationChipSummary(
     pending: partners.filter((p) => p.status === 'pending').length
   }
 }
+
+/**
+ * Whether the record header shows the External requests chip (Rob 2026-11-13):
+ * only where something can go to a partner — the collection has a partner
+ * integration (a pipeline push or a registered obligation kind: the server's
+ * `partner_integration` on the record's obligations read) or the record
+ * already has obligations or requests — and the form does not turn it off
+ * (entry_config.external_requests). Null while a read has not answered. A
+ * server that answers without `partner_integration` predates it: shown, as
+ * before.
+ */
+export function externalRequestsShown(input: {
+  partnerIntegration: boolean | undefined
+  /** Obligation rows on the record; null = not answered yet. */
+  obligations: number | null
+  /** Requests sent from the record; null = not answered yet. */
+  submissions: number | null
+  layoutOn: boolean
+}): boolean | null {
+  if (!input.layoutOn) return false
+  if (input.obligations === null || input.submissions === null) return null
+  return input.partnerIntegration !== false || input.obligations > 0 || input.submissions > 0
+}
