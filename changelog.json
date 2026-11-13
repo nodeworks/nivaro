@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-11-13T19:50:07.254Z",
+  "generated_at": "2026-11-13T20:23:15.707Z",
   "releases": [
+    {
+      "version": "0.3.150",
+      "tag": "v0.3.150",
+      "date": "2026-11-13T15:22:33-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "record",
+              "text": "Owners tile and External requests chip follow the layout",
+              "hash": "9a37fc8d6"
+            },
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "relation columns name records, several per cell for M2M",
+              "hash": "e861c1328"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync import relation columns and header tile docs",
+              "hash": "a8d40b0cb"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.149",
       "tag": "v0.3.149",
-      "date": "2026-11-13T14:49:04-05:00",
+      "date": "2026-11-13T14:50:07-05:00",
       "sections": [
         {
           "label": "Fixed",
