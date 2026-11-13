@@ -1,24 +1,28 @@
+import { formatDateTime, toLocalDateString } from '@nivaro/shared'
 import { describe, expect, it } from 'vitest'
 import { formatMultiValue, formatValue } from '@/lib/format-value'
 
 describe('formatValue datetime', () => {
   const iso = '2026-03-05T14:07:09.000Z'
-  // Token output depends on local TZ for hours; use date-only tokens for
-  // deterministic assertions and construct expected values via Date getters.
-  const d = new Date(iso)
-  const pad = (n: number) => String(n).padStart(2, '0')
+  // Output depends on the local TZ; expected values come from the shared formatters.
 
-  it('formats DD/MM/YYYY', () => {
+  // Army 11 (4b1c9f350): a full calendar date reads the one read-only date style and a
+  // template with a time of day reads the one shared date-time format, whatever the
+  // column's template says. Partial templates (YYYY, MMM YYYY…) keep their tokens.
+  it('a full calendar date template reads the one date style', () => {
     expect(formatValue(iso, { type: 'datetime', template: 'DD/MM/YYYY' })).toBe(
-      `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`
+      toLocalDateString(iso)
+    )
+    // A bare date stays on its stored day in every timezone.
+    expect(formatValue('2026-03-05', { type: 'datetime', template: 'DD/MM/YYYY' })).toBe(
+      'Mar 5, 2026'
     )
   })
 
-  it('formats full token set YYYY YY MMM MM DD HH mm ss', () => {
-    const out = formatValue(iso, { type: 'datetime', template: 'YYYY-MM-DD HH:mm:ss' })
-    expect(out).toBe(
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-    )
+  it('a template with a time of day reads the shared date-time format', () => {
+    for (const template of ['YYYY-MM-DD HH:mm:ss', 'h hh A a', 'h:mm A', 'hh:mm']) {
+      expect(formatValue(iso, { type: 'datetime', template })).toBe(formatDateTime(iso))
+    }
   })
 
   it('renders MMM as short month name', () => {
@@ -41,24 +45,14 @@ describe('formatValue datetime', () => {
     )
   })
 
-  it('renders 12-hour tokens h/hh and meridiem A/a from local hours', () => {
-    const h24 = d.getHours()
-    const h12 = h24 % 12 || 12
-    const out = formatValue(iso, { type: 'datetime', template: 'h hh A a' })
-    expect(out).toBe(`${h12} ${pad(h12)} ${h24 < 12 ? 'AM' : 'PM'} ${h24 < 12 ? 'am' : 'pm'}`)
-  })
-
-  it('12-hour tokens map midnight and noon to 12, not 0', () => {
+  it('the shared date-time format reads midnight and noon as 12, not 0', () => {
     // Local-time constructor: hours are exactly what we assert against.
     const midnight = new Date(2026, 2, 5, 0, 30).toISOString()
     const noon = new Date(2026, 2, 5, 12, 30).toISOString()
-    expect(formatValue(midnight, { type: 'datetime', template: 'h:mm A' })).toBe('12:30 AM')
-    expect(formatValue(noon, { type: 'datetime', template: 'h:mm A' })).toBe('12:30 PM')
-  })
-
-  it('hh beats h in token precedence (no double substitution)', () => {
-    const midnight = new Date(2026, 2, 5, 0, 5).toISOString()
-    expect(formatValue(midnight, { type: 'datetime', template: 'hh:mm' })).toBe('12:05')
+    expect(formatValue(midnight, { type: 'datetime', template: 'h:mm A' })).toBe(
+      'Mar 5, 2026, 12:30 AM'
+    )
+    expect(formatValue(noon, { type: 'datetime', template: 'hh:mm' })).toBe('Mar 5, 2026, 12:30 PM')
   })
 })
 
