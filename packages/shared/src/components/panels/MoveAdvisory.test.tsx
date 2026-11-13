@@ -11,6 +11,20 @@ import { PipelinePanel, PipelineTransitionButtons, refusalFixFor } from './Pipel
 
 type Cmd = { _method: string; _path: string; _body?: Record<string, unknown> }
 
+/** An approval brief with nothing in it, in the server's full shape. */
+const EMPTY_BRIEF = {
+  entered_at: new Date().toISOString(),
+  days_in_state: 0,
+  revisions: 0,
+  field_changes: [],
+  changed_total: 0,
+  changed_by_people: 0,
+  comments: 0,
+  addendums: { count: 0, cost_impact: 0 },
+  edited_by: [],
+  lines: []
+}
+
 let host: HTMLDivElement
 let root: Root
 
@@ -94,7 +108,10 @@ function render(ui: 'header' | 'panel', mayFlag: boolean, scene: Scene = {}) {
         flagged = true
         return { data: { succeeded: 1 } }
       }
-      if (cmd._path.endsWith('/approval-brief')) return { data: { lines: [] } }
+      // The brief as the server always answers it (services/approval-brief.ts). A partial one
+      // crashed the confirm step's strip whenever it arrived before the step was drawn — the
+      // intermittent failure of 2026-11-12.
+      if (cmd._path.endsWith('/approval-brief')) return { data: EMPTY_BRIEF }
       // The open panel's own reads (owners, creator): nothing to show.
       if (cmd._path.endsWith('/owners')) return { data: [] }
       if (cmd._path.endsWith('/owners/all') || cmd._path.endsWith('/creator')) return { data: null }
@@ -125,8 +142,12 @@ function render(ui: 'header' | 'panel', mayFlag: boolean, scene: Scene = {}) {
   return { calls }
 }
 
+// Up to 3 s, not 0.6 s: with the whole suite running, a render took longer than the old cap
+// now and then, the wait gave up without a word, and the next line failed on a missing
+// element (the flake of 2026-11-12). A wait that is met returns at once, so this costs
+// nothing when things work.
 const until = async (ok: () => boolean) => {
-  for (let i = 0; i < 60 && !ok(); i++) await act(() => new Promise((r) => setTimeout(r, 10)))
+  for (let i = 0; i < 300 && !ok(); i++) await act(() => new Promise((r) => setTimeout(r, 10)))
 }
 const posts = (calls: Cmd[], end: string) =>
   calls.filter((c) => c._method === 'POST' && c._path.endsWith(end))
@@ -150,6 +171,18 @@ const type = (el: HTMLInputElement, value: string) => {
   const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   set?.call(el, value)
   el.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+/**
+ * The Reason field appears once the fix's own definition has loaded, a moment after the
+ * button that names the fix. Typing as soon as the button showed found no field now and
+ * then (the intermittent failure of 2026-11-12): wait for the field itself.
+ */
+const typeReason = async (value: string) => {
+  await until(() => !!document.querySelector('input[aria-label="Reason"]'))
+  const field = document.querySelector('input[aria-label="Reason"]')
+  expect(field).not.toBeNull()
+  await act(async () => type(field as HTMLInputElement, value))
 }
 
 describe('advisory helpers', () => {
@@ -216,9 +249,7 @@ describe('header buttons: a move a check would refuse', () => {
     const run = button('Flag as Priority, then Approve') as HTMLButtonElement
     // The registry asks for a reason: nothing runs without one.
     expect(run.disabled).toBe(true)
-    await act(async () =>
-      type(document.querySelector('input[aria-label="Reason"]') as HTMLInputElement, 'Storm repair')
-    )
+    await typeReason('Storm repair')
     await act(async () => button('Flag as Priority, then Approve')?.click())
     await until(() => posts(calls, '/transition').length > 0)
     // The existing registry write, on this one record, with the reason.
@@ -245,9 +276,7 @@ describe('the Progress panel: the notice sits beside the moves before any press'
     expect(notice()?.textContent).toContain(MESSAGE)
     await until(() => !!button('Flag as Priority'))
     await act(async () => button('Flag as Priority')?.click())
-    await act(async () =>
-      type(document.querySelector('input[aria-label="Reason"]') as HTMLInputElement, 'Storm repair')
-    )
+    await typeReason('Storm repair')
     await act(async () => button('Flag as Priority')?.click())
     await until(() => posts(calls, '/bulk-actions/run').length > 0)
     // Flagging alone never moves the record; the notice goes once the check passes.
@@ -414,9 +443,7 @@ describe('what the fix says when it is done', () => {
     await until(() => !!button('Approve'))
     await act(async () => button('Approve')?.click())
     await until(() => !!button('Flag as Priority, then Approve'))
-    await act(async () =>
-      type(document.querySelector('input[aria-label="Reason"]') as HTMLInputElement, 'Storm repair')
-    )
+    await typeReason('Storm repair')
     await act(async () => button('Flag as Priority, then Approve')?.click())
     await until(() => posts(calls, '/transition').length > 0 && all(said).includes(FIX_DONE))
     // The move went on by itself: saying it is still to confirm would be false.
@@ -432,12 +459,12 @@ describe('what the fix says when it is done', () => {
     await until(() => !!button('Approve'))
     await act(async () => button('Approve')?.click())
     await until(() => !!button('Flag as Priority, then Approve'))
-    await act(async () =>
-      type(document.querySelector('input[aria-label="Reason"]') as HTMLInputElement, 'Storm repair')
-    )
+    await typeReason('Storm repair')
     await act(async () => button('Flag as Priority, then Approve')?.click())
     // The confirm step and the toast come from the same answer, in either order.
     await until(() => !!button('Confirm') && all(said).includes(FIX_DONE_CONFIRM))
+    expect(button('Confirm')).toBeTruthy()
+    expect(all(said)).toContain(FIX_DONE_CONFIRM)
     // Nothing was sent: the confirm is still the person's to press.
     expect(posts(calls, '/transition')).toHaveLength(0)
   })
@@ -447,9 +474,7 @@ describe('what the fix says when it is done', () => {
     const { calls } = render('panel', true)
     await until(() => !!button('Flag as Priority'))
     await act(async () => button('Flag as Priority')?.click())
-    await act(async () =>
-      type(document.querySelector('input[aria-label="Reason"]') as HTMLInputElement, 'Storm repair')
-    )
+    await typeReason('Storm repair')
     await act(async () => button('Flag as Priority')?.click())
     await until(() => posts(calls, '/bulk-actions/run').length > 0 && all(said).includes(FIX_DONE))
     expect(all(said)).not.toContain(FIX_DONE_CONFIRM)

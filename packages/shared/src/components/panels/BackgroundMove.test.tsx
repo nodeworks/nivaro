@@ -21,6 +21,20 @@ import { PipelinePanel, PipelineTransitionButtons } from './PipelinePanel'
 
 type Cmd = { _method: string; _path: string; _body?: Record<string, unknown> }
 
+/** An approval brief with nothing in it, in the server's full shape. */
+const EMPTY_BRIEF = {
+  entered_at: new Date().toISOString(),
+  days_in_state: 0,
+  revisions: 0,
+  field_changes: [],
+  changed_total: 0,
+  changed_by_people: 0,
+  comments: 0,
+  addendums: { count: 0, cost_impact: 0 },
+  edited_by: [],
+  lines: []
+}
+
 let host: HTMLDivElement
 let root: Root
 
@@ -106,7 +120,10 @@ function render(ui: 'header' | 'panel', scene: Scene) {
     getToken: () => null,
     request: vi.fn(async (cmd: Cmd) => {
       calls.push(cmd)
-      if (cmd._path.endsWith('/approval-brief')) return { data: { lines: [] } }
+      // The brief as the server always answers it (services/approval-brief.ts). A partial one
+      // crashed the confirm step's strip whenever it arrived before the step was drawn — the
+      // intermittent failure of 2026-11-12.
+      if (cmd._path.endsWith('/approval-brief')) return { data: EMPTY_BRIEF }
       // The open panel's own reads (owners, creator): nothing to show.
       if (cmd._path.endsWith('/owners')) return { data: [] }
       if (cmd._path.endsWith('/owners/all') || cmd._path.endsWith('/creator')) return { data: null }
