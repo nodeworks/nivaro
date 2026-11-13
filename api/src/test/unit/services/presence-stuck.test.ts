@@ -293,7 +293,9 @@ describe('stuckLabel', () => {
     expect(stuckLabel('/records/claims/42?tab=2', labels)).toBe('CM26-80332')
     expect(stuckLabel('/collections/claims/7', labels)).toBe('Claims')
     expect(stuckLabel('/records/workflows/new', labels)).toBe('Workflows › New')
-    expect(stuckLabel('/portal/upload/', labels)).toBe('Portal')
+    // The page line names the page under its section (db7819db9), and the stuck label matches it.
+    expect(stuckLabel('/portal/upload/', labels)).toBe('Portal › Upload')
+    expect(stuckLabel('/portal/12345', labels)).toBe('Portal')
     expect(stuckLabel(null, labels)).toBeNull()
   })
 })
