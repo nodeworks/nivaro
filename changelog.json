@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-13T18:28:59.707Z",
+  "generated_at": "2026-11-13T19:23:02.911Z",
   "releases": [
+    {
+      "version": "0.3.148",
+      "tag": "v0.3.148",
+      "date": "2026-11-13T14:22:31-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "a file column shows the file, not \"Not available to you\"",
+              "hash": "ed91567e0"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "extension sends use the same write-ahead and guard",
+              "hash": "297d0ab9e"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.147",
       "tag": "v0.3.147",
-      "date": "2026-11-13T13:28:41-05:00",
+      "date": "2026-11-13T13:28:59-05:00",
       "sections": [
         {
           "label": "Added",
