@@ -440,6 +440,7 @@ export {
   type MetadataQueryClient,
   MONEY_INPUT_MAX,
   type MoneyParse,
+  MoveProblemWordsContext,
   MyWorkView,
   maskInputsIn,
   matchesSearch,

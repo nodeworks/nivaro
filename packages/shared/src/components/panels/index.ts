@@ -20,6 +20,7 @@ export {
 } from './ItemActionChoices'
 export { CustomActionButtons } from './CustomActionButtons'
 export { ItemLockBanner, LockHolderButton, useItemLock } from './ItemLockBanner'
+export { MoveProblemWordsContext } from './BackgroundMove'
 export { PipelinePanel, PipelineTransitionButtons } from './PipelinePanel'
 export { RevisionsPanel } from './RevisionsPanel'
 export { RelatedRecordsPanel } from './RelatedRecordsPanel'

@@ -1,5 +1,5 @@
 import { AlertTriangle, Loader2 } from 'lucide-react'
-import { type CSSProperties, useEffect, useMemo, useRef } from 'react'
+import { type CSSProperties, createContext, useContext, useEffect, useMemo, useRef } from 'react'
 import { useItemEditAuth } from '../../context'
 import { describeError } from '../../lib/error-message'
 import {
@@ -181,6 +181,16 @@ export function RunningMoveNotice({
 }
 
 /**
+ * A host's own reading of a stored refusal it knows (EFP: a warehouse's "InstallAddressLocationCode
+ * field is required" → "The install location has no Oracle location code…"): what the row
+ * shows instead of the other system's words, whole, one line per "\n". Null = not one it
+ * knows; the row reads it as usual. The text as stored stays under "Details for support".
+ */
+export const MoveProblemWordsContext = createContext<((reason: string) => string | null) | null>(
+  null
+)
+
+/**
  * The last run that did not move the record: what was said, and the move
  * again for someone who may make it. Shown until the record moves on.
  *
@@ -206,11 +216,17 @@ export function MoveProblemNotice({
   const label = problem.transition_label?.trim() || 'The move'
   const reason = problemReason(problem)
   const said = useMemo(() => (reason ? describeError({ message: reason }, '') : null), [reason])
-  // A partner's own answer shows in its words, or failing that as what it means about the
-  // other system; anything else is read like every other error.
+  const hostWords = useContext(MoveProblemWordsContext)
+  // The host's reading of a refusal it knows first; then a partner's own answer in its
+  // words, or failing that what it means about the other system; anything else is read like
+  // every other error.
+  const fromHost = useMemo(
+    () => (reason ? hostWords?.(reason)?.trim() || null : null),
+    [reason, hostWords]
+  )
   const words = useMemo(
-    () => (reason ? partnerSaid(reason) : null) ?? said?.title.trim() ?? '',
-    [reason, said]
+    () => fromHost ?? (reason ? partnerSaid(reason) : null) ?? said?.title.trim() ?? '',
+    [fromHost, reason, said]
   )
   // The full words on hover only while the three lines cut them.
   const wordsRef = useOverflowTip<HTMLParagraphElement>(words)
@@ -236,7 +252,12 @@ export function MoveProblemNotice({
           <p
             ref={wordsRef}
             data-move-problem-reason
-            className='mt-0.5 line-clamp-3 break-words text-[12px] leading-snug text-slate-700 dark:text-slate-300'
+            className={cn(
+              'mt-0.5 break-words text-[12px] leading-snug text-slate-700 dark:text-slate-300',
+              // A host's words are short and curated (one per line): shown whole. The other
+              // system's words can run long: three lines, the rest on hover.
+              fromHost ? 'whitespace-pre-line' : 'line-clamp-3'
+            )}
           >
             {words}
           </p>

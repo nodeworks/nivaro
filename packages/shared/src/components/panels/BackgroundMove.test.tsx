@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ItemEditAuthContext, NivaroProvider, useNivaroClient } from '../../context'
 import {
   type MoveProblem,
+  MoveProblemWordsContext,
   partnerOutcome,
   partnerWords,
   pendingOptIn,
@@ -81,6 +82,8 @@ interface Scene {
   expanded?: boolean
   /** The move's POST is refused (422) with this stored reason, as a blocked partner call is. */
   refuse?: string
+  /** The host's own reading of a stored reason (MoveProblemWordsContext). */
+  hostWords?: (reason: string) => string | null
 }
 const instance = (s: Scene) => ({
   instance: { id: 'i-1', current_state: 'S-WH', current_state_obj: STATES[0], completed_at: null },
@@ -157,11 +160,13 @@ function render(ui: 'header' | 'panel', scene: Scene) {
       <QueryClientProvider client={qc}>
         <NivaroProvider client={client}>
           <ItemEditAuthContext.Provider value={{ isAdmin: false, userId: ME }}>
-            {ui === 'header' ? (
-              <PipelineTransitionButtons collection='orders' item='42' />
-            ) : (
-              <PipelinePanel collection='orders' item='42' defaultExpanded={scene.expanded} />
-            )}
+            <MoveProblemWordsContext.Provider value={scene.hostWords ?? null}>
+              {ui === 'header' ? (
+                <PipelineTransitionButtons collection='orders' item='42' />
+              ) : (
+                <PipelinePanel collection='orders' item='42' defaultExpanded={scene.expanded} />
+              )}
+            </MoveProblemWordsContext.Provider>
           </ItemEditAuthContext.Provider>
         </NivaroProvider>
       </QueryClientProvider>
@@ -588,6 +593,37 @@ describe('the reason a run did not go through', () => {
       marked: true,
       problem: { ...PROBLEM, reason: 'Submit order: submission failed — The project is not valid' }
     })
+    await until(() => !!problemNotice())
+    expect(problemWords()?.textContent).toBe('Submission failed: The project is not valid')
+  })
+
+  // EFP: a warehouse refusal it knows ("InstallAddressLocationCode … required") reads in its
+  // own plain words, so the row can be the one place a failed submit is told (its red banner
+  // steps aside while the row shows).
+  it('a host’s own reading of a refusal it knows wins; anything else reads as before', async () => {
+    const hostWords = (reason: string) =>
+      /InstallAddressLocationCode/.test(reason)
+        ? 'The install location has no Oracle location code.'
+        : null
+    render('panel', {
+      marked: true,
+      hostWords,
+      problem: {
+        ...PROBLEM,
+        reason:
+          'Submit order: submission failed — HTTP 400: "model is invalid: The InstallAddressLocationCode field is required."'
+      }
+    })
+    await until(() => !!problemNotice())
+    expect(problemWords()?.textContent).toBe('The install location has no Oracle location code.')
+    // A host's words are short and curated: shown whole, one per line, never cut to three.
+    expect(problemWords()?.className).toContain('whitespace-pre-line')
+    expect(problemWords()?.className).not.toContain('line-clamp-3')
+    // The text as stored is still there for support.
+    expect(problemNotice()?.querySelector('[data-error-details]')).not.toBeNull()
+    act(() => root.unmount())
+    root = createRoot(host)
+    render('panel', { marked: true, hostWords, problem: PROBLEM })
     await until(() => !!problemNotice())
     expect(problemWords()?.textContent).toBe('Submission failed: The project is not valid')
   })
