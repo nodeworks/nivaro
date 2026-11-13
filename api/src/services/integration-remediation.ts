@@ -186,6 +186,10 @@ export function refireRefusal(def: ObligationKindDef | undefined): string | null
  *    retry route and the automatic sweep already use, so a resend can never
  *    disagree with them about what an outcome means.
  */
+/** Why a send with no answer yet (`sending`, erp-unanswered.ts) is never repeated from here. */
+const UNANSWERED_DETAIL =
+  'the last send got no answer, so the partner may already have it — check there, then mark it received or not received'
+
 async function resendSubmission(
   obligationId: number,
   submissionId: number,
@@ -196,15 +200,17 @@ async function resendSubmission(
 
   const sub = (await db('nivaro_erp_submissions')
     .where({ id: submissionId })
-    .first('external_api', 'payload', 'external_ref', 'attempts')) as
+    .first('external_api', 'payload', 'external_ref', 'attempts', 'status')) as
     | {
         external_api: number
         payload: string | null
         external_ref: string | null
         attempts: number
+        status?: string | null
       }
     | undefined
   if (!sub) return { detail: 'the original request is no longer stored' }
+  if (sub.status === 'sending') return { detail: UNANSWERED_DETAIL }
 
   let stored: { endpoint_path: string; body: Record<string, unknown> }
   try {
@@ -265,16 +271,18 @@ async function refireFromPrior(
 ): Promise<SendNowResult> {
   const prior = (await db('nivaro_erp_submissions')
     .where({ id: priorSubmissionId })
-    .first('collection', 'item', 'external_api', 'payload', 'change_signature')) as
+    .first('collection', 'item', 'external_api', 'payload', 'change_signature', 'status')) as
     | {
         collection: string
         item: string
         external_api: number
         payload: string | null
         change_signature: string | null
+        status?: string | null
       }
     | undefined
   if (!prior) return { detail: 'the original request is no longer stored' }
+  if (prior.status === 'sending') return { detail: UNANSWERED_DETAIL }
 
   let stored: StoredRequest
   try {

@@ -17,8 +17,16 @@ import { recordRefusal } from '../services/erp-record-gate.js'
 import { requesterInsertFields } from '../services/erp-requester-columns.js'
 import { hasResendableBody, NO_BODY, NoBodyToResendError } from '../services/erp-resend-guard.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
+import {
+  answerDeadline,
+  isUnansweredStale,
+  SENDING_STATUS,
+  sendingLabel
+} from '../services/erp-unanswered.js'
 import { callExternalApi } from '../services/external-apis.js'
+import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { explainSubmissions } from '../services/integration-error-context.js'
+import { maintenanceExemptCaller } from '../services/maintenance-freeze.js'
 import { maskBodySecrets, sameLoggedBody } from '../services/secret-mask.js'
 import { buildSubmissionDetail, gatherSubmissionFacts } from '../services/submission-detail.js'
 import {
@@ -31,8 +39,14 @@ import { resolveFriendlyIds } from '../services/workflow-transitions.js'
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 type ErpStatus = 'submitted' | 'pending' | 'accepted' | 'rejected' | 'failed'
+/** A stored row may also be `sending`: written before the partner call, not answered yet
+ *  (erp-unanswered.ts). Never an outcome, and never set by hand — only a send writes it. */
+type RowStatus = ErpStatus | typeof SENDING_STATUS
 
+/** Statuses the manual override may set. */
 const ERP_STATUSES = new Set<ErpStatus>(['submitted', 'pending', 'accepted', 'rejected', 'failed'])
+/** Statuses the payload search filters on. */
+const SEARCHABLE_STATUSES = new Set<RowStatus>([...ERP_STATUSES, SENDING_STATUS])
 
 interface ErpSubmissionRow {
   id: number
@@ -40,7 +54,7 @@ interface ErpSubmissionRow {
   item: string
   external_api: number
   external_ref: string | null
-  status: ErpStatus
+  status: RowStatus
   attempts: number
   last_error: string | null
   payload: string | null
@@ -83,6 +97,19 @@ function serialize(row: ErpSubmissionRow) {
     payload: stored?.body ?? null,
     response: parseJson(row.response) ?? row.response ?? null,
     obligation_id: row.obligation_id ?? null,
+    // A send with no answer yet: in flight while its call may still answer, then "may have been
+    // received" until someone marks it (POST /:id/resolve-unanswered).
+    unanswered:
+      row.status === SENDING_STATUS
+        ? (() => {
+            const stale = isUnansweredStale(row)
+            return {
+              stale,
+              label: sendingLabel(stale),
+              answer_by: new Date(answerDeadline(row)).toISOString()
+            }
+          })()
+        : null,
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -90,6 +117,13 @@ function serialize(row: ErpSubmissionRow) {
 
 /** Statuses a non-admin may re-send: a push that landed (or may yet) is never re-sent by hand. */
 const RESENDABLE = new Set<ErpStatus>(['failed', 'rejected'])
+
+/** What a retry of a send with no answer gets (409): the partner may already have it. */
+const UNANSWERED_RETRY = {
+  error:
+    'This send got no answer, so the other system may already have it. Check there first, then mark it received or not received.',
+  code: 'UNANSWERED'
+} as const
 
 // ─── Response interpretation ────────────────────────────────────────────────
 
@@ -384,7 +418,7 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
           .orWhere('s.external_ref', 'like', like)
           .orWhere('s.item', 'like', like)
       })
-    if (q.status && ERP_STATUSES.has(q.status as ErpStatus))
+    if (q.status && SEARCHABLE_STATUSES.has(q.status as RowStatus))
       query = query.andWhere('s.status', q.status)
     if (q.external_api) query = query.andWhere('s.external_api', Number(q.external_api))
     if (q.collection && /^[A-Za-z_][A-Za-z0-9_]*$/.test(q.collection))
@@ -642,9 +676,12 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         adminOnlyTier: false
       })
       if (refusal) return reply.code(refusal.code).send(refusal.body)
+      // A send that never got an answer may already be at the partner: nobody re-sends it, admins
+      // included, until someone has checked there and marked it (resolve-unanswered below).
+      if (row.status === SENDING_STATUS) return reply.code(409).send(UNANSWERED_RETRY)
       // A pending or accepted push already reached the partner — re-sending it
       // by hand makes a duplicate order. Admins (Firefight, traffic map) may.
-      if (!req.isAdmin && !RESENDABLE.has(row.status)) {
+      if (!req.isAdmin && !RESENDABLE.has(row.status as ErpStatus)) {
         return reply.code(409).send({
           error: `This submission is ${row.status} — only failed or rejected pushes can be retried`,
           code: 'NOT_RETRYABLE'
@@ -751,6 +788,134 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       return { data: { results, recovered } }
     }
   )
+
+  // A send that never got an answer (status `sending`, past its own timeout): an administrator
+  // checked the partner and says what happened. not_received → failed, so the next press of the
+  // move sends again; received → accepted (the order number may be noted). The record's own
+  // fields are not touched either way. A person only: an administrator on their own session.
+  app.post<{
+    Params: { id: string }
+    Body: { outcome?: unknown; order_ref?: unknown; note?: unknown }
+  }>('/:id/resolve-unanswered', { preHandler: requireAdmin }, async (req, reply) => {
+    if (!maintenanceExemptCaller(req)) {
+      return reply.code(403).send({
+        error: 'Only an administrator signed in as themselves can mark a send received or not.',
+        code: 'PERSON_ONLY'
+      })
+    }
+    const outcome = req.body?.outcome
+    if (outcome !== 'received' && outcome !== 'not_received') {
+      return reply.code(400).send({ error: "outcome must be 'received' or 'not_received'" })
+    }
+    const text = (v: unknown, max: number) =>
+      typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null
+    const orderRef = text(req.body?.order_ref, 255)
+    const note = text(req.body?.note, 500)
+    const raw = String(req.params.id)
+    const id = /^\d+$/.test(raw) ? Number(raw) : Number.NaN
+    if (!Number.isSafeInteger(id) || id <= 0) return reply.code(404).send({ error: 'Not found' })
+    const row = (await db('nivaro_erp_submissions').where({ id }).first()) as
+      | (ErpSubmissionRow & { error_class?: string | null })
+      | undefined
+    if (!row) return reply.code(404).send({ error: 'Not found' })
+    // The record judged as this administrator: a restricting User Scope binds admins too.
+    try {
+      await assertInstanceAccess(
+        req.user,
+        true,
+        row.collection,
+        String(row.item),
+        undefined,
+        'read'
+      )
+    } catch (err) {
+      if (err instanceof InstanceAccessError) {
+        return err.statusCode === 404
+          ? reply.code(404).send({ error: 'Not found' })
+          : reply.code(403).send({ error: 'Forbidden' })
+      }
+      throw err
+    }
+    if (row.status !== SENDING_STATUS) {
+      return reply.code(409).send({
+        error: `This send already has an outcome (${row.status}).`,
+        code: 'NOT_UNANSWERED'
+      })
+    }
+    if (!isUnansweredStale(row)) {
+      return reply.code(409).send({
+        error: 'This send may still get its answer. Wait a few minutes, then check again.',
+        code: 'STILL_SENDING',
+        answer_by: new Date(answerDeadline(row)).toISOString()
+      })
+    }
+    const u = req.user as { first_name?: string | null; last_name?: string | null; email?: string }
+    const name =
+      [u?.first_name, u?.last_name].filter(Boolean).join(' ') || u?.email || 'an administrator'
+    const received = outcome === 'received'
+    const status: ErpStatus = received ? 'accepted' : 'failed'
+    const won = Number(
+      await db('nivaro_erp_submissions')
+        .where({ id, status: SENDING_STATUS })
+        .update(
+          received
+            ? {
+                status,
+                external_ref: orderRef ?? row.external_ref ?? null,
+                last_error: null,
+                error_class: null,
+                response: JSON.stringify({
+                  checked_by: name,
+                  outcome: 'received',
+                  order_ref: orderRef,
+                  note
+                }),
+                updated_at: new Date()
+              }
+            : {
+                status,
+                last_error: `Checked by ${name}: not received${note ? `. ${note}` : ''}`,
+                // Never picked up by an automatic resend: the next press of the move sends it.
+                error_class: 'validation',
+                updated_at: new Date()
+              }
+        )
+    )
+    if (won !== 1) {
+      return reply.code(409).send({
+        error: 'Someone else marked this send a moment ago.',
+        code: 'NOT_UNANSWERED'
+      })
+    }
+    await propagateSubmissionStatus({
+      submissionId: id,
+      status,
+      error: received ? null : `Checked by ${name}: not received`,
+      obligationId: row.obligation_id
+    })
+    const { announceSubmissionAspect } = await import('../services/record-events.js')
+    void announceSubmissionAspect(id)
+    // A held automatic move may run again: what it was waiting on is settled.
+    await clearAutoFailures({ collection: row.collection, item: String(row.item) })
+    await logActivity({
+      action: 'update',
+      collection: 'nivaro_erp_submissions',
+      item: String(id),
+      user: req.user?.id,
+      req,
+      comment:
+        `unanswered send marked ${received ? 'received' : 'not received'} (${row.collection}/${row.item})${
+          orderRef ? ` — order ${orderRef}` : ''
+        }${note ? ` — ${note}` : ''}`.slice(0, 500)
+    })
+    const updated = (await db('nivaro_erp_submissions').where({ id }).first()) as ErpSubmissionRow
+    return {
+      data: serialize(updated),
+      message: received
+        ? "Marked as received. The record's own fields (order number, status) were not changed: set them on the record."
+        : 'Marked as not received. It is sent again the next time the move is pressed.'
+    }
+  })
 
   // Manual status override — for webhook-driven updates from the ERP side
   app.patch<{

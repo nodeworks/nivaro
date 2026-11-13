@@ -15,7 +15,10 @@ const store = vi.hoisted(() => ({
   history: [] as Array<Record<string, unknown>>,
   notify: [] as Array<{ userId: string; opts: Record<string, unknown> }>,
   announced: [] as string[],
-  failInsert: false
+  failInsert: false,
+  /** What erp-unanswered says about the record's newest send without an answer. */
+  unanswered: null as null | Record<string, unknown>,
+  unansweredAsked: [] as string[]
 }))
 
 function query(rows: Row[]) {
@@ -129,6 +132,12 @@ vi.mock('../../../services/record-events.js', () => ({
     store.announced.push(`${collection}:${item}:${aspect}`)
   }
 }))
+vi.mock('../../../services/erp-unanswered.js', () => ({
+  newestUnansweredSendFor: async (collection: string, item: string) => {
+    store.unansweredAsked.push(`${collection}:${item}`)
+    return store.unanswered
+  }
+}))
 vi.mock('../../../services/workflow-actions.js', () => ({
   TransitionBlockedError: class TransitionBlockedError extends Error {
     statusCode = 422
@@ -177,6 +186,8 @@ beforeEach(() => {
   store.users.clear()
   store.users.set(KIM, { id: KIM, first_name: 'Kim', last_name: 'Lee', email: 'kim@example.test' })
   store.history.length = 0
+  store.unanswered = null
+  store.unansweredAsked = []
   store.notify.length = 0
   store.announced.length = 0
   store.failInsert = false
@@ -467,6 +478,40 @@ describe('a run whose process died: the lease', () => {
 
     // And the record can be submitted again.
     expect(await take({ userId: 'user-bob' })).not.toBeNull()
+  })
+
+  it('a run that stopped while a send got no answer says the partner may already have it', async () => {
+    store.unanswered = {
+      id: 50,
+      started_at: '2026-11-12T14:59:30.000Z',
+      stale: true,
+      api_id: 5,
+      api_name: 'MDSi',
+      endpoint_path: '/orders'
+    }
+    await take()
+    vi.clearAllTimers()
+    vi.advanceTimersByTime(LEASE_MS + 1_000)
+    const state = await transitionRunState('inst-1')
+    expect(store.unansweredAsked).toContain('orders:42')
+    expect(state.problem).toMatchObject({
+      result: 'interrupted',
+      unanswered: {
+        submission_id: 50,
+        api_name: 'MDSi',
+        started_at: '2026-11-12T14:59:30.000Z',
+        stale: true
+      }
+    })
+  })
+
+  it('a stopped run with nothing unanswered has no such warning', async () => {
+    await take()
+    vi.clearAllTimers()
+    vi.advanceTimersByTime(LEASE_MS + 1_000)
+    const state = await transitionRunState('inst-1')
+    expect(state.problem?.result).toBe('interrupted')
+    expect(state.problem?.unanswered).toBeNull()
   })
 
   it('a stale run does not refuse the next one: the take releases it first', async () => {

@@ -66,7 +66,10 @@ export function pushOutcomes(
   lastFailReason: string | null
 } {
   const failed = (p: { status: string }) => p.status === 'failed' || p.status === 'rejected'
-  const sorted = [...pushes].sort((x, y) => +new Date(y.updated_at) - +new Date(x.updated_at))
+  // A send with no answer yet (`sending`, erp-unanswered.ts) proves nothing either way.
+  const sorted = pushes
+    .filter((p) => p.status !== 'sending')
+    .sort((x, y) => +new Date(y.updated_at) - +new Date(x.updated_at))
   const d24 = sorted.filter((p) => new Date(p.updated_at) >= since24)
   const lastOk = sorted.find((p) => !failed(p))
   const lastFail = sorted.find(failed)

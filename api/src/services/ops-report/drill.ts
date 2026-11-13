@@ -1178,7 +1178,7 @@ export async function drill(
     case 'integration_failures': {
       const r = await rows(
         `SELECT TOP ${limit} s.id, s.created_at, s.collection, s.item, s.status, LEFT(s.last_error, 240) err, a.name api FROM nivaro_erp_submissions s LEFT JOIN nivaro_external_apis a ON a.id = s.external_api
-          WHERE s.created_at >= ? AND s.created_at < ? AND s.status NOT IN ('accepted', 'pending', 'skipped') ${key ? 'AND a.name = ?' : ''} ORDER BY s.created_at`,
+          WHERE s.created_at >= ? AND s.created_at < ? AND s.status NOT IN ('accepted', 'pending', 'skipped', 'sending') ${key ? 'AND a.name = ?' : ''} ORDER BY s.created_at`,
         key ? [S, E, key] : range
       )
       return out(
@@ -2076,7 +2076,7 @@ export async function drill(
     case 'pending_sends': {
       const r = await rows(
         `SELECT TOP ${limit} s.id, s.created_at, s.collection, s.item, s.status, s.next_retry_at, a.name api FROM nivaro_erp_submissions s LEFT JOIN nivaro_external_apis a ON a.id = s.external_api
-          WHERE s.status IN ('pending', 'retrying', 'queued') ${key ? 'AND a.name = ?' : ''} ORDER BY s.created_at`,
+          WHERE s.status IN ('pending', 'retrying', 'queued', 'sending') ${key ? 'AND a.name = ?' : ''} ORDER BY s.created_at`,
         key ? [key] : []
       )
       return out(

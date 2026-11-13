@@ -2780,6 +2780,19 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           since: (history[0] as { timestamp?: Date | string } | undefined)?.timestamp ?? null
         }).catch(() => null)
       : null
+    // A send with no answer behind the last run: administrators get the place to settle it
+    // (the ERP submissions tab on this record), absolute so a headless host links to admin.
+    const unansweredSend = runState?.problem?.unanswered
+    if (unansweredSend && isAdmin) {
+      const { adminBaseUrl } = await import('../admin-base.js')
+      const q = new URLSearchParams({
+        tab: 'erp',
+        collection,
+        item: String(item),
+        submission: String(unansweredSend.submission_id)
+      })
+      unansweredSend.review_url = `${adminBaseUrl() ?? ''}/integration-health?${q.toString()}`
+    }
     // Whether THIS caller may change the record right now (edit-lock.ts) — the
     // form shows read-only from it; the write itself is judged again.
     const editLock =

@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { newestUnansweredSendFor } from './erp-unanswered.js'
 import { getApp } from './io-holder.js'
 import { type JobRunHandle, type JobRunKind, startJobRun } from './job-runs.js'
 import { announceRecordAspect } from './record-events.js'
@@ -60,6 +61,19 @@ export interface TransitionRunProblem extends TransitionRunView {
   result: 'refused' | 'interrupted' | 'failed'
   reason: string | null
   finished_at: string | null
+  /**
+   * A send to another system on this record that never got an answer (erp-unanswered.ts): the
+   * other system may already have it, so the move is not simply tried again — someone checks
+   * there first and an administrator marks the send. Null when there is none.
+   */
+  unanswered: {
+    submission_id: number
+    api_name: string | null
+    started_at: string
+    stale: boolean
+    /** Set by the pipeline route for administrators: the ERP submissions tab on that record. */
+    review_url?: string | null
+  } | null
 }
 
 export interface TransitionRunHandle {
@@ -606,6 +620,12 @@ export async function transitionRunState(
     const started = isoOf(last.started_at)
     const current = !since || !started || new Date(started).getTime() >= new Date(since).getTime()
     if (current) {
+      // Only a run that did not finish can have left a send without an answer, and a refusal may
+      // BE the guard that such a send holds (workflow-actions.ts): both read it.
+      const send =
+        meta.collection && meta.item
+          ? await newestUnansweredSendFor(meta.collection, meta.item).catch(() => null)
+          : null
       problem = {
         ...viewOf(last, meta),
         result:
@@ -615,7 +635,15 @@ export async function transitionRunState(
               ? 'failed'
               : 'refused',
         reason: firstLine(last.error) ?? (last.status === 'interrupted' ? STOPPED_UNKNOWN : null),
-        finished_at: isoOf(last.finished_at)
+        finished_at: isoOf(last.finished_at),
+        unanswered: send
+          ? {
+              submission_id: send.id,
+              api_name: send.api_name,
+              started_at: send.started_at,
+              stale: send.stale
+            }
+          : null
       }
     }
   }

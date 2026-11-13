@@ -220,6 +220,8 @@ export function registerCoreIntegrationSignals(): void {
     ],
     evaluate: async ({ thresholds }) => {
       const cutoff = new Date(Date.now() - thresholds.min_age_minutes * 60_000)
+      // A newer send with no answer yet (`sending`) also settles it: retrying the older
+      // failure could duplicate what that send may already have delivered.
       // recordSubmission() inserts one row per attempt — several still-failing
       // attempts can share one (collection, item, external_api, endpoint)
       // tuple with nothing accepted/pending in between. Window to the newest
@@ -242,7 +244,7 @@ export function registerCoreIntegrationSignals(): void {
                   SELECT 1 FROM nivaro_erp_submissions n
                    WHERE n.collection = s.collection AND n.item = s.item AND n.external_api = s.external_api
                      AND ISNULL(JSON_VALUE(n.payload, '$.endpoint_path'), '') = ISNULL(JSON_VALUE(s.payload, '$.endpoint_path'), '')
-                     AND n.id > s.id AND n.status IN ('accepted', 'pending'))
+                     AND n.id > s.id AND n.status IN ('accepted', 'pending', 'sending'))
            ) x
           WHERE rn = 1
           ORDER BY updated_at DESC, id DESC`,

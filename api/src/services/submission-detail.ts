@@ -695,6 +695,14 @@ export function retryEligibility(f: SubmissionFacts): SubmissionDetail['retry'] 
   }
   if (status === 'accepted')
     return { eligible: false, reason: 'The partner already accepted this push.', warning: null }
+  // Written before the partner call and never answered (erp-unanswered.ts): the partner may have it.
+  if (status === 'sending')
+    return {
+      eligible: false,
+      reason:
+        'This send got no answer, so the partner may already have it. Check there, then mark it received or not received.',
+      warning: null
+    }
   if (status === 'pending' || status === 'submitted')
     return {
       eligible: false,
@@ -717,7 +725,10 @@ export function retryEligibility(f: SubmissionFacts): SubmissionDetail['retry'] 
   if (f.newer_landed)
     return {
       eligible: false,
-      reason: `A newer push to this record (#${f.newer_landed.id}) already landed — resending this older one could overwrite it.`,
+      reason:
+        f.newer_landed.status === 'sending'
+          ? `A newer push to this record (#${f.newer_landed.id}) got no answer and may have reached the partner — settle that one first.`
+          : `A newer push to this record (#${f.newer_landed.id}) already landed — resending this older one could overwrite it.`,
       warning: null
     }
   const warning =
@@ -903,7 +914,7 @@ export async function gatherSubmissionFacts(
       .raw(
         `SELECT TOP 1 id, status FROM nivaro_erp_submissions n
         WHERE n.collection = ? AND n.item = ? AND n.external_api = ? AND n.id > ?
-          AND n.status IN ('accepted', 'pending')
+          AND n.status IN ('accepted', 'pending', 'sending')
           AND ISNULL(JSON_VALUE(n.payload, '$.endpoint_path'), '') =
               ISNULL(JSON_VALUE(?, '$.endpoint_path'), '')
         ORDER BY n.id DESC`,

@@ -149,7 +149,7 @@ export async function buildMore(win: ReportWindow, extras: DigestExtras) {
     .map((j) => ({ job: j.id, at: clock(j.nextRun as Date, win.tz), heavy: !!j.heavy }))
   const pending = await rows(
     `SELECT a.name api, COUNT(*) n, MIN(s.created_at) oldest FROM nivaro_erp_submissions s LEFT JOIN nivaro_external_apis a ON a.id = s.external_api
-      WHERE s.status IN ('pending', 'retrying', 'queued') GROUP BY a.name`
+      WHERE s.status IN ('pending', 'retrying', 'queued', 'sending') GROUP BY a.name`
   )
   const keys = await rows(
     `SELECT name, expires_at FROM nivaro_api_keys WHERE expires_at IS NOT NULL AND expires_at >= ? AND expires_at < ?`,

@@ -329,7 +329,7 @@ export async function buildDigest(
   )
   const subFail = await rows(
     `SELECT s.created_at, a.name api, s.collection, s.item, LEFT(s.last_error, 300) err FROM nivaro_erp_submissions s LEFT JOIN nivaro_external_apis a ON a.id = s.external_api
-      WHERE s.created_at >= ? AND s.created_at < ? AND s.status NOT IN ('accepted','pending','skipped') ORDER BY s.created_at`,
+      WHERE s.created_at >= ? AND s.created_at < ? AND s.status NOT IN ('accepted','pending','skipped','sending') ORDER BY s.created_at`,
     range
   )
   const calls = await rows(

@@ -574,6 +574,16 @@ describe('push outcomes on the partner card (army3: Fusion IIP read Healthy whil
     expect(worseHealth('healthy', pushHealth)).toBe('failing')
     expect(lowerPct(100, 0)).toBe(0)
   })
+  it('a send with no answer yet is neither a success nor a failure', () => {
+    const p = pushOutcomes(
+      [
+        { status: 'sending', updated_at: ago(2), last_error: null },
+        { status: 'failed', updated_at: ago(10), last_error: 'reference already exists' }
+      ],
+      since24
+    )
+    expect(p).toMatchObject({ pushes24: 1, failures24: 1, lastOkAt: null })
+  })
   it('leaves a partner whose pushes landed healthy', () => {
     const p = pushOutcomes([{ status: 'accepted', updated_at: ago(5), last_error: null }], since24)
     expect(p).toMatchObject({ pushes24: 1, failures24: 0, lastFailAt: null })

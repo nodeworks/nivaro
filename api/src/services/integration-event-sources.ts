@@ -278,14 +278,15 @@ function mapSubmission(r: Record<string, unknown>): EventEntry {
     source: 'core:outbound',
     direction: 'out',
     label: String(r.api_name ?? 'Partner'),
-    text: `${endpoint || 'push'} · ${status}${attempts > 1 ? ` · ${attempts} attempts` : ''}`,
+    // `sending` = written before the partner call, no answer yet (erp-unanswered.ts).
+    text: `${endpoint || 'push'} · ${status === 'sending' ? 'no answer yet' : status}${attempts > 1 ? ` · ${attempts} attempts` : ''}`,
     context: failed
       ? String(r.last_error ?? '').slice(0, 200)
       : ((r.requested_via as string | null | undefined) ?? null),
     // A retried push is news at its newest attempt, not its first (army3):
     // updated_at moves on every send, created_at never does.
     created_at: new Date((r.updated_at ?? r.created_at) as string).toISOString(),
-    status: failed ? 'error' : 'ok',
+    status: failed ? 'error' : status === 'sending' ? 'info' : 'ok',
     user: (r.requested_by as string | null | undefined) ?? null,
     collection: (r.collection as string | null) ?? null,
     item_id: r.item != null ? String(r.item) : null,
@@ -336,7 +337,8 @@ const outbound: EventSourceDef = {
     if (opts.before) q.where('s.updated_at', '<', new Date(opts.before))
     if (opts.status === 'error') q.whereIn('s.status', ['failed', 'rejected'])
     if (opts.status === 'ok') q.whereIn('s.status', ['accepted', 'pending'])
-    if (opts.status === 'info') return []
+    // A send with no answer yet reads as info (mapSubmission).
+    if (opts.status === 'info') q.where('s.status', 'sending')
     if (opts.partner) q.where('a.name', opts.partner)
     if (opts.record) {
       const { collection, item } = opts.record
