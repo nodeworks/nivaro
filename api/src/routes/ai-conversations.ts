@@ -357,42 +357,46 @@ export async function aiConversationRoutes(app: FastifyInstance) {
       const format = q.format === 'xlsx' ? 'xlsx' : 'csv'
       const rows = await listMessages(found.conv.id)
       const idx = rows.findIndex((r) => String(r.id) === req.params.mid)
-      const msg = rows[idx]
-      if (msg?.role !== 'assistant') return reply.code(404).send({ error: 'Answer not found' })
-      const trace = parseJsonArray<{
-        tool: string
-        input: Record<string, unknown>
-        summary: string
-      }>(msg.trace)
-      const exportable = trace
-        .map((t, i) => ({ t, i }))
-        .filter(
-          ({ t }) =>
-            t && EXPORTABLE_TOOLS.has(t.tool) && !String(t.summary ?? '').startsWith('error:')
-        )
-      const step =
-        q.step != null && q.step !== ''
-          ? exportable.find(({ i }) => i === Number(q.step))
-          : exportable[exportable.length - 1]
-      if (!step) return reply.code(400).send({ error: 'This answer has no rows to export' })
-      const [{ executeChatTool, EXPORT_MAX_ROWS }, { answerExportTable }, tableOut] =
+      const [{ executeChatTool, EXPORT_MAX_ROWS }, { answerExportTable }, tableOut, gate] =
         await Promise.all([
           import('../services/ai-chat.js'),
           import('../services/ai-answer-export.js'),
-          import('../services/ai-export-table.js')
+          import('../services/ai-export-table.js'),
+          import('../services/read-gate.js')
         ])
+      // The thread as THIS person may see it: an answer withheld from them in a shared
+      // conversation has no trace here, so its query cannot be downloaded either.
+      const view = await messagesForViewer(req.user!, rows)
+      const step = tableOut.exportStepOf(view, req.params.mid, q.step, EXPORTABLE_TOOLS)
+      if (!step.ok) return reply.code(step.status).send({ error: step.error })
       let table: AnswerExport
       try {
-        // Every matching row (not the page the model read), read as the caller.
-        const input = step.t.input ?? {}
-        const { result } = await executeChatTool(req.user!, step.t.tool, input, {
-          exportRows: EXPORT_MAX_ROWS
-        })
-        table = await answerExportTable(req.user!, step.t.tool, input, result)
+        // Every matching row (not the page the model read), read as the caller. It is up to
+        // ten sequential reads plus label reads, so it takes a heavy-read slot, and the same
+        // person asking for the same file again while it runs joins that run.
+        const { value } = await gate.sharedGatedRead(
+          `ai-export:${req.user!.id}:${found.conv.id}:${req.params.mid}:${step.index}`,
+          req.user!.id,
+          async () => {
+            const { result } = await executeChatTool(req.user!, step.tool, step.input, {
+              exportRows: EXPORT_MAX_ROWS
+            })
+            return answerExportTable(req.user!, step.tool, step.input, result)
+          },
+          { label: 'ai-export', signal: gate.clientGoneSignal(reply.raw) }
+        )
+        table = value
       } catch (err) {
         return reply
           .code(422)
           .send({ error: err instanceof Error ? err.message : 'The query could not be re-run' })
+      }
+      // A workbook is built in memory in one go: it holds fewer cells than a CSV may.
+      if (format === 'xlsx') {
+        const capped = tableOut.capTableCells(table, tableOut.XLSX_MAX_CELLS)
+        if (capped.cut) {
+          table = { ...capped.table, total: table.total ?? table.rows.length }
+        }
       }
       const count = table.rows.length
       const cut = table.total != null && table.total > count
@@ -403,7 +407,7 @@ export async function aiConversationRoutes(app: FastifyInstance) {
         user: req.user!.id,
         collection: 'nivaro_ai_conversations',
         item: found.conv.id,
-        comment: `${count}${cut ? ` of ${table.total}` : ''} row(s) as ${format} (${step.t.tool})`,
+        comment: `${count}${cut ? ` of ${table.total}` : ''} row(s) as ${format} (${step.tool})`,
         req
       })
       // The page says so when the file holds fewer rows than match.

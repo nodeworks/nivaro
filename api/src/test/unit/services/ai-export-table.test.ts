@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest'
 import * as XLSX from 'xlsx'
 import {
   buildExportTable,
+  capTableCells,
   cellText,
   columnWidths,
   displayCell,
+  exportStepOf,
   headerFor,
   tableToAoa,
-  tableToCsv
+  tableToCsv,
+  XLSX_MAX_CELLS
 } from '../../../services/ai-export-table.js'
 
 const NY = 'America/New_York'
@@ -256,5 +259,74 @@ describe('writing the file', () => {
     expect(back.B2.w).toBe('2026-11-09 12:56 AM')
     expect(back.H2.w).toBe('2026-11-16')
     expect(columnWidths(table)).toHaveLength(table.headers.length)
+  })
+})
+
+describe('capTableCells — a workbook is built in memory, on the request', () => {
+  // Security review 2026-11-12: 10,000 rows x 60 columns as one synchronous workbook build,
+  // for any signed-in person, in a loop.
+  const table = (rows: number, cols: number) => ({
+    headers: Array.from({ length: cols }, (_, c) => `c${c}`),
+    rows: Array.from({ length: rows }, (_, r) => Array.from({ length: cols }, (_, c) => r * c))
+  })
+
+  it('leaves a table under the ceiling alone', () => {
+    const t = table(100, 10)
+    expect(capTableCells(t, 2000)).toEqual({ table: t, cut: false })
+  })
+
+  it('keeps whole rows from the top up to the ceiling and says it cut', () => {
+    const out = capTableCells(table(1000, 60), 6000)
+    expect(out.cut).toBe(true)
+    expect(out.table.rows).toHaveLength(100)
+    expect(out.table.rows[99][1]).toBe(99)
+    expect(out.table.headers).toHaveLength(60)
+  })
+
+  it('always keeps at least one row, and the ceiling for a workbook is 200,000 cells', () => {
+    expect(capTableCells(table(5, 50), 10).table.rows).toHaveLength(1)
+    expect(XLSX_MAX_CELLS).toBe(200_000)
+  })
+})
+
+describe('exportStepOf — which data call of which answer a download re-runs', () => {
+  const tools = new Set(['query_items', 'aggregate'])
+  const answer = (id: string, visible: boolean, trace: unknown[]) => ({
+    id,
+    role: 'assistant' as const,
+    visible,
+    trace: trace as never
+  })
+  const call = (tool: string, summary = '3 rows') => ({ tool, input: { collection: 'a' }, summary })
+
+  it('takes the last exportable call of the answer, or the step asked for', () => {
+    const msgs = [answer('7', true, [call('query_items'), call('search_docs'), call('aggregate')])]
+    expect(exportStepOf(msgs, '7', undefined, tools)).toMatchObject({ ok: true, index: 2 })
+    expect(exportStepOf(msgs, '7', '0', tools)).toMatchObject({ ok: true, index: 0 })
+  })
+
+  it('refuses an answer that is withheld from this viewer', () => {
+    // A shared conversation: another person's answer the viewer may not see comes back
+    // with an empty trace. Reading the stored row instead let them download its query.
+    const msgs = [answer('7', false, [])]
+    expect(exportStepOf(msgs, '7', undefined, tools)).toEqual({
+      ok: false,
+      status: 404,
+      error: 'Answer not found'
+    })
+  })
+
+  it('refuses a question, an unknown id, and an answer with nothing to export', () => {
+    const msgs = [
+      { id: '1', role: 'user' as const, visible: true, trace: [] as never },
+      answer('2', true, [call('search_docs'), call('query_items', 'error: nope')])
+    ]
+    expect(exportStepOf(msgs, '1', undefined, tools)).toMatchObject({ ok: false, status: 404 })
+    expect(exportStepOf(msgs, '9', undefined, tools)).toMatchObject({ ok: false, status: 404 })
+    expect(exportStepOf(msgs, '2', undefined, tools)).toEqual({
+      ok: false,
+      status: 400,
+      error: 'This answer has no rows to export'
+    })
   })
 })

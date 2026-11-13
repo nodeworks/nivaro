@@ -313,3 +313,66 @@ export function columnWidths(table: ExportTable): Array<{ wch: number }> {
     return { wch: Math.min(60, Math.max(8, widest + 2)) }
   })
 }
+
+/**
+ * Cells one workbook download may hold. The workbook is built in memory, in one go, on the
+ * request: 10,000 rows of 60 columns was 600,000 cells for anyone who asked, as often as
+ * they asked. A CSV of the same rows is a string join and keeps the row ceiling alone.
+ */
+export const XLSX_MAX_CELLS = 200_000
+
+/** The table cut to whole rows from the top that fit `maxCells` (never fewer than one row). */
+export function capTableCells<T extends ExportTable>(
+  table: T,
+  maxCells: number
+): { table: T; cut: boolean } {
+  const keep = Math.max(1, Math.floor(maxCells / Math.max(1, table.headers.length)))
+  if (table.rows.length <= keep) return { table, cut: false }
+  return { table: { ...table, rows: table.rows.slice(0, keep) }, cut: true }
+}
+
+/** One message of a conversation AS ITS VIEWER MAY SEE IT (ViewMessage, narrowed). */
+export interface ExportSourceMessage {
+  id: string
+  role: 'user' | 'assistant'
+  /** False = an answer withheld from this viewer; its trace is then empty. */
+  visible: boolean
+  trace: Array<{ tool?: string; input?: Record<string, unknown>; summary?: string }>
+}
+
+export type ExportStep =
+  | { ok: true; index: number; tool: string; input: Record<string, unknown> }
+  | { ok: false; status: 400 | 404; error: string }
+
+/**
+ * Which data call of answer `mid` a download re-runs: the step asked for, else the answer's
+ * last exportable call. Works on the viewer's own view of the thread, never the stored rows:
+ * in a shared conversation another person's answer the viewer may not see has no trace
+ * here, so its query cannot be downloaded either (it used to be read from the stored row).
+ */
+export function exportStepOf(
+  messages: ExportSourceMessage[],
+  mid: string,
+  stepParam: string | undefined,
+  exportable: ReadonlySet<string>
+): ExportStep {
+  const msg = messages.find((m) => String(m.id) === String(mid))
+  if (!msg || msg.role !== 'assistant' || !msg.visible) {
+    return { ok: false, status: 404, error: 'Answer not found' }
+  }
+  const steps = (msg.trace ?? [])
+    .map((t, index) => ({ t, index }))
+    .filter(
+      ({ t }) =>
+        !!t &&
+        typeof t.tool === 'string' &&
+        exportable.has(t.tool) &&
+        !String(t.summary ?? '').startsWith('error:')
+    )
+  const step =
+    stepParam != null && stepParam !== ''
+      ? steps.find(({ index }) => index === Number(stepParam))
+      : steps[steps.length - 1]
+  if (!step) return { ok: false, status: 400, error: 'This answer has no rows to export' }
+  return { ok: true, index: step.index, tool: String(step.t.tool), input: step.t.input ?? {} }
+}
