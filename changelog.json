@@ -1,10 +1,218 @@
 {
-  "generated_at": "2026-11-13T03:14:40.669Z",
+  "generated_at": "2026-11-13T17:11:09.345Z",
   "releases": [
+    {
+      "version": "0.3.146",
+      "tag": "v0.3.146",
+      "date": "2026-11-13T12:10:50-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "alert on sends that never got an answer",
+              "hash": "6ca9eccbb"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "resends write ahead and wait on unanswered sends",
+              "hash": "af7c88c99"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "blocking pushes fail closed when earlier sends can't be read",
+              "hash": "cce64b050"
+            },
+            {
+              "section": "Added",
+              "scope": "ui",
+              "text": "unanswered sends on the pipeline row and the ERP tab",
+              "hash": "73c1f158e"
+            },
+            {
+              "section": "Added",
+              "scope": "erp-submissions",
+              "text": "settle unanswered sends; readers know `sending`",
+              "hash": "630e0d8e1"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "write transition pushes before sending, hold unanswered ones",
+              "hash": "03f072525"
+            },
+            {
+              "section": "Added",
+              "scope": "collections",
+              "text": "shared Pinned section, My favorites, separate hidden/link switches",
+              "hash": "05160fe73"
+            },
+            {
+              "section": "Added",
+              "scope": "profile",
+              "text": "a User Scopes save says what it added and removed",
+              "hash": "e8c4fee0f"
+            },
+            {
+              "section": "Added",
+              "scope": "profile",
+              "text": "access granted to a person shows on their Activity feed",
+              "hash": "d26e39ea6"
+            },
+            {
+              "section": "Added",
+              "scope": "profile",
+              "text": "\"What they did\" in plain words",
+              "hash": "e02b2d8c2"
+            },
+            {
+              "section": "Added",
+              "scope": "activity",
+              "text": "link-table writes read in words everywhere",
+              "hash": "b894b96db"
+            },
+            {
+              "section": "Added",
+              "scope": "profile",
+              "text": "Pages visited names places, not routes",
+              "hash": "d707f0c07"
+            },
+            {
+              "section": "Added",
+              "scope": "moves",
+              "text": "a host can read a move's refusal in its own words",
+              "hash": "9cfe676d8"
+            },
+            {
+              "section": "Added",
+              "scope": "record",
+              "text": "More menu export slot beside Export PDF",
+              "hash": "6b4d504c8"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "link-row labels never reveal a record the reader cannot see",
+              "hash": "4859ba7ad"
+            },
+            {
+              "section": "Fixed",
+              "scope": "scopes",
+              "text": "Apply restriction is instant and its preview fast and plain",
+              "hash": "36bab2435"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tips",
+              "text": "a tip has a visible edge in dark mode",
+              "hash": "70916a517"
+            },
+            {
+              "section": "Fixed",
+              "scope": "notifications",
+              "text": "the bell's sibling controls use the instant tip",
+              "hash": "e6a127c1c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "jobs",
+              "text": "the Jobs tray header says when a job failed",
+              "hash": "a211e6a45"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tips",
+              "text": "a menu row's tip goes beside the menu, not over the next row",
+              "hash": "17c70c3f9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "this app's own reason wins over a status inside it",
+              "hash": "000888437"
+            },
+            {
+              "section": "Fixed",
+              "scope": "mail",
+              "text": "print the daily report's font stack raw",
+              "hash": "a2196ab51"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "header relation-path tiles keep their values after a refetch",
+              "hash": "6d28b0bdd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "moves",
+              "text": "Copy details on a refused move copies the other system's answer",
+              "hash": "ecdc5d885"
+            },
+            {
+              "section": "Fixed",
+              "scope": "moves",
+              "text": "a partner refusal in a 2xx body reads like every other refusal",
+              "hash": "f7d79f004"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "replay",
+              "text": "pack recordings for storage off the event loop",
+              "hash": "48c3bccc6"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "graphql-sse",
+              "text": "publish once the stream has subscribed",
+              "hash": "d47ae3704"
+            },
+            {
+              "section": "Other",
+              "scope": "presence",
+              "text": "stuck label names the page under its section",
+              "hash": "bc3a8fd7c"
+            },
+            {
+              "section": "Other",
+              "scope": "format-value",
+              "text": "assert the one shared date and date-time formats",
+              "hash": "8fec82382"
+            },
+            {
+              "section": "Other",
+              "scope": "socket",
+              "text": "mock the sign-out note exports socket.ts now reads",
+              "hash": "560cadb42"
+            }
+          ]
+        }
+      ],
+      "count": 30
+    },
     {
       "version": "0.3.145",
       "tag": "v0.3.145",
-      "date": "2026-11-12T22:14:23-05:00",
+      "date": "2026-11-12T22:14:40-05:00",
       "sections": [
         {
           "label": "Added",
