@@ -70,15 +70,19 @@ export function FoundElsewhere({
   const target = { collection: found.collection, itemId: String(found.id) }
   return (
     <p
-      // `w-full`: the cut link cannot shrink the line by itself, so in a container
-      // narrower than 52ch the line would otherwise spill out of both sides.
-      className='w-full max-w-[52ch] text-[12px] text-slate-600 dark:text-slate-300'
+      // One row that never wraps: the words keep their width and the link gives up its
+      // own, so the line is one line at any width and the button under it does not move
+      // when the answer arrives. `w-full`: in a container narrower than 52ch the row
+      // would otherwise spill out of both sides.
+      className='flex w-full max-w-[52ch] justify-center gap-1 whitespace-nowrap text-[12px] text-slate-600 dark:text-slate-300'
       data-found-elsewhere={found.collection}
     >
-      {found.collection === collection
-        ? "Hidden by this list's filters"
-        : `Found in ${found.display_name?.trim() || titleCase(found.collection)}`}
-      :{' '}
+      <span className='shrink-0'>
+        {found.collection === collection
+          ? "Hidden by this list's filters"
+          : `Found in ${found.display_name?.trim() || titleCase(found.collection)}`}
+        {/* The space is for the text itself (read out, copied); the row's gap draws it. */}:{' '}
+      </span>
       <a
         ref={linkRef}
         href={urlFor(target)}
@@ -88,7 +92,7 @@ export function FoundElsewhere({
           e.preventDefault()
           open(target)
         }}
-        className='inline-block max-w-full truncate align-bottom font-medium text-[#0284a8] underline-offset-2 hover:underline dark:text-nvr-cyan'
+        className='min-w-0 truncate font-medium text-[#0284a8] underline-offset-2 hover:underline dark:text-nvr-cyan'
       >
         {label}
       </a>

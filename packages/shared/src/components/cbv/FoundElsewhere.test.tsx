@@ -191,9 +191,19 @@ describe('FoundElsewhere — the line keeps one slot', () => {
   it('a long label is cut on one line, never wrapped', async () => {
     render({ term: 'CR26INV-33345' })
     await settle()
-    const link = hint()?.querySelector('a') as HTMLAnchorElement
-    for (const c of ['inline-block', 'max-w-full', 'truncate', 'align-bottom'])
-      expect(link.className.split(' ')).toContain(c)
+    const line = hint() as HTMLElement
+    const link = line.querySelector('a') as HTMLAnchorElement
+    // One flex row that never wraps: the words before the link keep their width, the link
+    // gives up its own. An inline-block link wrapped WHOLE onto a second line instead, and
+    // the button under the line moved when the answer arrived.
+    for (const c of ['flex', 'whitespace-nowrap', 'w-full'])
+      expect(line.className.split(' ')).toContain(c)
+    for (const c of ['min-w-0', 'truncate']) expect(link.className.split(' ')).toContain(c)
+    expect(link.className.split(' ')).not.toContain('inline-block')
+    const prefix = line.firstElementChild as HTMLElement
+    expect(prefix.tagName).toBe('SPAN')
+    expect(prefix.className.split(' ')).toContain('shrink-0')
+    expect(prefix.textContent?.trim().endsWith(':')).toBe(true)
   })
 })
 

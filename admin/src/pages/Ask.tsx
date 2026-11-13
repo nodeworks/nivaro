@@ -459,7 +459,10 @@ function ExportButtons({
         </button>
       ))}
       {cut && (
-        <span className='text-[11px] text-amber-700 dark:text-amber-300' data-ask-export-cut>
+        <span
+          className='whitespace-nowrap text-[11px] text-amber-700 dark:text-amber-300'
+          data-ask-export-cut
+        >
           {cut.note}
         </span>
       )}
