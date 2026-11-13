@@ -1,10 +1,307 @@
 {
-  "generated_at": "2026-11-12T17:17:34.620Z",
+  "generated_at": "2026-11-13T03:14:40.669Z",
   "releases": [
+    {
+      "version": "0.3.145",
+      "tag": "v0.3.145",
+      "date": "2026-11-12T22:14:23-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "extensions",
+              "text": "drop one record's cached query runs, hear every record change",
+              "hash": "45514f70e"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "a move can run in the background instead of holding the click",
+              "hash": "1122e0286"
+            },
+            {
+              "section": "Added",
+              "scope": "search",
+              "text": "list search can match a person's name through a relation; an empty list says where the record is",
+              "hash": "9ca8d08a7"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "a move an extension check would refuse says so before the click",
+              "hash": "b0e69ceb5"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "jobs",
+              "text": "the Jobs tray reads a failed job's text instead of showing it as stored",
+              "hash": "c828ee4cc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "only a move's own partner call reads as the other system's; the status line leaves the integration line too",
+              "hash": "5e7ab34e5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "the toast of a move another system refused says what it answered",
+              "hash": "6628d700a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "a cut partner answer that is only a status phrase is not shown as words",
+              "hash": "8c4df6739"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "a failed partner call is described as the other system's, and a cut answer says so",
+              "hash": "135cc7706"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "a failed move shows what the other system answered",
+              "hash": "5fbe7ab78"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "the \"found elsewhere\" line holds one line at any width",
+              "hash": "4480c3344"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "design review of the move notices and the background-move rows",
+              "hash": "79b3e5b53"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "a slow transition check cannot hold the record's pipeline read",
+              "hash": "558a58a93"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "the connect retry skips account faults and keeps the login out of the log",
+              "hash": "9f0e8ca95"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "a database that cannot be reached answers 503 once, and files one issue",
+              "hash": "ce975da4c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ui",
+              "text": "design review round 1 on this week's new surfaces",
+              "hash": "51e4ec1df"
+            },
+            {
+              "section": "Fixed",
+              "scope": "custom-queries",
+              "text": "cached runs are kept per tenant in cloud mode",
+              "hash": "c74a8bc83"
+            },
+            {
+              "section": "Fixed",
+              "scope": "flows",
+              "text": "overdue detached runs still count against a hard limit",
+              "hash": "182e4b8bd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "flows",
+              "text": "a hung detached run cannot stall other writers",
+              "hash": "82cb17215"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ask-ai",
+              "text": "answer downloads take a read slot, cap workbook size, and follow the viewer's own view",
+              "hash": "817cbeade"
+            },
+            {
+              "section": "Fixed",
+              "scope": "flows",
+              "text": "detached event flows are limited across writes and drained at shutdown",
+              "hash": "874b8b9a4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "scopes",
+              "text": "junction markers match in any case; housekeeping legs do not make a membership table",
+              "hash": "608e3391a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "monitor",
+              "text": "the blocking report keeps no person's login or machine, no foreign program name",
+              "hash": "d2bd9fdfe"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "a workflow auto-start that fails is recorded, not swallowed",
+              "hash": "c8982075c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "monitor",
+              "text": "another database's statement, login and host stay out of the blocking report",
+              "hash": "65cd52219"
+            },
+            {
+              "section": "Fixed",
+              "scope": "monitor",
+              "text": "the blocking-session monitor reports only chains that touch this database",
+              "hash": "c245ee74c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "GraphQL explorer editor workers; a stale chunk recovers instead of crashing",
+              "hash": "90962e76d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "forms",
+              "text": "no 404 for a collection without a form, no doomed reads on system tables",
+              "hash": "28a84726d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "a client that left before a streamed answer is not a server issue",
+              "hash": "c077d5b05"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ask-ai",
+              "text": "readable, complete answer downloads; \"today\" is the asker's day",
+              "hash": "7b1e452ab"
+            },
+            {
+              "section": "Fixed",
+              "scope": "notifications",
+              "text": "a notice with nowhere to go is not a button",
+              "hash": "313416c4b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "forms",
+              "text": "a related value the person cannot read says so, and is not a dead button",
+              "hash": "f5a758d86"
+            },
+            {
+              "section": "Fixed",
+              "scope": "scopes",
+              "text": "a membership junction's attribute legs are not a link between each other",
+              "hash": "07aab6b07"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "retry a refused login on connection open; keep login names out of 5xx bodies",
+              "hash": "e63769e2c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api-log",
+              "text": "dashboard reads of the request log no longer lock against the logger",
+              "hash": "961d44f63"
+            },
+            {
+              "section": "Fixed",
+              "scope": "rum",
+              "text": "a route change in a hidden tab reports no duration",
+              "hash": "1348dd38d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "replay",
+              "text": "pause idle recorders, drop heartbeat noise, cap retry count",
+              "hash": "49f428d6c"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "replay",
+              "text": "opening a large recording no longer holds the process",
+              "hash": "a280f2ea8"
+            },
+            {
+              "section": "Performance",
+              "scope": "admin",
+              "text": "the busy indicator re-reads only for runs that count as busy",
+              "hash": "a0dc5243d"
+            },
+            {
+              "section": "Performance",
+              "scope": "flows",
+              "text": "a create no longer waits for its \"after\" event flows",
+              "hash": "6984425f8"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync the public docs with this week's changes",
+              "hash": "051cfe0ea"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "pipelines",
+              "text": "the panel tests answer the approval brief in the server's full shape",
+              "hash": "5bdd964eb"
+            },
+            {
+              "section": "Other",
+              "scope": "db",
+              "text": "mark the fake-driver acquires as intended for the trap lint",
+              "hash": "10515bb34"
+            },
+            {
+              "section": "Other",
+              "scope": "pipelines",
+              "text": "the fix-done toast is read by what it says, not by position",
+              "hash": "267f460e2"
+            }
+          ]
+        }
+      ],
+      "count": 44
+    },
     {
       "version": "0.3.144",
       "tag": "v0.3.144",
-      "date": "2026-11-12T12:17:14-05:00",
+      "date": "2026-11-12T12:17:34-05:00",
       "sections": [
         {
           "label": "Added",
