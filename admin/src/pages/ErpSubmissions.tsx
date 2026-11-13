@@ -1,7 +1,7 @@
-import { ErrorExplanation, type IntegrationErrorExplanation } from '@nivaro/shared'
+import { ErrorExplanation, type IntegrationErrorExplanation, toastError } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, ChevronRight, ChevronsUpDown, RotateCw, Search } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import type { ErpStatus, ErpSubmission as ErpSubmissionBase } from '@/components/erp-status-badge'
@@ -25,8 +25,12 @@ import { useAuth } from '@/lib/auth'
 import { cn, formatRelative, titleCase } from '@/lib/utils'
 
 /** #18 — the list routes add each failed push in plain words + its Fix it target. */
-type ErpSubmission = ErpSubmissionBase & { explanation?: IntegrationErrorExplanation | null }
+type ErpSubmission = ErpSubmissionBase & {
+  explanation?: IntegrationErrorExplanation | null
+  external_api_name?: string | null
+}
 
+/** Statuses the manual override may set (`sending` is only ever written by a send). */
 const ERP_STATUSES: ErpStatus[] = ['submitted', 'pending', 'accepted', 'rejected', 'failed']
 
 const STATUS_STYLES: Record<ErpStatus, string> = {
@@ -34,14 +38,144 @@ const STATUS_STYLES: Record<ErpStatus, string> = {
   pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20 dark:text-amber-400',
   accepted: 'bg-green-500/10 text-green-700 border-green-500/20 dark:text-green-400',
   rejected: 'bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400',
-  failed: 'bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400'
+  failed: 'bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400',
+  // Written before the partner call and never answered: past its time it may have landed.
+  sending: 'bg-orange-500/10 text-orange-700 border-orange-500/25 dark:text-orange-300'
 }
 
-function StatusBadge({ status }: { status: ErpStatus }) {
+function StatusBadge({ sub }: { sub: Pick<ErpSubmission, 'status' | 'unanswered'> }) {
+  const inFlight = sub.status === 'sending' && sub.unanswered?.stale !== true
   return (
-    <Badge variant='outline' className={cn('text-[11px]', STATUS_STYLES[status])}>
-      {status}
+    <Badge
+      variant='outline'
+      className={cn(
+        'whitespace-nowrap text-[11px]',
+        inFlight
+          ? 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+          : STATUS_STYLES[sub.status]
+      )}
+    >
+      {sub.status === 'sending' ? (inFlight ? 'sending…' : 'no answer') : sub.status}
     </Badge>
+  )
+}
+
+type Settle = 'received' | 'not_received'
+
+/** The Received / Not received button whose settle row is open. */
+const PRESSED =
+  'border-nvr-cyan bg-nvr-cyan/10 text-foreground hover:bg-nvr-cyan/15 dark:border-nvr-cyan dark:bg-nvr-cyan/15 dark:text-foreground'
+
+/**
+ * A send that got no answer, past its time: an administrator checked the partner and says
+ * what happened (POST /erp-submissions/:id/resolve-unanswered). The first press opens this
+ * row; the button here is the second.
+ */
+function SettleRow({
+  sub,
+  outcome,
+  onCancel,
+  onDone
+}: {
+  sub: ErpSubmission
+  outcome: Settle
+  onCancel: () => void
+  onDone: () => void
+}) {
+  const [orderRef, setOrderRef] = useState('')
+  const [note, setNote] = useState('')
+  const partner = sub.external_api_name?.trim() || 'the partner'
+  const received = outcome === 'received'
+  const settle = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: ErpSubmission; message?: string }>(
+          `/erp-submissions/${sub.id}/resolve-unanswered`,
+          {
+            outcome,
+            ...(received && orderRef.trim() ? { order_ref: orderRef.trim() } : {}),
+            ...(note.trim() ? { note: note.trim() } : {})
+          }
+        )
+        .then((r) => r.data),
+    onSuccess: (r) => {
+      toast.success(r.message ?? (received ? 'Marked as received' : 'Marked as not received'), {
+        duration: 8000
+      })
+      onDone()
+    },
+    onError: (err) => toastError(err, 'Could not mark this send')
+  })
+  return (
+    <tr
+      data-erp-settle={outcome}
+      className='border-b border-slate-100 bg-orange-50/60 dark:border-border dark:bg-orange-500/[0.05]'
+    >
+      <td colSpan={8} className='px-4 py-3'>
+        <p className='text-[12.5px] font-medium text-slate-800 dark:text-slate-100'>
+          {received
+            ? `Mark #${sub.id} as received by ${partner}?`
+            : `Mark #${sub.id} as not received by ${partner}?`}
+        </p>
+        <p className='mt-0.5 max-w-[72ch] text-[12px] leading-snug text-slate-600 dark:text-slate-300'>
+          {received
+            ? `Only when ${partner} has this order. The record itself is not changed: set its order number and status there afterwards.`
+            : `Only when ${partner} has no such order. The next press of the move sends it again.`}
+        </p>
+        <div className='mt-2.5 flex flex-wrap items-end gap-2'>
+          {received && (
+            <div>
+              <Label
+                htmlFor={`settle-ref-${sub.id}`}
+                className='mb-1 block text-[11px] text-slate-500 dark:text-slate-400'
+              >
+                Order number at {partner} (optional)
+              </Label>
+              <Input
+                id={`settle-ref-${sub.id}`}
+                value={orderRef}
+                onChange={(e) => setOrderRef(e.target.value)}
+                placeholder='e.g. SO-104233'
+                className='h-7 w-44 font-mono text-[12px]'
+              />
+            </div>
+          )}
+          <div className='min-w-[220px] flex-1'>
+            <Label
+              htmlFor={`settle-note-${sub.id}`}
+              className='mb-1 block text-[11px] text-slate-500 dark:text-slate-400'
+            >
+              Note (optional)
+            </Label>
+            <Input
+              id={`settle-note-${sub.id}`}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={received ? 'Where you saw it' : 'What you checked'}
+              className='h-7 max-w-[420px] text-[12px]'
+            />
+          </div>
+          <Button
+            size='sm'
+            className='h-7 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan/85'
+            disabled={settle.isPending}
+            onClick={() => settle.mutate()}
+            data-erp-settle-confirm
+          >
+            {settle.isPending ? 'Saving…' : received ? 'Mark received' : 'Mark not received'}
+          </Button>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-7 text-[12px]'
+            disabled={settle.isPending}
+            onClick={onCancel}
+          >
+            Cancel
+          </Button>
+        </div>
+      </td>
+    </tr>
   )
 }
 
@@ -159,13 +293,21 @@ function StatusCombobox({
 function SubmissionRow({
   sub,
   isAdmin,
-  onRefetch
+  onRefetch,
+  highlighted = false
 }: {
   sub: ErpSubmission
   isAdmin: boolean
   onRefetch: () => void
+  /** Opened from a link to this send (`?submission=<id>`): marked and scrolled to. */
+  highlighted?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [settling, setSettling] = useState<Settle | null>(null)
+  const rowRef = useRef<HTMLTableRowElement>(null)
+  useEffect(() => {
+    if (highlighted) rowRef.current?.scrollIntoView({ block: 'center' })
+  }, [highlighted])
   const [overriding, setOverriding] = useState(false)
   const [overrideStatus, setOverrideStatus] = useState<ErpStatus | ''>('')
   const [overrideRef, setOverrideRef] = useState(sub.external_ref ?? '')
@@ -202,10 +344,20 @@ function SubmissionRow({
 
   const canRetry = sub.status === 'failed' || sub.status === 'rejected'
   const hasDetail = !!sub.last_error || !!sub.payload
+  const sending = sub.status === 'sending'
+  const unanswered = sending && sub.unanswered?.stale === true
+  const partner = sub.external_api_name?.trim() || 'the partner'
 
   return (
     <>
-      <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
+      <tr
+        ref={rowRef}
+        data-erp-submission={sub.id}
+        className={cn(
+          'border-b border-slate-100 last:border-0 dark:border-border',
+          highlighted && 'bg-nvr-cyan/[0.06] dark:bg-nvr-cyan/[0.08]'
+        )}
+      >
         <td className='px-3 py-2'>
           {hasDetail ? (
             <button
@@ -224,7 +376,7 @@ function SubmissionRow({
         </td>
         <td className='px-3 py-2 font-mono text-[12px] text-slate-500'>#{sub.id}</td>
         <td className='px-3 py-2'>
-          <StatusBadge status={sub.status} />
+          <StatusBadge sub={sub} />
         </td>
         <td className='px-3 py-2 text-center font-mono text-[12px] text-slate-600 dark:text-slate-300'>
           {sub.attempts}
@@ -239,6 +391,21 @@ function SubmissionRow({
           {sub.explanation && (
             <ErrorExplanation explanation={sub.explanation} compact className='mt-0.5' />
           )}
+          {sending && (
+            <p
+              data-erp-unanswered={unanswered ? 'stale' : 'in-flight'}
+              className={cn(
+                'mt-0.5 text-[12px] leading-snug',
+                unanswered
+                  ? 'text-orange-800 dark:text-orange-300'
+                  : 'text-slate-500 dark:text-slate-400'
+              )}
+            >
+              {unanswered
+                ? `No answer — ${partner} may have received it. Check there, then mark it.`
+                : `Waiting for ${partner} to answer.`}
+            </p>
+          )}
         </td>
         <td
           className='px-3 py-2 font-mono text-[11px] text-slate-400'
@@ -248,6 +415,30 @@ function SubmissionRow({
         </td>
         <td className='px-3 py-2'>
           <div className='flex items-center justify-end gap-1.5'>
+            {unanswered && isAdmin && (
+              <>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className={cn('h-6 px-2 text-[11px]', settling === 'received' && PRESSED)}
+                  aria-pressed={settling === 'received'}
+                  onClick={() => setSettling((v) => (v === 'received' ? null : 'received'))}
+                  data-erp-settle-open='received'
+                >
+                  Received
+                </Button>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className={cn('h-6 px-2 text-[11px]', settling === 'not_received' && PRESSED)}
+                  aria-pressed={settling === 'not_received'}
+                  onClick={() => setSettling((v) => (v === 'not_received' ? null : 'not_received'))}
+                  data-erp-settle-open='not_received'
+                >
+                  Not received
+                </Button>
+              </>
+            )}
             {canRetry && (
               <Button
                 size='sm'
@@ -260,7 +451,7 @@ function SubmissionRow({
                 Retry
               </Button>
             )}
-            {isAdmin && !overriding && (
+            {isAdmin && !overriding && !sending && (
               <Button
                 size='sm'
                 variant='ghost'
@@ -277,6 +468,18 @@ function SubmissionRow({
           </div>
         </td>
       </tr>
+
+      {settling && (
+        <SettleRow
+          sub={sub}
+          outcome={settling}
+          onCancel={() => setSettling(null)}
+          onDone={() => {
+            setSettling(null)
+            onRefetch()
+          }}
+        />
+      )}
 
       {/* Admin status override — inline form row */}
       {overriding && (
@@ -372,6 +575,8 @@ export function ErpSubmissionsPage({ embedded = false }: { embedded?: boolean } 
   const [searchParams] = useSearchParams()
   const seedCollection = searchParams.get('collection') ?? ''
   const seedItem = searchParams.get('item') ?? ''
+  // A link to one send (the record's "Check first", api pipelines route) marks its row.
+  const highlightId = Number(searchParams.get('submission') ?? '') || null
   const [collection, setCollection] = useState(seedCollection)
   const [itemId, setItemId] = useState(seedItem)
   const [applied, setApplied] = useState<{ collection: string; item: string } | null>(
@@ -536,7 +741,8 @@ export function ErpSubmissionsPage({ embedded = false }: { embedded?: boolean } 
                 ...['submitted', 'pending', 'accepted', 'rejected', 'failed'].map((st) => ({
                   value: st,
                   label: titleCase(st)
-                }))
+                })),
+                { value: 'sending', label: 'No answer yet' }
               ]}
             />
           </div>
@@ -587,7 +793,7 @@ export function ErpSubmissionsPage({ embedded = false }: { embedded?: boolean } 
                       className='flex w-full flex-wrap items-center gap-2 py-1.5 text-left text-[12px] hover:bg-slate-50 dark:hover:bg-muted/40'
                     >
                       <Badge variant='outline' className='h-5 px-1.5 text-[10px]'>
-                        {titleCase(row.status)}
+                        {row.status === 'sending' ? 'No answer yet' : titleCase(row.status)}
                       </Badge>
                       <span className='font-mono text-slate-700 dark:text-foreground'>
                         {row.collection}/{row.item}
@@ -690,6 +896,7 @@ export function ErpSubmissionsPage({ embedded = false }: { embedded?: boolean } 
                     sub={sub}
                     isAdmin={!!user?.is_admin}
                     onRefetch={refetch}
+                    highlighted={highlightId === sub.id}
                   />
                 ))}
               </tbody>

@@ -84,6 +84,8 @@ interface Scene {
   refuse?: string
   /** The host's own reading of a stored reason (MoveProblemWordsContext). */
   hostWords?: (reason: string) => string | null
+  /** The viewer is an administrator. */
+  admin?: boolean
 }
 const instance = (s: Scene) => ({
   instance: { id: 'i-1', current_state: 'S-WH', current_state_obj: STATES[0], completed_at: null },
@@ -159,7 +161,7 @@ function render(ui: 'header' | 'panel', scene: Scene) {
     root.render(
       <QueryClientProvider client={qc}>
         <NivaroProvider client={client}>
-          <ItemEditAuthContext.Provider value={{ isAdmin: false, userId: ME }}>
+          <ItemEditAuthContext.Provider value={{ isAdmin: scene.admin === true, userId: ME }}>
             <MoveProblemWordsContext.Provider value={scene.hostWords ?? null}>
               {ui === 'header' ? (
                 <PipelineTransitionButtons collection='orders' item='42' />
@@ -469,6 +471,64 @@ describe('the Progress panel: a move that runs in the background', () => {
       problem: { ...PROBLEM, transition_id: 't-someone-elses' }
     })
     await until(() => !!problemNotice())
+    expect(button('Try again')).toBeUndefined()
+  })
+})
+
+describe('a run that stopped while a send got no answer', () => {
+  const STOPPED: MoveProblem = {
+    ...PROBLEM,
+    result: 'interrupted',
+    reason: 'It stopped before it finished, so the record was not moved.',
+    unanswered: {
+      submission_id: 50,
+      api_name: 'MDSi',
+      started_at: '2026-11-12T19:30:00.000Z',
+      stale: true
+    }
+  }
+  const unansweredLine = () =>
+    document.querySelector('[data-move-problem-unanswered]') as HTMLElement | null
+
+  it('says the order may already be at the other system and offers no Try again', async () => {
+    render('panel', { marked: true, problem: STOPPED })
+    await until(() => !!problemNotice())
+    expect(unansweredLine()?.textContent).toContain('The order may already be at MDSi')
+    expect(problemNotice()?.textContent).toContain('Check first')
+    expect(button('Try again')).toBeUndefined()
+    // The move itself is held: the server would refuse it until the send is settled.
+    expect(button('Submit order')?.disabled).toBe(true)
+    expect(document.querySelector('[data-move-held]')?.getAttribute('data-tip')).toMatch(
+      /^Waiting on a check: MDSi may already have this order/
+    )
+    expect(button('Send Back')?.disabled).toBe(false)
+    // Not an administrator: no link into the ERP submissions tab.
+    expect(problemNotice()?.querySelector('a[data-move-problem-check]')).toBeNull()
+  })
+
+  it('an administrator gets a Check first link to that send', async () => {
+    const url =
+      'http://admin.test/integration-health?tab=erp&collection=orders&item=42&submission=50'
+    render('panel', {
+      marked: true,
+      admin: true,
+      problem: { ...STOPPED, unanswered: { ...STOPPED.unanswered!, review_url: url } }
+    })
+    await until(() => !!problemNotice())
+    const link = problemNotice()?.querySelector('a[data-move-problem-check]') as HTMLAnchorElement
+    expect(link?.textContent).toContain('Check first')
+    expect(link?.getAttribute('href')).toBe(url)
+    expect(button('Try again')).toBeUndefined()
+  })
+
+  it('a send still inside its time says it is still being sent', async () => {
+    render('panel', {
+      marked: true,
+      problem: { ...STOPPED, unanswered: { ...STOPPED.unanswered!, stale: false } }
+    })
+    await until(() => !!problemNotice())
+    expect(unansweredLine()?.textContent).toContain('has not been answered yet')
+    expect(problemNotice()?.textContent).toContain('Submit order is still being sent to MDSi.')
     expect(button('Try again')).toBeUndefined()
   })
 })

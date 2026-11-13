@@ -5,7 +5,8 @@ import { Badge } from '@/components/ui/badge'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-export type ErpStatus = 'submitted' | 'pending' | 'accepted' | 'rejected' | 'failed'
+/** `sending`: written before the partner call and not answered yet (api erp-unanswered.ts). */
+export type ErpStatus = 'submitted' | 'pending' | 'accepted' | 'rejected' | 'failed' | 'sending'
 
 export interface ErpSubmission {
   id: number
@@ -18,6 +19,8 @@ export interface ErpSubmission {
   last_error: string | null
   endpoint_path: string | null
   payload: Record<string, unknown> | null
+  /** Set only while `sending`: in flight, or past its time ("may have been received"). */
+  unanswered?: { stale: boolean; label: string; answer_by: string } | null
   created_at: string
   updated_at: string
 }
@@ -27,7 +30,8 @@ const STATUS_STYLES: Record<ErpStatus, string> = {
   pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20 dark:text-amber-400',
   accepted: 'bg-green-500/10 text-green-700 border-green-500/20 dark:text-green-400',
   rejected: 'bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400',
-  failed: 'bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400'
+  failed: 'bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400',
+  sending: 'bg-orange-500/10 text-orange-700 border-orange-500/25 dark:text-orange-300'
 }
 
 const STATUS_LABELS: Record<ErpStatus, string> = {
@@ -35,7 +39,8 @@ const STATUS_LABELS: Record<ErpStatus, string> = {
   pending: 'ERP: Pending',
   accepted: 'ERP: Accepted',
   rejected: 'ERP: Rejected',
-  failed: 'ERP: Failed'
+  failed: 'ERP: Failed',
+  sending: 'ERP: No answer yet'
 }
 
 /**

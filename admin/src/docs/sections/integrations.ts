@@ -37,10 +37,30 @@ GET  /api/erp-submissions/:id       # one push in full (admin): partner, obligat
       type: 'p',
       text: 'In the Integrations console, a Failed pushes row (and any row that is really a push or an import run) has a Details button that opens the push in place: the full error, every attempt with who started it, the request and response, what sent it and who, the matched call-log rows and a Retry that says why when it is not offered.'
     },
+    { type: 'h3', id: 'erp-submissions-unanswered', text: 'Sends that got no answer' },
+    {
+      type: 'p',
+      text: 'A push that a pipeline move makes (an `erp_submit` action) is written down BEFORE the request leaves, with status `sending`, and the same row is finished when the other system answers. If the app stops while it waits (a deploy, a crash, a background move whose run was lost), the row stays `sending`: the other system may already have the order, and the app does not know. Such a row reads "Sending…" while its call could still answer (the action\'s timeout plus a minute), then "No answer — may have been received".'
+    },
+    {
+      type: 'p',
+      text: 'While a send of the same push (same API and endpoint) on a record has no answer, the move is not sent again. A blocking push refuses the move ("MDSi may already have this order: the last send on … got no answer before the app stopped. Check MDSi before sending again, then mark that send as received or not received in Integrations, ERP submissions."); a non-blocking push is skipped and the reason is recorded on the obligation ledger. The record\'s pipeline row says the order may already be at the other system, holds the move\'s button, and offers administrators a Check first link instead of Try again. Retry, Send now and re-fire refuse a `sending` row too.'
+    },
+    {
+      type: 'p',
+      text: 'To settle it, check the other system, then open the send on the ERP submissions tab (`/integration-health?tab=erp&collection=…&item=…`) and press Received or Not received. Not received marks the row failed ("Checked by <name>: not received"), so the next press of the move sends again; it is never picked up by an automatic retry. Received marks it accepted and keeps the order number you note as its external reference; the record\'s own fields (order number, status) are not changed, so set them on the record. Only an administrator signed in as themselves can do this (not an API key, a connected app or View-as), and only once the send can no longer answer.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/erp-submissions/:id/resolve-unanswered   # administrators, own session only
+{ "outcome": "received" | "not_received", "order_ref": "SO-1001", "note": "Seen in Acuity" }
+# 404 unknown or hidden record · 409 NOT_UNANSWERED (already has an outcome)
+# 409 STILL_SENDING (may still answer) · 403 PERSON_ONLY`
+    },
     {
       type: 'ul',
       items: [
-        'Statuses: submitted, pending, accepted, rejected.',
+        'Statuses: submitted, pending, accepted, rejected, and sending (no answer yet).',
         'The item edit page shows the latest status as a badge with the full history in a panel.',
         'Combine with flows: a flow pushes to the ERP via callExternalApi and records/updates the submission row.'
       ]

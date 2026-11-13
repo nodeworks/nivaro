@@ -79,6 +79,7 @@ import {
   runningMoveTip,
   sameMoveId,
   startedInBackground,
+  unansweredHoldTip,
   useRunEnded
 } from './BackgroundMove'
 import { BranchLanes, type BranchLanesData } from './BranchLanes'
@@ -3239,7 +3240,10 @@ function PipelinePanelInner({
         const running =
           (executeTransition.isPending && executeTransition.variables?.transition_id === tx.id) ||
           sameMoveId(runningMove?.transition_id, tx.id)
-        return (
+        // The last run of this move left a send with no answer: the server refuses it until
+        // that send is settled, so the button says so instead of failing after a press.
+        const holdTip = unansweredHoldTip(moveProblem, tx.id)
+        const button = (
           <Button
             key={label}
             size='sm'
@@ -3250,7 +3254,7 @@ function PipelinePanelInner({
               tx.advisory && BLOCKED_BUTTON
             )}
             style={tx.advisory ? undefined : colorStyle(isActive)}
-            disabled={executeTransition.isPending || settling || !!runningMove}
+            disabled={executeTransition.isPending || settling || !!runningMove || !!holdTip}
             aria-disabled={freshTx.dimmed(tx.id) || undefined}
             data-fresh={freshTx.dimmed(tx.id) || undefined}
             {...freshTx.bind(tx.id)}
@@ -3266,6 +3270,14 @@ function PipelinePanelInner({
             )}
             {label}
           </Button>
+        )
+        // A disabled button cannot show its own tip: the span around it does.
+        return holdTip ? (
+          <span key={label} className='inline-flex' data-tip={holdTip} data-move-held>
+            {button}
+          </span>
+        ) : (
+          button
         )
       }
       return (
@@ -4273,6 +4285,7 @@ function PipelineTransitionButtonsInner({
             if (txs.length === 1) {
               const tx = txs[0]
               const inBackground = sameMoveId(runningMove?.transition_id, tx.id)
+              const holdTip = unansweredHoldTip(runningMove ? null : data.last_move_problem, tx.id)
               const running =
                 (executeTransition.isPending &&
                   executeTransition.variables?.transition_id === tx.id) ||
@@ -4287,7 +4300,7 @@ function PipelineTransitionButtonsInner({
                     tx.advisory && BLOCKED_BUTTON
                   )}
                   style={tx.advisory ? undefined : colorStyle(isActive)}
-                  disabled={executeTransition.isPending || settling || !!runningMove}
+                  disabled={executeTransition.isPending || settling || !!runningMove || !!holdTip}
                   data-move-running={inBackground || undefined}
                   aria-disabled={freshTx.dimmed(tx.id) || undefined}
                   data-fresh={freshTx.dimmed(tx.id) || undefined}
@@ -4307,6 +4320,13 @@ function PipelineTransitionButtonsInner({
                   {label}
                 </Button>
               )
+              // A send of this move's last run got no answer: held, and the span says why.
+              if (holdTip)
+                return (
+                  <span key={label} className='inline-flex' data-tip={holdTip} data-move-held>
+                    {button}
+                  </span>
+                )
               // #616 — a step that sends something to a partner says, before
               // it is pressed, whether what it sends is complete.
               if (!(tx.pushes && tx.pushes > 0)) return button

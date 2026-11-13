@@ -1,4 +1,4 @@
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { AlertTriangle, ArrowUpRight, Loader2 } from 'lucide-react'
 import { type CSSProperties, createContext, useContext, useEffect, useMemo, useRef } from 'react'
 import { useItemEditAuth } from '../../context'
 import { describeError } from '../../lib/error-message'
@@ -8,7 +8,7 @@ import {
   partnerWords,
   withoutMoveLabel
 } from '../../lib/partner-failure'
-import { cn, formatRelative } from '../../lib/utils'
+import { cn, formatDateTime, formatRelative } from '../../lib/utils'
 import { ErrorDetails } from '../ErrorNotice'
 import { useOverflowTip } from '../TipLayer'
 import { Button } from '../ui/button'
@@ -42,6 +42,19 @@ export interface MoveProblem extends RunningMove {
   result: 'refused' | 'interrupted' | 'failed'
   reason: string | null
   finished_at: string | null
+  /**
+   * A send to another system on the record that never got an answer (api
+   * services/erp-unanswered.ts): that system may already have it, so the move is
+   * not simply tried again. `review_url` (administrators only) opens the send on
+   * the ERP submissions tab, where it is marked received or not received.
+   */
+  unanswered?: {
+    submission_id: number
+    api_name: string | null
+    started_at: string
+    stale: boolean
+    review_url?: string | null
+  } | null
 }
 
 /** How often an open record asks again while a move is running on it. */
@@ -191,6 +204,47 @@ export const MoveProblemWordsContext = createContext<((reason: string) => string
 )
 
 /**
+ * What a send without an answer means for the move: the other system may already
+ * have it, and what to do before the move is pressed again. Returns the sentence
+ * and whether the viewer is the one who settles it.
+ */
+export function unansweredWords(
+  send: NonNullable<MoveProblem['unanswered']>,
+  canSettle: boolean
+): { lead: string; next: string } {
+  const api = send.api_name?.trim() || 'the other system'
+  const lead = `The order may already be at ${api}.`
+  if (!send.stale)
+    return {
+      lead,
+      next: `The send started ${formatRelative(send.started_at)} and has not been answered yet. Wait for it to finish before you do anything else.`
+    }
+  return {
+    lead,
+    next: canSettle
+      ? `The send on ${formatDateTime(send.started_at)} got no answer. Check first: look in ${api}, then mark that send received or not received.`
+      : `The send on ${formatDateTime(send.started_at)} got no answer. Check first: an administrator looks in ${api} and marks that send before it can go again.`
+  }
+}
+
+/**
+ * Why a move's own button is held: the last run of THIS move left a send without an answer, and
+ * the server refuses the move until that send is settled (api workflow-actions.ts). Null = not
+ * held. Shown as the tip of the disabled button.
+ */
+export function unansweredHoldTip(
+  problem: Pick<MoveProblem, 'transition_id' | 'unanswered'> | null | undefined,
+  transitionId: string
+): string | null {
+  const send = problem?.unanswered
+  if (!send || !sameMoveId(problem?.transition_id, transitionId)) return null
+  const api = send.api_name?.trim() || 'the other system'
+  return send.stale
+    ? `Waiting on a check: ${api} may already have this order. An administrator marks the last send received or not received first.`
+    : `Still being sent to ${api}. Wait for it to finish.`
+}
+
+/**
  * The last run that did not move the record: what was said, and the move
  * again for someone who may make it. Shown until the record moves on.
  *
@@ -230,6 +284,20 @@ export function MoveProblemNotice({
   )
   // The full words on hover only while the three lines cut them.
   const wordsRef = useOverflowTip<HTMLParagraphElement>(words)
+  // A send that got no answer: never "Try again" — the other system may already have it.
+  const unanswered = problem.unanswered ?? null
+  const reviewUrl = unanswered?.review_url?.trim() || null
+  const settle = unanswered ? unansweredWords(unanswered, !!reviewUrl) : null
+  const crossOrigin =
+    !!reviewUrl &&
+    typeof window !== 'undefined' &&
+    (() => {
+      try {
+        return new URL(reviewUrl, window.location.href).origin !== window.location.origin
+      } catch {
+        return false
+      }
+    })()
   return (
     <div
       role='note'
@@ -246,9 +314,12 @@ export function MoveProblemNotice({
       />
       <div className='min-w-0 flex-1'>
         <p className='break-words text-[13px] leading-snug text-slate-800 dark:text-slate-100'>
-          <span className='font-medium'>{label}</span> {PROBLEM_SENTENCE[problem.result]}
+          <span className='font-medium'>{label}</span>{' '}
+          {unanswered && !unanswered.stale
+            ? `is still being sent to ${unanswered.api_name?.trim() || 'the other system'}.`
+            : PROBLEM_SENTENCE[problem.result]}
         </p>
-        {words && (
+        {words && !(settle && problem.result === 'interrupted') && (
           <p
             ref={wordsRef}
             data-move-problem-reason
@@ -262,24 +333,48 @@ export function MoveProblemNotice({
             {words}
           </p>
         )}
+        {settle && (
+          <p
+            data-move-problem-unanswered
+            className='mt-1 break-words text-[12px] leading-snug text-slate-700 dark:text-slate-300'
+          >
+            <span className='font-medium text-amber-900 dark:text-amber-200'>{settle.lead}</span>{' '}
+            {settle.next}
+          </p>
+        )}
         <p className='mt-0.5 text-[11.5px] text-amber-800/80 dark:text-amber-300/80'>
           {startedBy(problem, userId)} · {formatRelative(problem.finished_at ?? problem.started_at)}
         </p>
         {said && <ErrorDetails description={said} action={label} className='mt-1' />}
       </div>
-      {onRetry && (
-        <Button
-          type='button'
-          size='sm'
-          variant='outline'
-          className='h-7 shrink-0 text-[12px]'
-          disabled={retryDisabled}
-          onClick={onRetry}
-          data-move-problem-retry
-        >
-          Try again
-        </Button>
-      )}
+      {unanswered
+        ? // While the send may still answer there is nothing to mark yet.
+          reviewUrl &&
+          unanswered.stale && (
+            <Button asChild size='sm' variant='outline' className='h-7 shrink-0 gap-1 text-[12px]'>
+              <a
+                href={reviewUrl}
+                data-move-problem-check
+                {...(crossOrigin ? { target: '_blank', rel: 'noreferrer' } : {})}
+              >
+                Check first
+                {crossOrigin && <ArrowUpRight aria-hidden className='h-3 w-3' />}
+              </a>
+            </Button>
+          )
+        : onRetry && (
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              className='h-7 shrink-0 text-[12px]'
+              disabled={retryDisabled}
+              onClick={onRetry}
+              data-move-problem-retry
+            >
+              Try again
+            </Button>
+          )}
     </div>
   )
 }
