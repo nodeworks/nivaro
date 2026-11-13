@@ -9072,7 +9072,10 @@ export function CollectionBrowserView({
                     }
                     onConfirm={() => deleteView.mutate(v.id)}
                     className='hover:text-red-500'
-                    armedClassName='rounded bg-red-600 px-1.5 text-[11px] font-semibold text-white dark:text-white'
+                    // Armed inside the light view chip: a soft red pill with its own hover, so the
+                    // cursor still on it after the first press never paints red text on solid red
+                    // (Rob 2026-11-13, light and dark).
+                    armedClassName='rounded bg-red-50 px-1.5 text-[11px] font-semibold text-red-700 ring-1 ring-inset ring-red-200 hover:bg-red-100 hover:text-red-800 dark:bg-red-500/15 dark:text-red-300 dark:ring-red-500/30 dark:hover:bg-red-500/25 dark:hover:text-red-200'
                   >
                     ✕
                   </ConfirmButton>
