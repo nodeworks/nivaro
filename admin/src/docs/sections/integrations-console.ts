@@ -48,7 +48,7 @@ export const integrationsConsole: DocSection = {
     { type: 'h2', id: 'ic-registry', text: 'The signal registry' },
     {
       type: 'p',
-      text: 'A signal is one KIND of integration problem — "a push failed", "an import hasn\'t run on schedule", "a partner keeps rejecting our calls" — not one occurrence of it. Core registers eight generic signals (`services/integration-signals-core.ts`): `core:partner-failing`, `core:push-failed`, `core:obligation-missing`, `core:obligation-overdue`, `core:inbound-errors`, `core:import-failed`, `core:import-stale`, `core:flow-failed`. Any extension registers its own the same way.'
+      text: 'A signal is one KIND of integration problem — "a push failed", "an import hasn\'t run on schedule", "a partner keeps rejecting our calls" — not one occurrence of it. Core registers generic signals (`services/integration-signals-core.ts`): `core:partner-failing`, `core:push-failed`, `core:auto-transition-held`, `core:unanswered-orders` (critical: an order a blocking move sent got no answer before the app stopped — the move waits until someone marks it on the ERP tab), `core:unanswered-sends` (the same for every other send), `core:obligation-missing`, `core:obligation-overdue`, `core:inbound-errors`, `core:import-failed`, `core:import-stale`, `core:flow-failed`. Any extension registers its own the same way.'
     },
     {
       type: 'pre',

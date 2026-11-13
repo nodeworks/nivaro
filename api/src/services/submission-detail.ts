@@ -210,7 +210,13 @@ export interface SubmissionDetail {
     triggered_by: string | null
     user: RequesterUser | null
   }>
-  retry: { eligible: boolean; reason: string | null; warning: string | null }
+  retry: {
+    eligible: boolean
+    reason: string | null
+    warning: string | null
+    /** A send with no answer: where an administrator marks it (the ERP tab row). */
+    review_url?: string
+  }
 }
 
 // ─── Pure helpers ───────────────────────────────────────────────────────────
@@ -699,8 +705,7 @@ export function retryEligibility(f: SubmissionFacts): SubmissionDetail['retry'] 
   if (status === 'sending')
     return {
       eligible: false,
-      reason:
-        'This send got no answer, so the partner may already have it. Check there, then mark it received or not received.',
+      reason: `This send got no answer, so ${f.api?.name ?? 'the partner'} may already have it. Check in ${f.api?.name ?? 'the partner'}, then mark it received or not received.`,
       warning: null
     }
   if (status === 'pending' || status === 'submitted')

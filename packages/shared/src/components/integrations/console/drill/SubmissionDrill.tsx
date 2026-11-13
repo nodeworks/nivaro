@@ -36,6 +36,17 @@ function openPath(nav: ReturnType<typeof useNavigation>, url: string) {
   else nav.navigate(url)
 }
 
+/** An absolute link into this same app opens in place; one to another host in a new tab. */
+function openAppUrl(nav: ReturnType<typeof useNavigation>, url: string) {
+  try {
+    const u = new URL(url, window.location.href)
+    if (u.origin === window.location.origin) return nav.navigate(`${u.pathname}${u.search}`)
+  } catch {
+    /* not a URL: treated as a path below */
+  }
+  openPath(nav, url)
+}
+
 function Section({ name, title, children }: { name: string; title: string; children: ReactNode }) {
   return (
     <section data-ic-drill-section={name} className='min-w-0'>
@@ -211,7 +222,7 @@ function SubmissionDrillBody({
           </span>
         )}
         <Dot />
-        <StatusPill status={s.status} />
+        <StatusPill status={s.status} stale={s.unanswered?.stale === true} />
         {s.error_class && (
           <span
             className={cn(
@@ -429,6 +440,17 @@ function SubmissionDrillBody({
           )}
           Retry
         </button>
+        {d.retry.review_url && (
+          <button
+            type='button'
+            data-ic-drill-review
+            onClick={() => openAppUrl(nav, d.retry.review_url as string)}
+            className='inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+          >
+            Mark it on the ERP tab
+            <ArrowRight className='h-3 w-3' aria-hidden />
+          </button>
+        )}
         {onOpenRecord && (
           <button
             type='button'

@@ -385,6 +385,8 @@ export interface SubmissionDetail {
     error_class: string | null
     requested_by: string | null
     requested_via: string | null
+    /** Set while `sending`: in flight, or past its time (`stale`, "no answer"). */
+    unanswered?: { stale: boolean; label: string } | null
   }
   partner: { id: number | null; name: string | null; owner: { id: string; name: string } | null }
   endpoint: { method: string; path: string | null }
@@ -413,7 +415,13 @@ export interface SubmissionDetail {
     triggered_by: string | null
     user: DrillUser | null
   }>
-  retry: { eligible: boolean; reason: string | null; warning: string | null }
+  retry: {
+    eligible: boolean
+    reason: string | null
+    warning: string | null
+    /** A send with no answer: its row on the ERP tab, where an administrator marks it. */
+    review_url?: string
+  }
 }
 
 /** One attempt of a submission — GET /erp-submissions/:id/attempts. */

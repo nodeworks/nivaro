@@ -610,7 +610,10 @@ function SignalRowView({
           <ExplainButton
             kind='signal-row'
             params={{ signal: signal.id, row_key: row.key }}
-            label='Explain this failure'
+            // A send with no answer may have reached the partner: not called a failure.
+            label={
+              signal.id.startsWith('core:unanswered-') ? 'Explain this' : 'Explain this failure'
+            }
           />
         </div>
       )}

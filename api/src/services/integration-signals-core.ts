@@ -5,6 +5,7 @@
 import { db } from '../db/index.js'
 import { AUTO_FAILURE_TABLE, memoryAvailable } from './auto-transition-memory.js'
 import { selectInChunks } from './db-batch.js'
+import { staleUnansweredSends } from './erp-unanswered.js'
 import { getObligationKind } from './integration-obligations.js'
 import { importCadence, isImportStale } from './integration-signal-settings.js'
 import { registerIntegrationSignal, type SignalRow } from './integration-signals.js'
@@ -360,6 +361,49 @@ export function registerCoreIntegrationSignals(): void {
       return { count, rows: out }
     }
   })
+
+  // Sends that never got an answer, past their time (erp-unanswered.ts): the process stopped
+  // mid-call or could not record the answer. The partner may have the request; the next send
+  // of the same push waits until an administrator marks it received or not received on the
+  // ERP tab (the row's Details points there). Orders from a blocking push — the move waits on
+  // them — are their own critical signal; every other send is a warning.
+  for (const blocking of [true, false]) {
+    registerIntegrationSignal({
+      id: blocking ? 'core:unanswered-orders' : 'core:unanswered-sends',
+      label: blocking ? 'Orders with no answer' : 'Sends with no answer',
+      description: blocking
+        ? 'A move sent an order and got no answer before the app stopped. The partner may already have it; the move waits until someone checks there and marks the send received or not received.'
+        : 'A send to a partner got no answer before the app stopped. The partner may already have it; the same send waits until someone checks there and marks it received or not received.',
+      tab: 'pushes',
+      severity: blocking ? 'critical' : 'warn',
+      thresholds: [],
+      evaluate: async () => {
+        const rows = (await staleUnansweredSends()).filter((r) => r.blocking === blocking)
+        const out: SignalRow[] = uniqueByKey(
+          rows.map((r) => {
+            const api = r.api_name ?? 'Partner'
+            const hours = (Date.now() - new Date(r.started_at).getTime()) / 3_600_000
+            return {
+              key: `${r.collection}:${r.item}:${api}:${r.endpoint_path ?? ''}`,
+              group: api,
+              group_label: api,
+              title: `${api} ${r.endpoint_path ?? ''}`.trim(),
+              // "3h" like the console's own "oldest 3h".
+              detail: `No answer for ${hours < 1 ? 'under an hour' : ageWords(hours).replace(/^(\d+) h$/, '$1h')} — ${api} may already have it. Check in ${api}, then mark the send received or not received.`,
+              since: r.started_at,
+              // A later unanswered send of the same push is a new occurrence.
+              occurrence: `sub:${r.id}`,
+              api,
+              record: { collection: r.collection, id: r.item },
+              actions: [open(r.collection, r.item)],
+              drill: { kind: 'submission', id: String(r.id) }
+            }
+          })
+        )
+        return { count: out.length, rows: out }
+      }
+    })
+  }
 
   for (const outcome of ['missing', 'overdue'] as const) {
     registerIntegrationSignal({

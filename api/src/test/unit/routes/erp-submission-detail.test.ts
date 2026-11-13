@@ -334,3 +334,29 @@ describe('GET /erp-submissions/:id', () => {
     await app.close()
   })
 })
+
+describe('GET /erp-submissions/:id — a send with no answer', () => {
+  it('is not retried, and points at its row on the ERP tab to be marked', async () => {
+    vi.mocked(gatherSubmissionFacts).mockResolvedValue(
+      withRow(facts(), { status: 'sending', error_class: null })
+    )
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/erp-submissions/82' })
+    expect(res.statusCode).toBe(200)
+    const retry = res.json().data.retry
+    expect(retry.eligible).toBe(false)
+    expect(retry.reason).toMatch(/may already have it/)
+    expect(retry.review_url).toMatch(
+      /\/integration-health\?tab=erp&collection=orders&item=1001&submission=82$/
+    )
+    await app.close()
+  })
+
+  it('a finished send has no such link', async () => {
+    vi.mocked(gatherSubmissionFacts).mockResolvedValue(facts())
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/erp-submissions/82' })
+    expect(res.json().data.retry.review_url).toBeUndefined()
+    await app.close()
+  })
+})
