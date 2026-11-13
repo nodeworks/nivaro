@@ -19,10 +19,12 @@
  * a `#nivaro-replay v1 <id>` header. JSON.stringify output never contains a
  * raw newline or tab, so lines split without parsing the (large) events.
  */
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
-import { gunzip, gunzipSync, gzip, gzipSync } from 'node:zlib'
+import { createGzip, gunzip, gzip } from 'node:zlib'
 import { db } from '../db/index.js'
-import { yieldToEventLoop } from './session-replay-chunks.js'
+import { inflateChunk, yieldToEventLoop } from './session-replay-chunks.js'
 
 // Off the event loop (zlib's thread pool): what a reload inflates and re-packs is megabytes.
 // With zlib's default 16 KB output buffer that is a trip to the pool and back per 16 KB (a
@@ -31,7 +33,12 @@ const gunzipAsync = promisify(gunzip)
 const gzipAsync = promisify(gzip)
 const OBJECT_INFLATE_BUFFER = 1024 * 1024
 const CHUNK_PACK_BUFFER = 256 * 1024
+// The object compresses to about a fifth of its lines: 256 KB of output covers a typical
+// chunk's line in one trip to the pool.
+const OBJECT_DEFLATE_BUFFER = 256 * 1024
 const NEWLINE = 0x0a
+const NEWLINE_CHAR = '\n'
+const NEWLINE_BYTE = Buffer.from(NEWLINE_CHAR, 'utf8')
 const TAB = 0x09
 
 export const DEFAULT_COLD_AFTER_DAYS = 3
@@ -92,32 +99,61 @@ export async function coldAfterDays(): Promise<number> {
 
 // ── Chunk codec (same storage shape as routes/session-recordings.ts) ─────────
 
-function decodeChunk(stored: string): string {
-  if (stored.startsWith('gz:')) {
-    return gunzipSync(Buffer.from(stored.slice(3), 'base64')).toString('utf8')
-  }
-  return stored
-}
-
-/** One object for a recording's chunks. */
-export function packReplayChunks(
+/**
+ * The object's lines, a chunk at a time: the header, then `<seq>\t<json>\n` per readable
+ * chunk. Each gzip chunk is inflated on zlib's thread pool (`inflateChunk`), and the loop
+ * gets a turn after every chunk.
+ */
+async function* objectLines(
   recordingId: string,
   chunks: Array<{ seq: number; events: string }>
-): Buffer {
-  const parts: Buffer[] = [Buffer.from(`${HEADER} ${recordingId}\n`, 'utf8')]
+): AsyncGenerator<Buffer> {
+  yield Buffer.from(`${HEADER} ${recordingId}\n`, 'utf8')
   for (const c of chunks) {
-    let json: string
+    let json: Buffer | string
     try {
-      json = decodeChunk(c.events)
+      json = await inflateChunk(c.events)
     } catch {
+      await yieldToEventLoop()
       continue // a corrupt chunk was unreadable hot too
     }
     // Guard the line format: stored chunks come from JSON.stringify, which
-    // escapes newlines — anything else is not ours to carry.
-    if (json.includes('\n')) json = JSON.stringify(JSON.parse(json))
-    parts.push(Buffer.from(`${Math.trunc(c.seq)}\t${json}\n`, 'utf8'))
+    // escapes newlines — anything else is not ours to carry (a parse failure
+    // here fails the move, and the recording stays hot).
+    if (json.includes(NEWLINE_CHAR)) json = JSON.stringify(JSON.parse(json.toString()))
+    // One write per line: every write to the compressor is its own trip to the thread pool.
+    yield Buffer.concat([
+      Buffer.from(`${Math.trunc(c.seq)}\t`, 'utf8'),
+      typeof json === 'string' ? Buffer.from(json, 'utf8') : json,
+      NEWLINE_BYTE
+    ])
+    await yieldToEventLoop()
   }
-  return gzipSync(Buffer.concat(parts))
+}
+
+/**
+ * One object for a recording's chunks: gzip of the header and a line per chunk.
+ *
+ * The hourly move to storage used to inflate every chunk and gzip the whole object on the
+ * event loop — about a second in one block per 15 MB recording, on whichever process ticks
+ * crons. Now each chunk is inflated and the object compressed on zlib's thread pool as the
+ * lines are written, with a turn of the loop between chunks. The bytes are the same as the
+ * old single `gzipSync` (one gzip member, same level; deflate's output does not depend on how
+ * its input is split), so objects written before and after read the same way.
+ */
+export async function packReplayChunks(
+  recordingId: string,
+  chunks: Array<{ seq: number; events: string }>
+): Promise<Buffer> {
+  const out: Buffer[] = []
+  await pipeline(
+    Readable.from(objectLines(recordingId, chunks), { objectMode: false }),
+    createGzip({ chunkSize: OBJECT_DEFLATE_BUFFER }),
+    async (compressed: AsyncIterable<Buffer>) => {
+      for await (const part of compressed) out.push(part)
+    }
+  )
+  return Buffer.concat(out)
 }
 
 /**
@@ -183,7 +219,7 @@ export async function moveRecordingCold(
   let key: string | null = null
   let bytes = 0
   if (chunks.length > 0) {
-    const body = packReplayChunks(recordingId, chunks)
+    const body = await packReplayChunks(recordingId, chunks)
     key = coldKeyFor(recordingId, rec.started_at)
     await objectStore.put(key, body, 'application/gzip')
     bytes = body.length

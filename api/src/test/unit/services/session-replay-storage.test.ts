@@ -209,8 +209,8 @@ beforeEach(() => {
 })
 
 describe('object format', () => {
-  it('round-trips gzip-stored and plain chunks with their seqs', () => {
-    const body = packReplayChunks('R1', [
+  it('round-trips gzip-stored and plain chunks with their seqs', async () => {
+    const body = await packReplayChunks('R1', [
       { seq: 0, events: gz('[{"type":4,"data":{"href":"x\\ny"}}]') },
       { seq: 3, events: '[{"type":3,"timestamp":5}]' }
     ])
@@ -221,9 +221,9 @@ describe('object format', () => {
     expect(() => unpack(gzipSync(Buffer.from('nope\n')))).toThrow()
   })
 
-  it('reads the object line by line as bytes: every chunk, its seq, its text untouched', () => {
+  it('reads the object line by line as bytes: every chunk, its seq, its text untouched', async () => {
     const first = '[{"type":4,"data":{"href":"x\\ny","t":"naïve — 日本語 — 😀\\ttab"}}]'
-    const body = packReplayChunks('R1', [
+    const body = await packReplayChunks('R1', [
       { seq: 0, events: gz(first) },
       { seq: -1, events: gz('[{"type":2}]') },
       { seq: 12, events: '[{"type":3,"timestamp":5}]' }
@@ -398,6 +398,29 @@ describe('opening a cold recording', () => {
     expect(decode(back[0].events)).toEqual([{ type: 2 }])
     expect(decode(back[1].events)).toEqual(first)
     expect(decode(back[2].events)).toEqual(second)
+  })
+
+  // 494 production recordings were stored before the pack moved off the event loop: an
+  // object written then (one gzipSync of the header and the lines) still reloads.
+  it('reloads an object written by the old synchronous pack', async () => {
+    const lines = [
+      '#nivaro-replay v1 R1',
+      '0\t[{"type":4,"data":{"href":"x\\ny"}}]',
+      '1\t[{"type":3,"timestamp":5}]'
+    ]
+    const key = 'session-replays/2026/10/R1.ndjson.gz'
+    objects.set(key, gzipSync(Buffer.from(`${lines.join('\n')}\n`, 'utf8')))
+    h.tables.nivaro_session_recordings.push(
+      recording('R1', 5, { cold: true, cold_key: key, cold_bytes: 1 })
+    )
+    expect(await ensureRecordingHot('R1', { wait: true, now: NOW })).toEqual({ state: 'hot' })
+    const back = events('R1').sort((a, b) => (a.seq as number) - (b.seq as number))
+    const decode = (stored: unknown) =>
+      gunzipSync(Buffer.from(String(stored).slice(3), 'base64')).toString('utf8')
+    expect(back.map((r) => [r.seq, decode(r.events)])).toEqual([
+      [0, '[{"type":4,"data":{"href":"x\\ny"}}]'],
+      [1, '[{"type":3,"timestamp":5}]']
+    ])
   })
 
   it('reloads many chunks in batches, all of them, in order', async () => {
