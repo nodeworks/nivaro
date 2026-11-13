@@ -118,8 +118,11 @@ export function bannerLines(rows: Row[], now: Date = new Date()): BannerLine[] {
     // A failed call says what the other system answered, in its words or as what the
     // failure means about that system — the reading the failed-move row and toast use
     // (lib/partner-failure.ts) — never the stored status line (`HTTP 401: ""`).
+    // This app's own reason shapes win: "payload template error: lookup failed: HTTP 404"
+    // is our message, not the other system's answer, status or not.
+    const plain = r.reason ? plainObligationReason(r.reason) : ''
     const why = r.reason
-      ? ` — ${partnerFailureText(r.reason) ?? plainObligationReason(r.reason)}`
+      ? ` — ${plain !== r.reason.trim() ? plain : (partnerFailureText(r.reason) ?? plain)}`
       : ''
     const what = r.label?.trim() || (r.trigger === 'transition' ? humanizeKind(r.kind) : '')
     const ctx = what ? ` · ${what}` : ''

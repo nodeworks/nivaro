@@ -154,4 +154,15 @@ describe('bannerLines — a failed send says what the other system answered', ()
       'Partner responded with status: ERROR'
     )
   })
+
+  // Design review round 3: one of this app's own reason shapes that happens to carry a
+  // status is still this app's words, never the other system's answer.
+  it('this app’s own reason wins over a status inside it', () => {
+    expect(failed('payload template error: lookup failed: HTTP 404')).toBe(
+      'send failed 58m ago (2:02 PM) — the message could not be built (lookup failed: HTTP 404)'
+    )
+    expect(failed('guard unmet: status is HTTP 500')).toBe(
+      'send failed 58m ago (2:02 PM) — its send condition was not met (status is HTTP 500)'
+    )
+  })
 })
