@@ -146,6 +146,7 @@ import { logSearch, logSearchOpen } from '../lib/search-log'
 import { type CellShape, type SkeletonColumn, shapeForField } from '../lib/skeleton-shapes'
 import { knownTotalFrom } from '../lib/slow-reason'
 import { nextSortValue } from '../lib/sort-cycle'
+import { isFileCollection } from '../lib/system-collections'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
@@ -192,6 +193,7 @@ import { rowFocusTarget, tabStopRowKey } from './cbv/row-focus'
 import { riskFilterEntry, splitRiskFilter } from './cbv/saved-view-risk'
 import { dropUnknownField, isFilterRefusal, unknownFieldsOf } from './cbv/unknown-fields'
 import { ViewDefaultMenu } from './cbv/ViewDefaultMenu'
+import { CbvFileLabel } from './cbv-file-label'
 import { exactCountParams, lastPageFromCount } from './cbv-pager'
 import { mergeFilterOptions, relationFilterRequests } from './cbv-relation-filter'
 import { canOpenChatRoom, discussRecord, useRecordRoomTypes } from './chat/chat-core'
@@ -757,7 +759,24 @@ function AddendumSummaryPill({ summary }: { summary: AddendumSummaryEntry | unde
   )
 }
 
+/** A link cell's label. A file target reads through /files (CbvFileLabel): it has no registry
+ *  row and no /items read, so the record path below always came back empty and every file read
+ *  "Not available to you" (production 2026-11-13, MWF Queue → File). */
 function RelationLabel({ relatedCollection, id }: { relatedCollection: string; id: unknown }) {
+  return isFileCollection(relatedCollection) ? (
+    <CbvFileLabel id={id} />
+  ) : (
+    <RecordRelationLabel relatedCollection={relatedCollection} id={id} />
+  )
+}
+
+function RecordRelationLabel({
+  relatedCollection,
+  id
+}: {
+  relatedCollection: string
+  id: unknown
+}) {
   const client = useNivaroClient()
   const userCol = USER_SYSTEM_COLS.has(relatedCollection)
   const hasId = id != null && id !== ''
