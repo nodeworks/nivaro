@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import {
   type CSSProperties,
+  Fragment,
   lazy,
   Suspense,
   useCallback,
@@ -74,6 +75,7 @@ import {
   type RunningMove,
   RunningMoveNotice,
   runningMovePoll,
+  runningMoveTip,
   sameMoveId,
   startedInBackground,
   useRunEnded
@@ -989,15 +991,78 @@ function BlockedMark({ className }: { className?: string }) {
   )
 }
 
-/** A blocked move says why before it is pressed: the check's words as its tip and description. */
-function blockedMoveProps(tx: Pick<PipelineTransition, 'advisory'>) {
-  return tx.advisory
-    ? {
-        'data-move-blocked': tx.advisory.code,
-        'data-tip': tx.advisory.message,
-        'aria-description': tx.advisory.message
-      }
-    : {}
+/**
+ * A blocked move says why before it is pressed: the check's words as its
+ * description, and on a button as its tip. An item in a menu carries no tip (it
+ * drew over the items below it): the menu says why in a line under its items
+ * (MenuAdvisories).
+ */
+function blockedMoveProps(
+  tx: Pick<PipelineTransition, 'advisory'>,
+  where: 'button' | 'menu' = 'button'
+) {
+  if (!tx.advisory) return {}
+  return {
+    'data-move-blocked': tx.advisory.code,
+    'aria-description': tx.advisory.message,
+    ...(where === 'button' ? { 'data-tip': tx.advisory.message } : {})
+  }
+}
+
+/**
+ * A blocked move's own button: the amber outline and plain ink in place of the
+ * move's action colour. In that colour the mark was the same amber as an amber
+ * move's label, and could not be read on a filled green one.
+ */
+const BLOCKED_BUTTON =
+  'border-amber-300 text-slate-700 dark:border-amber-500/40 dark:text-slate-200'
+
+/**
+ * Under a menu's items: why the marked ones would be refused, once per reason.
+ * With several reasons in one menu each names the items it stops (`nameOf` is
+ * the item's text in that menu).
+ */
+function MenuAdvisories({
+  moves,
+  nameOf
+}: {
+  moves: PipelineTransition[]
+  nameOf: (tx: PipelineTransition) => string
+}) {
+  const notes = distinctAdvisories(moves)
+  return notes.map(({ advisory, moves: stopped }) => (
+    <Fragment key={`${advisory.code}:${advisory.message}`}>
+      <DropdownMenuSeparator />
+      <div
+        data-move-blocked-note={advisory.code}
+        className='flex max-w-[280px] items-start gap-2 px-2 py-1.5 text-[11px] leading-snug text-slate-600 dark:text-slate-300'
+      >
+        <BlockedMark className='mt-0.5' />
+        <span className='min-w-0'>
+          {advisory.message}
+          {notes.length > 1 && (
+            <span className='mt-0.5 block text-amber-800/80 dark:text-amber-300/80'>
+              Stops: {[...new Set(stopped.map(nameOf))].join(', ')}
+            </span>
+          )}
+        </span>
+      </div>
+    </Fragment>
+  ))
+}
+
+/**
+ * Whether a move stops for a confirm before it runs: its note setting, or a
+ * move that always asks (asksFirst). A forward move may still ask when its
+ * brief warns; that is known only once it is pressed.
+ */
+function moveConfirms(
+  tx: PipelineTransition,
+  states: Array<Pick<PipelineState, 'id' | 'sort' | 'is_terminal' | 'key'>>,
+  currentStateId: string | null | undefined
+): boolean {
+  const mode = String((tx as { comment_mode?: string }).comment_mode ?? 'none')
+  return mode === 'optional' || mode === 'required' || asksFirst(tx, states, currentStateId)
 }
 
 function SendBackNotice({ entry }: { entry: PipelineHistoryEntry }) {
@@ -3163,9 +3228,13 @@ function PipelinePanelInner({
           <Button
             key={label}
             size='sm'
-            variant={isActive ? 'default' : 'outline'}
-            className={`${small ? 'h-7 text-[11px]' : 'text-[12px]'} gap-1.5 data-[fresh=true]:opacity-60`}
-            style={colorStyle(isActive)}
+            variant={isActive && !tx.advisory ? 'default' : 'outline'}
+            className={cn(
+              small ? 'h-7 text-[11px]' : 'text-[12px]',
+              'gap-1.5 data-[fresh=true]:opacity-60',
+              tx.advisory && BLOCKED_BUTTON
+            )}
+            style={tx.advisory ? undefined : colorStyle(isActive)}
             disabled={executeTransition.isPending || settling || !!runningMove}
             aria-disabled={freshTx.dimmed(tx.id) || undefined}
             data-fresh={freshTx.dimmed(tx.id) || undefined}
@@ -3194,6 +3263,8 @@ function PipelinePanelInner({
               style={colorStyle(isActive)}
               disabled={executeTransition.isPending || settling || !!runningMove}
             >
+              {/* Marked only when nothing inside can go: one free move is still a way on. */}
+              {txs.every((t) => t.advisory) && <BlockedMark />}
               {label}
               <ChevronDown className='h-3 w-3' />
             </Button>
@@ -3209,7 +3280,7 @@ function PipelinePanelInner({
                 <DropdownMenuItem
                   key={tx.id}
                   onSelect={() => trySetPending(tx.id)}
-                  {...blockedMoveProps(tx)}
+                  {...blockedMoveProps(tx, 'menu')}
                 >
                   {tx.color && (
                     <span
@@ -3221,6 +3292,10 @@ function PipelinePanelInner({
                   {tx.advisory && <BlockedMark className='ml-auto' />}
                 </DropdownMenuItem>
               ))}
+            <MenuAdvisories
+              moves={txs}
+              nameOf={(tx) => stateById.get(tx.to_state)?.label ?? tx.to_state}
+            />
           </DropdownMenuContent>
         </DropdownMenu>
       )
@@ -3238,6 +3313,68 @@ function PipelinePanelInner({
       }
     />
   ) : null
+  // The open card shows its move buttons at the bottom: what stands in a move's
+  // way (a check's refusal, a move still running, the last one's problem) sits
+  // there, directly above them. Under the header it was a card's length from the
+  // button that was pressed, and the confirm that followed opened back down here.
+  const noticesWithActions = expanded && !hideActionsExpanded && !!instance && hasTransitions
+  const moveNoticeRows = (withActions: boolean) => (
+    <>
+      {moveNotices.map(({ advisory, moves }) => (
+        <MoveAdvisoryNotice
+          key={`${advisory.code}:${advisory.message}`}
+          collection={collection}
+          item={String(item)}
+          advisory={advisory}
+          armedMove={
+            armedTx && moves.some((m) => m.id === armedTx.id)
+              ? {
+                  id: armedTx.id,
+                  label: armedTx.label,
+                  confirms: moveConfirms(armedTx, states ?? [], instance?.current_state)
+                }
+              : null
+          }
+          // Two reasons at once: the marks alone do not say which reason is whose.
+          stops={moveNotices.length > 1 ? [...new Set(moves.map((m) => m.label))] : undefined}
+          className={
+            withActions
+              ? 'rounded-lg border border-amber-200/80 px-3 dark:border-amber-500/20'
+              : undefined
+          }
+          onDismiss={() => setArmedMove(null)}
+          onFixed={(thenMove) => {
+            setArmedMove(null)
+            void queryClient.invalidateQueries({ queryKey })
+            if (thenMove) void trySetPending(thenMove.id, { cleared: true })
+          }}
+        />
+      ))}
+      {/* A background move: running now, or the last one that did not move the record. */}
+      {runningMove && (
+        <RunningMoveNotice
+          run={runningMove}
+          className={
+            withActions
+              ? 'rounded-lg border border-sky-200/80 px-3 dark:border-sky-500/20'
+              : undefined
+          }
+        />
+      )}
+      {moveProblem && (
+        <MoveProblemNotice
+          problem={moveProblem}
+          retryDisabled={executeTransition.isPending || settling}
+          onRetry={problemTx ? () => void trySetPending(problemTx.id) : undefined}
+          className={
+            withActions
+              ? 'rounded-lg border border-amber-200/80 px-3 dark:border-amber-500/20'
+              : undefined
+          }
+        />
+      )}
+    </>
+  )
   const sendBack = latestSendBack(history ?? [], instance?.current_state, states ?? [])
 
   const confirmForm = (
@@ -3410,35 +3547,10 @@ function PipelinePanelInner({
             )}
           />
         </div>
-        {/* A move a check would refuse says so here, before it is pressed — open or folded. */}
-        {moveNotices.map(({ advisory, moves }) => (
-          <MoveAdvisoryNotice
-            key={`${advisory.code}:${advisory.message}`}
-            collection={collection}
-            item={String(item)}
-            advisory={advisory}
-            armedMove={
-              armedTx && moves.some((m) => m.id === armedTx.id)
-                ? { id: armedTx.id, label: armedTx.label }
-                : null
-            }
-            onDismiss={() => setArmedMove(null)}
-            onFixed={(thenMove) => {
-              setArmedMove(null)
-              void queryClient.invalidateQueries({ queryKey })
-              if (thenMove) void trySetPending(thenMove.id, { cleared: true })
-            }}
-          />
-        ))}
-        {/* A background move: running now, or the last one that did not move the record. */}
-        {runningMove && <RunningMoveNotice run={runningMove} />}
-        {moveProblem && (
-          <MoveProblemNotice
-            problem={moveProblem}
-            retryDisabled={executeTransition.isPending || settling}
-            onRetry={problemTx ? () => void trySetPending(problemTx.id) : undefined}
-          />
-        )}
+        {/* What stands in a move's way says so before it is pressed. Folded (or open with
+            the buttons hosted elsewhere) that is here, under the header; open, it sits
+            further down, with the buttons it is about. */}
+        {!noticesWithActions && moveNoticeRows(false)}
         {!expanded && pendingTransition && (
           <div className='border-t border-slate-100 dark:border-border/60 px-4 py-3'>
             {confirmForm}
@@ -3533,6 +3645,7 @@ function PipelinePanelInner({
                 </div>
                 {hasTransitions && !hideActionsExpanded && (
                   <div className='space-y-3 px-5 py-4'>
+                    {moveNoticeRows(true)}
                     <div className='flex flex-wrap justify-end gap-2'>
                       {renderTransitionButtons(visibleTransitions)}
                     </div>
@@ -4001,8 +4114,11 @@ function PipelineTransitionButtonsInner({
   const pendingTx = pendingTransition ? transitions.find((t) => t.id === pendingTransition) : null
   const armedTx = armedMove ? transitions.find((t) => t.id === armedMove) : null
   // A background move is running on this record: every move waits for it
-  // (the Progress panel's row says who started it and when).
+  // (the Progress panel's row says who started it and when). The buttons are
+  // disabled meanwhile and cannot say why themselves (a pointer passes through
+  // a disabled button to what is under it), so the element around them does.
   const runningMove = data.running_move ?? null
+  const heldTip = runningMove ? runningMoveTip(runningMove) : undefined
   const pendingToState = pendingTx ? stateById.get(pendingTx.to_state) : null
   const landing = confirmLanding(pendingTx, currentState, data.states ?? [], chainOwners)
   const landedState = landing?.state ?? pendingToState
@@ -4026,7 +4142,7 @@ function PipelineTransitionButtonsInner({
   })()
 
   return (
-    <div ref={rootRef} className='relative'>
+    <div ref={rootRef} className='relative' data-tip={heldTip}>
       {folded ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -4037,8 +4153,10 @@ function PipelineTransitionButtonsInner({
               disabled={executeTransition.isPending || settling || !!runningMove}
               data-transitions-folded
             >
-              {(executeTransition.isPending || runningMove) && (
+              {executeTransition.isPending || runningMove ? (
                 <Loader2 className='h-3 w-3 animate-spin' />
+              ) : (
+                transitions.every((t) => t.advisory) && <BlockedMark />
               )}
               Actions
               <ChevronDown className='h-3 w-3' />
@@ -4053,7 +4171,7 @@ function PipelineTransitionButtonsInner({
                   {gi > 0 && all[gi - 1][1].length > 1 && <DropdownMenuSeparator />}
                   <DropdownMenuItem
                     onSelect={() => trySetPending(txs[0].id)}
-                    {...blockedMoveProps(txs[0])}
+                    {...blockedMoveProps(txs[0], 'menu')}
                   >
                     {txs[0].color && (
                       <span
@@ -4075,7 +4193,7 @@ function PipelineTransitionButtonsInner({
                     <DropdownMenuItem
                       key={tx.id}
                       onSelect={() => trySetPending(tx.id)}
-                      {...blockedMoveProps(tx)}
+                      {...blockedMoveProps(tx, 'menu')}
                     >
                       {tx.color && (
                         <span
@@ -4090,6 +4208,14 @@ function PipelineTransitionButtonsInner({
                 </DropdownMenuGroup>
               )
             )}
+            <MenuAdvisories
+              moves={transitions}
+              nameOf={(tx) =>
+                (byLabel.get(tx.label)?.length ?? 0) > 1
+                  ? (stateById.get(tx.to_state)?.label ?? tx.to_state)
+                  : tx.label
+              }
+            />
           </DropdownMenuContent>
         </DropdownMenu>
       ) : (
@@ -4126,9 +4252,12 @@ function PipelineTransitionButtonsInner({
                 <Button
                   key={label}
                   size='sm'
-                  variant={isActive ? 'default' : 'outline'}
-                  className='gap-1.5 text-[12px] data-[fresh=true]:opacity-60'
-                  style={colorStyle(isActive)}
+                  variant={isActive && !tx.advisory ? 'default' : 'outline'}
+                  className={cn(
+                    'gap-1.5 text-[12px] data-[fresh=true]:opacity-60',
+                    tx.advisory && BLOCKED_BUTTON
+                  )}
+                  style={tx.advisory ? undefined : colorStyle(isActive)}
                   disabled={executeTransition.isPending || settling || !!runningMove}
                   data-move-running={inBackground || undefined}
                   aria-disabled={freshTx.dimmed(tx.id) || undefined}
@@ -4175,6 +4304,7 @@ function PipelineTransitionButtonsInner({
                     style={colorStyle(isActive)}
                     disabled={executeTransition.isPending || settling || !!runningMove}
                   >
+                    {txs.every((t) => t.advisory) && <BlockedMark />}
                     {label}
                     <ChevronDown className='h-3 w-3' />
                   </Button>
@@ -4184,7 +4314,7 @@ function PipelineTransitionButtonsInner({
                     <DropdownMenuItem
                       key={tx.id}
                       onSelect={() => trySetPending(tx.id)}
-                      {...blockedMoveProps(tx)}
+                      {...blockedMoveProps(tx, 'menu')}
                     >
                       {tx.color && (
                         <span
@@ -4196,6 +4326,10 @@ function PipelineTransitionButtonsInner({
                       {tx.advisory && <BlockedMark className='ml-auto' />}
                     </DropdownMenuItem>
                   ))}
+                  <MenuAdvisories
+                    moves={txs}
+                    nameOf={(tx) => stateById.get(tx.to_state)?.label ?? tx.to_state}
+                  />
                 </DropdownMenuContent>
               </DropdownMenu>
             )
@@ -4288,7 +4422,11 @@ function PipelineTransitionButtonsInner({
           collection={collection}
           item={String(item)}
           advisory={armedTx.advisory}
-          armedMove={{ id: armedTx.id, label: armedTx.label }}
+          armedMove={{
+            id: armedTx.id,
+            label: armedTx.label,
+            confirms: moveConfirms(armedTx, data.states ?? [], data.instance.current_state)
+          }}
           className='absolute right-0 top-full z-50 mt-1'
           style={{ width: confirmWidth }}
           onDismiss={() => setArmedMove(null)}

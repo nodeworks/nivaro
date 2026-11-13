@@ -111,12 +111,17 @@ export function useRecordFixAction(collection: string, item: string, actionKey: 
  * `armedMove` is the move the person pressed anyway: the notice opens on the
  * fix and then goes on to that move. `floating` is the header's variant, which
  * has no row to sit in and opens under the buttons.
+ *
+ * A pressed move lights its notice up and brings it into view, whether or not
+ * this person can clear it: for someone who cannot, nothing else on the page
+ * changes, and the press looked ignored.
  */
 export function MoveAdvisoryNotice({
   collection,
   item,
   advisory,
   armedMove,
+  stops,
   floating,
   onFixed,
   onDismiss,
@@ -126,7 +131,12 @@ export function MoveAdvisoryNotice({
   collection: string
   item: string
   advisory: MoveAdvisory
-  armedMove?: { id: string; label: string } | null
+  /** `confirms`: the move asks before it runs (a note, a final step), so after
+   *  the fix it is still the person's to confirm. */
+  armedMove?: { id: string; label: string; confirms?: boolean } | null
+  /** The moves this reason holds back, by name. Given when several reasons show
+   *  at once: the marks on the buttons do not say which reason is whose. */
+  stops?: string[]
   floating?: boolean
   /** The fix ran; `thenMove` is the pressed move to go on with (null = none was pressed). */
   onFixed?: (thenMove: { id: string; label: string } | null) => void
@@ -139,22 +149,35 @@ export function MoveAdvisoryNotice({
   const [asked, setAsked] = useState(false)
   const [reason, setReason] = useState('')
   const reasonRef = useRef<HTMLInputElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const open = !!action && (asked || !!armedMove)
   // The form opened by a press (here or on the move): the reason is what is asked for next.
   useEffect(() => {
     if (open) reasonRef.current?.focus()
   }, [open])
+  // A pressed move: this is why it did not go. The notice may sit a card's
+  // length from the button that was pressed.
+  const armedId = armedMove?.id
+  useEffect(() => {
+    if (armedId) rootRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [armedId])
+  const fixLabel = advisory.fix?.label?.trim() || action?.label || ''
   const fix = useMutation({
     mutationFn: () => run(reason),
     onSuccess: () => {
-      toast.success(armedMove ? `${action?.label} — trying again` : `${action?.label} — done`)
+      // Only the fix is done. A move that asks first is still to confirm; one
+      // that does not goes on by itself and says so in its own words.
+      toast.success(
+        armedMove?.confirms
+          ? `Done: ${fixLabel}. Confirm ${armedMove.label} to finish.`
+          : `Done: ${fixLabel}.`
+      )
       setAsked(false)
       setReason('')
       onFixed?.(armedMove ?? null)
     },
     onError: (err) => toastError(err, `${action?.label ?? 'The action'} failed`)
   })
-  const fixLabel = advisory.fix?.label?.trim() || action?.label || ''
   const canRun = !fix.isPending && (!action?.require_reason || reason.trim().length > 0)
   const close = () => {
     setAsked(false)
@@ -163,6 +186,7 @@ export function MoveAdvisoryNotice({
   }
   return (
     <div
+      ref={rootRef}
       role={armedMove ? 'status' : 'note'}
       data-move-advisory={advisory.code}
       className={cn(
@@ -170,6 +194,7 @@ export function MoveAdvisoryNotice({
         floating
           ? 'rounded-lg border border-amber-200 bg-amber-50 p-3 shadow-lg dark:border-amber-500/30 dark:bg-amber-950'
           : 'border-t border-amber-200/80 bg-amber-50/70 px-4 py-2.5 dark:border-amber-500/20 dark:bg-amber-500/[0.06]',
+        armedMove && 'ring-1 ring-inset ring-amber-400 dark:ring-amber-400/60',
         className
       )}
       style={style}
@@ -179,9 +204,19 @@ export function MoveAdvisoryNotice({
         className='mt-[3px] h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400'
       />
       <div className='min-w-0 flex-1 space-y-2'>
-        <p className='break-words text-[13px] leading-snug text-slate-800 dark:text-slate-100'>
-          {advisory.message}
-        </p>
+        <div>
+          <p className='break-words text-[13px] leading-snug text-slate-800 dark:text-slate-100'>
+            {advisory.message}
+          </p>
+          {!!stops?.length && (
+            <p
+              className='mt-0.5 text-[11.5px] text-amber-800/80 dark:text-amber-300/80'
+              data-move-advisory-stops
+            >
+              Stops: {stops.join(', ')}
+            </p>
+          )}
+        </div>
         {open && action && (
           <form
             className='space-y-2'

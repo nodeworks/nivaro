@@ -60,6 +60,8 @@ interface Scene {
   marked?: boolean
   running?: RunningMove | null
   problem?: MoveProblem | null
+  /** The Progress panel starts open. */
+  expanded?: boolean
 }
 const instance = (s: Scene) => ({
   instance: { id: 'i-1', current_state: 'S-WH', current_state_obj: STATES[0], completed_at: null },
@@ -100,7 +102,9 @@ function render(ui: 'header' | 'panel', scene: Scene) {
     request: vi.fn(async (cmd: Cmd) => {
       calls.push(cmd)
       if (cmd._path.endsWith('/approval-brief')) return { data: { lines: [] } }
-      if (cmd._path.endsWith('/owners/all')) return { data: null }
+      // The open panel's own reads (owners, creator): nothing to show.
+      if (cmd._path.endsWith('/owners')) return { data: [] }
+      if (cmd._path.endsWith('/owners/all') || cmd._path.endsWith('/creator')) return { data: null }
       if (cmd._path.endsWith('/transition') && cmd._method === 'POST') {
         if (cmd._body?.accept_pending === true) {
           now.running = { ...RUN, started_by: ME, started_by_name: 'Ada Park' }
@@ -128,7 +132,7 @@ function render(ui: 'header' | 'panel', scene: Scene) {
             {ui === 'header' ? (
               <PipelineTransitionButtons collection='orders' item='42' />
             ) : (
-              <PipelinePanel collection='orders' item='42' />
+              <PipelinePanel collection='orders' item='42' defaultExpanded={scene.expanded} />
             )}
           </ItemEditAuthContext.Provider>
         </NivaroProvider>
@@ -159,6 +163,8 @@ const button = (text: string) =>
     | undefined
 const runningNotice = () => document.querySelector('[data-running-move]') as HTMLElement | null
 const problemNotice = () => document.querySelector('[data-move-problem]') as HTMLElement | null
+const problemWords = () =>
+  document.querySelector('[data-move-problem-reason]') as HTMLElement | null
 
 describe('helpers', () => {
   it('only a move that carries the mark asks to run in the background', () => {
@@ -245,7 +251,7 @@ describe('the Progress panel: a move that runs in the background', () => {
     const notice = problemNotice() as HTMLElement
     expect(notice.getAttribute('data-move-problem')).toBe('refused')
     expect(notice.textContent).toContain('Submit order did not go through')
-    expect(notice.textContent).toContain('Submission failed — HTTP 400: "The project is not valid"')
+    expect(problemWords()?.textContent).toContain('Submission failed')
     expect(notice.textContent).toContain('Started by Kim Lee')
     expect(button('Submit order')?.disabled).toBe(false)
 
@@ -360,5 +366,92 @@ describe('the header buttons', () => {
     await until(() => button('Submit order')?.disabled === true)
     await act(async () => button('Submit order')?.click())
     expect(posts(calls)).toHaveLength(0)
+  })
+})
+
+// Design review round 1 (held to item 3's findings): the reason a run left is
+// the refusal's own text, straight from the server. What a person reads goes
+// through the same reader every other error does.
+describe('the reason a run did not go through', () => {
+  it('never shows a status line: what it means is read, the text itself is kept for support', async () => {
+    render('panel', { marked: true, problem: PROBLEM })
+    await until(() => !!problemNotice())
+    expect(problemWords()?.textContent).toContain('Submission failed')
+    expect(problemWords()?.textContent).not.toMatch(/HTTP|400/)
+    const details = problemNotice()?.querySelector('[data-error-details]')
+    expect(details?.textContent).toContain('Details for support')
+    expect(details?.querySelector('[data-error-copy]')).not.toBeNull()
+  })
+
+  it('shows plain words as they are, with nothing folded away', async () => {
+    render('panel', {
+      marked: true,
+      problem: { ...PROBLEM, reason: 'Submit order: contact email is required' }
+    })
+    await until(() => !!problemNotice())
+    expect(problemWords()?.textContent).toBe('Contact email is required')
+    expect(problemNotice()?.querySelector('[data-error-details]')).toBeNull()
+  })
+
+  it('shows no words at all for text that is only the database’s', async () => {
+    render('panel', {
+      marked: true,
+      problem: { ...PROBLEM, result: 'failed', reason: "Invalid column name 'vendor_site'." }
+    })
+    await until(() => !!problemNotice())
+    expect(problemWords()).toBeNull()
+    expect(problemNotice()?.textContent).not.toContain('vendor_site')
+    expect(problemNotice()?.textContent).toContain('Submit order ran into a problem.')
+    expect(problemNotice()?.querySelector('[data-error-details]')).not.toBeNull()
+  })
+
+  it('has a tip only when the words are cut', async () => {
+    render('panel', { marked: true, problem: PROBLEM })
+    await until(() => !!problemWords())
+    // Nothing is cut here (jsdom lays nothing out): repeating the words on hover is noise.
+    expect(problemWords()?.hasAttribute('data-tip')).toBe(false)
+  })
+})
+
+describe('the Progress panel, open: what holds the moves sits with them', () => {
+  it('the running row is directly above the buttons, as its own card', async () => {
+    render('panel', { marked: true, running: RUN, expanded: true })
+    await until(() => !!runningNotice() && !!button('Submit order'))
+    expect(document.querySelectorAll('[data-running-move]')).toHaveLength(1)
+    expect(runningNotice()?.nextElementSibling).toBe(button('Submit order')?.parentElement)
+    expect(runningNotice()?.className).toContain('rounded-lg')
+    expect(runningNotice()?.className).not.toContain('border-t')
+  })
+
+  it('so is the last run’s problem, with its Try again', async () => {
+    render('panel', { marked: true, problem: PROBLEM, expanded: true })
+    await until(() => !!problemNotice() && !!button('Submit order'))
+    expect(problemNotice()?.nextElementSibling).toBe(button('Submit order')?.parentElement)
+    expect(problemNotice()?.className).toContain('rounded-lg')
+    expect(button('Try again')).toBeDefined()
+  })
+
+  it('folded, both stay under the header', async () => {
+    render('panel', { marked: true, running: RUN })
+    await until(() => !!runningNotice())
+    expect(runningNotice()?.className).toContain('border-t')
+    expect(runningNotice()?.className).not.toContain('rounded-lg')
+  })
+})
+
+describe('the header buttons, held by a run', () => {
+  it('say why on hover: a disabled button cannot', async () => {
+    render('header', { marked: true, running: RUN })
+    await until(() => button('Submit order')?.disabled === true)
+    const row = button('Submit order')?.closest('[data-tip]')
+    expect(row?.getAttribute('data-tip')).toBe(
+      'Submit order is running. Other moves wait until it finishes.'
+    )
+  })
+
+  it('say nothing of the kind when no run holds them', async () => {
+    render('header', { marked: true })
+    await until(() => !!button('Submit order'))
+    expect(button('Submit order')?.closest('[data-tip]')).toBeNull()
   })
 })

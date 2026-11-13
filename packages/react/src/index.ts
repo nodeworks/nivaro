@@ -676,6 +676,7 @@ export {
   skeletonColumnsFrom,
   slowReasonText,
   splitMessageTokens,
+  staleChunkReloadJustTried,
   startApiVersionWatch,
   startAutofillRun,
   startClientChaos,

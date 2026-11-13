@@ -1,7 +1,10 @@
 import { AlertTriangle, Loader2 } from 'lucide-react'
-import { type CSSProperties, useEffect, useRef } from 'react'
+import { type CSSProperties, useEffect, useMemo, useRef } from 'react'
 import { useItemEditAuth } from '../../context'
+import { describeError } from '../../lib/error-message'
 import { cn, formatRelative } from '../../lib/utils'
+import { ErrorDetails } from '../ErrorNotice'
+import { useOverflowTip } from '../TipLayer'
 import { Button } from '../ui/button'
 
 /**
@@ -106,6 +109,19 @@ export function problemReason(problem: Pick<MoveProblem, 'reason' | 'transition_
 
 const rowBase = 'flex items-start gap-2.5'
 
+/** What follows a running move's name, on its row and in the tip of the buttons it holds. */
+const RUNNING_SENTENCE = 'is running. Other moves wait until it finishes.'
+const runningLabel = (run: Pick<RunningMove, 'transition_label'>) =>
+  run.transition_label?.trim() || 'A move'
+
+/**
+ * Why every move is held, in one line: the tip for buttons that are disabled
+ * while a move runs (a disabled button cannot say so itself).
+ */
+export function runningMoveTip(run: Pick<RunningMove, 'transition_label'>): string {
+  return `${runningLabel(run)} ${RUNNING_SENTENCE}`
+}
+
 /** What follows the move's name. Only a refusal is known to have moved nothing;
  *  the reason under it says the rest. */
 const PROBLEM_SENTENCE: Record<MoveProblem['result'], string> = {
@@ -130,7 +146,7 @@ export function RunningMoveNotice({
   style?: CSSProperties
 }) {
   const { userId } = useItemEditAuth()
-  const label = run.transition_label?.trim() || 'A move'
+  const label = runningLabel(run)
   return (
     <div
       role='status'
@@ -150,8 +166,7 @@ export function RunningMoveNotice({
       />
       <div className='min-w-0 flex-1'>
         <p className='break-words text-[13px] leading-snug text-slate-800 dark:text-slate-100'>
-          <span className='font-medium'>{label}</span> is running. Other moves wait until it
-          finishes.
+          <span className='font-medium'>{label}</span> {RUNNING_SENTENCE}
         </p>
         <p className='mt-0.5 text-[11.5px] text-sky-800/80 dark:text-sky-300/80'>
           {startedBy(run, userId)} · {formatRelative(run.started_at)} · this page updates on its own
@@ -164,6 +179,11 @@ export function RunningMoveNotice({
 /**
  * The last run that did not move the record: what was said, and the move
  * again for someone who may make it. Shown until the record moves on.
+ *
+ * The stored reason is the refusal's own text (a check's words, a partner's
+ * answer). It is read the way every other error is (describeError): plain words
+ * show as they are; a status line, SQL or a stack is never shown, what it means
+ * is, and the text itself stays in the folded "Details for support".
  */
 export function MoveProblemNotice({
   problem,
@@ -180,6 +200,10 @@ export function MoveProblemNotice({
   const { userId } = useItemEditAuth()
   const label = problem.transition_label?.trim() || 'The move'
   const reason = problemReason(problem)
+  const said = useMemo(() => (reason ? describeError({ message: reason }, '') : null), [reason])
+  const words = said?.title.trim() ?? ''
+  // The full words on hover only while the three lines cut them.
+  const wordsRef = useOverflowTip<HTMLParagraphElement>(words)
   return (
     <div
       role='note'
@@ -198,17 +222,19 @@ export function MoveProblemNotice({
         <p className='break-words text-[13px] leading-snug text-slate-800 dark:text-slate-100'>
           <span className='font-medium'>{label}</span> {PROBLEM_SENTENCE[problem.result]}
         </p>
-        {reason && (
+        {words && (
           <p
+            ref={wordsRef}
+            data-move-problem-reason
             className='mt-0.5 line-clamp-3 break-words text-[12px] leading-snug text-slate-700 dark:text-slate-300'
-            data-tip={reason}
           >
-            {reason}
+            {words}
           </p>
         )}
         <p className='mt-0.5 text-[11.5px] text-amber-800/80 dark:text-amber-300/80'>
           {startedBy(problem, userId)} · {formatRelative(problem.finished_at ?? problem.started_at)}
         </p>
+        {said && <ErrorDetails description={said} action={label} className='mt-1' />}
       </div>
       {onRetry && (
         <Button
