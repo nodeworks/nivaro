@@ -113,7 +113,13 @@ export function deferEffect(
  *   writes that call it, never every write of the tenant.
  * - A run that has not finished after DETACHED_SLOT_MS gives its slot to the
  *   next one (it carries on and still records its own outcome), so runs that
- *   hang cannot hold the lane for good.
+ *   hang cannot hold the lane for good. It is still counted as overdue: no
+ *   more than DETACHED_HARD_MAX are ever out per tenant (running + overdue),
+ *   and while any run is overdue new writes run their effects themselves, so
+ *   freeing slots on a timer never becomes "two more every 30 seconds"
+ *   against a partner that has stopped answering.
+ * - A unit's next detached effect starts only when the one before it has
+ *   really finished, overdue or not.
  * - A waiting effect runs in the async context of the unit that queued it (its
  *   tenant, its request), not of whichever effect freed the slot.
  * - What is queued or running is counted, so shutdown can wait for it
@@ -122,9 +128,13 @@ export function deferEffect(
 export const DETACHED_SLOTS = 2
 export const DETACHED_BACKLOG = 20
 export const DETACHED_SLOT_MS = 30_000
+export const DETACHED_HARD_MAX = 6
 
 interface DetachedLane {
+  /** Holding a slot. */
   running: number
+  /** Lost their slot to the time limit and have not finished yet. */
+  overdue: number
   waiting: Array<() => void>
 }
 const lanes = new Map<string, DetachedLane>()
@@ -150,17 +160,29 @@ export async function drainDetachedEffects(timeoutMs: number): Promise<{ left: n
 function laneFor(key: string): DetachedLane {
   let lane = lanes.get(key)
   if (!lane) {
-    lane = { running: 0, waiting: [] }
+    lane = { running: 0, overdue: 0, waiting: [] }
     lanes.set(key, lane)
   }
   return lane
 }
 
-/**
- * Start `e` when its tenant has a free slot. Resolves when it has finished, or
- * when it has held its slot for DETACHED_SLOT_MS (the next effect of its unit
- * then starts; this one carries on).
- */
+const mayStart = (lane: DetachedLane) =>
+  lane.running < DETACHED_SLOTS && lane.running + lane.overdue < DETACHED_HARD_MAX
+
+/** Start what can start; forget a lane nothing is using. */
+function pump(key: string, lane: DetachedLane): void {
+  while (lane.waiting.length > 0 && mayStart(lane)) (lane.waiting.shift() as () => void)()
+  if (
+    lane.running === 0 &&
+    lane.overdue === 0 &&
+    lane.waiting.length === 0 &&
+    lanes.get(key) === lane
+  ) {
+    lanes.delete(key)
+  }
+}
+
+/** Start `e` when its tenant may start one more. Resolves when it has really finished. */
 function runDetached(e: Effect): Promise<void> {
   const key = getTenantId() ?? ''
   const lane = laneFor(key)
@@ -170,31 +192,28 @@ function runDetached(e: Effect): Promise<void> {
   return new Promise<void>((resolve) => {
     const go = () => {
       lane.running++
-      let freed = false
-      const free = () => {
-        if (freed) return
-        freed = true
-        lane.running--
-        resolve()
-        const next = lane.waiting.shift()
-        if (next) next()
-        else if (lane.running === 0 && lanes.get(key) === lane) lanes.delete(key)
-      }
+      let late = false
       const limit = setTimeout(() => {
+        late = true
+        lane.running--
+        lane.overdue++
         console.warn(
           `[unit-of-work] detached effect ${e.label} is still running after ${DETACHED_SLOT_MS / 1000}s: its slot goes to the next one`
         )
-        free()
+        pump(key, lane)
       }, DETACHED_SLOT_MS)
       limit.unref?.()
       // runEffect never rejects, so this chain needs no catch of its own.
       void work().then(() => {
         clearTimeout(limit)
         detachedOut--
-        free()
+        if (late) lane.overdue--
+        else lane.running--
+        resolve()
+        pump(key, lane)
       })
     }
-    if (lane.running < DETACHED_SLOTS) go()
+    if (mayStart(lane)) go()
     else lane.waiting.push(go)
   })
 }
@@ -202,12 +221,14 @@ function runDetached(e: Effect): Promise<void> {
 /**
  * Run a committed unit's effects in the order they were queued. The unit
  * waits for each plain effect; a detached one is started in its turn (behind
- * the detached effects before it, and when its tenant has a free slot) and
- * left to finish on the background pool. With a deep backlog the unit runs
- * its detached effects itself, like plain ones.
+ * the detached effects before it, and when its tenant may start one more) and
+ * left to finish on the background pool. With a deep backlog, or while a run
+ * of its tenant is overdue, the unit runs its detached effects itself, like
+ * plain ones.
  */
 async function releaseEffects(queued: Effect[]): Promise<void> {
-  const crowded = (lanes.get(getTenantId() ?? '')?.waiting.length ?? 0) >= DETACHED_BACKLOG
+  const lane = lanes.get(getTenantId() ?? '')
+  const crowded = !!lane && (lane.waiting.length >= DETACHED_BACKLOG || lane.overdue > 0)
   let detachedTail: Promise<void> | null = null
   for (const e of queued) {
     if (!e.detached || crowded) {

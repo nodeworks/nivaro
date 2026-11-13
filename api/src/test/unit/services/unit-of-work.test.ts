@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { inBackgroundPool } from '../../../db/pool-context.js'
 import {
   DETACHED_BACKLOG,
+  DETACHED_HARD_MAX,
   DETACHED_SLOT_MS,
   DETACHED_SLOTS,
   deferEffect,
@@ -197,6 +198,98 @@ describe('unit of work (#793)', () => {
           expect(detachedEffectsPending()).toBe(4)
           for (const r of releases) r()
           await vi.advanceTimersByTimeAsync(1)
+          expect(detachedEffectsPending()).toBe(0)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('overdue runs still count: past the hard limit nothing more starts until one ends', async () => {
+        vi.useFakeTimers()
+        try {
+          const started: string[] = []
+          const releases = new Map<string, () => void>()
+          const stuck = (name: string) => () => {
+            started.push(name)
+            return new Promise<void>((r) => releases.set(name, r))
+          }
+          const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+          for (const name of names) {
+            await runUnit(name, async () => {
+              await deferEffect(name, stuck(name), { detached: true })
+            })
+          }
+          expect(DETACHED_HARD_MAX).toBe(6)
+          for (let round = 0; round < 4; round++)
+            await vi.advanceTimersByTimeAsync(DETACHED_SLOT_MS)
+          // Six are out (all overdue by now). Freeing slots on a timer must not turn a
+          // limit of two into "two more every 30 seconds" against a partner that hangs.
+          expect(started).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
+          releases.get('a')?.()
+          await vi.advanceTimersByTimeAsync(1)
+          expect(started).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g'])
+          for (const r of releases.values()) r()
+          await vi.advanceTimersByTimeAsync(1)
+          releases.get('h')?.()
+          await vi.advanceTimersByTimeAsync(1)
+          expect(detachedEffectsPending()).toBe(0)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('while a run is overdue a new write runs its effect itself', async () => {
+        vi.useFakeTimers()
+        try {
+          let release: () => void = () => {}
+          await runUnit('slow', async () => {
+            await deferEffect(
+              'slow',
+              () =>
+                new Promise<void>((r) => {
+                  release = r
+                }),
+              { detached: true }
+            )
+          })
+          await vi.advanceTimersByTimeAsync(DETACHED_SLOT_MS + 1)
+          const ran: string[] = []
+          await runUnit('next', async () => {
+            await deferEffect('next', () => void ran.push('next'), { detached: true })
+          })
+          // The partner is not keeping up: this write waited for its own effect, as before.
+          expect(ran).toEqual(['next'])
+          release()
+          await vi.advanceTimersByTimeAsync(1)
+          expect(detachedEffectsPending()).toBe(0)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('a unit starts its next effect only when the one before has really finished', async () => {
+        vi.useFakeTimers()
+        try {
+          const ran: string[] = []
+          let release: () => void = () => {}
+          await runUnit('u', async () => {
+            await deferEffect(
+              'first',
+              () =>
+                new Promise<void>((r) => {
+                  ran.push('first:start')
+                  release = r
+                }),
+              { detached: true }
+            )
+            await deferEffect('second', () => void ran.push('second'), { detached: true })
+          })
+          await vi.advanceTimersByTimeAsync(DETACHED_SLOT_MS + 1)
+          // The first lost its slot, but it is still running: its unit's order holds.
+          expect(ran).toEqual(['first:start'])
+          release()
+          await vi.advanceTimersByTimeAsync(1)
+          expect(ran).toEqual(['first:start', 'second'])
           expect(detachedEffectsPending()).toBe(0)
         } finally {
           vi.useRealTimers()
