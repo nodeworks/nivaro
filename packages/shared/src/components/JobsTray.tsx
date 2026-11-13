@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  CircleSlash,
   Download,
   Loader2,
   Timer,
@@ -21,6 +22,7 @@ import {
   dismissJob,
   seedJobs,
   type TrayJob,
+  trayHeadline,
   useTrayJobs
 } from '../lib/jobs-tray'
 import { useLiveEvent } from '../lib/live'
@@ -65,31 +67,39 @@ export function JobsTray() {
   if (jobs.length === 0 || typeof document === 'undefined') return null
   const running = jobs.filter((j) => j.status === 'running' || j.status === 'queued').length
   const finished = jobs.length - running
+  const head = trayHeadline(jobs)
   const openHref = (href: string) =>
     nav.navigate ? nav.navigate(href) : window.location.assign(href)
 
   return createPortal(
     <div
       data-jobs-tray={jobs.length}
+      data-jobs-tray-tone={head.tone}
       data-nvr-dock-aware
       data-nvr-recording-hide
       className='fixed bottom-4 left-1/2 z-[110] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-700 shadow-xl dark:border-[#334155] dark:bg-[#1e293b] dark:text-slate-200'
     >
       <div className='flex items-center gap-2 px-3 py-2'>
-        {running > 0 ? (
+        {head.tone === 'running' ? (
           <Loader2 className='h-3.5 w-3.5 shrink-0 animate-spin text-nvr-cyan' />
+        ) : head.tone === 'failed' ? (
+          <AlertCircle className='h-3.5 w-3.5 shrink-0 text-rose-500' />
+        ) : head.tone === 'cancelled' ? (
+          <CircleSlash className='h-3.5 w-3.5 shrink-0 text-slate-400' />
         ) : (
           <Check className='h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400' />
         )}
         <button
           type='button'
           onClick={() => setOpen((o) => !o)}
-          className='min-w-0 flex-1 text-left text-[12.5px] font-medium'
+          className='min-w-0 flex-1 truncate text-left text-[12.5px] font-medium'
           aria-expanded={open}
+          data-jobs-tray-head
         >
-          {running > 0
-            ? `${running} job${running === 1 ? '' : 's'} running`
-            : `${finished} job${finished === 1 ? '' : 's'} finished`}
+          {head.text}
+          {head.note && (
+            <span className='font-normal text-rose-600 dark:text-rose-300'> · {head.note}</span>
+          )}
         </button>
         {finished > 0 && (
           <button
@@ -98,7 +108,7 @@ export function JobsTray() {
             data-jobs-tray-clear
             className='text-[11px] text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
           >
-            Clear finished
+            {running > 0 ? 'Clear finished' : 'Clear'}
           </button>
         )}
         <button
@@ -145,6 +155,7 @@ function JobRow({
   const done = job.status === 'completed'
   const failed = job.status === 'error'
   const waiting = job.status === 'queued'
+  const cancelled = job.status === 'canceled'
   const prog = job.progress ?? {}
   const total = Number(prog.total)
   const count = Number(prog.done)
@@ -164,12 +175,16 @@ function JobRow({
         jobFailureText(job.error)
       : done
         ? job.outcome
-        : job.kind === 'background-run'
-          ? // #2759 — a slow read the server is finishing: say how long it usually takes.
-            Number(prog.expected_ms) >= 1000
-            ? `Usually takes about ${clock(Number(prog.expected_ms))}`
-            : 'Running on the server'
-          : [phase, pct != null ? `${count} of ${total}` : null].filter(Boolean).join(' · ') || null
+        : cancelled
+          ? // An import's cancel sends no outcome: the row still says what happened.
+            job.outcome || 'Cancelled'
+          : job.kind === 'background-run'
+            ? // #2759 — a slow read the server is finishing: say how long it usually takes.
+              Number(prog.expected_ms) >= 1000
+              ? `Usually takes about ${clock(Number(prog.expected_ms))}`
+              : 'Running on the server'
+            : [phase, pct != null ? `${count} of ${total}` : null].filter(Boolean).join(' · ') ||
+              null
   return (
     <li
       data-job={job.key}
@@ -181,6 +196,8 @@ function JobRow({
           <AlertCircle className='h-3.5 w-3.5 text-rose-500' />
         ) : done ? (
           <Check className='h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400' />
+        ) : cancelled ? (
+          <CircleSlash className='h-3.5 w-3.5 text-slate-400' />
         ) : waiting ? (
           <Timer className='h-3.5 w-3.5 text-slate-400' />
         ) : (

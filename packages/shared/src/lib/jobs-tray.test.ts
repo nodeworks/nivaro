@@ -6,7 +6,9 @@ import {
   applyJobUpdate,
   dismissFinishedJobs,
   dismissJob,
-  seedJobs
+  seedJobs,
+  type TrayJob,
+  trayHeadline
 } from './jobs-tray'
 
 describe('jobs tray model', () => {
@@ -75,5 +77,56 @@ describe('jobs tray model', () => {
     expect(__trayJobs()[0].cancel_path).toBe('/ai/research/7/cancel')
     applyJobUpdate({ key: 'job:7', status: 'canceled', outcome: 'Cancelled' })
     expect(__trayJobs()[0]).toMatchObject({ status: 'canceled', cancel_path: null })
+  })
+})
+
+// Go-live week review (2026-11-12): the header showed a green check and "1 job finished" for a
+// job that failed. It says what happened, and mixed results say each part.
+describe('trayHeadline', () => {
+  const job = (status: TrayJob['status'], key = Math.random().toString()): TrayJob => ({
+    key,
+    kind: 'bulk',
+    label: 'x',
+    status,
+    at: 0
+  })
+  const of = (...s: TrayJob['status'][]) => trayHeadline(s.map((x) => job(x)))
+
+  it('a run that worked reads as finished', () => {
+    expect(of('completed')).toEqual({ tone: 'done', text: '1 job finished', note: null })
+    expect(of('completed', 'completed')).toMatchObject({ tone: 'done', text: '2 jobs finished' })
+  })
+
+  it('a failed run reads as failed, never finished', () => {
+    expect(of('error')).toEqual({ tone: 'failed', text: '1 job failed', note: null })
+    expect(of('error', 'error')).toMatchObject({ tone: 'failed', text: '2 jobs failed' })
+  })
+
+  it('mixed results name each part, the failure first', () => {
+    expect(of('completed', 'error', 'completed')).toMatchObject({
+      tone: 'failed',
+      text: '1 job failed, 2 done'
+    })
+    expect(of('error', 'canceled', 'completed')).toMatchObject({
+      tone: 'failed',
+      text: '1 job failed, 1 done, 1 cancelled'
+    })
+  })
+
+  it('a cancelled run is neither done nor failed', () => {
+    expect(of('canceled')).toEqual({ tone: 'cancelled', text: '1 job cancelled', note: null })
+    expect(of('completed', 'canceled')).toMatchObject({
+      tone: 'done',
+      text: '1 job done, 1 cancelled'
+    })
+  })
+
+  it('while something runs it leads, and a failure beside it is still said', () => {
+    expect(of('running', 'queued')).toEqual({ tone: 'running', text: '2 jobs running', note: null })
+    expect(of('running', 'error', 'completed')).toEqual({
+      tone: 'running',
+      text: '1 job running',
+      note: '1 failed'
+    })
   })
 })

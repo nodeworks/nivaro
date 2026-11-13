@@ -149,6 +149,51 @@ export function applyJobUpdate(p: JobProgressPayload, now = Date.now()): void {
   notify()
 }
 
+export interface TrayHeadline {
+  /** Which mark the header carries: spinner, red alert, green check or the neutral stop. */
+  tone: 'running' | 'failed' | 'done' | 'cancelled'
+  text: string
+  /** While something still runs: what already failed beside it ("1 failed"), else null. */
+  note: string | null
+}
+
+const jobsWord = (n: number) => `${n} job${n === 1 ? '' : 's'}`
+
+/**
+ * The tray header in words that say what happened (go-live week review): a failed run never
+ * reads as "finished" under a green check, and mixed results name each part, failures first —
+ * "1 job failed, 2 done". A run still going leads; a failure beside it rides as the note.
+ */
+export function trayHeadline(list: TrayJob[]): TrayHeadline {
+  let running = 0
+  let failed = 0
+  let done = 0
+  let cancelled = 0
+  for (const j of list) {
+    if (j.status === 'running' || j.status === 'queued') running++
+    else if (j.status === 'error') failed++
+    else if (j.status === 'canceled') cancelled++
+    else done++
+  }
+  if (running > 0)
+    return {
+      tone: 'running',
+      text: `${jobsWord(running)} running`,
+      note: failed > 0 ? `${failed} failed` : null
+    }
+  const parts: Array<[number, string]> = [
+    [failed, 'failed'],
+    [done, done && (failed || cancelled) ? 'done' : 'finished'],
+    [cancelled, 'cancelled']
+  ]
+  const text = parts
+    .filter(([n]) => n > 0)
+    .map(([n, word], i) => (i === 0 ? `${jobsWord(n)} ${word}` : `${n} ${word}`))
+    .join(', ')
+  const tone = failed > 0 ? 'failed' : done > 0 ? 'done' : 'cancelled'
+  return { tone, text, note: null }
+}
+
 /** Seed from `GET /my-jobs` (server truth for the keys it names). */
 export function seedJobs(list: Array<JobProgressPayload & { at?: string }>): void {
   load()
