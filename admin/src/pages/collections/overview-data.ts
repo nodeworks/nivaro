@@ -1,72 +1,13 @@
-import { useQuery } from '@tanstack/react-query'
-import { useCallback, useMemo, useState } from 'react'
+import { type CollectionFavorites, favoriteCollectionsOf } from '@nivaro/shared'
+import { useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 import { useNavFavorites } from '@/layouts/FavoritesNav'
 import { api } from '@/lib/api'
-import type { CollectionSummary, OverviewStats } from './types'
 
-/** Facts for every collection (admin only; `enabled` false for others — no request). */
-export function useOverviewStats(enabled: boolean) {
-  return useQuery<OverviewStats>({
-    queryKey: ['collections-overview-stats'],
-    queryFn: () => api.get('/collections/overview-stats').then((r) => r.data.data ?? {}),
-    enabled,
-    staleTime: 60_000,
-    retry: false
-  })
-}
-
-/** One collection's hover-card summary, fetched only while `enabled` (the card is open). */
-export function useCollectionSummary(collection: string, enabled: boolean) {
-  return useQuery<CollectionSummary>({
-    queryKey: ['collection-summary', collection],
-    queryFn: () =>
-      api.get(`/collections/${encodeURIComponent(collection)}/summary`).then((r) => r.data.data),
-    enabled,
-    staleTime: 60_000,
-    retry: false
-  })
-}
-
-// ─── Your own use (this browser) ───────────────────────────────────────────────
-
-const USAGE_KEY = 'nvr_collections_usage'
-const MAX_RECENT = 12
-
-interface Usage {
-  /** Newest first. */
-  recent: string[]
-  counts: Record<string, number>
-}
-
-function readUsage(): Usage {
-  try {
-    const raw = JSON.parse(localStorage.getItem(USAGE_KEY) ?? 'null') as Usage | null
-    if (raw && Array.isArray(raw.recent) && raw.counts && typeof raw.counts === 'object')
-      return { recent: raw.recent.map(String), counts: raw.counts }
-  } catch {
-    /* private window / bad JSON */
-  }
-  return { recent: [], counts: {} }
-}
-
-/** Remember that this person opened a collection from the page (Recent + Most used). */
-export function recordCollectionOpen(collection: string): void {
-  const u = readUsage()
-  const recent = [collection, ...u.recent.filter((c) => c !== collection)].slice(0, MAX_RECENT)
-  const counts = { ...u.counts, [collection]: (u.counts[collection] ?? 0) + 1 }
-  try {
-    localStorage.setItem(USAGE_KEY, JSON.stringify({ recent, counts }))
-  } catch {
-    /* storage off */
-  }
-}
-
-/** Read once per page visit (a click navigates away, so nothing goes stale while shown). */
-export function useCollectionUsage(): Usage {
-  const [usage] = useState(readUsage)
-  return usage
-}
+/**
+ * The admin app's own pieces of the Collections page; the page itself is the shared
+ * CollectionsDirectory (@nivaro/shared).
+ */
 
 // ─── My favorites = sidebar favorites ─────────────────────────────────────────
 
@@ -74,18 +15,12 @@ export function useCollectionUsage(): Usage {
  * A person's favorite collection is a sidebar favorite whose path is /collections/<name>
  * (users.preferences.nav_favorites), so starring one here also puts it in the sidebar's
  * Favorites and follows the person between machines. Personal — not the shared "Pinned"
- * list an administrator sets for everyone (shared-pins.ts).
+ * list an administrator sets for everyone. The admin app passes this so the sidebar and the
+ * page share one optimistic copy.
  */
-export function useFavoriteCollections() {
+export function useFavoriteCollections(): CollectionFavorites {
   const { favorites, save } = useNavFavorites()
-  const favorite = useMemo(() => {
-    const set = new Set<string>()
-    for (const f of favorites.items) {
-      const m = /^\/collections\/([^/?#]+)$/.exec(f.path)
-      if (m) set.add(decodeURIComponent(m[1]))
-    }
-    return set
-  }, [favorites])
+  const favorite = useMemo(() => favoriteCollectionsOf(favorites.items), [favorites])
   const toggle = useCallback(
     async (collection: string, label: string) => {
       const path = `/collections/${encodeURIComponent(collection)}`

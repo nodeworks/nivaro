@@ -1,13 +1,14 @@
-import { toastError } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useRef } from 'react'
 import { toast } from 'sonner'
-import { api } from '@/lib/api'
+import { useNivaroClient } from '../../context'
+import { get, put } from '../../lib/commands'
+import { toastError } from '../../lib/error-toast'
 
 /**
  * Pinned collections — the list an administrator puts at the top of the Collections page
  * for EVERYONE (GET/PUT /api/collection-pins). Not the person's own favorites: those are
- * sidebar favorites (overview-data.ts useFavoriteCollections).
+ * sidebar favorites (directory-data.ts useNavFavoriteCollections).
  *
  * The server answers only collections the reader may read. Admin edits show at once
  * (optimistic) and go out one at a time, in order; a failed save puts the list back to what
@@ -29,13 +30,14 @@ export function movePin(list: string[], name: string, delta: -1 | 1): string[] {
 }
 
 export function useSharedPins(enabled = true) {
+  const client = useNivaroClient()
   const qc = useQueryClient()
   const query = useQuery<string[]>({
     queryKey: PINS_QUERY_KEY,
     queryFn: () =>
-      api
-        .get('/collection-pins')
-        .then((r) => (r.data?.data?.collections as string[] | undefined) ?? []),
+      client
+        .request<{ data?: { collections?: string[] } }>(get('/collection-pins'))
+        .then((r) => r.data?.collections ?? []),
     enabled,
     staleTime: 30_000,
     retry: 1
@@ -55,8 +57,10 @@ export function useSharedPins(enabled = true) {
       qc.setQueryData(PINS_QUERY_KEY, next)
       const run = chain.current.then(async () => {
         try {
-          const res = await api.put('/collection-pins', { collections: next })
-          const saved = (res.data?.data?.collections as string[] | undefined) ?? next
+          const res = await client.request<{ data?: { collections?: string[] } }>(
+            put('/collection-pins', { collections: next })
+          )
+          const saved = res.data?.collections ?? next
           stored.current = saved
           // Only the newest save repaints from the answer; an older one is already superseded.
           if (inFlight.current === 1) qc.setQueryData(PINS_QUERY_KEY, saved)
@@ -71,7 +75,7 @@ export function useSharedPins(enabled = true) {
       chain.current = run
       return run
     },
-    [qc]
+    [client, qc]
   )
 
   const pins = query.data ?? []

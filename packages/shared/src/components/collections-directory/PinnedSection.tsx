@@ -3,26 +3,29 @@ import {
   DndContext,
   type DragEndEvent,
   KeyboardSensor,
+  type Modifier,
   PointerSensor,
   useSensor,
   useSensors
 } from '@dnd-kit/core'
-import { restrictToVerticalAxis } from '@dnd-kit/modifiers'
 import {
   arrayMove,
   SortableContext,
   sortableKeyboardCoordinates,
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
-import { ErrorNotice } from '@nivaro/shared'
 import { MoreHorizontal, Pin } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { Skeleton } from '@/components/ui/skeleton'
-import type { Collection } from '@/lib/api'
+import { ErrorNotice } from '../ErrorNotice'
+import { Skeleton } from '../ui/skeleton'
 import { label } from './page-model'
 import { FolderHeader, Section, SortableRow } from './sections'
+import type { DirectoryCollection as Collection } from './types'
 
 export const PINNED_KEY = '__pinned__'
+
+/** Rows only move up and down (what @dnd-kit/modifiers' restrictToVerticalAxis does). */
+const restrictToVerticalAxis: Modifier = ({ transform }) => ({ ...transform, x: 0 })
 
 export interface PinnedRowOptions {
   /** Admins: the drag handle at the row's left. */

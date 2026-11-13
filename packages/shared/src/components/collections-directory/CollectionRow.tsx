@@ -11,22 +11,57 @@ import {
   Star,
   Workflow
 } from 'lucide-react'
-import { type FocusEvent, type ReactNode, useState } from 'react'
-import { Link } from 'react-router'
-import { Checkbox } from '@/components/ui/checkbox'
-import type { Collection } from '@/lib/api'
 import {
-  cn,
-  formatDateTime,
-  formatNumber,
-  formatRelative,
-  resolveCollectionIcon,
-  titleCase
-} from '@/lib/utils'
+  type AnchorHTMLAttributes,
+  type FocusEvent,
+  forwardRef,
+  type MouseEvent,
+  type ReactNode,
+  useState
+} from 'react'
+import { useNavigation } from '../../context'
+import { cn, formatDateTime, formatNumber, resolveCollectionIcon, titleCase } from '../../lib/utils'
+import { Checkbox } from '../ui/checkbox'
 import { CollectionHoverCard, useHoverIntent } from './CollectionHoverCard'
 import { CollectionRowMenu } from './CollectionRowMenu'
-import { recordCollectionOpen } from './overview-data'
-import type { CollectionStat, Density, FolderOption } from './types'
+import { recordCollectionOpen } from './directory-data'
+import type {
+  DirectoryCollection as Collection,
+  CollectionStat,
+  Density,
+  FolderOption,
+  RowMenuLink
+} from './types'
+
+/** The admin's route for a collection's records — the default when the host gives none. */
+export const defaultCollectionPath = (collection: string) =>
+  `/collections/${encodeURIComponent(collection)}`
+
+/**
+ * An in-app link through the host's navigation: a plain left click navigates in place;
+ * a modified or middle click, or a click the caller already handled, keeps the browser's own
+ * behaviour (new tab, nothing).
+ */
+export const HostLink = forwardRef<
+  HTMLAnchorElement,
+  AnchorHTMLAttributes<HTMLAnchorElement> & { to: string }
+>(function HostLink({ to, onClick, ...rest }, ref) {
+  const { navigate } = useNavigation()
+  return (
+    <a
+      ref={ref}
+      href={to}
+      {...rest}
+      onClick={(e: MouseEvent<HTMLAnchorElement>) => {
+        onClick?.(e)
+        if (e.defaultPrevented) return
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+        e.preventDefault()
+        navigate(to)
+      }}
+    />
+  )
+})
 
 const MAX_BADGES = 3
 
@@ -38,9 +73,9 @@ export function CollectionAvatar({
   icon,
   size = 'md'
 }: {
-  color: string | null
+  color?: string | null
   name: string
-  icon: string | null
+  icon?: string | null
   /** md = 24px (default), sm = 20px (compact rows). */
   size?: 'sm' | 'md'
 }) {
@@ -125,7 +160,7 @@ function Badges({ items }: { items: BadgeSpec[] }) {
   const shown = items.slice(0, MAX_BADGES)
   const rest = items.slice(MAX_BADGES)
   return (
-    <span className='hidden shrink-0 items-center gap-1 sm:flex'>
+    <span data-cdr='' className='hidden shrink-0 items-center gap-1 sm:[&[data-cdr]]:flex'>
       {shown.map((b) => (
         <Badge key={b.key} spec={b} />
       ))}
@@ -173,6 +208,30 @@ function KeyText({ text, at, len }: { text: string; at: number; len: number }) {
 
 // ─── Stats ────────────────────────────────────────────────────────────────────
 
+/**
+ * "3h ago" within a week, else the short date ("Nov 2", "Mar 4, 2025"): the column is narrow,
+ * so it never takes the full timestamp the exact-time preference gives elsewhere — the full
+ * stamp is in the tip.
+ */
+export function shortWhen(iso: string, now = Date.now()): string {
+  const d = new Date(iso)
+  const t = d.getTime()
+  if (Number.isNaN(t)) return '—'
+  const mins = Math.floor((now - t) / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 7) return `${days}d ago`
+  const sameYear = d.getFullYear() === new Date(now).getFullYear()
+  return d.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' })
+  })
+}
+
 function Stats({ stat }: { stat: CollectionStat }) {
   const rows =
     stat.rows == null ? (
@@ -187,10 +246,10 @@ function Stats({ stat }: { stat: CollectionStat }) {
   return (
     <span className='flex shrink-0 items-center gap-3 text-[11px] tabular-nums text-slate-500 dark:text-slate-400'>
       <span className='w-16 text-right'>{rows}</span>
-      <span className='hidden w-16 text-right md:block'>
+      <span data-cdr='' className='hidden w-16 whitespace-nowrap text-right md:[&[data-cdr]]:block'>
         {stat.changed_at ? (
           <span data-tip={`Last change ${formatDateTime(stat.changed_at)}`}>
-            {formatRelative(stat.changed_at)}
+            {shortWhen(stat.changed_at)}
           </span>
         ) : (
           <span
@@ -231,6 +290,9 @@ export function CollectionRow({
   quietPin = false,
   folders,
   onMove,
+  recordsPath,
+  editPath,
+  menuExtra,
   selecting,
   selected,
   onSelect,
@@ -256,7 +318,14 @@ export function CollectionRow({
   /** In the Pinned section the pin is implied: show it only on hover/focus, as "Unpin". */
   quietPin?: boolean
   folders: FolderOption[]
-  onMove: (group: string | null) => void
+  /** Host can move collections between folders (admin app); absent = no Move to folder. */
+  onMove?: (group: string | null) => void
+  /** Where the collection's records open in this app (default: the admin's /collections/…). */
+  recordsPath?: string
+  /** Host-only ✏ link to the collection's editor (admin app). */
+  editPath?: string
+  /** Host-only group in the ⋯ menu (admin app: Data model pages). */
+  menuExtra?: { heading: string; items: RowMenuLink[] }
   selecting: boolean
   selected: boolean
   onSelect: () => void
@@ -272,6 +341,7 @@ export function CollectionRow({
   const compact = density === 'compact'
   const [hot, setHot] = useState(false)
   const card = useHoverIntent(isAdmin)
+  const openPath = recordsPath ?? defaultCollectionPath(name)
 
   const at = matchIndex(name, highlight)
   const showKey = hot || at >= 0
@@ -296,8 +366,8 @@ export function CollectionRow({
     <div
       data-collection={name}
       className={cn(
-        'group/row relative flex w-full items-center gap-2 transition-colors duration-150 hover:bg-[#00ceff]/[0.04] focus-within:bg-[#00ceff]/[0.04] motion-reduce:transition-none dark:hover:bg-[#00ceff]/[0.06] dark:focus-within:bg-[#00ceff]/[0.06]',
-        selected && 'bg-[#00ceff]/[0.07] dark:bg-[#00ceff]/[0.1]',
+        'group/row relative flex w-full items-center gap-2 transition-colors duration-150 hover:bg-nvr-cyan/[0.04] focus-within:bg-nvr-cyan/[0.04] motion-reduce:transition-none dark:hover:bg-nvr-cyan/[0.06] dark:focus-within:bg-nvr-cyan/[0.06]',
+        selected && 'bg-nvr-cyan/[0.07] dark:bg-nvr-cyan/[0.1]',
         compact ? 'h-7' : 'min-h-10 py-1',
         indent ? 'pl-2 pr-2' : dragHandle ? 'pr-2' : 'pl-4 pr-2'
       )}
@@ -317,8 +387,8 @@ export function CollectionRow({
         />
       )}
 
-      <Link
-        to={`/collections/${encodeURIComponent(name)}`}
+      <HostLink
+        to={openPath}
         onClick={(e) => {
           card.close()
           if (selecting) {
@@ -374,23 +444,24 @@ export function CollectionRow({
         </span>
         <Badges items={badges} />
         {stat && <Stats stat={stat} />}
-      </Link>
+      </HostLink>
 
-      {isAdmin && (
-        <Link
-          to={`/data-model/${encodeURIComponent(col.collection)}`}
+      {isAdmin && editPath && (
+        <HostLink
+          to={editPath}
           aria-label={`Edit ${displayName}`}
           data-tip='Edit fields, forms and settings'
           data-collection-edit
+          data-cdr=''
           onClick={(e) => e.stopPropagation()}
           className={cn(
             // Phones: the ⋯ menu carries editing; the row keeps its width for the name.
-            'hidden h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 sm:flex dark:text-slate-500 dark:hover:bg-white/10 dark:hover:text-slate-300',
+            'hidden h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 sm:[&[data-cdr]]:flex dark:text-slate-500 dark:hover:bg-white/10 dark:hover:text-slate-300',
             REVEAL
           )}
         >
           <Pencil className='h-3.5 w-3.5' />
-        </Link>
+        </HostLink>
       )}
       {isAdmin && onTogglePinned && (
         <button
@@ -401,6 +472,7 @@ export function CollectionRow({
           aria-pressed={pinnedForAll}
           data-tip={pinnedForAll ? 'Unpin for everyone' : 'Pin to the top for everyone'}
           data-collection-pin
+          data-cdr=''
           onClick={(e) => {
             e.preventDefault()
             e.stopPropagation()
@@ -408,7 +480,7 @@ export function CollectionRow({
           }}
           className={cn(
             // Phones: Pin for everyone stays in the ⋯ menu.
-            'hidden sm:flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:hover:bg-white/10',
+            'hidden sm:[&[data-cdr]]:flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:hover:bg-white/10',
             pinnedForAll && !quietPin
               ? 'text-slate-600 hover:text-slate-800 dark:text-slate-300 dark:hover:text-slate-100'
               : cn(
@@ -450,6 +522,8 @@ export function CollectionRow({
         col={col}
         displayName={displayName}
         isAdmin={isAdmin}
+        recordsPath={openPath}
+        extra={isAdmin ? menuExtra : undefined}
         favorite={favorite}
         onToggleFavorite={onToggleFavorite}
         pinnedForAll={pinnedForAll}
@@ -459,7 +533,7 @@ export function CollectionRow({
         folders={folders}
         onMove={onMove}
         // Touch screens have no hover: keep the menu in sight there.
-        className={cn(REVEAL, '[@media(hover:none)]:opacity-100')}
+        className={cn(REVEAL, '[@media(hover:none)]:[&[data-cdr]]:opacity-100')}
       />
     </div>
   )

@@ -1,6 +1,7 @@
+import type { DirectoryFolder as FolderOption } from '@nivaro/shared'
 import { describe, expect, it } from 'vitest'
+import type { Collection } from '@/lib/api'
 import { suggestFolders } from './folder-suggestions'
-import type { Collection, FolderOption } from './types'
 
 let id = 0
 const col = (collection: string, group: string | null = null): Collection => ({

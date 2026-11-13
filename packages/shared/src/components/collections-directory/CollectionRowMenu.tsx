@@ -5,24 +5,19 @@ import {
   Check,
   ChevronRight,
   Copy,
-  Download,
   ExternalLink,
   FolderInput,
-  GitBranch,
-  LayoutTemplate,
-  ListChecks,
   MoreHorizontal,
   Pin,
   PinOff,
   Rows3,
-  Settings2,
   Star,
-  StarOff,
-  TableProperties
+  StarOff
 } from 'lucide-react'
-import { type ReactNode, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useState } from 'react'
 import { toast } from 'sonner'
+import { useNavigation } from '../../context'
+import { cn } from '../../lib/utils'
 import {
   Command,
   CommandGroup,
@@ -30,28 +25,24 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator
-} from '@/components/ui/command'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import type { Collection } from '@/lib/api'
-import { cn } from '@/lib/utils'
-import { recordCollectionOpen } from './overview-data'
-import type { FolderOption } from './types'
+} from '../ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { recordCollectionOpen } from './directory-data'
+import type { DirectoryCollection, FolderOption, RowMenuLink } from './types'
 
 const ITEM = 'gap-2 text-[12px] [&_svg]:size-3.5 [&_svg]:text-slate-400 dark:[&_svg]:text-slate-500'
 
-const DATA_MODEL_TABS: Array<{ tab: string; label: string; icon: ReactNode }> = [
-  { tab: 'fields', label: 'Fields', icon: <TableProperties /> },
-  { tab: 'relations', label: 'Relations', icon: <GitBranch /> },
-  { tab: 'groups', label: 'Form layouts', icon: <LayoutTemplate /> },
-  { tab: 'rules', label: 'Rules', icon: <ListChecks /> },
-  { tab: 'imports', label: 'Imports', icon: <Download /> },
-  { tab: 'settings', label: 'Settings', icon: <Settings2 /> }
-]
-
+/**
+ * A row's ⋯ menu: open, favorite, pin for everyone (admins), the Pinned section's moves,
+ * copy key — plus whatever the host adds (`extra`: the admin app's Data model pages) and,
+ * when the host can move collections (`onMove`), Move to folder.
+ */
 export function CollectionRowMenu({
   col,
   displayName,
   isAdmin,
+  recordsPath,
+  extra,
   favorite,
   onToggleFavorite,
   pinnedForAll = false,
@@ -62,9 +53,13 @@ export function CollectionRowMenu({
   onMove,
   className
 }: {
-  col: Collection
+  col: DirectoryCollection
   displayName: string
   isAdmin: boolean
+  /** Where the collection's records open in this app. */
+  recordsPath: string
+  /** The host's own group of links (heading + items), e.g. the admin's Data model pages. */
+  extra?: { heading: string; items: RowMenuLink[] }
   favorite: boolean
   onToggleFavorite: () => void
   pinnedForAll?: boolean
@@ -72,15 +67,14 @@ export function CollectionRowMenu({
   onMoveUp?: () => void
   onMoveDown?: () => void
   folders: FolderOption[]
-  onMove: (group: string | null) => void
+  /** Absent = no Move to folder (a host without folder editing). */
+  onMove?: (group: string | null) => void
   className?: string
 }) {
-  const navigate = useNavigate()
+  const { navigate } = useNavigation()
   const [open, setOpen] = useState(false)
   const [page, setPage] = useState<'main' | 'folders'>('main')
   const name = col.collection
-  const enc = encodeURIComponent(name)
-  const recordsPath = `/collections/${enc}`
 
   const onOpenChange = (v: boolean) => {
     setOpen(v)
@@ -104,6 +98,7 @@ export function CollectionRowMenu({
           type='button'
           aria-label={`More actions for ${displayName}`}
           data-tip='More actions'
+          data-cdr=''
           onClick={(e) => e.stopPropagation()}
           className={cn(
             'flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition-opacity hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-700 motion-reduce:transition-none dark:text-slate-500 dark:hover:bg-white/10 dark:hover:text-slate-300 dark:data-[state=open]:bg-white/10 dark:data-[state=open]:text-slate-200',
@@ -147,16 +142,16 @@ export function CollectionRowMenu({
                   Open in new tab
                 </CommandItem>
               </CommandGroup>
-              {isAdmin && (
+              {extra && extra.items.length > 0 && (
                 <>
                   <CommandSeparator />
-                  <CommandGroup heading='Data model'>
-                    {DATA_MODEL_TABS.map((t) => (
+                  <CommandGroup heading={extra.heading}>
+                    {extra.items.map((t) => (
                       <CommandItem
-                        key={t.tab}
-                        value={`dm-${t.tab}`}
+                        key={t.key}
+                        value={`extra-${t.key}`}
                         className={ITEM}
-                        onSelect={run(() => navigate(`/data-model/${enc}?tab=${t.tab}`))}
+                        onSelect={run(() => navigate(t.path))}
                       >
                         {t.icon}
                         {t.label}
@@ -197,7 +192,7 @@ export function CollectionRowMenu({
                     Move down
                   </CommandItem>
                 )}
-                {isAdmin && (
+                {isAdmin && onMove && (
                   <CommandItem
                     value='move-to-folder'
                     className={ITEM}
@@ -233,7 +228,7 @@ export function CollectionRowMenu({
                   value='folder-none'
                   keywords={['No folder']}
                   className={ITEM}
-                  onSelect={run(() => col.group != null && onMove(null))}
+                  onSelect={run(() => col.group != null && onMove?.(null))}
                 >
                   <span className='h-2 w-2 shrink-0 rounded-full border border-slate-300 dark:border-slate-600' />
                   No folder
@@ -245,7 +240,7 @@ export function CollectionRowMenu({
                     value={`folder-${f.key}`}
                     keywords={[f.label]}
                     className={ITEM}
-                    onSelect={run(() => col.group !== f.key && onMove(f.key))}
+                    onSelect={run(() => col.group !== f.key && onMove?.(f.key))}
                   >
                     <span
                       className='h-2 w-2 shrink-0 rounded-full bg-slate-300 dark:bg-slate-600'

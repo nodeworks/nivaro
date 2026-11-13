@@ -1,10 +1,9 @@
-import * as PopoverPrimitive from '@radix-ui/react-popover'
 import { ArrowLeft, ArrowRight, LayoutTemplate, Workflow } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
-import { Popover, PopoverContent } from '@/components/ui/popover'
-import { Skeleton } from '@/components/ui/skeleton'
-import { formatDateTime, formatRelative, titleCase } from '@/lib/utils'
-import { useCollectionSummary } from './overview-data'
+import { formatDateTime, formatRelative, titleCase } from '../../lib/utils'
+import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
+import { Skeleton } from '../ui/skeleton'
+import { useCollectionSummary } from './directory-data'
 
 const OPEN_DELAY_MS = 400
 const CLOSE_DELAY_MS = 150
@@ -218,7 +217,7 @@ export function CollectionHoverCard({
 }) {
   return (
     <Popover open={open} onOpenChange={(v) => !v && onClose()}>
-      <PopoverPrimitive.Anchor asChild>{children}</PopoverPrimitive.Anchor>
+      <PopoverAnchor asChild>{children}</PopoverAnchor>
       {open && (
         <PopoverContent
           side='right'

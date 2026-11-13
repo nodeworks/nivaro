@@ -1,7 +1,7 @@
-import { titleCase } from '@/lib/utils'
+import { titleCase } from '../../lib/utils'
 import type {
   ChipKey,
-  Collection,
+  DirectoryCollection as Collection,
   CollectionStat,
   FolderOption,
   OverviewStats,
@@ -9,7 +9,7 @@ import type {
 } from './types'
 
 /**
- * Everything the Collections page shows, worked out from the registry rows,
+ * Everything the collections directory shows, worked out from the registry rows,
  * the admin stats and the page state — pure, so the rules are testable.
  *
  * Folders: a "folder" is a nivaro_collections row whose name another row uses

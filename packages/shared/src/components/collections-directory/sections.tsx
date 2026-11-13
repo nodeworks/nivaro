@@ -2,11 +2,11 @@ import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { ChevronDown, ChevronRight, FolderOpen, GripVertical } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { cn } from '@/lib/utils'
+import { cn } from '../../lib/utils'
 import type { FolderOption } from './types'
 
 /**
- * The Collections page's building blocks (pages/Collections.tsx and PinnedSection):
+ * The collections directory's building blocks (CollectionsDirectory and PinnedSection):
  * a bordered section, its sticky header and the sortable wrapper used by Arrange mode
  * and by the Pinned section.
  */
