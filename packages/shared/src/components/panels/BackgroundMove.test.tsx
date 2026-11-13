@@ -265,6 +265,12 @@ describe('helpers', () => {
       expect(said('HTTP 500: {"message":"Invalid column name \'vendor_site\'."}')).toBeNull()
     })
 
+    it('a cut answer that is only a status phrase is still not words', () => {
+      // The mark added to a cut sentence must not hide what the sentence is.
+      expect(said('HTTP 400: "Bad Request')).toBeNull()
+      expect(said('HTTP 500: {"message":"Internal Server Error')).toBeNull()
+    })
+
     it('nothing for a reason that has no status line: it is read the usual way', () => {
       expect(partnerWords('Contact email is required')).toBeNull()
       expect(partnerWords('fetch failed (Error: connect ECONNREFUSED 10.0.0.1:443)')).toBeNull()

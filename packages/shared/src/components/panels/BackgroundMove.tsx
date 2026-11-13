@@ -175,7 +175,8 @@ export function partnerWords(reason: string): string | null {
   const full = (words ?? '').replace(/\s+/g, ' ').trim()
   // A cut sentence says so: it must never just stop mid-word as if that were all of it.
   const said = cut || full.length > 300 ? `${full.slice(0, 299).trimEnd()}…` : full
-  if (full.length < 3 || /<[a-z!/]/i.test(said) || isRawErrorText(said)) return null
+  // Judged on the sentence itself, before the mark: "Bad Request…" is still a status phrase.
+  if (full.length < 3 || /<[a-z!/]/i.test(full) || isRawErrorText(full)) return null
   const lead = reason
     .slice(0, mark.index)
     .replace(/[\s:·—–-]+$/, '')
