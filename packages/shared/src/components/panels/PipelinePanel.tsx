@@ -30,6 +30,7 @@ import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { errorToastOptions, toastError } from '../../lib/error-toast'
+import { partnerMoveFailure, partnerMoveReading } from '../../lib/move-failure'
 import { OPEN_MOVE_STATE_EVENT, type OpenMoveStateRequest } from '../../lib/move-state'
 import {
   signalSentence,
@@ -37,7 +38,6 @@ import {
   useRecordSignalWhile
 } from '../../lib/presence-signals'
 import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
-import { partnerMoveFailure } from '../../lib/move-failure'
 import { userErrorMessage } from '../../lib/safe-error'
 import { serverNow } from '../../lib/server-clock'
 import { userCardQuery } from '../../lib/user-cards'
@@ -3101,7 +3101,11 @@ function PipelinePanelInner({
       toast.error(refusedBy?.title ?? userErrorMessage(err, 'Failed to execute transition'), {
         duration: 12000,
         // What to do next + Copy details (lib/error-toast.ts); "Why?" below wins the action slot.
-        ...errorToastOptions(err, { action: 'Transition' }),
+        // A partner's refusal copies what the toast said and the other system's answer as
+        // stored, never the generic reading of a 422.
+        ...errorToastOptions(refusedBy ? partnerMoveReading(err, refusedBy) : err, {
+          action: 'Transition'
+        }),
         ...(refusedBy ? { description: refusedBy.description } : {}),
         // #1867: a refusal carries "Why?" — the role, owner or access rule
         // that stopped it, and who can change it.
@@ -4057,7 +4061,11 @@ function PipelineTransitionButtonsInner({
       toast.error(refusedBy?.title ?? userErrorMessage(err, 'Failed to execute transition'), {
         duration: 12000,
         // What to do next + Copy details (lib/error-toast.ts); "Why?" below wins the action slot.
-        ...errorToastOptions(err, { action: 'Transition' }),
+        // A partner's refusal copies what the toast said and the other system's answer as
+        // stored, never the generic reading of a 422.
+        ...errorToastOptions(refusedBy ? partnerMoveReading(err, refusedBy) : err, {
+          action: 'Transition'
+        }),
         ...(refusedBy ? { description: refusedBy.description } : {}),
         // #1867: a refusal carries "Why?" — the role, owner or access rule
         // that stopped it, and who can change it.

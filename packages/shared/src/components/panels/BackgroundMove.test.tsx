@@ -131,6 +131,7 @@ function render(ui: 'header' | 'panel', scene: Scene) {
         if (scene.refuse)
           throw Object.assign(new Error('Request failed with status 422'), {
             status: 422,
+            requestId: 'req-9',
             response: { status: 422, error: scene.refuse }
           })
         if (cmd._body?.accept_pending === true) {
@@ -726,6 +727,31 @@ describe('a move another system refused, pressed the ordinary way', () => {
         'Submit order did not go through',
         'Submission failed: The project is not valid'
       ])
+    })
+
+    // Support needs the other system's answer, not the generic reading of a 422.
+    it(`${ui}: Copy details copies what the toast said and the answer as stored`, async () => {
+      const said = vi.spyOn(toast, 'error')
+      const written: string[] = []
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: async (t: string) => void written.push(t) }
+      })
+      const { calls } = render(ui, { refuse: REFUSED, expanded: true })
+      await until(() => !!button('Submit order'))
+      await act(async () => button('Submit order')?.click())
+      await until(() => posts(calls).length > 0 && said.mock.calls.length > 0)
+      const opts = said.mock.calls
+        .map((c) => c[1] as { action?: { label: string; onClick: () => void } } | undefined)
+        .find((o) => o?.action?.label === 'Copy details')
+      expect(opts).toBeDefined()
+      await act(async () => opts?.action?.onClick())
+      await until(() => written.length > 0)
+      expect(written[0]).toContain(
+        'What happened: Submit order did not go through — Submission failed: The project is not valid'
+      )
+      expect(written[0]).toContain(`Technical: ${REFUSED}`)
+      expect(written[0]).not.toMatch(/That request could not be completed/)
     })
   }
 })

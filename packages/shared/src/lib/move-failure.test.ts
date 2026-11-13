@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { partnerMoveFailure } from './move-failure'
+import { errorDetailsText } from './error-message'
+import { partnerMoveFailure, partnerMoveReading } from './move-failure'
 
 // A move that calls another system and is refused answers 422 with the reason as stored:
 // 'Submit to Warehouse: submission failed — HTTP 400: "The project is not valid"'. The toast
@@ -155,5 +156,41 @@ describe('a failed move’s toast when another system refused it', () => {
         'Submit to Warehouse'
       )
     ).toBeNull()
+  })
+})
+
+// "Copy details" on that toast is what support gets: it must carry what the toast said and
+// the other system's own answer, not the generic reading of a 422.
+describe('what Copy details puts on the clipboard for a refused move', () => {
+  const err = Object.assign(
+    sdkError(422, {
+      error: 'Submit to Warehouse: submission failed — HTTP 400: "The project is not valid"'
+    }),
+    { requestId: 'req-1' }
+  )
+
+  it('says what the toast said, then the other system’s answer as it was stored', () => {
+    const refusedBy = partnerMoveFailure(err, 'Submit to Warehouse')
+    if (!refusedBy) throw new Error('expected a partner refusal')
+    const text = errorDetailsText(partnerMoveReading(err, refusedBy), {
+      action: 'Transition',
+      page: '/records/inventory_request/7',
+      now: new Date('2026-11-13T12:00:00Z')
+    })
+    expect(text).toContain(
+      'What happened: Submit to Warehouse did not go through — Submission failed: The project is not valid'
+    )
+    expect(text).toContain(
+      'Technical: Submit to Warehouse: submission failed — HTTP 400: "The project is not valid"'
+    )
+    expect(text).toContain('Request id: req-1')
+    expect(text).not.toMatch(/That request could not be completed|Correct the highlighted values/)
+  })
+
+  it('keeps the request id, so the toast still offers Copy details', () => {
+    const refusedBy = partnerMoveFailure(err, 'Submit to Warehouse')
+    if (!refusedBy) throw new Error('expected a partner refusal')
+    expect(partnerMoveReading(err, refusedBy).requestId).toBe('req-1')
+    expect(partnerMoveReading(err, refusedBy).hint).toBeUndefined()
   })
 })
