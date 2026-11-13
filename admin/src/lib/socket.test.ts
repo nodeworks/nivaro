@@ -48,7 +48,11 @@ vi.mock('@nivaro/shared', () => ({
       emit: (e: string, p: unknown) => sink.current(e, p),
       destroy: () => {}
     }
-  }
+  },
+  // Sign-out notes are exercised in packages/shared (sign-out-note) and the security route tests.
+  SIGN_OUT_NOTE_EVENT: 'session:signed-out-note',
+  parseSignOutNote: () => null,
+  saveSignOutNote: () => {}
 }))
 
 import { joinWatchRoom } from './socket'

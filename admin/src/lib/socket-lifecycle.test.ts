@@ -54,7 +54,11 @@ vi.mock('@nivaro/shared', () => ({
     return { isLeader: () => true, onEvent: () => () => {}, emit: () => {}, destroy: () => {} }
   },
   measureClockOffset: () => 120_000,
-  setServerClockOffset
+  setServerClockOffset,
+  // Sign-out notes are exercised in packages/shared (sign-out-note) and the security route tests.
+  SIGN_OUT_NOTE_EVENT: 'session:signed-out-note',
+  parseSignOutNote: () => null,
+  saveSignOutNote: () => {}
 }))
 
 import { adminRealtime, getSocket } from './socket'
