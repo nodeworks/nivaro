@@ -78,6 +78,7 @@ import {
   HEADER_VALUE_LINE
 } from '../lib/header-strip'
 import { loadErrorText } from '../lib/load-error'
+import { useStartsOpen } from '../lib/use-starts-open'
 import { affixesFor, formatWidgetValue } from '../lib/widget-value-format'
 import { BackgroundRunOffer } from './BackgroundRunOffer'
 import { type CacheInfo, CacheStamp, type CustomQueryEnvelope, cacheStampTip } from './CacheStamp'
@@ -1100,7 +1101,7 @@ export function WidgetSlot({
 }: WidgetSlotProps) {
   const fetchCfg = useApiFetchConfig()
   const apiBase = apiBaseProp ?? fetchCfg.apiBase
-  const [open, setOpen] = useState(defaultExpanded)
+  const [open, setOpen] = useStartsOpen(defaultExpanded, true)
   const [widget, setWidget] = useState<WidgetDef | null>(null)
   const [renderData, setRenderData] = useState<Record<string, unknown> | null>(null)
   const [defLoading, setDefLoading] = useState(true)

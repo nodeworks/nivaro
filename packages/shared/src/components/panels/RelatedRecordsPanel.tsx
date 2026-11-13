@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
+import { useStartsOpen } from '../../lib/use-starts-open'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -40,7 +41,7 @@ export function RelatedRecordsPanel({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const { open: openItem } = useItemNavigation()
-  const [expanded, setExpanded] = useState(defaultExpanded)
+  const [expanded, setExpanded] = useStartsOpen(defaultExpanded, false)
   const [adding, setAdding] = useState(false)
   // Most links point at a sibling record — default to this collection.
   const [targetCollection, setTargetCollection] = useState(collection)

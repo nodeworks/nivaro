@@ -12,11 +12,12 @@ import {
   Users,
   X
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { invalidateRecordTasks, OPEN_TASK_STATUSES } from '../../lib/record-tasks'
+import { useStartsOpen } from '../../lib/use-starts-open'
 import { cn, formatDate, formatDateTime, formatRelative } from '../../lib/utils'
 import { TaskDoButton } from '../ai/TaskDo'
 import { Button } from '../ui/button'
@@ -843,14 +844,8 @@ export function TaskPanel({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const { isAdmin, userId } = useItemEditAuth()
-  const [expanded, setExpanded] = useState(false)
-  const syncedFromProp = useRef(false)
-  useEffect(() => {
-    if (!syncedFromProp.current && defaultExpanded !== undefined) {
-      syncedFromProp.current = true
-      setExpanded(defaultExpanded)
-    }
-  }, [defaultExpanded])
+  // Follows the layout's "Starts open" whenever it changes (the editor's toggle, live).
+  const [expanded, setExpanded] = useStartsOpen(defaultExpanded, false)
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
   const [historyOf, setHistoryOf] = useState<number | null>(null)

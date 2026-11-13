@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, Network } from 'lucide-react'
-import { useState } from 'react'
 import { useDrilldown, useItemNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { useStartsOpen } from '../../lib/use-starts-open'
 
 /**
  * Referenced by (#644) — which records point AT this one, per M2O relation:
@@ -37,7 +37,7 @@ export function ReferencedByPanel({
   // the detail sheet (record stays put) instead of navigating away. Hosts
   // without one keep the navigation fallback.
   const drill = useDrilldown()
-  const [expanded, setExpanded] = useState(defaultExpanded)
+  const [expanded, setExpanded] = useStartsOpen(defaultExpanded, true)
 
   const { data: refs = [] } = useQuery({
     queryKey: ['referenced-by', collection, itemId],

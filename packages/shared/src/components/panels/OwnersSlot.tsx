@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, Users } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { useStartsOpen } from '../../lib/use-starts-open'
 import { UserAvatar } from '../UserAvatar'
 
 interface Owner {
@@ -41,14 +41,8 @@ export function OwnersSlot({
   defaultExpanded?: boolean
 }) {
   const client = useNivaroClient()
-  const [expanded, setExpanded] = useState(false)
-  const syncedFromProp = useRef(false)
-  useEffect(() => {
-    if (!syncedFromProp.current && defaultExpanded !== undefined) {
-      syncedFromProp.current = true
-      setExpanded(defaultExpanded)
-    }
-  }, [defaultExpanded])
+  // Follows the layout's "Starts open" whenever it changes (the editor's toggle, live).
+  const [expanded, setExpanded] = useStartsOpen(defaultExpanded, false)
 
   const { data: owners = [] } = useQuery<Owner[]>({
     queryKey: ['pipeline-instance-owners', collection, item],

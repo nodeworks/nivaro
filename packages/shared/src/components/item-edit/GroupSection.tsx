@@ -14,6 +14,7 @@ import { get, post } from '../../lib/commands'
 import { isEmptyValue, isFolded, planFieldGrid, readGroupStructure } from '../../lib/form-structure'
 import { reportSectionUse } from '../../lib/form-usage-beacon'
 import { useRecordReader } from '../../lib/record-loader'
+import { useStartsOpen } from '../../lib/use-starts-open'
 import {
   choiceLabel,
   cn,
@@ -1188,7 +1189,12 @@ export const GroupSection = memo(function GroupSection({
   /** Called once the deferred section opens: the form loads what it holds. */
   onFirstOpen?: (key: string) => void
 }) {
-  const [localCollapsed, setLocalCollapsed] = useState(group.is_collapsed ?? false)
+  // Follows the section's "Starts collapsed" whenever it changes (the layout editor's toggle, live).
+  const [localOpen, setLocalOpen] = useStartsOpen(
+    group.is_collapsed == null ? undefined : !group.is_collapsed,
+    true
+  )
+  const localCollapsed = !localOpen
   // #2698: "Show N more" opened by hand (a folded field with a value opens it on its own).
   const [foldOpen, setFoldOpen] = useState(false)
   // Layout editor canvas: every placement is a selectable shell, the section
@@ -1230,7 +1236,7 @@ export const GroupSection = memo(function GroupSection({
       ? () => setDesignFolded((v) => !v)
       : controlled
         ? onToggle
-        : () => setLocalCollapsed((v) => !v)
+        : () => setLocalOpen((v) => !v)
   // Section use (#2730): expanding a section, or working inside it, counts as opening it.
   const usageOn = !design && layoutId != null
   const reportOpened = () => {

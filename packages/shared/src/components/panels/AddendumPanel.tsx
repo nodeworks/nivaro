@@ -14,6 +14,7 @@ import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { sanitizeHtml } from '../../lib/sanitize-html'
+import { useStartsOpen } from '../../lib/use-starts-open'
 import { titleCase } from '../../lib/utils'
 import {
   type DocumentApplySelection,
@@ -1856,7 +1857,10 @@ export function AddendumPanel({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [sheetOpen, setSheetOpen] = useState(false)
-  const [collapsed, setCollapsed] = useState(!defaultExpanded)
+  const [expandedState, setExpandedState] = useStartsOpen(defaultExpanded, true)
+  const collapsed = !expandedState
+  const setCollapsed = (v: boolean | ((c: boolean) => boolean)) =>
+    setExpandedState((open) => !(typeof v === 'function' ? v(!open) : v))
   const [compare, setCompare] = useState(false)
 
   const {

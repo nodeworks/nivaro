@@ -23,6 +23,7 @@ import {
   useRecordSignalSender
 } from '../../lib/presence-signals'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
+import { useStartsOpen } from '../../lib/use-starts-open'
 import { formatDateTime, formatRelative, titleCase } from '../../lib/utils'
 import { AgentBadge } from '../AgentBadge'
 import { AutolinkedText } from '../AutolinkedText'
@@ -809,14 +810,8 @@ export function CommentPanel({
   const queryClient = useQueryClient()
   // #3232: the record form's field-comment context — labels for "on <Field>" and the jump.
   const fieldComments = useFieldComments()
-  const [expanded, setExpanded] = useState(false)
-  const syncedFromProp = useRef(false)
-  useEffect(() => {
-    if (!syncedFromProp.current && defaultExpanded !== undefined) {
-      syncedFromProp.current = true
-      setExpanded(defaultExpanded)
-    }
-  }, [defaultExpanded])
+  // Follows the layout's "Starts open" whenever it changes (the editor's toggle, live).
+  const [expanded, setExpanded] = useStartsOpen(defaultExpanded, false)
   const [draft, setDraft] = useState('')
   const onUnsentDraftRef = useRef(onUnsentDraft)
   onUnsentDraftRef.current = onUnsentDraft

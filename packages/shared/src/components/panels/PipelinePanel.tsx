@@ -40,6 +40,7 @@ import {
 import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
 import { userErrorMessage } from '../../lib/safe-error'
 import { serverNow } from '../../lib/server-clock'
+import { useStartsOpen } from '../../lib/use-starts-open'
 import { userCardQuery } from '../../lib/user-cards'
 import {
   cn,
@@ -2772,7 +2773,8 @@ function PipelinePanelInner({
   const [comment, setComment] = useState('')
   const [pendingTransition, setPendingTransition] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
-  const [expanded, setExpanded] = useState(false)
+  // Follows the layout's "Starts open" whenever it changes (the editor's toggle, live).
+  const [expanded, setExpanded] = useStartsOpen(defaultExpanded, false)
   const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
   // A refusal the caller can fix here (REFUSAL_FIX_ACTIONS), e.g. PRIORITY_REQUIRED.
   const [fixOffer, setFixOffer] = useState<RefusalFixOffer | null>(null)
@@ -2785,13 +2787,6 @@ function PipelinePanelInner({
   // dialog is open; and the same notice from anyone else's.
   useRecordSignalWhile(collection, item, 'transition', !!pendingTransition || !!requirementsDialog)
   const approvingNames = useRecordSignalPeers(collection, item, 'transition')
-  const syncedFromProp = useRef(false)
-  useEffect(() => {
-    if (!syncedFromProp.current && defaultExpanded !== undefined) {
-      syncedFromProp.current = true
-      setExpanded(defaultExpanded)
-    }
-  }, [defaultExpanded])
   // One decision per press: a double click sent the transition twice (the
   // guard below is awaited, so the button had not disabled yet) and the twin
   // came back as an error toast.
