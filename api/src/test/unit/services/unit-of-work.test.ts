@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { inBackgroundPool } from '../../../db/pool-context.js'
 import {
   DETACHED_BACKLOG,
+  DETACHED_SLOT_MS,
   DETACHED_SLOTS,
   deferEffect,
   detachedEffectsPending,
@@ -128,7 +129,7 @@ describe('unit of work (#793)', () => {
         expect(detachedEffectsPending()).toBe(0)
       })
 
-      it('a deep backlog makes the writer wait for its own effect again', async () => {
+      it('with a deep backlog a writer runs its own effect itself, as before detaching', async () => {
         const gates: Array<() => void> = []
         const held = () => new Promise<void>((r) => gates.push(r))
         for (let i = 0; i < DETACHED_SLOTS + DETACHED_BACKLOG; i++) {
@@ -137,27 +138,69 @@ describe('unit of work (#793)', () => {
           })
         }
         await settle()
+        // The lane is full of runs that are not finishing. A new write must not queue behind
+        // them (one hung partner would then stall every writer): it runs its effect inline
+        // and waits for THAT, which is what every create did before effects could detach.
+        const ran: string[] = []
+        let release: () => void = () => {}
         let returned = false
         const late = runUnit('late', async () => {
-          await deferEffect('late', () => {}, { detached: true })
+          await deferEffect(
+            'late',
+            async () => {
+              ran.push('late:start')
+              await new Promise<void>((r) => {
+                release = r
+              })
+              ran.push('late:end')
+            },
+            { detached: true }
+          )
         }).then(() => {
           returned = true
         })
         await settle()
-        // A bulk load must not outrun its flows without bound: this create waits, as every
-        // create did before effects could be detached.
+        expect(ran).toEqual(['late:start'])
         expect(returned).toBe(false)
-        for (let k = 0; k < 400 && !returned; k++) {
-          gates.shift()?.()
-          await settle()
-        }
+        release()
         await late
-        expect(returned).toBe(true)
+        expect(ran).toEqual(['late:start', 'late:end'])
+        // The backlog is exactly as it was: the late write neither waited for it nor joined it.
+        expect(detachedEffectsPending()).toBe(DETACHED_SLOTS + DETACHED_BACKLOG)
         while (gates.length > 0) {
           gates.shift()?.()
           await settle()
         }
         expect(detachedEffectsPending()).toBe(0)
+      })
+
+      it('a run that does not end gives its slot to the next one after a time limit', async () => {
+        vi.useFakeTimers()
+        try {
+          const started: string[] = []
+          const releases: Array<() => void> = []
+          const stuck = (name: string) => () => {
+            started.push(name)
+            return new Promise<void>((r) => releases.push(r))
+          }
+          for (const name of ['a', 'b', 'c', 'd']) {
+            await runUnit(name, async () => {
+              await deferEffect(name, stuck(name), { detached: true })
+            })
+          }
+          await vi.advanceTimersByTimeAsync(1)
+          expect(started).toEqual(['a', 'b'])
+          await vi.advanceTimersByTimeAsync(DETACHED_SLOT_MS)
+          // Both stuck runs lost their slots; the two that waited have started. The stuck
+          // ones are still counted: they have not finished.
+          expect(started).toEqual(['a', 'b', 'c', 'd'])
+          expect(detachedEffectsPending()).toBe(4)
+          for (const r of releases) r()
+          await vi.advanceTimersByTimeAsync(1)
+          expect(detachedEffectsPending()).toBe(0)
+        } finally {
+          vi.useRealTimers()
+        }
       })
 
       it('an effect that waited runs in the context of the unit that queued it', async () => {

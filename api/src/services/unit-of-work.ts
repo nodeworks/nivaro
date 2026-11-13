@@ -105,9 +105,15 @@ export function deferEffect(
  * on the small background pool, where each create used to wait for its own.
  * - At most DETACHED_SLOTS run at once per tenant; the rest wait their turn in
  *   the order their units committed.
- * - Once DETACHED_BACKLOG are waiting, a committing unit waits for its own
- *   detached effects again, so a bulk load cannot outrun them without bound
- *   (in memory or against the partner). A person's single create never sees it.
+ * - Once DETACHED_BACKLOG are waiting, a committing unit runs its detached
+ *   effects ITSELF and waits for them, exactly as every writer did before
+ *   effects could detach. A bulk load therefore cannot outrun its effects
+ *   without bound (in memory or against the partner), and no writer ever
+ *   queues behind other writers' effects: a partner that hangs slows the
+ *   writes that call it, never every write of the tenant.
+ * - A run that has not finished after DETACHED_SLOT_MS gives its slot to the
+ *   next one (it carries on and still records its own outcome), so runs that
+ *   hang cannot hold the lane for good.
  * - A waiting effect runs in the async context of the unit that queued it (its
  *   tenant, its request), not of whichever effect freed the slot.
  * - What is queued or running is counted, so shutdown can wait for it
@@ -115,6 +121,7 @@ export function deferEffect(
  */
 export const DETACHED_SLOTS = 2
 export const DETACHED_BACKLOG = 20
+export const DETACHED_SLOT_MS = 30_000
 
 interface DetachedLane {
   running: number
@@ -149,7 +156,11 @@ function laneFor(key: string): DetachedLane {
   return lane
 }
 
-/** Start `e` when its tenant has a free slot; resolves when it has finished. */
+/**
+ * Start `e` when its tenant has a free slot. Resolves when it has finished, or
+ * when it has held its slot for DETACHED_SLOT_MS (the next effect of its unit
+ * then starts; this one carries on).
+ */
 function runDetached(e: Effect): Promise<void> {
   const key = getTenantId() ?? ''
   const lane = laneFor(key)
@@ -159,14 +170,28 @@ function runDetached(e: Effect): Promise<void> {
   return new Promise<void>((resolve) => {
     const go = () => {
       lane.running++
-      // runEffect never rejects, so this chain needs no catch of its own.
-      void work().then(() => {
+      let freed = false
+      const free = () => {
+        if (freed) return
+        freed = true
         lane.running--
-        detachedOut--
         resolve()
         const next = lane.waiting.shift()
         if (next) next()
-        else if (lane.running === 0) lanes.delete(key)
+        else if (lane.running === 0 && lanes.get(key) === lane) lanes.delete(key)
+      }
+      const limit = setTimeout(() => {
+        console.warn(
+          `[unit-of-work] detached effect ${e.label} is still running after ${DETACHED_SLOT_MS / 1000}s: its slot goes to the next one`
+        )
+        free()
+      }, DETACHED_SLOT_MS)
+      limit.unref?.()
+      // runEffect never rejects, so this chain needs no catch of its own.
+      void work().then(() => {
+        clearTimeout(limit)
+        detachedOut--
+        free()
       })
     }
     if (lane.running < DETACHED_SLOTS) go()
@@ -178,20 +203,20 @@ function runDetached(e: Effect): Promise<void> {
  * Run a committed unit's effects in the order they were queued. The unit
  * waits for each plain effect; a detached one is started in its turn (behind
  * the detached effects before it, and when its tenant has a free slot) and
- * left to finish on the background pool, unless the backlog is deep.
+ * left to finish on the background pool. With a deep backlog the unit runs
+ * its detached effects itself, like plain ones.
  */
 async function releaseEffects(queued: Effect[]): Promise<void> {
   const crowded = (lanes.get(getTenantId() ?? '')?.waiting.length ?? 0) >= DETACHED_BACKLOG
   let detachedTail: Promise<void> | null = null
   for (const e of queued) {
-    if (!e.detached) {
+    if (!e.detached || crowded) {
       await runEffect(e)
       continue
     }
     const start = () => runDetached(e)
     detachedTail = detachedTail ? detachedTail.then(start) : start()
   }
-  if (crowded && detachedTail) await detachedTail
 }
 
 /**
