@@ -5,13 +5,16 @@ import {
   type ActivityApproval,
   type ActivityChange,
   type ActivityEntryInput,
+  type ActivityJunctionLabel,
   type ActivityLabels,
   activityWhy,
   actorOf,
   choiceText,
+  collectionNouns,
   renderActivitySentence
 } from './activity-sentence.js'
 import { selectInChunks } from './db-batch.js'
+import { type JunctionInfo, loadJunctionMap } from './junction-map.js'
 
 /**
  * The read side of the readable audit trail (migration 516): the extra columns a page of
@@ -222,6 +225,89 @@ export interface LabelDeps {
   links(
     collections: string[]
   ): Promise<Array<{ many_collection: string; many_field: string; one_collection: string | null }>>
+  /** Link (junction) tables → their parent and other leg. */
+  junctions?(): Promise<Map<string, JunctionInfo>>
+  /** `junction:id` → the row's parent id and linked id: the live row, else its newest
+   *  revision snapshot (what was stored when it was removed). */
+  junctionRows?(
+    junctions: Map<string, JunctionInfo>,
+    refs: Array<{ collection: string; id: string }>
+  ): Promise<Map<string, JunctionRow>>
+  /** File id → its title / file name. */
+  fileNames?(ids: string[]): Promise<Map<string, string>>
+}
+
+export interface JunctionRow {
+  parent: string | null
+  target: string | null
+  target_collection: string | null
+}
+
+const FILE_TABLES = new Set(['nivaro_files', 'directus_files'])
+
+function snapshotKey(v: unknown): string | null {
+  if (v == null) return null
+  if (typeof v === 'object') {
+    const id = (v as { id?: unknown }).id
+    return id == null || typeof id === 'object' ? null : String(id)
+  }
+  return String(v)
+}
+
+async function readJunctionRows(
+  junctions: Map<string, JunctionInfo>,
+  refs: Array<{ collection: string; id: string }>
+): Promise<Map<string, JunctionRow>> {
+  const out = new Map<string, JunctionRow>()
+  const by = new Map<string, string[]>()
+  for (const r of refs) by.set(r.collection, [...(by.get(r.collection) ?? []), r.id])
+  await Promise.all(
+    [...by].map(async ([junction, ids]) => {
+      const j = junctions.get(junction)
+      if (!j) return
+      const cols = [
+        ...new Set(['id', j.parentFk, j.targetFk, j.discriminator].filter(Boolean))
+      ] as string[]
+      const take = (row: Record<string, unknown>, id: string) => {
+        const tc = j.discriminator ? snapshotKey(row[j.discriminator]) : j.target
+        out.set(`${junction}:${id}`, {
+          parent: snapshotKey(row[j.parentFk]),
+          target: j.targetFk ? snapshotKey(row[j.targetFk]) : null,
+          target_collection: tc === 'directus_users' ? 'nivaro_users' : tc
+        })
+      }
+      try {
+        const live = (await db(junction)
+          .whereIn('id', ids)
+          .select(...cols)) as Array<Record<string, unknown>>
+        for (const row of live) take(row, String(row.id))
+      } catch {
+        /* table gone: the snapshots below */
+      }
+      const missing = ids.filter((id) => !out.has(`${junction}:${id}`))
+      if (!missing.length) return
+      try {
+        const snaps = (await db('nivaro_revisions')
+          .where('collection', junction)
+          .whereIn('item', missing)
+          .whereNotNull('data')
+          .orderBy('id', 'desc')
+          .select('item', 'data')) as Array<{ item: string; data: string }>
+        for (const s of snaps) {
+          const id = String(s.item)
+          if (out.has(`${junction}:${id}`)) continue
+          try {
+            take(JSON.parse(s.data) as Record<string, unknown>, id)
+          } catch {
+            /* unreadable snapshot */
+          }
+        }
+      } catch {
+        /* no snapshots: the sentence says "a Division" */
+      }
+    })
+  )
+  return out
 }
 
 const defaultLabelDeps: LabelDeps = {
@@ -289,6 +375,21 @@ const defaultLabelDeps: LabelDeps = {
       many_field: string
       one_collection: string | null
     }>
+  },
+  junctions: () => loadJunctionMap(),
+  junctionRows: readJunctionRows,
+  async fileNames(ids) {
+    const rows = (await selectInChunks(ids, 500, (chunk) =>
+      Promise.resolve(
+        db('nivaro_files').whereIn('id', chunk).select('id', 'title', 'filename_download')
+      )
+    )) as Array<{ id: string; title: string | null; filename_download: string | null }>
+    return new Map(
+      rows.map((r) => [
+        String(r.id).toLowerCase(),
+        String(r.title || r.filename_download || '').trim()
+      ])
+    )
   }
 }
 
@@ -340,6 +441,33 @@ export async function activityLabelsFor(
     .map((r) => ({ collection: String(r?.collection ?? ''), id: String(r?.id ?? '').trim() }))
     .filter((r) => IDENT.test(r.collection) && r.id && r.id.length <= 100)
     .slice(0, LABEL_LIMITS.refs)
+  // Link rows: what each one links, from the row as stored (live, else its snapshot). The
+  // parent and the linked record join the refs and are judged as the reader below.
+  const jmap =
+    refs.length && deps.junctions
+      ? await deps.junctions().catch(() => new Map<string, JunctionInfo>())
+      : new Map<string, JunctionInfo>()
+  const linkRefs = refs.filter((r) => jmap.has(r.collection))
+  const storedLinks =
+    linkRefs.length && deps.junctionRows
+      ? await deps.junctionRows(jmap, linkRefs).catch(() => new Map<string, JunctionRow>())
+      : new Map<string, JunctionRow>()
+  const fileIds = new Set<string>()
+  const linkCollections = new Set<string>()
+  for (const r of linkRefs) {
+    const row = storedLinks.get(`${r.collection}:${r.id}`)
+    const j = jmap.get(r.collection)!
+    if (row?.parent && !refs.some((x) => x.collection === j.parent && x.id === row.parent))
+      refs.push({ collection: j.parent, id: row.parent })
+    if (row?.target && row.target_collection) {
+      if (FILE_TABLES.has(row.target_collection)) fileIds.add(row.target)
+      else if (!refs.some((x) => x.collection === row.target_collection && x.id === row.target))
+        refs.push({ collection: row.target_collection, id: row.target })
+    }
+    linkCollections.add(j.parent)
+    const tc = row?.target_collection ?? j.target
+    if (tc && !FILE_TABLES.has(tc)) linkCollections.add(tc)
+  }
   const userIds = new Set(
     (Array.isArray(body.users) ? body.users : [])
       .map((u) => String(u ?? '').trim())
@@ -354,6 +482,7 @@ export async function activityLabelsFor(
     [
       ...(Array.isArray(body.collections) ? body.collections : []).map((c) => String(c ?? '')),
       ...refs.map((r) => r.collection),
+      ...linkCollections,
       ...fieldAsks.map((f) => f.collection)
     ].filter((c) => IDENT.test(c))
   )
@@ -454,6 +583,53 @@ export async function activityLabelsFor(
   for (const l of linkRows) {
     const key = `${l.many_collection}.${l.many_field}`
     if (asked.has(key)) labels.links[key] = String(l.one_collection ?? '') || 'record'
+  }
+  // Link rows in words: parent + the linked record's name, each as the reader may see it.
+  if (linkRefs.length) {
+    const parentVisible = (c: string, id: string) => {
+      const v = labels.records[`${c}:${id}`]
+      return v !== null && v !== undefined
+    }
+    const files =
+      fileIds.size && deps.fileNames
+        ? await deps.fileNames([...fileIds]).catch(() => new Map<string, string>())
+        : new Map<string, string>()
+    const junctionLabels: Record<string, ActivityJunctionLabel> = {}
+    for (const r of linkRefs) {
+      const j = jmap.get(r.collection)!
+      const row = storedLinks.get(`${r.collection}:${r.id}`)
+      const tc = row?.target_collection ?? j.target
+      const file = !!tc && FILE_TABLES.has(tc)
+      const parentId = row?.parent ?? null
+      // Not visible / unknown parent: the sentence says "a workflow record"; a value is then
+      // never shown either (a file or a link is only as visible as its record).
+      const parentOk = !!parentId && parentVisible(j.parent, parentId)
+      let value: string | null = null
+      if (row?.target && tc && (parentOk || admin)) {
+        if (file) value = files.get(row.target.toLowerCase()) || null
+        else if (tc === 'nivaro_users') value = labels.users[row.target.toUpperCase()] ?? null
+        else {
+          const v = labels.records[`${tc}:${row.target}`]
+          value = v && v !== row.target ? v : null
+        }
+      }
+      if (!parentOk && !admin) value = null
+      const noun = file
+        ? 'file'
+        : tc
+          ? collectionNouns(tc, { collections: labels.collections }).singular
+          : j.alias
+            ? collectionNouns(j.alias, null).singular
+            : 'link'
+      junctionLabels[`${r.collection}:${r.id}`] = {
+        parent_collection: j.parent,
+        parent_id: parentId,
+        noun,
+        value,
+        file
+      }
+    }
+    return { ...labels, junctions: junctionLabels }
   }
   return labels
 }

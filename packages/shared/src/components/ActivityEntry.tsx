@@ -231,7 +231,9 @@ export function ActivityFeed({
   empty?: ReactNode
   className?: string
 }) {
-  const groups = useMemo(() => groupActivity(entries), [entries])
+  // With labels, the link rows one write made on one record fold into one line
+  // ("changed Division on Workflow CM26-79704: Zone 1 → Zone 2").
+  const groups = useMemo(() => groupActivity(entries, { labels }), [entries, labels])
   if (groups.length === 0) return <>{empty ?? null}</>
   return (
     <div className={cn('divide-y divide-slate-100 dark:divide-border', className)}>

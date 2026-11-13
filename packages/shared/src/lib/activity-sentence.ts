@@ -155,6 +155,26 @@ export interface ActivityLabels {
   links?: Record<string, string>
   /** IANA zone dates in values render in; unset = the runtime's own zone. */
   timeZone?: string | null
+  /** `junction:id` → what a link row links, as the reader may see it. */
+  junctions?: Record<string, ActivityJunctionLabel>
+}
+
+/**
+ * A link (junction) row in words: "Added Division Zone 2 to Workflow CM26-79704". The
+ * values come from the row as it was stored (the live row, else its newest revision
+ * snapshot), each name read as the reader (null = unknown or not theirs to see).
+ */
+export interface ActivityJunctionLabel {
+  /** The collection the link hangs off ("workflows"). */
+  parent_collection: string
+  /** The parent record; null = not known (no row, no snapshot). Its label is in `records`. */
+  parent_id?: string | null
+  /** One link's noun, singular ("Division", "file"). */
+  noun: string
+  /** The linked record's name; null = unknown or not the reader's to see. */
+  value?: string | null
+  /** The link is a file on the record. */
+  file?: boolean
 }
 
 export const HIDDEN_RECORD = "a record you can't see"
@@ -784,9 +804,139 @@ function exportSummary(comment: string): { rows: number | null; format: string |
   }
 }
 
+// ─── Links (junction rows) ──────────────────────────────────────────────────
+
+/** The link label for an entry, when its collection is a link table the labels describe. */
+export function junctionOf(
+  entry: ActivityEntryInput,
+  labels?: ActivityLabels | null
+): ActivityJunctionLabel | null {
+  const key = `${text(entry.collection)}:${text(entry.item)}`
+  return labels?.junctions?.[key] ?? null
+}
+
+function anArticle(noun: string): string {
+  return `${/^[aeiou]/i.test(noun) ? 'an' : 'a'} ${noun}`
+}
+
+/** "Workflow CM26-79704", or "a workflow record" when unknown / not the reader's to see. */
+function linkParent(j: ActivityJunctionLabel, labels?: ActivityLabels | null): string {
+  const generic = `a ${midSentence(collectionNouns(j.parent_collection, labels).singular)} record`
+  if (!text(j.parent_id)) return generic
+  const p = recordPhrase(j.parent_collection, j.parent_id, labels)
+  return !p || p === HIDDEN_RECORD ? generic : p
+}
+
+/** "Division Zone 2", "file Plan.pdf", or "a Division" when the value is unknown. */
+function linkThing(j: ActivityJunctionLabel): string {
+  const v = text(j.value)
+  return v ? `${j.noun} ${v}` : anArticle(j.noun)
+}
+
+function linkPredicate(
+  action: string,
+  j: ActivityJunctionLabel,
+  labels?: ActivityLabels | null
+): string {
+  const parent = linkParent(j, labels)
+  if (action === 'create') return `added ${linkThing(j)} to ${parent}`
+  if (action === 'delete') return `removed ${linkThing(j)} from ${parent}`
+  return `updated ${linkThing(j)} on ${parent}`
+}
+
+/**
+ * One write's link rows on one record as clauses, oldest first: a removed + added pair of one
+ * kind is a change ("Division Zone 1 → Zone 2", "Region → BSO" when the old value is unknown),
+ * the rest say what happened ("added Region BSO", "removed a Division", "updated file X.pdf").
+ * Null when the entries are not all link rows of one record.
+ */
+export function linkChanges(
+  entries: ActivityEntryInput[],
+  labels?: ActivityLabels | null
+): {
+  parent: string
+  pairs: Array<{ noun: string; from: string; to: string }>
+  rest: string[]
+} | null {
+  const links = entries.map((e) => ({ e, j: junctionOf(e, labels) }))
+  if (links.length === 0 || links.some((l) => !l.j)) return null
+  const parents = new Set(links.map((l) => text(l.j!.parent_id)).filter(Boolean))
+  const collections = new Set(links.map((l) => l.j!.parent_collection))
+  if (parents.size > 1 || collections.size > 1) return null
+  const known = links.find((l) => text(l.j!.parent_id))?.j ?? links[0].j!
+  const kinds = new Map<string, { removed: string[]; added: string[]; updated: string[] }>()
+  // Oldest first: the clauses read in the order the write made them.
+  for (const { e, j } of [...links].reverse()) {
+    const k = kinds.get(j!.noun) ?? { removed: [], added: [], updated: [] }
+    const v = text(j!.value)
+    const a = text(e.action)
+    if (a === 'delete') k.removed.push(v)
+    else if (a === 'create') k.added.push(v)
+    else k.updated.push(v)
+    kinds.set(j!.noun, k)
+  }
+  const one = (noun: string, v: string) => (v ? `${noun} ${v}` : anArticle(noun))
+  const pairs: Array<{ noun: string; from: string; to: string }> = []
+  const rest: string[] = []
+  for (const [noun, k] of kinds) {
+    if (k.removed.length === 1 && k.added.length === 1 && k.updated.length === 0) {
+      pairs.push({ noun, from: k.removed[0], to: k.added[0] })
+      continue
+    }
+    for (const v of k.removed) rest.push(`removed ${one(noun, v)}`)
+    for (const v of k.added) rest.push(`added ${one(noun, v)}`)
+    for (const v of k.updated) rest.push(`updated ${one(noun, v)}`)
+  }
+  return { parent: linkParent(known, labels), pairs, rest }
+}
+
+/** A pair as a clause: "Division Zone 1 → Zone 2", "Division → Zone 2", "changed Division". */
+export function linkPairText(p: { noun: string; from: string; to: string }): string {
+  if (p.from && p.to) return `${p.noun} ${p.from} → ${p.to}`
+  if (p.to) return `${p.noun} set to ${p.to}`
+  return `changed ${p.noun}`
+}
+
+/**
+ * One write's link rows as one predicate: "changed Division on Workflow CM26-79704: Zone 1 →
+ * Zone 2"; several kinds list theirs ("changed Workflow CM26-79704: Division Zone 1 → Zone 2;
+ * added Region BSO").
+ */
+export function linkGroupPredicate(
+  entries: ActivityEntryInput[],
+  labels?: ActivityLabels | null
+): string | null {
+  const c = linkChanges(entries, labels)
+  if (!c) return null
+  const { parent, pairs, rest } = c
+  if (rest.length === 0 && pairs.length === 1) {
+    const p = pairs[0]
+    if (p.from && p.to) return `changed ${p.noun} on ${parent}: ${p.from} → ${p.to}`
+    if (p.to) return `changed ${p.noun} on ${parent} to ${p.to}`
+    return `changed ${p.noun} on ${parent}`
+  }
+  if (pairs.length === 0 && rest.length === 1) {
+    const e = entries[0]
+    return linkPredicate(text(e.action), junctionOf(e, labels)!, labels)
+  }
+  return `changed ${parent}: ${[...pairs.map(linkPairText), ...rest].join('; ')}`
+}
+
 // ─── The sentence ───────────────────────────────────────────────────────────
 
 const TRANSITION_ACTIONS = new Set(['transition', 'pipeline-transition'])
+
+/** A move's plain past-tense verb from the transition it ran: "Approve" → Approved, else Moved. */
+export function transitionVerb(via: string | null | undefined): string {
+  const v = text(via).toLowerCase()
+  if (/approv/.test(v)) return 'Approved'
+  if (/reject/.test(v)) return 'Rejected'
+  if (/declin/.test(v)) return 'Declined'
+  if (/send.?back|return/.test(v)) return 'Sent back'
+  if (/submit/.test(v)) return 'Submitted'
+  if (/cancel/.test(v)) return 'Cancelled'
+  return 'Moved'
+}
 
 /** The sentence without the actor ("moved PO 4471 from Draft to Approved"). */
 export function activityPredicate(
@@ -800,6 +950,11 @@ export function activityPredicate(
   const aNoun = `${/^[aeiou]/i.test(nouns.singular) ? 'an' : 'a'} ${midSentence(nouns.singular)}`
   const comment = text(entry.comment)
   const on = record ? ` on ${record}` : ''
+
+  // A link row says what it linked to what ("added Division Zone 2 to Workflow 79704").
+  const link = junctionOf(entry, labels)
+  if (link && (action === 'create' || action === 'delete' || action === 'update'))
+    return linkPredicate(action, link, labels)
 
   // Pipeline events folded into a record's history carry their states.
   if (entry.event?.kind === 'start') {
@@ -1017,6 +1172,8 @@ export interface ActivityGroup<T extends ActivityEntryInput = ActivityEntryInput
 }
 
 export const BURST_WINDOW_MS = 60_000
+/** Link rows one write made land within this of each other. */
+export const LINK_WRITE_WINDOW_MS = 5_000
 
 function tsMs(e: ActivityEntryInput): number {
   if (!e.timestamp) return Number.NaN
@@ -1038,18 +1195,39 @@ function isSummaryRow(e: ActivityEntryInput): boolean {
  * Folds consecutive entries of one burst into one group. Entries sharing a
  * group_key always fold; entries without one fold when the same actor did the
  * same action on the same collection, each within `windowMs` of the previous
- * (rows from before migration 516). Order is kept; singles are groups of one.
+ * (rows from before migration 516). With `labels`, the link rows one write made on one
+ * record (removed Division, added Division, …) fold too, whatever their action. Order is
+ * kept; singles are groups of one.
  */
 export function groupActivity<T extends ActivityEntryInput>(
   entries: T[],
-  opts: { windowMs?: number } = {}
+  opts: { windowMs?: number; labels?: ActivityLabels | null } = {}
 ): ActivityGroup<T>[] {
   const windowMs = opts.windowMs ?? BURST_WINDOW_MS
   const out: ActivityGroup<T>[] = []
+  const sameRecord = (a: ActivityJunctionLabel, b: ActivityJunctionLabel) =>
+    a.parent_collection === b.parent_collection &&
+    (!text(a.parent_id) || !text(b.parent_id) || text(a.parent_id) === text(b.parent_id))
   for (const e of entries) {
     const cur = out[out.length - 1]
     const prev = cur?.entries[cur.entries.length - 1]
     const gk = text(e.group_key)
+    if (cur && prev && opts.labels) {
+      const a = junctionOf(e, opts.labels)
+      const b = junctionOf(prev, opts.labels)
+      if (
+        a &&
+        b &&
+        cur.entries.every((x) => junctionOf(x, opts.labels)) &&
+        sameRecord(a, b) &&
+        actorKey(e) === actorKey(prev) &&
+        Math.abs(tsMs(prev) - tsMs(e)) <= LINK_WRITE_WINDOW_MS
+      ) {
+        cur.entries.push(e)
+        if (cur.by !== 'group_key') cur.by = 'time'
+        continue
+      }
+    }
     if (cur && prev) {
       const pgk = text(prev.group_key)
       if (gk && gk === pgk) {
@@ -1087,6 +1265,8 @@ export function renderActivityGroupSentence(
   const head = members[0] ?? entries[0]
   if (members.length <= 1) return renderActivitySentence(head, labels)
   const who = actorName(head, labels)
+  const linked = linkGroupPredicate(members, labels)
+  if (linked) return `${who} ${linked}`
   const collections = new Set(members.map((e) => text(e.collection)))
   const collection = collections.size === 1 ? (head.collection ?? null) : null
   const items = new Set(members.map((e) => text(e.item)))
