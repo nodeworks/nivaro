@@ -9666,7 +9666,7 @@ export function InlineTableField({
             {/* Pending rows (new parent OR pending-save mode) */}
             {!isNew && activeView === 'original' && rows.length > renderCap && (
               <tr ref={renderSentinelRef}>
-                <td colSpan={99} className='px-3 py-2 text-center text-[11px] text-slate-400'>
+                <td colSpan={nestedColSpan} className='px-3 py-2 text-center text-[11px] text-slate-400'>
                   Showing {renderCap} of {rows.length} rows — scroll to load more
                 </td>
               </tr>
