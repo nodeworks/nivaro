@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ItemEditAuthContext, NivaroProvider, useNivaroClient } from '../../context'
 import {
   type MoveProblem,
+  partnerWords,
   pendingOptIn,
   problemReason,
   type RunningMove,
@@ -188,6 +189,69 @@ describe('helpers', () => {
       'Started automatically'
     )
     expect(startedBy({ ...RUN, started_by: null, started_by_name: null }, ME)).toBe('Started')
+  })
+
+  describe('the other system’s own words in a stored reason', () => {
+    const said = (answer: string) => partnerWords(`Submission failed — ${answer}`)
+
+    it('a body that is one sentence', () => {
+      expect(said('HTTP 400: "The project is not valid"')).toBe(
+        'Submission failed: The project is not valid'
+      )
+    })
+
+    it('a body that carries its sentence in a field, also one level down', () => {
+      expect(said('HTTP 400: {"message":"Task 1000 is not in the list of values"}')).toBe(
+        'Submission failed: Task 1000 is not in the list of values'
+      )
+      expect(said('HTTP 422: {"error":{"message":"No such location"},"code":17}')).toBe(
+        'Submission failed: No such location'
+      )
+      expect(said('HTTP 400: {"status":"ERROR","detail":"Quantity must be above zero"}')).toBe(
+        'Submission failed: Quantity must be above zero'
+      )
+    })
+
+    it('a body the server cut short still gives the sentence it had read', () => {
+      expect(
+        said(
+          'HTTP 400: {"status":"ERROR","message":"The project is not valid for this org","trace":"abc'
+        )
+      ).toBe('Submission failed: The project is not valid for this org')
+      expect(said('HTTP 400: "The ship-to location is not set up for this wareh')).toBe(
+        'Submission failed: The ship-to location is not set up for this wareh'
+      )
+    })
+
+    it('keeps an escaped quote as the quote it is', () => {
+      // The stored text: {"message":"Part \"CX-12\" is not stocked"}
+      expect(said('HTTP 400: {"message":"Part \\"CX-12\\" is not stocked"}')).toBe(
+        'Submission failed: Part "CX-12" is not stocked'
+      )
+    })
+
+    it('with nothing in front of the status line, the words stand alone', () => {
+      expect(partnerWords('HTTP 400: "The project is not valid"')).toBe('The project is not valid')
+    })
+
+    it('nothing when the answer holds no words a person can read', () => {
+      expect(said('HTTP 502: null')).toBeNull()
+      expect(said('HTTP 500: ""')).toBeNull()
+      expect(said('HTTP 500: {"ok":false,"code":500}')).toBeNull()
+      expect(said('HTTP 502: "<html><body><h1>502 Bad Gateway</h1></body></html>"')).toBeNull()
+      expect(
+        said(
+          'HTTP 500: {"message":"TypeError: Cannot read properties of undefined (reading \'id\')"}'
+        )
+      ).toBeNull()
+      expect(said('HTTP 500: {"message":"Invalid column name \'vendor_site\'."}')).toBeNull()
+    })
+
+    it('nothing for a reason that has no status line: it is read the usual way', () => {
+      expect(partnerWords('Contact email is required')).toBeNull()
+      expect(partnerWords('fetch failed (Error: connect ECONNREFUSED 10.0.0.1:443)')).toBeNull()
+      expect(partnerWords('')).toBeNull()
+    })
   })
 
   it('drops the move’s own name from the front of its reason', () => {
@@ -381,6 +445,26 @@ describe('the reason a run did not go through', () => {
     const details = problemNotice()?.querySelector('[data-error-details]')
     expect(details?.textContent).toContain('Details for support')
     expect(details?.querySelector('[data-error-copy]')).not.toBeNull()
+  })
+
+  // Owner's call (2026-11-12): what the other system SAID is what the person needs to fix the
+  // request, so it shows on the row. Only its words: the status line stays folded away.
+  it('shows what the other system answered, in its own words', async () => {
+    render('panel', { marked: true, problem: PROBLEM })
+    await until(() => !!problemNotice())
+    expect(problemWords()?.textContent).toBe('Submission failed: The project is not valid')
+    // The text as stored is still there for support.
+    expect(problemNotice()?.querySelector('[data-error-details]')).not.toBeNull()
+  })
+
+  it('falls back to the plain sentence when the answer holds no words', async () => {
+    render('panel', {
+      marked: true,
+      problem: { ...PROBLEM, reason: 'Submit order: submission failed — HTTP 502: null' }
+    })
+    await until(() => !!problemNotice())
+    expect(problemWords()?.textContent).toContain('Submission failed')
+    expect(problemWords()?.textContent).not.toMatch(/HTTP|502|null/)
   })
 
   it('shows plain words as they are, with nothing folded away', async () => {

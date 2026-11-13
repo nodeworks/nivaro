@@ -2,6 +2,7 @@ import { AlertTriangle, Loader2 } from 'lucide-react'
 import { type CSSProperties, useEffect, useMemo, useRef } from 'react'
 import { useItemEditAuth } from '../../context'
 import { describeError } from '../../lib/error-message'
+import { isRawErrorText } from '../../lib/safe-error'
 import { cn, formatRelative } from '../../lib/utils'
 import { ErrorDetails } from '../ErrorNotice'
 import { useOverflowTip } from '../TipLayer'
@@ -107,6 +108,72 @@ export function problemReason(problem: Pick<MoveProblem, 'reason' | 'transition_
   return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : ''
 }
 
+/** The status line a partner call's failure is stored with: "… — HTTP 400: <body excerpt>". */
+const STATUS_MARK = /\bHTTP \d{3}: /
+/** Where a partner's answer keeps its sentence, most telling first. */
+const WORD_KEYS = [
+  'message',
+  'error_description',
+  'detail',
+  'error',
+  'title',
+  'reason',
+  'description',
+  'msg'
+]
+const KEYED_SENTENCE = new RegExp(`"(?:${WORD_KEYS.join('|')})"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`)
+
+/** A JSON string's inner text as the text it stands for (a body cut short may end mid-escape). */
+function unescapeJson(inner: string): string {
+  try {
+    return JSON.parse(`"${inner.replace(/\\$/, '')}"`) as string
+  } catch {
+    return inner
+  }
+}
+
+function sentenceIn(value: unknown, depth = 0): string | null {
+  if (typeof value === 'string') return value
+  if (!value || typeof value !== 'object' || Array.isArray(value) || depth > 1) return null
+  const body = value as Record<string, unknown>
+  for (const key of WORD_KEYS) {
+    const found = sentenceIn(body[key], depth + 1)
+    if (found?.trim()) return found
+  }
+  return null
+}
+
+/**
+ * What the other system answered, in its own words, when a stored reason is a
+ * partner call's failure ("Submission failed — HTTP 400: "The project is not
+ * valid""). Those words are what the person needs to put the request right, so
+ * the row shows them: "Submission failed: The project is not valid". Only words:
+ * the status line itself is never shown, and an answer that reads as anything
+ * else (markup, a stack, SQL, an id) gives null, so the reason is read the usual
+ * way. The body is an excerpt and may be cut short.
+ */
+export function partnerWords(reason: string): string | null {
+  const mark = STATUS_MARK.exec(reason)
+  if (!mark) return null
+  const body = reason.slice(mark.index + mark[0].length).trim()
+  let words: string | null = null
+  try {
+    words = sentenceIn(JSON.parse(body))
+  } catch {
+    // Cut short: the sentence under a known key, else a body that is one (unfinished) string.
+    const keyed = KEYED_SENTENCE.exec(body)
+    if (keyed) words = unescapeJson(keyed[1])
+    else if (body.startsWith('"')) words = unescapeJson(body.slice(1).replace(/"$/, ''))
+  }
+  const said = (words ?? '').replace(/\s+/g, ' ').trim().slice(0, 300)
+  if (said.length < 3 || /<[a-z!/]/i.test(said) || isRawErrorText(said)) return null
+  const lead = reason
+    .slice(0, mark.index)
+    .replace(/[\s:·—–-]+$/, '')
+    .trim()
+  return lead ? `${lead}: ${said}` : said
+}
+
 const rowBase = 'flex items-start gap-2.5'
 
 /** What follows a running move's name, on its row and in the tip of the buttons it holds. */
@@ -183,7 +250,8 @@ export function RunningMoveNotice({
  * The stored reason is the refusal's own text (a check's words, a partner's
  * answer). It is read the way every other error is (describeError): plain words
  * show as they are; a status line, SQL or a stack is never shown, what it means
- * is, and the text itself stays in the folded "Details for support".
+ * is, and the text itself stays in the folded "Details for support". The one
+ * addition: what a partner answered shows in its own words (partnerWords).
  */
 export function MoveProblemNotice({
   problem,
@@ -201,7 +269,11 @@ export function MoveProblemNotice({
   const label = problem.transition_label?.trim() || 'The move'
   const reason = problemReason(problem)
   const said = useMemo(() => (reason ? describeError({ message: reason }, '') : null), [reason])
-  const words = said?.title.trim() ?? ''
+  // A partner's own answer shows in its words; anything else is read like every other error.
+  const words = useMemo(
+    () => (reason ? partnerWords(reason) : null) ?? said?.title.trim() ?? '',
+    [reason, said]
+  )
   // The full words on hover only while the three lines cut them.
   const wordsRef = useOverflowTip<HTMLParagraphElement>(words)
   return (
