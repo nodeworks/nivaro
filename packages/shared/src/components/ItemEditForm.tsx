@@ -249,7 +249,7 @@ import {
   saveIsEcho,
   staleDraftConflicts
 } from './item-edit/header-midair'
-import { useHeaderPathPreview } from './item-edit/header-path-preview'
+import { keepResolvedPaths, useHeaderPathPreview } from './item-edit/header-path-preview'
 import {
   applyDisplayTemplate,
   type CascadeRule,
@@ -3848,6 +3848,10 @@ function ItemEditFormView({
   useEffect(() => {
     if (!itemData) return
     const prev = initialDataRef.current
+    // The read carries no relation-path values (unit.name …): keep the ones the
+    // header was showing while it still points at the same records (fix: tiles
+    // went to "—" after a refused move's refresh until a reload).
+    const record = keepResolvedPaths(prev, itemData)
     const firstLoad = Object.keys(prev).length === 0
     const ownSave = Date.now() - ownSaveAtRef.current < 8000
     // Someone else's write landed while this form was open (RecordLiveSync
@@ -3856,7 +3860,7 @@ function ItemEditFormView({
     // edits — merge only the fields they have NOT touched, keeping their
     // draft dirty instead of silently replacing it.
     if (!firstLoad && !ownSave) {
-      const changed = remoteChangedFields(prev, itemData)
+      const changed = remoteChangedFields(prev, record)
       // A touched field holds an edit only while its draft differs from the
       // baseline it was made on. Touched-then-saved, reverted or "Take
       // theirs" fields equal that baseline and follow the server — keeping
@@ -3885,10 +3889,10 @@ function ItemEditFormView({
             // the remote value waits behind "Take theirs / Keep mine" (#6).
             // Conflicts always show (they protect the person's edit, socket
             // or not); plain notes only for a live write that named the field.
-            const conflict = isOwnEdit(k) && !valuesEqual(draftRef.current[k], itemData[k])
+            const conflict = isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k])
             if (!conflict && !noted.includes(k)) continue
             next[k] = conflict
-              ? { was: prev[k], by, at, theirs: itemData[k], conflict: true }
+              ? { was: prev[k], by, at, theirs: record[k], conflict: true }
               : { was: prev[k], by, at }
           }
           return next
@@ -3896,25 +3900,25 @@ function ItemEditFormView({
         // The collision baseline moves with the adopted values — but not past
         // a conflict: with the person's own edit of a field still standing
         // against the newer value, the save must meet the mid-air check.
-        if (!keepCollisionBase(changed, ownEdits, draftRef.current, itemData))
+        if (!keepCollisionBase(changed, ownEdits, draftRef.current, record))
           void qc.invalidateQueries({ queryKey: ['collision-base', collection, itemId] })
         for (const k of changed) if (!isOwnEdit(k)) userTouchedRef.current.delete(k)
         const editsLeft = [...userTouchedRef.current].some(
-          (k) => !valuesEqual(draftRef.current[k], itemData[k])
+          (k) => !valuesEqual(draftRef.current[k], record[k])
         )
         if (editsLeft) {
-          initialDataRef.current = itemData
+          initialDataRef.current = record
           const merged = { ...draftRef.current }
-          for (const k of changed) if (!userTouchedRef.current.has(k)) merged[k] = itemData[k]
+          for (const k of changed) if (!userTouchedRef.current.has(k)) merged[k] = record[k]
           draftRef.current = merged
           setDraft(merged)
           return
         }
       }
     }
-    initialDataRef.current = itemData
-    draftRef.current = itemData
-    setDraft(itemData)
+    initialDataRef.current = record
+    draftRef.current = record
+    setDraft(record)
     // A save whose line was refused keeps that line staged: adopting the
     // saved record must not mark the form clean over it (army5 b02-N7).
     setIsDirty(childRefusedRef.current)

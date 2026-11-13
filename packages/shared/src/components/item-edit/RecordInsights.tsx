@@ -55,6 +55,8 @@ export function invalidateRecordData(
   itemId: string
 ): void {
   void qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
+  // Relation-path values (a header's Unit = unit.name): a move's writes may repoint the record.
+  void qc.invalidateQueries({ queryKey: ['resolve-paths', collection, itemId] })
   void qc.invalidateQueries({
     predicate: (q) => q.queryKey[0] === 'o2m-rows' && String(q.queryKey[3]) === itemId
   })

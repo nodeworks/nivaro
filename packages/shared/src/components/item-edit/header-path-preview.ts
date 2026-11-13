@@ -13,6 +13,36 @@ import type { CMSRelation } from './types'
  * draft points at, as the viewer. Longer paths keep the saved value.
  */
 
+const idOf = (v: unknown): string =>
+  String((v != null && typeof v === 'object' ? (v as { id?: unknown }).id : v) ?? '')
+
+/**
+ * The record read again, with the relation-path values the form was showing
+ * ('unit.name', 'unit.schedule_date', resolved by /resolve-paths and merged
+ * into the form's copy) carried over while the record still points at the same
+ * related record. The read itself carries no such keys: adopting it as is
+ * blanked those header tiles after any refetch (a refused move's refresh) until
+ * the page was reloaded, because the resolved values are only merged when
+ * their own read changes. A value the new read carries wins; a first hop that
+ * now points elsewhere drops the old value. Returns `next` itself when nothing
+ * is kept.
+ */
+export function keepResolvedPaths(
+  prev: Record<string, unknown>,
+  next: Record<string, unknown>
+): Record<string, unknown> {
+  let out: Record<string, unknown> | null = null
+  for (const [key, value] of Object.entries(prev)) {
+    const dot = key.indexOf('.')
+    if (dot <= 0 || key in next) continue
+    const hop = key.slice(0, dot)
+    if (!(hop in next) || idOf(prev[hop]) !== idOf(next[hop])) continue
+    out ??= { ...next }
+    out[key] = value
+  }
+  return out ?? next
+}
+
 /** The one-hop header paths whose first hop the draft holds differently from the saved record. */
 export function pathsToPreview(
   paths: string[],

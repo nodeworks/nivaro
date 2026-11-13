@@ -14,6 +14,8 @@ describe('invalidateRecordData', () => {
 
     expect(calls.map((c) => c.queryKey).filter(Boolean)).toEqual([
       ['item', 'inventory_requests', '32842'],
+      // Relation-path values (header Unit = unit.name): a move may repoint the record.
+      ['resolve-paths', 'inventory_requests', '32842'],
       ['child-summary', 'inventory_requests', '32842'],
       ['last-touch', 'inventory_requests', '32842'],
       ['sla-breach', 'inventory_requests', '32842'],
