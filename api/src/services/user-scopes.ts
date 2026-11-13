@@ -240,8 +240,11 @@ async function getAdjacency(): Promise<Map<string, Edge[]>> {
   for (const r of rels) {
     if (!r.many_collection || !r.many_field || !r.junction_field) continue
     const pairs = markedPairs.get(r.many_collection) ?? new Set<string>()
-    pairs.add(`${r.many_field}|${r.junction_field}`)
-    pairs.add(`${r.junction_field}|${r.many_field}`)
+    // Compared without regard to case: markers are stored as typed.
+    const a = r.many_field.toLowerCase()
+    const b = r.junction_field.toLowerCase()
+    pairs.add(`${a}|${b}`)
+    pairs.add(`${b}|${a}`)
     markedPairs.set(r.many_collection, pairs)
   }
   // pair every two legs of a junction → bidirectional junction edges
@@ -256,11 +259,28 @@ async function getAdjacency(): Promise<Map<string, Edge[]>> {
     // column was empty on every row, so every lookup scoped through it
     // vanished for every restricted person (production 2026-11-10: unit type
     // labels read "Record not found", their pickers were empty).
-    const marked = legs.length > 2 ? markedPairs.get(junction) : undefined
+    //
+    // Only legs that can be part of a route count towards "more": a housekeeping
+    // leg into a system table (created by) or into a table that is gone does not
+    // turn a plain many-to-many into a membership table. And a marker that names
+    // none of the junction's legs (stale metadata) pairs nothing, so it is not a
+    // reason to drop the legs' only link: without a usable marker every pair
+    // links, as before.
+    const linkLegs = legs.filter((l) => !skip(l.target) && realTables.has(l.target.toLowerCase()))
+    const named = linkLegs.length > 2 ? markedPairs.get(junction) : undefined
+    const marked =
+      named &&
+      linkLegs.some((a) =>
+        linkLegs.some(
+          (b) => a !== b && named.has(`${a.field.toLowerCase()}|${b.field.toLowerCase()}`)
+        )
+      )
+        ? named
+        : undefined
     for (const a of legs) {
       for (const b of legs) {
         if (a === b || a.target === b.target) continue
-        if (marked && !marked.has(`${a.field}|${b.field}`)) continue
+        if (marked && !marked.has(`${a.field.toLowerCase()}|${b.field.toLowerCase()}`)) continue
         push({
           kind: 'junction',
           from: a.target,

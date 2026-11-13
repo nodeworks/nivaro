@@ -497,6 +497,66 @@ describe('getUserScopeEnforcement — defaults are advisory, restrictions are no
       ])
     })
 
+    it('pairs the marked legs whatever letter case the marker was stored in', async () => {
+      // Markers are stored as typed: a marker that names its leg in another case must not
+      // make the junction's only link disappear (and the collection unscoped with it).
+      const mixedCase = membership.map((r) =>
+        r.junction_field ? { ...r, junction_field: 'Categories_ID' } : r
+      )
+      installDb({
+        dimensions: [{ ...ZONE_DIM, target_collection: 'categories' }],
+        scopes: restrict,
+        relations: mixedCase
+      })
+
+      const out = await getUserScopeEnforcement(makeUser(), 'items')
+
+      expect(out.filters).toHaveLength(1)
+      expect(out.filters[0].hops[0]).toMatchObject({ kind: 'junction', to: 'categories' })
+    })
+
+    it('does not take a plain link for a membership table because of a housekeeping leg', async () => {
+      // items_tags is a plain many-to-many with a "created by" leg into the user table (never
+      // part of a scope route) and a stale marker that names no leg. Counting the user leg
+      // made it "more than two legs", and the stale marker then dropped its only link.
+      installDb({
+        dimensions: [{ ...ZONE_DIM, target_collection: 'tags' }],
+        scopes: restrict,
+        relations: [
+          {
+            many_collection: 'items_tags',
+            many_field: 'items_id',
+            one_collection: 'items',
+            one_field: 'tags',
+            junction_field: 'tag'
+          },
+          {
+            many_collection: 'items_tags',
+            many_field: 'tags_id',
+            one_collection: 'tags',
+            one_field: null,
+            junction_field: null
+          },
+          {
+            many_collection: 'items_tags',
+            many_field: 'user_created',
+            one_collection: 'nivaro_users',
+            one_field: null,
+            junction_field: null
+          }
+        ]
+      })
+
+      const out = await getUserScopeEnforcement(makeUser(), 'items')
+
+      expect(out.filters).toHaveLength(1)
+      expect(out.filters[0].hops[0]).toMatchObject({
+        kind: 'junction',
+        junction: 'items_tags',
+        to: 'tags'
+      })
+    })
+
     it('leaves the route to a real link between the two, whatever the names', async () => {
       // The real link has the longer name; the name tie-break used to hand the
       // route to the membership table.
