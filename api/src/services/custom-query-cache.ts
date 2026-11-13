@@ -7,9 +7,14 @@
  * renders pass only their bound params, so their keys differ from the route's
  * for the same question (see routes/widgets-internal.ts).
  *
- * Leaf module: imports nothing of the app.
+ * In cloud mode every tenant shares one Redis, so the key also carries the
+ * tenant (tenantKeyTag): two tenants that installed the same starter kit hold
+ * the same slug with the same SQL and run it with the same params.
+ *
+ * Near-leaf module: of the app it imports only the tenant context.
  */
 import { createHash } from 'node:crypto'
+import { getTenantId } from '../db/tenant-context.js'
 
 /** What of a query's definition decides its answer besides the bound params. */
 export interface CustomQueryKeyDef {
@@ -31,13 +36,28 @@ export function customQuerySqlStamp(def: CustomQueryKeyDef): string {
     .slice(0, 10)
 }
 
-/** `cq:<slug>:<sql stamp>:<params JSON>` — `cq:<slug>:*` still matches every entry of a slug. */
+/**
+ * The current tenant as a key segment suffix: `.<16 hex>` in a tenant context
+ * (cloud), nothing without one (self-hosted keys are unchanged). A digest, not
+ * the id itself, so whatever an id holds it cannot end the segment early or be
+ * read as params.
+ */
+function tenantKeyTag(): string {
+  const tenant = getTenantId()
+  if (!tenant) return ''
+  return `.${createHash('sha256').update(tenant).digest('hex').slice(0, 16)}`
+}
+
+/**
+ * `cq:<slug>:<sql stamp>[.<tenant tag>]:<params JSON>` — `cq:<slug>:*` still
+ * matches every entry of a slug (in cloud: every tenant's entries of it).
+ */
 export function customQueryCacheKey(
   slug: string,
   params: Record<string, unknown>,
   def: CustomQueryKeyDef
 ): string {
-  return `cq:${slug}:${customQuerySqlStamp(def)}:${JSON.stringify(params)}`
+  return `cq:${slug}:${customQuerySqlStamp(def)}${tenantKeyTag()}:${JSON.stringify(params)}`
 }
 
 /**
