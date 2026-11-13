@@ -72,7 +72,10 @@ describe('bannerLines', () => {
   it('reads a failure as danger and carries its error', () => {
     const out = bannerLines([row({ outcome: 'failed', reason: 'HTTP 500' })], now)
     expect(out[0].tone).toBe('danger')
-    expect(out[0].text).toBe('send failed 58m ago (2:02 PM) — HTTP 500')
+    // What the status means about the other system, never the status line itself.
+    expect(out[0].text).toBe(
+      'send failed 58m ago (2:02 PM) — The other system ran into a problem of its own.'
+    )
   })
 
   it('says plainly when a send never happened', () => {
@@ -117,6 +120,38 @@ describe('bannerLines', () => {
     )
     expect(out[0].text).toBe(
       'send failed 58m ago (2:02 PM) · Fusion — transfer order submitted — LOV'
+    )
+  })
+})
+
+// Design review (2026-11-12): after a failed move's toast goes, this line is the only words
+// left on the record. It read the stored status line as it was (`— HTTP 401: ""`).
+describe('bannerLines — a failed send says what the other system answered', () => {
+  const failed = (reason: string) => bannerLines([row({ outcome: 'failed', reason })], now)[0].text
+
+  it('the other system’s own sentence, without the status line', () => {
+    expect(failed('HTTP 400: "The project is not valid"')).toBe(
+      'send failed 58m ago (2:02 PM) — The project is not valid'
+    )
+  })
+
+  it('what the failure means when the answer holds no sentence', () => {
+    expect(failed('HTTP 401: ""')).toBe(
+      'send failed 58m ago (2:02 PM) — The other system did not accept this app’s sign-in. An administrator needs to check the connection.'
+    )
+    expect(failed('fetch failed (after 2 retries)')).toBe(
+      'send failed 58m ago (2:02 PM) — The other system could not be reached.'
+    )
+  })
+
+  it('a reason that is not a partner call’s failure reads as before', () => {
+    const skipped = bannerLines(
+      [row({ outcome: 'skipped', reason: 'this record has no Project yet' })],
+      now
+    )[0].text
+    expect(skipped).toContain('this record has no Project yet')
+    expect(failed('Partner responded with status: ERROR')).toContain(
+      'Partner responded with status: ERROR'
     )
   })
 })

@@ -86,6 +86,32 @@ describe('a failed move’s toast when another system refused it', () => {
     })
   })
 
+  // Design review: only a move's OWN call to another system is the other system's. A fault of
+  // this app (a 500 whose text names a socket error or a status) must keep its usual toast,
+  // or everyone is pointed at the partner while this app is the one in trouble.
+  it('nothing for this app’s own server fault, whatever words its text carries', () => {
+    const fault = (message: string) =>
+      sdkError(500, { statusCode: 500, error: 'Internal Server Error', message })
+    for (const message of [
+      'connect ECONNREFUSED 127.0.0.1:6679',
+      'read ECONNRESET',
+      'getaddrinfo ENOTFOUND smtp.internal',
+      'Budget service answered HTTP 503',
+      'fetch failed'
+    ])
+      expect(partnerMoveFailure(fault(message), 'Submit to Warehouse')).toBeNull()
+  })
+
+  it('still reads every shape of a move’s own partner call', () => {
+    const shown = (answer: string) =>
+      partnerMoveFailure(refused(answer), 'Submit to Warehouse')?.description
+    expect(shown('fetch failed (after 2 retries)')).toBe('The other system could not be reached.')
+    expect(shown('Timed out after 30000ms')).toBe('The other system took too long to answer.')
+    expect(shown('Token exchange failed (HTTP 401): invalid_client')).toBe(
+      'The other system did not accept this app’s sign-in. An administrator needs to check the connection.'
+    )
+  })
+
   it('nothing for a refusal that is not another system’s: the toast stays as it was', () => {
     expect(
       partnerMoveFailure(
