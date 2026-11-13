@@ -186,6 +186,7 @@ describe('buildAppInfo', () => {
         'min_app_version',
         'name',
         'origin',
+        'environment_notice',
         'push',
         'sign_in',
         'version'

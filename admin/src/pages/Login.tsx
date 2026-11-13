@@ -1,4 +1,4 @@
-import { SignOutNoteBanner } from '@nivaro/shared'
+import { EnvironmentLoginBanner, SignOutNoteBanner } from '@nivaro/shared'
 import { Monitor, Moon, ShieldCheck, Sun } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
@@ -336,233 +336,255 @@ export function LoginPage() {
   const ThemeIcon = THEME_ICONS[theme as keyof typeof THEME_ICONS] ?? Monitor
 
   return (
-    <div className='flex min-h-screen overflow-hidden'>
-      {/* An administrator's message from signing this person out (stays until they sign in). */}
-      <SignOutNoteBanner />
-      {/* ── Left panel ─────────────────────────────────────────────── */}
-      <div
-        className='relative hidden flex-col overflow-hidden lg:flex lg:w-1/2'
-        style={{ background: '#172940' }}
-      >
-        {/* Subtle grid texture */}
+    <div className='flex min-h-screen flex-col'>
+      {/* Not production: says so above everything (the server decides; nothing on production). */}
+      <EnvironmentLoginBanner />
+      <div className='flex flex-1 overflow-hidden'>
+        {/* An administrator's message from signing this person out (stays until they sign in). */}
+        <SignOutNoteBanner />
+        {/* ── Left panel ─────────────────────────────────────────────── */}
         <div
-          className='absolute inset-0 opacity-[0.04]'
-          style={{
-            backgroundImage:
-              'linear-gradient(rgba(255,255,255,0.6) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.6) 1px, transparent 1px)',
-            backgroundSize: '48px 48px'
-          }}
-        />
-
-        {/* Ambient N watermark — breathes slowly in background */}
-        <div className='absolute inset-0 flex items-center justify-center pointer-events-none'>
-          <svg
-            width='520'
-            height='520'
-            viewBox='0 0 24 24'
-            aria-hidden='true'
-            style={{ animation: 'login-mark-pulse 7s ease-in-out infinite' }}
-          >
-            <rect x='2' y='2' width='6' height='20' fill='white' />
-            <rect x='16' y='2' width='6' height='20' fill='white' />
-            <polygon points='8,2 12.5,2 16,22 11.5,22' fill='white' />
-          </svg>
-        </div>
-
-        {/* Corner accent — top left */}
-        <svg
-          className='absolute left-8 top-8'
-          width='72'
-          height='72'
-          viewBox='0 0 72 72'
-          fill='none'
-          aria-hidden='true'
-          style={{ opacity: 0.22, animation: 'login-fade 1.2s ease 0.5s both' }}
+          className='relative hidden flex-col overflow-hidden lg:flex lg:w-1/2'
+          style={{ background: '#172940' }}
         >
-          <line x1='0' y1='0' x2='72' y2='0' stroke='#1e96d2' strokeWidth='1.5' />
-          <line x1='0' y1='0' x2='0' y2='72' stroke='#1e96d2' strokeWidth='1.5' />
-          <circle cx='0' cy='0' r='3' fill='#1e96d2' />
-        </svg>
+          {/* Subtle grid texture */}
+          <div
+            className='absolute inset-0 opacity-[0.04]'
+            style={{
+              backgroundImage:
+                'linear-gradient(rgba(255,255,255,0.6) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.6) 1px, transparent 1px)',
+              backgroundSize: '48px 48px'
+            }}
+          />
 
-        {/* Corner accent — bottom right */}
-        <svg
-          className='absolute bottom-8 right-8 rotate-180'
-          width='72'
-          height='72'
-          viewBox='0 0 72 72'
-          fill='none'
-          aria-hidden='true'
-          style={{ opacity: 0.22, animation: 'login-fade 1.2s ease 0.5s both' }}
-        >
-          <line x1='0' y1='0' x2='72' y2='0' stroke='#1e96d2' strokeWidth='1.5' />
-          <line x1='0' y1='0' x2='0' y2='72' stroke='#1e96d2' strokeWidth='1.5' />
-          <circle cx='0' cy='0' r='3' fill='#1e96d2' />
-        </svg>
-
-        {/* Content */}
-        <div className='relative z-10 flex flex-1 flex-col items-center justify-center px-12 py-16'>
-          {/* Mark badge */}
-          {branding?.logo_url ? (
-            <img
-              src={branding.logo_url}
-              alt={branding.name ?? 'Logo'}
-              className='mb-10 max-h-24 max-w-[260px] object-contain'
-              style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both' }}
-            />
-          ) : (
-            <div
-              className='mb-10 flex h-16 w-16 items-center justify-center rounded-2xl shadow-lg'
-              style={{
-                background: '#1e96d2',
-                animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both'
-              }}
+          {/* Ambient N watermark — breathes slowly in background */}
+          <div className='absolute inset-0 flex items-center justify-center pointer-events-none'>
+            <svg
+              width='520'
+              height='520'
+              viewBox='0 0 24 24'
+              aria-hidden='true'
+              style={{ animation: 'login-mark-pulse 7s ease-in-out infinite' }}
             >
-              <NivaroMark size={36} color='#172940' />
-            </div>
-          )}
+              <rect x='2' y='2' width='6' height='20' fill='white' />
+              <rect x='16' y='2' width='6' height='20' fill='white' />
+              <polygon points='8,2 12.5,2 16,22 11.5,22' fill='white' />
+            </svg>
+          </div>
 
-          <h1
-            className='text-center text-[64px] font-black leading-none tracking-[-0.04em] text-white'
-            style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both' }}
+          {/* Corner accent — top left */}
+          <svg
+            className='absolute left-8 top-8'
+            width='72'
+            height='72'
+            viewBox='0 0 72 72'
+            fill='none'
+            aria-hidden='true'
+            style={{ opacity: 0.22, animation: 'login-fade 1.2s ease 0.5s both' }}
           >
-            {branding?.login_title || branding?.name || 'Nivaro'}
-          </h1>
-          <p
-            className='mt-4 text-center text-[13px] font-light tracking-[0.08em] text-white/50'
-            style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both' }}
-          >
-            {branding?.login_message || 'Headless CMS'}
-          </p>
+            <line x1='0' y1='0' x2='72' y2='0' stroke='#1e96d2' strokeWidth='1.5' />
+            <line x1='0' y1='0' x2='0' y2='72' stroke='#1e96d2' strokeWidth='1.5' />
+            <circle cx='0' cy='0' r='3' fill='#1e96d2' />
+          </svg>
 
-          {/* Scheduled login notices (#648) — announcement rows on the 'login'
+          {/* Corner accent — bottom right */}
+          <svg
+            className='absolute bottom-8 right-8 rotate-180'
+            width='72'
+            height='72'
+            viewBox='0 0 72 72'
+            fill='none'
+            aria-hidden='true'
+            style={{ opacity: 0.22, animation: 'login-fade 1.2s ease 0.5s both' }}
+          >
+            <line x1='0' y1='0' x2='72' y2='0' stroke='#1e96d2' strokeWidth='1.5' />
+            <line x1='0' y1='0' x2='0' y2='72' stroke='#1e96d2' strokeWidth='1.5' />
+            <circle cx='0' cy='0' r='3' fill='#1e96d2' />
+          </svg>
+
+          {/* Content */}
+          <div className='relative z-10 flex flex-1 flex-col items-center justify-center px-12 py-16'>
+            {/* Mark badge */}
+            {branding?.logo_url ? (
+              <img
+                src={branding.logo_url}
+                alt={branding.name ?? 'Logo'}
+                className='mb-10 max-h-24 max-w-[260px] object-contain'
+                style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both' }}
+              />
+            ) : (
+              <div
+                className='mb-10 flex h-16 w-16 items-center justify-center rounded-2xl shadow-lg'
+                style={{
+                  background: '#1e96d2',
+                  animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both'
+                }}
+              >
+                <NivaroMark size={36} color='#172940' />
+              </div>
+            )}
+
+            <h1
+              className='text-center text-[64px] font-black leading-none tracking-[-0.04em] text-white'
+              style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both' }}
+            >
+              {branding?.login_title || branding?.name || 'Nivaro'}
+            </h1>
+            <p
+              className='mt-4 text-center text-[13px] font-light tracking-[0.08em] text-white/50'
+              style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both' }}
+            >
+              {branding?.login_message || 'Headless CMS'}
+            </p>
+
+            {/* Scheduled login notices (#648) — announcement rows on the 'login'
               channel, window-filtered server-side. Maintenance heads-up before
               anyone signs in. */}
-          {(branding?.notices?.length ?? 0) > 0 && (
-            <div
-              className='mt-5 w-full max-w-[420px] space-y-2'
-              style={{ animation: 'login-fade 0.8s ease 0.2s both' }}
-            >
-              {branding?.notices?.map((n) => (
-                <div
-                  key={n.id}
-                  className={`rounded-lg border px-3.5 py-2.5 text-left backdrop-blur ${
-                    n.severity === 'critical'
-                      ? 'border-red-400/40 bg-red-500/15'
-                      : n.severity === 'warn'
-                        ? 'border-amber-400/40 bg-amber-500/15'
-                        : 'border-white/20 bg-white/10'
-                  }`}
-                >
-                  <p className='text-[12.5px] font-semibold text-white'>{n.subject}</p>
-                  {n.body && (
-                    <p className='mt-0.5 text-[12px] leading-snug text-white/70'>{n.body}</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Configurable help/support links (#347) — Settings → Project. */}
-          {(branding?.login_links?.length ?? 0) > 0 && (
-            <div
-              className='mt-4 flex flex-wrap items-center gap-x-4 gap-y-1'
-              style={{ animation: 'login-fade 0.8s ease 0.24s both' }}
-            >
-              {branding?.login_links?.map((l) => (
-                <a
-                  key={l.url}
-                  href={l.url}
-                  target='_blank'
-                  rel='noreferrer'
-                  className='text-[12px] text-white/50 underline decoration-white/20 underline-offset-2 transition-colors hover:text-white/85'
-                >
-                  {l.label}
-                </a>
-              ))}
-            </div>
-          )}
-
-          <div
-            className='mt-12 flex items-center gap-2'
-            style={{ animation: 'login-fade 0.8s ease 0.28s both' }}
-          >
-            <div className='h-px w-16 bg-white/10' />
-            <div className='h-1 w-1 rounded-full bg-white/20' />
-            <div
-              className='h-1.5 w-1.5 rounded-full'
-              style={{ background: '#1e96d2', opacity: 0.7 }}
-            />
-            <div className='h-1 w-1 rounded-full bg-white/20' />
-            <div className='h-px w-16 bg-white/10' />
-          </div>
-
-          <p
-            className='mt-8 max-w-xs text-center text-[13px] leading-relaxed text-white/40'
-            style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.32s both' }}
-          >
-            A metadata-driven headless CMS for enterprise applications.
-          </p>
-        </div>
-
-        {/* Bottom strip */}
-        <div
-          className='relative z-10 border-t border-white/[0.06] px-12 py-5'
-          style={{ animation: 'login-fade 1s ease 0.45s both' }}
-        >
-          <p className='text-[11px] text-white/25'>Nivaro · Restricted Access</p>
-        </div>
-      </div>
-
-      {/* ── Right panel ──────────────────────────────────────────────── */}
-      <div className='relative flex flex-1 flex-col items-center justify-center bg-secondary px-8 py-12 lg:w-1/2'>
-        <button
-          type='button'
-          onClick={() => setTheme(nextTheme)}
-          aria-label={`Theme: ${theme}. Switch to ${nextTheme}`}
-          className='absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-white'
-        >
-          <ThemeIcon className='h-4 w-4' />
-        </button>
-
-        {/* Mobile mark */}
-        <div
-          className='mb-8 flex flex-col items-center lg:hidden'
-          style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both' }}
-        >
-          <div
-            className='flex h-12 w-12 items-center justify-center rounded-xl shadow-md'
-            style={{ background: '#172940' }}
-          >
-            <NivaroMark size={24} color='#1e96d2' />
-          </div>
-          <p className='mt-3 text-[18px] font-bold text-slate-900'>Nivaro</p>
-        </div>
-
-        <div
-          className='w-full max-w-sm'
-          style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both' }}
-        >
-          {totpStep ? (
-            <TotpForm />
-          ) : (
-            <>
-              <div className='mb-6 text-center'>
-                <h2 className='text-[24px] font-bold tracking-tight text-slate-900'>
-                  Sign in to your account
-                </h2>
+            {(branding?.notices?.length ?? 0) > 0 && (
+              <div
+                className='mt-5 w-full max-w-[420px] space-y-2'
+                style={{ animation: 'login-fade 0.8s ease 0.2s both' }}
+              >
+                {branding?.notices?.map((n) => (
+                  <div
+                    key={n.id}
+                    className={`rounded-lg border px-3.5 py-2.5 text-left backdrop-blur ${
+                      n.severity === 'critical'
+                        ? 'border-red-400/40 bg-red-500/15'
+                        : n.severity === 'warn'
+                          ? 'border-amber-400/40 bg-amber-500/15'
+                          : 'border-white/20 bg-white/10'
+                    }`}
+                  >
+                    <p className='text-[12.5px] font-semibold text-white'>{n.subject}</p>
+                    {n.body && (
+                      <p className='mt-0.5 text-[12px] leading-snug text-white/70'>{n.body}</p>
+                    )}
+                  </div>
+                ))}
               </div>
+            )}
 
-              {/* Tab switcher */}
-              <div className='mb-6 flex rounded-xl border border-slate-200 bg-slate-100 p-1'>
-                {anySsoButtons && (
+            {/* Configurable help/support links (#347) — Settings → Project. */}
+            {(branding?.login_links?.length ?? 0) > 0 && (
+              <div
+                className='mt-4 flex flex-wrap items-center gap-x-4 gap-y-1'
+                style={{ animation: 'login-fade 0.8s ease 0.24s both' }}
+              >
+                {branding?.login_links?.map((l) => (
+                  <a
+                    key={l.url}
+                    href={l.url}
+                    target='_blank'
+                    rel='noreferrer'
+                    className='text-[12px] text-white/50 underline decoration-white/20 underline-offset-2 transition-colors hover:text-white/85'
+                  >
+                    {l.label}
+                  </a>
+                ))}
+              </div>
+            )}
+
+            <div
+              className='mt-12 flex items-center gap-2'
+              style={{ animation: 'login-fade 0.8s ease 0.28s both' }}
+            >
+              <div className='h-px w-16 bg-white/10' />
+              <div className='h-1 w-1 rounded-full bg-white/20' />
+              <div
+                className='h-1.5 w-1.5 rounded-full'
+                style={{ background: '#1e96d2', opacity: 0.7 }}
+              />
+              <div className='h-1 w-1 rounded-full bg-white/20' />
+              <div className='h-px w-16 bg-white/10' />
+            </div>
+
+            <p
+              className='mt-8 max-w-xs text-center text-[13px] leading-relaxed text-white/40'
+              style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.32s both' }}
+            >
+              A metadata-driven headless CMS for enterprise applications.
+            </p>
+          </div>
+
+          {/* Bottom strip */}
+          <div
+            className='relative z-10 border-t border-white/[0.06] px-12 py-5'
+            style={{ animation: 'login-fade 1s ease 0.45s both' }}
+          >
+            <p className='text-[11px] text-white/25'>Nivaro · Restricted Access</p>
+          </div>
+        </div>
+
+        {/* ── Right panel ──────────────────────────────────────────────── */}
+        <div className='relative flex flex-1 flex-col items-center justify-center bg-secondary px-8 py-12 lg:w-1/2'>
+          <button
+            type='button'
+            onClick={() => setTheme(nextTheme)}
+            aria-label={`Theme: ${theme}. Switch to ${nextTheme}`}
+            className='absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-white'
+          >
+            <ThemeIcon className='h-4 w-4' />
+          </button>
+
+          {/* Mobile mark */}
+          <div
+            className='mb-8 flex flex-col items-center lg:hidden'
+            style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both' }}
+          >
+            <div
+              className='flex h-12 w-12 items-center justify-center rounded-xl shadow-md'
+              style={{ background: '#172940' }}
+            >
+              <NivaroMark size={24} color='#1e96d2' />
+            </div>
+            <p className='mt-3 text-[18px] font-bold text-slate-900'>Nivaro</p>
+          </div>
+
+          <div
+            className='w-full max-w-sm'
+            style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both' }}
+          >
+            {totpStep ? (
+              <TotpForm />
+            ) : (
+              <>
+                <div className='mb-6 text-center'>
+                  <h2 className='text-[24px] font-bold tracking-tight text-slate-900'>
+                    Sign in to your account
+                  </h2>
+                </div>
+
+                {/* Tab switcher */}
+                <div className='mb-6 flex rounded-xl border border-slate-200 bg-slate-100 p-1'>
+                  {anySsoButtons && (
+                    <button
+                      type='button'
+                      onClick={() => setTab('microsoft')}
+                      className={`flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors${
+                        tab === 'microsoft' ? '' : ' text-slate-600'
+                      }`}
+                      style={
+                        tab === 'microsoft'
+                          ? {
+                              background: 'white',
+                              color: '#0f172a',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
+                            }
+                          : undefined
+                      }
+                    >
+                      SSO
+                    </button>
+                  )}
                   <button
                     type='button'
-                    onClick={() => setTab('microsoft')}
+                    onClick={() => setTab('password')}
                     className={`flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors${
-                      tab === 'microsoft' ? '' : ' text-slate-600'
+                      tab === 'password' ? '' : ' text-slate-600'
                     }`}
                     style={
-                      tab === 'microsoft'
+                      tab === 'password'
                         ? {
                             background: 'white',
                             color: '#0f172a',
@@ -571,113 +593,95 @@ export function LoginPage() {
                         : undefined
                     }
                   >
-                    SSO
+                    Email / Password
                   </button>
+                </div>
+
+                {reauth && (
+                  <div className='mb-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[13px] text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200'>
+                    Sign in again to connect an app to Nivaro — connecting needs a recent sign-in.
+                  </div>
                 )}
-                <button
-                  type='button'
-                  onClick={() => setTab('password')}
-                  className={`flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors${
-                    tab === 'password' ? '' : ' text-slate-600'
-                  }`}
-                  style={
-                    tab === 'password'
-                      ? {
-                          background: 'white',
-                          color: '#0f172a',
-                          boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
-                        }
-                      : undefined
-                  }
-                >
-                  Email / Password
-                </button>
-              </div>
+                {error && tab === 'microsoft' && (
+                  <div className='mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700'>
+                    {error === 'suspended'
+                      ? 'Your account is suspended — usually because the directory no longer lists it, a retention rule ran, or an administrator set it. Ask an administrator: the reason is shown on your account page, and they can restore access.'
+                      : error === 'sign_in_disabled'
+                        ? "Sign-in is turned off for your account's role, so you can't sign in to this app. Ask an administrator if this is wrong: they can change the role, or give you one that may sign in."
+                        : error === 'session_expired'
+                          ? 'Your session ended — it reached the time limit or sat idle longer than this instance allows. Sign in again to carry on.'
+                          : error === 'provider_unavailable'
+                            ? 'The sign-in provider is not answering right now. Anyone already signed in keeps working — try again in a few minutes.'
+                            : error === 'account_link'
+                              ? 'This sign-in matches an account that is already linked to a different sign-in. Ask an administrator to check your account.'
+                              : 'Authentication failed. Please try again or contact IT support.'}
+                  </div>
+                )}
 
-              {reauth && (
-                <div className='mb-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[13px] text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200'>
-                  Sign in again to connect an app to Nivaro — connecting needs a recent sign-in.
-                </div>
-              )}
-              {error && tab === 'microsoft' && (
-                <div className='mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700'>
-                  {error === 'suspended'
-                    ? 'Your account is suspended — usually because the directory no longer lists it, a retention rule ran, or an administrator set it. Ask an administrator: the reason is shown on your account page, and they can restore access.'
-                    : error === 'sign_in_disabled'
-                      ? "Sign-in is turned off for your account's role, so you can't sign in to this app. Ask an administrator if this is wrong: they can change the role, or give you one that may sign in."
-                      : error === 'session_expired'
-                        ? 'Your session ended — it reached the time limit or sat idle longer than this instance allows. Sign in again to carry on.'
-                        : error === 'provider_unavailable'
-                          ? 'The sign-in provider is not answering right now. Anyone already signed in keeps working — try again in a few minutes.'
-                          : error === 'account_link'
-                            ? 'This sign-in matches an account that is already linked to a different sign-in. Ask an administrator to check your account.'
-                            : 'Authentication failed. Please try again or contact IT support.'}
-                </div>
-              )}
-
-              {tab === 'microsoft' ? (
-                <>
-                  {oidcOn && (
-                    <a
-                      href={`/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`}
-                      className='group flex w-full items-center justify-center gap-3 rounded-xl px-5 py-4 text-[14px] font-semibold text-[#fff] shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
-                      style={{ background: isMicrosoft ? '#0078d4' : '#0f172a' }}
-                    >
-                      {isMicrosoft ? <MicrosoftIcon /> : <KeyIcon />}
-                      Continue with {oidcLabel}
-                    </a>
-                  )}
-                  {providers?.saml.enabled && (
-                    <a
-                      href={`/api/auth/saml/login?returnTo=${encodeURIComponent(returnTo)}`}
-                      className='mt-3 flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-[14px] font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:shadow active:scale-[0.985]'
-                    >
-                      <KeyIcon dark />
-                      Continue with {providers.saml.label}
-                    </a>
-                  )}
-                  {/* Additional OIDC providers (#538) — same PKCE flow against
+                {tab === 'microsoft' ? (
+                  <>
+                    {oidcOn && (
+                      <a
+                        href={`/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`}
+                        className='group flex w-full items-center justify-center gap-3 rounded-xl px-5 py-4 text-[14px] font-semibold text-[#fff] shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
+                        style={{ background: isMicrosoft ? '#0078d4' : '#0f172a' }}
+                      >
+                        {isMicrosoft ? <MicrosoftIcon /> : <KeyIcon />}
+                        Continue with {oidcLabel}
+                      </a>
+                    )}
+                    {providers?.saml.enabled && (
+                      <a
+                        href={`/api/auth/saml/login?returnTo=${encodeURIComponent(returnTo)}`}
+                        className='mt-3 flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-[14px] font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:shadow active:scale-[0.985]'
+                      >
+                        <KeyIcon dark />
+                        Continue with {providers.saml.label}
+                      </a>
+                    )}
+                    {/* Additional OIDC providers (#538) — same PKCE flow against
                       admin-configured issuers (Settings → Sign-in providers). */}
-                  {(providers?.sso ?? []).map((p) => (
-                    <a
-                      key={p.id}
-                      href={`/api/auth/login?provider=${encodeURIComponent(p.key)}&returnTo=${encodeURIComponent(returnTo)}`}
-                      className={
-                        resolveButtonColor(p.button_color)
-                          ? 'mt-3 flex w-full items-center justify-center gap-3 rounded-xl px-5 py-3.5 text-[14px] font-semibold text-[#fff] shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
-                          : 'mt-3 flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-[14px] font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:shadow active:scale-[0.985]'
-                      }
-                      style={
-                        resolveButtonColor(p.button_color)
-                          ? { background: resolveButtonColor(p.button_color) as string }
-                          : undefined
-                      }
-                    >
-                      {p.logo_url ? (
-                        <img src={p.logo_url} alt='' className='h-5 w-5 rounded object-contain' />
-                      ) : (
-                        <KeyIcon dark={!p.button_color} />
-                      )}
-                      Continue with {p.label}
-                    </a>
-                  ))}
-                  <p className='mt-6 text-center text-[12px] leading-relaxed text-slate-600'>
-                    Access is restricted to authorized users. If you need access, contact your
-                    administrator.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <PasswordLoginForm />
-                  <TokenLoginFallback />
-                </>
-              )}
-            </>
-          )}
-        </div>
+                    {(providers?.sso ?? []).map((p) => (
+                      <a
+                        key={p.id}
+                        href={`/api/auth/login?provider=${encodeURIComponent(p.key)}&returnTo=${encodeURIComponent(returnTo)}`}
+                        className={
+                          resolveButtonColor(p.button_color)
+                            ? 'mt-3 flex w-full items-center justify-center gap-3 rounded-xl px-5 py-3.5 text-[14px] font-semibold text-[#fff] shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
+                            : 'mt-3 flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-[14px] font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:shadow active:scale-[0.985]'
+                        }
+                        style={
+                          resolveButtonColor(p.button_color)
+                            ? { background: resolveButtonColor(p.button_color) as string }
+                            : undefined
+                        }
+                      >
+                        {p.logo_url ? (
+                          <img src={p.logo_url} alt='' className='h-5 w-5 rounded object-contain' />
+                        ) : (
+                          <KeyIcon dark={!p.button_color} />
+                        )}
+                        Continue with {p.label}
+                      </a>
+                    ))}
+                    <p className='mt-6 text-center text-[12px] leading-relaxed text-slate-600'>
+                      Access is restricted to authorized users. If you need access, contact your
+                      administrator.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <PasswordLoginForm />
+                    <TokenLoginFallback />
+                  </>
+                )}
+              </>
+            )}
+          </div>
 
-        <div className='mt-16 text-center' style={{ animation: 'login-fade 1s ease 0.4s both' }}>
-          <p className='text-[11px] text-slate-600'>© 2026 Nivaro · All rights reserved</p>
+          <div className='mt-16 text-center' style={{ animation: 'login-fade 1s ease 0.4s both' }}>
+            <p className='text-[11px] text-slate-600'>© 2026 Nivaro · All rights reserved</p>
+          </div>
         </div>
       </div>
     </div>

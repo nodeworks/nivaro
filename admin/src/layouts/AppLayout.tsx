@@ -6,6 +6,7 @@ import {
   DEMO_USER,
   DndMark,
   DoNotDisturbRow,
+  EnvironmentEdge,
   ForceReloadBanner,
   hexToRgbChannels,
   installReplayTail,
@@ -1087,6 +1088,7 @@ function ForceRefreshBanner() {
     <>
       <ForceReloadBanner />
       <SignOutNoteAfterSignIn />
+      <EnvironmentEdge />
     </>
   )
 }

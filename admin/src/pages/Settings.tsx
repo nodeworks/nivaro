@@ -31,6 +31,7 @@ import { toast } from 'sonner'
 import { AudienceConfirmSettingsCard } from '@/components/audience-confirm-settings'
 import { ChannelTestModeCard } from '@/components/channel-test-mode-card'
 import { DirectorySyncCard } from '@/components/directory-sync-card'
+import { EnvironmentNoticeSettingsCard } from '@/components/environment-notice-settings'
 import { HuddleSettingsSection } from '@/components/huddle-settings'
 import { ObligationsArmingPreview } from '@/components/obligations-arming-preview'
 import { SessionReplaySettingsSection } from '@/components/session-replay-settings'
@@ -4084,6 +4085,7 @@ export function SettingsPage() {
               {activeSection === 'instance' && (
                 <>
                   <InstanceOverridesSection />
+                  <EnvironmentNoticeSettingsCard />
                   <AudienceConfirmSettingsCard />
                 </>
               )}

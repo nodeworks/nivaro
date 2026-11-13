@@ -117,6 +117,7 @@ import { dossierRoutes } from './dossier.js'
 import { draftPublishRoutes } from './draft-publish.js'
 import { draftsRoutes } from './drafts.js'
 import { envPresenceRoutes } from './env-presence.js'
+import { environmentNoticeRoutes } from './environment-notice.js'
 import { environmentRoutes } from './environments.js'
 import { erpSubmissionsRoutes } from './erp-submissions.js'
 import { eventsStreamRoutes } from './events-stream.js'
@@ -448,6 +449,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(configConformanceRecordRoutes, { prefix: '/config-conformance' })
   await app.register(announcementRoutes, { prefix: '/announcements' })
   await app.register(audiencePreviewRoutes, { prefix: '/audience-preview' })
+  await app.register(environmentNoticeRoutes)
   await app.register(myJobsRoutes, { prefix: '/my-jobs' })
   await app.register(backgroundRunsRoutes, { prefix: '/background-runs' })
   await app.register(viewSubscriptionsRoutes, { prefix: '/view-subscriptions' })

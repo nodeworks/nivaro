@@ -200,6 +200,13 @@ export { DndMark, DoNotDisturbRow, useDndActive } from './components/DoNotDistur
 export type { DelegationConsoleViewProps } from './components/delegation/DelegationConsoleView'
 export { DelegationConsoleView } from './components/delegation/DelegationConsoleView'
 export { EmptyState } from './components/EmptyState'
+export {
+  EnvironmentBand,
+  EnvironmentEdge,
+  type EnvironmentInfo,
+  EnvironmentLoginBanner,
+  useInstanceEnvironment
+} from './components/EnvironmentNotice'
 export { ErrorDetails, ErrorNotice } from './components/ErrorNotice'
 export { ErrorSurface } from './components/ErrorSurface'
 export { canPreviewFile, FilePreviewLightbox } from './components/FilePreviewLightbox'

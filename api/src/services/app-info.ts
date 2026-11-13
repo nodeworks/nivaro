@@ -4,7 +4,9 @@ import { db } from '../db/index.js'
 import { tenantOrigin } from '../db/tenant-context.js'
 import { mobileClients, mobileSignInEnabled } from '../lib/mobile-clients.js'
 import { NIVARO_VERSION } from '../version.js'
+import { appEnvironment } from './app-info-environment.js'
 import { chaosAllowed } from './chaos/gate.js'
+import { currentNotice, type EnvironmentNotice } from './environment-notice.js'
 import { phonePushMode } from './phone-push.js'
 import { overlaySettings } from './settings-overrides.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -19,6 +21,8 @@ export interface AppInfo {
   version: string
   cloud: boolean
   environment: 'production' | 'staging' | 'development' | 'test' | 'other'
+  /** "This is staging" for the sign-in page (Settings → This Instance; null = none). */
+  environment_notice: EnvironmentNotice | null
   min_app_version: string | null
   sign_in: { mobile: boolean; client_ids: string[] }
   push: { mode: 'off' | 'direct' | 'relay' }
@@ -27,32 +31,9 @@ export interface AppInfo {
 }
 
 /** What a tenant hook already knows when it lets the probe through a blocked tenant. */
+export { appEnvironment } from './app-info-environment.js'
+
 export type AppInfoBlock = NonNullable<FastifyRequest['nvrTenantBlock']>
-
-export function appEnvironment(env: NodeJS.ProcessEnv = process.env): AppInfo['environment'] {
-  const v = (env.NIVARO_ENVIRONMENT ?? '').trim().toLowerCase()
-  if (v) {
-    return v === 'production' || v === 'staging' || v === 'development' || v === 'test'
-      ? v
-      : 'other'
-  }
-  // army7 b10: staging runs NODE_ENV=production and told apps it was production.
-  // With no NIVARO_ENVIRONMENT, an instance named for an environment
-  // (NIVARO_INSTANCE=staging) says which one it is before NODE_ENV does.
-  const named = INSTANCE_ENVIRONMENTS[(env.NIVARO_INSTANCE ?? '').trim().toLowerCase()]
-  if (named) return named
-  return env.NODE_ENV === 'production' ? 'production' : 'development'
-}
-
-const INSTANCE_ENVIRONMENTS: Record<string, AppInfo['environment']> = {
-  production: 'production',
-  prod: 'production',
-  staging: 'staging',
-  stage: 'staging',
-  development: 'development',
-  dev: 'development',
-  test: 'test'
-}
 
 /** Areas the phone app may show, from the switches the admin already uses. */
 export function enabledFeatures(env: NodeJS.ProcessEnv = process.env): string[] {
@@ -129,6 +110,7 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
     version: NIVARO_VERSION,
     cloud: !!process.env.CLOUD_META_DB_URL,
     environment: appEnvironment(),
+    environment_notice: await currentNotice(),
     min_app_version: process.env.MOBILE_MIN_APP_VERSION?.trim() || null,
     sign_in: {
       mobile: mobileSignInEnabled(),

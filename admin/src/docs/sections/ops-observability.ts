@@ -633,6 +633,15 @@ export const instanceOverridesDocs: DocSection = {
     {
       type: 'note',
       text: 'Both the read (GET /api/settings/instance-overrides) and the save (PUT) are admin-only, and every save is audit-logged with the instance key and the keys it set.'
+    },
+    { type: 'h3', id: 'environment-notice', text: 'Environment notice' },
+    {
+      type: 'p',
+      text: 'The Environment notice card on This Instance puts a hazard-tape band across the top of the sign-in pages (admin and portal) and a tape frame around them, so nobody mistakes staging for production. Automatic shows it on every environment except production; Always show and Never show decide it for this environment only. Label (default: the environment name), sentence and a "Go to production" link (https, default NIVARO_PRODUCTION_URL) are optional; a switch also marks the signed-in admin app with a striped top edge and the label in the tab title. The card previews the band as you type.'
+    },
+    {
+      type: 'note',
+      text: 'Stored under the environment_notice key of this instance\'s override row (GET/PATCH /api/environment-notice, admin, audit-logged). Sign-in pages read it from the public GET /api/app-info (environment_notice). ENVIRONMENT_NOTICE=on|off on the server wins over the setting. Never shown in cloud mode.'
     }
   ]
 }
