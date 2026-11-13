@@ -151,6 +151,7 @@ describe('a request that cannot get a connection', () => {
       },
       { retry: true }
     )
+    // lint-traps-ok: a fake driver in a test: there is no pool connection to release
     const conn = await client.acquireConnection()
     expect(n).toBe(3)
     const state = connectStateOf(k)

@@ -25,6 +25,7 @@ class FakeDriver {
       throw Object.assign(new Error("Login failed for user 'app_ro'."), { code: 'ELOGIN' })
     return { host: this.host }
   }
+  // lint-traps-ok: the fake driver itself, not a caller holding a pool connection
   async acquireConnection(): Promise<unknown> {
     return this.acquireRawConnection()
   }
@@ -90,6 +91,7 @@ describe('the read replica pool', () => {
   it('stamps an error from acquiring with the pool it came from', async () => {
     const replica = driverOf(dbRead)
     replica.unreachable = true // not a refused login: nothing is retried
+    // lint-traps-ok: a fake driver in a test: the call is expected to reject, nothing is held
     const err = await replica.acquireConnection().then(
       () => null,
       (e) => e
