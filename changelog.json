@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-11-13T19:23:02.911Z",
+  "generated_at": "2026-11-13T19:50:07.254Z",
   "releases": [
+    {
+      "version": "0.3.149",
+      "tag": "v0.3.149",
+      "date": "2026-11-13T14:49:04-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "a multi-value column reads at most 50 children per row",
+              "hash": "d508496a1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "views",
+              "text": "the armed Delete? on a saved view reads in light and dark",
+              "hash": "77dc2a1a6"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.148",
       "tag": "v0.3.148",
-      "date": "2026-11-13T14:22:31-05:00",
+      "date": "2026-11-13T14:23:03-05:00",
       "sections": [
         {
           "label": "Fixed",
