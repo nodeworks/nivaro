@@ -2215,10 +2215,31 @@ export async function resolvePathValues(
 
   if (classified.type === 'o2m') {
     const manyField = classified.manyField as string
-    const o2mCols = rest.length > 0 ? [manyField, 'id'] : [manyField, ...selectFields]
+    // A plain column one hop down (`units.name`) is read in this same capped read: reading
+    // it afterwards by parent or by child id would list every child again.
+    let plainLeaf: string | null = null
+    if (rest.length === 1) {
+      const relatedRels = batch
+        ? await batch.relations(classified.relatedCollection, relationsCache)
+        : (relationsCache.get(classified.relatedCollection) ??
+          (await getRelations(classified.relatedCollection)))
+      relationsCache.set(classified.relatedCollection, relatedRels)
+      if (!classifyRelationSegment(classified.relatedCollection, rest[0], relatedRels))
+        plainLeaf = rest[0]
+    }
+    const o2mCols =
+      rest.length > 0
+        ? [...new Set([manyField, 'id', ...(plainLeaf ? [plainLeaf] : [])])]
+        : selectFields.includes('*')
+          ? ['*']
+          : [...new Set([manyField, 'id', ...selectFields])]
     const readRelated = () =>
       selectInChunks(ids, 2000, (chunk) =>
-        whereInList(db(classified.relatedCollection), manyField, chunk).select(o2mCols)
+        cappedChildren(
+          whereInList(db(classified.relatedCollection), manyField, chunk).select(o2mCols),
+          manyField,
+          'id'
+        )
       )
     const relatedRows = batch
       ? await batch.once(
@@ -2226,42 +2247,26 @@ export async function resolvePathValues(
           readRelated
         )
       : await readRelated()
-    const grouped = new Map<string, Record<string, unknown>[]>()
-    for (const row of relatedRows as Array<Record<string, unknown>>) {
-      const parentId = String(row[manyField])
-      const list = grouped.get(parentId) ?? []
-      list.push(row)
-      grouped.set(parentId, list)
-    }
+    const { grouped, totals } = groupCapped(relatedRows as Array<Record<string, unknown>>, (row) =>
+      String(row[manyField])
+    )
     // Multi-valued hop with remaining segments: recurse the rest of the path
     // per related row and join the distinct results per parent.
     if (rest.length > 0) {
+      // #1224 — a plain column one hop down (`workflow_lines.requisition_id`)
+      // used to be re-read BY ID: thousands of child ids in 2000-id chunks. It
+      // now rides the capped read above, keyed by the parents.
+      if (plainLeaf) {
+        const leaf = plainLeaf
+        const nested = new Map<string, PathValue>()
+        for (const row of relatedRows as Array<Record<string, unknown>>) {
+          nested.set(String(row.id), { value: pathText(row[leaf]), ids: [] })
+        }
+        return joinMultiHop(ids, grouped, nested, totals)
+      }
       const allRelatedIds = [
         ...new Set((relatedRows as Array<Record<string, unknown>>).map((r) => String(r.id)))
       ]
-      // #1224 — a plain column one hop down (`workflow_lines.requisition_id`)
-      // used to be re-read BY ID: thousands of child ids in 2000-id chunks.
-      // The same rows come back keyed by the parents (a few hundred ids), and
-      // every such path of this resolve shares that one read. The hop's own
-      // row order above is untouched, so multi-value cells list identically.
-      if (batch && rest.length === 1 && allRelatedIds.length > 0) {
-        const relatedRels = await batch.relations(classified.relatedCollection, relationsCache)
-        const leaf = rest[0]
-        if (!classifyRelationSegment(classified.relatedCollection, leaf, relatedRels)) {
-          const leafRows = await batch.rows(
-            classified.relatedCollection,
-            ids,
-            leaf === 'id' ? [] : [leaf],
-            manyField
-          )
-          const nested = new Map<string, PathValue>()
-          for (const row of leafRows) {
-            const v = row[leaf]
-            nested.set(String(row.id), { value: pathText(v), ids: [] })
-          }
-          return joinMultiHop(ids, grouped, nested)
-        }
-      }
       const nested = await resolvePathValues(
         classified.relatedCollection,
         allRelatedIds,
@@ -2269,14 +2274,14 @@ export async function resolvePathValues(
         relationsCache,
         batch
       )
-      return joinMultiHop(ids, grouped, nested)
+      return joinMultiHop(ids, grouped, nested, totals)
     }
     const out = new Map<string, PathValue>()
     for (const rowId of ids) {
       const related = grouped.get(rowId) ?? []
       const values = related.slice(0, 3).map((r) => resolveDisplayValue(r, template))
       out.set(rowId, {
-        value: formatMultiValueCell(values, related.length),
+        value: formatMultiValueCell(values, totals.get(rowId) ?? related.length),
         ids: related.slice(0, 50).map((r) => String(r.id))
       })
     }
@@ -2286,17 +2291,27 @@ export async function resolvePathValues(
   // m2m
   const readJunction = () =>
     selectInChunks(ids, 2000, (chunk) =>
-      whereInList(db(`${classified.junction} as _j`), `_j.${classified.junctionFkToParent}`, chunk)
-        .join(
-          `${classified.relatedCollection} as _rel`,
-          '_rel.id',
-          `_j.${classified.junctionFkToOther}`
+      cappedChildren(
+        whereInList(
+          db(`${classified.junction} as _j`),
+          `_j.${classified.junctionFkToParent}`,
+          chunk
         )
-        .select([
-          `_j.${classified.junctionFkToParent} as __parent_id`,
-          '_rel.id as __rel_id',
-          ...selectFields.map((f) => `_rel.${f}`)
-        ])
+          .join(
+            `${classified.relatedCollection} as _rel`,
+            '_rel.id',
+            `_j.${classified.junctionFkToOther}`
+          )
+          .select([
+            `_j.${classified.junctionFkToParent} as __parent_id`,
+            '_rel.id as __rel_id',
+            // `_rel.id` is already __rel_id: naming it twice is a duplicate column
+            // name in the capped read's derived table.
+            ...selectFields.filter((f) => f !== 'id').map((f) => `_rel.${f}`)
+          ]),
+        `_j.${classified.junctionFkToParent}`,
+        '_rel.id'
+      )
     )
   const junctionRows = batch
     ? await batch.once(
@@ -2304,13 +2319,9 @@ export async function resolvePathValues(
         readJunction
       )
     : await readJunction()
-  const grouped = new Map<string, Record<string, unknown>[]>()
-  for (const row of junctionRows as Array<Record<string, unknown>>) {
-    const parentId = String(row.__parent_id)
-    const list = grouped.get(parentId) ?? []
-    list.push(row)
-    grouped.set(parentId, list)
-  }
+  const { grouped, totals } = groupCapped(junctionRows as Array<Record<string, unknown>>, (row) =>
+    String(row.__parent_id)
+  )
   if (rest.length > 0) {
     const allRelatedIds = [
       ...new Set(
@@ -2331,18 +2342,60 @@ export async function resolvePathValues(
         list.map((r) => ({ id: r.__rel_id ?? r.id }))
       )
     }
-    return joinMultiHop(ids, groupedIds, nested)
+    return joinMultiHop(ids, groupedIds, nested, totals)
   }
   const out = new Map<string, PathValue>()
   for (const rowId of ids) {
     const related = grouped.get(rowId) ?? []
     const values = related.slice(0, 3).map((r) => resolveDisplayValue(r, template))
     out.set(rowId, {
-      value: formatMultiValueCell(values, related.length),
+      value: formatMultiValueCell(values, totals.get(rowId) ?? related.length),
       ids: related.slice(0, 50).map((r) => String(r.__rel_id ?? r.id))
     })
   }
   return out
+}
+
+/**
+ * Children kept per parent by a multi-value path read (production 2026-11-13: the Unit
+ * Types list's Units column read all 230,336 units of a page into the web process and
+ * froze it for up to 61 s). A cell shows 3 values and "+N more" and its drill-down
+ * ids stop at 50, so 50 is all any cell can use; the true count rides COUNT(*) OVER.
+ */
+export const MULTI_VALUE_ROW_CAP = 50
+
+/** `inner` (already filtered and selected) cut to the first MULTI_VALUE_ROW_CAP rows per
+ *  `partition`, ordered by `order`; every row carries `__rn` and the parent's `__total`. */
+function cappedChildren(inner: Knex.QueryBuilder, partition: string, order: string) {
+  return db
+    .from(
+      inner
+        .select(
+          db.raw('ROW_NUMBER() OVER (PARTITION BY ?? ORDER BY ??) AS __rn', [partition, order]),
+          db.raw('COUNT(*) OVER (PARTITION BY ??) AS __total', [partition])
+        )
+        .as('_c')
+    )
+    .where('__rn', '<=', MULTI_VALUE_ROW_CAP)
+    .orderBy('__rn')
+}
+
+/** Capped rows grouped per parent (in `__rn` order) + each parent's full child count. */
+function groupCapped(
+  rows: Array<Record<string, unknown>>,
+  parentOf: (row: Record<string, unknown>) => string
+): { grouped: Map<string, Record<string, unknown>[]>; totals: Map<string, number> } {
+  const grouped = new Map<string, Record<string, unknown>[]>()
+  const totals = new Map<string, number>()
+  for (const row of rows) {
+    const parentId = parentOf(row)
+    const list = grouped.get(parentId) ?? []
+    list.push(row)
+    grouped.set(parentId, list)
+    const total = Number(row.__total)
+    if (Number.isFinite(total)) totals.set(parentId, total)
+  }
+  return { grouped, totals }
 }
 
 // Aggregate a relation path's numeric leaf per parent row — one set-based
@@ -2454,7 +2507,9 @@ export async function resolveExtraPathValues(
 function joinMultiHop(
   parentIds: string[],
   relatedByParent: Map<string, Record<string, unknown>[]>,
-  nested: Map<string, PathValue>
+  nested: Map<string, PathValue>,
+  /** Full child count per parent when the read was capped (MULTI_VALUE_ROW_CAP). */
+  totals?: Map<string, number>
 ): Map<string, PathValue> {
   const out = new Map<string, PathValue>()
   for (const parentId of parentIds) {
@@ -2471,8 +2526,10 @@ function joinMultiHop(
       else idSet.add(String(r.id))
     }
     if (values.length === 0 && idSet.size === 0) continue
+    // Children past the cap were never read: count each as one more value.
+    const unread = Math.max(0, (totals?.get(parentId) ?? related.length) - related.length)
     out.set(parentId, {
-      value: formatMultiValueCell(values.slice(0, 3), values.length),
+      value: formatMultiValueCell(values.slice(0, 3), values.length + unread),
       ids: [...idSet].slice(0, 50)
     })
   }

@@ -94,23 +94,6 @@ describe('extra-column paths with a shared batch', () => {
     ])
   })
 
-  it('reads a plain column one o2m hop down by the parents, once for every such path', async () => {
-    const paths = ['lines.sku', 'lines.id']
-    selects.length = 0
-    const unbatched = await resolveAll(paths, false)
-    // per path: the hop, then the children again by id
-    expect(selects.filter((s) => s.table === 'lines')).toHaveLength(4)
-
-    selects.length = 0
-    const batched = await resolveAll(paths, true)
-    expect(selects).toEqual([
-      { table: 'lines', by: 'article', cols: ['article', 'id'] },
-      { table: 'lines', by: 'article', cols: ['article', 'id', 'sku'] }
-    ])
-    expect(batched).toEqual(unbatched)
-    expect(batched[0]).toEqual([
-      ['1', { value: 'S1a', ids: ['1-a', '1-b'] }],
-      ['2', { value: 'S2a', ids: ['2-a'] }]
-    ])
-  })
+  // A plain column one o2m hop down (`lines.sku`) is now read inside the hop's own capped
+  // read (one windowed statement per path, batched or not): queue-multi-value-cap.test.ts.
 })
