@@ -47,7 +47,8 @@ export interface PageModel {
     links: number
     chip: Partial<Record<ChipKey, number>>
   }
-  /** Rows a filter would match but that are folded away (hidden / link tables) — for empty-search help. */
+  /** Rows a filter would match but that are folded away — hidden (never a link table) / link
+   *  tables (hidden flag or not) — for empty-search help. */
   foldedMatches: { hidden: Collection[]; links: Collection[] }
 }
 
@@ -69,7 +70,9 @@ export function matchesChip(
     case 'empty':
       return stat?.rows === 0
     case 'hidden':
-      return !!c.hidden
+      // A hidden link table counts as a link table, never as hidden: the two switches and
+      // chips do not overlap (on EFP every link table is also flagged hidden).
+      return !!c.hidden && !stat?.link
     case 'link':
       return !!stat?.link
     case 'virtual':
@@ -123,10 +126,13 @@ export function buildPageModel(
   const showHidden = state.showHidden || chipOn('hidden')
   const showLinks = state.showLinks || chipOn('link')
   const isLink = (c: Collection) => !!stat(c)?.link
+  // Two separate kinds that never overlap: link tables (whatever their hidden flag) and
+  // hidden collections that are not link tables. Each has its own switch.
+  const isHidden = (c: Collection) => !!c.hidden && !isLink(c)
 
   const counts = {
     total: real.length,
-    hidden: real.filter((c) => c.hidden).length,
+    hidden: real.filter(isHidden).length,
     links: real.filter(isLink).length,
     chip: Object.fromEntries(
       CHIPS.map((k) => [k, real.filter((c) => matchesChip(c, k, stat(c))).length])
@@ -136,13 +142,14 @@ export function buildPageModel(
   const passesChips = (c: Collection) => state.chips.every((k) => matchesChip(c, k, stat(c)))
   const candidates = real.filter((c) => matchesFilter(c, filter) && passesChips(c))
   const foldedMatches = {
-    hidden: showHidden ? [] : candidates.filter((c) => c.hidden),
-    links: showLinks ? [] : candidates.filter((c) => !c.hidden && isLink(c))
+    hidden: showHidden ? [] : candidates.filter(isHidden),
+    links: showLinks ? [] : candidates.filter(isLink)
   }
-  const visible = candidates.filter((c) => (showHidden || !c.hidden) && (showLinks || !isLink(c)))
+  const inPlace = (c: Collection) => (isLink(c) ? showLinks : showHidden || !c.hidden)
+  const visible = candidates.filter(inPlace)
   const linkTables = showLinks
     ? []
-    : candidates.filter((c) => isLink(c) && (showHidden || !c.hidden))
+    : candidates.filter(isLink).sort((a, b) => label(a).localeCompare(label(b)))
 
   const byLabel = (a: Collection, b: Collection) => label(a).localeCompare(label(b))
   const bySort = (a: Collection, b: Collection) =>
@@ -154,7 +161,7 @@ export function buildPageModel(
       folder,
       sort: folderRows.get(folder.key)?.sort ?? 9999,
       cols: visible.filter((c) => c.group === folder.key).sort(bySort),
-      hiddenCount: showHidden ? 0 : real.filter((c) => c.group === folder.key && c.hidden).length
+      hiddenCount: showHidden ? 0 : real.filter((c) => c.group === folder.key && isHidden(c)).length
     }))
     // A folder whose collections are all hidden still shows (with "N hidden") until you narrow.
     .filter((s) => s.cols.length > 0 || (!narrowing && s.hiddenCount > 0))

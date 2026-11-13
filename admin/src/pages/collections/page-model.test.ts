@@ -138,6 +138,80 @@ describe('collections page model', () => {
     expect(order('az')).toEqual(['alpha', 'vendors', 'warehouses', 'workflows'])
   })
 
+  // EFP_Staging shape (2026-11-13): every link table is ALSO flagged hidden. The two switches
+  // must not overlap — "Show link tables" alone lists them, "Show hidden" never pulls them in.
+  describe('hidden vs link tables when every link table is also hidden', () => {
+    const link = () => ({
+      rows: 5,
+      changed_at: null,
+      pipeline: null,
+      forms: 0,
+      imports: 0,
+      link: true,
+      virtual: false
+    })
+    const shape: Collection[] = [
+      col('wf', { display_name: 'Workflow' }), // folder
+      col('workflows', { group: 'wf' }),
+      col('workflow_notes', { group: 'wf', hidden: true }), // plain hidden
+      col('workflows_zones', { group: 'wf', hidden: true }), // link + hidden
+      col('vendors'),
+      col('old_vendors', { hidden: true }), // plain hidden
+      col('vendors_regions', { hidden: true }) // link + hidden
+    ]
+    const st: OverviewStats = { workflows_zones: link(), vendors_regions: link() }
+    const names = (m: ReturnType<typeof buildPageModel>) => ({
+      inFolders: m.sections.flatMap((s) => s.cols.map((c) => c.collection)),
+      loose: m.loose.map((c) => c.collection),
+      fold: m.linkTables.map((c) => c.collection)
+    })
+
+    it('counts do not overlap', () => {
+      const m = buildPageModel(shape, st, base, '', usage)
+      expect(m.counts).toMatchObject({ hidden: 2, links: 2 })
+      expect(m.counts.chip.hidden).toBe(2)
+    })
+
+    it('by default: hidden ones folded away, link tables in their own fold', () => {
+      const m = buildPageModel(shape, st, base, '', usage)
+      expect(names(m)).toEqual({
+        inFolders: ['workflows'],
+        loose: ['vendors'],
+        fold: ['vendors_regions', 'workflows_zones']
+      })
+      expect(m.sections[0].hiddenCount).toBe(1)
+    })
+
+    it('"Show link tables" alone lists link tables in place, hidden flag or not', () => {
+      const m = buildPageModel(shape, st, { ...base, showLinks: true }, '', usage)
+      expect(names(m)).toEqual({
+        inFolders: ['workflows', 'workflows_zones'],
+        loose: ['vendors', 'vendors_regions'],
+        fold: []
+      })
+      expect(m.sections[0].hiddenCount).toBe(1)
+    })
+
+    it('"Show hidden" alone lists hidden collections that are not link tables', () => {
+      const m = buildPageModel(shape, st, { ...base, showHidden: true }, '', usage)
+      expect(names(m)).toEqual({
+        inFolders: ['workflow_notes', 'workflows'],
+        loose: ['old_vendors', 'vendors'],
+        fold: ['vendors_regions', 'workflows_zones']
+      })
+      expect(m.sections[0].hiddenCount).toBe(0)
+    })
+
+    it('empty-search help names the right switch', () => {
+      const h = buildPageModel(shape, st, base, 'old_v', usage)
+      expect(h.foldedMatches.hidden.map((c) => c.collection)).toEqual(['old_vendors'])
+      expect(h.foldedMatches.links).toEqual([])
+      const l = buildPageModel(shape, st, base, 'regions', usage)
+      expect(l.foldedMatches.hidden).toEqual([])
+      expect(l.foldedMatches.links.map((c) => c.collection)).toEqual(['vendors_regions'])
+    })
+  })
+
   it('suggests near spellings for a typo', () => {
     expect(nearSpellings('vendrs', rows).map((c) => c.collection)).toContain('vendors')
     expect(nearSpellings('zz', rows)).toEqual([])

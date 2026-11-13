@@ -11,22 +11,10 @@ import {
   arrayMove,
   SortableContext,
   sortableKeyboardCoordinates,
-  useSortable,
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  ChevronDown,
-  ChevronRight,
-  Clock,
-  Database,
-  FolderOpen,
-  GripVertical,
-  Link2,
-  SearchX,
-  Star
-} from 'lucide-react'
+import { Clock, Database, Link2, SearchX, Star } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
@@ -35,7 +23,6 @@ import { SchemaProposalsPanel } from '@/components/schema-proposals-panel'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, type Collection } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { cn } from '@/lib/utils'
 import { CollectionAvatar, CollectionRow } from './collections/CollectionRow'
 import { CollectionsToolbar } from './collections/CollectionsToolbar'
 import { FolderSuggestions } from './collections/FolderSuggestions'
@@ -46,10 +33,11 @@ import {
   readLocal,
   recordCollectionOpen,
   useCollectionUsage,
+  useFavoriteCollections,
   useOverviewStats,
-  usePinnedCollections,
   writeLocal
 } from './collections/overview-data'
+import { PINNED_KEY, PinnedSection } from './collections/PinnedSection'
 import { buildPageModel, label, nearSpellings } from './collections/page-model'
 import {
   CreateTableInline,
@@ -58,7 +46,9 @@ import {
   type SchemaPanel,
   SchemaToolsMenu
 } from './collections/SchemaTools'
-import type { CollectionStat, FolderOption, PageState } from './collections/types'
+import { FolderHeader, Section, SortableRow } from './collections/sections'
+import { useSharedPins } from './collections/shared-pins'
+import type { CollectionStat, PageState } from './collections/types'
 
 /**
  * Collections (/collections) — every registered collection, findable.
@@ -66,9 +56,12 @@ import type { CollectionStat, FolderOption, PageState } from './collections/type
  * Folders (a registry row other rows name as their `group`) hold the curated
  * part; everything else sits in "Not in a folder", A–Z. Hidden collections and
  * link tables are folded away by default. Views other than Folders are one
- * flat sorted list. Pins are sidebar favorites; Recent / Most used are this
- * browser's own. Reordering only happens in Arrange mode. Admins also get
- * counts, last change, badges, the hover card and folder tools.
+ * flat sorted list. "Pinned" is the shared list an administrator puts at the
+ * top for everyone (collections/shared-pins.ts); "My favorites" are the
+ * person's own stars (= sidebar favorites); Recent / Most used are this
+ * browser's own. Reordering only happens in Arrange mode (and, for admins, in
+ * the Pinned section). Admins also get counts, last change, badges, the hover
+ * card and folder tools.
  */
 
 const COLLAPSED_KEY = 'nivaro_col_collapsed'
@@ -86,110 +79,6 @@ const DEFAULT_PREFS: Prefs = {
 }
 
 const sectionId = (key: string) => `cl-section-${key.replace(/[^A-Za-z0-9_-]/g, '_')}`
-
-// ─── Sortable wrappers (Arrange mode only) ────────────────────────────────────
-
-function SortableRow({ id, children }: { id: string; children: (handle: ReactNode) => ReactNode }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id
-  })
-  const handle = (
-    <button
-      type='button'
-      {...attributes}
-      {...listeners}
-      aria-label='Drag to reorder'
-      className='flex w-7 shrink-0 cursor-grab touch-none items-center justify-center text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300'
-    >
-      <GripVertical className='h-3.5 w-3.5' />
-    </button>
-  )
-  return (
-    <div
-      ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={cn('relative', isDragging && 'z-10 opacity-50')}
-    >
-      {children(handle)}
-    </div>
-  )
-}
-
-// ─── Folder section ───────────────────────────────────────────────────────────
-
-function FolderHeader({
-  folder,
-  count,
-  hiddenCount,
-  collapsed,
-  onToggle,
-  dragHandle,
-  icon
-}: {
-  folder: FolderOption
-  count: number
-  hiddenCount: number
-  collapsed: boolean
-  onToggle: () => void
-  dragHandle?: ReactNode
-  icon?: ReactNode
-}) {
-  const color = folder.color ?? '#94a3b8'
-  return (
-    <div
-      // Sticks under the page toolbar while its folder scrolls past.
-      className='sticky z-[5] flex items-stretch border-b border-slate-200 bg-slate-50 dark:border-white/[0.08] dark:bg-[#141f2a]'
-      style={{ top: 'var(--cl-toolbar-h, 0px)' }}
-    >
-      {dragHandle}
-      <button
-        type='button'
-        onClick={onToggle}
-        aria-expanded={!collapsed}
-        className={cn(
-          'flex flex-1 items-center gap-2.5 py-1.5 pr-4 text-left transition-colors hover:bg-slate-100 dark:hover:bg-white/[0.04]',
-          !dragHandle && 'pl-4'
-        )}
-      >
-        <span
-          className='flex h-5 w-5 shrink-0 items-center justify-center rounded'
-          style={{ backgroundColor: `${color}22` }}
-        >
-          {icon ?? <FolderOpen className='h-3 w-3' style={{ color }} />}
-        </span>
-        <span className='flex-1 truncate text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
-          {folder.label}
-        </span>
-        <span className='text-[11px] tabular-nums text-slate-500 dark:text-slate-400'>
-          {count}
-          {hiddenCount > 0 && (
-            <span data-tip='Hidden collections in this folder — turn on Show hidden to list them'>
-              {' '}
-              · {hiddenCount} hidden
-            </span>
-          )}
-        </span>
-        {collapsed ? (
-          <ChevronRight className='h-3.5 w-3.5 text-slate-400 dark:text-slate-500' />
-        ) : (
-          <ChevronDown className='h-3.5 w-3.5 text-slate-400 dark:text-slate-500' />
-        )}
-      </button>
-    </div>
-  )
-}
-
-function Section({ id, children }: { id: string; children: ReactNode }) {
-  return (
-    <section
-      id={id}
-      className='rounded-lg border border-slate-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]'
-      style={{ scrollMarginTop: 'calc(var(--cl-toolbar-h, 0px) + 12px)' }}
-    >
-      {children}
-    </section>
-  )
-}
 
 // ─── Loading / empty states ───────────────────────────────────────────────────
 
@@ -310,12 +199,25 @@ function EmptySearch({
   )
 }
 
-// ─── Pinned + recent strip ────────────────────────────────────────────────────
+// ─── My favorites + recent strip ──────────────────────────────────────────────
 
-function QuickStrip({ title, icon, cols }: { title: string; icon: ReactNode; cols: Collection[] }) {
-  if (!cols.length) return null
+function QuickStrip({
+  title,
+  icon,
+  cols,
+  empty,
+  ...rest
+}: {
+  title: string
+  icon: ReactNode
+  cols: Collection[]
+  /** Shown beside the title when there is nothing to list; without it the strip is left out. */
+  empty?: ReactNode
+  [data: `data-${string}`]: string | boolean | undefined
+}) {
+  if (!cols.length && !empty) return null
   return (
-    <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+    <div className='flex min-w-0 flex-wrap items-center gap-1.5' {...rest}>
       <span className='mr-1 inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 dark:text-slate-400'>
         {icon}
         {title}
@@ -331,6 +233,7 @@ function QuickStrip({ title, icon, cols }: { title: string; icon: ReactNode; col
           <span className='truncate'>{label(c)}</span>
         </Link>
       ))}
+      {!cols.length && empty}
     </div>
   )
 }
@@ -389,7 +292,9 @@ export function CollectionsPage() {
 
   const { data: stats } = useOverviewStats(isAdmin)
   const usage = useCollectionUsage()
-  const { pinned, toggle: togglePin } = usePinnedCollections()
+  const { favorite, toggle: toggleFavorite } = useFavoriteCollections()
+  const sharedPins = useSharedPins()
+  const pinnedSet = useMemo(() => new Set(sharedPins.pins), [sharedPins.pins])
 
   const model = useMemo(
     () => buildPageModel(local, stats, state, filter, usage),
@@ -490,13 +395,29 @@ export function CollectionsPage() {
   }
 
   // ── Rendering helpers ────────────────────────────────────────────────────────
-  const renderRow = (col: Collection, dragHandle?: ReactNode) => (
+  const renderRow = (
+    col: Collection,
+    dragHandle?: ReactNode,
+    moves?: { onMoveUp?: () => void; onMoveDown?: () => void; inPinned?: boolean }
+  ) => (
     <CollectionRow
       col={col}
       stat={stats?.[col.collection] as CollectionStat | undefined}
       density={state.density}
-      pinned={pinned.has(col.collection)}
-      onTogglePin={() => void togglePin(col.collection, label(col))}
+      favorite={favorite.has(col.collection)}
+      onToggleFavorite={() => void toggleFavorite(col.collection, label(col))}
+      pinnedForAll={pinnedSet.has(col.collection)}
+      onTogglePinned={
+        isAdmin
+          ? () =>
+              void (pinnedSet.has(col.collection)
+                ? sharedPins.unpin(col.collection, label(col))
+                : sharedPins.pin(col.collection, label(col)))
+          : undefined
+      }
+      onMoveUp={moves?.onMoveUp}
+      onMoveDown={moves?.onMoveDown}
+      quietPin={moves?.inPinned}
       folders={model.folders}
       onMove={(group) => void moveOne(col, group)}
       selecting={selecting}
@@ -546,16 +467,23 @@ export function CollectionsPage() {
   const narrowing = !!filter.trim() || chips.length > 0
   const isOpen = (key: string) => narrowing || !collapsed[key]
   const folderView = state.view === 'folders'
-  const showQuick = folderView && !narrowing && !arranging && !selecting
-  const pinnedCols = [...pinned].map((n) => byName.get(n)).filter((c): c is Collection => !!c)
+  // Pinned + My favorites are "go to" shortcuts: while searching or filtering they step
+  // aside — every match is already in the results below, with its pin and star.
+  const showPinned = !narrowing && !arranging && !selecting
+  const showQuick = folderView && showPinned
+  const pinnedCols = sharedPins.pins.map((n) => byName.get(n)).filter((c): c is Collection => !!c)
+  const favoriteCols = [...favorite].map((n) => byName.get(n)).filter((c): c is Collection => !!c)
   const recentCols = usage.recent
-    .filter((n) => !pinned.has(n))
+    .filter((n) => !favorite.has(n) && !pinnedSet.has(n))
     .map((n) => byName.get(n))
     .filter((c): c is Collection => !!c)
     .slice(0, 6)
 
   const jumpTargets = folderView
     ? [
+        ...(showPinned && pinnedCols.length > 0
+          ? [{ key: PINNED_KEY, label: 'Pinned', count: pinnedCols.length }]
+          : []),
         ...model.sections.map((s) => ({
           key: s.folder.key,
           label: s.folder.label,
@@ -623,12 +551,39 @@ export function CollectionsPage() {
             />
           ) : (
             <>
-              {showQuick && (pinnedCols.length > 0 || recentCols.length > 0) && (
+              {showPinned && (
+                <PinnedSection
+                  sectionId={sectionId(PINNED_KEY)}
+                  cols={pinnedCols}
+                  isAdmin={isAdmin}
+                  status={sharedPins.status}
+                  error={sharedPins.error}
+                  onRetry={() => void sharedPins.refetch()}
+                  onReorder={(names) => void sharedPins.reorder(names)}
+                  collapsed={!!collapsed[PINNED_KEY]}
+                  onToggle={() => toggleCollapse(PINNED_KEY)}
+                  renderRow={(c, opts) =>
+                    renderRow(c, opts.handle, {
+                      onMoveUp: opts.onMoveUp,
+                      onMoveDown: opts.onMoveDown,
+                      inPinned: true
+                    })
+                  }
+                />
+              )}
+
+              {showQuick && (
                 <div className='space-y-2' data-collections-quick>
                   <QuickStrip
-                    title='Pinned'
+                    data-collections-favorites
+                    title='My favorites'
                     icon={<Star className='h-3 w-3 fill-current' />}
-                    cols={pinnedCols}
+                    cols={favoriteCols}
+                    empty={
+                      <span className='text-[12px] text-slate-500 dark:text-slate-400'>
+                        Star a collection to keep it here and in your sidebar.
+                      </span>
+                    }
                   />
                   <QuickStrip
                     title='Recent'

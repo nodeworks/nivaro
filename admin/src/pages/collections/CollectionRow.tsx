@@ -6,6 +6,7 @@ import {
   Link2,
   type LucideIcon,
   Pencil,
+  Pin,
   Square,
   Star,
   Workflow
@@ -73,7 +74,8 @@ interface BadgeSpec {
 
 function badgesFor(col: Collection, stat: CollectionStat | undefined): BadgeSpec[] {
   const out: BadgeSpec[] = []
-  if (col.hidden)
+  // A link table is its own kind (its own switch), whatever its hidden flag says.
+  if (col.hidden && !stat?.link)
     out.push({ key: 'hidden', label: 'Hidden', icon: EyeOff, tip: 'Hidden from navigation' })
   if (stat?.virtual)
     out.push({
@@ -220,8 +222,13 @@ export function CollectionRow({
   col,
   stat,
   density,
-  pinned,
-  onTogglePin,
+  favorite,
+  onToggleFavorite,
+  pinnedForAll = false,
+  onTogglePinned,
+  onMoveUp,
+  onMoveDown,
+  quietPin = false,
   folders,
   onMove,
   selecting,
@@ -236,8 +243,18 @@ export function CollectionRow({
   /** undefined for non-admins / still loading → no counts or stat badges. */
   stat?: CollectionStat
   density: Density
-  pinned: boolean
-  onTogglePin: () => void
+  /** The reader's own favorite (sidebar favorites) — the star. */
+  favorite: boolean
+  onToggleFavorite: () => void
+  /** On the shared Pinned list (for everyone). */
+  pinnedForAll?: boolean
+  /** Admins only: pin / unpin for everyone. No pin control without it. */
+  onTogglePinned?: () => void
+  /** The Pinned section's admin moves, offered in the menu (absent at the ends). */
+  onMoveUp?: () => void
+  onMoveDown?: () => void
+  /** In the Pinned section the pin is implied: show it only on hover/focus, as "Unpin". */
+  quietPin?: boolean
   folders: FolderOption[]
   onMove: (group: string | null) => void
   selecting: boolean
@@ -367,26 +384,59 @@ export function CollectionRow({
           data-collection-edit
           onClick={(e) => e.stopPropagation()}
           className={cn(
-            'flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-slate-500 dark:hover:bg-white/10 dark:hover:text-slate-300',
+            // Phones: the ⋯ menu carries editing; the row keeps its width for the name.
+            'hidden h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 sm:flex dark:text-slate-500 dark:hover:bg-white/10 dark:hover:text-slate-300',
             REVEAL
           )}
         >
           <Pencil className='h-3.5 w-3.5' />
         </Link>
       )}
+      {isAdmin && onTogglePinned && (
+        <button
+          type='button'
+          aria-label={
+            pinnedForAll ? `Unpin ${displayName} for everyone` : `Pin ${displayName} for everyone`
+          }
+          aria-pressed={pinnedForAll}
+          data-tip={pinnedForAll ? 'Unpin for everyone' : 'Pin to the top for everyone'}
+          data-collection-pin
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onTogglePinned()
+          }}
+          className={cn(
+            // Phones: Pin for everyone stays in the ⋯ menu.
+            'hidden sm:flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:hover:bg-white/10',
+            pinnedForAll && !quietPin
+              ? 'text-slate-600 hover:text-slate-800 dark:text-slate-300 dark:hover:text-slate-100'
+              : cn(
+                  REVEAL,
+                  'text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300'
+                )
+          )}
+        >
+          <Pin className={cn('h-3.5 w-3.5', pinnedForAll && 'fill-current')} />
+        </button>
+      )}
       <button
         type='button'
-        aria-label={pinned ? `Unpin ${displayName}` : `Pin ${displayName}`}
-        aria-pressed={pinned}
-        data-tip={pinned ? 'Unpin' : 'Pin to Favorites'}
+        aria-label={
+          favorite
+            ? `Remove ${displayName} from my favorites`
+            : `Add ${displayName} to my favorites`
+        }
+        aria-pressed={favorite}
+        data-tip={favorite ? 'Remove from my favorites' : 'Add to my favorites'}
         onClick={(e) => {
           e.preventDefault()
           e.stopPropagation()
-          onTogglePin()
+          onToggleFavorite()
         }}
         className={cn(
           'flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:hover:bg-white/10',
-          pinned
+          favorite
             ? 'text-nvr-cyan'
             : cn(
                 REVEAL,
@@ -394,17 +444,22 @@ export function CollectionRow({
               )
         )}
       >
-        <Star className={cn('h-3.5 w-3.5', pinned && 'fill-current')} />
+        <Star className={cn('h-3.5 w-3.5', favorite && 'fill-current')} />
       </button>
       <CollectionRowMenu
         col={col}
         displayName={displayName}
         isAdmin={isAdmin}
-        pinned={pinned}
-        onTogglePin={onTogglePin}
+        favorite={favorite}
+        onToggleFavorite={onToggleFavorite}
+        pinnedForAll={pinnedForAll}
+        onTogglePinned={onTogglePinned}
+        onMoveUp={onMoveUp}
+        onMoveDown={onMoveDown}
         folders={folders}
         onMove={onMove}
-        className={REVEAL}
+        // Touch screens have no hover: keep the menu in sight there.
+        className={cn(REVEAL, '[@media(hover:none)]:opacity-100')}
       />
     </div>
   )

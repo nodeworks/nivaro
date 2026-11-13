@@ -60,8 +60,8 @@ function renderRow(over: Partial<Props> = {}) {
   const props: Props = {
     col,
     density: 'comfortable',
-    pinned: false,
-    onTogglePin: vi.fn(),
+    favorite: false,
+    onToggleFavorite: vi.fn(),
     folders: [{ key: 'finance', label: 'Finance', color: null }],
     onMove: vi.fn(),
     selecting: false,
@@ -148,7 +148,9 @@ describe('CollectionRow', () => {
       stat: { ...stat, rows: 0, virtual: true, link: true }
     })
     expect(screen.getByText('Empty')).toBeInTheDocument()
-    expect(screen.getByText('+3')).toBeInTheDocument()
+    // A link table never carries the Hidden badge (it has its own switch): 5 badges → +2.
+    expect(screen.getByText('+2')).toBeInTheDocument()
+    expect(screen.queryByText('Hidden')).toBeNull()
   })
 
   it('navigates and records the open on click', () => {
@@ -182,19 +184,59 @@ describe('CollectionRow', () => {
     expect(where()).toBe('/collections')
   })
 
-  it('pins with the star without navigating', () => {
+  it('stars a favorite without navigating', () => {
     const { props } = renderRow()
-    fireEvent.click(screen.getByRole('button', { name: 'Pin Purchase order lines' }))
-    expect(props.onTogglePin).toHaveBeenCalledTimes(1)
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Add Purchase order lines to my favorites' })
+    )
+    expect(props.onToggleFavorite).toHaveBeenCalledTimes(1)
     expect(where()).toBe('/collections')
   })
 
-  it('shows a filled star when pinned', () => {
-    renderRow({ pinned: true })
-    expect(screen.getByRole('button', { name: 'Unpin Purchase order lines' })).toHaveAttribute(
-      'aria-pressed',
-      'true'
-    )
+  it('shows a filled star for a favorite', () => {
+    renderRow({ favorite: true })
+    expect(
+      screen.getByRole('button', { name: 'Remove Purchase order lines from my favorites' })
+    ).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('offers admins a pin for everyone, separate from the star', () => {
+    const onTogglePinned = vi.fn()
+    renderRow({ onTogglePinned })
+    fireEvent.click(screen.getByRole('button', { name: 'Pin Purchase order lines for everyone' }))
+    expect(onTogglePinned).toHaveBeenCalledTimes(1)
+    expect(where()).toBe('/collections')
+  })
+
+  it('shows a pinned collection as pinned to admins', () => {
+    renderRow({ pinnedForAll: true, onTogglePinned: vi.fn() })
+    expect(
+      screen.getByRole('button', { name: 'Unpin Purchase order lines for everyone' })
+    ).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('gives non-admins no pin control', () => {
+    renderRow({ isAdmin: false, pinnedForAll: true })
+    expect(screen.queryByRole('button', { name: /for everyone/ })).toBeNull()
+  })
+
+  it('menu: favorites in personal words, pin for everyone for admins, moves when offered', async () => {
+    const onMoveUp = vi.fn()
+    renderRow({ onTogglePinned: vi.fn(), pinnedForAll: true, onMoveUp })
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Purchase order lines' }))
+    expect(await screen.findByText('Add to my favorites')).toBeInTheDocument()
+    expect(screen.getByText('Unpin for everyone')).toBeInTheDocument()
+    expect(screen.queryByText('Move down')).toBeNull()
+    fireEvent.click(screen.getByText('Move up'))
+    expect(onMoveUp).toHaveBeenCalledTimes(1)
+  })
+
+  it('menu gives non-admins only the personal favorite', async () => {
+    renderRow({ isAdmin: false, favorite: true })
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Purchase order lines' }))
+    expect(await screen.findByText('Remove from my favorites')).toBeInTheDocument()
+    expect(screen.queryByText(/for everyone/)).toBeNull()
+    expect(screen.queryByText(/^Pin$|^Unpin$/)).toBeNull()
   })
 
   it('menu offers data-model items to admins', async () => {

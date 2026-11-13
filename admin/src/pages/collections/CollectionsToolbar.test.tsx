@@ -44,7 +44,7 @@ describe('CollectionsToolbar', () => {
     setup()
     expect(screen.getByRole('button', { name: /Has records/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^Empty/ })).toBeNull()
-    expect(screen.getByText(/Show hidden \(3\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Show hidden collections \(3\)/)).toBeInTheDocument()
     expect(screen.queryByText(/Show link tables/)).toBeNull()
   })
 

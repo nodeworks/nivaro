@@ -258,7 +258,7 @@ export function CollectionsToolbar({
                 id='coll-show-hidden'
                 className='h-4 w-7 data-[state=checked]:bg-nvr-cyan [&>span]:h-3 [&>span]:w-3 [&>span]:data-[state=checked]:translate-x-3'
               />
-              Show hidden ({counts.hidden})
+              Show hidden collections ({counts.hidden})
             </label>
           )}
           {counts.links > 0 && (

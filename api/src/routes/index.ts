@@ -77,6 +77,7 @@ import { chatHuddleCallRoutes } from './chat-huddle-calls.js'
 import { chatHuddleSfuRoutes } from './chat-huddle-sfu.js'
 import { collectionDesignerRoutes } from './collection-designer.js'
 import { collectionLayoutsRoutes } from './collection-layouts.js'
+import { collectionPinRoutes } from './collection-pins.js'
 import { collectionPresetsRoutes } from './collection-presets.js'
 import { collectionSnapshotRoutes } from './collection-snapshots.js'
 import { collectionsRoutes } from './collections.js'
@@ -215,6 +216,7 @@ import { opsDbRoutes } from './ops-db.js'
 import { opsLogsRoutes } from './ops-logs.js'
 import { opsReadableRoutes } from './ops-readable.js'
 import { opsRedisRoutes } from './ops-redis.js'
+import { opsReportRoutes } from './ops-reports.js'
 import { opsRuntimeRoutes } from './ops-runtime.js'
 import { opsTaskRoutes } from './ops-tasks.js'
 import { overviewRoutes } from './overview.js'
@@ -306,7 +308,6 @@ import { syncJobsRoutes } from './sync-jobs.js'
 import { tasksRoutes } from './tasks.js'
 import { teamMiscRoutes, teamUserRoutes } from './team.js'
 import { teamsBotRoutes } from './teams-bot.js'
-import { opsReportRoutes } from './ops-reports.js'
 import { telemetryRoutes } from './telemetry.js'
 import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
@@ -472,6 +473,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(recordViewRoutes)
   // #3227 — role starter sidebar layouts (a person's own rides preferences.nav_layout)
   await app.register(navLayoutRoutes, { prefix: '/nav-layout' })
+  // Collections page: collections an admin pins to the top for everyone
+  await app.register(collectionPinRoutes, { prefix: '/collection-pins' })
   await app.register(meNotificationRoutes)
   await app.register(recordLinkRoutes)
   await app.register(fieldHistoryRoutes)

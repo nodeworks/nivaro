@@ -1,5 +1,7 @@
 import {
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   Check,
   ChevronRight,
   Copy,
@@ -10,6 +12,8 @@ import {
   LayoutTemplate,
   ListChecks,
   MoreHorizontal,
+  Pin,
+  PinOff,
   Rows3,
   Settings2,
   Star,
@@ -48,8 +52,12 @@ export function CollectionRowMenu({
   col,
   displayName,
   isAdmin,
-  pinned,
-  onTogglePin,
+  favorite,
+  onToggleFavorite,
+  pinnedForAll = false,
+  onTogglePinned,
+  onMoveUp,
+  onMoveDown,
   folders,
   onMove,
   className
@@ -57,8 +65,12 @@ export function CollectionRowMenu({
   col: Collection
   displayName: string
   isAdmin: boolean
-  pinned: boolean
-  onTogglePin: () => void
+  favorite: boolean
+  onToggleFavorite: () => void
+  pinnedForAll?: boolean
+  onTogglePinned?: () => void
+  onMoveUp?: () => void
+  onMoveDown?: () => void
   folders: FolderOption[]
   onMove: (group: string | null) => void
   className?: string
@@ -155,10 +167,36 @@ export function CollectionRowMenu({
               )}
               <CommandSeparator />
               <CommandGroup>
-                <CommandItem value='toggle-pin' className={ITEM} onSelect={run(onTogglePin)}>
-                  {pinned ? <StarOff /> : <Star />}
-                  {pinned ? 'Unpin' : 'Pin'}
+                <CommandItem
+                  value='toggle-favorite'
+                  className={ITEM}
+                  onSelect={run(onToggleFavorite)}
+                >
+                  {favorite ? <StarOff /> : <Star />}
+                  {favorite ? 'Remove from my favorites' : 'Add to my favorites'}
                 </CommandItem>
+                {isAdmin && onTogglePinned && (
+                  <CommandItem
+                    value='toggle-pinned'
+                    className={ITEM}
+                    onSelect={run(onTogglePinned)}
+                  >
+                    {pinnedForAll ? <PinOff /> : <Pin />}
+                    {pinnedForAll ? 'Unpin for everyone' : 'Pin for everyone'}
+                  </CommandItem>
+                )}
+                {isAdmin && onMoveUp && (
+                  <CommandItem value='pin-move-up' className={ITEM} onSelect={run(onMoveUp)}>
+                    <ArrowUp />
+                    Move up
+                  </CommandItem>
+                )}
+                {isAdmin && onMoveDown && (
+                  <CommandItem value='pin-move-down' className={ITEM} onSelect={run(onMoveDown)}>
+                    <ArrowDown />
+                    Move down
+                  </CommandItem>
+                )}
                 {isAdmin && (
                   <CommandItem
                     value='move-to-folder'

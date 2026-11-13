@@ -68,16 +68,17 @@ export function useCollectionUsage(): Usage {
   return usage
 }
 
-// ─── Pinned = sidebar favorites ───────────────────────────────────────────────
+// ─── My favorites = sidebar favorites ─────────────────────────────────────────
 
 /**
- * A pinned collection is a sidebar favorite whose path is /collections/<name>
- * (users.preferences.nav_favorites), so pinning here also puts it in the
- * sidebar's Favorites and follows the person between machines.
+ * A person's favorite collection is a sidebar favorite whose path is /collections/<name>
+ * (users.preferences.nav_favorites), so starring one here also puts it in the sidebar's
+ * Favorites and follows the person between machines. Personal — not the shared "Pinned"
+ * list an administrator sets for everyone (shared-pins.ts).
  */
-export function usePinnedCollections() {
+export function useFavoriteCollections() {
   const { favorites, save } = useNavFavorites()
-  const pinned = useMemo(() => {
+  const favorite = useMemo(() => {
     const set = new Set<string>()
     for (const f of favorites.items) {
       const m = /^\/collections\/([^/?#]+)$/.exec(f.path)
@@ -97,12 +98,12 @@ export function usePinnedCollections() {
         has
           ? { ...favorites, items: favorites.items.filter((f) => f.path !== path) }
           : { ...favorites, items: [...favorites.items, { label, path, group: null }] },
-        has ? `Unpinned ${label}` : `Pinned ${label}`
+        has ? `Removed ${label} from your favorites` : `Added ${label} to your favorites`
       )
     },
     [favorites, save]
   )
-  return { pinned, toggle }
+  return { favorite, toggle }
 }
 
 // ─── Per-person page preferences (this browser) ───────────────────────────────
