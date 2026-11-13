@@ -63,8 +63,18 @@ vi.mock('../../../db/index.js', () => ({ db: (name: string) => query(name) }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
 vi.mock('../../../services/external-apis.js', () => ({ callExternalApi: vi.fn() }))
 vi.mock('../../../services/erp-submission-status.js', () => ({
-  propagateSubmissionStatus: vi.fn(async () => undefined)
+  propagateSubmissionStatus: vi.fn(async () => undefined),
+  markResendStarting: vi.fn(async () => true),
+  applySendOutcome: vi.fn(async () => undefined)
 }))
+vi.mock('../../../services/erp-unanswered.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/erp-unanswered.js')>()),
+  unansweredHold: vi.fn(async () => null)
+}))
+vi.mock('../../../services/chain.js', () => ({
+  withChainStep: async (_k: string, fn: () => unknown) => fn()
+}))
+vi.mock('../../../services/send-skip-rules.js', () => ({ sendSkipReason: async () => null }))
 vi.mock('../../../services/auto-transition-memory.js', () => ({
   clearAutoFailures: vi.fn(async () => undefined)
 }))
@@ -91,7 +101,11 @@ vi.mock('../../../services/instance-guard.js', () => {
 
 import { erpSubmissionsRoutes } from '../../../routes/erp-submissions.js'
 import { logActivity } from '../../../services/activity.js'
-import { propagateSubmissionStatus } from '../../../services/erp-submission-status.js'
+import {
+  markResendStarting,
+  propagateSubmissionStatus
+} from '../../../services/erp-submission-status.js'
+import { unansweredHold } from '../../../services/erp-unanswered.js'
 import { callExternalApi } from '../../../services/external-apis.js'
 import { assertInstanceAccess } from '../../../services/instance-guard.js'
 
@@ -261,5 +275,48 @@ describe('POST /:id/retry on an unanswered send', () => {
     expect(res.statusCode).toBe(409)
     expect(res.json().code).toBe('UNANSWERED')
     expect(callExternalApi).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /:id/retry of a failed send while another send of it has no answer', () => {
+  const failed = () =>
+    sendingRow({ id: 51, status: 'failed', last_error: 'HTTP 503', obligation_id: 77 }, 120)
+
+  it('409 UNANSWERED with the same sentence; nothing marked or sent', async () => {
+    store.rows = [failed()]
+    const reason =
+      'MDSi may already have this order: the last send on Thu, Nov 12 at 2:30 PM EST got no answer before the app stopped. Check MDSi before sending again, then mark that send as received or not received in Integrations, ERP submissions.'
+    vi.mocked(unansweredHold).mockResolvedValueOnce({ reason, send: null, checkFailed: false })
+    const res = await app().inject({ method: 'POST', url: '/51/retry', headers: ADMIN })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toEqual({ error: reason, code: 'UNANSWERED' })
+    expect(unansweredHold).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: 'inventory_request',
+        item: 'r1',
+        apiId: 5,
+        endpointPath: '/orders',
+        ignoreIds: new Set([51])
+      })
+    )
+    expect(markResendStarting).not.toHaveBeenCalled()
+    expect(callExternalApi).not.toHaveBeenCalled()
+  })
+
+  it('otherwise the row is marked sending BEFORE the partner is called', async () => {
+    store.rows = [failed()]
+    const order: string[] = []
+    vi.mocked(markResendStarting).mockImplementationOnce(async () => {
+      order.push('mark')
+      return true
+    })
+    vi.mocked(callExternalApi).mockImplementationOnce((async () => {
+      order.push('send')
+      return { status: 200, body: { status: 'OK' } }
+    }) as never)
+    const res = await app().inject({ method: 'POST', url: '/51/retry', headers: ADMIN })
+    expect(res.statusCode).toBe(200)
+    expect(order).toEqual(['mark', 'send'])
+    expect(markResendStarting).toHaveBeenCalledWith(51, 1, 30_000)
   })
 })

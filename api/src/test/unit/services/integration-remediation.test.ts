@@ -9,15 +9,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../../routes/erp-submissions.js', () => ({ sendPayload: vi.fn() }))
 vi.mock('../../../services/erp-submission-status.js', () => ({
   applySendOutcome: vi.fn(async () => {}),
+  markResendStarting: vi.fn(async () => true),
   propagateSubmissionStatus: vi.fn(async () => {})
+}))
+// Nothing earlier is waiting on an answer unless a test says so ("Send now while an earlier
+// send has no answer" below).
+vi.mock('../../../services/erp-unanswered.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/erp-unanswered.js')>()),
+  unansweredHold: vi.fn(async () => null)
 }))
 
 import { db } from '../../../db/index.js'
 import { sendPayload } from '../../../routes/erp-submissions.js'
 import {
   applySendOutcome,
+  markResendStarting,
   propagateSubmissionStatus
 } from '../../../services/erp-submission-status.js'
+import { unansweredHold } from '../../../services/erp-unanswered.js'
 import {
   clearObligationKinds,
   registerObligationKind
@@ -744,10 +753,17 @@ describe('runMissingRefirePass — gate on', () => {
       collection: 'workflows',
       item: '2',
       external_api: 7,
-      payload: JSON.stringify({ endpoint_path: '/orders', body: { a: 1 } }),
       change_signature: 'sig-abc',
+      // Written before the call (erp-unanswered.ts): a crash mid-call leaves it `sending`.
+      status: 'sending',
       attempts: 0,
       obligation_id: 11
+    })
+    // The prior request, plus when the new send stops reading as in flight.
+    expect(JSON.parse(String(insertedRow.payload))).toMatchObject({
+      endpoint_path: '/orders',
+      body: { a: 1 },
+      answer_by: expect.any(String)
     })
     // The prior row itself is never written to.
     expect(priorRow.update).not.toHaveBeenCalled()
@@ -1088,5 +1104,101 @@ describe('runMissingRefirePass — dry run', () => {
     expect(sendPayload).not.toHaveBeenCalled()
     expect(applySendOutcome).not.toHaveBeenCalled()
     expect(propagateSubmissionStatus).not.toHaveBeenCalled()
+  })
+})
+
+describe('Send now while an earlier send has no answer (erp-unanswered.ts)', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  const STALE = {
+    reason:
+      'MDSi may already have this order: the last send on Thu, Nov 12 at 3:00 PM EST got no answer before the app stopped. Check MDSi before sending again, then mark that send as received or not received in Integrations, ERP submissions.',
+    send: null,
+    checkFailed: false
+  }
+
+  function wireOwn(row: Record<string, unknown> = {}) {
+    const obligations = chain({
+      first: vi.fn().mockResolvedValue({
+        id: 1,
+        api: 'MDSi',
+        collection: 'inventory_request',
+        item: '32842',
+        submission_id: 50
+      })
+    })
+    const submissionRow = chain({
+      first: vi.fn().mockResolvedValue({
+        collection: 'inventory_request',
+        item: '32842',
+        external_api: 5,
+        payload: JSON.stringify({ endpoint_path: '/orders', body: { a: 1 } }),
+        external_ref: null,
+        attempts: 1,
+        status: 'failed',
+        ...row
+      })
+    })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settingsChain(true)
+      if (table === 'nivaro_integration_obligations') return obligations
+      if (table === 'nivaro_erp_submissions') return submissionRow
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+  }
+
+  it('re-sending its own row: refused with the same sentence, nothing marked or sent', async () => {
+    wireOwn()
+    vi.mocked(unansweredHold).mockResolvedValueOnce(STALE)
+    const r = await sendNow(1, 'user-rob')
+    expect(r).toEqual({ detail: STALE.reason, code: 'unanswered' })
+    expect(unansweredHold).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: 'inventory_request',
+        item: '32842',
+        apiId: 5,
+        endpointPath: '/orders',
+        ignoreIds: new Set([50])
+      })
+    )
+    expect(markResendStarting).not.toHaveBeenCalled()
+    expect(sendPayload).not.toHaveBeenCalled()
+  })
+
+  it('earlier sends that cannot be read: refused, never sent blind', async () => {
+    wireOwn()
+    vi.mocked(unansweredHold).mockResolvedValueOnce({
+      reason: "Couldn't check earlier sends to MDSi. Try again in a minute.",
+      send: null,
+      checkFailed: true
+    })
+    const r = await sendNow(1, 'user-rob')
+    expect(r.code).toBe('unanswered')
+    expect(r.detail).toMatch(/^Couldn't check earlier sends to MDSi/)
+    expect(sendPayload).not.toHaveBeenCalled()
+  })
+
+  it('writes ahead: the row reads `sending` BEFORE the partner is called', async () => {
+    wireOwn()
+    const order: string[] = []
+    vi.mocked(markResendStarting).mockImplementationOnce(async () => {
+      order.push('mark')
+      return true
+    })
+    vi.mocked(sendPayload).mockImplementationOnce(async () => {
+      order.push('send')
+      return { status: 'accepted', external_ref: null, error: null, response: {}, http_status: 200 }
+    })
+    await sendNow(1, 'user-rob')
+    expect(order).toEqual(['mark', 'send'])
+    expect(markResendStarting).toHaveBeenCalledWith(50, 1, 30_000)
+  })
+
+  it('someone else’s resend of the row is already out: nothing sent', async () => {
+    wireOwn()
+    vi.mocked(markResendStarting).mockResolvedValueOnce(false)
+    const r = await sendNow(1, 'user-rob')
+    expect(r.code).toBe('unanswered')
+    expect(sendPayload).not.toHaveBeenCalled()
   })
 })

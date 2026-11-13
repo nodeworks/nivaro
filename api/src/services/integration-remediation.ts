@@ -29,6 +29,13 @@ import { chainFields } from './chain-columns.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
 import { hasResendableBody, NO_BODY } from './erp-resend-guard.js'
 import {
+  answerByFor,
+  payloadWithAnswerBy,
+  RESEND_TIMEOUT_MS,
+  SENDING_STATUS,
+  unansweredHold
+} from './erp-unanswered.js'
+import {
   allObligationKinds,
   getObligationKind,
   type ObligationKindDef,
@@ -196,12 +203,24 @@ async function resendSubmission(
   userId: string | null
 ): Promise<SendNowResult> {
   const { sendPayload } = await import('../routes/erp-submissions.js')
-  const { applySendOutcome, propagateSubmissionStatus } = await import('./erp-submission-status.js')
+  const { applySendOutcome, markResendStarting, propagateSubmissionStatus } = await import(
+    './erp-submission-status.js'
+  )
 
   const sub = (await db('nivaro_erp_submissions')
     .where({ id: submissionId })
-    .first('external_api', 'payload', 'external_ref', 'attempts', 'status')) as
+    .first(
+      'collection',
+      'item',
+      'external_api',
+      'payload',
+      'external_ref',
+      'attempts',
+      'status'
+    )) as
     | {
+        collection: string
+        item: string
         external_api: number
         payload: string | null
         external_ref: string | null
@@ -224,6 +243,20 @@ async function resendSubmission(
   }
   // A payload template that refused to render recorded the row with no body: nothing to send.
   if (!hasResendableBody(stored)) return { detail: NO_BODY.message, code: NO_BODY.error }
+
+  // Another send of this push with no answer (or none could be checked): the partner may
+  // already have it. A person's Send now and the sweep both wait (erp-unanswered.ts).
+  const hold = await unansweredHold({
+    collection: sub.collection,
+    item: String(sub.item),
+    apiId: sub.external_api,
+    endpointPath: stored.endpoint_path,
+    ignoreIds: new Set([submissionId])
+  })
+  if (hold) return { detail: hold.reason, code: 'unanswered' }
+  // Write-ahead: the row reads `sending` until the answer lands on it.
+  if (!(await markResendStarting(submissionId, sub.attempts, RESEND_TIMEOUT_MS)))
+    return { detail: UNANSWERED_DETAIL, code: 'unanswered' }
 
   // The resend's call log + attempt row nest under the submission it re-sends.
   const outcome = await withChainStep(`submission:${submissionId}`, async () => {
@@ -308,6 +341,7 @@ async function refireFromPrior(
     userId
   )
   if (!outcome) return { detail: 'could not create a submission row to re-fire into' }
+  if ('refused' in outcome) return { detail: outcome.refused, code: 'unanswered' }
   return { detail: `re-sent: ${outcome.status}${outcome.error ? ` — ${outcome.error}` : ''}` }
 }
 
@@ -323,7 +357,9 @@ type StoredRequest = {
  * record's current data (`sendFresh`) both land here, so neither can drift
  * from the other or from every other sender:
  *
- * The shell row starts `pending` with `attempts: 0`, stamped with THIS
+ * Nothing is sent while another send of the same push on the record has no
+ * answer, or when that cannot be checked (`refused`, erp-unanswered.ts).
+ * The shell row starts `sending` (write-ahead, with `answer_by`) and `attempts: 0`, stamped with THIS
  * obligation's id; `sendPayload` (the same guards as every resend) makes the
  * call inside the submission's chain step; `applySendOutcome` writes the
  * row (attempts → 1, status, error_class); `propagateSubmissionStatus` moves
@@ -341,7 +377,14 @@ async function sendIntoNewRow(
   },
   stored: StoredRequest,
   userId: string | null
-): Promise<{ status: string; error?: string | null } | null> {
+): Promise<{ status: string; error?: string | null } | { refused: string } | null> {
+  const hold = await unansweredHold({
+    collection: identity.collection,
+    item: String(identity.item),
+    apiId: identity.external_api,
+    endpointPath: stored.endpoint_path
+  })
+  if (hold) return { refused: hold.reason }
   const now = new Date()
   // Probed once per tenant — naming a column this database hasn't run
   // migration 350 for fails the WHOLE insert, not just these two fields.
@@ -356,10 +399,11 @@ async function sendIntoNewRow(
       item: identity.item,
       external_api: identity.external_api,
       external_ref: null,
-      status: 'pending',
+      // Written before the call: a process that stops mid-call leaves it `sending`.
+      status: SENDING_STATUS,
       attempts: 0,
       last_error: null,
-      payload: identity.payload,
+      payload: payloadWithAnswerBy(identity.payload, answerByFor(now, RESEND_TIMEOUT_MS)),
       change_signature: identity.change_signature,
       obligation_id: obligationId,
       ...requesterFields,
@@ -580,6 +624,7 @@ export async function sendFresh(
     userId
   )
   if (!outcome) return { detail: 'could not create a submission row to send into' }
+  if ('refused' in outcome) return { detail: outcome.refused, code: 'unanswered' }
   return {
     detail: `sent current data (${b.request.summary}): ${outcome.status}${outcome.error ? ` — ${outcome.error}` : ''}`
   }
@@ -589,7 +634,7 @@ export async function sendFresh(
  *  answers 409). */
 export type SendNowResult = {
   detail: string
-  code?: 'no_body' | 'fresh_available'
+  code?: 'no_body' | 'fresh_available' | 'unanswered'
 }
 
 /**
@@ -798,6 +843,8 @@ export async function runRetryPass(
         .catch(() => {})
       continue
     }
+    // Held by an unanswered send: nothing went out; the next tick looks again.
+    if (sent.code === 'unanswered') continue
     retried++
   }
   return { retried, gaveUp }
@@ -927,6 +974,10 @@ export async function runMissingRefirePass(
     const sent = await refireFromPrior(r.id, prior.id, null)
     if (sent.code === 'no_body') {
       // The newest request is a render failure: nothing to repeat — left for a person.
+      queued++
+      continue
+    }
+    if (sent.code === 'unanswered') {
       queued++
       continue
     }

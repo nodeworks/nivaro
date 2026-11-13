@@ -5,7 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../../routes/erp-submissions.js', () => ({ sendPayload: vi.fn() }))
 vi.mock('../../../services/erp-submission-status.js', () => ({
   applySendOutcome: vi.fn(async () => {}),
+  markResendStarting: vi.fn(async () => true),
   propagateSubmissionStatus: vi.fn(async () => {})
+}))
+// The unanswered-send check has its own tests (erp-unanswered / remediation-unanswered):
+// here nothing earlier is waiting on an answer.
+vi.mock('../../../services/erp-unanswered.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/erp-unanswered.js')>()),
+  unansweredHold: vi.fn(async () => null)
 }))
 
 vi.mock('../../../services/workflow-actions.js', () => ({
@@ -18,6 +25,7 @@ import {
   applySendOutcome,
   propagateSubmissionStatus
 } from '../../../services/erp-submission-status.js'
+import { unansweredHold } from '../../../services/erp-unanswered.js'
 import {
   clearObligationKinds,
   registerObligationKind
@@ -135,14 +143,16 @@ describe('sendFresh — a person’s "Send current data"', () => {
       collection: 'workflows',
       item: '372931',
       external_api: 12,
-      status: 'pending',
+      // Written before the call: a crash mid-call leaves it `sending` (erp-unanswered.ts).
+      status: 'sending',
       attempts: 0,
       obligation_id: 7
     })
     expect(JSON.parse(String(row.payload))).toEqual({
       endpoint_path: '/api/efp/v1/projectupdate',
       body: { project_number: 'CPJ0007656', Status: 'Waiting On Level 3 Approval' },
-      secret_paths: []
+      secret_paths: [],
+      answer_by: expect.any(String)
     })
     expect(sendPayload).toHaveBeenCalledWith(
       12,
@@ -158,6 +168,33 @@ describe('sendFresh — a person’s "Send current data"', () => {
     expect(r.detail).toBe(
       'sent current data (Waiting on Level 3 Approval, requisition PW27-81371, no PO): accepted'
     )
+  })
+
+  it('an earlier send of it with no answer: refused, no row, nothing sent', async () => {
+    registerObligationKind(linxKind())
+    const { submissions } = wire()
+    vi.mocked(unansweredHold).mockResolvedValueOnce({
+      reason:
+        'An earlier send to LinX is still waiting for its answer (started 40 seconds ago). Wait for it to finish.',
+      send: null,
+      checkFailed: false
+    })
+    const r = await sendFresh(7, 'user-rob')
+    expect(r).toEqual({
+      detail:
+        'An earlier send to LinX is still waiting for its answer (started 40 seconds ago). Wait for it to finish.',
+      code: 'unanswered'
+    })
+    expect(unansweredHold).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: 'workflows',
+        item: '372931',
+        apiId: 12,
+        endpointPath: '/api/efp/v1/projectupdate'
+      })
+    )
+    expect(submissions.insert).not.toHaveBeenCalled()
+    expect(sendPayload).not.toHaveBeenCalled()
   })
 
   it('a builder refusal (no LinX id) sends nothing and says why', async () => {

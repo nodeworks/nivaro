@@ -40,6 +40,11 @@ vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 // sendPayload from here. Every scenario in this file stops before that
 // point, but the module is mocked anyway as a hard backstop.
 vi.mock('../../../routes/erp-submissions.js', () => ({ sendPayload: vi.fn() }))
+// Nothing earlier is waiting on an answer here (the check has its own tests).
+vi.mock('../../../services/erp-unanswered.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/erp-unanswered.js')>()),
+  unansweredHold: vi.fn(async () => null)
+}))
 
 import { db } from '../../../db/index.js'
 import { sendPayload } from '../../../routes/erp-submissions.js'

@@ -19,9 +19,13 @@ import { hasResendableBody, NO_BODY, NoBodyToResendError } from '../services/erp
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import {
   answerDeadline,
+  checkFailedReason,
   isUnansweredStale,
+  RESEND_TIMEOUT_MS,
   SENDING_STATUS,
-  sendingLabel
+  sendingLabel,
+  UnansweredSendError,
+  unansweredHold
 } from '../services/erp-unanswered.js'
 import { callExternalApi } from '../services/external-apis.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
@@ -220,7 +224,7 @@ export async function sendPayload(
       // list), so a resend substitutes exactly what the first send did and nothing data forged.
       body: restrictPlaceholders(stored.body, stored.secret_paths),
       bodySecrets: true,
-      timeoutMs: 30_000,
+      timeoutMs: RESEND_TIMEOUT_MS,
       _log: { triggeredBy: 'erp-submission', userId }
     })
     return await interpretResponse(externalApi, res.status, res.body)
@@ -248,12 +252,14 @@ export async function retrySubmissionRow(
   row: Pick<
     ErpSubmissionRow,
     'id' | 'external_api' | 'external_ref' | 'attempts' | 'payload' | 'obligation_id'
-  >,
+  > &
+    Partial<Pick<ErpSubmissionRow, 'collection' | 'item'>>,
   userId: string | null
 ): Promise<SendOutcome> {
   const stored = parseJson<StoredPayload>(row.payload)
   if (!stored?.endpoint_path) throw new Error('Submission has no stored payload to retry')
   if (!hasResendableBody(stored)) throw new NoBodyToResendError()
+  await startResend(row, stored.endpoint_path)
   const outcome = await withChainStep(`submission:${row.id}`, async () => {
     const sent = await sendPayload(row.external_api, stored, userId ?? undefined)
     const { applySendOutcome } = await import('../services/erp-submission-status.js')
@@ -274,6 +280,38 @@ export async function retrySubmissionRow(
     obligationId: row.obligation_id
   })
   return outcome
+}
+
+/**
+ * Before a stored request is sent again into its own row: refuse while another send of the
+ * same push on the record has no answer, or when that cannot be checked
+ * (UnansweredSendError, erp-unanswered.ts); then mark the row `sending` (write-ahead, so a
+ * process that stops mid-call leaves it `sending`, not the failure a retry would repeat).
+ */
+export async function startResend(
+  row: Pick<ErpSubmissionRow, 'id' | 'external_api' | 'attempts'> &
+    Partial<Pick<ErpSubmissionRow, 'collection' | 'item'>>,
+  endpointPath: string
+): Promise<void> {
+  let where = row.collection != null && row.item != null ? row : null
+  if (!where) {
+    where = ((await db('nivaro_erp_submissions')
+      .where({ id: row.id })
+      .first('id', 'collection', 'item', 'external_api', 'attempts')) ?? null) as typeof row | null
+  }
+  if (!where?.collection || where.item == null)
+    throw new UnansweredSendError(checkFailedReason(null))
+  const hold = await unansweredHold({
+    collection: where.collection,
+    item: String(where.item),
+    apiId: row.external_api,
+    endpointPath,
+    ignoreIds: new Set([Number(row.id)])
+  })
+  if (hold) throw new UnansweredSendError(hold.reason)
+  const { markResendStarting } = await import('../services/erp-submission-status.js')
+  if (!(await markResendStarting(row.id, row.attempts, RESEND_TIMEOUT_MS)))
+    throw new UnansweredSendError(UNANSWERED_RETRY.error)
 }
 
 // ─── Routes ─────────────────────────────────────────────────────────────────
@@ -498,12 +536,23 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         requested_via: row.requested_via ?? null
       }
     ])
-    return {
-      data: {
-        submission,
-        ...buildSubmissionDetail(facts)
+    const detail = buildSubmissionDetail(facts)
+    // A send with no answer is settled on the ERP tab, not retried: the drill links to its row
+    // there (absolute, so a headless host's console reaches admin).
+    if (row.status === SENDING_STATUS) {
+      const { adminBaseUrl } = await import('../admin-base.js')
+      const q = new URLSearchParams({
+        tab: 'erp',
+        collection: row.collection,
+        item: String(row.item),
+        submission: String(row.id)
+      })
+      detail.retry = {
+        ...detail.retry,
+        review_url: `${adminBaseUrl() ?? ''}/integration-health?${q.toString()}`
       }
     }
+    return { data: { submission, ...detail } }
   })
 
   app.get<{ Params: { collection: string; item: string } }>(
@@ -697,7 +746,14 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       // A retry's call log and attempt row hang under the submission it
       // retries; one helper for the row update + obligation (#628) so this
       // route can never drift from the bulk paths about what a retry touches.
-      const outcome = await retrySubmissionRow(row, req.user?.id ?? null)
+      let outcome: SendOutcome
+      try {
+        outcome = await retrySubmissionRow(row, req.user?.id ?? null)
+      } catch (err) {
+        if (err instanceof UnansweredSendError)
+          return reply.code(409).send({ error: err.message, code: err.code })
+        throw err
+      }
       // #1217: a person retrying the push is the retry a held auto transition
       // was waiting for — it may fire again on the next evaluation.
       await clearAutoFailures({ collection: row.collection, item: String(row.item) })
@@ -771,7 +827,8 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         } catch (err) {
           results.push({
             id,
-            status: 'error',
+            // Held by an unanswered send: nothing went out.
+            status: err instanceof UnansweredSendError ? 'skipped' : 'error',
             error: err instanceof Error ? err.message : String(err)
           })
         }
@@ -1038,6 +1095,14 @@ export async function runErpAutoRetries(): Promise<{ attempted: number; landed: 
         .update({ error_class: 'validation' })
         .catch(() => {})
       continue
+    }
+    // Held by an unanswered send of the same push (or one that could not be checked):
+    // nothing goes out; the next tick looks again.
+    try {
+      await startResend(row, stored.endpoint_path)
+    } catch (err) {
+      if (err instanceof UnansweredSendError) continue
+      throw err
     }
     attempted++
     // Each retry's call log + attempt row nest under the submission it retries.

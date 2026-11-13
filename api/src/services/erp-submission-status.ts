@@ -10,6 +10,12 @@
 import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
 import { requesterInsertFields, requesterSelectColumns } from './erp-requester-columns.js'
+import {
+  answerByFor,
+  payloadWithAnswerBy,
+  RESEND_TIMEOUT_MS,
+  SENDING_STATUS
+} from './erp-unanswered.js'
 import { resolveObligation } from './integration-obligations.js'
 import { classifyError } from './integration-remediation.js'
 import { announceSubmissionAspect } from './record-events.js'
@@ -180,6 +186,37 @@ export async function applySendOutcome(opts: {
       requested_via: opts.requestedVia ?? null
     })
   }
+}
+
+/**
+ * Write-ahead for a resend of a stored request INTO its own row (Retry, Send now, the retry
+ * sweeps): the attempt the row holds now is kept first (as applySendOutcome would), then the
+ * row reads `sending` with `answer_by` until the outcome lands on it. A process that stops
+ * mid-call leaves it `sending` (erp-unanswered.ts), never the old failure a retry would repeat.
+ * False = it was already `sending` (someone else's resend is out): send nothing.
+ */
+export async function markResendStarting(
+  submissionId: number,
+  priorAttempts: number,
+  timeoutMs = RESEND_TIMEOUT_MS
+): Promise<boolean> {
+  const row = (await db('nivaro_erp_submissions')
+    .where({ id: submissionId })
+    .first('payload', 'status')) as { payload: string | null; status: string } | undefined
+  if (!row || row.status === SENDING_STATUS) return false
+  await captureSubmissionRow(submissionId, priorAttempts)
+  const won = Number(
+    await db('nivaro_erp_submissions')
+      .where({ id: submissionId })
+      .whereNot('status', SENDING_STATUS)
+      .update({
+        status: SENDING_STATUS,
+        payload: payloadWithAnswerBy(row.payload, answerByFor(new Date(), timeoutMs)),
+        updated_at: new Date()
+      })
+  )
+  if (won === 1) void announceSubmissionAspect(submissionId)
+  return won === 1
 }
 
 interface AttemptRow {

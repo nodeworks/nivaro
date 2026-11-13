@@ -285,7 +285,8 @@ export async function retryFailedPushes(opts: {
       let anyFailed = false
       for (const p of failed) {
         try {
-          const outcome = await retrySubmissionRow(p, req.user?.id ?? null)
+          // The record is known here: the unanswered-send check needs it (erp-unanswered.ts).
+          const outcome = await retrySubmissionRow({ ...p, collection }, req.user?.id ?? null)
           const landed = outcome.status === 'pending' || outcome.status === 'accepted'
           if (!landed) anyFailed = true
           verdicts.push(
