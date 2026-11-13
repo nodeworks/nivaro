@@ -821,7 +821,8 @@ function anArticle(noun: string): string {
 
 /** "Workflow CM26-79704", or "a workflow record" when unknown / not the reader's to see. */
 function linkParent(j: ActivityJunctionLabel, labels?: ActivityLabels | null): string {
-  const generic = `a ${midSentence(collectionNouns(j.parent_collection, labels).singular)} record`
+  const parentNoun = midSentence(collectionNouns(j.parent_collection, labels).singular)
+  const generic = `${/^[aeiou]/i.test(parentNoun) ? 'an' : 'a'} ${parentNoun} record`
   if (!text(j.parent_id)) return generic
   const p = recordPhrase(j.parent_collection, j.parent_id, labels)
   return !p || p === HIDDEN_RECORD ? generic : p

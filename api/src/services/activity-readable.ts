@@ -235,6 +235,19 @@ export interface LabelDeps {
   ): Promise<Map<string, JunctionRow>>
   /** File id → its title / file name. */
   fileNames?(ids: string[]): Promise<Map<string, string>>
+  /** Addendums by id: title and the record each amends. */
+  addendums?(ids: string[]): Promise<
+    Array<{
+      id: string
+      title: string | null
+      parent_collection: string | null
+      parent_id: string | null
+    }>
+  >
+  /** Notifications by id: subject and recipient. */
+  notifications?(
+    ids: string[]
+  ): Promise<Array<{ id: string; subject: string | null; recipient: string | null }>>
 }
 
 export interface JunctionRow {
@@ -378,6 +391,40 @@ const defaultLabelDeps: LabelDeps = {
   },
   junctions: () => loadJunctionMap(),
   junctionRows: readJunctionRows,
+  async addendums(ids) {
+    const rows = (await selectInChunks(ids, 500, (chunk) =>
+      Promise.resolve(
+        db('nivaro_addendums')
+          .whereIn('id', chunk)
+          .select('id', 'title', 'parent_collection', 'parent_id')
+      )
+    )) as Array<{
+      id: unknown
+      title: string | null
+      parent_collection: string | null
+      parent_id: unknown
+    }>
+    return rows.map((r) => ({
+      id: String(r.id),
+      title: r.title,
+      parent_collection: r.parent_collection,
+      parent_id: r.parent_id == null ? null : String(r.parent_id)
+    }))
+  },
+  async notifications(ids) {
+    const nums = ids.filter((i) => /^\d+$/.test(i))
+    if (!nums.length) return []
+    const rows = (await selectInChunks(nums, 500, (chunk) =>
+      Promise.resolve(
+        db('nivaro_notifications').whereIn('id', chunk).select('id', 'subject', 'recipient')
+      )
+    )) as Array<{ id: unknown; subject: string | null; recipient: unknown }>
+    return rows.map((r) => ({
+      id: String(r.id),
+      subject: r.subject,
+      recipient: r.recipient == null ? null : String(r.recipient)
+    }))
+  },
   async fileNames(ids) {
     const rows = (await selectInChunks(ids, 500, (chunk) =>
       Promise.resolve(
@@ -486,6 +533,27 @@ export async function activityLabelsFor(
     const tc = row?.target_collection ?? j.target
     if (tc && !FILE_TABLES.has(tc)) linkCollections.add(tc)
   }
+  // Addendums and notifications are system rows people still speak of by name (Rob
+  // 2026-11-13: "Approved Addendum 867F8CB1-…"). An addendum is named by its title and the
+  // record it amends — only as visible as that record; a notification by its subject — only
+  // to administrators and its own recipient.
+  const addendumRefs = refs.filter((r) => r.collection === 'nivaro_addendums')
+  const notificationRefs = refs.filter((r) => r.collection === 'nivaro_notifications')
+  const addendumRows =
+    addendumRefs.length && deps.addendums
+      ? await deps.addendums(addendumRefs.map((r) => r.id)).catch(() => [])
+      : []
+  const addendumById = new Map(addendumRows.map((a) => [a.id.toLowerCase(), a]))
+  for (const a of addendumRows) {
+    if (
+      a.parent_collection &&
+      a.parent_id &&
+      IDENT.test(a.parent_collection) &&
+      refs.length < refBudget &&
+      !refs.some((x) => x.collection === a.parent_collection && x.id === a.parent_id)
+    )
+      refs.push({ collection: a.parent_collection, id: a.parent_id })
+  }
   const userIds = new Set(
     (Array.isArray(body.users) ? body.users : [])
       .map((u) => String(u ?? '').trim())
@@ -533,6 +601,7 @@ export async function activityLabelsFor(
       userIds.add(r.id)
       continue
     }
+    if (r.collection === 'nivaro_addendums' || r.collection === 'nivaro_notifications') continue
     const list = byCollection.get(r.collection) ?? []
     list.push(r.id)
     byCollection.set(r.collection, list)
@@ -579,6 +648,37 @@ export async function activityLabelsFor(
     if (p.is_redacted === true || p.is_redacted === 1) continue
     const name = [p.first_name, p.last_name].filter(Boolean).join(' ').trim()
     if (name) labels.users[String(p.id).toUpperCase()] = name
+  }
+  for (const r of addendumRefs) {
+    const a = addendumById.get(r.id.toLowerCase())
+    const key = `nivaro_addendums:${r.id}`
+    if (!a) {
+      labels.records[key] = null
+      continue
+    }
+    const parentKey = `${a.parent_collection}:${a.parent_id}`
+    const parent = labels.records[parentKey]
+    if (parent == null && !admin) {
+      labels.records[key] = null
+      continue
+    }
+    const title = String(a.title ?? '').trim()
+    const on = parent && parent !== a.parent_id ? parent : null
+    labels.records[key] =
+      [title ? `“${title}”` : '', on ? `on ${on}` : ''].filter(Boolean).join(' ') || null
+  }
+  if (notificationRefs.length && deps.notifications) {
+    const rows = await deps
+      .notifications(notificationRefs.map((r) => r.id))
+      .catch(() => [] as Array<{ id: string; subject: string | null; recipient: string | null }>)
+    const byId = new Map(rows.map((n) => [n.id, n]))
+    for (const r of notificationRefs) {
+      const n = byId.get(r.id)
+      const mine = !!n?.recipient && n.recipient.toUpperCase() === String(user.id).toUpperCase()
+      const subject = String(n?.subject ?? '').trim()
+      labels.records[`nivaro_notifications:${r.id}`] =
+        n && subject && (admin || mine) ? `“${subject.slice(0, 120)}”` : null
+    }
   }
   // A person named as the record ("changed the role of Pat"): the same directory name.
   for (const r of refs) {

@@ -213,3 +213,39 @@ describe('activity scope', () => {
     expect(activityGroupKey('cron', 'y'.repeat(100)).length).toBe(64)
   })
 })
+
+// Rob 2026-11-13: "Approved Addendum 867F8CB1-…" and "Read notifications" with no names.
+describe('addendum and notification labels', () => {
+  const ADD = '867F8CB1-E71E-49FC-A995-D6AEBC97FCF8'
+  const more = {
+    addendums: vi.fn(async () => [
+      { id: ADD, title: 'Scope change', parent_collection: 'invoices', parent_id: '1' },
+      { id: 'b-hidden', title: 'Secret', parent_collection: 'invoices', parent_id: '2' }
+    ]),
+    notifications: vi.fn(async () => [
+      { id: '10', subject: 'Workflow CM26-1 needs you', recipient: PAT },
+      { id: '11', subject: 'Someone else', recipient: ROB }
+    ])
+  }
+  const refs = [
+    { collection: 'nivaro_addendums', id: ADD },
+    { collection: 'nivaro_addendums', id: 'b-hidden' },
+    { collection: 'nivaro_notifications', id: '10' },
+    { collection: 'nivaro_notifications', id: '11' }
+  ]
+
+  it('an addendum reads as its title on the record it amends, only when that record is visible', async () => {
+    const l = await activityLabelsFor(reader, { refs }, {}, deps(more))
+    expect(l.records?.[`nivaro_addendums:${ADD}`]).toBe('“Scope change” on INV-1')
+    expect(l.records?.['nivaro_addendums:b-hidden']).toBeNull()
+  })
+
+  it('a notification is named by its subject for its recipient and for administrators only', async () => {
+    const mine = await activityLabelsFor(reader, { refs }, {}, deps(more))
+    expect(mine.records?.['nivaro_notifications:10']).toBe('“Workflow CM26-1 needs you”')
+    expect(mine.records?.['nivaro_notifications:11']).toBeNull()
+    const admin = await activityLabelsFor(reader, { refs }, { isAdmin: true }, deps(more))
+    expect(admin.records?.['nivaro_notifications:11']).toBe('“Someone else”')
+    expect(admin.records?.['nivaro_addendums:b-hidden']).toBe('“Secret”')
+  })
+})

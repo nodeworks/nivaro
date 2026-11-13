@@ -100,6 +100,11 @@ export type VerbKind =
 
 export { buildJunctionMap, type JunctionInfo, junctionsOf, loadJunctionMap }
 
+/** "a workflow", "an addendum". */
+function aOrAn(noun: string): string {
+  return `${/^[aeiou]/i.test(noun) ? 'an' : 'a'} ${noun}`
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // ─── Verbs ──────────────────────────────────────────────────────────────────
@@ -309,7 +314,7 @@ function targetOf(
   const id = String(item)
   const key = `${collection}:${id}`
   const { singular } = collectionNouns(collection, labels)
-  const generic = `a ${lowerNoun(singular)} record`
+  const generic = `${aOrAn(lowerNoun(singular))} record`
   const records = labels.records ?? {}
   const linkable = !SYSTEM_RE.test(collection) && action !== 'delete'
   if (key in records && records[key] == null) return { text: generic, record: null, hidden: true }
@@ -587,7 +592,7 @@ export function foldPersonLines(rows: PersonDidRow[], ctx: FoldContext): DidLine
       ? targetOf(j.parent, parentId, labels)
       : {
           // No parent id: unknown, or not the viewer's to see (activityLabelsFor withholds it).
-          text: `a ${lowerNoun(collectionNouns(j.parent, labels).singular)} record`,
+          text: `${aOrAn(lowerNoun(collectionNouns(j.parent, labels).singular))} record`,
           record: null,
           hidden: true
         }
