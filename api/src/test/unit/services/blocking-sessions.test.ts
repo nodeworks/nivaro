@@ -28,6 +28,7 @@ const ses = (
 ): ChainSession => ({
   session_id,
   mine,
+  own_login: mine,
   database_name: mine ? 'App' : 'Other',
   program_name: mine ? 'nivaro-api' : 'php',
   host_name: 'host',
@@ -75,8 +76,7 @@ describe('summarizeBlocking', () => {
     const r = summarizeBlocking(requests, sessions)
     expect(r?.message).toBe('1 session(s) blocked (worst 130s) behind 1 head blocker(s)')
     expect(r?.severity).toBe('critical')
-    expect(r?.stack).toContain('Other')
-    expect(r?.stack).toContain('php')
+    expect(r?.stack).toContain('#70 [Other]')
   })
 
   it("keeps another database's statement, login and host out of the report", () => {
@@ -94,7 +94,10 @@ describe('summarizeBlocking', () => {
       ses(11, true)
     ]
     const r = summarizeBlocking(requests, sessions)
-    expect(r?.stack).toContain('#70 [Other · php]')
+    // Not even its program name: that is free text the other application sets, and
+    // replication and agent jobs put server and publication names in it.
+    expect(r?.stack).toContain('#70 [Other]')
+    expect(r?.stack).not.toContain('php')
     expect(r?.stack).toContain('1 open transaction(s)')
     expect(r?.stack).not.toContain('ssn')
     expect(r?.stack).not.toContain('their_login')
@@ -118,6 +121,35 @@ describe('summarizeBlocking', () => {
     const r = summarizeBlocking(requests, sessions)
     expect(r?.stack).toContain('select * from orders')
     expect(r?.stack).toContain('2 open transaction(s)')
+  })
+
+  it('names a person working in this database by their program, never their login or machine', () => {
+    // A DBA in a query tool, in this database, under their own login: the issue log must
+    // not keep their Windows login and workstation name.
+    const requests = [req(11, 10, 30, true)]
+    const sessions = [
+      ses(10, true, {
+        own_login: false,
+        program_name: 'Query Tool',
+        host_name: 'DBA-LAPTOP',
+        login_name: 'CORP\\jsmith',
+        sql_text: 'begin tran; update t set a = 1'
+      }),
+      ses(11, true, { host_name: 'api-3', login_name: 'app_login' })
+    ]
+    const r = summarizeBlocking(requests, sessions)
+    expect(r?.stack).toContain('#10 [App · Query Tool]')
+    expect(r?.stack).toContain('update t set a = 1')
+    expect(r?.stack).not.toContain('DBA-LAPTOP')
+    expect(r?.stack).not.toContain('jsmith')
+  })
+
+  it("names the app's own sessions with their host and login", () => {
+    const requests = [req(11, 10, 30, true)]
+    const sessions = [ses(10, true, { host_name: 'api-3', login_name: 'app_login' }), ses(11, true)]
+    expect(summarizeBlocking(requests, sessions)?.stack).toContain(
+      '#10 [App · nivaro-api · api-3 · app_login]'
+    )
   })
 
   it('stays quiet while nothing in the chain has waited 15 seconds', () => {

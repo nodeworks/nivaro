@@ -13,9 +13,15 @@
  * between are part of the chain, not heads. An idle head (a transaction left open) has no
  * running request, so its text is the last statement its connection ran.
  *
- * A session of ANOTHER database is named by its database and program only. Its statement can
- * carry that application's data, and its login and host are not this app's to store in its
- * issue log; the queries below do not read them at all for such a session.
+ * What the issue log keeps about a session:
+ * - in ANOTHER database: its database name, nothing else. Its statement can carry that
+ *   application's data, its login and host are not this app's to store, and its program name
+ *   is free text the other application sets (replication and agent jobs put server and
+ *   publication names in it).
+ * - in this database under another login (a person in a query tool): its program and
+ *   statement, never the person's login or machine name.
+ * - the app's own sessions: program, host and login too (which process it was).
+ * The queries below return NULL for what is not kept, so it never leaves the server.
  */
 import type { Knex } from 'knex'
 
@@ -35,6 +41,8 @@ export interface BlockedRequest {
 export interface ChainSession {
   session_id: number
   mine: boolean | number
+  /** Does the session run under the login this API connects with? */
+  own_login?: boolean | number | null
   database_name?: string | null
   program_name?: string | null
   host_name?: string | null
@@ -59,11 +67,12 @@ const yes = (v: boolean | number | null | undefined) => v === true || v === 1
 function describeSession(id: number, s: ChainSession | undefined): string {
   if (!s) return `#${id}`
   const own = yes(s.mine)
-  const who = (
-    own
+  const parts = !own
+    ? [s.database_name]
+    : yes(s.own_login)
       ? [s.database_name, s.program_name, s.host_name, s.login_name]
       : [s.database_name, s.program_name]
-  )
+  const who = parts
     .map((x) => (x ?? '').trim())
     .filter(Boolean)
     .join(' · ')
@@ -155,10 +164,14 @@ export async function blockingReport(db: Knex): Promise<BlockingReport | null> {
     sessions = (await db.raw(
       `SELECT s.session_id,
               CASE WHEN s.database_id = DB_ID() THEN 1 ELSE 0 END AS mine,
+              CASE WHEN s.login_name = SUSER_SNAME() THEN 1 ELSE 0 END AS own_login,
               DB_NAME(s.database_id) AS database_name,
-              s.program_name, s.open_transaction_count,
-              CASE WHEN s.database_id = DB_ID() THEN s.host_name END AS host_name,
-              CASE WHEN s.database_id = DB_ID() THEN s.login_name END AS login_name,
+              s.open_transaction_count,
+              CASE WHEN s.database_id = DB_ID() THEN s.program_name END AS program_name,
+              CASE WHEN s.database_id = DB_ID() AND s.login_name = SUSER_SNAME()
+                   THEN s.host_name END AS host_name,
+              CASE WHEN s.database_id = DB_ID() AND s.login_name = SUSER_SNAME()
+                   THEN s.login_name END AS login_name,
               CASE WHEN s.database_id = DB_ID()
                    THEN LEFT(COALESCE(rt.text, ct.text), 300) END AS sql_text
        FROM sys.dm_exec_sessions s
