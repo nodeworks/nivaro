@@ -29,8 +29,9 @@
  * averaged 2.3 s, 1.5 s of it one flow's push to a partner that nothing in
  * the answer or the next page read depends on).
  */
-import { AsyncLocalStorage } from 'node:async_hooks'
+import { AsyncLocalStorage, AsyncResource } from 'node:async_hooks'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { getTenantId } from '../db/tenant-context.js'
 
 export interface EffectOptions {
   /**
@@ -96,21 +97,101 @@ export function deferEffect(
 }
 
 /**
+ * Detached effects across units.
+ *
+ * Inside one unit they run one at a time, but a loop of creates (an import, an
+ * inbound feed, a flow that creates rows) opens a unit per row, so without a
+ * limit every row's detached effect starts at once: N partner calls together
+ * on the small background pool, where each create used to wait for its own.
+ * - At most DETACHED_SLOTS run at once per tenant; the rest wait their turn in
+ *   the order their units committed.
+ * - Once DETACHED_BACKLOG are waiting, a committing unit waits for its own
+ *   detached effects again, so a bulk load cannot outrun them without bound
+ *   (in memory or against the partner). A person's single create never sees it.
+ * - A waiting effect runs in the async context of the unit that queued it (its
+ *   tenant, its request), not of whichever effect freed the slot.
+ * - What is queued or running is counted, so shutdown can wait for it
+ *   (drainDetachedEffects) instead of dropping runs nothing recorded yet.
+ */
+export const DETACHED_SLOTS = 2
+export const DETACHED_BACKLOG = 20
+
+interface DetachedLane {
+  running: number
+  waiting: Array<() => void>
+}
+const lanes = new Map<string, DetachedLane>()
+let detachedOut = 0
+
+/** Detached effects queued or running in this process (all tenants). */
+export function detachedEffectsPending(): number {
+  return detachedOut
+}
+
+/**
+ * Wait up to `timeoutMs` for the detached effects in flight to finish; answers
+ * how many were still out. For shutdown: the writers already got their answer.
+ */
+export async function drainDetachedEffects(timeoutMs: number): Promise<{ left: number }> {
+  const deadline = Date.now() + Math.max(0, timeoutMs)
+  while (detachedOut > 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, Math.min(25, Math.max(1, deadline - Date.now()))))
+  }
+  return { left: detachedOut }
+}
+
+function laneFor(key: string): DetachedLane {
+  let lane = lanes.get(key)
+  if (!lane) {
+    lane = { running: 0, waiting: [] }
+    lanes.set(key, lane)
+  }
+  return lane
+}
+
+/** Start `e` when its tenant has a free slot; resolves when it has finished. */
+function runDetached(e: Effect): Promise<void> {
+  const key = getTenantId() ?? ''
+  const lane = laneFor(key)
+  // Bound now, while the queuing unit's context is still the current one.
+  const work = AsyncResource.bind(() => runInBackgroundPool(() => runEffect(e)))
+  detachedOut++
+  return new Promise<void>((resolve) => {
+    const go = () => {
+      lane.running++
+      // runEffect never rejects, so this chain needs no catch of its own.
+      void work().then(() => {
+        lane.running--
+        detachedOut--
+        resolve()
+        const next = lane.waiting.shift()
+        if (next) next()
+        else if (lane.running === 0) lanes.delete(key)
+      })
+    }
+    if (lane.running < DETACHED_SLOTS) go()
+    else lane.waiting.push(go)
+  })
+}
+
+/**
  * Run a committed unit's effects in the order they were queued. The unit
  * waits for each plain effect; a detached one is started in its turn (behind
- * the detached effects before it) and left to finish on the background pool.
+ * the detached effects before it, and when its tenant has a free slot) and
+ * left to finish on the background pool, unless the backlog is deep.
  */
 async function releaseEffects(queued: Effect[]): Promise<void> {
+  const crowded = (lanes.get(getTenantId() ?? '')?.waiting.length ?? 0) >= DETACHED_BACKLOG
   let detachedTail: Promise<void> | null = null
   for (const e of queued) {
     if (!e.detached) {
       await runEffect(e)
       continue
     }
-    const start = () => runInBackgroundPool(() => runEffect(e))
-    // runEffect never rejects, so the chain needs no catch of its own.
+    const start = () => runDetached(e)
     detachedTail = detachedTail ? detachedTail.then(start) : start()
   }
+  if (crowded && detachedTail) await detachedTail
 }
 
 /**

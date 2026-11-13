@@ -1,7 +1,12 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { describe, expect, it, vi } from 'vitest'
 import { inBackgroundPool } from '../../../db/pool-context.js'
 import {
+  DETACHED_BACKLOG,
+  DETACHED_SLOTS,
   deferEffect,
+  detachedEffectsPending,
+  drainDetachedEffects,
   runUnit,
   unitOfWorkOpen,
   withUnitOfWork
@@ -91,6 +96,115 @@ describe('unit of work (#793)', () => {
     const settle = async () => {
       for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0))
     }
+
+    describe('across units (security review 2026-11-12)', () => {
+      // One at a time held only inside ONE unit. A loop of creates (an import, an inbound
+      // feed) opens a unit per row, so every row's after-create flow started at once: N
+      // partner calls together, all on the small background pool.
+      it('at most two run at once, the rest wait their turn', async () => {
+        let running = 0
+        let most = 0
+        const gates: Array<() => void> = []
+        const held = () => async () => {
+          running++
+          most = Math.max(most, running)
+          await new Promise<void>((r) => gates.push(r))
+          running--
+        }
+        for (let i = 0; i < 6; i++) {
+          await runUnit(`u${i}`, async () => {
+            await deferEffect(`e${i}`, held(), { detached: true })
+          })
+        }
+        await settle()
+        expect(DETACHED_SLOTS).toBe(2)
+        expect(running).toBe(2)
+        expect(detachedEffectsPending()).toBe(6)
+        while (gates.length > 0) {
+          gates.shift()?.()
+          await settle()
+        }
+        expect(most).toBe(2)
+        expect(detachedEffectsPending()).toBe(0)
+      })
+
+      it('a deep backlog makes the writer wait for its own effect again', async () => {
+        const gates: Array<() => void> = []
+        const held = () => new Promise<void>((r) => gates.push(r))
+        for (let i = 0; i < DETACHED_SLOTS + DETACHED_BACKLOG; i++) {
+          await runUnit('fill', async () => {
+            await deferEffect('fill', held, { detached: true })
+          })
+        }
+        await settle()
+        let returned = false
+        const late = runUnit('late', async () => {
+          await deferEffect('late', () => {}, { detached: true })
+        }).then(() => {
+          returned = true
+        })
+        await settle()
+        // A bulk load must not outrun its flows without bound: this create waits, as every
+        // create did before effects could be detached.
+        expect(returned).toBe(false)
+        for (let k = 0; k < 400 && !returned; k++) {
+          gates.shift()?.()
+          await settle()
+        }
+        await late
+        expect(returned).toBe(true)
+        while (gates.length > 0) {
+          gates.shift()?.()
+          await settle()
+        }
+        expect(detachedEffectsPending()).toBe(0)
+      })
+
+      it('an effect that waited runs in the context of the unit that queued it', async () => {
+        const who = new AsyncLocalStorage<string>()
+        const gates: Array<() => void> = []
+        const seen: Array<string | undefined> = []
+        const held = () => new Promise<void>((r) => gates.push(r))
+        await who.run('filler', async () => {
+          for (let i = 0; i < DETACHED_SLOTS; i++) {
+            await runUnit('fill', async () => {
+              await deferEffect('fill', held, { detached: true })
+            })
+          }
+        })
+        await who.run('tenant-a', () =>
+          runUnit('a', async () => {
+            await deferEffect('a', () => void seen.push(who.getStore()), { detached: true })
+          })
+        )
+        await settle()
+        expect(seen).toEqual([])
+        while (gates.length > 0) {
+          gates.shift()?.()
+          await settle()
+        }
+        // Started later, from another unit's completion: still its own tenant and person.
+        expect(seen).toEqual(['tenant-a'])
+      })
+
+      it('shutdown waits for what is in flight and says what it had to leave', async () => {
+        let release: () => void = () => {}
+        await runUnit('u', async () => {
+          await deferEffect(
+            'slow',
+            () =>
+              new Promise<void>((r) => {
+                release = r
+              }),
+            { detached: true }
+          )
+        })
+        await settle()
+        expect(await drainDetachedEffects(10)).toEqual({ left: 1 })
+        release()
+        expect(await drainDetachedEffects(500)).toEqual({ left: 0 })
+      })
+    })
 
     it('start in their turn when the unit commits, and the unit does not wait for them', async () => {
       const ran: string[] = []

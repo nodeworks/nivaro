@@ -17,7 +17,7 @@ import {
   reconcile,
   registerScheduleResync
 } from '../services/row-schedules.js'
-import { deferEffect } from '../services/unit-of-work.js'
+import { deferEffect, drainDetachedEffects } from '../services/unit-of-work.js'
 import { verifyWebhookSignature } from '../services/webhook-signature.js'
 
 const FLOW_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -572,6 +572,18 @@ export async function webhookFlowRoute(app: FastifyInstance) {
 let flowHealthCheckRegistered = false
 
 export async function flowsRoutes(app: FastifyInstance) {
+  // "After" event flows run detached from the write that fired them
+  // (services/unit-of-work.ts): the writer has its answer before the run
+  // starts, so a run still out at shutdown has recorded nothing yet. Give the
+  // ones in flight a few seconds while the pools are still open (preClose),
+  // and say how many were cut.
+  app.addHook('preClose', async () => {
+    const { left } = await drainDetachedEffects(4000)
+    if (left > 0) {
+      app.log.warn({ left }, 'shutdown cut event flow runs that were still in flight')
+    }
+  })
+
   // Other processes on this database follow a change to a scheduled flow.
   app.addHook('onResponse', async (req, reply) => {
     if (req.method === 'GET' || reply.statusCode >= 400) return
