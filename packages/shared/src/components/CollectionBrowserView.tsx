@@ -637,15 +637,29 @@ const relBatches = new Map<
   }
 >()
 
+/** The dotted tokens of a display template (`{{core_category.name}}`): fields that live on a
+ *  linked record, which a plain `fields=*` read returns only as an id. */
+export function templateRelationPaths(template: string | null | undefined): string[] {
+  if (!template) return []
+  return [
+    ...new Set(
+      [...template.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1]).filter((t) => t.includes('.'))
+    )
+  ]
+}
+
 function fetchRelationRow(
   client: ReturnType<typeof useNivaroClient>,
   collection: string,
-  id: string
+  id: string,
+  /** Template paths through the row's own links (templateRelationPaths) — read with the row. */
+  nested: string[] = []
 ): Promise<Record<string, unknown> | null> {
-  let batch = relBatches.get(collection)
+  const batchKey = nested.length > 0 ? `${collection}\u0000${nested.join(',')}` : collection
+  let batch = relBatches.get(batchKey)
   if (!batch) {
     batch = { ids: new Set(), waiters: [], promise: null }
-    relBatches.set(collection, batch)
+    relBatches.set(batchKey, batch)
   }
   const current = batch
   current.ids.add(id)
@@ -654,26 +668,34 @@ function fetchRelationRow(
       // One tick of collection: every cell in the committed render lands here
       // before the request goes out.
       setTimeout(() => {
-        relBatches.delete(collection)
+        relBatches.delete(batchKey)
         const ids = [...current.ids]
         // Chunked so a wide page can't blow past the bound-parameter ceiling.
         const chunks: string[][] = []
         for (let i = 0; i < ids.length; i += 200) chunks.push(ids.slice(i, i + 200))
+        const read = (chunk: string[], withNested: boolean) =>
+          client
+            .request<{ data: Array<Record<string, unknown>> }>(
+              get(`/items/${collection}`, {
+                filter: JSON.stringify({ id: { _in: chunk } }),
+                limit: chunk.length,
+                // A template naming a linked record's field (categories:
+                // "{{core_category.name}} - {{sub_category.name}}") reads those through
+                // the link; a plain `*` row has only the ids and the label came out " - ".
+                fields: withNested ? ['*', ...nested].join(',') : '*',
+                // #2444 — a display-label lookup: the server may answer it from its
+                // short-lived label row cache (busted by this collection's writes).
+                ...(withNested ? {} : { labels: 1 })
+              })
+            )
+            .then((r) => r.data ?? [])
         Promise.all(
           chunks.map((chunk) =>
-            client
-              .request<{ data: Array<Record<string, unknown>> }>(
-                get(`/items/${collection}`, {
-                  filter: JSON.stringify({ id: { _in: chunk } }),
-                  limit: chunk.length,
-                  fields: '*',
-                  // #2444 — a display-label lookup: the server may answer it from its
-                  // short-lived label row cache (busted by this collection's writes).
-                  labels: 1
-                })
-              )
-              .then((r) => r.data ?? [])
-              .catch(() => [])
+            (nested.length > 0
+              ? // A stale template path must not cost the whole label: the plain row then.
+                read(chunk, true).catch(() => read(chunk, false))
+              : read(chunk, false)
+            ).catch(() => [])
           )
         ).then((results) => {
           const map = new Map<string, Record<string, unknown>>()
@@ -768,7 +790,7 @@ function RecordRelationLabel({
   const userCol = USER_SYSTEM_COLS.has(relatedCollection)
   const hasId = id != null && id !== ''
 
-  const { data: meta } = useQuery({
+  const { data: meta, isPending: metaPending } = useQuery({
     queryKey: ['cbv-collection-meta', relatedCollection],
     queryFn: () =>
       client
@@ -778,20 +800,23 @@ function RecordRelationLabel({
     enabled: !isSystemCol(relatedCollection),
     retry: false
   })
+  // The row is read once the template is known, so its linked fields come with it.
+  const nested = templateRelationPaths(meta?.display_template)
+  const metaKnown = isSystemCol(relatedCollection) || !metaPending
 
   const { data: item, isLoading } = useQuery({
-    queryKey: ['cbv-relation-item', relatedCollection, String(id)],
+    queryKey: ['cbv-relation-item', relatedCollection, String(id), nested.join(',')],
     queryFn: () =>
       userCol
         ? client.request<{ data: Record<string, unknown> }>(get(`/users/${id}`)).then((r) => r.data)
-        : fetchRelationRow(client, relatedCollection, String(id)),
-    enabled: hasId && (userCol || !isSystemCol(relatedCollection)),
+        : fetchRelationRow(client, relatedCollection, String(id), nested),
+    enabled: hasId && metaKnown && (userCol || !isSystemCol(relatedCollection)),
     staleTime: 30 * 60_000,
     retry: false
   })
 
   if (!hasId) return <span className='text-[12px] text-slate-300'>—</span>
-  if (isLoading)
+  if (isLoading || !metaKnown)
     return (
       <span className='inline-block h-3.5 w-24 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
     )
