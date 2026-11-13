@@ -389,6 +389,10 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }`
         ['merge', 'Only the mapped fields are updated.']
       ]
     },
+    {
+      type: 'p',
+      text: 'Relation columns: a column mapped to a many-to-one field names the related record by its name (the related collection\'s label column, case- and space-insensitive) or its id. A column mapped to a many-to-many field may list several, comma-separated — "Cran, HQ Funded" links the row to both project types; a cell that is itself one record\'s name ("Smith, John") stays whole. A value that matches no record, or more than one, refuses that row with a sentence naming it, and the preview lists those rows before you start. Overwrite makes the record\'s links exactly the file\'s list; merge adds the file\'s links to the ones it has. Rollback removes the links a created record got and puts an overwritten record\'s links back.'
+    },
     { type: 'h3', id: 'imports-health', text: 'Import health' },
     {
       type: 'p',

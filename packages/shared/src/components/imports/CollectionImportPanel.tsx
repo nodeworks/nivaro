@@ -742,6 +742,9 @@ function ImportWizard({
               reason?: string
               fields: Array<{ field: string; old: unknown; new: unknown }>
             }>
+            /** Rows whose relation cells name a record that does not exist (or several). */
+            link_error_rows?: number
+            link_problems?: Array<{ row: number; error: string }>
           }
         }>('/imports/preview', {
           collection,
@@ -770,14 +773,30 @@ function ImportWizard({
     queryKey: ['import-collection-meta', collection],
     queryFn: () =>
       client.request(
-        get<{ data: { fields?: { field: string; hidden?: boolean }[] } }>(
-          `/collections/${collection}`
-        )
+        get<{
+          data: {
+            fields?: {
+              field: string
+              hidden?: boolean
+              special?: string | null
+              interface?: string | null
+            }[]
+          }
+        }>(`/collections/${collection}`)
       ),
     enabled: !!collection,
     staleTime: 60_000
   })
   const fields = (metaQuery.data?.data?.fields ?? []).filter((f) => !f.hidden).map((f) => f.field)
+  // A relation column names the related record(s) by name or id; a link to many takes a
+  // comma-separated list ("Cran, HQ Funded").
+  const linkHint = (field: string | undefined): string | null => {
+    const meta = field ? metaQuery.data?.data?.fields?.find((f) => f.field === field) : undefined
+    const kind = `${meta?.special ?? ''} ${meta?.interface ?? ''}`.toLowerCase()
+    if (/m2m|many-to-many/.test(kind)) return 'Links several: separate names (or ids) with commas'
+    if (/m2o|many-to-one/.test(kind)) return 'Matched by name or id'
+    return null
+  }
 
   const fetchUrl = useMutation({
     mutationFn: (u: string) =>
@@ -1165,6 +1184,11 @@ function ImportWizard({
                             </div>
                           )}
                         </div>
+                        {linkHint(columnMap[h]) && (
+                          <p className='mt-1 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                            {linkHint(columnMap[h])}
+                          </p>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -1329,6 +1353,24 @@ function ImportWizard({
                     Conflicts need a look before you start — they are rows the import will silently
                     drop or resolve by last-write-wins.
                   </p>
+                )}
+                {(preview.link_error_rows ?? 0) > 0 && (
+                  <div className='rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-500/30 dark:bg-red-500/10'>
+                    <p className='text-[12px] font-medium text-red-700 dark:text-red-300'>
+                      {formatNumber(preview.link_error_rows ?? 0)}{' '}
+                      {preview.link_error_rows === 1 ? 'row names' : 'rows name'} a record that does
+                      not exist — {preview.link_error_rows === 1 ? 'it' : 'they'} will not be
+                      imported
+                    </p>
+                    <ul className='mt-1 max-h-32 space-y-0.5 overflow-y-auto text-[11.5px] text-red-700 dark:text-red-300'>
+                      {(preview.link_problems ?? []).map((p) => (
+                        <li key={`${p.row}-${p.error}`}>
+                          <span className='text-red-500/80 dark:text-red-400/70'>Row {p.row}:</span>{' '}
+                          {p.error}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </div>
             )}

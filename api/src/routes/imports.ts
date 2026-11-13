@@ -8,6 +8,14 @@ import { logActivity } from '../services/activity.js'
 import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { importRowErrorText } from '../services/db-refusal-labels.js'
+import {
+  currentLinks,
+  type ImportLinkField,
+  ImportLinkResolver,
+  importLinkFields,
+  sameLinks,
+  writeLinksRaw
+} from '../services/import-links.js'
 import { createOne, updateOne } from '../services/items.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
@@ -284,6 +292,15 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
       throw new Error('This job writes as whoever queued it, and that user no longer exists')
     const stamp = `import:CSV ${String(job.file_name ?? 'file').replace(/:/g, ' ')}:job-${jobId}`
 
+    // Relation columns: a cell names the related record(s) by id or label; an M2M cell
+    // may list several, comma-separated (services/import-links.ts).
+    const linkFields = await importLinkFields(
+      job.collection as string,
+      Object.values(columnMap).filter(Boolean)
+    )
+    const linkResolver = new ImportLinkResolver()
+    const headerOf = new Map(Object.entries(columnMap).map(([csv, f]) => [f, csv]))
+
     let created = 0
     let updated = 0
     let skipped = 0
@@ -294,9 +311,21 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
     const rbCreated: Array<{ id: unknown }> = []
     const rbUpdated: Array<{ key_field: string; key: unknown; prior: Record<string, unknown> }> = []
 
-    const insertRow = async (collection: string, rowData: Record<string, unknown>) => {
-      if (!actor) return insertReturningId(collection, rowData)
-      const made = (await createOne(actor, collection, { ...rowData, _change_reason: stamp })) as {
+    const insertRow = async (
+      collection: string,
+      rowData: Record<string, unknown>,
+      links: Map<ImportLinkField, string[]>
+    ) => {
+      if (!actor) {
+        const id = await insertReturningId(collection, rowData)
+        if (links.size > 0 && id == null)
+          throw new Error('The record was created but its id could not be read to link it')
+        for (const [lf, ids] of links) await writeLinksRaw(lf, id, ids, false)
+        return id
+      }
+      const payload: Record<string, unknown> = { ...rowData, _change_reason: stamp }
+      for (const [lf, ids] of links) payload[lf.field] = ids
+      const made = (await createOne(actor, collection, payload)) as {
         id?: unknown
       } | null
       return made?.id ?? null
@@ -323,6 +352,18 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
         const idField = job.id_field as string | null
         const strategy = job.duplicate_strategy as string
 
+        // Relation cells → ids; M2M sets leave rowData (no column of their own).
+        const links = new Map<ImportLinkField, string[]>()
+        for (const [field, lf] of linkFields) {
+          if (!(field in rowData)) continue
+          const resolved = await linkResolver.resolve(lf, rowData[field], headerOf.get(field))
+          if (lf.kind === 'm2o') rowData[field] = resolved
+          else {
+            links.set(lf, resolved as string[])
+            delete rowData[field]
+          }
+        }
+
         if (idField && rowData[idField]) {
           const existing = await db(collection)
             .where({ [idField]: rowData[idField] })
@@ -334,6 +375,17 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
               const prior: Record<string, unknown> = {}
               for (const k of Object.keys(rowData))
                 prior[k] = (existing as Record<string, unknown>)[k]
+              // Links: overwrite = exactly the file's list; merge = the file's added to the
+              // record's own. The prior set is kept for rollback.
+              const existingId = (existing as { id: unknown }).id
+              const linkSets = new Map<ImportLinkField, string[]>()
+              for (const [lf, ids] of links) {
+                const now = await currentLinks(lf, existingId)
+                const want = strategy === 'overwrite' ? ids : [...new Set([...now, ...ids])]
+                if (sameLinks(now, want)) continue
+                linkSets.set(lf, want)
+                prior[lf.field] = { set: now }
+              }
               if (actor) {
                 // Only fields that actually differ; an unchanged row writes nothing.
                 const patch: Record<string, unknown> = {}
@@ -341,6 +393,7 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
                   const was = (existing as Record<string, unknown>)[k]
                   if (!sameCell(was, v)) patch[k] = v
                 }
+                for (const [lf, want] of linkSets) patch[lf.field] = { set: want }
                 if (Object.keys(patch).length === 0) {
                   skipped++
                 } else {
@@ -355,6 +408,7 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
                 await db(collection)
                   .where({ [idField]: rowData[idField] })
                   .update(rowData)
+                for (const [lf, want] of linkSets) await writeLinksRaw(lf, existingId, want, true)
                 rbUpdated.push({ key_field: idField, key: rowData[idField], prior })
                 updated++
               }
@@ -362,11 +416,11 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
               skipped++
             }
           } else {
-            rbCreated.push({ id: await insertRow(collection, rowData) })
+            rbCreated.push({ id: await insertRow(collection, rowData, links) })
             created++
           }
         } else {
-          rbCreated.push({ id: await insertRow(collection, rowData) })
+          rbCreated.push({ id: await insertRow(collection, rowData, links) })
           created++
         }
       } catch (err) {
@@ -674,6 +728,39 @@ export async function importsRoutes(app: FastifyInstance) {
       return rowData
     })
 
+    // Relation cells resolve exactly as the run will: names → ids, an M2M list → a set
+    // compared with the record's links. A name that matches nothing is reported here.
+    const linkFields = await importLinkFields(
+      collection,
+      Object.values(columnMap).filter(Boolean)
+    ).catch(() => new Map<string, ImportLinkField>())
+    const headerOf = new Map(Object.entries(columnMap).map(([csv, f]) => [f, csv]))
+    const linkResolver = new ImportLinkResolver()
+    const linkProblems: Array<{ row: number; error: string }> = []
+    let linkErrorRows = 0
+    const rowLinks: Array<Map<string, string[]>> = []
+    for (let i = 0; i < mapped.length; i++) {
+      const rowData = mapped[i]
+      const links = new Map<string, string[]>()
+      rowLinks.push(links)
+      let bad = false
+      for (const [field, lf] of linkFields) {
+        if (!(field in rowData)) continue
+        try {
+          const resolved = await linkResolver.resolve(lf, rowData[field], headerOf.get(field))
+          if (lf.kind === 'm2o') rowData[field] = resolved
+          else links.set(field, resolved as string[])
+        } catch (err) {
+          bad = true
+          if (linkProblems.length < 50)
+            linkProblems.push({ row: i + 2, error: (err as Error).message.slice(0, 300) })
+        }
+        if (lf.kind === 'm2m') delete rowData[field]
+      }
+      if (bad) linkErrorRows++
+    }
+    const m2mFields = [...linkFields.values()].filter((lf) => lf.kind === 'm2m')
+
     const same = (a: unknown, b: unknown): boolean => {
       const as = String(a ?? '').trim()
       const bs = String(b ?? '').trim()
@@ -706,13 +793,15 @@ export async function importsRoutes(app: FastifyInstance) {
         .filter((v) => v != null && String(v).trim() !== '')
         .map((v) => String(v))
       const distinct = [...new Set(idValues)]
-      const mappedFields = [...new Set(Object.values(columnMap).filter(Boolean))]
+      const mappedFields = [...new Set(Object.values(columnMap).filter(Boolean))].filter(
+        (f) => linkFields.get(f)?.kind !== 'm2m'
+      )
       let existingRows: Array<Record<string, unknown>> = []
       try {
         existingRows = await selectInChunks(distinct, 1000, (chunk) =>
           db(collection)
             .whereIn(idField, chunk)
-            .select([...new Set([idField, ...mappedFields])])
+            .select([...new Set(['id', idField, ...mappedFields])])
         )
       } catch (err) {
         return reply
@@ -720,6 +809,24 @@ export async function importsRoutes(app: FastifyInstance) {
           .send({ error: `Could not read ${collection}: ${(err as Error).message.slice(0, 200)}` })
       }
       const existingById = new Map(existingRows.map((r) => [String(r[idField]), r]))
+      // Each matched record's current links, one read per M2M field.
+      const linksNow = new Map<string, Map<string, string[]>>()
+      for (const lf of m2mFields) {
+        const byParent = new Map<string, string[]>()
+        linksNow.set(lf.field, byParent)
+        const parents = existingRows.map((r) => String(r.id))
+        const rows = (await selectInChunks(parents, 1000, (chunk) =>
+          db(lf.junction as string)
+            .whereIn(lf.fkToParent as string, chunk)
+            .select({ p: lf.fkToParent as string, o: lf.fkToOther as string })
+        )) as Array<{ p: unknown; o: unknown }>
+        for (const r of rows) {
+          if (r.o == null) continue
+          const list = byParent.get(String(r.p)) ?? []
+          list.push(String(r.o))
+          byParent.set(String(r.p), list)
+        }
+      }
 
       // Duplicate ids WITHIN the file — ambiguous, always a conflict.
       const seenInFile = new Map<string, number>()
@@ -763,6 +870,14 @@ export async function importsRoutes(app: FastifyInstance) {
             fieldChangeCounts[f] = (fieldChangeCounts[f] ?? 0) + 1
           }
         }
+        for (const [f, ids] of rowLinks[i]) {
+          const now = linksNow.get(f)?.get(String(existing.id)) ?? []
+          const want = strategy === 'overwrite' ? ids : [...new Set([...now, ...ids])]
+          if (!sameLinks(now, want)) {
+            fieldDiffs.push({ field: f, old: now.join(', '), new: want.join(', ') })
+            fieldChangeCounts[f] = (fieldChangeCounts[f] ?? 0) + 1
+          }
+        }
         if (fieldDiffs.length === 0) {
           unchanged++
           return
@@ -798,7 +913,9 @@ export async function importsRoutes(app: FastifyInstance) {
         changed,
         conflicts,
         field_change_counts: fieldChangeCounts,
-        diffs
+        diffs,
+        link_error_rows: linkErrorRows,
+        link_problems: linkProblems
       }
     })
   })
@@ -960,7 +1077,16 @@ export async function importsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'values is required' })
     }
     try {
-      const created = await createOne(req.user!, collection, values, req)
+      // Relation cells name records the way the file did ("Cran, HQ Funded").
+      const linkFields = await importLinkFields(collection, Object.keys(values))
+      const resolver = new ImportLinkResolver()
+      const payload: Record<string, unknown> = { ...values }
+      for (const [field, lf] of linkFields) {
+        const v = payload[field]
+        if (v == null || typeof v !== 'string') continue
+        payload[field] = await resolver.resolve(lf, v)
+      }
+      const created = await createOne(req.user!, collection, payload, req)
       return reply.send({ data: created })
     } catch (err) {
       const status = (err as { statusCode?: number }).statusCode ?? 422
@@ -998,6 +1124,12 @@ export async function importsRoutes(app: FastifyInstance) {
       .update({ rolled_back_at: new Date(), rolled_back_by: req.user?.id ?? null })
 
     const user = req.user!
+    // M2M links the import wrote: a created record's junction rows go before the record
+    // (a delete does not remove them), an overwritten record's prior set comes back.
+    const rbLinkFields = await importLinkFields(
+      collection,
+      Object.values(parseJson<Record<string, string>>(job.column_map) ?? {}).filter(Boolean)
+    ).catch(() => new Map<string, ImportLinkField>())
     void (async () => {
       let deleted = 0
       let restored = 0
@@ -1012,6 +1144,8 @@ export async function importsRoutes(app: FastifyInstance) {
           skippedRows++
         } else {
           try {
+            for (const lf of rbLinkFields.values())
+              if (lf.kind === 'm2m') await writeLinksRaw(lf, c.id, [], true)
             const { deleteOne } = await import('../services/items.js')
             await deleteOne(user, collection, String(c.id))
             deleted++
@@ -1037,9 +1171,26 @@ export async function importsRoutes(app: FastifyInstance) {
               _change_reason: `Import rollback (job ${id})`
             })
           } else {
-            await db(collection)
-              .where({ [u.key_field]: u.key })
-              .update(u.prior)
+            const plain: Record<string, unknown> = {}
+            const linkPrior: Array<[ImportLinkField, string[]]> = []
+            for (const [k, v] of Object.entries(u.prior)) {
+              const lf = rbLinkFields.get(k)
+              if (lf?.kind === 'm2m') {
+                const set = (v as { set?: unknown[] } | null)?.set
+                if (Array.isArray(set)) linkPrior.push([lf, set.map(String)])
+              } else plain[k] = v
+            }
+            if (Object.keys(plain).length > 0)
+              await db(collection)
+                .where({ [u.key_field]: u.key })
+                .update(plain)
+            if (linkPrior.length > 0) {
+              const rec = (await db(collection)
+                .where({ [u.key_field]: u.key })
+                .first('id')) as { id: unknown } | undefined
+              if (!rec) throw new Error('record no longer exists')
+              for (const [lf, set] of linkPrior) await writeLinksRaw(lf, rec.id, set, true)
+            }
           }
           restored++
         } catch (err) {
