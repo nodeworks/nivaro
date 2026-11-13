@@ -15,8 +15,21 @@ import { createPortal } from 'react-dom'
  */
 const liveInstances: Array<(owns: boolean) => void> = []
 
+/** A menu whose rows carry tips: a tip drawn under a row would cover the row below it. */
+const MENU = '[data-nvr-header-menu-panel], [role="menu"]'
+/** Gap between a tip and what it explains. */
+const GAP = 6
+
+interface Tip {
+  x: number
+  y: number
+  text: string
+  /** A menu row's tip goes beside the menu (left of it, else right), level with the row. */
+  beside?: { left: number; right: number; rowTop: number; rowHeight: number }
+}
+
 export function TipLayer() {
-  const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null)
+  const [tip, setTip] = useState<Tip | null>(null)
   const [owns, setOwns] = useState(false)
   const tipRef = useRef<HTMLDivElement>(null)
 
@@ -43,6 +56,17 @@ export function TipLayer() {
         return
       }
       const r = el.getBoundingClientRect()
+      const menu = el.closest(MENU)
+      if (menu && menu !== el) {
+        const m = menu.getBoundingClientRect()
+        setTip({
+          x: m.left,
+          y: r.top,
+          text,
+          beside: { left: m.left, right: m.right, rowTop: r.top, rowHeight: r.height }
+        })
+        return
+      }
       setTip({ x: r.left, y: r.bottom + 4, text })
     }
     const clear = () => setTip(null)
@@ -64,8 +88,17 @@ export function TipLayer() {
     if (!el) return
     const r = el.getBoundingClientRect()
     let { x, y } = tip
-    if (r.right > window.innerWidth - 8) x = Math.max(8, window.innerWidth - r.width - 8)
-    if (r.bottom > window.innerHeight - 8) y = Math.max(8, tip.y - r.height - 30)
+    if (tip.beside) {
+      // Beside the menu, never over its rows: left of it when the tip fits there, else right.
+      const b = tip.beside
+      const left = b.left - GAP - r.width
+      x = left >= 8 ? left : Math.min(b.right + GAP, Math.max(8, window.innerWidth - r.width - 8))
+      y = Math.round(b.rowTop + (b.rowHeight - r.height) / 2)
+      y = Math.max(8, Math.min(y, window.innerHeight - r.height - 8))
+    } else {
+      if (r.right > window.innerWidth - 8) x = Math.max(8, window.innerWidth - r.width - 8)
+      if (r.bottom > window.innerHeight - 8) y = Math.max(8, tip.y - r.height - 30)
+    }
     if (x !== tip.x || y !== tip.y) setTip({ ...tip, x, y })
   }, [tip])
 
