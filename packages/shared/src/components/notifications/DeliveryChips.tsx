@@ -162,7 +162,6 @@ export function DeliveryChips({ delivery, mailLogUrl, onNavigate, className }: D
             key={c.key}
             type='button'
             data-tip={`${c.tip} · open mail log`}
-            title={c.tip}
             onClick={(e) => {
               e.stopPropagation()
               onNavigate?.(link)
@@ -172,7 +171,7 @@ export function DeliveryChips({ delivery, mailLogUrl, onNavigate, className }: D
             {inner}
           </button>
         ) : (
-          <span key={c.key} data-tip={c.tip} title={c.tip} className={cls}>
+          <span key={c.key} data-tip={c.tip} className={cls}>
             {inner}
           </span>
         )

@@ -244,3 +244,93 @@ describe('NotificationCenterView — a row with nowhere to go', () => {
     cleanup()
   })
 })
+
+// Go-live week review (2026-11-12): the bell's sibling controls (a bundle's Open record and
+// Mark read, a record group's Open record and Mark read, the "deleted" chip) still used the
+// browser's slow `title` tooltip. They use the instant `data-tip`, and the icon-only buttons
+// carry their name for a screen reader.
+describe('NotificationBell — sibling controls use the instant tip', () => {
+  async function openWithBundles() {
+    const bundle = (over: Record<string, unknown>) => ({
+      collection: 'workflows',
+      item: '7',
+      label: 'WF-7',
+      count: 2,
+      unread: 1,
+      lane: 'needs_you',
+      categories: ['comment'],
+      newest: new Date().toISOString(),
+      url: null,
+      ids: [11, 12],
+      rows: [
+        row({ id: 11, read: false, collection: 'workflows', item: '7' }),
+        row({ id: 12, read: true, collection: 'workflows', item: '7' })
+      ],
+      ...over
+    })
+    const rows = [
+      row({ id: 21, read: false, collection: 'regions', item: '3', category: 'comment' }),
+      row({ id: 22, read: false, collection: 'regions', item: '3', category: 'comment' })
+    ]
+    const client = {
+      request: vi.fn(async (cmd: { _path?: string }) => {
+        const path = String(cmd?._path ?? '')
+        if (path === '/notifications')
+          return {
+            data: rows,
+            bundles: [bundle({}), bundle({ item: '8', label: 'WF-8', deleted: true })],
+            pinned: []
+          }
+        if (/unread|count/.test(path))
+          return { unread: 0, attention: 0, lanes: { critical: 0, needs_you: 0, fyi: 0 } }
+        return {}
+      })
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={qc}>
+          <NivaroProvider client={client as never}>
+            <NotificationBell routes={routes} onNavigate={vi.fn()} tabBadge={false} />
+          </NivaroProvider>
+        </QueryClientProvider>
+      )
+    })
+    await act(async () => {
+      ;(host.querySelector('button[aria-label^="Notifications"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    return () => {
+      act(() => root.unmount())
+      host.remove()
+    }
+  }
+
+  it('no control in the open bell carries a native title', async () => {
+    const cleanup = await openWithBundles()
+    const bundleEl = document.querySelector('[data-notification-bundle]') as HTMLElement
+    expect(bundleEl).not.toBeNull()
+    // Nothing in the bell's popover falls back to the browser's slow tooltip.
+    expect([...document.querySelectorAll('[title]')].map((e) => e.outerHTML.slice(0, 300))).toEqual(
+      []
+    )
+
+    const tip = (sel: string) =>
+      [...document.querySelectorAll<HTMLElement>(sel)].map((e) => [
+        e.dataset.tip,
+        e.getAttribute('aria-label')
+      ])
+    expect(tip('[data-notification-bundle-read]')).toContainEqual(['Mark read', 'Mark read'])
+    expect(tip('[data-notification-open-record]')).toContainEqual(['Open record', 'Open record'])
+    const deleted = document.querySelector(
+      '[data-notification-bundle-deleted="true"] [data-notification-bundle-gone]'
+    ) as HTMLElement
+    expect(deleted?.dataset.tip).toBe('This record has since been deleted')
+    cleanup()
+  })
+})

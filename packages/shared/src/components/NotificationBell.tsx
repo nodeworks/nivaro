@@ -627,7 +627,8 @@ export function NotificationBell({
               {b.deleted && (
                 <span
                   className='rounded bg-rose-50 px-1 py-px text-[9.5px] font-semibold text-rose-700 dark:bg-rose-900/30 dark:text-rose-300'
-                  title='This record has since been deleted'
+                  data-notification-bundle-gone
+                  data-tip='This record has since been deleted'
                 >
                   deleted
                 </span>
@@ -649,7 +650,9 @@ export function NotificationBell({
             {target && (
               <button
                 type='button'
-                title='Open record'
+                aria-label='Open record'
+                data-tip='Open record'
+                data-notification-open-record
                 onClick={() => {
                   setOpen(false)
                   runNotificationTarget(target, onNavigate)
@@ -662,7 +665,8 @@ export function NotificationBell({
             {unreadIds.length > 0 && (
               <button
                 type='button'
-                title='Mark all read'
+                aria-label='Mark read'
+                data-tip='Mark read'
                 data-notification-bundle-read={key}
                 onClick={() => markGroup.mutate(unreadIds)}
                 className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
@@ -826,7 +830,9 @@ export function NotificationBell({
                             <span className='ml-auto flex items-center gap-0.5'>
                               <button
                                 type='button'
-                                title='Open record'
+                                aria-label='Open record'
+                                data-tip='Open record'
+                                data-notification-open-record
                                 onClick={() => {
                                   if (unreadIds.length) markGroup.mutate(unreadIds)
                                   setOpen(false)
@@ -839,7 +845,8 @@ export function NotificationBell({
                               {unreadIds.length > 0 && (
                                 <button
                                   type='button'
-                                  title='Mark read'
+                                  aria-label='Mark read'
+                                  data-tip='Mark read'
                                   onClick={() => markGroup.mutate(unreadIds)}
                                   className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
                                 >
