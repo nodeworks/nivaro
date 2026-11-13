@@ -138,6 +138,30 @@ export function partnerFailureText(reason: string): string | null {
   return partnerWords(reason) ?? partnerOutcome(reason)
 }
 
+/** A partner that answered 2xx and said no in its body is stored with its own words and no
+ *  status line: "Submission failed — <what it said>" (api workflow-actions.ts). */
+const SAID_IN_BODY = /^(submission failed)\s+[—–-]\s+([\s\S]+)$/i
+
+/**
+ * A partner call's failure as a person reads it, whatever shape the other system answered
+ * in: its words after a status line (partnerWords), what a wordless status means
+ * (partnerOutcome), or the words it gave in a 2xx body: "Submission failed: <its words>".
+ * Null for anything else, and for a body that is not words (markup, a stack, SQL, an id):
+ * that is read the usual way. The row of a background move and the toast of a move pressed
+ * the ordinary way both read through this, so they say the same thing.
+ */
+export function partnerSaid(reason: string): string | null {
+  const read = partnerFailureText(reason)
+  if (read) return read
+  const shape = SAID_IN_BODY.exec(reason.trim())
+  if (!shape) return null
+  const full = shape[2].replace(/\s+/g, ' ').trim()
+  if (full.length < 3 || /<[a-z!/]/i.test(full) || isRawErrorText(full)) return null
+  const said = full.length > 300 ? `${full.slice(0, 299).trimEnd()}…` : full
+  const lead = shape[1]
+  return `${lead.charAt(0).toUpperCase()}${lead.slice(1).toLowerCase()}: ${said}`
+}
+
 /** What the API stores and answers for a move whose own call to another system failed:
  *  "<move>: submission failed — <what happened>". */
 const PARTNER_CALL = /(?:^|: )submission failed\s+[—–-]\s/i
@@ -152,5 +176,5 @@ export function partnerCallText(text: string): string | null {
   if (!shape) return null
   // From "submission failed" on: the move's own name in front of it is the caller's to say.
   const rest = text.slice(shape.index + (shape[0].startsWith(': ') ? 2 : 0))
-  return partnerFailureText(rest.charAt(0).toUpperCase() + rest.slice(1))
+  return partnerSaid(rest.charAt(0).toUpperCase() + rest.slice(1))
 }

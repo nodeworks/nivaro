@@ -580,6 +580,17 @@ describe('the reason a run did not go through', () => {
     expect(problemNotice()?.textContent).not.toMatch(/signed out/i)
   })
 
+  // A partner that answered 2xx and said no in its body: the same "Submission failed: <its
+  // words>" the toast of a move pressed the ordinary way shows (lib/partner-failure partnerSaid).
+  it('a refusal the other system gave in a 2xx body reads like any other refusal', async () => {
+    render('panel', {
+      marked: true,
+      problem: { ...PROBLEM, reason: 'Submit order: submission failed — The project is not valid' }
+    })
+    await until(() => !!problemNotice())
+    expect(problemWords()?.textContent).toBe('Submission failed: The project is not valid')
+  })
+
   it('a call that never got an answer says so in plain words', async () => {
     render('panel', {
       marked: true,
@@ -700,6 +711,21 @@ describe('a move another system refused, pressed the ordinary way', () => {
       await act(async () => button('Submit order')?.click())
       await until(() => posts(calls).length > 0 && said.mock.calls.length > 0)
       expect(failed(said).map((c) => c[0])).toContain('Submit order: contact email is required')
+    })
+
+    it(`${ui}: a refusal sent back in a 2xx body gets the same toast`, async () => {
+      const said = vi.spyOn(toast, 'error')
+      const { calls } = render(ui, {
+        refuse: 'Submit order: submission failed — The project is not valid',
+        expanded: true
+      })
+      await until(() => !!button('Submit order'))
+      await act(async () => button('Submit order')?.click())
+      await until(() => posts(calls).length > 0 && said.mock.calls.length > 0)
+      expect(failed(said)).toContainEqual([
+        'Submit order did not go through',
+        'Submission failed: The project is not valid'
+      ])
     })
   }
 })

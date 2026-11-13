@@ -3,8 +3,8 @@ import { type CSSProperties, useEffect, useMemo, useRef } from 'react'
 import { useItemEditAuth } from '../../context'
 import { describeError } from '../../lib/error-message'
 import {
-  partnerFailureText,
   partnerOutcome,
+  partnerSaid,
   partnerWords,
   withoutMoveLabel
 } from '../../lib/partner-failure'
@@ -209,7 +209,7 @@ export function MoveProblemNotice({
   // A partner's own answer shows in its words, or failing that as what it means about the
   // other system; anything else is read like every other error.
   const words = useMemo(
-    () => (reason ? partnerFailureText(reason) : null) ?? said?.title.trim() ?? '',
+    () => (reason ? partnerSaid(reason) : null) ?? said?.title.trim() ?? '',
     [reason, said]
   )
   // The full words on hover only while the three lines cut them.

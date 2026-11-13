@@ -133,4 +133,27 @@ describe('a failed move’s toast when another system refused it', () => {
     expect(partnerMoveFailure(new Error('Network down'), 'Approve')).toBeNull()
     expect(partnerMoveFailure(null, 'Approve')).toBeNull()
   })
+
+  // A partner that answers 2xx and says no in its body is stored without a status line:
+  // "<move>: submission failed — <its own words>". It kept the old toast (the whole sentence
+  // as the title, "Correct the highlighted values" under it) while the row said the words.
+  it('a refusal that came back as a 2xx with an error body reads like every other refusal', () => {
+    expect(partnerMoveFailure(refused('The project is not valid'), 'Submit to Warehouse')).toEqual({
+      title: 'Submit to Warehouse did not go through',
+      description: 'Submission failed: The project is not valid'
+    })
+    expect(
+      partnerMoveFailure(refused('Partner responded with status: ERROR'), 'Submit to Warehouse')
+        ?.description
+    ).toBe('Submission failed: Partner responded with status: ERROR')
+  })
+
+  it('a 2xx error body that is not words keeps the usual toast', () => {
+    expect(
+      partnerMoveFailure(
+        refused("SqlException: Invalid column name 'x' at dbo.sp_push line 4"),
+        'Submit to Warehouse'
+      )
+    ).toBeNull()
+  })
 })
