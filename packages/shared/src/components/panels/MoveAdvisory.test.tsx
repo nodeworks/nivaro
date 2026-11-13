@@ -402,6 +402,12 @@ describe('moves in a menu', () => {
 })
 
 describe('what the fix says when it is done', () => {
+  // Read by what was said, never by position: the toast is one global, and a move the test
+  // before this one started can still say its own "done" after that test has ended.
+  const all = (said: { mock: { calls: unknown[][] } }) => said.mock.calls.map((c) => c[0])
+  const FIX_DONE = 'Done: Flag as Priority.'
+  const FIX_DONE_CONFIRM = 'Done: Flag as Priority. Confirm Approve to finish.'
+
   it('a move that then goes on by itself: only that the fix is done', async () => {
     const said = vi.spyOn(toast, 'success')
     const { calls } = render('header', true)
@@ -412,8 +418,9 @@ describe('what the fix says when it is done', () => {
       type(document.querySelector('input[aria-label="Reason"]') as HTMLInputElement, 'Storm repair')
     )
     await act(async () => button('Flag as Priority, then Approve')?.click())
-    await until(() => posts(calls, '/transition').length > 0 && said.mock.calls.length > 0)
-    expect(said.mock.calls[0][0]).toBe('Done: Flag as Priority.')
+    await until(() => posts(calls, '/transition').length > 0 && all(said).includes(FIX_DONE))
+    // The move went on by itself: saying it is still to confirm would be false.
+    expect(all(said)).not.toContain(FIX_DONE_CONFIRM)
   })
 
   it('a move that asks first: the fix is done, and the move is still to confirm', async () => {
@@ -430,8 +437,7 @@ describe('what the fix says when it is done', () => {
     )
     await act(async () => button('Flag as Priority, then Approve')?.click())
     // The confirm step and the toast come from the same answer, in either order.
-    await until(() => !!button('Confirm') && said.mock.calls.length > 0)
-    expect(said.mock.calls[0][0]).toBe('Done: Flag as Priority. Confirm Approve to finish.')
+    await until(() => !!button('Confirm') && all(said).includes(FIX_DONE_CONFIRM))
     // Nothing was sent: the confirm is still the person's to press.
     expect(posts(calls, '/transition')).toHaveLength(0)
   })
@@ -445,7 +451,7 @@ describe('what the fix says when it is done', () => {
       type(document.querySelector('input[aria-label="Reason"]') as HTMLInputElement, 'Storm repair')
     )
     await act(async () => button('Flag as Priority')?.click())
-    await until(() => posts(calls, '/bulk-actions/run').length > 0 && said.mock.calls.length > 0)
-    expect(said.mock.calls[0][0]).toBe('Done: Flag as Priority.')
+    await until(() => posts(calls, '/bulk-actions/run').length > 0 && all(said).includes(FIX_DONE))
+    expect(all(said)).not.toContain(FIX_DONE_CONFIRM)
   })
 })
