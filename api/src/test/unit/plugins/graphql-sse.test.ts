@@ -90,6 +90,8 @@ beforeEach(async () => {
   await app.ready()
 })
 afterEach(async () => {
+  heard?.mockRestore()
+  heard = null
   vi.unstubAllEnvs()
   vi.mocked(recheckStreamIdentity).mockReset()
   vi.mocked(recheckStreamIdentity).mockImplementation(async (_r, _u, _b, last) => ({
@@ -130,6 +132,24 @@ function revokeAfterFirstCheck() {
 
 function publishSoon(fn: () => void, ms = 20) {
   setTimeout(fn, ms)
+}
+
+/**
+ * Publish once the stream is listening. A fixed delay raced the stream's set-up (sign-in,
+ * schema, subscribe): it subscribes 2–8 ms in when idle but took 23–70 ms under full-suite
+ * load, and an event published before the subscription exists is never delivered.
+ */
+let heard: { mockRestore(): void } | null = null
+function publishWhenSubscribed(fn: () => void) {
+  const original = pubsub.asyncIterator.bind(pubsub)
+  const spy = vi.spyOn(pubsub, 'asyncIterator').mockImplementation(((topic: string) => {
+    const it = original(topic)
+    spy.mockRestore()
+    heard = null
+    setImmediate(fn)
+    return it
+  }) as typeof pubsub.asyncIterator)
+  heard = spy
 }
 
 describe('GraphQL over SSE (#1749)', () => {
@@ -187,7 +207,7 @@ describe('GraphQL over SSE (#1749)', () => {
 
   it('streams itemMutated with the journal position as the id; an API key revoked mid-stream ends it', async () => {
     revokeAfterFirstCheck()
-    publishSoon(() =>
+    publishWhenSubscribed(() =>
       pubsub.publish(topics.itemMutated('orders', '*', ''), {
         itemMutated: {
           collection: 'orders',
@@ -246,7 +266,7 @@ describe('GraphQL over SSE (#1749)', () => {
           data: null
         }
       })
-    publishSoon(() => {
+    publishWhenSubscribed(() => {
       live('3', '10') // already replayed
       live('6', '12')
     })
@@ -282,7 +302,7 @@ describe('GraphQL over SSE (#1749)', () => {
 
   it('a stream opened in tenant A hears tenant A only', async () => {
     revokeAfterFirstCheck()
-    publishSoon(() => {
+    publishWhenSubscribed(() => {
       pubsub.publish(topics.itemMutated('orders', '*', 'B'), {
         itemMutated: { collection: 'orders', item: 'b', action: 'update', changed_fields: [] }
       })
