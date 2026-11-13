@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-11-13T20:45:56.722Z",
+  "generated_at": "2026-11-13T21:59:42.642Z",
   "releases": [
+    {
+      "version": "0.3.152",
+      "tag": "v0.3.152",
+      "date": "2026-11-13T16:59:21-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "a link column shows labels built from linked fields",
+              "hash": "636d542d1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "Starts open folds or opens the panel at once",
+              "hash": "99b3859bf"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.151",
       "tag": "v0.3.151",
-      "date": "2026-11-13T15:45:36-05:00",
+      "date": "2026-11-13T15:45:56-05:00",
       "sections": [
         {
           "label": "Added",
