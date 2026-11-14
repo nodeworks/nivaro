@@ -2,6 +2,7 @@ import { userErrorMessage } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ChevronDown, ChevronRight, Download, Upload } from 'lucide-react'
 import { useRef, useState } from 'react'
+import { Link } from 'react-router'
 import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -51,12 +52,57 @@ interface SnapshotDiff {
   tables: TableDiff[]
   totals: { added: number; removed: number; changed: number; tables_differing: number }
   schema_drift: { only_mine: string[]; only_theirs: string[] }
+  /** A "Copy to dev" file: only the rows changed on the instance it came from. */
+  bundle?: {
+    kind: 'changed-here'
+    items: ProdOnlyChange[]
+    removed: Array<{ table: string; key: string; label: string | null }>
+  }
 }
 
 function short(v: unknown): string {
   if (v === null || v === undefined) return '—'
   const s = typeof v === 'string' ? v : JSON.stringify(v)
   return s.length > 140 ? `${s.slice(0, 140)}…` : s
+}
+
+interface ProdOnlyChange {
+  id: string
+  table: string
+  key: string
+  label: string | null
+  kind: string
+  who: string | null
+}
+
+/** Changes made on this instance, not from promotion, that an apply would overwrite. */
+function ProdOnlyNotice({ items, refused }: { items: ProdOnlyChange[]; refused: boolean }) {
+  return (
+    <div
+      className='basis-full rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11.5px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300'
+      data-prod-only-notice=''
+    >
+      <p className='font-medium'>
+        {refused ? 'Refused: ' : ''}
+        {items.length} change{items.length === 1 ? '' : 's'} made here, not from promotion, would be
+        overwritten
+      </p>
+      <ul className='mt-0.5 list-disc pl-4'>
+        {items.slice(0, 5).map((i) => (
+          <li key={i.id}>
+            {i.label ?? `${i.table} #${i.key}`} — {i.kind} here{i.who ? ` by ${i.who}` : ''}
+          </li>
+        ))}
+      </ul>
+      <p className='mt-0.5'>
+        Review them under{' '}
+        <Link to='/environments/changed-here' className='font-medium underline'>
+          Environments → Changed here
+        </Link>
+        : copy them to dev or mark them as intended.
+      </p>
+    </div>
+  )
 }
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
@@ -88,7 +134,10 @@ function ApplyControls({
     skipped_keyless: number
     skipped_inactive_user?: number
     plan_hash: string
+    /** Changes made here, not from promotion, this apply would overwrite (production). */
+    prod_only_changes?: ProdOnlyChange[]
   } | null>(null)
+  const [refused, setRefused] = useState<ProdOnlyChange[] | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
@@ -97,6 +146,7 @@ function ApplyControls({
   async function run(mode: 'preview' | 'apply') {
     setBusy(true)
     setErr(null)
+    setRefused(null)
     try {
       const r = await api.post<{
         data: Record<string, number> & { errors?: Array<{ key: string; error: string }> }
@@ -122,8 +172,13 @@ function ApplyControls({
       }
     } catch (e) {
       const res = (
-        e as { response?: { data?: { error?: string; code?: string; preview?: never } } }
+        e as {
+          response?: {
+            data?: { error?: string; code?: string; preview?: never; items?: ProdOnlyChange[] }
+          }
+        }
       ).response
+      if (res?.data?.code === 'PROD_ONLY_CHANGES') setRefused(res.data.items ?? [])
       // Bound to the preview: the table moved since — show the new counts, apply again.
       if (res?.data?.code === 'STALE' && res.data.preview) {
         setPreview(res.data.preview)
@@ -185,6 +240,9 @@ function ApplyControls({
         )}
         {result && (
           <span className='text-[11.5px] text-emerald-600 dark:text-emerald-400'>{result}</span>
+        )}
+        {(refused ?? preview?.prod_only_changes ?? []).length > 0 && (
+          <ProdOnlyNotice items={refused ?? preview?.prod_only_changes ?? []} refused={!!refused} />
         )}
         {err && <span className='text-[11.5px] text-red-600 dark:text-red-400'>{err}</span>}
       </div>
@@ -657,6 +715,28 @@ export function ConfigDiffPage() {
                 <Stat label='Tables differing' value={String(diff.totals.tables_differing)} />
               </div>
 
+              {diff.bundle && (
+                <div
+                  className='mt-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-[11.5px] text-sky-800 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200'
+                  data-config-bundle=''
+                >
+                  <p className='font-medium'>
+                    Changes copied from {diff.theirs.environment}: {diff.bundle.items.length} row
+                    {diff.bundle.items.length === 1 ? '' : 's'} changed there, not from promotion
+                  </p>
+                  <p className='mt-0.5'>
+                    The file carries only those rows, so rows that exist only here are not listed.
+                    Apply a table to bring its rows over (upsert only). If a row was added there,
+                    check the diff first: the same id here may be a different row.
+                  </p>
+                  {diff.bundle.removed.length > 0 && (
+                    <p className='mt-0.5'>
+                      Removed there (remove by hand here if wanted):{' '}
+                      {diff.bundle.removed.map((r) => r.label ?? `${r.table} #${r.key}`).join(', ')}
+                    </p>
+                  )}
+                </div>
+              )}
               {(diff.schema_drift.only_mine.length > 0 ||
                 diff.schema_drift.only_theirs.length > 0) && (
                 <p className='mt-3 text-[11px] text-muted-foreground'>

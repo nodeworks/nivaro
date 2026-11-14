@@ -40,6 +40,8 @@ export interface DrillTarget {
 
 interface DrillCtx {
   open: (t: DrillTarget) => void
+  /** Open an app path the way drawer links do (host mapping, new tab). */
+  link?: (path: string) => void
 }
 const Ctx = createContext<DrillCtx | null>(null)
 
@@ -558,7 +560,6 @@ export function DrillProvider({
     title?: string
   } | null>(null)
   const open = useCallback((t: DrillTarget) => setStack([t]), [])
-  const ctx = useMemo<DrillCtx>(() => ({ open }), [open])
   const top = stack[stack.length - 1]
   const onLink = useCallback(
     (path: string) => {
@@ -572,6 +573,7 @@ export function DrillProvider({
     },
     [nav, linkTo]
   )
+  const ctx = useMemo<DrillCtx>(() => ({ open, link: onLink }), [open, onLink])
 
   return (
     <Ctx.Provider value={ctx}>

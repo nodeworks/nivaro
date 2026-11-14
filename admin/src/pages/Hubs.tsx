@@ -41,6 +41,7 @@ const SCREENS: Record<string, Screens> = {
   '/environments': {
     '': lazy(() => import('@/pages/Environments')),
     config: page(() => import('@/pages/ConfigDiff'), 'ConfigDiffPage'),
+    'changed-here': lazy(() => import('@/pages/ConfigChangedHere')),
     readiness: lazy(() => import('@/pages/Readiness')),
     quality: lazy(() => import('@/pages/QualityChecks'))
   },

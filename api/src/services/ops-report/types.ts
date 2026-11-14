@@ -175,6 +175,8 @@ export interface OpsSection {
     unit?: OpsKpiMeta['unit']
     week_avg?: number | null
     note?: string
+    /** An app path the row opens ("Open" beside the note). */
+    href?: string
     better?: 'up' | 'down' | null
   }>
 }

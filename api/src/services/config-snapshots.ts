@@ -30,7 +30,15 @@ import {
 } from './config-inventory.js'
 import { chunkArray } from './db-batch.js'
 
-export type SnapshotTrigger = 'cron' | 'manual' | 'pre-migration' | 'pre-deploy' | 'pre-restore'
+export type SnapshotTrigger =
+  | 'cron'
+  | 'manual'
+  | 'pre-migration'
+  | 'pre-deploy'
+  | 'pre-restore'
+  // Taken right after a promotion copied config here: the baseline "Changed here, not from
+  // promotion" compares against (services/config-drift).
+  | 'promote'
 
 /** Newest N kept per trigger kind (#2803). Unknown kinds keep the default. */
 export const KEEP_BY_TRIGGER: Record<string, number> = {
@@ -38,7 +46,8 @@ export const KEEP_BY_TRIGGER: Record<string, number> = {
   manual: 10,
   'pre-migration': 10,
   'pre-deploy': 10,
-  'pre-restore': 10
+  'pre-restore': 10,
+  promote: 10
 }
 const KEEP_DEFAULT = 10
 /** Every kind at its cap, plus slack: the history list's default length. */

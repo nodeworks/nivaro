@@ -1,6 +1,6 @@
 import type { OpsDigest, OpsReport } from '../../lib/ops-report-types'
 import { cn } from '../../lib/utils'
-import { Drillable } from './drill'
+import { Drillable, useDrill } from './drill'
 import { arr, dr, formatKpi, ms, num } from './format'
 import { type Col, MiniTable, Section, Stat, SubTitle } from './ui'
 
@@ -30,6 +30,7 @@ export function DigestSections({ report }: { report: OpsReport }) {
   const notifs = arr(d.notifications)
   const cfg = arr(d.config_changes)
   const sections = arr(d.sections)
+  const drill = useDrill()
 
   const backlogTotal = arr(work?.backlog).reduce((a, b) => a + b.waiting, 0)
   const mailSent = arr(mail?.by_status).find((s) => s.status === 'sent')?.n
@@ -945,7 +946,28 @@ export function DigestSections({ report }: { report: OpsReport }) {
                 { h: 'Measure', cell: (r) => r.label },
                 { h: 'Today', cell: (r) => formatKpi(r.value, r.unit), num: true },
                 { h: '7-day avg', cell: (r) => formatKpi(r.week_avg, r.unit), num: true },
-                { h: 'Note', cell: (r) => r.note ?? '' }
+                {
+                  h: 'Note',
+                  cell: (r) =>
+                    r.href && drill?.link ? (
+                      <span className='inline-flex items-center gap-1.5'>
+                        {r.note ?? ''}
+                        <button
+                          type='button'
+                          data-ops-section-link={r.href}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            drill.link?.(r.href as string)
+                          }}
+                          className='font-medium text-nvr-cyan hover:underline'
+                        >
+                          Open
+                        </button>
+                      </span>
+                    ) : (
+                      (r.note ?? '')
+                    )
+                }
               ] as Col<(typeof s.rows)[number]>[]
             }
             drill={(r) =>

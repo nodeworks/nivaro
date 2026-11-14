@@ -71,7 +71,9 @@ export const INSTANCE_RESERVED_KEYS = [
   // Audience confirm threshold for configs that send to people (services/audience-gate.ts, #3080).
   'audience_confirm',
   // "This is staging" sign-in notice (services/environment-notice.ts).
-  'environment_notice'
+  'environment_notice',
+  // Config changed here, not from promotion (services/config-drift/store.ts): refuse, baseline.
+  'config_drift'
 ] as const
 
 export function withoutReservedKeys(map: Record<string, unknown>): Record<string, unknown> {

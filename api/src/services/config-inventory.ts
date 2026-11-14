@@ -690,6 +690,25 @@ export interface ConfigSnapshot {
   tables: Record<string, Record<string, SnapshotRow>>
   /** Tables that were requested but could not be read, with the reason. */
   errors: Record<string, string>
+  /**
+   * A partial file (services/config-drift "Copy to dev"): it carries only the rows changed on the
+   * instance it came from, so a compare must not read every other row as "only here".
+   */
+  bundle?: {
+    kind: 'changed-here'
+    items: Array<{
+      id: string
+      table: string
+      key: string
+      label: string | null
+      kind: string
+      at: string | null
+      who: string | null
+    }>
+    /** Rows removed there: an upsert cannot carry a removal. */
+    removed: Array<{ table: string; key: string; label: string | null }>
+    baseline_snapshot_id: number | null
+  }
   /** Stored restore points only (#2803): why this one was taken. */
   restore_point?: {
     trigger: string
