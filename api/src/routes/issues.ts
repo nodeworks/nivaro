@@ -5,10 +5,12 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { CLIENT_HEADER, parseClientHeader } from '../services/client-version.js'
-import { trackError } from '../services/error-tracking.js'
+import { crashKind, fromBrowserExtension } from '../services/crash-signature.js'
+import { listCrashes, recordCrash } from '../services/crash-tracking.js'
 import { readOne } from '../services/items.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
+import { normalizeApp, normalizeScreenPath } from '../services/traffic-client-facts.js'
 
 const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'] as const
@@ -128,17 +130,26 @@ async function notifyAssignment(
 }
 
 export async function issuesRoutes(app: FastifyInstance) {
-  // POST /issues/client — React error boundary reports. Deduped by
-  // fingerprint via trackError; severity fixed to 'high'.
+  // POST /issues/client — front-end crash reports (error boundaries, window errors, unhandled
+  // rejections; packages/shared lib/crash-report.ts). Grouped by signature + screen + release
+  // into one issue (services/crash-tracking.ts); severity fixed to 'high'.
   app.post('/client', { preHandler: requireAuth }, async (req, reply) => {
-    const body = req.body as {
+    const body = (req.body ?? {}) as {
       message?: string
+      name?: string
       stack?: string
       url?: string
+      kind?: string
+      app?: string
+      screen?: string
+      release?: string
       recording_id?: string
       recording_offset_ms?: number
     }
-    if (!body.message?.trim()) return reply.code(400).send({ error: 'message is required' })
+    if (typeof body.message !== 'string' || !body.message.trim())
+      return reply.code(400).send({ error: 'message is required' })
+    // A browser extension's own script failing is not the app's crash.
+    if (fromBrowserExtension(body.stack)) return reply.code(204).send()
     // #2840 — a crash in a tab running browser chaos mode was provoked on purpose (the client
     // marks its error reports while chaos is on): not a bug to file.
     if (req.headers['x-nivaro-client-chaos']) return reply.code(204).send()
@@ -161,13 +172,31 @@ export async function issuesRoutes(app: FastifyInstance) {
       Number.isFinite(Number(body.recording_offset_ms))
         ? Math.max(0, Math.floor(Number(body.recording_offset_ms)))
         : null
-    const issueId = await trackError({
-      source: 'client',
-      route: String(body.url ?? 'unknown').slice(0, 300),
+    // Which front end, screen and build: the report's own fields first (the tab may have moved
+    // on), the page-context headers every request carries next. All untrusted, all normalised.
+    const header = (name: string) => {
+      const v = req.headers[name]
+      return Array.isArray(v) ? v[0] : v
+    }
+    const app = normalizeApp(body.app) ?? normalizeApp(header('x-nivaro-app')) ?? 'app'
+    const screen =
+      normalizeScreenPath(body.screen) ??
+      normalizeScreenPath(header('x-nivaro-page')) ??
+      normalizeScreenPath(body.url) ??
+      'unknown'
+    const bodyRelease =
+      typeof body.release === 'string' ? body.release.replace(/[^\w.+@-]/g, '').slice(0, 60) : ''
+    const release =
+      parseClientHeader(req.headers[CLIENT_HEADER])?.build ?? (bodyRelease || 'unknown')
+    const { issueId } = await recordCrash({
+      app,
+      release,
+      kind: crashKind(body.kind),
+      screen,
+      name: typeof body.name === 'string' ? body.name : null,
       message: body.message,
-      stack: body.stack ?? null,
+      stack: typeof body.stack === 'string' ? body.stack : null,
       userId: req.user?.id ?? null,
-      build: parseClientHeader(req.headers[CLIENT_HEADER])?.build ?? null,
       recordingId,
       recordingOffsetMs
     })
@@ -179,6 +208,23 @@ export async function issuesRoutes(app: FastifyInstance) {
       message: body.message.trim().slice(0, 160)
     }
     return reply.code(204).send()
+  })
+
+  // GET /issues/crashes?days=14&release=&screen=&app=&status= — front-end crashes grouped by
+  // signature + screen + release, with people affected and replay links. Admin only: it names
+  // people and carries stacks.
+  app.get('/crashes', { preHandler: requireAdmin }, async (req, reply) => {
+    const q = req.query as Record<string, string | undefined>
+    const text = (v: string | undefined, max = 200) =>
+      typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null
+    const data = await listCrashes({
+      days: Number(q.days) || 14,
+      release: text(q.release, 60),
+      screen: text(q.screen),
+      app: text(q.app, 30),
+      status: text(q.status, 20)
+    })
+    return reply.send({ data })
   })
 
   // GET /issues?collection=&item=&status=&severity=&assigned_to=me

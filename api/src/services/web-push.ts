@@ -135,7 +135,8 @@ const ICON_ALIASES: Record<string, (typeof PUSH_ICON_CATEGORIES)[number]> = {
   audit: 'security',
   access: 'security',
   report: 'reports',
-  integration: 'integrations'
+  integration: 'integrations',
+  crashes: 'alerts'
 }
 
 /** The icon file key for a category + lane, e.g. `sla-needs`, `default`. */

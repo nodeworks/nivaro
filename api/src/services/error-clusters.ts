@@ -43,7 +43,7 @@ const FRAME_RE = /^\s*at\s+(?:(.+?)\s+\()?(.+?):(\d+)(?::(\d+))?\)?\s*$/
 const FF_FRAME_RE = /^\s*([^@\s]*)@(.+?):(\d+)(?::(\d+))?\s*$/
 
 /** A file path without origin, query, build hash or line numbers: "assets/index.js". */
-function cleanFile(file: string): string {
+export function cleanFile(file: string): string {
   let f = file.replace(/^webpack:\/\/\/?|^file:\/\//, '')
   f = f.replace(/^https?:\/\/[^/]+\//, '')
   f = f.split('?')[0]
@@ -176,7 +176,9 @@ export function messageOfIssue(issue: Pick<ClusterIssue, 'title' | 'source'>): {
 export function stackOfDetails(details: string | null | undefined): string | null {
   const d = String(details ?? '')
   if (!d) return null
-  const lines = d.split('\n').filter((l) => !/^(Route|Request context):/.test(l))
+  const lines = d
+    .split('\n')
+    .filter((l) => !/^(Route|Request context|Crash|Frame|Alerted):/.test(l))
   return lines.join('\n').trim() || null
 }
 

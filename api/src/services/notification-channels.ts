@@ -154,6 +154,7 @@ export const NOTIFY_CATEGORY_LABELS: Record<NotifyCategory, string> = {
   system: 'System',
   huddle: 'Huddles and calls',
   chaos: 'Chaos drills and game days',
+  crashes: 'App crashes',
   other: 'Everything else'
 }
 

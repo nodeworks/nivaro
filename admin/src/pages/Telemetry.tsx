@@ -22,6 +22,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn, formatDate, formatNumber, formatRelative } from '@/lib/utils'
 import { AskTelemetry } from './telemetry/AskTelemetry'
+import { CrashesSince } from './telemetry/CrashesSince'
 import { RecoveryPanel } from './telemetry/Recovery'
 import { SlowestRequests } from './telemetry/SlowestRequests'
 import { Card, Dot, PartError, TONE, type Tone } from './telemetry/ui'
@@ -741,6 +742,8 @@ export function TelemetryPage() {
             </div>
 
             <RecoveryPanel />
+
+            <CrashesSince />
 
             {s.settings.store.configured && <SlowestRequests grafanaUrl={s.settings.grafana_url} />}
 

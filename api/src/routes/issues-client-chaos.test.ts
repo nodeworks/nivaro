@@ -51,4 +51,48 @@ describe('POST /issues/client and browser chaos mode (#2840)', () => {
     expect(trackError).not.toHaveBeenCalled()
     await f.close()
   })
+
+  it('groups by the screen pattern, app and release the tab reports', async () => {
+    const f = await app()
+    const res = await f.inject({
+      method: 'POST',
+      url: '/issues/client',
+      headers: {
+        'x-nivaro-app': 'efp-new',
+        'x-nivaro-page': '/queues/:id',
+        'x-nivaro-client': 'build=0.3.112; tab=abc'
+      },
+      payload: {
+        message: 'bad "Jane Smith" value',
+        name: 'TypeError',
+        kind: 'rejection',
+        url: '/queues/4471?token=x',
+        stack: 'TypeError: bad\n    at Kt (https://h/assets/Queue-B3kF9a_x.js:1:2)'
+      }
+    })
+    expect(res.statusCode).toBe(204)
+    const call = (trackError.mock.calls[0] as unknown as [Record<string, unknown>])[0]
+    expect(call).toMatchObject({
+      source: 'client',
+      route: '/queues/:id',
+      build: '0.3.112',
+      message: 'TypeError: bad "…" value',
+      userId: 'u1'
+    })
+    expect(String(call.fingerprint)).toHaveLength(64)
+    expect((call.detailsHeader as string[])[0]).toMatch(/^Crash: app=efp-new; release=0.3.112; kind=rejection;/)
+    await f.close()
+  })
+
+  it('never files a browser extension failing in its own script', async () => {
+    const f = await app()
+    const res = await f.inject({
+      method: 'POST',
+      url: '/issues/client',
+      payload: { message: 'x', stack: 'TypeError: x\n    at chrome-extension://abc/c.js:1:1' }
+    })
+    expect(res.statusCode).toBe(204)
+    expect(trackError).not.toHaveBeenCalled()
+    await f.close()
+  })
 })

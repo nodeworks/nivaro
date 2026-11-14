@@ -6,34 +6,18 @@ import {
   useTopicPresence
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  AlertOctagon,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  ChevronsUpDown,
-  PlayCircle,
-  Plus,
-  X
-} from 'lucide-react'
+import { AlertOctagon, ChevronDown, ChevronRight, PlayCircle, Plus, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { toast } from 'sonner'
+import { CrashesView } from '@/components/crashes-view'
 import { ExplainButton } from '@/components/explain-button'
+import { MonCombobox } from '@/components/filter-combobox'
 import { IssueComments } from '@/components/issue-comments'
 import { IssueGroupsView } from '@/components/issue-groups-view'
 import { Button } from '@/components/ui/button'
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList
-} from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
@@ -132,71 +116,6 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 // ─── Combobox (shadcn Popover + Command) ─────────────────────────────────────
-
-function MonCombobox({
-  value,
-  onChange,
-  options,
-  placeholder,
-  className
-}: {
-  value: string
-  onChange: (v: string) => void
-  options: { value: string; label: string }[]
-  placeholder?: string
-  className?: string
-}) {
-  const [open, setOpen] = useState(false)
-  const selected = options.find((o) => o.value === value)
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant='outline'
-          role='combobox'
-          aria-expanded={open}
-          className={cn('h-8 justify-between px-2 text-[12px] font-normal', className)}
-        >
-          <span className={cn('truncate', !selected && 'text-muted-foreground')}>
-            {selected ? selected.label : (placeholder ?? 'Select…')}
-          </span>
-          <ChevronsUpDown className='ml-1 h-3 w-3 shrink-0 opacity-50' />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className='w-[220px] p-0' align='start'>
-        <Command>
-          <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
-          <CommandList>
-            <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
-              No results
-            </CommandEmpty>
-            <CommandGroup>
-              {options.map((opt) => (
-                <CommandItem
-                  key={opt.value}
-                  value={opt.value}
-                  onSelect={(current) => {
-                    onChange(current === value ? '' : current)
-                    setOpen(false)
-                  }}
-                  className='text-[12px]'
-                >
-                  <Check
-                    className={cn(
-                      'mr-2 h-3 w-3',
-                      value === opt.value ? 'opacity-100' : 'opacity-0'
-                    )}
-                  />
-                  {opt.label}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  )
-}
 
 // ─── Create panel ────────────────────────────────────────────────────────────
 
@@ -656,7 +575,10 @@ export function IssuesPage() {
   const [sourceFilter, setSourceFilter] = useState('')
   const [creating, setCreating] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
-  const [view, setView] = useState<'list' | 'grouped'>('list')
+  // ?view=crashes opens the Crashes tab (the crash alert's and the Telemetry strip's link).
+  const [view, setView] = useState<'list' | 'grouped' | 'crashes'>(() =>
+    new URLSearchParams(window.location.search).get('view') === 'crashes' ? 'crashes' : 'list'
+  )
   const { user: me } = useAuth()
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
@@ -830,7 +752,7 @@ export function IssuesPage() {
         )}
         {me?.is_admin && (
           <span className='ml-auto flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
-            {(['list', 'grouped'] as const).map((v) => (
+            {(['list', 'grouped', 'crashes'] as const).map((v) => (
               <button
                 key={v}
                 type='button'
@@ -842,7 +764,7 @@ export function IssuesPage() {
                     : 'rounded px-2 py-0.5 text-[11px] font-medium text-slate-400 hover:text-slate-600 dark:hover:text-muted-foreground'
                 }
               >
-                {v === 'list' ? 'List' : 'Grouped'}
+                {v === 'list' ? 'List' : v === 'grouped' ? 'Grouped' : 'Crashes'}
               </button>
             ))}
           </span>
@@ -925,7 +847,18 @@ export function IssuesPage() {
       )}
       {/* Table */}
       <div className='flex-1 overflow-y-auto'>
-        {view === 'grouped' && me?.is_admin ? (
+        {view === 'crashes' && me?.is_admin ? (
+          <CrashesView
+            onOpen={(id) => {
+              setStatusFilter('')
+              setSeverityFilter('')
+              setCollectionFilter('')
+              setSourceFilter('')
+              setExpandedId(id)
+              setView('list')
+            }}
+          />
+        ) : view === 'grouped' && me?.is_admin ? (
           <IssueGroupsView
             onOpen={(id) => {
               setStatusFilter('')
