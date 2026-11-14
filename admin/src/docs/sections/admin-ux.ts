@@ -950,6 +950,15 @@ export const adminUxListSignals: DocSection = {
       type: 'note',
       text: 'Only an administrator can delete a collection or role default view, even when someone else owns it (`DELETE /api/saved-views/:id` answers 403 `DEFAULT_VIEW_ADMIN_ONLY`; the ✕ is hidden for everyone else). Every view delete takes two presses.'
     },
+    { type: 'h2', id: 'list-signals-heavy-columns', text: 'Heavy list columns' },
+    {
+      type: 'p',
+      text: 'A "link to many" column (O2M or M2M) lists every linked record in each row. When records link thousands of rows each — a unit type with 2,341 units — the column is slow to read and says nothing. Data Model → the collection → Settings shows a **Heavy columns on this list** card when the list opens on such a column (the collection default view, else the first 7 visible fields, and every role default view). One click creates a shared default view without it, or removes it from the default view that shows it; labels, pins and widths of the other columns are kept. People can still add the column to their own views.'
+    },
+    {
+      type: 'p',
+      text: 'Heavy = more than 20 linked rows per record on average, or more than 200 on one record. Each relation is measured with one GROUP BY (time-boxed, behind the heavy-read gate, cached an hour; Check again re-measures). Administrators also see a **Heavy list** badge on the collection in the Collections directory and a note in its hover card. API: `GET /api/collections/:collection/list-weight` (`?fresh=1`) and `GET /api/collections/list-weight` (every flagged collection), administrators only.'
+    },
     { type: 'h2', id: 'list-signals-tree', text: 'Tree view and hierarchy scope' },
     {
       type: 'p',

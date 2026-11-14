@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Code2,
   Download,
   EyeOff,
@@ -30,6 +31,7 @@ import type {
   CollectionStat,
   Density,
   FolderOption,
+  HeavyListFlag,
   RowMenuLink
 } from './types'
 
@@ -105,10 +107,31 @@ interface BadgeSpec {
   label: string
   icon: LucideIcon
   tip: string
+  /** A warning (amber) rather than a plain fact. */
+  warn?: boolean
 }
 
-function badgesFor(col: Collection, stat: CollectionStat | undefined): BadgeSpec[] {
+/** "Units (up to 2,341 per record)" — the heavy columns a list opens on. */
+export function heavyListTip(flag: HeavyListFlag): string {
+  const parts = flag.fields.map((f) => `${f.label} (up to ${formatNumber(f.max)} per record)`)
+  return `The list opens on ${parts.join(' and ')} — slow and unreadable. Fix it in Data model → Collection Browser.`
+}
+
+function badgesFor(
+  col: Collection,
+  stat: CollectionStat | undefined,
+  heavyList: HeavyListFlag | undefined
+): BadgeSpec[] {
   const out: BadgeSpec[] = []
+  // First, so the 3-badge cap never hides it.
+  if (heavyList && heavyList.fields.length > 0)
+    out.push({
+      key: 'heavy-list',
+      label: 'Heavy list',
+      icon: AlertTriangle,
+      tip: heavyListTip(heavyList),
+      warn: true
+    })
   // A link table is its own kind (its own switch), whatever its hidden flag says.
   if (col.hidden && !stat?.link)
     out.push({ key: 'hidden', label: 'Hidden', icon: EyeOff, tip: 'Hidden from navigation' })
@@ -147,7 +170,13 @@ function Badge({ spec }: { spec: BadgeSpec }) {
   return (
     <span
       data-tip={spec.tip}
-      className='inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-px text-[10px] font-medium bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-400'
+      data-badge={spec.key}
+      className={cn(
+        'inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-px text-[10px] font-medium',
+        spec.warn
+          ? 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200 dark:bg-amber-400/10 dark:text-amber-300 dark:ring-amber-400/25'
+          : 'bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-400'
+      )}
     >
       <Icon className='h-[11px] w-[11px] shrink-0' aria-hidden='true' />
       {spec.label}
@@ -280,6 +309,7 @@ function isFocusVisible(el: Element): boolean {
 export function CollectionRow({
   col,
   stat,
+  heavyList,
   density,
   favorite,
   onToggleFavorite,
@@ -304,6 +334,8 @@ export function CollectionRow({
   col: Collection
   /** undefined for non-admins / still loading → no counts or stat badges. */
   stat?: CollectionStat
+  /** Admins only: the list opens on a heavy "link to many" column (amber badge + card note). */
+  heavyList?: HeavyListFlag
   density: Density
   /** The reader's own favorite (sidebar favorites) — the star. */
   favorite: boolean
@@ -345,7 +377,7 @@ export function CollectionRow({
 
   const at = matchIndex(name, highlight)
   const showKey = hot || at >= 0
-  const badges = badgesFor(col, stat)
+  const badges = badgesFor(col, stat, isAdmin ? heavyList : undefined)
 
   const onBlur = (e: FocusEvent<HTMLDivElement>) => {
     if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHot(false)
@@ -419,6 +451,7 @@ export function CollectionRow({
               <CollectionHoverCard
                 collection={name}
                 title={displayName}
+                heavyList={heavyList}
                 open={card.open}
                 onClose={card.close}
                 onCardEnter={card.cancel}

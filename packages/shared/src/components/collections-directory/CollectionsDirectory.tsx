@@ -27,6 +27,7 @@ import {
   recordCollectionOpen,
   useCollectionUsage,
   useDirectoryCollections,
+  useHeavyListFlags,
   useNavFavoriteCollections,
   useOverviewStats,
   writeLocal
@@ -314,6 +315,7 @@ export function CollectionsDirectory({
   }, [data])
 
   const { data: stats } = useOverviewStats(isAdmin)
+  const { data: heavyLists } = useHeavyListFlags(isAdmin)
   const usage = useCollectionUsage()
   const ownFavorites = useNavFavoriteCollections(!hostFavorites)
   const { favorite, toggle: toggleFavorite } = hostFavorites ?? ownFavorites
@@ -432,6 +434,7 @@ export function CollectionsDirectory({
     <CollectionRow
       col={col}
       stat={stats?.[col.collection] as CollectionStat | undefined}
+      heavyList={isAdmin ? heavyLists?.[col.collection] : undefined}
       density={state.density}
       favorite={favorite.has(col.collection)}
       onToggleFavorite={() => void toggleFavorite(col.collection, label(col))}

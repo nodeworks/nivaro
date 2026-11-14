@@ -8,6 +8,7 @@ import { logActivity } from '../services/activity.js'
 import * as svc from '../services/collections.js'
 import { getCollectionSummary, getOverviewStats } from '../services/collections-overview.js'
 import { forgetEditLockPlan } from '../services/edit-lock.js'
+import { getHeavyListFlags, getListWeight } from '../services/list-weight.js'
 import { parseSummaryModeRules, validateSummaryModeRules } from '../services/summary-mode.js'
 import type { CMSCollection, CMSField } from '../types.js'
 
@@ -501,6 +502,25 @@ export async function collectionsRoutes(app: FastifyInstance) {
     const { collection } = req.params as { collection: string }
     if (!(await svc.getCollection(collection))) return reply.code(404).send({ error: 'Not found' })
     return reply.send({ data: await getCollectionSummary(collection) })
+  })
+
+  // Heavy list columns (2026-11-13): O2M / M2M fields whose records link so many rows that a
+  // list column showing them is slow and unreadable, and whether the list opens on them.
+  // Admin only; measured behind the read gate, cached an hour (services/list-weight.ts).
+  app.get('/list-weight', async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+    const { data, partial } = await getHeavyListFlags(req.user?.id ?? null)
+    return reply.send({ data, partial })
+  })
+
+  app.get('/:collection/list-weight', async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+    const { collection } = req.params as { collection: string }
+    const { fresh } = req.query as { fresh?: string }
+    if (!(await svc.getCollection(collection))) return reply.code(404).send({ error: 'Not found' })
+    return reply.send({
+      data: await getListWeight(collection, req.user?.id ?? null, { fresh: fresh === '1' })
+    })
   })
 
   app.get('/:collection/fields', async (req, reply) => {

@@ -177,6 +177,31 @@ describe('CollectionRow', () => {
     expect(queryByText('Hidden')).toBeNull()
   })
 
+  it('shows admins a Heavy list badge first, with the heavy columns in its tip', () => {
+    const { container } = renderRow({
+      col: { ...col, hidden: true, singleton: true },
+      stat: { ...stat, virtual: true },
+      heavyList: { fields: [{ field: 'units', label: 'Units', avg: 2280.6, max: 2341 }] }
+    })
+    const badge = container.querySelector('[data-badge="heavy-list"]')
+    expect(badge?.textContent).toBe('Heavy list')
+    expect(badge?.getAttribute('data-tip')).toContain('Units (up to 2,341 per record)')
+    // First of the badges, so the cap of three never folds it into +N.
+    expect(container.querySelector('[data-badge]')).toBe(badge)
+  })
+
+  it('never shows the Heavy list badge to non-admins', () => {
+    const { container } = renderRow({
+      isAdmin: false,
+      editPath: undefined,
+      menuExtra: undefined,
+      onMove: undefined,
+      heavyList: { fields: [{ field: 'units', label: 'Units', avg: 2280.6, max: 2341 }] }
+    })
+    expect(container.querySelector('[data-badge="heavy-list"]')).toBeNull()
+    expect(queryByText('Heavy list')).toBeNull()
+  })
+
   it('navigates through the host and records the open on click', () => {
     renderRow()
     const link = getByRole('link', /^Purchase order lines/)
