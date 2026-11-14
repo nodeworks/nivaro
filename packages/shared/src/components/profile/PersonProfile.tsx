@@ -30,11 +30,12 @@ import { PersonHeader } from './PersonHeader'
 import { AboutCard, AvailabilityCard, PeopleCard, ResponsibilitiesCard } from './PersonOverview'
 import { PersonWeekCard } from './PersonWeek'
 import { SignedInDevices } from './SignedInDevices'
+import { SlowScreensCard } from './SlowScreensCard'
 import { useInvalidatePerson, usePersonProfile } from './types'
 
 export type PersonProfileTab = 'overview' | 'access' | 'activity' | 'did' | 'tools'
-/** The Activity tab's two views: the cards, or one day on a timeline (#1367). */
-type ActivityView = 'feed' | 'day'
+/** The Activity tab's views: the cards, one day on a timeline (#1367), or their slowest screens. */
+type ActivityView = 'feed' | 'day' | 'speed'
 
 /**
  * Someone else's page. A colleague gets the slim read: who they are, how to
@@ -189,7 +190,8 @@ export function PersonProfile({
               {(
                 [
                   ['feed', 'Feed'],
-                  ['day', 'Day']
+                  ['day', 'Day'],
+                  ['speed', 'Slow screens']
                 ] as Array<[ActivityView, string]>
               ).map(([id, label]) => (
                 <button
@@ -211,6 +213,8 @@ export function PersonProfile({
             </fieldset>
             {activityView === 'day' && isAdmin ? (
               <DayTimelineCard userId={profile.id} />
+            ) : activityView === 'speed' && isAdmin ? (
+              <SlowScreensCard userId={profile.id} name={profile.first_name ?? profile.name} />
             ) : (
               <div className='grid gap-4 lg:grid-cols-2'>
                 <div className='space-y-4'>

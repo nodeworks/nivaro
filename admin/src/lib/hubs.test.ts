@@ -3,6 +3,7 @@ import {
   ACTIVITY_HUB,
   AUTOMATIONS_HUB,
   allowedHubTabs,
+  DATA_INTEGRITY_HUB,
   HUB_PATHS,
   HUB_REDIRECTS,
   HUBS,
@@ -58,5 +59,13 @@ describe('hub registry', () => {
     expect(isPathDisabled('/activity/audit', disabled)).toBe(true)
     expect(isPathDisabled('/reports', disabled)).toBe(false)
     expect(allowedHubTabs(ACTIVITY_HUB, disabled).some((t) => t.path === 'audit')).toBe(false)
+  })
+
+  it('keeps every Data Integrity tab behind the old page path', () => {
+    expect(hubForPath('/data-integrity/orphans')?.tab.label).toBe('Orphans')
+    expect(hubForPath('/data-integrity')?.tab.label).toBe('Form conformance')
+    // A role that hid the old page still has the whole hub hidden.
+    expect(allowedHubTabs(DATA_INTEGRITY_HUB, new Set(['/data-integrity']))).toEqual([])
+    expect(isPathDisabled('/data-integrity/orphans', new Set(['/data-integrity']))).toBe(true)
   })
 })

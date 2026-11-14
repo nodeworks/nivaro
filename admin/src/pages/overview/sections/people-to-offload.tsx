@@ -81,7 +81,7 @@ export function PeopleToOffloadSection({ hideTitle }: SectionProps = {}) {
       id='people-to-offload'
       title='People to offload'
       hideTitle={hideTitle}
-      more={{ label: 'Inactive people', to: '/data-integrity?tab=people' }}
+      more={{ label: 'Inactive people', to: '/data-integrity/people' }}
     >
       {isLoading ? (
         <Surface className='divide-y divide-slate-100 dark:divide-border'>
@@ -109,7 +109,7 @@ export function PeopleToOffloadSection({ hideTitle }: SectionProps = {}) {
           {data.total_people > 5 && (
             <p className='border-t border-slate-100 px-3 py-2 text-[11.5px] text-slate-500 dark:border-border dark:text-slate-400'>
               {data.total_people - 5} more.{' '}
-              <Link to='/data-integrity?tab=people' className='font-medium hover:underline'>
+              <Link to='/data-integrity/people' className='font-medium hover:underline'>
                 See everyone
               </Link>
             </p>

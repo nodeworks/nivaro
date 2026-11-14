@@ -114,7 +114,6 @@ const ErdViewPage = lazy(() => import('@/pages/ErdView').then((m) => ({ default:
 const SchemaGraphPage = lazy(() =>
   import('@/pages/SchemaGraph').then((m) => ({ default: m.SchemaGraphPage }))
 )
-const DataIntegrityPage = lazy(() => import('@/pages/DataIntegrity'))
 const AnnouncementsPage = lazy(() => import('@/pages/Announcements'))
 const MyWorkPage = lazy(() => import('@/pages/MyWork').then((m) => ({ default: m.MyWorkPage })))
 const SupportPage = lazy(() => import('@/pages/Support').then((m) => ({ default: m.SupportPage })))
@@ -479,7 +478,6 @@ export default function App() {
                   <Route path='webhooks/:id' element={<WebhookEditPage />} />
                   <Route path='procedures' element={<ProceduresPage />} />
                   <Route path='custom-queries/:id' element={<CustomQueryEditPage />} />
-                  <Route path='data-integrity' element={<DataIntegrityPage />} />
                   <Route path='announcements' element={<AnnouncementsPage />} />
                   <Route path='my-work' element={<MyWorkPage />} />
                   <Route path='support' element={<SupportPage />} />
@@ -552,7 +550,7 @@ export default function App() {
                   <Route path='command' element={<CommandCenterPage />} />
                   <Route
                     path='data-quality'
-                    element={<Navigate to='/data-integrity?tab=quality' replace />}
+                    element={<Navigate to='/data-integrity/quality' replace />}
                   />
                   <Route path='issues' element={<IssuesPage />} />
                   <Route path='issues/:id' element={<IssuesPage />} />

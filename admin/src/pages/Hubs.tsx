@@ -154,6 +154,12 @@ const SCREENS: Record<string, Screens> = {
     '': lazy(() => import('@/pages/ConfigHealth')),
     review: lazy(() => import('@/pages/ConfigReview')),
     search: lazy(() => import('@/pages/ConfigSearch'))
+  },
+  '/data-integrity': {
+    '': page(() => import('@/pages/DataIntegrity'), 'ConformanceTab'),
+    quality: page(() => import('@/pages/DataIntegrity'), 'QualityTab'),
+    people: page(() => import('@/pages/DataIntegrity'), 'PeopleTab'),
+    orphans: page(() => import('@/pages/data-integrity/Orphans'), 'OrphansTab')
   }
 }
 

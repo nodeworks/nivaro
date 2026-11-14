@@ -10,6 +10,7 @@ import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet'
 import { isSupportContextFile } from './support-context'
+import { TicketSlowScreens } from './TicketSlowScreens'
 import { TicketTraffic } from './TicketTraffic'
 import {
   STATUS_TONE,
@@ -364,6 +365,12 @@ export function TicketDetailSheet({
               </section>
 
               {t.can.work && <TicketTraffic ticketId={t.id} />}
+
+              <TicketSlowScreens
+                userId={t.created_by}
+                name={t.requester_name}
+                text={`${t.title} ${t.description ?? ''}`}
+              />
 
               <section data-ticket-thread>
                 <h3 className='mb-2 text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>

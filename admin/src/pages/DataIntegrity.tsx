@@ -7,87 +7,77 @@ import {
   NivaroProvider,
   QualityRulesView
 } from '@nivaro/shared'
-import { useNavigate, useSearchParams } from 'react-router'
-import { cn } from '@/lib/utils'
+import type { ReactNode } from 'react'
+import { Navigate, useNavigate, useSearchParams } from 'react-router'
+import { HubToolbar } from '@/components/hub-page'
 
-// Data Integrity — one home for "which rows are bad", three lenses:
-// Form conformance (would this record fail its own form today — the shared
-// ConformanceView, embeddable in headless hosts) and Quality rules (the
-// admin-authored not_null/regex/range/unique/formula checks that used to
-// live at /data-quality; that route now redirects here), plus Inactive people
-// (accounts that can no longer act but are still named on live work).
+// Data Integrity hub (lib/hubs.ts DATA_INTEGRITY_HUB) — "which rows are bad", one tab per
+// lens: Form conformance (would this record fail its own form today — the shared
+// ConformanceView, embeddable in headless hosts), Quality rules (admin-authored
+// not_null/regex/range/unique/formula checks; /data-quality redirects here), Inactive people
+// (accounts that can no longer act but are still named on live work) and Orphans (links to
+// records that no longer exist, pages/data-integrity/Orphans.tsx).
 const client = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
-export default function DataIntegrity() {
+function IntegrityProviders({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
-  const [params, setParams] = useSearchParams()
-  const raw = params.get('tab')
-  const tab = raw === 'quality' || raw === 'people' ? raw : 'conformance'
+  return (
+    <NivaroProvider client={client}>
+      <NavigationContext.Provider
+        value={{ navigate: (path) => navigate(path), itemUrl: defaultItemUrl }}
+      >
+        {children}
+      </NavigationContext.Provider>
+    </NivaroProvider>
+  )
+}
 
+/** First tab. Old links (`?tab=quality`, `?tab=people&person=…`, notifications) land on their tab. */
+export function ConformanceTab() {
+  const [params] = useSearchParams()
+  const legacy = params.get('tab')
+  if (legacy === 'quality' || legacy === 'people' || legacy === 'orphans') {
+    const next = new URLSearchParams(params)
+    next.delete('tab')
+    const search = next.toString()
+    return <Navigate to={`/data-integrity/${legacy}${search ? `?${search}` : ''}`} replace />
+  }
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Data Integrity
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              {tab === 'conformance'
-                ? 'Records that no longer satisfy their own field configuration — required fields left empty, validation rules violated, cascade values no longer available.'
-                : tab === 'people'
-                  ? 'Suspended, redacted and placeholder accounts that live work still names — contacts and owners on open records, owner seats, team places, open tasks.'
-                  : 'Admin-authored quality rules (not-null, regex, range, unique, formula) with run history per collection.'}
-            </p>
-          </div>
-          <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
-            {(
-              [
-                { value: 'conformance', label: 'Form conformance' },
-                { value: 'quality', label: 'Quality rules' },
-                { value: 'people', label: 'Inactive people' }
-              ] as const
-            ).map((t) => (
-              <button
-                key={t.value}
-                type='button'
-                onClick={() => setParams(t.value === 'conformance' ? {} : { tab: t.value })}
-                className={cn(
-                  'rounded px-2.5 py-1 text-[12px] font-medium transition-colors',
-                  tab === t.value
-                    ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
-                    : 'text-slate-400 hover:text-slate-600'
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
-          </span>
-        </div>
-      </header>
-      <NivaroProvider client={client}>
-        <NavigationContext.Provider
-          value={{
-            navigate: (path) => navigate(path),
-            itemUrl: defaultItemUrl
+      <HubToolbar description='Records that no longer satisfy their own field configuration — required fields left empty, validation rules violated, cascade values no longer available.' />
+      <IntegrityProviders>
+        <ConformanceView />
+      </IntegrityProviders>
+    </div>
+  )
+}
+
+export function QualityTab() {
+  return (
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar description='Admin-authored quality rules (not-null, regex, range, unique, formula) with run history per collection.' />
+      <IntegrityProviders>
+        <QualityRulesView />
+      </IntegrityProviders>
+    </div>
+  )
+}
+
+export function PeopleTab() {
+  const [params, setParams] = useSearchParams()
+  return (
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar description='Suspended, redacted and placeholder accounts that live work still names — contacts and owners on open records, owner seats, team places, open tasks.' />
+      <IntegrityProviders>
+        <InactiveUserLinksView
+          focusUserId={params.get('person')}
+          onClearFocus={() => {
+            const next = new URLSearchParams(params)
+            next.delete('person')
+            setParams(next, { replace: true })
           }}
-        >
-          {tab === 'conformance' ? (
-            <ConformanceView />
-          ) : tab === 'people' ? (
-            <InactiveUserLinksView
-              focusUserId={params.get('person')}
-              onClearFocus={() => {
-                const next = new URLSearchParams(params)
-                next.delete('person')
-                setParams(next, { replace: true })
-              }}
-            />
-          ) : (
-            <QualityRulesView />
-          )}
-        </NavigationContext.Provider>
-      </NivaroProvider>
+        />
+      </IntegrityProviders>
     </div>
   )
 }

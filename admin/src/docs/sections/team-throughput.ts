@@ -202,6 +202,20 @@ export const peoplePageGuide: DocSection = {
                   "capped": ["pages", ...] } }
 → 400 date must be YYYY-MM-DD / a real calendar day; tz_offset must be whole minutes (clamped to ±14h)`
     },
+    { type: 'h2', id: 'people-slow-screens', text: 'Slow screens' },
+    {
+      type: 'p',
+      text: 'Activity tab → Slow screens (administrators): the person\'s own slowest pages over the last 7 or 30 days — how often they opened each, median and p95 time, the worst, and the browsers and screen sizes they used. Expand a page for the slowest calls made while it loaded (their requests in the first seconds of their most recent visits to it), their slowest visits with browser and screen, and a Replay link when a session recording was running at that moment. A full load counts until its largest paint; a move inside the app until the new page settles. Browser timings and the request log are kept 14 days, so 30 days shows what is left. On a support ticket an administrator sees the same card for the requester: open at once when the ticket talks about slowness ("slow", "takes forever", "spinning"…), otherwise one press away. Read-only; the request log is read with NOLOCK and only for the moments those pages were loading.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/slow-screens/:userId?days=7|30      (admin)
+→ 200 { "data": { "days", "timing_days", "samples", "journeys", "no_timings",
+                  "devices": { "browsers": [{ "name", "n" }], "screens": [{ "name", "n" }] },
+                  "pages": [{ "app", "page", "n", "loads", "moves", "median_ms", "p95_ms", "worst_ms", "visits",
+                              "devices": [...], "calls": [{ "method", "path", "n", "visits", "median_ms", "worst_ms", "errors" }],
+                              "slow_visits": [{ "at", "ms", "kind", "browser", "screen", "replay": { "recording_id", "offset_ms" } | null }] }] } }`
+    },
     { type: 'h2', id: 'people-bulk', text: 'Users list bulk actions' },
     {
       type: 'p',
