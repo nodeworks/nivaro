@@ -21,6 +21,7 @@ import {
   Fragment,
   type ReactNode,
   useCallback,
+  useDeferredValue,
   useEffect,
   useId,
   useMemo,
@@ -177,6 +178,21 @@ import {
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
 import { nameFieldControl, primaryControl } from './field-a11y'
 import { GridBulkEditDialog } from './GridBulkEditDialog'
+import {
+  cellSearchTexts,
+  extraSearchRows,
+  GRID_READ_LIMIT,
+  GRID_SEARCH_HIGHLIGHT_CSS,
+  GRID_SEARCH_MIN_ROWS,
+  GridSearchBox,
+  pendingRowVisibility,
+  searchWords,
+  textMatchesWords,
+  useDebouncedValue,
+  useGridChildTotal,
+  useGridSearchHighlight,
+  useGridServerSearch
+} from './grid-search'
 import {
   applyDisplayTemplate,
   EMPTY_NESTED_OPS,
@@ -2513,7 +2529,7 @@ export function InlineTableField({
                 ? { _and: [{ [manyField]: { _eq: parentId } }, rowFilterClause] }
                 : { [manyField]: { _eq: parentId } }
             ),
-            limit: 200
+            limit: GRID_READ_LIMIT
           })
         )
         .then((r) => r.data ?? []),
@@ -2749,6 +2765,78 @@ export function InlineTableField({
       ? staging.getPendingDeletes(relatedCollection, manyField)
       : new Set<string>()
 
+  // ── Search inside the grid (2026-11-13, grid-search.tsx) ──────────────────
+  // Filters the rows by the text their visible cells show; a grid holding a
+  // partial set (GRID_READ_LIMIT) also asks the server — the list search, as
+  // the viewer — and the children it finds join the grid while the search is
+  // on (they are real rows: editable, labelled, mid-air-guarded like the rest,
+  // but never counted in the grid's totals or "all rows" actions).
+  const [gridSearch, setGridSearch] = useState('')
+  const gridSearchInputRef = useRef<HTMLInputElement | null>(null)
+  const deferredGridSearch = useDeferredValue(gridSearch)
+  const debouncedGridSearch = useDebouncedValue(gridSearch.trim(), 300)
+  const gridSearchWords = useMemo(() => searchWords(deferredGridSearch), [deferredGridSearch])
+  const gridPartial = !isNew && rawRows.length >= GRID_READ_LIMIT
+  const gridBaseFilter = useMemo(
+    () =>
+      rowFilterClause
+        ? { _and: [{ [manyField]: { _eq: parentId } }, rowFilterClause] }
+        : { [manyField]: { _eq: parentId } },
+    [rowFilterClause, manyField, parentId]
+  )
+  const serverSearch = useGridServerSearch({
+    client,
+    collection: relatedCollection,
+    filter: gridBaseFilter,
+    query: debouncedGridSearch,
+    enabled: gridPartial,
+    version: rowsUpdatedAt
+  })
+  const gridChildTotal = useGridChildTotal({
+    client,
+    collection: relatedCollection,
+    filter: gridBaseFilter,
+    enabled: gridPartial,
+    version: rowsUpdatedAt
+  })
+  // A found row the person is editing (or has a staged edit on) stays in the
+  // grid after the search moves on, so the edit is never orphaned off screen.
+  const heldSearchRowsRef = useRef(new Map<string, Record<string, unknown>>())
+  const pendingEditKeysSig = [...pendingEdits.keys()].sort().join(',')
+  const editingRowId = editState?.rowId ?? null
+  const searchExtraSig = (serverSearch.rows ?? []).map((r) => String(r.id)).join(',')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the id signatures stand in for the arrays/maps they summarise
+  const searchExtraRows = useMemo(() => {
+    const held = heldSearchRowsRef.current
+    for (const id of [...held.keys()])
+      if (id !== editingRowId && !pendingEdits.has(id)) held.delete(id)
+    for (const r of serverSearch.rows ?? []) {
+      const id = String(r.id)
+      if (id === editingRowId || pendingEdits.has(id)) held.set(id, r)
+    }
+    return extraSearchRows(rawRows, serverSearch.rows, [...held.values()])
+  }, [rawRows, searchExtraSig, editingRowId, pendingEditKeysSig])
+  const searchExtraIds = useMemo(
+    () => new Set(searchExtraRows.map((r) => String(r.id))),
+    [searchExtraRows]
+  )
+  const loadedRows = useMemo(
+    () => (searchExtraRows.length ? [...rawRows, ...searchExtraRows] : rawRows),
+    [rawRows, searchExtraRows]
+  )
+  useEffect(() => {
+    if (!isNew && !readOnly && searchExtraRows.length) rowBases.noteRows(searchExtraRows)
+  }, [searchExtraRows, rowBases, isNew, readOnly])
+  // Adding a row KEEPS the search: unsaved rows always stay in view, and a
+  // line this grid saves (live mode) while the search is on stays shown until
+  // the search changes — the person sees what they just added.
+  const searchKeepIdsRef = useRef(new Set<string>())
+  const prevRawIdsRef = useRef<Set<string> | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the search text; the set itself is a ref
+  useEffect(() => {
+    searchKeepIdsRef.current = new Set()
+  }, [deferredGridSearch])
+
   // Relation-path columns ('purchase_order.workflow.workflow_id'): read-only
   // values resolved server-side in one bulk call and merged into each row for
   // display. Never editable, never saved.
@@ -2923,7 +3011,7 @@ export function InlineTableField({
       const s = v == null ? '' : String(v)
       if (s && !s.startsWith('pending:') && s !== 'new') ids.add(s)
     }
-    for (const r of rawRows) add(r.id)
+    for (const r of loadedRows) add(r.id)
     for (const r of pendingRows) add((r as Record<string, unknown>).id)
     if (activeView !== 'original') {
       const entry = addendumO2MEntries.find((e) => e.addendumId === activeView)
@@ -2931,7 +3019,7 @@ export function InlineTableField({
     }
     return [...ids]
     // biome-ignore lint/correctness/useExhaustiveDependencies: pendingRows is a fresh array per render — its id list is the identity that matters here
-  }, [rawRows, pendingIdsKey, activeView, addendumO2MEntries])
+  }, [loadedRows, pendingIdsKey, activeView, addendumO2MEntries])
   const { data: resolvedPathData } = useQuery<{
     rows: Record<string, Record<string, { value: string; ids: string[] }>>
     targets: Record<string, string | null>
@@ -2973,8 +3061,8 @@ export function InlineTableField({
 
   const rows = useMemo(() => {
     let sorted = resolvedPathRows
-      ? rawRows.map((r) => ({ ...r, ...(resolvedPathRows[String(r.id)] ?? {}) }))
-      : rawRows
+      ? loadedRows.map((r) => ({ ...r, ...(resolvedPathRows[String(r.id)] ?? {}) }))
+      : loadedRows
     if (rowOrderField) {
       const getOrder = (r: Record<string, unknown>): number => {
         const pe = isPendingMode ? pendingEdits.get(String(r.id)) : undefined
@@ -3013,7 +3101,7 @@ export function InlineTableField({
     }
     return sorted
   }, [
-    rawRows,
+    loadedRows,
     resolvedPathRows,
     rowOrderField,
     isPendingMode,
@@ -3222,7 +3310,8 @@ export function InlineTableField({
   const effectiveRowsForRollup = useMemo(() => {
     const base = [
       ...(rows ?? [])
-        .filter((r) => !pendingDeletes.has(String(r.id)))
+        // Rows a grid search brought in are never part of the grid's figures.
+        .filter((r) => !pendingDeletes.has(String(r.id)) && !searchExtraIds.has(String(r.id)))
         .map((r) => {
           const rid = String(r.id)
           const merged = pendingEdits.has(rid) ? { ...r, ...pendingEdits.get(rid) } : r
@@ -3246,7 +3335,7 @@ export function InlineTableField({
     }
     return base
     // biome-ignore lint/correctness/useExhaustiveDependencies: staged state rides in via stagedSignature; the getters return fresh objects each render
-  }, [rows, stagedSignature, editState])
+  }, [rows, stagedSignature, editState, searchExtraIds])
 
   // Addendum view: the rows on screen are the addendum's PROPOSED set, so the
   // live total must sum those — publishing the record's current rows here made
@@ -3265,10 +3354,12 @@ export function InlineTableField({
     // biome-ignore lint/correctness/useExhaustiveDependencies: applyComputedFields is a stable closure over field config
   }, [activeView, addendumO2MEntries, effectiveRowsForRollup])
 
-  // The grid fetches at most O2M_ROW_LIMIT rows. Past that it holds a PARTIAL
+  // The grid fetches at most GRID_READ_LIMIT rows. Past that it holds a PARTIAL
   // set, and a total summed from it would be confidently wrong — worse than the
-  // stored figure it would replace. Withhold rows instead.
-  const rowsTruncated = rawRows.length >= O2M_ROW_LIMIT
+  // stored figure it would replace. Withhold rows instead. (This compared with
+  // O2M_ROW_LIMIT, 1000, which the 200-row read never reached — so a 2,000-row
+  // grid published the sum of its first 200 rows.)
+  const rowsTruncated = rawRows.length >= GRID_READ_LIMIT
 
   // Token resolver for `options.stats` / `options.sum_cap` expressions:
   // `$parent.<field>` reads the parent record's draft, `$sum.<col>` sums the
@@ -3890,9 +3981,12 @@ export function InlineTableField({
 
   const [renderCap, setRenderCap] = useState(150)
   const renderSentinelRef = useRef<HTMLTableRowElement | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-observe whenever the sentinel may have (re)mounted — the list, the window or the search moved
   useEffect(() => {
+    // The sentinel row renders only while more rows wait (the whole list, or a
+    // search's matches) — its presence is the condition.
     const el = renderSentinelRef.current
-    if (!el || rows.length <= renderCap) return
+    if (!el) return
     const obs = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) setRenderCap((c) => c + 150)
@@ -3901,7 +3995,7 @@ export function InlineTableField({
     )
     obs.observe(el)
     return () => obs.disconnect()
-  }, [rows.length, renderCap])
+  }, [rows.length, renderCap, deferredGridSearch])
   const rowIdsHash = visibleRowIds.join(',')
   const rowCommentCounts = useRowCommentCounts(
     relatedCollection,
@@ -4296,6 +4390,18 @@ export function InlineTableField({
   const LOCAL_WRITE_GRACE_MS = 10_000
   const stampLocalWrite = (id: string | number) =>
     localWritesRef.current.set(String(id), Date.now())
+  // Grid search: a line this tab creates while a search is on is kept in view
+  // (searchKeepIdsRef, reset when the search changes) — rows that arrive in
+  // the read right after a local create are this person's new lines.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per rows read; the rest are refs
+  useEffect(() => {
+    const ids = new Set(rawRows.map((r) => String(r.id)))
+    const prev = prevRawIdsRef.current
+    prevRawIdsRef.current = ids
+    if (!prev || !gridSearch.trim()) return
+    if (Date.now() - localCreateAtRef.current > LOCAL_WRITE_GRACE_MS) return
+    for (const id of ids) if (!prev.has(id)) searchKeepIdsRef.current.add(id)
+  }, [rowsUpdatedAt])
   // A record-level Fix (integrity banner) writes lines through the API, not
   // this grid: stamp them as this tab's own (army6 M5 — the grid said "changed
   // by others · changed by <the person who clicked Fix>").
@@ -6865,6 +6971,22 @@ export function InlineTableField({
    *  by Bernard's 8, "Changes saved", nothing said to either. */
   const bulkBasesRef = useRef<Map<string, Promise<number | null>>>(new Map())
 
+  // Grid search marks: every match inside the shown rows' DATA cells (the
+  // leading select / drag / # / status cells and the actions cell skipped;
+  // the row being edited is inputs, never marked).
+  const gridSearchKey = useId()
+  const gridLeadCells =
+    (selectMode && activeView === 'original' && !readOnly ? 1 : 0) +
+    (enableReorder && (rowOrderField || isNew || isPendingMode) ? 1 : 0) +
+    (showLineNumbers ? 1 : 0) +
+    (isNew || isPendingMode ? 1 : 0)
+  useGridSearchHighlight(
+    gridSearchKey,
+    tableWrapRef,
+    activeView === 'original' ? gridSearchWords : [],
+    `tr[data-o2m-row]:not([data-o2m-editing]) > td:nth-child(n+${gridLeadCells + 1}):not(:last-child)`
+  )
+
   if (colsLoading || (!isNew && rowsLoading))
     return (
       <div className='py-3 text-center text-[12px] text-slate-400'>
@@ -6928,16 +7050,116 @@ export function InlineTableField({
     row: Record<string, unknown>
     idx: number
   }
+
+  // ── Grid search: which rows show ─────────────────────────────────────────
+  // A row matches when every word appears in the text its visible cells
+  // show (grid-search.tsx cellSearchTexts mirrors renderCell). Saved rows
+  // that do not match hide; rows the server search found (partial grids)
+  // show as found; the row being edited and lines added during the search
+  // always show; unsaved rows follow pendingRowVisibility.
+  const gridSearching = gridSearchWords.length > 0 && activeView === 'original'
+  const formulaColumnText = (c: CMSField, row: Record<string, unknown>): string => {
+    const o = parseJson<Record<string, unknown>>(c.options) ?? {}
+    const formula = typeof o.column_formula === 'string' ? o.column_formula : ''
+    if (!formula) return ''
+    const rid = row.id != null ? String(row.id) : ''
+    const asNumeric = (v: unknown) =>
+      typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : v
+    const result = evaluateNumeric(formula, (ref) =>
+      asNumeric(ref.includes('.') ? resolvedPathData?.rows[rid]?.[ref]?.value : row[ref])
+    )
+    if (result === null) return ''
+    return `${result}\n${result.toLocaleString('en-US', numericIntlOptions(o, o.format as string | undefined))}`
+  }
+  const rowMatchesGridSearch = (row: Record<string, unknown>): boolean => {
+    const parts: string[] = []
+    for (const c of effectiveCols) {
+      if (isSummaryCol(c)) continue
+      if (c.interface === 'formula-column') {
+        parts.push(formulaColumnText(c, row))
+        continue
+      }
+      let val = row[c.field]
+      if (c.computed_type === 'write' && c.computed_formula)
+        val = evalClientFormula(c.computed_formula as string, row) ?? val
+      const rel = m2oRelMap.get(c.field)
+      const label =
+        rel?.one_collection && val != null
+          ? m2oDisplays[rel.one_collection]?.[String(val)]
+          : undefined
+      parts.push(...cellSearchTexts(c, val, { m2oLabel: label }))
+    }
+    return textMatchesWords(parts.join('\n'), gridSearchWords)
+  }
+  /** Saved rows that show, in render order, with their index in `rows` (line numbers). */
+  const savedRowsShown: Array<{ row: Record<string, unknown>; ri: number }> = []
+  let savedMatchCount = 0
+  if (!isNew && activeView === 'original') {
+    rows.forEach((row, ri) => {
+      if (!gridSearching) {
+        savedRowsShown.push({ row, ri })
+        return
+      }
+      const id = String(row.id)
+      const displayRow = pendingEdits.has(id) ? { ...row, ...pendingEdits.get(id) } : row
+      const matches = searchExtraIds.has(id) || rowMatchesGridSearch(displayRow)
+      if (matches) savedMatchCount++
+      if (matches || editState?.rowId === id || searchKeepIdsRef.current.has(id))
+        savedRowsShown.push({ row, ri })
+    })
+  }
+  const pendingRowsVis = pendingRows.map((r, i) =>
+    gridSearching
+      ? pendingRowVisibility(r as Record<string, unknown>, {
+          searching: true,
+          matches: rowMatchesGridSearch(r as Record<string, unknown>),
+          editing: editState?.rowId === `pending:${i}`
+        })
+      : ('show' as const)
+  )
+  const pendingMatchCount = gridSearching
+    ? pendingRows.filter((r) => rowMatchesGridSearch(r as Record<string, unknown>)).length
+    : 0
+  const keptUnsavedCount = pendingRowsVis.filter((v) => v === 'dim').length
+  const savedRowsRendered = savedRowsShown.slice(0, renderCap)
+  const gridSavedTotal = gridPartial ? (gridChildTotal ?? rawRows.length) : rawRows.length
+  const gridSearchAvailable =
+    activeView === 'original' &&
+    (gridPartial ||
+      rawRows.length + pendingRows.length > GRID_SEARCH_MIN_ROWS ||
+      gridSearch.trim() !== '')
+  const gridSearchBox = gridSearchAvailable ? (
+    <GridSearchBox
+      value={gridSearch}
+      onChange={setGridSearch}
+      inputRef={gridSearchInputRef}
+      searching={gridSearching}
+      shown={savedMatchCount + pendingMatchCount}
+      total={gridSavedTotal + pendingRows.length}
+      loaded={gridPartial ? rawRows.length : null}
+      loadedOf={gridPartial ? gridSavedTotal : null}
+      loading={serverSearch.loading}
+      error={serverSearch.error}
+      onRetry={serverSearch.retry}
+      moreMatches={
+        serverSearch.total != null && serverSearch.rows
+          ? serverSearch.total - serverSearch.rows.length
+          : null
+      }
+      keptUnsaved={keptUnsavedCount}
+    />
+  ) : null
+
   const visibleRowTargets = (): RowTarget[] => {
     const out: RowTarget[] = []
     if (activeView !== 'original') return out
     if (!isNew) {
-      rows.slice(0, renderCap).forEach((r, ri) => {
+      for (const { row: r, ri } of savedRowsRendered) {
         const id = String(r.id)
-        if (pendingDeletes.has(id)) return
-        if (sectionsActive) {
+        if (pendingDeletes.has(id)) continue
+        if (sectionsActive && !gridSearching) {
           const sec = sectionOf(r)
-          if (sec !== null && collapsedSections.has(sec)) return
+          if (sec !== null && collapsedSections.has(sec)) continue
         }
         out.push({
           key: id,
@@ -6945,9 +7167,10 @@ export function InlineTableField({
           row: pendingEdits.has(id) ? { ...r, ...pendingEdits.get(id) } : r,
           idx: ri
         })
-      })
+      }
     }
     pendingRows.forEach((r, i) => {
+      if (pendingRowsVis[i] === 'hide') return
       out.push({ key: `pending:${i}`, kind: 'pending', row: r, idx: i })
     })
     return out
@@ -7042,7 +7265,8 @@ export function InlineTableField({
     if (!isNew) {
       rows.forEach((r, ri) => {
         const id = String(r.id)
-        if (pendingDeletes.has(id)) return
+        // A row a grid search brought in is not one of "all" the loaded rows.
+        if (pendingDeletes.has(id) || searchExtraIds.has(id)) return
         out.push({
           key: id,
           kind: 'saved',
@@ -7917,11 +8141,28 @@ export function InlineTableField({
     // Advertises which child collection this grid holds, so the summary can
     // jump to it by collection rather than by field name (the two differ for
     // relations that never got an alias field on the layout).
+    // biome-ignore lint/a11y/noStaticElementInteractions: the "/" shortcut listens for keys bubbling up from the grid's own controls
     <div
       className='space-y-1.5'
       data-o2m-collection={relatedCollection}
       onFocusCapture={onCellFocusCapture}
       onBlurCapture={onCellBlurCapture}
+      onKeyDown={(e) => {
+        // "/" inside the grid jumps to its search box (never while typing).
+        // A nested grid handles its own "/" first (defaultPrevented).
+        if (e.key !== '/' || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return
+        if (!gridSearchAvailable) return
+        const t = e.target as HTMLElement | null
+        if (
+          t?.closest(
+            'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="combobox"], [role="textbox"]'
+          )
+        )
+          return
+        e.preventDefault()
+        gridSearchInputRef.current?.focus()
+        gridSearchInputRef.current?.select()
+      }}
     >
       <ChangeReasonDialog
         challenge={crChallenge?.challenge ?? null}
@@ -7960,7 +8201,7 @@ export function InlineTableField({
         />
       )}
       {!readOnly && (
-        <div className='flex items-center gap-2 text-[11px]'>
+        <div className='flex flex-wrap items-center gap-2 text-[11px]'>
           <span className='text-slate-400'>Add</span>
           <input
             type='number'
@@ -8301,12 +8542,16 @@ export function InlineTableField({
             )
           })()}
           {presetSwitcher}
+          {gridSearchBox && <div className='ml-auto'>{gridSearchBox}</div>}
           {showRowRevisions && !isNew && (
             <button
               type='button'
               data-tip='Lines timeline — every line added, changed or removed on this record'
               onClick={() => setTimelineOpen(true)}
-              className='ml-auto rounded p-1 text-slate-300 hover:text-nvr-cyan'
+              className={cn(
+                'rounded p-1 text-slate-300 hover:text-nvr-cyan',
+                !gridSearchBox && 'ml-auto'
+              )}
             >
               <History className='h-3.5 w-3.5' />
             </button>
@@ -8591,7 +8836,16 @@ export function InlineTableField({
         </div>
       )}
       {/* readOnly grids skip the !readOnly toolbar above, so the preset switcher gets its own strip */}
-      {readOnly && presetSwitcher}
+      {readOnly &&
+        (gridSearchBox ? (
+          <div className='flex flex-wrap items-center gap-2'>
+            {presetSwitcher}
+            <div className='ml-auto'>{gridSearchBox}</div>
+          </div>
+        ) : (
+          presetSwitcher
+        ))}
+      {gridSearching && <style>{GRID_SEARCH_HIGHLIGHT_CSS}</style>}
       <div
         ref={tableWrapRef}
         className={
@@ -8696,12 +8950,16 @@ export function InlineTableField({
             {/* Saved rows */}
             {!isNew &&
               activeView === 'original' &&
-              rows.slice(0, renderCap).map((row, ri) => {
+              savedRowsRendered.map(({ row, ri }, si) => {
                 const id = String(row.id)
                 const section = sectionsActive ? sectionOf(row) : null
+                // Against the row rendered just above (a search hides rows between).
                 const isSectionStart =
-                  section !== null && (ri === 0 || sectionOf(rows[ri - 1]) !== section)
-                const sectionCollapsed = section !== null && collapsedSections.has(section)
+                  section !== null &&
+                  (si === 0 || sectionOf(savedRowsRendered[si - 1].row) !== section)
+                // A search shows its matches in collapsed sections too.
+                const sectionCollapsed =
+                  section !== null && !gridSearching && collapsedSections.has(section)
                 const sectionHeader =
                   isSectionStart && section !== null ? (
                     <tr className='border-b border-slate-200 bg-slate-100/80 dark:border-border dark:bg-muted'>
@@ -8774,7 +9032,13 @@ export function InlineTableField({
                       data-o2m-row={`${relatedCollection}:${id}`}
                       data-o2m-editing={isEditing ? '' : undefined}
                       tabIndex={splitMode ? -1 : undefined}
-                      draggable={enableReorder && !!rowOrderField && !isEditing && !isPendingDelete}
+                      draggable={
+                        enableReorder &&
+                        !!rowOrderField &&
+                        !isEditing &&
+                        !isPendingDelete &&
+                        !gridSearching
+                      }
                       onDragStart={() => handleDragStart(ri)}
                       onDragOver={(e) => handleDragOver(e, ri)}
                       onDrop={handleDrop}
@@ -8857,7 +9121,18 @@ export function InlineTableField({
                             <td className='relative w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>
                               {firstLeadCell === 'num' && sinceTick(id)}
                               <span className='inline-flex items-center gap-1'>
-                                {ri + 1}
+                                {searchExtraIds.has(id) ? (
+                                  // Found by the search past the rows loaded here: its
+                                  // place in the full list is not known, so no number.
+                                  <span
+                                    className='text-slate-300 dark:text-slate-600'
+                                    data-tip='Found by the search — beyond the rows this table loads'
+                                  >
+                                    ·
+                                  </span>
+                                ) : (
+                                  ri + 1
+                                )}
                                 {rowMatchPanel && (
                                   <RowMatchDot
                                     result={rowMatches.byRow.get(id)}
@@ -9662,13 +9937,54 @@ export function InlineTableField({
               existing record belongs at the end of the list, not above
               lines that already exist. */}
             {/* Pending rows (new parent OR pending-save mode) */}
-            {!isNew && activeView === 'original' && rows.length > renderCap && (
+            {!isNew && activeView === 'original' && savedRowsShown.length > renderCap && (
               <tr ref={renderSentinelRef}>
-                <td colSpan={nestedColSpan} className='px-3 py-2 text-center text-[11px] text-slate-400'>
-                  Showing {renderCap} of {rows.length} rows — scroll to load more
+                <td
+                  colSpan={nestedColSpan}
+                  className='px-3 py-2 text-center text-[11px] text-slate-400'
+                >
+                  Showing {renderCap} of {savedRowsShown.length}{' '}
+                  {gridSearching ? 'matching rows' : 'rows'} — scroll to load more
                 </td>
               </tr>
             )}
+            {gridSearching &&
+              savedRowsShown.length === 0 &&
+              // Unsaved rows kept in view (dimmed) are not matches either.
+              pendingRowsVis.every((v) => v !== 'show') &&
+              !isEditingNew && (
+                <tr data-grid-search-empty=''>
+                  <td
+                    colSpan={nestedColSpan}
+                    className='px-3 py-8 text-center text-[12px] text-slate-400 dark:text-slate-500'
+                  >
+                    {serverSearch.loading ? (
+                      <span className='inline-flex items-center gap-1.5'>
+                        <Loader2 className='h-3.5 w-3.5 animate-spin' aria-hidden='true' />
+                        Searching all {gridSavedTotal.toLocaleString('en-US')} rows…
+                      </span>
+                    ) : (
+                      <>
+                        No rows match “{deferredGridSearch.trim()}”
+                        {gridPartial && !serverSearch.error
+                          ? ` in all ${gridSavedTotal.toLocaleString('en-US')} rows`
+                          : ''}
+                        .{' '}
+                        <button
+                          type='button'
+                          onClick={() => {
+                            setGridSearch('')
+                            gridSearchInputRef.current?.focus()
+                          }}
+                          className='font-medium text-nvr-cyan underline-offset-2 hover:underline'
+                        >
+                          Clear search
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              )}
             {/* Series rows with NO grid row: spend that landed under a key nobody
                 planned for must never be invisible — it renders as a read-only
                 ghost row the reader can turn into a real one. */}
@@ -9743,6 +10059,8 @@ export function InlineTableField({
             {pendingRows.length > 0 &&
               pendingRows.map((row, ri) => {
                 const pendingRowId = `pending:${ri}`
+                const searchVis = pendingRowsVis[ri] ?? 'show'
+                if (searchVis === 'hide') return null
                 const isEditing = editState?.rowId === pendingRowId
                 const inlineEdit = isEditing && !splitMode
                 const isPDragging = dragIdx === ri
@@ -9757,8 +10075,14 @@ export function InlineTableField({
                       // outside and committed it shut. Saved rows always had it.
                       data-o2m-editing={isEditing ? '' : undefined}
                       data-o2m-row={`${relatedCollection}:${pendingRowId}`}
+                      data-grid-search-dim={searchVis === 'dim' ? '' : undefined}
+                      data-tip={
+                        searchVis === 'dim'
+                          ? 'Not saved yet — kept in view while you search'
+                          : undefined
+                      }
                       tabIndex={splitMode ? -1 : undefined}
-                      draggable={enableReorder && !isEditing}
+                      draggable={enableReorder && !isEditing && !gridSearching}
                       onDragStart={() => handleDragStart(ri)}
                       onDragOver={(e) => handleDragOver(e, ri)}
                       onDrop={(e) => {
@@ -9797,7 +10121,8 @@ export function InlineTableField({
                             : 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
                           : isPrefilled
                             ? 'hover:bg-slate-50 dark:hover:bg-muted cursor-pointer'
-                            : 'bg-amber-50/40 hover:bg-amber-50/70 dark:bg-amber-400/10 dark:hover:bg-amber-400/15 cursor-pointer'
+                            : 'bg-amber-50/40 hover:bg-amber-50/70 dark:bg-amber-400/10 dark:hover:bg-amber-400/15 cursor-pointer',
+                        searchVis === 'dim' && 'opacity-50 hover:opacity-100'
                       )}
                     >
                       {!(isEditing && rowEditorMode === 'panel') && (
