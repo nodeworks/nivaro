@@ -184,6 +184,7 @@ import {
   GRID_READ_LIMIT,
   GRID_SEARCH_HIGHLIGHT_CSS,
   GRID_SEARCH_MIN_ROWS,
+  GRID_SEARCH_ROOT_ATTR,
   GridSearchBox,
   pendingRowVisibility,
   searchWords,
@@ -191,6 +192,7 @@ import {
   useDebouncedValue,
   useGridChildTotal,
   useGridSearchHighlight,
+  useGridSearchShortcut,
   useGridServerSearch
 } from './grid-search'
 import {
@@ -6986,6 +6988,10 @@ export function InlineTableField({
     activeView === 'original' ? gridSearchWords : [],
     `tr[data-o2m-row]:not([data-o2m-editing]) > td:nth-child(n+${gridLeadCells + 1}):not(:last-child)`
   )
+  // "/" while in this grid jumps to its search box (the root carries the marker only while
+  // the box shows, so an inner grid without one hands the key to the grid around it).
+  const gridRootRef = useRef<HTMLDivElement | null>(null)
+  useGridSearchShortcut(gridRootRef, gridSearchInputRef, activeView === 'original')
 
   if (colsLoading || (!isNew && rowsLoading))
     return (
@@ -8141,28 +8147,13 @@ export function InlineTableField({
     // Advertises which child collection this grid holds, so the summary can
     // jump to it by collection rather than by field name (the two differ for
     // relations that never got an alias field on the layout).
-    // biome-ignore lint/a11y/noStaticElementInteractions: the "/" shortcut listens for keys bubbling up from the grid's own controls
     <div
+      ref={gridRootRef}
       className='space-y-1.5'
       data-o2m-collection={relatedCollection}
+      {...(gridSearchAvailable ? { [GRID_SEARCH_ROOT_ATTR]: '' } : {})}
       onFocusCapture={onCellFocusCapture}
       onBlurCapture={onCellBlurCapture}
-      onKeyDown={(e) => {
-        // "/" inside the grid jumps to its search box (never while typing).
-        // A nested grid handles its own "/" first (defaultPrevented).
-        if (e.key !== '/' || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return
-        if (!gridSearchAvailable) return
-        const t = e.target as HTMLElement | null
-        if (
-          t?.closest(
-            'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="combobox"], [role="textbox"]'
-          )
-        )
-          return
-        e.preventDefault()
-        gridSearchInputRef.current?.focus()
-        gridSearchInputRef.current?.select()
-      }}
     >
       <ChangeReasonDialog
         challenge={crChallenge?.challenge ?? null}

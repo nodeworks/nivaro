@@ -75,7 +75,8 @@ export const navigationPersonal: DocSection = {
       items: [
         'Built from your own entries in the activity log; nothing extra is recorded.',
         'Every record is checked as you: one you can no longer read (a scope or filter change, or it was deleted) is left out, and names are the ones you are allowed to see.',
-        'Linking records (for example adding a division) counts as an edit of the record you linked them on.'
+        'Linking records (for example adding a division) counts as an edit of the record you linked them on.',
+        'Only records with a page of their own are listed: chat messages, system tables and tables that are not collections never are, and a record with no name to show (only its id) is left out.'
       ]
     },
 

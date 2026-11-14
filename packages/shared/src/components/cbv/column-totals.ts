@@ -62,28 +62,226 @@ export function formatTotal(v: number, fn: TotalFn, format?: ColumnFormatConfig 
 
 const storeKey = (collection: string) => `nvr_cbv_totals_${collection}`
 
-/** The person's last totals choice for this list (this browser); {} when none or unreadable. */
-export function loadRememberedTotals(collection: string): Record<string, TotalFn> {
+/**
+ * The person's OWN totals choices for one list (this browser), column → function or 'off'.
+ * They lie over whatever the open view states (2026-11-14): a view that totals one column
+ * never wipes the person's other choices, and the view's totals are never written here.
+ */
+export type TotalOverride = TotalFn | 'off'
+export type TotalOverrides = Record<string, TotalOverride>
+
+const isOverride = (v: unknown): v is TotalOverride => v === 'off' || isTotalFn(v)
+
+/**
+ * Reads the stored overrides. The first shape (2026-11-13) was a flat `{column: fn}` map of
+ * what the list showed; each entry is read as the person's choice for that column.
+ */
+export function loadTotalOverrides(collection: string): TotalOverrides {
   try {
     const raw = localStorage.getItem(storeKey(collection))
     const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : null
     if (!parsed || typeof parsed !== 'object') return {}
-    const out: Record<string, TotalFn> = {}
-    for (const [k, v] of Object.entries(parsed))
-      if (totalsEligibleKey(k) && isTotalFn(v)) out[k] = v
+    const map =
+      parsed.v === 2 && parsed.o && typeof parsed.o === 'object'
+        ? (parsed.o as Record<string, unknown>)
+        : parsed
+    const out: TotalOverrides = {}
+    for (const [k, v] of Object.entries(map)) if (totalsEligibleKey(k) && isOverride(v)) out[k] = v
     return out
   } catch {
     return {}
   }
 }
 
-export function rememberTotals(collection: string, totals: Record<string, TotalFn>): void {
+export function rememberTotalOverrides(collection: string, overrides: TotalOverrides): void {
   try {
-    if (Object.keys(totals).length === 0) localStorage.removeItem(storeKey(collection))
-    else localStorage.setItem(storeKey(collection), JSON.stringify(totals))
+    if (Object.keys(overrides).length === 0) localStorage.removeItem(storeKey(collection))
+    else localStorage.setItem(storeKey(collection), JSON.stringify({ v: 2, o: overrides }))
   } catch {
     /* private window / blocked storage: the choice lasts this visit only */
   }
+}
+
+/** What the list shows: the view's totals with the person's own choices laid over them. */
+export function shownTotals(
+  viewTotals: Record<string, TotalFn>,
+  overrides: TotalOverrides
+): Record<string, TotalFn> {
+  const out: Record<string, TotalFn> = { ...viewTotals }
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v === 'off') delete out[k]
+    else out[k] = v
+  }
+  return out
+}
+
+/** The person picks a function (null = off) for one column. */
+export function setOverride(
+  overrides: TotalOverrides,
+  key: string,
+  fn: TotalFn | null
+): TotalOverrides {
+  return { ...overrides, [key]: fn ?? 'off' }
+}
+
+/**
+ * After a view is saved with the totals on screen, a choice that now says the same as the
+ * view is no longer the person's own: it follows the view from here on.
+ */
+export function overridesAfterSave(
+  overrides: TotalOverrides,
+  saved: Record<string, TotalFn>
+): TotalOverrides {
+  const out: TotalOverrides = {}
+  for (const [k, v] of Object.entries(overrides)) {
+    const same = v === 'off' ? !saved[k] : saved[k] === v
+    if (!same) out[k] = v
+  }
+  return out
+}
+
+/** The field facts the totals choice reads. */
+export interface TotalsField {
+  field: string
+  type?: string | null
+  computed_type?: string | null
+  computed_formula?: string | null
+  computed_store?: boolean | null
+}
+
+/** A calculated field the list works out when it reads is not a column the server can total. */
+export function isStoredField(f: TotalsField): boolean {
+  return !f.computed_formula || !!f.computed_store
+}
+
+const NUMBER_TYPES = new Set(['integer', 'bigInteger', 'biginteger', 'decimal', 'float'])
+
+export type TotalTerm = { field: string; sign: 1 | -1 }
+
+/**
+ * The fields a formula adds and takes away, when that is ALL it does: `item.a - item.b`,
+ * `item.a + (item.b - item.c)`, `coalesce(item.a, 0) - item.b`, `{{a}} - {{b}}`. Then the
+ * sum of the formula over the rows is the same sums added and taken away (an empty value
+ * counts as 0 both ways). Anything else — a constant, ×, ÷, a function, a condition — gives
+ * null: its sum cannot be built from the columns' sums.
+ */
+export function linearSumTerms(formula: string): TotalTerm[] | null {
+  const src = String(formula ?? '').trim()
+  if (!src) return null
+  let i = 0
+  const ws = () => {
+    while (i < src.length && /\s/.test(src[i] as string)) i++
+  }
+  const ref = (): string | null => {
+    ws()
+    const rest = src.slice(i)
+    const item = /^item\.([A-Za-z_][A-Za-z0-9_]*)/.exec(rest)
+    if (item) {
+      i += item[0].length
+      return item[1] as string
+    }
+    const mustache = /^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/.exec(rest)
+    if (mustache) {
+      i += mustache[0].length
+      return mustache[1] as string
+    }
+    const co = /^coalesce\s*\(/i.exec(rest)
+    if (co) {
+      i += co[0].length
+      const inner = ref()
+      const zero = /^\s*,\s*0(?:\.0+)?\s*\)/.exec(src.slice(i))
+      if (!inner || !zero) return null
+      i += zero[0].length
+      return inner
+    }
+    return null
+  }
+  const counts = new Map<string, number>()
+  const expr = (sign: 1 | -1): boolean => {
+    let first = true
+    for (;;) {
+      ws()
+      let s: 1 | -1 = sign
+      if (src[i] === '+' || src[i] === '-') {
+        if (src[i] === '-') s = s === 1 ? -1 : 1
+        i++
+        ws()
+      } else if (!first) return false
+      first = false
+      if (src[i] === '(') {
+        i++
+        if (!expr(s)) return false
+        ws()
+        if (src[i] !== ')') return false
+        i++
+      } else {
+        const f = ref()
+        if (!f) return false
+        counts.set(f, (counts.get(f) ?? 0) + s)
+      }
+      ws()
+      if (i >= src.length || src[i] === ')') return true
+      if (src[i] !== '+' && src[i] !== '-') return false
+    }
+  }
+  if (!expr(1)) return null
+  ws()
+  if (i !== src.length) return null
+  const terms: TotalTerm[] = []
+  for (const [field, n] of counts) {
+    if (n === 1 || n === -1) terms.push({ field, sign: n })
+    else if (n !== 0) return null
+  }
+  return terms.length ? terms : null
+}
+
+export type TotalsSupport =
+  | { kind: 'server' }
+  | { kind: 'derived'; terms: TotalTerm[] }
+  | { kind: 'none'; why: string }
+
+/**
+ * Whether the totals row can show a figure for this number field, and how: the server totals
+ * a stored column; a calculated field that only adds and takes away stored number columns is
+ * summed from their sums; anything else says why it has no total (the choice is never
+ * offered and then silently dropped).
+ */
+export function totalsSupport(
+  f: TotalsField,
+  fieldOf: (name: string) => TotalsField | undefined
+): TotalsSupport {
+  if (isStoredField(f)) return { kind: 'server' }
+  if (f.computed_type !== 'rollup') {
+    const terms = linearSumTerms(f.computed_formula ?? '')
+    if (
+      terms?.every((t) => {
+        const tf = fieldOf(t.field)
+        return !!tf && isStoredField(tf) && NUMBER_TYPES.has(String(tf.type ?? ''))
+      })
+    )
+      return { kind: 'derived', terms }
+  }
+  return {
+    kind: 'none',
+    why:
+      f.computed_type === 'rollup'
+        ? 'Worked out from linked records each time the list is read, so it has no total.'
+        : 'Calculated each time the list is read from a formula that does more than add and subtract stored columns, so it has no total.'
+  }
+}
+
+/** A derived sum from its inputs' sums; null while any input is missing. */
+export function combineTerms(
+  terms: TotalTerm[],
+  sums: (field: string) => number | null
+): number | null {
+  let total = 0
+  for (const t of terms) {
+    const v = sums(t.field)
+    if (v == null) return null
+    total += t.sign * v
+  }
+  return Math.round(total * 1e6) / 1e6
 }
 
 /** The tooltip on a footer figure. */

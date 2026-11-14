@@ -148,7 +148,8 @@ describe('CollectionBrowserView totals row', () => {
     expect(aggCalls().at(-1)?._params).toEqual({ avg: 'amount' })
     expect(document.querySelector('[data-cbv-total-cell="amount"]')?.textContent).toBe('Avg12.35')
     expect(JSON.parse(localStorage.getItem('nvr_cbv_totals_orders') ?? '{}')).toEqual({
-      amount: 'avg'
+      v: 2,
+      o: { amount: 'avg' }
     })
     // the page itself was not re-read for it (page 2 is only prefetched)
     expect(calls.filter((c) => c._path === '/items/orders' && c._params?.page !== 2)).toHaveLength(

@@ -342,6 +342,65 @@ export function useGridSearchHighlight(
   )
 }
 
+// ── The "/" shortcut ────────────────────────────────────────────────────────
+// "/" anywhere in a grid jumps to its search box (2026-11-14). The keys arrive
+// at the document, not at the grid: a click on a plain cell leaves focus on
+// the page body, so a listener on the grid's own element never heard them.
+// "In the grid" = focus is inside it, or nothing has focus and the last click
+// landed in it. The innermost grid with a search box wins (nested grids).
+
+export const GRID_SEARCH_TIP =
+  'Search these rows by any column. Shortcut: / while in the table. Esc clears.'
+
+/** Marks a grid whose search box is showing; the shortcut finds the nearest one. */
+export const GRID_SEARCH_ROOT_ATTR = 'data-grid-search-root'
+
+const TYPING =
+  'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="combobox"], [role="textbox"]'
+
+let lastPointerTarget: Element | null = null
+let pointerListeners = 0
+const notePointer = (e: Event) => {
+  lastPointerTarget = e.target instanceof Element ? e.target : null
+}
+
+/**
+ * The grid root a "/" keydown belongs to, or null: never while typing in a field, never
+ * with a modifier, never once something else handled the key.
+ */
+export function gridSearchShortcutRoot(e: KeyboardEvent, doc: Document = document): Element | null {
+  if (e.key !== '/' || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return null
+  const target = e.target instanceof Element ? e.target : null
+  if (target?.closest(TYPING)) return null
+  const focused = target && target !== doc.body && target !== doc.documentElement ? target : null
+  const anchor = focused ?? (lastPointerTarget?.isConnected ? lastPointerTarget : null)
+  return anchor?.closest(`[${GRID_SEARCH_ROOT_ATTR}]`) ?? null
+}
+
+/** While `enabled`, "/" in the grid under `rootRef` focuses (and selects) `inputRef`. */
+export function useGridSearchShortcut(
+  rootRef: React.RefObject<HTMLElement | null>,
+  inputRef: React.RefObject<HTMLInputElement | null>,
+  enabled: boolean
+) {
+  useEffect(() => {
+    if (!enabled || typeof document === 'undefined') return
+    if (pointerListeners++ === 0) document.addEventListener('pointerdown', notePointer, true)
+    const onKey = (e: KeyboardEvent) => {
+      const root = rootRef.current
+      if (!root || gridSearchShortcutRoot(e) !== root) return
+      e.preventDefault()
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      if (--pointerListeners === 0) document.removeEventListener('pointerdown', notePointer, true)
+    }
+  }, [enabled, rootRef, inputRef])
+}
+
 // ── The box ─────────────────────────────────────────────────────────────────
 
 const fmtCount = (n: number) => n.toLocaleString('en-US')
@@ -410,7 +469,7 @@ export function GridSearchBox(props: {
           }}
           aria-label='Search these rows'
           placeholder={`Search ${fmtCount(total)} rows`}
-          data-tip='Find rows by any column’s text — press / in the table to jump here, Esc to clear'
+          data-tip={GRID_SEARCH_TIP}
           className='h-6 w-[190px] rounded border border-slate-200 bg-white pl-5 pr-5 text-[11px] text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200 dark:placeholder:text-slate-500 [&::-webkit-search-cancel-button]:hidden'
         />
         {value && (

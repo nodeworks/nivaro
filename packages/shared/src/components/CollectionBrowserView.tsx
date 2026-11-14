@@ -192,14 +192,21 @@ import { CopyAsButton } from './CopyAsButton'
 import { CollectionTree, useTreeConfig } from './cbv/CollectionTree'
 import { ColumnHeaderMenu } from './cbv/ColumnHeaderMenu'
 import {
+  combineTerms,
   formatTotal,
   isTotalFn,
-  loadRememberedTotals,
+  loadTotalOverrides,
+  overridesAfterSave,
   readTotal,
-  rememberTotals,
+  rememberTotalOverrides,
+  setOverride,
+  shownTotals,
   type TotalFn,
+  type TotalOverrides,
+  type TotalsSupport,
   totalsEligibleKey,
   totalsParams,
+  totalsSupport,
   totalTip
 } from './cbv/column-totals'
 import {
@@ -4545,11 +4552,28 @@ export function CollectionBrowserView({
   const [columnFormulas, setColumnFormulas] = useState<Record<string, string>>({})
   const [renamingCol, setRenamingCol] = useState<string | null>(null)
   const [columnFormats, setColumnFormats] = useState<Record<string, ColumnFormatConfig>>({})
-  // Totals row (2026-11-13): per column, the figure the footer shows; remembered per
-  // person per list in this browser, and saved with a view.
-  const [columnAggs, setColumnAggs] = useState<Record<string, TotalFn>>(() =>
-    loadRememberedTotals(collection)
+  // Totals row (2026-11-13): per column, the figure the footer shows. What shows = the open
+  // view's totals with the person's OWN choices laid over them (2026-11-14): the choices are
+  // remembered per list in this browser and never replaced by a view's; a saved view gets
+  // what is on screen.
+  const [viewAggs, setViewAggs] = useState<Record<string, TotalFn>>({})
+  const [totalOverrides, setTotalOverrides] = useState<TotalOverrides>(() =>
+    loadTotalOverrides(collection)
   )
+  const columnAggs = useMemo(
+    () => shownTotals(viewAggs, totalOverrides),
+    [viewAggs, totalOverrides]
+  )
+  // Stored when the person changes them, never from an effect (an effect after a collection
+  // switch would write the old list's choices under the new list's name).
+  const updateTotalOverrides = (change: (o: TotalOverrides) => TotalOverrides) =>
+    setTotalOverrides((o) => {
+      const next = change(o)
+      rememberTotalOverrides(collection, next)
+      return next
+    })
+  const setColumnTotal = (key: string, fn: TotalFn | null) =>
+    updateTotalOverrides((o) => setOverride(o, key, fn))
   // Column widths (#131): drag the header's right edge; persisted per view.
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [columnTints, setColumnTints] = useState<Record<string, TintRule[]>>({})
@@ -4756,7 +4780,8 @@ export function CollectionBrowserView({
     setColumnLabels({})
     setColumnFormulas({})
     setColumnFormats({})
-    setColumnAggs(loadRememberedTotals(collection))
+    setViewAggs({})
+    setTotalOverrides(loadTotalOverrides(collection))
     setSelectedIds([])
     setActiveViewId(null)
     setQuickSel({})
@@ -5530,15 +5555,47 @@ export function CollectionBrowserView({
   // over the whole filtered result as the viewer (GET /items/:c/aggregate runs the
   // list's own gated query: search, conditions, row filters, User Scopes, field list).
   // Filters settle first (debounced) so typing in a column filter asks once.
-  useEffect(() => rememberTotals(collection, columnAggs), [collection, columnAggs])
   const totalsConditions = useDebounced(conditionsParam, 400)
   const totalsSearch = useDebounced(appliedSearch, 400)
-  const totalCols = effectiveColumns.filter(
-    (k) => !!columnAggs[k] && totalsEligibleKey(k) && fieldByName.has(k)
-  )
+  // How each column can be totalled (2026-11-14): a stored column by the server; a calculated
+  // field that only adds and subtracts stored number columns from those columns' sums; any
+  // other calculated field not at all (the menu says why, a view's `agg` on it is ignored).
+  const totalsSupportOf = (key: string): TotalsSupport | null => {
+    if (!totalsEligibleKey(key)) return null
+    const f = fieldByName.get(key)
+    if (!f) return null
+    return totalsSupport(f as never, (n) => fieldByName.get(n) as never)
+  }
+  /** "Requisition Amount − Forecast Total": how a calculated column's sum is worked out. */
+  const derivedFormulaText = (terms: Array<{ field: string; sign: 1 | -1 }>) =>
+    terms
+      .map(
+        (t, i) =>
+          `${i === 0 ? (t.sign < 0 ? '− ' : '') : t.sign < 0 ? ' − ' : ' + '}${columnLabel(t.field)}`
+      )
+      .join('')
+  const derivedTotalNote = (terms: Array<{ field: string; sign: 1 | -1 }>) =>
+    `Sum only: worked out as ${derivedFormulaText(terms)}.`
+  const totalCols = effectiveColumns.filter((k) => {
+    const fn = columnAggs[k]
+    if (!fn) return false
+    const s = totalsSupportOf(k)
+    return s?.kind === 'server' || (s?.kind === 'derived' && fn === 'sum')
+  })
+  // One read per (column, function) the footer needs — a derived sum asks its inputs' sums,
+  // shared with those columns' own Sum when they show one.
+  const totalReads: Array<{ key: string; fn: TotalFn }> = []
+  for (const k of totalCols) {
+    const s = totalsSupportOf(k)
+    const needs =
+      s?.kind === 'derived'
+        ? s.terms.map((t) => ({ key: t.field, fn: 'sum' as TotalFn }))
+        : [{ key: k, fn: columnAggs[k] as TotalFn }]
+    for (const n of needs)
+      if (!totalReads.some((r) => r.key === n.key && r.fn === n.fn)) totalReads.push(n)
+  }
   const totalQueries = useQueries({
-    queries: totalCols.map((key) => {
-      const fn = columnAggs[key] as TotalFn
+    queries: totalReads.map(({ key, fn }) => {
       return {
         queryKey: ['cbv-col-total', collection, totalsSearch, totalsConditions, key, fn],
         queryFn: () =>
@@ -5558,14 +5615,32 @@ export function CollectionBrowserView({
   })
   const columnTotals: Record<string, { value: number | null; loading: boolean; failed: boolean }> =
     {}
-  totalCols.forEach((key, i) => {
-    const q = totalQueries[i]
+  const readOf = (key: string, fn: TotalFn) =>
+    totalQueries[totalReads.findIndex((r) => r.key === key && r.fn === fn)]
+  for (const key of totalCols) {
+    const s = totalsSupportOf(key)
+    if (s?.kind === 'derived') {
+      const qs = s.terms.map((t) => readOf(t.field, 'sum'))
+      const sums = qs.map((q) => q?.data as number | null | undefined)
+      // An input with nothing filled in sums to nothing = 0 here (the row formula reads an
+      // empty value as 0 too); only when every input is empty is there no figure.
+      columnTotals[key] = {
+        value:
+          sums.some((v) => v === undefined) || sums.every((v) => v == null)
+            ? null
+            : combineTerms(s.terms, (f) => (readOf(f, 'sum')?.data as number | null) ?? 0),
+        loading: qs.some((q) => !!q?.isLoading),
+        failed: qs.some((q) => !!q?.isError)
+      }
+      continue
+    }
+    const q = readOf(key, columnAggs[key] as TotalFn)
     columnTotals[key] = {
       value: (q?.data as number | null | undefined) ?? null,
       loading: !!q?.isLoading,
       failed: !!q?.isError
     }
-  })
+  }
   const showTotals = totalCols.length > 0 && !groupBy && !aiResult
   const totalPages = totalUnknown
     ? page + (rows.length >= effPageSize ? 1 : 0)
@@ -6619,14 +6694,15 @@ export function CollectionBrowserView({
         if (typeof c !== 'string' && c.width) widths[c.key] = c.width
         if (typeof c !== 'string' && isTotalFn(c.agg)) aggs[c.key] = c.agg
       }
-      // A view that states totals shows them; one that states none keeps the person's own.
-      setColumnAggs(Object.keys(aggs).length ? aggs : loadRememberedTotals(collection))
+      // The view's totals, under the person's own choices (which a view never replaces).
+      setViewAggs(aggs)
       setColumnLabels(labels)
       setColumnFormats(formats)
       setColumnTints(tints)
       setColumnWidths(widths)
       setColumnPins(pinsStated ? pins : null)
     } else {
+      setViewAggs({})
       setColumnPins(null)
     }
     setPage(1)
@@ -6647,7 +6723,7 @@ export function CollectionBrowserView({
     setColumnLabels({})
     setColumnFormulas({})
     setColumnFormats({})
-    setColumnAggs(loadRememberedTotals(collection))
+    setViewAggs({})
     setColumnPins(null)
     setPage(1)
   }
@@ -6665,7 +6741,8 @@ export function CollectionBrowserView({
           effectivePins[k] ?? (i === 0 && columnPins !== null ? 'none' : undefined)
         const tint = columnTints[k]
         const width = columnWidths[k]
-        const agg = columnAggs[k]
+        // The totals on screen — only ones the list can show (never one it would drop).
+        const agg = totalCols.includes(k) ? columnAggs[k] : undefined
         const formula = columnFormulas[k]
         if (
           !label &&
@@ -6877,6 +6954,12 @@ export function CollectionBrowserView({
     columnFormats,
     columnWidths,
     columnPins,
+    // Totals, tints and list formulas ride the address too: missing here, a reload re-applied
+    // an address written before they changed (and the view pill came back active on it, so
+    // its ↺ saved the stale totals over the view — 2026-11-14).
+    columnAggs,
+    columnTints,
+    columnFormulas,
     appliedQuick,
     colFilters,
     linkConds,
@@ -6908,15 +6991,27 @@ export function CollectionBrowserView({
     if (listSettled) setTrailDetail(trailDetail)
   }, [listSettled, trailDetail])
 
+  // A view saved with the totals on screen states them from now on: while it is the open
+  // view, the person's choices that say the same follow it again (2026-11-14).
+  const totalsOnScreen = (): Record<string, TotalFn> =>
+    Object.fromEntries(totalCols.map((k) => [k, columnAggs[k] as TotalFn]))
+  const adoptSavedTotals = (aggs: Record<string, TotalFn>) => {
+    setViewAggs(aggs)
+    updateTotalOverrides((o) => overridesAfterSave(o, aggs))
+  }
   const saveView = useMutation({
-    mutationFn: () =>
-      client.request<{ data: SavedView }>(
+    mutationFn: async () => {
+      const aggs = totalsOnScreen()
+      const r = await client.request<{ data: SavedView }>(
         post('/saved-views', { collection, name: saveName.trim(), ...viewState() })
-      ),
-    onSuccess: (r) => {
+      )
+      return { r, aggs }
+    },
+    onSuccess: ({ r, aggs }) => {
       setSaveOpen(false)
       setSaveName('')
       setActiveViewId(r.data.id)
+      adoptSavedTotals(aggs)
       invalidateViews()
     }
   })
@@ -6924,8 +7019,13 @@ export function CollectionBrowserView({
   // it saves, a check for a moment after, and a toast naming the view.
   const [viewJustSaved, setViewJustSaved] = useState<number | null>(null)
   const updateView = useMutation({
-    mutationFn: (id: number) => client.request(patch(`/saved-views/${id}`, viewState())),
-    onSuccess: (_r, id) => {
+    mutationFn: async (id: number) => {
+      const aggs = totalsOnScreen()
+      await client.request(patch(`/saved-views/${id}`, viewState()))
+      return { aggs }
+    },
+    onSuccess: ({ aggs }, id) => {
+      if (id === activeViewId) adoptSavedTotals(aggs)
       invalidateViews()
       setViewJustSaved(id)
       setTimeout(() => setViewJustSaved((cur) => (cur === id ? null : cur)), 2000)
@@ -6948,15 +7048,19 @@ export function CollectionBrowserView({
   // "Set default" in the column picker: write the CURRENT state onto the
   // collection's is_default view (creating one named "Default" if none).
   const upsertDefault = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const def = views.find((v) => v.is_default)
-      return def
-        ? client.request(patch(`/saved-views/${def.id}`, { ...viewState(), is_default: true }))
-        : client.request<{ data: SavedView }>(
-            post('/saved-views', { collection, name: 'Default', is_default: true, ...viewState() })
-          )
+      const aggs = totalsOnScreen()
+      if (def)
+        await client.request(patch(`/saved-views/${def.id}`, { ...viewState(), is_default: true }))
+      else
+        await client.request<{ data: SavedView }>(
+          post('/saved-views', { collection, name: 'Default', is_default: true, ...viewState() })
+        )
+      return { aggs, id: def?.id ?? null }
     },
-    onSuccess: () => {
+    onSuccess: ({ aggs, id }) => {
+      if (id != null && id === activeViewId) adoptSavedTotals(aggs)
       setColsOpen(false)
       invalidateViews()
     }
@@ -8509,17 +8613,15 @@ export function CollectionBrowserView({
                       >
                         $
                       </button>
-                      {!k.includes('.') && !k.startsWith('__') && (
+                      {(() => {
+                        // Only where the list can show the figure (2026-11-14): a number
+                        // column it totals on the server, or a calculated sum of them.
+                        const s = isNumericCol(k) ? totalsSupportOf(k) : null
+                        return s?.kind === 'server' || s?.kind === 'derived'
+                      })() && (
                         <button
                           type='button'
-                          onClick={() =>
-                            setColumnAggs((a) => {
-                              const next = { ...a }
-                              if (next[k]) delete next[k]
-                              else next[k] = 'sum'
-                              return next
-                            })
-                          }
+                          onClick={() => setColumnTotal(k, columnAggs[k] ? null : 'sum')}
                           title='Sum this column in a footer row (across all matching records)'
                           aria-label={`Toggle sum for ${k}`}
                           className={
@@ -9714,20 +9816,21 @@ export function CollectionBrowserView({
                                 ? () => setPointField({ field: key, nonce: Date.now() })
                                 : undefined
                             }
-                            totals={
-                              isNumericCol(key) && totalsEligibleKey(key) && f && !readOnlyComputed
-                                ? {
-                                    fn: columnAggs[key] ?? null,
-                                    onChange: (fn) =>
-                                      setColumnAggs((a) => {
-                                        const next = { ...a }
-                                        if (fn) next[key] = fn
-                                        else delete next[key]
-                                        return next
-                                      })
-                                  }
-                                : undefined
-                            }
+                            totals={(() => {
+                              const s = isNumericCol(key) && f ? totalsSupportOf(key) : null
+                              if (!s) return undefined
+                              const onChange = (fn: TotalFn | null) => setColumnTotal(key, fn)
+                              if (s.kind === 'none')
+                                return { fn: null, onChange, unavailable: s.why }
+                              if (s.kind === 'derived')
+                                return {
+                                  fn: columnAggs[key] === 'sum' ? 'sum' : null,
+                                  onChange,
+                                  only: ['sum'] as TotalFn[],
+                                  note: derivedTotalNote(s.terms)
+                                }
+                              return { fn: columnAggs[key] ?? null, onChange }
+                            })()}
                           />
                           {resizeHandle(key)}
                         </th>
@@ -10560,7 +10663,17 @@ export function CollectionBrowserView({
                               t && fn
                                 ? t.failed
                                   ? `This ${short.toLowerCase()} could not be worked out`
-                                  : totalTip(fn, columnLabel(key), totalUnknown ? null : total)
+                                  : (() => {
+                                      const tip = totalTip(
+                                        fn,
+                                        columnLabel(key),
+                                        totalUnknown ? null : total
+                                      )
+                                      const s = totalsSupportOf(key)
+                                      return s?.kind === 'derived'
+                                        ? `${tip}, worked out as ${derivedFormulaText(s.terms)}`
+                                        : tip
+                                    })()
                                 : undefined
                             }
                           >

@@ -5,6 +5,7 @@ import { activityListSource } from './activity-filters.js'
 import { activityLabelsFor } from './activity-readable.js'
 import { type ActivityLabels, parseTransitionComment } from './activity-sentence.js'
 import { selectInChunks } from './db-batch.js'
+import { isInternalCollection } from './system-collections.js'
 
 /**
  * #22 "Recently edited by me" — the records a person CHANGED (created, edited fields, moved
@@ -14,7 +15,10 @@ import { selectInChunks } from './db-batch.js'
  * days of their own rows. Every record is judged AS THE CALLER through `activityLabelsFor`:
  * a record they can no longer read (User Scope, row filter, policy, deleted) is left out, and
  * its label is read as them. Link-table (junction) writes and comments fold into the record
- * they were made on. Pure: `foldEdits`, `didSummary`. I/O: `recentlyEditedBy`.
+ * they were made on. Only records a person opens as a record page are listed (2026-11-14:
+ * Rob's Home listed "21 · Created · Chat Messages"): never a system or chat table, never a
+ * table that is not a registered collection, and never a row whose only name is its id.
+ * Pure: `foldEdits`, `didSummary`, `hasReadableLabel`. I/O: `recentlyEditedBy`.
  */
 
 /** Activity actions that change a record (reads, sign-ins, exports never count). */
@@ -89,8 +93,11 @@ export function foldEdits(
     fieldsByActivity?: Map<number, string[]>
     links?: Map<string, LinkTarget | null>
     isLinkTable?: (collection: string) => boolean
+    /** A collection that is not a record page (beyond the system and chat tables). */
+    isHidden?: (collection: string) => boolean
   } = {}
 ): EditedSummary[] {
+  const listable = (c: string) => !isInternalCollection(c) && !opts.isHidden?.(c)
   const out = new Map<string, EditedSummary & { _fields: Set<string>; _gone: boolean }>()
   const touch = (collection: string, id: string, at: string) => {
     const key = `${collection}:${id}`
@@ -127,24 +134,25 @@ export function foldEdits(
     if (collection === 'nivaro_comments') {
       if (action !== 'create') continue
       const m = /^([A-Za-z_][A-Za-z0-9_]*):(.+)$/.exec(String(r.comment ?? '').trim())
-      if (!m) continue
+      if (!m || !listable(m[1])) continue
       const s = touch(m[1], m[2].trim(), at)
       if (s._gone) continue
       s.comments++
       kind(s, 'comment')
       continue
     }
-    if (/^(nivaro|directus)_/i.test(collection)) continue
+    if (isInternalCollection(collection)) continue
     // A link row: an edit of the record it hangs off (its field), when the caller may see it.
     if (opts.isLinkTable?.(collection)) {
       const link = opts.links?.get(`${collection}:${item}`)
-      if (!link) continue
+      if (!link || !listable(link.collection)) continue
       const s = touch(link.collection, link.id, at)
       if (s._gone) continue
       s._fields.add(link.field)
       kind(s, 'edit')
       continue
     }
+    if (!listable(collection)) continue
     const s = touch(collection, item, at)
     if (s._gone) continue
     if (action === 'delete') {
@@ -179,6 +187,15 @@ export function foldEdits(
     .filter((s) => !s._gone && s.order.length > 0)
     .map(({ _fields, _gone, ...s }) => ({ ...s, fields: _fields.size }))
     .sort((a, b) => (a.last_edited_at < b.last_edited_at ? 1 : -1))
+}
+
+/**
+ * A label a person can read: not empty and not just the record's id (activityLabelsFor falls
+ * back to the id when a record has no name — "21" says nothing on a Home card).
+ */
+export function hasReadableLabel(label: string | null | undefined, itemId: string): boolean {
+  const l = String(label ?? '').trim()
+  return l !== '' && l.toLowerCase() !== itemId.trim().toLowerCase()
 }
 
 /** "Moved to Approved · edited 3 fields · commented" — what they did, newest first. */
@@ -245,6 +262,8 @@ export interface RecentlyEditedDeps {
   rows(userId: string, since: Date, limit: number): Promise<EditRow[]>
   deltas(activityIds: number[]): Promise<Array<{ activity: number; delta: unknown }>>
   junctions(): Promise<Map<string, { parent: string; alias: string | null }>>
+  /** Which of these tables are registered collections (the ones with a record page). */
+  registered(collections: string[]): Promise<Set<string>>
   labels(
     user: User,
     refs: Array<{ collection: string; id: string }>,
@@ -265,6 +284,15 @@ export const defaultRecentlyEditedDeps: RecentlyEditedDeps = {
       .whereIn('a.action', [...EDIT_ACTIONS])
       .whereNotNull('a.collection')
       .whereNotNull('a.item')
+      // Chat and system rows never list (comments name their record): leaving them out here
+      // keeps a chatty person's 400-row window for records.
+      .whereRaw("a.collection NOT LIKE ? ESCAPE '!'", ['chat!_%'])
+      .whereRaw("a.collection NOT LIKE ? ESCAPE '!'", ['directus!_%'])
+      .where((q) =>
+        q
+          .whereRaw("a.collection NOT LIKE ? ESCAPE '!'", ['nivaro!_%'])
+          .orWhere('a.collection', 'nivaro_comments')
+      )
       .orderBy([
         { column: 'a.timestamp', order: 'desc' },
         { column: 'a.id', order: 'desc' }
@@ -287,6 +315,16 @@ export const defaultRecentlyEditedDeps: RecentlyEditedDeps = {
   async junctions() {
     const { loadJunctionMap } = await import('./junction-map.js')
     return loadJunctionMap()
+  },
+  async registered(collections) {
+    const { getCollection } = await import('./collections.js')
+    const out = new Set<string>()
+    await Promise.all(
+      collections.map(async (c) => {
+        if (await getCollection(c).catch(() => undefined)) out.add(c)
+      })
+    )
+    return out
   },
   labels: (user, refs, admin) => activityLabelsFor(user, { refs }, { isAdmin: admin }),
   async states(byCollection) {
@@ -326,7 +364,13 @@ export async function recentlyEditedBy(
     rows = await deps.rows(userId, since, MAX_ROWS)
     // Enough distinct records to fill the list after the visibility check, or the window
     // already held fewer rows than one read takes (a wider one would add nothing new).
-    const distinct = new Set(rows.map((r) => `${r.collection}:${r.item}`)).size
+    const distinct = new Set(
+      rows
+        .filter(
+          (r) => r.collection === 'nivaro_comments' || !isInternalCollection(String(r.collection))
+        )
+        .map((r) => `${r.collection}:${r.item}`)
+    ).size
     if (distinct >= limit * 3 || rows.length >= MAX_ROWS) break
   }
   if (rows.length === 0) return []
@@ -335,6 +379,20 @@ export async function recentlyEditedBy(
     .junctions()
     .catch(() => new Map<string, { parent: string; alias: string | null }>())
   const isLinkTable = (c: string) => jmap.has(c)
+  // Only registered collections have a record page; a raw table never lists. A failed
+  // registry read leaves the label rule below to keep out what has no name.
+  const named = new Set<string>()
+  for (const r of rows) {
+    const c = String(r.collection ?? '')
+    if (c === 'nivaro_comments') {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*):/.exec(String(r.comment ?? '').trim())
+      if (m) named.add(m[1])
+    } else if (jmap.has(c)) named.add(jmap.get(c)!.parent)
+    else named.add(c)
+  }
+  const candidates = [...named].filter((c) => IDENT.test(c) && !isInternalCollection(c))
+  const registered = await deps.registered(candidates).catch(() => null)
+  const isHidden = (c: string) => registered != null && !registered.has(c)
   // Field lists for plain updates (their revision delta), one batched read.
   const updateIds = rows
     .filter((r) => r.action === 'update' && !isLinkTable(String(r.collection)))
@@ -367,8 +425,11 @@ export async function recentlyEditedBy(
     const id = String(r.item ?? '').trim()
     if (c === 'nivaro_comments') {
       const m = /^([A-Za-z_][A-Za-z0-9_]*):(.+)$/.exec(String(r.comment ?? '').trim())
-      if (m && r.action === 'create') addRef(m[1], m[2].trim())
-    } else if (!/^(nivaro|directus)_/i.test(c)) addRef(c, id)
+      if (m && r.action === 'create' && !isInternalCollection(m[1]) && !isHidden(m[1]))
+        addRef(m[1], m[2].trim())
+    } else if (isLinkTable(c)) {
+      if (!isHidden(jmap.get(c)!.parent)) addRef(c, id)
+    } else if (!isInternalCollection(c) && !isHidden(c)) addRef(c, id)
   }
   const labels = await deps.labels(user, refs, opts.isAdmin).catch(() => ({}) as ActivityLabels)
   const links = new Map<string, LinkTarget | null>()
@@ -384,12 +445,13 @@ export async function recentlyEditedBy(
         : null
     )
   }
-  const folded = foldEdits(rows, { fieldsByActivity, links, isLinkTable })
+  const folded = foldEdits(rows, { fieldsByActivity, links, isLinkTable, isHidden })
   const visible: Array<EditedSummary & { label: string }> = []
   for (const s of folded) {
-    // Undefined = never judged (over budget); null = the caller cannot see it. Both stay out.
+    // Undefined = never judged (over budget); null = the caller cannot see it. Both stay out,
+    // and so does a record whose only name is its id.
     const label = labels.records?.[`${s.collection}:${s.item_id}`]
-    if (label == null) continue
+    if (label == null || !hasReadableLabel(label, s.item_id)) continue
     visible.push({ ...s, label })
     if (visible.length >= limit) break
   }

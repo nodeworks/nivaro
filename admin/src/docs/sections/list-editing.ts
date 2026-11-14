@@ -103,7 +103,15 @@ export const listEditing: DocSection = {
     },
     {
       type: 'p',
-      text: 'The figure covers every record the list matches, not just the page you see, and is worked out by the server as you: your search, filters and column filters, your role’s row filters and User Scopes all apply, and a field you cannot read is never totalled. It reads in the column’s own format (a currency column shows currency); Count is always a whole number. Each column asks once and asks again only when the filters settle after a change. The choice is remembered for you on this list in this browser, and a saved view keeps the totals it was saved with. Grouped lists and AI search results show no totals row.'
+      text: 'The figure covers every record the list matches, not just the page you see, and is worked out by the server as you: your search, filters and column filters, your role’s row filters and User Scopes all apply, and a field you cannot read is never totalled. It reads in the column’s own format (a currency column shows currency); Count is always a whole number. Each column asks once and asks again only when the filters settle after a change. Grouped lists and AI search results show no totals row.'
+    },
+    {
+      type: 'p',
+      text: 'A saved view can state totals of its own. What you pick yourself is laid over them and remembered for you on this list in this browser: a view that totals one column never switches off the others you turned on, and switching views or going back to Default keeps your choices. Saving or updating a view gives it exactly the totals on screen (a reload brings them all back); from then on the choices it now holds follow the view.'
+    },
+    {
+      type: 'p',
+      text: 'A calculated field that only adds and subtracts stored number columns (for example Left to Forecast = Requisition Amount − Forecast Total) offers Sum alone, worked out from those columns’ sums. A field that is worked out from linked records each time the list is read, or by any other formula, has no total: its menu says so and why, instead of offering one.'
     },
     {
       type: 'note',

@@ -90,7 +90,7 @@ export const fieldDisplaySettingsGuide: DocSection = {
     { type: 'h3', text: 'Searching inside an inline grid' },
     {
       type: 'p',
-      text: 'Inline grids holding more than ten rows get a search box in their toolbar (press / anywhere in the grid to jump to it, Esc to clear). It filters rows by the text their visible cells show — relation labels, choice labels, Yes/No, formatted dates and amounts — and every word must match, as in list search. Matches are highlighted and the box counts them ("12 of 2,341 rows").'
+      text: 'Inline grids holding more than ten rows get a search box in their toolbar. Press / while in the grid (after clicking a row or cell, or with focus on any of its controls — never while typing in a field) to jump to it; Esc clears it. It filters rows by the text their visible cells show — relation labels, choice labels, Yes/No, formatted dates and amounts — and every word must match, as in list search. Matches are highlighted and the box counts them ("12 of 2,341 rows").'
     },
     {
       type: 'p',

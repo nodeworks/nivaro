@@ -25,8 +25,18 @@ export function ColumnHeaderMenu({
   onSetSelected?: () => void
   /** Why bulk set is off for this list (the bulk action is switched off, no checkboxes). */
   setUnavailable?: string | null
-  /** Absent = the column has no totals (not a number column). */
-  totals?: { fn: TotalFn | null; onChange: (fn: TotalFn | null) => void }
+  /**
+   * Absent = the column has no totals (not a number column). `only` limits the functions
+   * (a calculated sum offers Sum alone); `unavailable` = a number column the list cannot
+   * total: the section shows why instead of choices, so nothing is offered and then dropped.
+   */
+  totals?: {
+    fn: TotalFn | null
+    onChange: (fn: TotalFn | null) => void
+    only?: TotalFn[]
+    unavailable?: string
+    note?: string
+  }
 }) {
   const [open, setOpen] = useState(false)
   if (!onSetSelected && !totals) return null
@@ -104,10 +114,30 @@ export function ColumnHeaderMenu({
             <legend className='px-2 pb-0.5 pt-1 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground'>
               Σ Totals row
             </legend>
-            {[
-              { fn: null, label: 'Off' } as { fn: TotalFn | null; label: string },
-              ...TOTAL_FNS
-            ].map((t) => {
+            {totals.unavailable ? (
+              <p
+                data-cbv-col-total-unavailable
+                data-tip={totals.unavailable}
+                className='cursor-help px-2 py-1 text-[12px] leading-snug text-muted-foreground underline decoration-dotted underline-offset-2'
+              >
+                No total for this column
+              </p>
+            ) : null}
+            {totals.note && !totals.unavailable ? (
+              <p
+                data-cbv-col-total-note
+                className='px-2 pb-1 text-[11.5px] leading-snug text-muted-foreground'
+              >
+                {totals.note}
+              </p>
+            ) : null}
+            {(totals.unavailable
+              ? []
+              : [
+                  { fn: null, label: 'Off' } as { fn: TotalFn | null; label: string },
+                  ...TOTAL_FNS.filter((t) => !totals.only || totals.only.includes(t.fn))
+                ]
+            ).map((t) => {
               const on = (totals.fn ?? null) === t.fn
               return (
                 <button
