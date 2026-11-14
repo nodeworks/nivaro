@@ -12,7 +12,7 @@
  * the moment it is read.
  */
 
-import { clearRecordOutboxFor } from '@nivaro/shared'
+import { clearRecordOutboxFor, viewAsPath } from '@nivaro/shared'
 import { MASQUERADE_KEY as KEY, readMasquerade } from './masquerade-core'
 
 export {
@@ -52,7 +52,12 @@ export async function stopMasquerade(): Promise<void> {
  * (a window.open after an await is a popup a browser may block) and pointed
  * at the app once the token is back.
  */
-export async function openViewAsTab(person: { id: string; name: string }): Promise<void> {
+export async function openViewAsTab(person: {
+  id: string
+  name: string
+  /** The page to open on (a record: "See this record as …"); home when absent. */
+  path?: string
+}): Promise<void> {
   const tab = window.open('about:blank', '_blank')
   try {
     const current = readMasquerade()
@@ -77,7 +82,9 @@ export async function openViewAsTab(person: { id: string; name: string }): Promi
       name: person.name,
       uid: person.id
     }).toString()
-    const url = `${window.location.origin}/#${frag}`
+    // Same-origin paths only (viewAsPath refuses `//host` and schemes).
+    const path = person.path ? (viewAsPath(person.path) ?? '/') : '/'
+    const url = `${window.location.origin}${path}#${frag}`
     if (tab) tab.location.href = url
     else window.open(url, '_blank')
   } catch (err) {

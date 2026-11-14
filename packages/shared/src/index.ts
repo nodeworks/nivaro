@@ -1294,7 +1294,13 @@ export {
 export * from './lib/utils'
 export { setNumberFormat, setTimeDisplay } from './lib/utils'
 export { applyValidationRule } from './lib/validation-rules'
-export { canViewAs, registerViewAsOpener, type ViewAsOpener, viewAs } from './lib/view-as'
+export {
+  canViewAs,
+  registerViewAsOpener,
+  type ViewAsOpener,
+  viewAs,
+  viewAsPath
+} from './lib/view-as'
 export * from './lib/worker-socket'
 export * from './lib/write-formula'
 export * from './types'

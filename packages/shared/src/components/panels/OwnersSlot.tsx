@@ -4,6 +4,7 @@ import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import { UserAvatar } from '../UserAvatar'
+import { ViewAsPersonButton } from '../ViewAsPersonButton'
 
 interface Owner {
   id: number
@@ -96,7 +97,7 @@ export function OwnersSlot({
                     {list.map((o) => (
                       <div
                         key={o.id}
-                        className='flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5'
+                        className='group flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5 dark:border-border dark:bg-muted/40'
                       >
                         <UserAvatar
                           userId={o.user}
@@ -107,7 +108,17 @@ export function OwnersSlot({
                             </span>
                           }
                         />
-                        <span className='text-[12px] text-slate-700'>{ownerName(o)}</span>
+                        <span className='text-[12px] text-slate-700 dark:text-slate-200'>
+                          {ownerName(o)}
+                        </span>
+                        <ViewAsPersonButton
+                          person={{
+                            id: String(o.user),
+                            name: ownerName(o),
+                            firstName: o.first_name
+                          }}
+                          className='-mr-1.5 h-5 w-5 opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100'
+                        />
                       </div>
                     ))}
                   </div>

@@ -11647,6 +11647,7 @@ function ItemEditFormView({
           hideActionsExpanded={!!pipelineSlotOpts.hide_actions_expanded}
           onBeforeTransition={saveThenTransition}
           asRole={viewAs.roleId}
+          asUser={viewAs.personId}
           addendumPending={
             !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
           }
@@ -12475,6 +12476,8 @@ function ItemEditFormView({
           <PipelinePanel
             collection={pipelineCollection}
             item={pipelineItem}
+            asRole={viewAs.roleId}
+            asUser={viewAs.personId}
             onBeforeTransition={saveThenTransition}
             addendumPending={
               !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
@@ -12919,6 +12922,8 @@ function ItemEditFormView({
           <PipelinePanel
             collection={pipelineCollection}
             item={pipelineItem}
+            asRole={viewAs.roleId}
+            asUser={viewAs.personId}
             onBeforeTransition={saveThenTransition}
             addendumPending={
               !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
@@ -13034,6 +13039,8 @@ function ItemEditFormView({
                 // transition (saveThenTransition — shared by every transition
                 // button on the form).
                 onBeforeTransition={saveThenTransition}
+                asRole={viewAs.roleId}
+                asUser={viewAs.personId}
               />
             )}
           </div>
@@ -13099,6 +13106,8 @@ function ItemEditFormView({
           <PipelinePanel
             collection={pipelineCollection}
             item={pipelineItem}
+            asRole={viewAs.roleId}
+            asUser={viewAs.personId}
             defaultExpanded={false}
             onBeforeTransition={saveThenTransition}
             addendumPending={
@@ -14571,12 +14580,12 @@ function ItemEditFormView({
                                                       variant='outline'
                                                       size='sm'
                                                       onClick={() => setViewAsOpen(true)}
-                                                      title='Render this form exactly as a chosen role sees it (nothing is saved as them)'
+                                                      title='Render this form and its moves exactly as a chosen role or person sees them (nothing is saved or moved as them)'
                                                       className='gap-1.5'
                                                       data-view-as-role-open
                                                     >
                                                       <Eye className='h-3.5 w-3.5' />
-                                                      View as role…
+                                                      View as role or person…
                                                     </Button>
                                                   )}
                                                   {!isNew && itemId && (
@@ -15094,6 +15103,8 @@ function ItemEditFormView({
                                               item={pipelineItem}
                                               // Same as the header buttons: save first, then transition.
                                               onBeforeTransition={saveThenTransition}
+                                              asRole={viewAs.roleId}
+                                              asUser={viewAs.personId}
                                             />
                                           )}
                                       </div>
@@ -15974,6 +15985,9 @@ function ItemEditFormView({
                                         <ViewAsRoleBar
                                           roles={viewAs.roles}
                                           roleId={viewAs.roleId}
+                                          personId={viewAs.personId}
+                                          person={viewAs.person}
+                                          onPersonChange={viewAs.setPersonId}
                                           onChange={(id) => {
                                             viewAs.setRoleId(id)
                                             if (!id) setViewAsOpen(false)

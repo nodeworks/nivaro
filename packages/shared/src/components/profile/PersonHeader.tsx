@@ -293,7 +293,7 @@ function ViewAsButton({ profile: p }: { profile: PersonProfile }) {
       type='button'
       data-person-view-as
       disabled={busy}
-      data-tip={`See the app exactly as ${first} does. Recorded in the activity log under your name.`}
+      data-tip={`Open the app as ${first} in a new tab. Anything you do there is done as ${first}. Starting it is recorded under your name.`}
       onClick={async () => {
         setBusy(true)
         try {
