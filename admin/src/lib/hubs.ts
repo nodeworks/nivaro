@@ -16,6 +16,7 @@ import {
   type LucideIcon,
   MailCheck,
   Plug,
+  ScanSearch,
   ServerCog,
   ShieldAlert,
   ShieldCheck,
@@ -350,6 +351,21 @@ export const CONFIG_HUB: HubDef = {
   ]
 }
 
+export const DATA_INTEGRITY_HUB: HubDef = {
+  base: '/data-integrity',
+  title: 'Data Integrity',
+  hint: 'Rows that are wrong: records that fail their own form, quality rules, people who can no longer act, and links to records that are gone.',
+  icon: ScanSearch,
+  tabs: [
+    { path: '', label: 'Form conformance' },
+    // No `legacy`: every tab keeps the old page's permission key (/data-integrity…);
+    // App.tsx redirects /data-quality here.
+    { path: 'quality', label: 'Quality rules' },
+    { path: 'people', label: 'Inactive people' },
+    { path: 'orphans', label: 'Orphans' }
+  ]
+}
+
 export const HUBS: HubDef[] = [
   JOBS_HUB,
   DATABASE_HUB,
@@ -373,7 +389,8 @@ export const HUBS: HubDef[] = [
   GRAPHQL_HUB,
   DOCS_HUB,
   DEV_TOOLS_HUB,
-  CONFIG_HUB
+  CONFIG_HUB,
+  DATA_INTEGRITY_HUB
 ]
 
 export const hubTabPath = (hub: HubDef, tab: HubTabDef) =>

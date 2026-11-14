@@ -391,7 +391,7 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }`
     },
     {
       type: 'p',
-      text: 'Relation columns: a column mapped to a many-to-one field names the related record by its name (the related collection\'s label column, case- and space-insensitive) or its id. A column mapped to a many-to-many field may list several, comma-separated — "Cran, HQ Funded" links the row to both project types; a cell that is itself one record\'s name ("Smith, John") stays whole. A value that matches no record, or more than one, refuses that row with a sentence naming it, and the preview lists those rows before you start. Overwrite makes the record\'s links exactly the file\'s list; merge adds the file\'s links to the ones it has. Rollback removes the links a created record got and puts an overwritten record\'s links back.'
+      text: "Relation columns: a column mapped to a many-to-one field names the related record by its name (the related collection's label column, case- and space-insensitive) or its id. A column mapped to a many-to-many field may list several, comma-separated — \"Cran, HQ Funded\" links the row to both project types; a cell that is itself one record's name (\"Smith, John\") stays whole. A value that matches no record, or more than one, refuses that row with a sentence naming it, and the preview lists those rows before you start. Overwrite makes the record's links exactly the file's list; merge adds the file's links to the ones it has. Rollback removes the links a created record got and puts an overwritten record's links back."
     },
     { type: 'h3', id: 'imports-health', text: 'Import health' },
     {
@@ -1304,6 +1304,41 @@ export const dataIntegrityGuide: DocSection = {
     {
       type: 'p',
       text: 'The **People to offload** card lists those people — name, when and how they were suspended, and how much they hold by kind — most work first. Each row opens this tab on that person (`?person=<id>`), where the work is handed on. It draws nothing when nobody holds work. In the admin app it is an Overview section (administrators only, on by default, hide it in Customize); in the EFP portal it is the dashboard card "People to offload", placed beside "People needing attention". Approvals are listed but cannot be reassigned from here: change the approver on the approval chain.'
+    },
+    { type: 'h2', id: 'orphans', text: 'Orphans' },
+    {
+      type: 'p',
+      text: 'The Orphans tab (`/data-integrity/orphans`) finds rows whose links point at records that no longer exist: a link field whose target was deleted, child rows whose parent is gone, link-table (many-to-many) rows with one side missing, and file fields whose file was removed. Every link is built from the relation and field metadata and kept only once its tables and columns are seen in the live database (the metadata is a claim, not truth); links that cannot be checked are listed with the reason (a missing table, a many-to-any link, types that cannot be compared). A link the database itself enforces with a trusted foreign key cannot dangle, so it is shown as enforced and never scanned. DB Health → Dangling foreign keys remains the nightly detector for plain business links; this tab covers the rest and repairs.'
+    },
+    {
+      type: 'p',
+      text: "**Run a full sweep** counts every link in the background (one statement per link with its own deadline on the database server, inside the heavy-read gate, on the background connection pool) and shows progress; you can leave the page, stop it, and the result is kept a week. **Count now** re-reads one link on its own. Pick a link to see its newest orphan rows: open any row, or pick rows and **Empty the link** (a nullable link field; each row is saved through the record's own save as you, with history) or **Remove link rows** (link-table rows only, and never when other tables have foreign keys pointing at that table). Both are previewed first, need a second press, re-check that each row still dangles, and write an `orphan-clear` / `orphan-delete` activity row naming the rows."
+    },
+    {
+      type: 'table',
+      head: ['Endpoint', 'Purpose'],
+      rows: [
+        [
+          '`GET /api/orphans`',
+          'Every link checked, the links skipped with why, and the last sweep (admin).'
+        ],
+        [
+          '`GET /api/orphans/check?key=`',
+          'Count + newest 25 rows for one link now (time-boxed, 503 when it runs out).'
+        ],
+        [
+          '`POST /api/orphans/sweep`',
+          'Start the background sweep (202; 409 while one runs). `POST /api/orphans/sweep/cancel` stops it.'
+        ],
+        [
+          '`POST /api/orphans/preview`',
+          '`{key, action: clear|delete, ids?}` → the rows that still dangle (≤200), a sentence and `plan_hash`.'
+        ],
+        [
+          '`POST /api/orphans/apply`',
+          '`{key, action, ids, plan_hash}` — runs exactly the previewed rows through the items service (409 STALE_PLAN when they differ).'
+        ]
+      ]
     }
   ]
 }
