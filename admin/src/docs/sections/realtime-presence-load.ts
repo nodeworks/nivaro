@@ -51,7 +51,7 @@ node scripts/realtime-load.mjs --target http://127.0.0.1:3099 --people 250 --dry
       rows: [
         [
           'Event-loop stall',
-          'Any API process peaked above the lag limit in that many of 5 consecutive minutes (searched over the last 9 minutes, so a stall between two runs is caught). A lone GC pause never fires.',
+          'Any API process peaked above the lag limit in that many of 5 consecutive minutes (searched over the last 9 minutes, so a stall between two runs is caught). A stall longer than a minute counts in every minute it covered. A lone GC pause never fires.',
           '1000 ms, 3 of 5 minutes'
         ],
         [
@@ -72,6 +72,25 @@ node scripts/realtime-load.mjs --target http://127.0.0.1:3099 --people 250 --dry
         'Config keys: event-loop `threshold_ms`, `breach_minutes`, `window_minutes`; route jump `factor`, `min_rps`, `sustain_minutes`, `share_factor` (0 = off), `min_history_minutes` (processes younger than this stay out of the comparison), `ceiling_rps`; delivery `window_minutes`, `min_samples`, `target_ms`, `good_pct`.',
         'Route templates come from the route definition (`GET /api/items/:collection`), never raw ids.',
         'Cloud mode: all three answer "unknown" — process figures are shared by every tenant on a process and are not kept per tenant.'
+      ]
+    },
+    {
+      type: 'h3',
+      id: 'presence-load-stall-cause',
+      text: 'What caused a stall'
+    },
+    {
+      type: 'p',
+      text: 'An event-loop stall alert names its likely cause, for example "Most likely cause: GET resolve-paths on Unit Types by Sam Rivera (Unit Types list) — 63 s, on prod · web-2." Each API process notes every stall of half a second or more together with the requests that were running through it, and the monitor reads those notes from the process that stalled.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Every request on a stalled process waits for the loop, so the alert ranks them. A request ranks higher the more of the stall it covers, if it was running code rather than waiting on the database when the stall began, and if its last database answer came just before the stall. A request that covers at least 80% of the stall and ranks first is the "Most likely cause". Otherwise the alert says "Possible cause" with the share it covers. When nothing was running, the alert says the stall was likely background work (a scheduled job, socket traffic or garbage collection).',
+        'The alert lists up to five requests from the worst stall on each stalled process. Each shows the route pattern, the collection, the person, the screen they were on (from the page the app reported), how long the request took (or "still running"), the share of the stall it covered, the process and the request id (the same id as the API log row and the slow-trace entry).',
+        'Where it shows: Health → Monitors (a "Most likely cause" box with the request table, while the monitor fails), the issue the alert raises, the notice to the creator and subscribers (in-app, push, email and Teams, with the cause first), the Ops Console incident timeline and the daily report\'s Freezes table.',
+        "Only route patterns, collection names, people's names, screen patterns, times and request ids are kept. Query strings, request bodies and SQL text never reach the alert. Names are looked up when the alert is built.",
+        'Cloud mode: off, like the stall monitor itself. One process serves many tenants, and a request from one tenant must never be named to another.'
       ]
     }
   ]

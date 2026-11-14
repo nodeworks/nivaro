@@ -259,7 +259,8 @@ export interface OpsDigest {
   database: {
     deadlocks: Array<{ issue: number; at: string; victim: string; other: string }>
     timeouts: Array<{ issue: number; title: string }>
-    freezes: Array<{ issue: number; title: string }>
+    /** `cause`: the freeze alert's likely cause line, when its detail names one. */
+    freezes: Array<{ issue: number; title: string; cause?: string }>
   }
   issues: {
     new: Array<{ id: number; source: string; severity: string; title: string; count: number }>

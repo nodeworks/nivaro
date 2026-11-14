@@ -259,7 +259,8 @@ export function DigestSections({ report }: { report: OpsReport }) {
           drill={(r) => dr('issue', r.issue, `Issue #${r.issue}`)}
           cols={[
             { h: 'Issue', cell: (r) => `#${r.issue}`, num: true },
-            { h: 'What', cell: (r) => r.title }
+            { h: 'What', cell: (r) => r.title },
+            { h: 'Likely cause', cell: (r) => r.cause ?? '—' }
           ]}
         />
       </Section>

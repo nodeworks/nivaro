@@ -17,6 +17,7 @@ import { routeOf } from './digest-route.js'
 
 export { routeOf }
 
+import { causeFromDetail } from '../stall-cause-words.js'
 import type { OpsDigest } from './types.js'
 import { clock, type ReportWindow } from './window.js'
 
@@ -304,8 +305,11 @@ export async function buildDigest(
       /Timeout: Request failed/i.test(`${title} ${String(r.details ?? '').slice(0, 4000)}`)
     )
       timeouts.push({ issue: num(r.id), title: title.slice(0, 200) })
-    else if (/^Monitor failing/i.test(title))
-      freezes.push({ issue: num(r.id), title: title.slice(0, 200) })
+    else if (/^Monitor failing/i.test(title)) {
+      // A freeze alert's detail names its likely cause (2026-11-13).
+      const cause = causeFromDetail(r.details)
+      freezes.push({ issue: num(r.id), title: title.slice(0, 200), ...(cause ? { cause } : {}) })
+    }
   }
 
   // ── Jobs ────────────────────────────────────────────────────────────────────

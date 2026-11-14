@@ -14,6 +14,7 @@
  */
 import { hostname } from 'node:os'
 import { currentTraceMeta } from './request-trace.js'
+import { normalizeApp, normalizeScreenPath } from './traffic-client-facts.js'
 import { callerKeyFor, pathTemplate } from './traffic-entities.js'
 
 export const INFLIGHT_CAP = 2000
@@ -45,6 +46,8 @@ interface Entry {
   goneAt: number | null
   /** #3231 — what the request is waiting on (slow paths only; null until one notes a wait). */
   waits: Map<WaitKind, WaitNote> | null
+  /** Epoch ms the request's last statement answered (stall attribution); null = none yet. */
+  lastSettle: number | null
 }
 
 /**
@@ -114,7 +117,8 @@ export function inflightStart(req: unknown): void {
       rows: 0,
       inAuth: false,
       goneAt: null,
-      waits: null
+      waits: null,
+      lastSettle: null
     })
     byReq.set(req, id)
   } catch {
@@ -164,6 +168,10 @@ export function inflightEnd(req: unknown): void {
     byTrace.delete(id)
     const stats: RequestSqlStats = { queries: e.n, sql_ms: Math.round(e.ms), rows: e.rows }
     ;(req as Record<string, unknown>)[SQL_STAMP] = stats
+    if (endListener) {
+      const now = Date.now()
+      if (now - e.startedAt >= STALL_FINISHED_MIN_MS) endListener(stallRawOf(e, now))
+    }
   } catch {
     /* never */
   }
@@ -202,6 +210,7 @@ export function attachInflightQueries(client: {
     const uid = (q as KnexQueryEvent).__knexQueryUid
     const started = uid ? e.running.get(uid) : undefined
     if (uid) e.running.delete(uid)
+    e.lastSettle = Date.now()
     e.n++
     if (started) e.ms += performance.now() - started.perf
     if (Array.isArray(res)) e.rows += res.length
@@ -226,6 +235,7 @@ export function trackStatement(sql: string): (rows?: number) => void {
     e.running.set(uid, st)
     return (rows?: number) => {
       if (!e.running.delete(uid)) return
+      e.lastSettle = Date.now()
       e.n++
       e.ms += performance.now() - st.perf
       if (rows) e.rows += rows
@@ -474,6 +484,85 @@ export function inflightWaitSnapshots(minAgeMs: number, cap = 200): WaitSnapshot
     out.push(snapshotOf(id, e, now, nowPerf))
   }
   return out
+}
+
+// ── Freeze attribution: which requests were running when the event loop stalled ─────────────
+
+/**
+ * One request as the stall attribution (services/stall-causes.ts) sees it: the route TEMPLATE,
+ * the collection named by the route, the person's id, and the screen the client said it was on
+ * (normalised pattern, never ids). Never the query string, the body or SQL text.
+ */
+export interface InflightStallRaw {
+  id: string
+  method: string
+  /** Route template (`/api/items/:collection/resolve-paths`). */
+  route: string
+  /** Epoch ms. */
+  startedAt: number
+  /** Epoch ms the response went out; null = still running. */
+  endedAt: number | null
+  userId: string | null
+  app: string | null
+  page: string | null
+  collection: string | null
+  /** Epoch ms the oldest statement still out was sent; null = none out. */
+  sqlSince: number | null
+  /** Epoch ms the request's last statement answered; null = none yet. */
+  lastSettle: number | null
+}
+
+/** Only requests at least this long can have overlapped a stall worth reporting. */
+export const STALL_FINISHED_MIN_MS = 500
+
+const IDENT = /^[A-Za-z][A-Za-z0-9_]{0,63}$/
+
+function headerOf(req: unknown, name: string): string | null {
+  const v = (req as { headers?: Record<string, unknown> } | null)?.headers?.[name]
+  if (Array.isArray(v)) return typeof v[0] === 'string' ? v[0] : null
+  return typeof v === 'string' ? v : null
+}
+
+function collectionOf(req: unknown): string | null {
+  const p = (req as { params?: Record<string, unknown> } | null)?.params
+  const c = p?.collection
+  return typeof c === 'string' && IDENT.test(c) ? c : null
+}
+
+function stallRawOf(e: Entry, endedAt: number | null): InflightStallRaw {
+  let sqlSince: number | null = null
+  for (const s of e.running.values()) if (sqlSince == null || s.at < sqlSince) sqlSince = s.at
+  return {
+    id: e.id,
+    method: e.method,
+    route: e.route,
+    startedAt: e.startedAt,
+    endedAt,
+    userId: userIdOf(e.req),
+    app: normalizeApp(headerOf(e.req, 'x-nivaro-app')),
+    page: normalizeScreenPath(headerOf(e.req, 'x-nivaro-page')),
+    collection: collectionOf(e.req),
+    sqlSince,
+    lastSettle: e.lastSettle
+  }
+}
+
+/** Every unfinished request on this process, for the stall attribution. */
+export function inflightStallCandidates(cap = 500): InflightStallRaw[] {
+  const out: InflightStallRaw[] = []
+  for (const e of byTrace.values()) {
+    if (out.length >= cap) break
+    out.push(stallRawOf(e, null))
+  }
+  return out
+}
+
+type EndListener = (raw: InflightStallRaw) => void
+let endListener: EndListener | null = null
+
+/** One listener hears every request of STALL_FINISHED_MIN_MS or more as it finishes. */
+export function setInflightEndListener(fn: EndListener | null): void {
+  endListener = fn
 }
 
 /** Test hook. */

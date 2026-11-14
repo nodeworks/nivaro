@@ -6,6 +6,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { cleanLogFilter, filterChips } from '../services/log-filters.js'
 import { bustLogRules, readLog } from '../services/log-ring.js'
+import { causeFromDetail } from '../services/stall-cause-words.js'
 import { swallowStats } from '../services/swallow-counter.js'
 
 /**
@@ -452,6 +453,12 @@ export async function opsLogsRoutes(app: FastifyInstance) {
           .orderBy('last_seen_at', 'desc')
           .limit(50)
           .select('title', 'severity', 'last_seen_at', 'occurrence_count')
+          // A failing monitor's detail opens with its likely cause (freeze alerts, 2026-11-13).
+          .select(
+            db.raw(
+              "CASE WHEN title LIKE 'Monitor failing:%' THEN LEFT(details, 1500) END AS monitor_detail"
+            )
+          )
           .catch(() => [] as Array<Record<string, unknown>>),
         db('nivaro_job_runs')
           .whereBetween('started_at', [from, to])
@@ -472,10 +479,13 @@ export async function opsLogsRoutes(app: FastifyInstance) {
           .catch(() => [] as Array<Record<string, unknown>>)
       ])
       for (const i of issues) {
+        const cause = causeFromDetail(i.monitor_detail)
         events.push({
           at: new Date(i.last_seen_at as Date).toISOString(),
           kind: `issue:${i.severity}`,
-          label: `${i.title}${Number(i.occurrence_count) > 1 ? ` (×${i.occurrence_count})` : ''}`
+          label: `${i.title}${Number(i.occurrence_count) > 1 ? ` (×${i.occurrence_count})` : ''}${
+            cause ? ` — ${cause}` : ''
+          }`
         })
       }
       for (const j of jobs) {
