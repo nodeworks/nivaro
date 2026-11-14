@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { activityGroupKey, withActivityScope } from './activity-scope.js'
 import { newChainId, startChain } from './chain.js'
 import { getFile, readFileBuffer } from './files.js'
+import { announceCollectionImportRun } from './import-collection-runs.js'
 import { loadQueueStanding, publishQueueStanding } from './import-queue-standing.js'
 import { rememberRunRows } from './import-run-rows.js'
 import { emitImportProgress, emitJobProgress } from './live-progress.js'
@@ -270,6 +271,8 @@ async function runOne(
 ): Promise<void> {
   let buffer = preloaded
   const began = Date.now()
+  // #1826 — a procedure-mode run is announced on its collections' pages (start + end).
+  let announced: ImportDefinition | null = null
   try {
     const definition = await getImportDefinition(String(next.import_key))
     if (!definition) throw new Error(`No import definition for "${next.import_key}"`)
@@ -289,6 +292,8 @@ async function runOne(
       status: 'running',
       href: `/imports?run=${next.id}`
     })
+    announced = definition
+    void announceCollectionImportRun(definition, String(next.id), 'running')
     // One integration event chain per run: the load, and the post-run flows
     // it fans out to (PO completion sweep, partner pushes), share it.
     const fileBuffer = buffer
@@ -367,6 +372,7 @@ async function runOne(
         // Service-mode runs report what actually changed; proc runs keep null.
         ...(summary ? { logs: summary.slice(0, 4000) } : {})
       })
+    void announceCollectionImportRun(definition, String(next.id), 'completed')
     await notifyCreator(
       app,
       next,
@@ -426,6 +432,7 @@ async function runOne(
         updated_at: new Date(),
         logs: message.slice(0, 4000)
       })
+    if (announced) void announceCollectionImportRun(announced, String(next.id), 'error')
     // The failure belongs in front of whoever queued it — a silent 'error' row
     // is how imports get re-run blindly.
     await notifyCreator(app, next, `${label(next)} import failed`, message.slice(0, 500))

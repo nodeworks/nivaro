@@ -21,6 +21,7 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { useRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
 import { userErrorMessage } from '../../lib/safe-error'
 import { formatRelative } from '../../lib/utils'
+import { CollectionImportBanner } from '../CollectionImportBanner'
 import { markLiveRecordWrite } from './live-record-marks'
 
 /** Why an open record can no longer be saved (#1871 deleted, #1925 access). */
@@ -673,6 +674,8 @@ export function RecordLiveSync({
           </p>
         </div>
       )}
+      {/* #1826 — a procedure-mode import writing this collection (no per-record events). */}
+      {!gone && <CollectionImportBanner collection={collection} scope='record' />}
       {flows.length > 0 && !gone && (
         <div
           data-record-automation

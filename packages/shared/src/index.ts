@@ -117,6 +117,7 @@ export type {
   CollectionBrowserViewProps
 } from './components/CollectionBrowserView'
 export { CollectionBrowserView } from './components/CollectionBrowserView'
+export { CollectionImportBanner } from './components/CollectionImportBanner'
 export {
   ConfigHistory,
   ConfigHistoryButton,

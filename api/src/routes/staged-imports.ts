@@ -822,6 +822,17 @@ export async function stagedImportRoutes(app: FastifyInstance) {
    * group and a time estimate from each definition's recent run times. Admins see every
    * run; anyone else only the runs they queued.
    */
+  // #1826 — procedure-mode runs writing this collection (running, or ended in the last few
+  // minutes) for the banner on its list and record pages. Readers of the collection only.
+  app.get('/collection-runs', async (req) => {
+    const collection = String((req.query as { collection?: string }).collection ?? '').trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(collection)) return { data: [] }
+    const { can } = await import('../services/permissions.js')
+    if (!req.user || !(await can(req.user as User, 'read', collection))) return { data: [] }
+    const { listCollectionImportRuns } = await import('../services/import-collection-runs.js')
+    return { data: await listCollectionImportRuns(collection) }
+  })
+
   app.get('/queue', async (req) => {
     const { currentStanding } = await import('../services/staged-import-worker.js')
     const { entries, standing } = await currentStanding()
