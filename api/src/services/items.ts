@@ -7222,6 +7222,15 @@ export async function createOne(
     row: ctx.payload as Record<string, unknown>,
     callerFields
   })
+  // Exact copies of an existing record's label, where the collection blocks them
+  // (`browser_config.duplicate_check.block_exact`); a no-op everywhere else.
+  {
+    const bc = (col as { browser_config?: unknown }).browser_config
+    if (bc != null && JSON.stringify(bc).includes('block_exact')) {
+      const { enforceDuplicateBlock } = await import('./duplicate-check.js')
+      await enforceDuplicateBlock(user, collection, ctx.payload as Record<string, unknown>, bc)
+    }
+  }
 
   // Encrypt configured encrypted fields just before write
   const securedPayload = await encryptItemFields(collection, ctx.payload)

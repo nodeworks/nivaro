@@ -531,6 +531,7 @@
           <a class="docs-nav-item" data-section="global-search" href="#global-search">Global Search (Cmd+K)</a>
           <a class="docs-nav-item" data-section="saved-views" href="#saved-views">Saved Views</a>
           <a class="docs-nav-item" data-section="form-collaboration" href="#form-collaboration">Form Collaboration &amp; Drafts</a>
+          <a class="docs-nav-item" data-section="duplicate-warnings" href="#duplicate-warnings">Duplicate Warnings</a>
           <a class="docs-nav-item" data-section="list-signals" href="#list-signals">Fulfilment, Send-backs &amp; Back to Queue</a>
           <a class="docs-nav-item" data-section="import-from-url" href="#import-from-url">Bulk Import from URL</a>
           <a class="docs-nav-item" data-section="ai-field-mapping" href="#ai-field-mapping">AI Field Mapping</a>
@@ -18084,6 +18085,44 @@ DELETE /api/saved-views/:id        Delete view (creator/admin only)</code></pre>
           <h2 class="doc-h2" id="form-collaboration-cursors">Shared cursors in grids</h2>
           <p class="doc-p">Beyond “Robert is editing this line”, the cell a colleague has focus in is outlined with their name — the grid announces <code class="doc-code">cell:&lt;collection&gt;:&lt;row&gt;:&lt;field&gt;</code> through the record-presence channel (window event <code class="doc-code">nvr:cell-editing</code>, relayed by the host as a <code class="doc-code">field:focus</code>), and the host marks the matching <code class="doc-code">[data-grid-cell]</code>.</p>
           <!-- /SYNC:form-collaboration -->
+        </div>
+
+        <div class="doc-section" id="s-duplicate-warnings" data-toc='[{"id":"duplicate-warnings","label":"Duplicate Warnings"},{"id":"duplicate-warnings-form","label":"On the new-record form"},{"id":"duplicate-warnings-setting","label":"Which collections are checked"},{"id":"duplicate-warnings-api","label":"API"},{"id":"duplicate-warnings-import","label":"Collection import preview"}]'>
+          <!-- SYNC:duplicate-warnings -->
+          <h1 class="doc-h1" id="duplicate-warnings">Duplicate Warnings</h1>
+          <p class="doc-p">Reference lists (unit types, vendors, categories, project types…) grow copies when nobody sees that “MX480” already exists while typing “mx480”. When someone creates a record, the form compares what they type in the label field with the existing records and shows the likely duplicates under the field — before they save.</p>
+          <h2 class="doc-h2" id="duplicate-warnings-form">On the new-record form</h2>
+          <ul class="doc-ul">
+            <li>**Already exists: MX480 (unit type) — Open** in amber: an existing record has the same text, ignoring case and spacing.</li>
+            <li>**Similar: MX-480 B (unit type)** in quiet grey: the same letters and digits once punctuation and accents are removed, one value is the start of the other (“Acme Corp” / “Acme Corporation”), or one or two typos in a longer value.</li>
+            <li>The form asks about 0.6 s after typing stops. A name opens the existing record in the drill-down sheet (the draft stays put) or, where the app has no sheet, in a new tab.</li>
+            <li>Only records the person may read count, and only fields they may read are compared (row filters, User Scopes and field permissions apply exactly as on a list read). Editing an existing record never shows the notice.</li>
+            <li>The notice never stops the save — unless the collection blocks exact copies (below).</li>
+          </ul>
+          <h2 class="doc-h2" id="duplicate-warnings-setting">Which collections are checked</h2>
+          <p class="doc-p">**Table Editor → Settings → Collection Browser → Warn about duplicates**, stored as <code class="doc-code">browser_config.duplicate_check</code> on the collection (no migration):</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Mode</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td>Auto (unset)</td><td>On for a small reference list: the display template names exactly one plain text field (not computed, not a generated id) and the table holds at most 50,000 rows. Transactional tables, labels built from several fields and system tables are off.</td></tr>
+              <tr><td>On</td><td>The chosen fields (else the display template’s text fields), on any table size. Above 50,000 rows only the exact check runs (it seeks an index); the near-match checks scan and are skipped.</td></tr>
+              <tr><td>Off</td><td>Never checked.</td></tr>
+              <tr><td>Block exact copies</td><td>A create whose value equals an existing record’s (case and spacing ignored) is refused with <code class="doc-code">400 DUPLICATE_RECORD</code> (<code class="doc-code">field</code>, <code class="doc-code">value</code>, and <code class="doc-code">existing_id</code> when the person may read that record). Judged against every record, so the refusal can say a copy exists that the person cannot open. Creates only — renaming an existing record is not checked.</td></tr></tr></tbody>
+          </table></div>
+          <pre class="doc-pre"><code>PATCH /api/collections/unit_types
+{ "browser_config": { "duplicate_check": { "mode": "on", "fields": ["name"], "block_exact": true } } }</code></pre>
+          <h2 class="doc-h2" id="duplicate-warnings-api">API</h2>
+          <pre class="doc-pre"><code>GET /api/duplicates/unit_types
+→ { data: { enabled: true, fields: ["name"], block_exact: false, close: true, source: "auto", label: "Unit Type" } }
+
+GET /api/duplicates/unit_types/check?values={"name":"mx480"}&amp;exclude=&lt;id&gt;
+→ { data: { enabled: true, fields: ["name"], matches: {
+      name: [ { id: "7", label: "MX480", value: "MX480", match: "exact", score: 1 },
+              { id: "9", label: "MX-480 B", value: "MX-480 B", match: "close", score: 0.71 } ] } } }</code></pre>
+          <p class="doc-p">Signed in; answered as the caller. Up to 5 matches per field, exact first. The lookup runs under a 1.5 s time budget; <code class="doc-code">partial: true</code> says a check was cut.</p>
+          <h2 class="doc-h2" id="duplicate-warnings-import">Collection import preview</h2>
+          <p class="doc-p">The import preview (<code class="doc-code">POST /api/imports/preview</code>) checks every row the import would CREATE against the same fields and answers <code class="doc-code">duplicates: { fields, exact_rows, close_rows, in_file_rows, close, rows[] }</code> (the first 50 rows with what they copy). The confirm step shows “3 new rows would create a duplicate — 2 copy an existing record, 1 repeats an earlier row”. Choose a match field to update the existing records instead, or remove the rows from the file. Exact and punctuation-only matches are checked; the typo check does not run on imports.</p>
+          <div class="doc-note">The form in efp-new uses the same shared record form, so it gets the same notice with no host change.</div>
+          <!-- /SYNC:duplicate-warnings -->
         </div>
 
         <div class="doc-section" id="s-list-signals" data-toc='[{"id":"list-signals","label":"Fulfilment, Send-backs &amp; Back to Queue"},{"id":"list-signals-fulfilment","label":"Shipped n / m on lists"},{"id":"list-signals-send-backs","label":"Sent back"},{"id":"list-signals-back","label":"Back to the queue"},{"id":"list-signals-open-tabs","label":"Open in tabs"},{"id":"list-signals-recent","label":"Recently viewed"},{"id":"list-signals-owner-load","label":"Owner load"},{"id":"list-signals-saved-view-widget","label":"Dashboard widgets from a saved view"},{"id":"list-signals-sla-presets","label":"SLA duration presets"},{"id":"list-signals-row-flags","label":"Row flags on a catalog picker"},{"id":"list-signals-facet-builder","label":"Facet builders on a catalog picker"},{"id":"list-signals-unseen","label":"Changed since you looked"},{"id":"list-signals-formula-columns","label":"Formula columns"},{"id":"list-signals-role-default","label":"Default view per role"},{"id":"list-signals-tree","label":"Tree view and hierarchy scope"}]'>

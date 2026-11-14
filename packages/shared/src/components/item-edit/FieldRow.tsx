@@ -28,6 +28,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { useAddendumFields } from './AddendumFieldContext'
 import { AutoIdPreviewField } from './AutoIdPreviewField'
 import { useCascadeClearNotifier } from './cascade-clear-notice'
+import { DuplicateNotice } from './DuplicateNotice'
 import { FOCUSABLE } from './entry/entry-keys'
 import {
   LockReasonBadge,
@@ -755,6 +756,7 @@ export const FieldRow = memo(function FieldRow({
   const remoteChange = affordances?.remoteChanges[field.field]
   const lockReason = affordances?.lockReasons[field.field]
   const applyToLines = affordances?.applyToLines[field.field]
+  const duplicateHint = affordances?.duplicates?.[field.field]
   // Personal defaults (new records): pill + undo while the field holds its default, or a
   // quiet hint saying why the saved default was not applied.
   const personalDefaults = usePersonalDefaultsApi()
@@ -1440,6 +1442,7 @@ export const FieldRow = memo(function FieldRow({
       {personalDefaultHint && !personalDefaultApplied && (
         <PersonalDefaultHint field={field.field} text={personalDefaultHint} />
       )}
+      {duplicateHint && <DuplicateNotice field={field.field} hint={duplicateHint} />}
       {remoteChange && (
         <RemoteChangeGhost
           change={remoteChange}

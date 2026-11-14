@@ -27,6 +27,7 @@ import type { TextContext } from '../../lib/placement-behaviour'
 import { htmlToText } from '../../lib/sanitize-html'
 import { cn, formatRelative } from '../../lib/utils'
 import { useOverflowTip } from '../TipLayer'
+import type { DuplicateHint } from './DuplicateNotice'
 import { clearPersonalDefault, refusalText, usePersonalDefaultCss } from './PersonalDefaultControl'
 import { PERSONAL_DEFAULT_GHOST_BUTTON } from './PersonalDefaultPill'
 import type { CMSField, CMSRelation } from './types'
@@ -80,6 +81,8 @@ export interface FieldAffordances {
   glossaryHelp?: boolean
   /** #2703: the record's pipeline state and the viewer's role, for label rules. */
   placementText?: TextContext | null
+  /** New records: field → existing records that look the same (DuplicateNotice). */
+  duplicates?: Record<string, DuplicateHint>
 }
 
 export const FieldAffordancesContext = createContext<FieldAffordances | null>(null)
