@@ -9,8 +9,9 @@ import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 /**
  * "See this record as <person>" (Rob 2026-11-13) — an administrator's door
  * into the real View-as, opened on THIS page in a new tab as that person.
- * View-as is the person: whatever is done in that tab is done as them, so
- * the door says so before it opens (an anchored confirm, never a native
+ * View-as is the person: whatever is done in that tab is done as them (the
+ * server stores the administrator beside it, shown to administrators only),
+ * so the door says so before it opens (an anchored confirm, never a native
  * dialog). Shown to administrators only, and only where the host app can
  * open itself as someone else (registerViewAsOpener). Starting it is logged
  * by the server under the admin's name; this component writes nothing.
@@ -83,8 +84,8 @@ export function ViewAsPersonButton({
       >
         <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>{label}</p>
         <p className='mt-1 text-[12px] leading-snug text-slate-600 dark:text-muted-foreground'>
-          Opens this page in a new tab as {first}. Anything you do there is done as {first} — saves,
-          moves and messages go out under their name. Starting it is recorded under yours.
+          Opens this page as {first}, exactly as {first} sees it. Anything you change is done as{' '}
+          {first}; admins can see it was you.
         </p>
         <div className='mt-3 flex justify-end gap-2'>
           <button

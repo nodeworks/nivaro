@@ -99,7 +99,10 @@ describe('ViewAsPersonButton', () => {
     await until(() => !!document.querySelector('[data-view-as-person-confirm]'))
     const confirm = document.querySelector('[data-view-as-person-confirm]')
     expect(confirm?.textContent).toContain('View as David Pry')
-    expect(confirm?.textContent).toContain('Anything you do there is done as David')
+    expect(confirm?.textContent).toContain('Opens this page as David, exactly as David sees it.')
+    expect(confirm?.textContent).toContain(
+      'Anything you change is done as David; admins can see it was you.'
+    )
     // Nothing opens until the admin says so.
     expect(opener).not.toHaveBeenCalled()
     await act(async () => button('Open as David')?.click())

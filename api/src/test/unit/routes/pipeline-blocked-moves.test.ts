@@ -13,6 +13,8 @@ const S_WAREHOUSE = 'S-WAREHOUSE'
 
 const who = vi.hoisted(() => ({
   admin: false,
+  /** Rob 2026-11-14: a View-as (nvm_) tab of David, opened by an administrator. */
+  viewAs: false,
   owner: {
     allowed: false,
     message: '',
@@ -24,9 +26,25 @@ const who = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../middleware/authenticate.js', () => {
-  const set = async (req: { user?: unknown; isAdmin?: boolean }) => {
+  const set = async (req: {
+    user?: unknown
+    isAdmin?: boolean
+    authMethod?: string
+    masqueradeAdminId?: string
+  }) => {
+    if (who.admin && !who.viewAs) {
+      // The administrator signed in as themselves.
+      req.user = { id: 'u-rob', role: '6D0C0E3A-0000-4000-8000-0000000000A1' }
+      req.isAdmin = true
+      req.authMethod = 'session'
+      return
+    }
+    // David — or a View-as tab of David: authenticate resolves the PERSON (their role, their
+    // isAdmin) and only notes the administrator behind it (middleware/authenticate.ts nvm_).
     req.user = { id: 'u-david', role: '6D0C0E3A-0000-4000-8000-0000000000C1' }
-    req.isAdmin = who.admin
+    req.isAdmin = false
+    req.authMethod = who.viewAs ? 'masquerade' : 'session'
+    if (who.viewAs) req.masqueradeAdminId = 'u-rob'
   }
   return { authenticate: vi.fn(set), requireAuth: vi.fn(set), requireAdmin: vi.fn(set) }
 })
@@ -79,7 +97,10 @@ vi.mock('../../../services/workflow-conditions.js', async (orig) => ({
   // An MDSi warehouse: the Fusion variant's condition does not match.
   fetchRecordForConditions: vi.fn(async () => ({ warehouse_kind: 'mdsi' }))
 }))
-vi.mock('../../../lib/column-probe.js', () => ({ hasColumn: vi.fn(async () => false) }))
+const probe = vi.hoisted(() => ({ actingAdmin: false }))
+vi.mock('../../../lib/column-probe.js', () => ({
+  hasColumn: vi.fn(async (_t: string, c: string) => c === 'acting_admin' && probe.actingAdmin)
+}))
 
 const tables = vi.hoisted(() => ({}) as Record<string, Array<Record<string, unknown>>>)
 vi.mock('../../../db/index.js', () => {
@@ -127,6 +148,8 @@ const tx = (row: Record<string, unknown>) => ({
 
 beforeEach(() => {
   who.admin = false
+  who.viewAs = false
+  probe.actingAdmin = false
   who.owner = {
     allowed: false,
     message: '',
@@ -171,6 +194,17 @@ beforeEach(() => {
   ]
   tables.nivaro_roles = [{ id: ROLE_ADMIN, name: 'Admin' }]
 })
+
+async function readFull() {
+  const app = Fastify({ logger: false })
+  await app.register(pipelinesRoutes, { prefix: '/pipelines' })
+  const res = await app.inject({
+    method: 'GET',
+    url: '/pipelines/instance/inventory_request/37713'
+  })
+  expect(res.statusCode).toBe(200)
+  return JSON.parse(res.body).data as Record<string, unknown>
+}
 
 async function read() {
   const app = Fastify({ logger: false })
@@ -277,5 +311,69 @@ describe('GET /pipelines/instance — blocked_transitions (FDX25INV-37713)', () 
       reason:
         "Draft is skipped for this request (amount is below 5,000), so it can't be sent there."
     })
+  })
+})
+
+describe('View-as is exactly the person (Rob 2026-11-14)', () => {
+  it('a View-as tab of the creator sees Submit to Warehouse blocked with the owner reason', async () => {
+    const own = await read()
+    who.viewAs = true
+    who.admin = true // the administrator behind the tab — never what the request judges
+    const asDavid = await read()
+    expect(ids(asDavid.available_transitions)).toEqual(['T-SEND-BACK', 'T-CANCEL'])
+    expect(ids(asDavid.available_transitions)).not.toContain('T-SUBMIT')
+    expect(asDavid.blocked_transitions.find((t) => t.id === 'T-SUBMIT')?.blocked).toEqual({
+      code: 'OWNER',
+      reason:
+        'Only the owner of Warehouse Submission can make this move. No one owns Warehouse Submission on this record yet — an administrator can make it, or ask to be made the owner.'
+    })
+    // Identical to David's own answer, move for move.
+    expect(asDavid.available_transitions).toEqual(own.available_transitions)
+    expect(asDavid.blocked_transitions).toEqual(own.blocked_transitions)
+  })
+
+  it('the same record read by the administrator as themselves: the move is allowed', async () => {
+    who.admin = true
+    const data = await read()
+    expect(ids(data.available_transitions)).toContain('T-SUBMIT')
+    expect(data.blocked_transitions).toEqual([])
+  })
+})
+
+describe('pipeline history: the administrator behind a View-as move (migration 527)', () => {
+  beforeEach(() => {
+    probe.actingAdmin = true
+    tables['nivaro_workflow_history as h'] = [
+      { id: 7, from_state: 'S-DRAFT', to_state: S_WAREHOUSE, first_name: 'David', last_name: 'Pry' }
+    ]
+    tables.nivaro_workflow_history = [{ id: 7, acting_admin: 'u-rob' }]
+    tables.nivaro_users = [{ id: 'u-rob', first_name: 'Rob', last_name: 'Lee', email: 'r@x.test' }]
+  })
+
+  const historyOf = async () =>
+    (await readFull()).history as Array<{ id: number; acting_admin?: unknown }>
+
+  it('an administrator reader gets acting_admin on the move', async () => {
+    who.admin = true
+    const [h] = await historyOf()
+    expect(h.acting_admin).toEqual({ id: 'u-rob', name: 'Rob Lee' })
+  })
+
+  it('David (and anyone not an administrator) gets the move exactly as his own', async () => {
+    const [h] = await historyOf()
+    expect('acting_admin' in h).toBe(false)
+  })
+
+  it('the View-as tab itself reads it as David does', async () => {
+    who.viewAs = true
+    const [h] = await historyOf()
+    expect('acting_admin' in h).toBe(false)
+  })
+
+  it('a database behind migration 527 answers no acting_admin, and still answers', async () => {
+    who.admin = true
+    probe.actingAdmin = false
+    const [h] = await historyOf()
+    expect('acting_admin' in h).toBe(false)
   })
 })

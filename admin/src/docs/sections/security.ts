@@ -326,7 +326,18 @@ Authorization: Bearer <nvm_-token>
     { type: 'h3', text: 'View as, from a person’s page' },
     {
       type: 'p',
-      text: 'The admin app’s "View as" button (People page → header) mints a token and opens a new tab on it. The token lives only in that tab’s sessionStorage and rides every request as a bearer, so the admin’s other tabs stay the admin; an amber bar names the person and "Stop viewing as" revokes the token and closes the tab. See People page tools.'
+      text: 'The admin app’s "View as" button (People page → header) mints a token and opens a new tab on it. The token lives only in that tab’s sessionStorage and rides every request as a bearer, so the admin’s other tabs stay the admin; an amber bar names the person ("Viewing as David Pry — you see and act exactly as David. Admins can see changes were made by you.") and "Stop viewing as" revokes the token and closes the tab. From a record (the eye beside an owner, or "Open as …"), the tab opens on that record — in the admin app and in a headless frontend that reads the opener’s `path`. See People page tools.'
+    },
+    { type: 'h3', text: 'Exactly the person — and who sees that it was you' },
+    {
+      type: 'ul',
+      items: [
+        'A View-as tab is the person: the same screens, data, buttons and permissions, judged as them on the server (their role, their admin standing, whether they own the step). A move they cannot make shows locked with the same reason they see; a save, a move, a comment or an upload is done as them.',
+        'Only credential routes are refused (API keys, connected apps, static tokens, kiosk links, a nested View-as): what they minted would belong to the person.',
+        'The administrator behind every write is stored beside it: on the activity row (`nivaro_activity.actor` = `{kind: "view_as", id: <admin>, on_behalf_of: <person>}`, which also covers record saves, revisions, comments, tasks, support tickets, uploads and approval decisions), on a pipeline move (`nivaro_workflow_history.acting_admin`, migration 527) and on a chat message (`chat_messages.masquerade_admin`).',
+        'Administrators — and only administrators — read it: the Activity page, the record history, the pipeline history and the comment thread say "Rob Lee as David Pry".',
+        'Everyone else, the person included, sees exactly what they would see had the person done it: no "as" in the history, and notifications, emails, webhooks and partner payloads are unchanged.'
+      ]
     },
     {
       type: 'warn',

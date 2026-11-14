@@ -19,6 +19,7 @@ import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access
 import { registeredTransitionRefusal } from './transition-checks.js'
 import { claimTransition, TransitionDuplicateError } from './transition-guard.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
+import { viewAsColumns } from './view-as-attribution.js'
 import { TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
 import {
@@ -152,6 +153,8 @@ export async function startWorkflowInstance(opts: {
         })
       await db('nivaro_workflow_history').insert({
         ...(await chainFields('nivaro_workflow_history')),
+        // Migration 527: the administrator behind a View-as move (admins-only display).
+        ...(await viewAsColumns('nivaro_workflow_history')),
         instance: instanceId,
         transition: null,
         from_state: initialState.id,

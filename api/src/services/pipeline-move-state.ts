@@ -15,6 +15,7 @@
 import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
 import { originFields } from './note-authorship.js'
+import { viewAsColumns } from './view-as-attribution.js'
 
 export class MoveStateError extends Error {
   constructor(
@@ -95,6 +96,8 @@ export async function moveRecordToState(input: MoveStateInput): Promise<MoveStat
     const res = (await trx('nivaro_workflow_history')
       .insert({
         ...(await chainFields('nivaro_workflow_history')),
+        // Migration 527: the administrator behind a View-as move (admins-only display).
+        ...(await viewAsColumns('nivaro_workflow_history')),
         instance: instance.id,
         from_state: fromStateId,
         to_state: target.id,

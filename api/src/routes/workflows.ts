@@ -11,6 +11,7 @@ import { manualTransitionRefusal } from '../services/manual-transition-gate.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from '../services/record-access.js'
 import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
+import { viewAsColumns } from '../services/view-as-attribution.js'
 import { syncStateField } from '../services/workflow-transitions.js'
 
 // ─── Types (mirrors routes/pipelines.ts — same underlying tables) ─────────────
@@ -328,6 +329,8 @@ async function checkJoin(childInstanceId: string, userId: string | null) {
       })
     await db('nivaro_workflow_history').insert({
       ...(await chainFields('nivaro_workflow_history')),
+      // Migration 527: the administrator behind a View-as move (admins-only display).
+      ...(await viewAsColumns('nivaro_workflow_history')),
       instance: parentId,
       transition: null,
       from_state: parent.current_state,
@@ -629,6 +632,8 @@ export async function workflowsRoutes(app: FastifyInstance) {
     // Record the split on the parent (children + join target encoded in comment JSON).
     await db('nivaro_workflow_history').insert({
       ...(await chainFields('nivaro_workflow_history')),
+      // Migration 527: the administrator behind a View-as move (admins-only display).
+      ...(await viewAsColumns('nivaro_workflow_history')),
       instance: id,
       transition: null,
       from_state: instance.current_state,
@@ -856,6 +861,8 @@ export async function workflowsRoutes(app: FastifyInstance) {
       })
     await db('nivaro_workflow_history').insert({
       ...(await chainFields('nivaro_workflow_history')),
+      // Migration 527: the administrator behind a View-as move (admins-only display).
+      ...(await viewAsColumns('nivaro_workflow_history')),
       instance: id,
       transition: transition.id,
       from_state: instance.current_state,

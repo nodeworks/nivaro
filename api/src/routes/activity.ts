@@ -24,6 +24,7 @@ import { agentBadgeLabel, readMcpSettings } from '../services/mcp-calls.js'
 import { myRecordSet, whereInRecordSet } from '../services/overview/my-records.js'
 import { getAllowedFields } from '../services/permissions.js'
 import { isStatementTimeout } from '../services/request-trace.js'
+import { hideViewAsActor } from '../services/view-as-attribution.js'
 import type { User } from '../types.js'
 import { registerActivityUndoRoutes } from './activity-undo.js'
 
@@ -355,9 +356,10 @@ async function activityListGate(req: FastifyRequest, reply: FastifyReply) {
 }
 
 /**
- * What a non-administrator sees of a page: no IP address or user agent, and an update's
- * changed fields only where their role may read the field (a value they could not open on the
- * record never shows in its history either).
+ * What a non-administrator sees of a page: no IP address or user agent, no administrator behind
+ * a View-as write (it reads as the person's own), and an update's changed fields only where their
+ * role may read the field (a value they could not open on the record never shows in its history
+ * either).
  */
 async function forNonAdmin(
   user: User,
@@ -369,7 +371,8 @@ async function forNonAdmin(
     allowed.set(c, await getAllowedFields(user, 'read', c).catch(() => []))
   }
   return rows.map((r) => {
-    const { ip: _ip, user_agent: _ua, ...rest } = r
+    // A View-as write reads exactly like the person's own (only administrators see the admin).
+    const { ip: _ip, user_agent: _ua, ...rest } = hideViewAsActor(r)
     const fields = allowed.get(String(r.collection ?? ''))
     if (Array.isArray(rest.changes) && fields !== null) {
       const ok = new Set(fields ?? [])

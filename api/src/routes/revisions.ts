@@ -195,7 +195,7 @@ export async function revisionsRoutes(app: FastifyInstance) {
     const data = await revisionsForReader(
       req.user!,
       q.collection,
-      await listRevisions(q.collection, q.item)
+      await listRevisions(q.collection, q.item, { isAdmin: !!req.isAdmin })
     )
     return reply.send({ data })
   })
