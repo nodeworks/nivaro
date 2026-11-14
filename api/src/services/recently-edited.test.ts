@@ -175,7 +175,9 @@ describe('recentlyEditedBy', () => {
   })
 
   it('widens the window only while too few records turned up', async () => {
-    const rows = vi.fn(async () => [row(1, 'update', 'workflows', '7', '2026-11-13T10:00:00Z')])
+    const rows = vi.fn(async (_user: string, _since: Date, _limit: number) => [
+      row(1, 'update', 'workflows', '7', '2026-11-13T10:00:00Z')
+    ])
     await recentlyEditedBy(
       user,
       { limit: 5, isAdmin: false, now: new Date('2026-11-13T12:00:00Z') },
@@ -183,7 +185,7 @@ describe('recentlyEditedBy', () => {
     )
     expect(rows).toHaveBeenCalledTimes(3)
     const days = rows.mock.calls.map(
-      (c) => (new Date('2026-11-13T12:00:00Z').getTime() - (c[1] as Date).getTime()) / 86_400_000
+      (c) => (new Date('2026-11-13T12:00:00Z').getTime() - c[1].getTime()) / 86_400_000
     )
     expect(days).toEqual([3, 30, 180])
   })
