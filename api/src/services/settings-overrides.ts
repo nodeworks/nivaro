@@ -134,3 +134,70 @@ export function envOverrideKeys(): string[] {
   const o = envOverrides()
   return o ? Object.keys(o) : []
 }
+
+/** The env layer as parsed (a copy) — for the Settings → This Instance read-only view. */
+export function envOverrideMap(): Record<string, unknown> {
+  const o = envOverrides()
+  return o ? { ...o } : {}
+}
+
+/** Test seam: forget the parsed env layer so the next read parses NIVARO_SETTINGS_OVERRIDES again. */
+export function resetEnvOverridesForTest(): void {
+  envParsed = undefined
+}
+
+/** One NIVARO_SETTINGS_OVERRIDES key as Settings → This Instance shows it (read-only). */
+export interface EnvOverrideView {
+  key: string
+  /** Display text: secrets masked, objects as JSON (secret-looking members masked), null = cleared. */
+  value: string | null
+  secret: boolean
+  /** The DB override row on this instance names the same key — the env value wins over it. */
+  shadows_db: boolean
+}
+
+// Names that read as credentials even when they are not in the settings secret list
+// (the env layer may name any column, or a feature's per-instance JSON). Over-masking is the safe side.
+const SECRET_NAME = /(pass(word)?|secret|token|(^|_)key$|private|credential|webhook)/i
+
+function looksSecret(key: string, secretKeys: readonly string[]): boolean {
+  return secretKeys.includes(key) || SECRET_NAME.test(key)
+}
+
+function maskDeep(v: unknown, mask: string): unknown {
+  if (Array.isArray(v)) return v.map((x) => maskDeep(x, mask))
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      out[k] = SECRET_NAME.test(k) ? (x == null || x === '' ? x : mask) : maskDeep(x, mask)
+    }
+    return out
+  }
+  return v
+}
+
+/**
+ * The env layer for display: every key it sets, its value masked the way GET /settings masks
+ * credentials (a set secret = the mask, an unset one = null), and whether the DB override row
+ * names the same key (that row value is shadowed — the env one is what this instance uses).
+ * Pure: no env or DB reads.
+ */
+export function describeEnvOverrides(
+  envMap: Record<string, unknown>,
+  dbMap: Record<string, unknown>,
+  secretKeys: readonly string[],
+  mask: string
+): EnvOverrideView[] {
+  return Object.keys(envMap)
+    .sort()
+    .map((key) => {
+      const raw = envMap[key]
+      const secret = looksSecret(key, secretKeys)
+      let value: string | null
+      if (raw == null) value = null
+      else if (secret) value = raw === '' ? null : mask
+      else if (typeof raw === 'object') value = JSON.stringify(maskDeep(raw, mask))
+      else value = String(raw)
+      return { key, value, secret, shadows_db: Object.hasOwn(dbMap, key) }
+    })
+}

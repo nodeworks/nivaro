@@ -10,7 +10,9 @@ import {
 } from '../services/session-replay-settings.js'
 import {
   bustInstanceOverridesCache,
+  describeEnvOverrides,
   envOverrideKeys,
+  envOverrideMap,
   INSTANCE_RESERVED_KEYS,
   instanceKey,
   withoutReservedKeys
@@ -653,7 +655,18 @@ export async function settingsRoutes(app: FastifyInstance) {
     } catch {
       /* table absent mid-migration — empty */
     }
-    return reply.send({ data: { instance_key: instanceKey(), overrides: data } })
+    // The env layer (NIVARO_SETTINGS_OVERRIDES) wins over the row above but is set on the
+    // server, not here: shown read-only so an admin can tell why a value is not what they
+    // saved. Secrets masked like GET /settings; `shadows_db` = the row names the same key.
+    const env = describeEnvOverrides(envOverrideMap(), data, SECRET_KEYS, MASK)
+    return reply.send({
+      data: {
+        instance_key: instanceKey(),
+        overrides: data,
+        env_overrides: env,
+        shadowed: env.filter((e) => e.shadows_db).map((e) => e.key)
+      }
+    })
   })
 
   app.put('/instance-overrides', { preHandler: requireAdmin }, async (req, reply) => {
