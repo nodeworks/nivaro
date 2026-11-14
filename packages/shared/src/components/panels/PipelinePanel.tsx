@@ -83,6 +83,15 @@ import {
   unansweredHoldTip,
   useRunEnded
 } from './BackgroundMove'
+import {
+  BlockedMenuMark,
+  BlockedMoveButton,
+  blockedGroupTip,
+  blockedMenuItemProps,
+  isBlockedMove,
+  type MoveBlock,
+  withBlockedMoves
+} from './BlockedMove'
 import { BranchLanes, type BranchLanesData } from './BranchLanes'
 import { joinLabels, landingSkipGroups, landingState } from './landing-state'
 import {
@@ -136,6 +145,11 @@ interface PipelineTransition {
   /** Marked to run in the background: asked for with `accept_pending`, shown
    *  as running instead of holding the click (BackgroundMove.tsx). */
   background?: boolean
+  /** The pipeline's own order for its moves. */
+  sort?: number | null
+  /** Held back from this person (`blocked_transitions`): drawn disabled with
+   *  the reason as its tip, never pressed (BlockedMove.tsx). */
+  blocked?: MoveBlock | null
 }
 interface PipelineHistoryEntry {
   id: number
@@ -235,6 +249,9 @@ interface PipelinePanelData {
   instance: PipelineInstance | null
   states: PipelineState[]
   available_transitions: PipelineTransition[]
+  /** Moves from here this person may not make now, each with `blocked`
+   *  (an older server answers none). */
+  blocked_transitions?: PipelineTransition[]
   all_transitions: PipelineTransition[]
   history: PipelineHistoryEntry[]
   binding: { id: number; template: string; collection: string; state_field: string | null } | null
@@ -1989,6 +2006,19 @@ function OwnersSection({
     staleTime: 60_000
   })
   const withCreator = atInitial && resolvedCount === 0 && creator?.name ? creator : null
+  // Everyone listed for the current step is only a stand-in (the binding's
+  // fallback field — the record is in their queue) and nobody is assigned by
+  // hand: say so, or the roster reads as if they own the step and can move
+  // it (FDX25INV-37713, Rob 2026-11-13). Owner-only moves judge ASSIGNED owners.
+  const currentStep = states.find((s) => s.id === currentStateId)
+  const manualOnStep = (owners ?? []).some(
+    (o) => !o.state || o.state === currentStateId || o.state === currentStep?.key
+  )
+  const standInOnly =
+    !!currentStep &&
+    groupOwners.length > 0 &&
+    groupOwners.every((o) => o.queue_only) &&
+    !manualOnStep
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ownersKey })
@@ -2179,6 +2209,14 @@ function OwnersSection({
             </div>
           ))}
         </div>
+      )}
+      {standInOnly && !ownersLoading && !groupOwnersLoading && (
+        <p
+          data-owners-stand-in
+          className='mt-1.5 text-[11px] leading-snug text-slate-500 dark:text-slate-400'
+        >
+          Shown as a stand-in — no one is assigned to {currentStep?.label}.
+        </p>
       )}
       {adding && (
         <div className='mt-3 space-y-2 rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-border p-3'>
@@ -3203,7 +3241,10 @@ function PipelinePanelInner({
         instance?.current_state,
         skippedStates
       )
-  const hasTransitions = visibleTransitions.length > 0
+  // The moves drawn: those on offer plus the ones held back from this person
+  // (disabled, the reason as their tip) in the pipeline's own order.
+  const shownMoves = withBlockedMoves(visibleTransitions, data.blocked_transitions)
+  const hasTransitions = shownMoves.length > 0
   const moveNotices = distinctAdvisories(visibleTransitions)
   const armedTx = armedMove ? visibleTransitions.find((t) => t.id === armedMove) : null
   // A background move on this record (BackgroundMove.tsx): while one runs,
@@ -3230,6 +3271,24 @@ function PipelinePanelInner({
             ? { backgroundColor: txColor, borderColor: txColor }
             : { borderColor: txColor, color: txColor }
           : undefined
+      const byTarget = [...txs].sort(
+        (a, b) =>
+          (stateById.get(a.to_state)?.sort ?? 999) - (stateById.get(b.to_state)?.sort ?? 999)
+      )
+      // Held back from this person: disabled in its place, saying why.
+      if (txs.every(isBlockedMove))
+        return (
+          <BlockedMoveButton
+            key={label}
+            label={label}
+            small={small}
+            code={byTarget[0].blocked?.code}
+            reason={blockedGroupTip(
+              byTarget,
+              (i) => stateById.get(byTarget[i].to_state)?.label ?? byTarget[i].to_state
+            )}
+          />
+        )
       if (txs.length === 1) {
         const tx = txs[0]
         const running =
@@ -3292,28 +3351,27 @@ function PipelinePanelInner({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align='start'>
-            {[...txs]
-              .sort(
-                (a, b) =>
-                  (stateById.get(a.to_state)?.sort ?? 999) -
-                  (stateById.get(b.to_state)?.sort ?? 999)
-              )
-              .map((tx) => (
-                <DropdownMenuItem
-                  key={tx.id}
-                  onSelect={() => trySetPending(tx.id)}
-                  {...blockedMoveProps(tx, 'menu')}
-                >
-                  {tx.color && (
-                    <span
-                      className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
-                      style={{ backgroundColor: tx.color }}
-                    />
-                  )}
-                  {stateById.get(tx.to_state)?.label ?? tx.to_state}
-                  {tx.advisory && <BlockedMark className='ml-auto' />}
-                </DropdownMenuItem>
-              ))}
+            {byTarget.map((tx) => (
+              <DropdownMenuItem
+                key={tx.id}
+                onSelect={() => trySetPending(tx.id)}
+                {...blockedMoveProps(tx, 'menu')}
+                {...blockedMenuItemProps(tx)}
+              >
+                {tx.color && (
+                  <span
+                    className={cn(
+                      'mr-2 inline-block h-2 w-2 shrink-0 rounded-full',
+                      tx.blocked && 'opacity-40'
+                    )}
+                    style={{ backgroundColor: tx.color }}
+                  />
+                )}
+                {stateById.get(tx.to_state)?.label ?? tx.to_state}
+                {tx.advisory && <BlockedMark className='ml-auto' />}
+                {tx.blocked && <BlockedMenuMark />}
+              </DropdownMenuItem>
+            ))}
             <MenuAdvisories
               moves={txs}
               nameOf={(tx) => stateById.get(tx.to_state)?.label ?? tx.to_state}
@@ -3529,7 +3587,7 @@ function PipelinePanelInner({
           <div className='ml-auto flex items-center gap-2' onClick={(e) => e.stopPropagation()}>
             {!expanded && hasTransitions && !hideActionsCollapsed && (
               <div className='flex flex-wrap items-center gap-1.5'>
-                {renderTransitionButtons(visibleTransitions, true)}
+                {renderTransitionButtons(shownMoves, true)}
               </div>
             )}
             {!expanded && !instance && data?.binding && (
@@ -3669,7 +3727,7 @@ function PipelinePanelInner({
                   <div className='space-y-3 px-5 py-4'>
                     {moveNoticeRows(true)}
                     <div className='flex flex-wrap justify-end gap-2'>
-                      {renderTransitionButtons(visibleTransitions)}
+                      {renderTransitionButtons(shownMoves)}
                     </div>
                     {pendingTransition && confirmForm}
                     {fixPanel}
@@ -4144,7 +4202,10 @@ function PipelineTransitionButtonsInner({
     data.instance.current_state,
     data.instance.completed_at ? null : skippedChain
   )
-  if (transitions.length === 0) return null
+  // Drawn: the moves on offer plus the ones held back from this person
+  // (disabled, saying why) in the pipeline's own order.
+  const shown = withBlockedMoves(transitions, data.blocked_transitions)
+  if (shown.length === 0) return null
   const stateById = new Map((data.states ?? []).map((s) => [s.id, s]))
   const currentState = data.instance.current_state_obj ?? null
   const pendingTx = pendingTransition ? transitions.find((t) => t.id === pendingTransition) : null
@@ -4159,7 +4220,7 @@ function PipelineTransitionButtonsInner({
   const landing = confirmLanding(pendingTx, currentState, data.states ?? [], chainOwners)
   const landedState = landing?.state ?? pendingToState
   const byLabel = new Map<string, PipelineTransition[]>()
-  for (const tx of transitions) {
+  for (const tx of shown) {
     const l = byLabel.get(tx.label) ?? []
     l.push(tx)
     byLabel.set(tx.label, l)
@@ -4168,6 +4229,7 @@ function PipelineTransitionButtonsInner({
     [...txs].sort(
       (a, b) => (stateById.get(a.to_state)?.sort ?? 999) - (stateById.get(b.to_state)?.sort ?? 999)
     )
+  const targetLabel = (tx: PipelineTransition) => stateById.get(tx.to_state)?.label ?? tx.to_state
   // The confirm panel opens leftwards from the buttons; on a phone-width
   // sheet 600px would run off the sheet's left edge, where it is clipped.
   const confirmWidth = (() => {
@@ -4192,7 +4254,7 @@ function PipelineTransitionButtonsInner({
               {executeTransition.isPending || runningMove ? (
                 <Loader2 className='h-3 w-3 animate-spin' />
               ) : (
-                transitions.every((t) => t.advisory) && <BlockedMark />
+                transitions.length > 0 && transitions.every((t) => t.advisory) && <BlockedMark />
               )}
               Actions
               <ChevronDown className='h-3 w-3' />
@@ -4208,15 +4270,20 @@ function PipelineTransitionButtonsInner({
                   <DropdownMenuItem
                     onSelect={() => trySetPending(txs[0].id)}
                     {...blockedMoveProps(txs[0], 'menu')}
+                    {...blockedMenuItemProps(txs[0])}
                   >
                     {txs[0].color && (
                       <span
-                        className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
+                        className={cn(
+                          'mr-2 inline-block h-2 w-2 shrink-0 rounded-full',
+                          txs[0].blocked && 'opacity-40'
+                        )}
                         style={{ backgroundColor: txs[0].color }}
                       />
                     )}
                     {label}
                     {txs[0].advisory && <BlockedMark className='ml-auto' />}
+                    {txs[0].blocked && <BlockedMenuMark />}
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
               ) : (
@@ -4230,15 +4297,20 @@ function PipelineTransitionButtonsInner({
                       key={tx.id}
                       onSelect={() => trySetPending(tx.id)}
                       {...blockedMoveProps(tx, 'menu')}
+                      {...blockedMenuItemProps(tx)}
                     >
                       {tx.color && (
                         <span
-                          className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
+                          className={cn(
+                            'mr-2 inline-block h-2 w-2 shrink-0 rounded-full',
+                            tx.blocked && 'opacity-40'
+                          )}
                           style={{ backgroundColor: tx.color }}
                         />
                       )}
-                      {stateById.get(tx.to_state)?.label ?? tx.to_state}
+                      {targetLabel(tx)}
                       {tx.advisory && <BlockedMark className='ml-auto' />}
+                      {tx.blocked && <BlockedMenuMark />}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuGroup>
@@ -4277,6 +4349,18 @@ function PipelineTransitionButtonsInner({
                   ? { backgroundColor: txColor, borderColor: txColor }
                   : { borderColor: txColor, color: txColor }
                 : undefined
+            // Held back from this person: disabled in its place, saying why.
+            if (txs.every(isBlockedMove)) {
+              const ordered = sortByTarget(txs)
+              return (
+                <BlockedMoveButton
+                  key={label}
+                  label={label}
+                  code={ordered[0].blocked?.code}
+                  reason={blockedGroupTip(ordered, (i) => targetLabel(ordered[i]))}
+                />
+              )
+            }
             if (txs.length === 1) {
               const tx = txs[0]
               const inBackground = sameMoveId(runningMove?.transition_id, tx.id)
@@ -4359,15 +4443,20 @@ function PipelineTransitionButtonsInner({
                       key={tx.id}
                       onSelect={() => trySetPending(tx.id)}
                       {...blockedMoveProps(tx, 'menu')}
+                      {...blockedMenuItemProps(tx)}
                     >
                       {tx.color && (
                         <span
-                          className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
+                          className={cn(
+                            'mr-2 inline-block h-2 w-2 shrink-0 rounded-full',
+                            tx.blocked && 'opacity-40'
+                          )}
                           style={{ backgroundColor: tx.color }}
                         />
                       )}
-                      {stateById.get(tx.to_state)?.label ?? tx.to_state}
+                      {targetLabel(tx)}
                       {tx.advisory && <BlockedMark className='ml-auto' />}
+                      {tx.blocked && <BlockedMenuMark />}
                     </DropdownMenuItem>
                   ))}
                   <MenuAdvisories

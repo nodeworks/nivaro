@@ -3,11 +3,13 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { UUID_RE } from '../lib/sql-value-fit.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { activeAddendumInstances } from '../services/addendum-summary.js'
 import { buildApprovalBrief } from '../services/approval-brief.js'
 import { clearAutoFailures, heldForInstance } from '../services/auto-transition-memory.js'
+import { blockedMoveReasons, requiredRoleIds, roleAllows } from '../services/blocked-moves.js'
 import { excludeBranchChildren, findRecordInstance } from '../services/branch-instances.js'
 import {
   type BranchLane,
@@ -22,7 +24,7 @@ import { selectInChunks, whereInList } from '../services/db-batch.js'
 import { editLockVerdictFor } from '../services/edit-lock.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
-import { withoutAdminOnlyMoves } from '../services/manual-transition-gate.js'
+import { adminOnlyMoveMessages } from '../services/manual-transition-gate.js'
 import { originFields, originSelect } from '../services/note-authorship.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
@@ -2595,6 +2597,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           instance: null,
           states: [],
           available_transitions: [],
+          blocked_transitions: [],
           history: [],
           binding: effectiveBinding,
           owners_configured: await ownersConfigured()
@@ -2631,22 +2634,30 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         )
       : {}
 
-    const availableTransitions = transitions
+    // This record's manual moves from where it is: the ones a person could
+    // ever make here, before asking whether THIS caller may.
+    const candidateRows = transitions.filter((tx) => {
+      // Auto transitions fire from the engine, never from users
+      if (coerceBool(tx.auto_trigger)) return false
+      // Transition applies if from_state is null (any) or matches current state
+      const fromOk = tx.from_state === null || tx.from_state === currentState
+      if (!fromOk) return false
+      // A finished record offers only the escape hatches authored out of
+      // the state it sits in (Uncancel) — the gate refuses every other move
+      // there (manual-transition-gate.ts), so "Cancel" on a Canceled
+      // record was offered and then refused (army4 a15-7).
+      if (!offeredOnCompleted(instance, tx)) return false
+      // Conditional branching: hide transitions whose condition rules don't
+      // match the record — not this record's move at all, never "blocked".
+      if (tx.condition_rules && !evaluateConditionRules(tx.condition_rules, conditionRecord)) {
+        return false
+      }
+      return true
+    })
+    const candidateMoves = candidateRows.map(formatTransition)
+
+    const availableTransitions = candidateRows
       .filter((tx) => {
-        // Auto transitions fire from the engine, never from users
-        if (coerceBool(tx.auto_trigger)) return false
-        // Transition applies if from_state is null (any) or matches current state
-        const fromOk = tx.from_state === null || tx.from_state === currentState
-        if (!fromOk) return false
-        // A finished record offers only the escape hatches authored out of
-        // the state it sits in (Uncancel) — the gate refuses every other move
-        // there (manual-transition-gate.ts), so "Cancel" on a Canceled
-        // record was offered and then refused (army4 a15-7).
-        if (!offeredOnCompleted(instance, tx)) return false
-        // Conditional branching: hide transitions whose condition rules don't match the record
-        if (tx.condition_rules && !evaluateConditionRules(tx.condition_rules, conditionRecord)) {
-          return false
-        }
         // Check role requirement
         if (!tx.required_roles) return true
         if (isAdmin) return true
@@ -2665,8 +2676,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // view-as-role preview has no person to judge, so it shows them.
     // `allow_creator` moves are offered to the record's creator as well.
     let offeredTransitions = availableTransitions
+    let actor: Awaited<ReturnType<typeof checkTransitionOwner>> | null = null
     if (!isAdmin && !asRole && req.user && availableTransitions.some((t) => t.require_owner)) {
-      const actor = await checkTransitionOwner({
+      actor = await checkTransitionOwner({
         user: req.user,
         isAdmin: false,
         collection,
@@ -2678,18 +2690,22 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
     // Post-approval lock: the moves the gate refuses a non-admin at an
     // admin-only state are not offered either (the same lists judge both).
-    offeredTransitions = await withoutAdminOnlyMoves({
+    const adminOnly = await adminOnlyMoveMessages({
       isAdmin,
       collection,
       item,
-      transitions: offeredTransitions
+      transitions: candidateMoves
     })
+    if (adminOnly.size > 0)
+      offeredTransitions = offeredTransitions.filter((t) => !adminOnly.has(String(t.id)))
 
     // Send backs to steps this record skips are not offered (army 9 b06): the
     // move would be refused (TARGET_SKIPPED) — the panel hides the same ones.
+    // Judged over every candidate so a held-back send back can say why too.
+    let skipped = new Map<string, string[]>()
     if (!instance.completed_at) {
-      const skipped = await skippedSendBackTargets({
-        moves: offeredTransitions,
+      skipped = await skippedSendBackTargets({
+        moves: candidateMoves,
         states,
         currentStateId: currentState,
         instanceId: String(instance.id),
@@ -2704,6 +2720,41 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         skipped
       )
     }
+
+    // The moves this caller may not make right now, each with why (Rob
+    // 2026-11-13, services/blocked-moves.ts): the record page shows them
+    // disabled with the reason as their tip instead of leaving them out.
+    const roleIdsHeld = isAdmin
+      ? []
+      : [
+          ...new Set(
+            candidateMoves
+              .filter((t) => !roleAllows(t, userRole))
+              .flatMap((t) => requiredRoleIds(t.required_roles))
+              .filter((r) => UUID_RE.test(r))
+              .map((r) => r.toUpperCase())
+          )
+        ]
+    const roleNames = new Map<string, string>()
+    if (roleIdsHeld.length > 0) {
+      const rows = (await db('nivaro_roles')
+        .whereIn('id', roleIdsHeld)
+        .select('id', 'name')
+        .catch(() => [])) as Array<{ id: string; name: string | null }>
+      for (const r of rows) if (r.name) roleNames.set(String(r.id).toUpperCase(), r.name)
+    }
+    const blockedTransitions = blockedMoveReasons({
+      candidates: candidateMoves,
+      offeredIds: new Set(offeredTransitions.map((t) => String(t.id))),
+      isAdmin,
+      role: userRole,
+      roleNames,
+      actor,
+      adminOnly,
+      skipped,
+      states,
+      currentStateId: currentState
+    })
 
     // What an extension's transition check would answer for each move on
     // offer, said before it is pressed (transition-checks.ts): the panel shows
@@ -2833,6 +2884,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           const advisory = advisories.get(String(t.id))
           return advisory ? { ...stripTransitionActions(t), advisory } : stripTransitionActions(t)
         }),
+        // Moves this caller may not make now, each with `blocked: {code, reason}`
+        // (services/blocked-moves.ts) — drawn disabled, never in a row menu.
+        blocked_transitions: blockedTransitions.map(({ move, blocked }) => ({
+          ...stripTransitionActions(move),
+          blocked
+        })),
         all_transitions: transitions.map((t) => stripTransitionActions(formatTransition(t))),
         history,
         binding: effectiveBinding,
