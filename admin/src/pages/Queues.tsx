@@ -22,6 +22,7 @@ import {
   inlineEditForStorage,
   normalizeInlineEdit,
   type PickedField,
+  queryKeys,
   Term
 } from '@nivaro/shared'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -965,16 +966,17 @@ function SourceRow({
     enabled: isCollection || isAddendums
   })
 
-  const { data: fieldConfig } = useQuery<{
-    data: Array<{ field: string; type: string; label: string | null; computed_type: string | null }>
-  }>({
-    queryKey: ['field-config', source.collection],
-    queryFn: () => api.get(`/field-config/${source.collection}`).then((r) => r.data),
+  // ['field-config', c] holds the rows ARRAY for every reader (lib/query-keys.ts).
+  const { data: fieldConfig } = useQuery<
+    Array<{ field: string; type: string; label: string | null; computed_type: string | null }>
+  >({
+    queryKey: queryKeys.fieldConfig(source.collection),
+    queryFn: () => api.get(`/field-config/${source.collection}`).then((r) => r.data.data),
     enabled: isCollection
   })
   // Real DB columns only — alias (o2m/m2m presentation) and computed fields
   // aren't SQL-filterable by applyQueueConditions.
-  const filterFieldOptions = (fieldConfig?.data ?? [])
+  const filterFieldOptions = (Array.isArray(fieldConfig) ? fieldConfig : [])
     .filter((f) => f.type !== 'alias' && !f.computed_type)
     .map((f) => ({ value: f.field, label: f.label || f.field }))
 
@@ -1485,7 +1487,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
   const { data: collections = [] } = useQuery<
     Array<{ collection: string; display_name: string | null; plural: string | null }>
   >({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get('/collections').then((r) => r.data.data)
   })
 

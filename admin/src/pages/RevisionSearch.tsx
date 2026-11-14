@@ -1,3 +1,4 @@
+import { queryKeys } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronsUpDown } from 'lucide-react'
 import { useState } from 'react'
@@ -35,7 +36,7 @@ export default function RevisionSearch() {
   } | null>(null)
 
   const { data: collections = [] } = useQuery<Array<{ collection: string }>>({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get('/collections').then((r) => r.data.data),
     staleTime: 60_000
   })

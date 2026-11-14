@@ -26,6 +26,7 @@ function labelInitials(label: string): string {
   )
 }
 
+import { queryKeys } from '../../lib/query-keys'
 import { cn, matchesAllTokens, userOptionFilter } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
 import {
@@ -353,7 +354,7 @@ export function RelationCombobox({
       junction_field?: string | null
     }>
   >({
-    queryKey: ['collection-relations', collection],
+    queryKey: queryKeys.collectionRelations(collection),
     queryFn: () =>
       client
         .request<{ data: { relations?: Array<Record<string, unknown>> } }>(

@@ -3,6 +3,7 @@ import { ChevronDown, RotateCcw } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { get } from '../../lib/commands'
 import { numericIntlOptions } from '../../lib/format-value'
+import { queryKeys } from '../../lib/query-keys'
 import { htmlToText } from '../../lib/sanitize-html'
 import { cn, formatDate, formatDateTime, formatRelative, titleCase } from '../../lib/utils'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
@@ -433,7 +434,7 @@ export function RowHistorySheet({
       const out: Record<string, Record<string, string>> = {}
       const metaFor = (c: string) =>
         qc.fetchQuery({
-          queryKey: ['collection-meta', c],
+          queryKey: queryKeys.collectionMeta(c),
           queryFn: () =>
             client
               .request<{

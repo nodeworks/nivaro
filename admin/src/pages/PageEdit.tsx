@@ -1,3 +1,4 @@
+import { queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
@@ -19,7 +20,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
-import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -36,6 +36,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { api, type Collection } from '@/lib/api'
+import { useGoBack } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 import type { CmsPage, PageWidget } from './PagesAdmin'
 import { WIDGET_TYPE_LABELS, WidgetBody } from './PageView'
@@ -183,7 +184,7 @@ function Combobox({
 
 function useCollectionFields(collection: string) {
   const { data } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
     enabled: !!collection,
     staleTime: 30_000

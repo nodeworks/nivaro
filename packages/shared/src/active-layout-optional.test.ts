@@ -14,9 +14,11 @@ const ROUTE = '/collection-layouts/active'
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = join(here, '..', '..', '..')
 const ROOTS = ['packages/shared/src', 'packages/react/src', 'admin/src']
-// Not requests our screens make: reference docs, and the playground's sample call a person runs.
+// Not requests our screens make: reference docs, the playground's sample call a person runs, and
+// the query-key registry (it names the route as a shape signature, never calls it).
 const SKIP = [
   /\/docs\//,
+  /packages\/shared\/src\/lib\/query-keys\.ts$/,
   /admin\/src\/pages\/Playground\.tsx$/,
   /admin\/src\/pages\/SdkPlayground\.tsx$/
 ]

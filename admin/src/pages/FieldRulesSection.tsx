@@ -1,15 +1,16 @@
+import {
+  ConfigReadBack,
+  describeFieldRule,
+  FieldPicker,
+  queryKeys,
+  RelationPicker,
+  sentenceLabelsFromFields
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Plus, Trash2, Wand2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { ExplainButton } from '@/components/explain-button'
-import {
-  ConfigReadBack,
-  describeFieldRule,
-  FieldPicker,
-  RelationPicker,
-  sentenceLabelsFromFields
-} from '@nivaro/shared'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -291,7 +292,7 @@ function SetLookupConfigRow({
   onChange: (patch: Partial<SetLookupConfig>) => void
 }) {
   const { data: lookupMeta } = useQuery({
-    queryKey: ['collection-meta', cfg.collection],
+    queryKey: queryKeys.collectionMeta(cfg.collection),
     queryFn: () => api.get(`/collections/${cfg.collection}`).then((r) => r.data.data),
     enabled: !!cfg.collection,
     staleTime: 30_000
@@ -359,7 +360,7 @@ function SetFromTriggerConfigRow({
   onChange: (patch: Partial<SetFromTriggerConfig>) => void
 }) {
   const { data: relatedMeta } = useQuery({
-    queryKey: ['collection-meta', relatedCollection],
+    queryKey: queryKeys.collectionMeta(relatedCollection),
     queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
     enabled: !!relatedCollection,
     staleTime: 30_000
@@ -708,7 +709,7 @@ export function FieldRulesSection({
   const qc = useQueryClient()
 
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
     enabled: !!collection,
     staleTime: 30_000
@@ -717,7 +718,7 @@ export function FieldRulesSection({
   // For set_lookup's "lookup collection" pick — matches the collection-select
   // idiom in TableEditor.tsx's rollup-source editor.
   const { data: collectionsList } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () =>
       api.get<{ data: { collection: string }[] }>('/collections').then((r) => r.data.data),
     staleTime: 60_000

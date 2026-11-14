@@ -13,6 +13,7 @@ import {
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
+import { queryKeys } from '../../lib/query-keys'
 import { sanitizeHtml } from '../../lib/sanitize-html'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import { titleCase } from '../../lib/utils'
@@ -1260,7 +1261,7 @@ function AddendumCard({
   )
   const derivedChildCfgs = useQueries({
     queries: derivedChildCollections.map((c) => ({
-      queryKey: ['field-config', c, null],
+      queryKey: queryKeys.fieldConfig(c, null),
       queryFn: () =>
         client.request<{ data: CMSField[] }>(get(`/field-config/${c}`)).then((r) => r.data ?? []),
       staleTime: 60_000

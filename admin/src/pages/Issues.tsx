@@ -1,4 +1,5 @@
 import {
+  queryKeys,
   signalSentence,
   useFreshIds,
   useLiveOps,
@@ -751,7 +752,7 @@ export function IssuesPage() {
   }, [linkedId, linkedNum, rows])
 
   const { data: collections = [] } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () =>
       api.get<{ data: { collection: string }[] }>('/collections').then((r) => r.data.data),
     staleTime: 60_000

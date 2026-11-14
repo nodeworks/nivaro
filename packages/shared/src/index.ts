@@ -1033,6 +1033,16 @@ export {
   whoText
 } from './lib/presence-signals'
 export { presenceChangeTouches, type StuckState, stuckText } from './lib/presence-state'
+export {
+  type CollectionMetaShape,
+  fetchCollectionMeta,
+  fetchCollectionRelations,
+  QUERY_KEY_SPECS,
+  type QueryKeyBuilders,
+  type QueryKeySpec,
+  queryKeys,
+  type SharedQueryKey
+} from './lib/query-keys'
 export * from './lib/query-stats'
 export * from './lib/queue-grouping'
 export {

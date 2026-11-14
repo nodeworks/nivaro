@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useCallback, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, getActiveLayout } from '../../lib/commands'
+import { queryKeys } from '../../lib/query-keys'
 import { titleCase } from '../../lib/utils'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
@@ -71,7 +72,7 @@ export function QuickPickerDialog({
   const client = useNivaroClient()
   const { steps, layoutId } = useQuickPickerSteps(open ? collection : null, layoutSlug)
   const { data: fieldConfig = [] } = useQuery<CMSField[]>({
-    queryKey: ['field-config', collection, layoutId],
+    queryKey: queryKeys.fieldConfig(collection, layoutId),
     queryFn: () =>
       client
         .request<{ data: CMSField[] }>(

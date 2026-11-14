@@ -3,6 +3,7 @@ import { Loader2, Pencil, X } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { fetchCollectionRelations, queryKeys } from '../../lib/query-keys'
 import { cn, titleCase, toLocalDateString } from '../../lib/utils'
 import { FieldRenderer } from './FieldRenderer'
 import { applyDisplayTemplate, EMPTY_NESTED_OPS, SENTINEL_FIELDS } from './helpers'
@@ -114,12 +115,8 @@ export function NestedRelationEditor({
 
   // Resolve the grandchild relation off the LINE collection's own relations.
   const { data: parentRelations, isLoading: relationsLoading } = useQuery<CMSRelation[]>({
-    queryKey: ['collection-relations', parentCollection],
-    queryFn: () =>
-      client.request<{ data: unknown }>(get(`/collections/${parentCollection}`)).then((r) => {
-        const d = r.data as { relations?: CMSRelation[] }
-        return d?.relations ?? []
-      }),
+    queryKey: queryKeys.collectionRelations(parentCollection),
+    queryFn: () => fetchCollectionRelations(client, parentCollection),
     staleTime: 10 * 60_000
   })
   const grandRel = useMemo(
@@ -134,18 +131,14 @@ export function NestedRelationEditor({
 
   // Grandchild's own relations (for FieldRenderer's M2O pickers + read-only labels)
   const { data: grandRelations = [] } = useQuery<CMSRelation[]>({
-    queryKey: ['collection-relations', grandCollection],
-    queryFn: () =>
-      client.request<{ data: unknown }>(get(`/collections/${grandCollection}`)).then((r) => {
-        const d = r.data as { relations?: CMSRelation[] }
-        return d?.relations ?? []
-      }),
+    queryKey: queryKeys.collectionRelations(grandCollection),
+    queryFn: () => fetchCollectionRelations(client, grandCollection),
     enabled: !!grandCollection,
     staleTime: 10 * 60_000
   })
 
   const { data: grandFields = [] } = useQuery<CMSField[]>({
-    queryKey: ['field-config', grandCollection, null],
+    queryKey: queryKeys.fieldConfig(grandCollection, null),
     queryFn: () =>
       client
         .request<{ data: CMSField[] }>(get(`/field-config/${grandCollection}`))

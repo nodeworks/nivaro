@@ -91,6 +91,7 @@ import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-
 import { isOwnWrite } from '../../lib/own-writes'
 import { usePrefetchIntent } from '../../lib/prefetch'
 import { rowPresenceKey, useRowPresence } from '../../lib/presence-hooks'
+import { queryKeys } from '../../lib/query-keys'
 import { buildGroups } from '../../lib/queue-grouping'
 import {
   type CascadeSelection,
@@ -1856,7 +1857,7 @@ export function QueueWorklist({
   const { data: collectionsReg } = useQuery<
     Array<{ collection: string; display_name: string | null; plural: string | null }>
   >({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () =>
       client
         .request<{

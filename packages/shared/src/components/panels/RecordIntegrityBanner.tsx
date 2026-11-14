@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
+import { queryKeys } from '../../lib/query-keys'
 import { hasRecordExtras } from '../../lib/system-collections'
 import { cn, formatDateTime, formatRelative, titleCase } from '../../lib/utils'
 import type { CMSField } from '../item-edit/types'
@@ -193,7 +194,7 @@ export function RecordIntegrityBanner({
   // Labels for the finding headings — the same cached field config the form
   // and its grids read.
   const { data: fieldCfg } = useQuery<CMSField[]>({
-    queryKey: ['field-config', collection, null],
+    queryKey: queryKeys.fieldConfig(collection, null),
     queryFn: () =>
       client
         .request<{ data: CMSField[] }>(get(`/field-config/${collection}`))

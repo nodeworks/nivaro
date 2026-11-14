@@ -3,6 +3,7 @@ import { ChevronDown } from 'lucide-react'
 import { Fragment, useMemo, useState } from 'react'
 import { get } from '../../lib/commands'
 import { numericIntlOptions } from '../../lib/format-value'
+import { queryKeys } from '../../lib/query-keys'
 import { htmlToText } from '../../lib/sanitize-html'
 import { cn, formatDate, formatDateTime, titleCase } from '../../lib/utils'
 import { applyDisplayTemplate, SYSTEM_FIELDS } from '../item-edit/helpers'
@@ -144,7 +145,7 @@ export function AddendumLinesDiff({
   ignoreMissing?: boolean
 }) {
   const { data: fields = [] } = useQuery<CMSField[]>({
-    queryKey: ['field-config', childCollection, null],
+    queryKey: queryKeys.fieldConfig(childCollection, null),
     queryFn: () =>
       client
         .request<{ data: CMSField[] }>(get(`/field-config/${childCollection}`))

@@ -26,6 +26,7 @@ import { canOpenCatalogItem, openCatalogItem } from '../../lib/catalog-item-open
 import { del, get, patch, post } from '../../lib/commands'
 import { evaluateBoolean } from '../../lib/expression'
 import { useLiveRefetchInterval } from '../../lib/live-queries'
+import { fetchCollectionRelations, queryKeys } from '../../lib/query-keys'
 import { matchesSearch, tokenize } from '../../lib/search-text'
 import { registerStagedRowLabel } from '../../lib/staged-row-labels'
 import { normalizeIdent, submissionLineErrors } from '../../lib/submission-errors'
@@ -599,11 +600,8 @@ export function CatalogPickerField({
   // ['collection-meta', <collection>] (the whole meta object, r.data, …) and a
   // collision handed this hook an object, `.find` blew up → "does not resolve".
   const { data: childRelations = [], isPending: childRelationsPending } = useQuery<CMSRelation[]>({
-    queryKey: ['collection-relations', relatedCollection],
-    queryFn: () =>
-      client
-        .request<{ data: unknown }>(get(`/collections/${relatedCollection}`))
-        .then((r) => (r.data as { relations?: CMSRelation[] })?.relations ?? []),
+    queryKey: queryKeys.collectionRelations(relatedCollection),
+    queryFn: () => fetchCollectionRelations(client, relatedCollection),
     staleTime: 10 * 60_000
   })
   const catalogCol = useMemo(
@@ -620,7 +618,7 @@ export function CatalogPickerField({
   // integer column, never past what the column stores). Same key + shape as the
   // grids' field-config reads.
   const { data: childFields = [] } = useQuery<CMSField[]>({
-    queryKey: ['field-config', relatedCollection, null],
+    queryKey: queryKeys.fieldConfig(relatedCollection, null),
     queryFn: () =>
       client
         .request<{ data: CMSField[] }>(get(`/field-config/${relatedCollection}`))
@@ -684,11 +682,8 @@ export function CatalogPickerField({
   }, [catalogMeta, catalogCol, config.section_by])
   const sectionJunction = sectionAliasRel?.many_collection ?? null
   const { data: junctionRelations = [] } = useQuery<CMSRelation[]>({
-    queryKey: ['collection-relations', sectionJunction],
-    queryFn: () =>
-      client
-        .request<{ data: unknown }>(get(`/collections/${sectionJunction}`))
-        .then((r) => (r.data as { relations?: CMSRelation[] })?.relations ?? []),
+    queryKey: queryKeys.collectionRelations(sectionJunction),
+    queryFn: () => fetchCollectionRelations(client, sectionJunction),
     enabled: !!sectionJunction,
     staleTime: 10 * 60_000
   })
@@ -3930,11 +3925,8 @@ function StockPlaceName({
 }) {
   const client = useNivaroClient()
   const { data: rels = [] } = useQuery<CMSRelation[]>({
-    queryKey: ['collection-relations', parentCollection],
-    queryFn: () =>
-      client
-        .request<{ data: unknown }>(get(`/collections/${parentCollection}`))
-        .then((r) => (r.data as { relations?: CMSRelation[] })?.relations ?? []),
+    queryKey: queryKeys.collectionRelations(parentCollection),
+    queryFn: () => fetchCollectionRelations(client, parentCollection),
     enabled: !!parentCollection,
     staleTime: 10 * 60_000
   })

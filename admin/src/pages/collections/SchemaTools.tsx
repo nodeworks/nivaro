@@ -1,4 +1,4 @@
-import { collectionMatchesFilter as matchesFilter } from '@nivaro/shared'
+import { collectionMatchesFilter as matchesFilter, queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronDown,
@@ -113,7 +113,7 @@ export function CreateTableInline({ onClose }: { onClose: () => void }) {
     mutationFn: (n: string) => schemaApi.createTable({ name: n }),
     onSuccess: (result) => {
       void qc.invalidateQueries({ queryKey: ['data-model-tables'] })
-      void qc.invalidateQueries({ queryKey: ['collections'] })
+      void qc.invalidateQueries({ queryKey: queryKeys.collections() })
       toast.success(`Table "${result.data.name}" created`)
       navigate(`/data-model/${result.data.name}`)
     },

@@ -1,4 +1,9 @@
-import { ErrorExplanation, type IntegrationErrorExplanation, toastError } from '@nivaro/shared'
+import {
+  ErrorExplanation,
+  type IntegrationErrorExplanation,
+  queryKeys,
+  toastError
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, ChevronRight, ChevronsUpDown, RotateCw, Search } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -584,7 +589,7 @@ export function ErpSubmissionsPage({ embedded = false }: { embedded?: boolean } 
   )
 
   const { data: collections = [] } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get<{ data: Collection[] }>('/collections').then((r) => r.data.data),
     staleTime: 60_000
   })

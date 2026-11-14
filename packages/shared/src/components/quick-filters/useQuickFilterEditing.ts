@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, patch } from '../../lib/commands'
+import { queryKeys } from '../../lib/query-keys'
 import { useUnsavedWork } from '../../lib/unsaved-work'
 import {
   cleanQuickFilters,
@@ -158,7 +159,7 @@ export function useQuickFilterEditing({
         browser_config: browserConfig
       })
       // Data model → Settings reads the same row under its own key.
-      void qc.invalidateQueries({ queryKey: ['collection-meta', collection] })
+      void qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(collection) })
       setStatus('saved')
       savedTimer.current = window.setTimeout(() => setStatus('idle'), 3000)
     } catch (err) {

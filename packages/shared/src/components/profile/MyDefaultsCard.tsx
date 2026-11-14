@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { ParentDraftContext, useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, put } from '../../lib/commands'
 import { cascadeParents, isEmptyValue } from '../../lib/personal-defaults'
+import { queryKeys } from '../../lib/query-keys'
 import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatDate, titleCase } from '../../lib/utils'
 import { FieldRenderer } from '../item-edit/FieldRenderer'
@@ -55,7 +56,7 @@ function useCollectionMetas(collections: string[]): Map<string, CollectionMeta> 
   const client = useNivaroClient()
   const fieldQs = useQueries({
     queries: collections.map((c) => ({
-      queryKey: ['field-config', c, null],
+      queryKey: queryKeys.fieldConfig(c, null),
       queryFn: () =>
         client.request<{ data: CMSField[] }>(get(`/field-config/${c}`)).then((r) => r.data ?? []),
       staleTime: 60_000

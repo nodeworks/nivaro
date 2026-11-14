@@ -3,6 +3,7 @@ import { Check, ChevronRight, Copy, Loader2 } from 'lucide-react'
 import { createContext, useContext, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { fetchCollectionRelations, queryKeys } from '../../lib/query-keys'
 import { useRecordReader } from '../../lib/record-loader'
 import { choiceLabel, cn, titleCase, toLocalDateString } from '../../lib/utils'
 import { useChangePulse } from './GroupSection'
@@ -466,11 +467,8 @@ function O2MSummary({
   // template and the usual names cannot. Same key and shape as the catalog
   // picker's relations read.
   const { data: childRelations = [] } = useQuery<CMSRelation[]>({
-    queryKey: ['collection-relations', relatedCollection],
-    queryFn: () =>
-      client
-        .request<{ data: unknown }>(get(`/collections/${relatedCollection}`))
-        .then((r) => (r.data as { relations?: CMSRelation[] })?.relations ?? []),
+    queryKey: queryKeys.collectionRelations(relatedCollection),
+    queryFn: () => fetchCollectionRelations(client, relatedCollection),
     staleTime: 10 * 60_000
   })
   const itemRel = o2mItemRelation(childRelations, relatedCollection, manyField)

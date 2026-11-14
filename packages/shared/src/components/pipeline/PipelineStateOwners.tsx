@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { describeOwnerGroup, sentenceLabelsFromFields } from '../../lib/config-sentences'
+import { queryKeys } from '../../lib/query-keys'
 import { useRecordReader } from '../../lib/record-loader'
 import { ConfigReadBack } from '../ConfigReadBack'
 import { ConfirmButton } from '../profile/primitives'
@@ -129,7 +130,7 @@ function M2OValuePicker({
   const containerRef = useRef<HTMLDivElement>(null)
 
   const { data: relMeta } = useQuery({
-    queryKey: ['collection-meta', relatedCollection],
+    queryKey: queryKeys.collectionMeta(relatedCollection),
     queryFn: () =>
       client
         .request<{ data: CollectionMeta }>(get(`/collections/${relatedCollection}`))
@@ -442,7 +443,7 @@ export function PipelineStateOwners({
   void templateId
 
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () =>
       client
         .request<{ data: CollectionMeta }>(get(`/collections/${collection}`))

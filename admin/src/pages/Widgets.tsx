@@ -1,4 +1,4 @@
-import { type InputBinding, WidgetSlot } from '@nivaro/shared'
+import { type InputBinding, queryKeys, WidgetSlot } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
@@ -294,14 +294,14 @@ function FeedForm({
   }, [feed?.id])
 
   const { data: collections = [] } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () =>
       api.get<{ data: { collection: string }[] }>('/collections').then((r) => r.data.data),
     staleTime: 60_000
   })
 
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', form.collection],
+    queryKey: queryKeys.collectionMeta(form.collection),
     queryFn: () =>
       api
         .get<{ data: { fields: { field: string; type: string; hidden?: boolean }[] } }>(

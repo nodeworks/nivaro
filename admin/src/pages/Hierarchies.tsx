@@ -1,3 +1,4 @@
+import { queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDown,
@@ -217,14 +218,14 @@ function LevelRow({
   onMove: (dir: -1 | 1) => void
 }) {
   const { data: collectionsData } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () =>
       api.get<{ data: { collection: string }[] }>('/collections').then((r) => r.data.data),
     staleTime: 60_000
   })
 
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', level.collection],
+    queryKey: queryKeys.collectionMeta(level.collection),
     queryFn: () =>
       api
         .get<{ data: { fields: { field: string; type: string; hidden?: boolean }[] } }>(

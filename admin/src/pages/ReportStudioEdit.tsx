@@ -2,6 +2,7 @@ import { createNivaro } from '@nivaro/sdk'
 import {
   NivaroProvider,
   QueryWidgetBody,
+  queryKeys,
   usePublishAskContext,
   userErrorMessage
 } from '@nivaro/shared'
@@ -1364,11 +1365,11 @@ function ConfigSheet({
         .then((r) => r.data.data)
   })
   const { data: fields = [] } = useQuery({
-    queryKey: ['field-config', widget.collection],
+    queryKey: queryKeys.fieldConfig(widget.collection),
     queryFn: () =>
-      api
-        .get<{ data: FieldMeta[] }>(`/field-config/${widget.collection}`)
-        .then((r) => r.data.data.filter((f) => !f.field.includes('.'))),
+      api.get<{ data: FieldMeta[] }>(`/field-config/${widget.collection}`).then((r) => r.data.data),
+    // The key holds every row for other readers; dotted (related) paths are left out here.
+    select: (rows) => rows.filter((f) => !f.field.includes('.')),
     enabled: !!widget.collection
   })
 
@@ -2196,11 +2197,11 @@ function MetricRow({
   onDelete: () => void
 }) {
   const { data: fields = [] } = useQuery({
-    queryKey: ['field-config', metric.collection],
+    queryKey: queryKeys.fieldConfig(metric.collection),
     queryFn: () =>
-      api
-        .get<{ data: FieldMeta[] }>(`/field-config/${metric.collection}`)
-        .then((r) => r.data.data.filter((f) => !f.field.includes('.'))),
+      api.get<{ data: FieldMeta[] }>(`/field-config/${metric.collection}`).then((r) => r.data.data),
+    // The key holds every row for other readers; dotted (related) paths are left out here.
+    select: (rows) => rows.filter((f) => !f.field.includes('.')),
     enabled: !!metric.collection
   })
   const numericOpts = fields
@@ -4547,11 +4548,11 @@ function AddFilterField({
   const collections = [...new Set(widgets.map((w) => w.collection).filter(Boolean))] as string[]
   const first = collections[0]
   const { data: fields = [] } = useQuery({
-    queryKey: ['field-config', first],
+    queryKey: queryKeys.fieldConfig(first),
     queryFn: () =>
-      api
-        .get<{ data: FieldMeta[] }>(`/field-config/${first}`)
-        .then((r) => r.data.data.filter((f) => !f.field.includes('.'))),
+      api.get<{ data: FieldMeta[] }>(`/field-config/${first}`).then((r) => r.data.data),
+    // The key holds every row for other readers; dotted (related) paths are left out here.
+    select: (rows) => rows.filter((f) => !f.field.includes('.')),
     enabled: !!first
   })
   const existing = new Set((gf.filter_bar ?? []).map((f) => f.field))

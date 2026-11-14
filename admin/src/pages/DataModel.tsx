@@ -2,6 +2,7 @@
 // tree hierarchy + tree permissions. The old /data-model list page was folded into
 // /collections (2026-10-29); /data-model redirects there.
 
+import { queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
@@ -507,7 +508,7 @@ function TreeEnableForm({
   const [maintainPath, setMaintainPath] = useState(false)
 
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
     enabled: !!collection,
     staleTime: 10 * 60 * 1000
@@ -639,7 +640,7 @@ export function TreeSection({ collection, isAdmin }: { collection: string; isAdm
   })
 
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
     enabled: !!treeConfig && !!collection,
     staleTime: 10 * 60 * 1000

@@ -3,12 +3,12 @@ import { Check, ChevronsUpDown, Search, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { fetchCollectionMeta, fetchCollectionRelations, queryKeys } from '../../lib/query-keys'
 import { userErrorMessage } from '../../lib/safe-error'
 import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { applyDisplayTemplate } from './helpers'
 import { RelationCombobox } from './RelationCombobox'
-import type { CMSRelation } from './types'
 
 // ─── MembershipSetField ───────────────────────────────────────────────────────
 // An O2M whose child rows are MEMBERSHIPS: one row per (key, value), where the
@@ -111,16 +111,16 @@ const templateFields = (tmpl: string | null | undefined): string[] =>
 
 function useCollectionLabels(collection: string | null, ids: string[] | 'all') {
   const client = useNivaroClient()
-  const { data: meta } = useQuery<{ display_template?: string | null }>({
-    queryKey: ['collection-display-meta', collection],
-    queryFn: () =>
-      client
-        .request<{ data: { display_template?: string | null } }>(get(`/collections/${collection}`))
-        .then((r) => ({ display_template: r.data?.display_template ?? null })),
+  // The key holds the whole meta object for every reader (lib/query-keys.ts); this one only
+  // needs the template, so it narrows with `select` and never stores a smaller object.
+  const { data: template } = useQuery({
+    queryKey: queryKeys.collectionDisplayMeta(collection),
+    queryFn: () => fetchCollectionMeta(client, collection as string),
+    select: (meta) => meta?.display_template ?? null,
     enabled: !!collection,
     staleTime: 10 * 60_000
   })
-  const tmpl = meta?.display_template ?? null
+  const tmpl = template ?? null
   const idKey = ids === 'all' ? 'all' : [...ids].sort().join(',')
   const { data: rows = [], isLoading } = useQuery<Record<string, unknown>[]>({
     queryKey: ['membership-set-labels', collection, tmpl, idKey],
@@ -138,7 +138,7 @@ function useCollectionLabels(collection: string | null, ids: string[] | 'all') {
         )
       return out
     },
-    enabled: !!collection && meta !== undefined && (ids === 'all' || ids.length > 0),
+    enabled: !!collection && template !== undefined && (ids === 'all' || ids.length > 0),
     staleTime: 60_000
   })
   const labels = useMemo(() => {
@@ -176,12 +176,9 @@ export function MembershipSetField({
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const { data: childRelations = [] } = useQuery<CMSRelation[]>({
-    queryKey: ['collection-relations', relatedCollection],
-    queryFn: () =>
-      client
-        .request<{ data: unknown }>(get(`/collections/${relatedCollection}`))
-        .then((r) => (r.data as { relations?: CMSRelation[] })?.relations ?? []),
+  const { data: childRelations = [] } = useQuery({
+    queryKey: queryKeys.collectionRelations(relatedCollection),
+    queryFn: () => fetchCollectionRelations(client, relatedCollection),
     staleTime: 10 * 60_000
   })
   const targetOf = (f: string) =>

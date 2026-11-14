@@ -3,6 +3,7 @@ import {
   type ActivityLabels,
   collectionNouns,
   QueryErrorState,
+  queryKeys,
   readableTitle,
   useActivityLabels
 } from '@nivaro/shared'
@@ -586,7 +587,7 @@ export function ReportsPage() {
   const params = activityParams(effective)
 
   const { data: collectionsData } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get('/collections').then((r) => r.data.data as CollectionRow[])
   })
   const { data: actionsData } = useQuery({

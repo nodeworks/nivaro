@@ -14,6 +14,7 @@ import {
   layoutGrantedTools,
   NavigationContext,
   NivaroProvider,
+  queryKeys,
   useLayoutEditingQuiet,
   usePublishAskContext
 } from '@nivaro/shared'
@@ -456,7 +457,7 @@ export function ItemEditPage() {
 
   // ── Admin-specific queries ────────────────────────────────────────────────
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
     enabled: !!collection,
     staleTime: 10 * 60 * 1000

@@ -364,18 +364,21 @@ export function PlanGridField(props: {
   // InlineTableField cell-history read, same endpoint); a figure changed FOR
   // a stated reason carries a corner notch.
   const provenanceSettled = useAfterIdle(2000)
-  const { data: cellProvenance = {} } = useQuery<PlanCellProvenance>({
+  // Same key, fetch and stored shape ({data, created}) as InlineTableField's cell history, so
+  // the two never hand each other a different object; this grid only reads `data`.
+  const { data: cellProvenance = {} } = useQuery({
     queryKey: ['o2m-cell-provenance', rc, mf, parentId, rowsUpdatedAt],
     queryFn: () =>
       client
-        .request<{ data: PlanCellProvenance }>(
+        .request<{ data: PlanCellProvenance; created?: Record<string, unknown> }>(
           get('/revisions/o2m-cell-provenance', {
             collection: rc,
             many_field: mf,
             parent_id: parentId
           })
         )
-        .then((r) => r.data ?? {}),
+        .then((r) => ({ data: r.data ?? {}, created: r.created ?? {} })),
+    select: (r): PlanCellProvenance => r?.data ?? {},
     enabled: provenanceSettled && showHistory && !isNew && rawRows.length > 0,
     staleTime: 60_000,
     placeholderData: (prev) => prev

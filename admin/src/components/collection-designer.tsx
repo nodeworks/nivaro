@@ -5,10 +5,9 @@
  * the AI proposes a plan, and NOTHING is created until the reviewed/edited
  * summary is explicitly applied. Backed by /data-model/designer/*.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+
+import { queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router'
-import { toast } from 'sonner'
 import {
   ArrowLeft,
   FileSpreadsheet,
@@ -19,10 +18,11 @@ import {
   Wand2,
   X
 } from 'lucide-react'
-import { api } from '@/lib/api'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   Select,
   SelectContent,
@@ -30,6 +30,8 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { api } from '@/lib/api'
 
 interface DesignField {
   field: string
@@ -98,7 +100,7 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
   const fileInput = useRef<HTMLInputElement>(null)
 
   const { data: existingCollections } = useQuery<{ collection: string }[]>({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get('/collections').then((r) => r.data.data),
     staleTime: 60_000,
     enabled: open
@@ -174,7 +176,7 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
     },
     onSuccess: (d) => {
       qc.invalidateQueries({ queryKey: ['data-model-tables'] })
-      qc.invalidateQueries({ queryKey: ['collections'] })
+      qc.invalidateQueries({ queryKey: queryKeys.collections() })
       if (!d.created.length) {
         toast.error(d.errors[0] ?? 'Nothing was created')
         return
@@ -768,8 +770,9 @@ function RelationCell({
 }) {
   const target = f.relation?.related_collection ?? null
   const planTarget = planCollections.find((c) => c.collection === target)
+  // The whole meta object: ['collection-fields', c] holds a filtered field ARRAY elsewhere.
   const { data: existingFields } = useQuery<{ fields?: { field: string }[] }>({
-    queryKey: ['collection-fields', target],
+    queryKey: queryKeys.collectionMeta(target),
     queryFn: () => api.get(`/collections/${target}`).then((r) => r.data.data),
     enabled: !!target && !planTarget,
     staleTime: 300_000

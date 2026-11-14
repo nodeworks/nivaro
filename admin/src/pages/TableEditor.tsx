@@ -18,6 +18,7 @@ import {
   LayoutEditor,
   LayoutOverview,
   normalizeInlineEdit,
+  queryKeys,
   sentenceLabelsFromFields,
   Term,
   TipLayer
@@ -372,14 +373,14 @@ function RollupSourceRow({
   onRemove?: () => void
 }) {
   const { data: collectionsData } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () =>
       api.get<{ data: { collection: string }[] }>('/collections').then((r) => r.data.data),
     staleTime: 60_000
   })
 
   const { data: relatedMeta } = useQuery({
-    queryKey: ['collection-meta', source.related_collection],
+    queryKey: queryKeys.collectionMeta(source.related_collection),
     queryFn: () =>
       api
         .get<{ data: { fields: { field: string; type: string; hidden?: boolean }[] } }>(
@@ -645,7 +646,7 @@ function LookupConfigEditor({
   ).filter((r) => r.many_collection === collection && r.one_collection && !r.junction_field)
   const target = m2o.find((r) => r.many_field === config.fk_field)?.one_collection ?? null
   const { data: targetMeta } = useQuery({
-    queryKey: ['collection-meta', target],
+    queryKey: queryKeys.collectionMeta(target),
     queryFn: () => api.get(`/collections/${target}`).then((r) => r.data.data),
     enabled: !!target
   })
@@ -6157,7 +6158,9 @@ function CastCheckSection({ tableName }: { tableName: string }) {
   } | null>(null)
   const { data: table } = useQuery({
     queryKey: ['data-model-table', tableName],
-    queryFn: () => schemaApi.getTable(tableName).then((r) => r.data),
+    // Same body as the table page's reader under this key; `select` unwraps it.
+    queryFn: () => schemaApi.getTable(tableName),
+    select: (r) => r.data,
     enabled: open && !!tableName
   })
   const lenNum = Number(maxLen)
@@ -6767,7 +6770,7 @@ function AddendumsSection({ tableName }: { tableName: string }) {
   const qc = useQueryClient()
 
   const { data: col } = useQuery({
-    queryKey: ['collection-meta', tableName],
+    queryKey: queryKeys.collectionMeta(tableName),
     queryFn: () =>
       api
         .get<{
@@ -6787,7 +6790,7 @@ function AddendumsSection({ tableName }: { tableName: string }) {
     mutationFn: (v: boolean) =>
       api.patch(`/collections/${tableName}`, { addendums_enabled: v ? 1 : 0 }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+      qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(tableName) })
       toast.success('Addendums setting saved')
     },
     onError: () => toast.error('Failed to update setting')
@@ -6819,7 +6822,7 @@ function AddendumsSection({ tableName }: { tableName: string }) {
         addendum_allowed_states: rules.length ? JSON.stringify(rules) : null
       }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+      qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(tableName) })
       toast.success('State restrictions saved')
     },
     onError: () => toast.error('Failed to save state restrictions')
@@ -6868,7 +6871,7 @@ function AddendumsSection({ tableName }: { tableName: string }) {
         addendum_start_states: rules.length ? JSON.stringify(rules) : null
       }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+      qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(tableName) })
       toast.success('Start states saved')
     },
     onError: () => toast.error('Failed to save start states')
@@ -6925,7 +6928,7 @@ function AddendumsSection({ tableName }: { tableName: string }) {
         addendum_allowed_roles: roles.length ? JSON.stringify(roles) : null
       }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+      qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(tableName) })
       toast.success('Role restrictions saved')
     },
     onError: () => toast.error('Failed to save role restrictions')
@@ -7594,7 +7597,7 @@ function LiveEventsSetting({
 function BrowserSettingsSection({ tableName }: { tableName: string }) {
   const qc = useQueryClient()
   const { data: col } = useQuery({
-    queryKey: ['collection-meta', tableName],
+    queryKey: queryKeys.collectionMeta(tableName),
     queryFn: () =>
       api
         .get<{
@@ -7674,7 +7677,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     await api.patch(`/collections/${tableName}`, {
       browser_config: Object.keys(clean).length > 0 ? clean : null
     })
-    qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+    qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(tableName) })
     toast.success('Browser settings saved')
   }
 
@@ -7829,7 +7832,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
                 void api
                   .patch(`/collections/${tableName}`, { color: accentColor || null })
                   .then(() => {
-                    qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+                    qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(tableName) })
                     toast.success('Accent color saved')
                   })
               }}
@@ -7842,7 +7845,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
                 onClick={() => {
                   setAccentColor('')
                   void api.patch(`/collections/${tableName}`, { color: null }).then(() => {
-                    qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+                    qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(tableName) })
                   })
                 }}
                 className='text-[11px] text-slate-400 hover:text-red-500'
@@ -7900,7 +7903,7 @@ function PickerFilterSection({ tableName }: { tableName: string }) {
   const qc = useQueryClient()
 
   const { data: col } = useQuery({
-    queryKey: ['collection-meta', tableName],
+    queryKey: queryKeys.collectionMeta(tableName),
     queryFn: () =>
       api
         .get<{ data: { picker_filter: unknown } }>(`/collections/${tableName}`)
@@ -7923,7 +7926,7 @@ function PickerFilterSection({ tableName }: { tableName: string }) {
   const save = async () => {
     if (!draft.trim()) {
       await api.patch(`/collections/${tableName}`, { picker_filter: null })
-      qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+      qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(tableName) })
       toast.success('Picker filter cleared')
       return
     }
@@ -7931,7 +7934,7 @@ function PickerFilterSection({ tableName }: { tableName: string }) {
       const parsed = JSON.parse(draft)
       setError('')
       await api.patch(`/collections/${tableName}`, { picker_filter: parsed })
-      qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+      qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(tableName) })
       toast.success('Picker filter saved')
     } catch {
       setError('Invalid JSON — check the filter expression')
@@ -7942,7 +7945,7 @@ function PickerFilterSection({ tableName }: { tableName: string }) {
     setDraft('')
     setError('')
     await api.patch(`/collections/${tableName}`, { picker_filter: null })
-    qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+    qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(tableName) })
     toast.success('Picker filter cleared')
   }
 
@@ -8048,7 +8051,7 @@ function SumCapRuleEditor({
   const severityName = useId()
 
   const { data: fieldsMeta } = useQuery({
-    queryKey: ['collection-meta', tableName],
+    queryKey: queryKeys.collectionMeta(tableName),
     queryFn: () =>
       api
         .get<{ data: { fields: { field: string; type: string; hidden?: boolean }[] } }>(
@@ -8079,7 +8082,7 @@ function SumCapRuleEditor({
   const parentCollection = selectedRelation?.one_collection ?? null
 
   const { data: parentFieldsMeta } = useQuery({
-    queryKey: ['collection-meta', parentCollection],
+    queryKey: queryKeys.collectionMeta(parentCollection),
     queryFn: () =>
       api
         .get<{ data: { fields: { field: string; type: string; hidden?: boolean }[] } }>(
@@ -9122,7 +9125,7 @@ type BehaviorSection =
 function useFieldConfig(tableName: string) {
   const qc = useQueryClient()
   const { data: fieldConfig = [], isLoading } = useQuery({
-    queryKey: ['field-config', tableName],
+    queryKey: queryKeys.fieldConfig(tableName),
     queryFn: () =>
       api
         .get<{
@@ -9147,7 +9150,7 @@ function useFieldConfig(tableName: string) {
 
   const patchField = async (fieldName: string, patch: Record<string, unknown>) => {
     await api.patch(`/field-config/${tableName}/${fieldName}`, patch)
-    qc.invalidateQueries({ queryKey: ['field-config', tableName] })
+    qc.invalidateQueries({ queryKey: queryKeys.fieldConfig(tableName) })
     qc.invalidateQueries({ queryKey: ['layout-field-config', tableName] })
   }
 
@@ -9156,7 +9159,7 @@ function useFieldConfig(tableName: string) {
 
 function useCollectionFields(tableName: string) {
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', tableName],
+    queryKey: queryKeys.collectionMeta(tableName),
     queryFn: () => api.get(`/collections/${tableName}`).then((r) => r.data.data),
     enabled: !!tableName,
     staleTime: 30_000

@@ -7,6 +7,7 @@ import {
   QueueWorklist
 } from '@nivaro/react'
 import { createNivaro } from '@nivaro/sdk'
+import { queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   Check,
@@ -1245,7 +1246,7 @@ type FieldMeta = { field: string; type: string; hidden?: boolean }
 
 function useCollectionFields(collection: string) {
   const { data } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () =>
       api
         .get<{ data: { fields: FieldMeta[] } }>(`/collections/${collection}`)
@@ -1267,7 +1268,7 @@ function CollectionCombobox({
 }) {
   const [open, setOpen] = useState(false)
   const { data } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () =>
       api.get<{ data: { collection: string }[] }>('/collections').then((r) => r.data.data),
     staleTime: 60_000
@@ -2055,7 +2056,7 @@ function LiveFormTab() {
   const client = useMemo(() => createNivaro(window.location.origin, { timeoutMs: 90_000 }), [])
 
   const { data: colData } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get<{ data: { collection: string; display_name: string | null }[] }>('/collections').then((r) => r.data.data),
     staleTime: 60_000,
   })

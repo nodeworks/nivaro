@@ -12,6 +12,7 @@ import {
   PretendDownButton,
   QueryErrorState,
   QueryWidgetBody,
+  queryKeys,
   useLiveRefetchInterval,
   useLiveWidget,
   usePretendDownScope
@@ -755,7 +756,7 @@ function AddWidgetSheet({
   const [viewSumField, setViewSumField] = useState('')
 
   const { data: collectionsData } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get<{ data: Collection[] }>('/collections').then((r) => r.data.data)
   })
   const collections = collectionsData ?? []
@@ -1052,7 +1053,7 @@ function GlobalFilterBar({
   // the server validates filters against.
   const fieldQueries = useQueries({
     queries: collections.map((c) => ({
-      queryKey: ['collection-meta', c],
+      queryKey: queryKeys.collectionMeta(c),
       queryFn: () =>
         api
           .get<{ data: { fields?: Array<{ field: string }> } }>(`/collections/${c}`)
@@ -1288,7 +1289,7 @@ export function DashboardEditPage() {
   })
   // #2858 — Pretend down names collections by their display name (same read as Add widget).
   const { data: collectionList } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get<{ data: Collection[] }>('/collections').then((r) => r.data.data)
   })
   const collectionLabels = useMemo(
