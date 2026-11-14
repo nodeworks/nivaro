@@ -87,6 +87,19 @@ export const fieldDisplaySettingsGuide: DocSection = {
       type: 'p',
       text: 'Wide inline grids (O2M child tables) can pin their leading cells: the "Freeze first column" switch in the grid settings keeps the row handles and the first data column in place while the rest of the grid scrolls horizontally. Pinned cells need an opaque background, so they give up row tinting — the trade-off the switch’s help text spells out.'
     },
+    { type: 'h3', text: 'Searching inside an inline grid' },
+    {
+      type: 'p',
+      text: 'Inline grids holding more than ten rows get a search box in their toolbar (press / anywhere in the grid to jump to it, Esc to clear). It filters rows by the text their visible cells show — relation labels, choice labels, Yes/No, formatted dates and amounts — and every word must match, as in list search. Matches are highlighted and the box counts them ("12 of 2,341 rows").'
+    },
+    {
+      type: 'p',
+      text: 'A grid reads at most 200 child rows. Past that the toolbar says how many are loaded ("200 of 2,341 loaded") and a search also asks the server — the same search the collection lists use, run as the viewer — so rows beyond the first 200 are found too. Rows found that way can be edited like any other and are never counted in the grid’s totals; a found row with an unsaved change stays in the grid after the search is cleared. The server search covers the child collection’s text columns (and any related labels the collection’s list search is set up for), not formatted numbers.'
+    },
+    {
+      type: 'p',
+      text: 'Unsaved rows the person added, copied or imported stay in view while searching (dimmed when they do not match), the row being edited never disappears, and a row added during a search stays shown — adding keeps the search on. A prefilled addendum row is searched like a saved one. Dragging to reorder is off while a search is on.'
+    },
     { type: 'h3', text: 'Storage and API' },
     {
       type: 'ul',
