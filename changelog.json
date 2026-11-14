@@ -1,10 +1,87 @@
 {
-  "generated_at": "2026-11-14T15:25:23.863Z",
+  "generated_at": "2026-11-14T18:23:51.911Z",
   "releases": [
+    {
+      "version": "0.3.159",
+      "tag": "v0.3.159",
+      "date": "2026-11-14T13:23:34-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "presence",
+              "text": "name the worklist someone is on",
+              "hash": "e8ee3b38e"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "say why a stand-in holds the step",
+              "hash": "257da3b3a"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "check every hop before a stand-in reason names a value",
+              "hash": "f4c6ac86a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "home",
+              "text": "\"Edited by me\" lists only records with a page and a name",
+              "hash": "920026e5d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "grid",
+              "text": "\"/\" jumps to the grid search from anywhere in the grid",
+              "hash": "da2b6ec74"
+            },
+            {
+              "section": "Fixed",
+              "scope": "list",
+              "text": "totals follow the person, views keep every total they are saved with",
+              "hash": "c6e196264"
+            },
+            {
+              "section": "Fixed",
+              "scope": "coverage",
+              "text": "leave records that no longer exist out of No owner",
+              "hash": "632b2d8b1"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "rebuild the in-app docs index after the stand-in reason merge",
+              "hash": "221dc4b5e"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "regenerate docs index for totals, grid search and edited-by-me notes",
+              "hash": "ba0b3077e"
+            }
+          ]
+        }
+      ],
+      "count": 9
+    },
     {
       "version": "0.3.158",
       "tag": "v0.3.158",
-      "date": "2026-11-14T10:25:03-05:00",
+      "date": "2026-11-14T10:25:23-05:00",
       "sections": [
         {
           "label": "Added",
