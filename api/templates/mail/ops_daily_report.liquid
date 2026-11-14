@@ -54,6 +54,10 @@
 </table>
 {%- endif -%}
 
+{%- if no_owner -%}
+<p style="margin:0 0 22px;font-family:{{ f | raw }};font-size:13.5px;line-height:1.5;color:#334155;"><span style="font-weight:600;color:#b45309;">Steps with no owner:</span> {{ no_owner.count }} {{ no_owner.text }} <a href="{{ no_owner.url }}" style="color:#0369a1;">See which steps</a></p>
+{%- endif -%}
+
 {% render 'partials/button', url: report_url, label: 'Open the full report' %}
 <p style="margin:0;font-family:{{ f | raw }};font-size:12px;line-height:1.5;color:#64748b;">Every number in the report opens the rows behind it. You get this email because you turned on &ldquo;Email me this report&rdquo; in Health &rsaquo; Daily report.</p>
 {% endblock %}

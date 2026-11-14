@@ -149,6 +149,7 @@
           <a class="docs-nav-item" data-section="pipeline-overview" href="#pipeline-overview">Overview</a>
           <a class="docs-nav-item" data-section="pipeline-dimensions" href="#pipeline-dimensions">Dimensions</a>
           <a class="docs-nav-item" data-section="pipeline-owners" href="#pipeline-owners">Owner Groups</a>
+          <a class="docs-nav-item" data-section="pipeline-no-owner-steps" href="#pipeline-no-owner-steps">Steps With No Owner</a>
           <a class="docs-nav-item" data-section="pipeline-specificity" href="#pipeline-specificity">Specificity &amp; Priority</a>
           <a class="docs-nav-item" data-section="pipeline-branching" href="#pipeline-branching">Conditional Branching</a>
           <a class="docs-nav-item" data-section="queues" href="#queues">Queues</a>
@@ -2228,6 +2229,33 @@ POST /api/pipelines/:id/owner-matrix/versions            { note? }  — checkpoi
 GET  /api/pipelines/:id/owner-matrix/versions/:vid/diff  ?against=current|&lt;vid&gt;
 POST /api/pipelines/:id/owner-matrix/versions/:vid/restore</code></pre>
           <!-- /SYNC:pipeline-owners -->
+        </div>
+
+        <div class="doc-section" id="s-pipeline-no-owner-steps" data-toc='[{"id":"pipeline-no-owner-steps","label":"Steps With No Owner"}]'>
+          <!-- SYNC:pipeline-no-owner-steps -->
+          <h1 class="doc-h1" id="pipeline-no-owner-steps">Steps With No Owner</h1>
+          <p class="doc-p">A move marked "Only the owner of this step" (require_owner) can be made by the step's ASSIGNED owners — the people of the owner group that matches the record, instance owners, and their working delegates — and by administrators. The binding's fallback person (often the creator) keeps a record in their queue but is not an owner, so when no owner group matches a record nobody but an administrator can make that move. Coverage › No owner (/coverage/no-owner) lists those records before people get stuck.</p>
+          <h3 class="doc-h3">What counts</h3>
+          <ul class="doc-ul">
+            <li>An open record whose current step has at least one manual owner-only move that does not also allow the creator, from that step or from any step, whose conditions match the record.</li>
+            <li>Nobody is assigned to own the step on that record: owners resolve exactly as the owner-only check does (owner groups, instance owners, delegation; no fallback person).</li>
+            <li>Terminal steps and steps marked "owners not required" never count. Records whose only owners are suspended or out with no delegate are on the Coverage gaps tab instead.</li>
+          </ul>
+          <h3 class="doc-h3">Reading the page</h3>
+          <ul class="doc-ul">
+            <li>One card per pipeline step and collection, biggest first, with the owner-only moves out of it ("or creator" marks a move the creator may also make).</li>
+            <li>"Values no owner group covers" groups the records by their values on the step's owner dimensions (warehouse, zone…). A highlighted value is one no owner group of the step names — the group to create. The closest existing group and what it misses are shown when there is one.</li>
+            <li>Show records lists the oldest records first: the record (opens it), who created it, whose queue it sits in, and since when it has been on the step.</li>
+            <li>Open owner matrix opens the pipeline at its Owner Matrix. After adding a group, Re-check recomputes at once (the answer is otherwise kept two minutes).</li>
+          </ul>
+          <div class="doc-note">Administrators see only the records they may read: restrict User Scopes apply to them too. The daily report (Health › Daily report) has a "Steps with no owner" section with the total and the biggest steps, and its email adds a line linking this tab whenever the total is above zero.</div>
+          <pre class="doc-pre"><code>GET /api/coverage-gaps/no-owner            (admin)  ?fresh=1  ?sample=10
+→ { data: { computed_at, checked, total,
+            groups: [{ template_id, template_name, state_id, state_key, state_label,
+                       collection, collection_label, count, moves[], clusters[{ dims, uncovered,
+                       reason, suggestion, count }], ungrouped, conditions_unchecked,
+                       sample[{ item, label, creator, stand_in, since }], matrix_href }] } }</code></pre>
+          <!-- /SYNC:pipeline-no-owner-steps -->
         </div>
 
         <div class="doc-section" id="s-pipeline-specificity" data-toc='[{"id":"pipeline-specificity","label":"Specificity &amp; Owner Resolution"}]'>

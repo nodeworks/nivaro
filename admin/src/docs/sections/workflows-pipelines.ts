@@ -357,6 +357,50 @@ POST /api/pipelines/:id/owner-matrix/versions/:vid/restore`
   ]
 }
 
+export const pipelineNoOwnerSteps: DocSection = {
+  id: 'pipeline-no-owner-steps',
+  label: 'Steps With No Owner',
+  content: [
+    { type: 'h1', id: 'pipeline-no-owner-steps', text: 'Steps With No Owner' },
+    {
+      type: 'p',
+      text: 'A move marked "Only the owner of this step" (require_owner) can be made by the step\'s ASSIGNED owners — the people of the owner group that matches the record, instance owners, and their working delegates — and by administrators. The binding\'s fallback person (often the creator) keeps a record in their queue but is not an owner, so when no owner group matches a record nobody but an administrator can make that move. Coverage › No owner (/coverage/no-owner) lists those records before people get stuck.'
+    },
+    { type: 'h3', text: 'What counts' },
+    {
+      type: 'ul',
+      items: [
+        'An open record whose current step has at least one manual owner-only move that does not also allow the creator, from that step or from any step, whose conditions match the record.',
+        'Nobody is assigned to own the step on that record: owners resolve exactly as the owner-only check does (owner groups, instance owners, delegation; no fallback person).',
+        'Terminal steps and steps marked "owners not required" never count. Records whose only owners are suspended or out with no delegate are on the Coverage gaps tab instead.'
+      ]
+    },
+    { type: 'h3', text: 'Reading the page' },
+    {
+      type: 'ul',
+      items: [
+        'One card per pipeline step and collection, biggest first, with the owner-only moves out of it ("or creator" marks a move the creator may also make).',
+        '"Values no owner group covers" groups the records by their values on the step\'s owner dimensions (warehouse, zone…). A highlighted value is one no owner group of the step names — the group to create. The closest existing group and what it misses are shown when there is one.',
+        'Show records lists the oldest records first: the record (opens it), who created it, whose queue it sits in, and since when it has been on the step.',
+        'Open owner matrix opens the pipeline at its Owner Matrix. After adding a group, Re-check recomputes at once (the answer is otherwise kept two minutes).'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Administrators see only the records they may read: restrict User Scopes apply to them too. The daily report (Health › Daily report) has a "Steps with no owner" section with the total and the biggest steps, and its email adds a line linking this tab whenever the total is above zero.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/coverage-gaps/no-owner            (admin)  ?fresh=1  ?sample=10
+→ { data: { computed_at, checked, total,
+            groups: [{ template_id, template_name, state_id, state_key, state_label,
+                       collection, collection_label, count, moves[], clusters[{ dims, uncovered,
+                       reason, suggestion, count }], ungrouped, conditions_unchecked,
+                       sample[{ item, label, creator, stand_in, since }], matrix_href }] } }`
+    }
+  ]
+}
+
 export const pipelineSpecificity: DocSection = {
   id: 'pipeline-specificity',
   label: 'Specificity & Resolution',

@@ -1876,129 +1876,150 @@ export async function analyzeOwnerGaps(templateId: string): Promise<OwnerGapClus
     const unowned = instancesWithoutActingOwner(instances, owners, live)
     if (unowned.length === 0) continue
 
-    // Per state: prepared groups + the records' resolved filter values.
-    const byState = new Map<string, typeof unowned>()
-    for (const u of unowned) {
-      const sid = String(u.current_state)
-      byState.set(sid, [...(byState.get(sid) ?? []), u])
-    }
-    const groupData = await getOwnerGroupsForStates([...byState.keys()], db)
-
-    // One record read per binding (not one per state), with only the columns
-    // the states' filters read — up to 500 records per state, as before.
-    const itemsByState = new Map<string, string[]>()
-    const allItems = new Set<string>()
-    const allFields = new Set<string>()
-    for (const [sid, insts] of byState) {
-      const items = insts.map((i) => String(i.item)).slice(0, 500)
-      itemsByState.set(sid, items)
-      for (const it of items) allItems.add(it)
-      for (const f of groupData.get(sid)?.prepared?.filterFields ?? []) allFields.add(f)
-    }
-    const allRows = await readMatchRecords(b.collection, [...allItems], [...allFields])
-    const rowById = new Map(allRows.map((r) => [String(r.id), r]))
-
-    for (const [sid, insts] of byState) {
-      const prepared = groupData.get(sid)?.prepared
-      const fields = prepared?.filterFields ?? []
-      const records = new Map<string, Record<string, unknown>>()
-      for (const it of itemsByState.get(sid) ?? []) {
-        const row = rowById.get(it)
-        if (row) records.set(it, row)
-      }
-      const resolved = await resolveFilterValues(b.collection, records, fields, db)
-
-      const displayOf = (v: ResolvedFilterValue | undefined): string => {
-        if (!v) return ''
-        const d = v.display instanceof Set ? [...v.display] : v.display != null ? [v.display] : []
-        return d.map(String).sort().join(', ')
-      }
-
-      const firstOf = (v: unknown): unknown => {
-        if (v instanceof Set) {
-          const arr = [...v]
-          return arr.length > 0 ? arr.sort()[0] : null
-        }
-        return v ?? null
-      }
-
-      for (const inst of insts) {
-        const item = String(inst.item)
-        const rv = resolved.get(item)
-        const dims: Record<string, string> = {}
-        for (const f of fields)
-          dims[f] = displayOf(rv?.get(f)) || String(records.get(item)?.[f] ?? '')
-        const clusterKey = `${sid}|${b.collection}|${JSON.stringify(dims)}`
-        let cluster = clusters.get(clusterKey)
-        if (!cluster) {
-          // Closest group: fewest failing filters, at least one passing.
-          let bestSuggestion: OwnerGapCluster['suggestion'] = null
-          for (const { group, filters } of prepared?.candidates ?? []) {
-            const matched: string[] = []
-            const mismatched: string[] = []
-            for (const f of filters) {
-              const r = rv?.get(f.field)
-              const ok = r
-                ? f.id_value != null
-                  ? evalAgainstResolved(f.op, r.ids, f.id_value)
-                  : evalAgainstResolved(f.op, r.display, f.value)
-                : evalFilterOp(f.op, records.get(item)?.[f.field], f.id_value ?? f.value)
-              if (ok) matched.push(f.field)
-              else mismatched.push(`${f.field} (wants ${String(f.id_value ?? f.value)})`)
-            }
-            if (matched.length === 0) continue
-            if (
-              !bestSuggestion ||
-              mismatched.length < bestSuggestion.mismatched_filters.length ||
-              (mismatched.length === bestSuggestion.mismatched_filters.length &&
-                matched.length > bestSuggestion.matched_filters.length)
-            ) {
-              bestSuggestion = {
-                group_id: String(group.id),
-                group_label:
-                  ((group as { name?: string | null }).name ?? '').trim() ||
-                  // Unnamed group (legacy sync left a few): describe it by its
-                  // own filter values rather than showing a uuid.
-                  filters.map((f) => String(f.value)).join(' · ') ||
-                  String(group.id),
-                matched_filters: matched,
-                mismatched_filters: mismatched
-              }
-            }
-          }
-          // Filters a remediation group would need: one eq per dimension the
-          // records actually resolved a value for (first id when multi-valued
-          // — Set membership makes a single-id eq still match those records).
-          const clusterFilters: OwnerGapCluster['filters'] = []
-          for (const f of fields) {
-            const r = rv?.get(f)
-            const display = dims[f]
-            if (!display) continue
-            const rawId = r ? firstOf(r.ids) : null
-            const idNum = rawId != null && !Number.isNaN(Number(rawId)) ? Number(rawId) : null
-            clusterFilters.push({
-              field: f,
-              op: 'eq',
-              value: display.split(', ')[0],
-              id_value: idNum
-            })
-          }
-          cluster = {
-            state_id: sid,
-            state_key: keyByState.get(sid.toUpperCase()) ?? null,
-            collection: b.collection,
-            count: 0,
-            sample_items: [],
-            dims,
-            filters: clusterFilters,
-            suggestion: bestSuggestion
-          }
-          clusters.set(clusterKey, cluster)
-        }
-        cluster.count++
-        if (cluster.sample_items.length < 5) cluster.sample_items.push(item)
-      }
-    }
+    await clusterOwnerGapRecords(b.collection, unowned, keyByState, clusters, { perStateCap: 500 })
   }
   return [...clusters.values()].sort((a, z) => z.count - a.count).slice(0, 50)
+}
+
+/**
+ * Cluster unowned records of ONE collection by their resolved dimension
+ * values (the owner-group filter fields of each record's current state) and
+ * add them to `clusters` — the owner-gap advisor's grouping, shared with the
+ * "steps with no owner" report (services/no-owner-steps.ts) so both read the
+ * same values the live resolver matches on. Up to `perStateCap` records per
+ * state are read for their values; the rest count into the cluster of blank
+ * values. `clusterOf` (when given) learns each record's cluster key.
+ */
+export async function clusterOwnerGapRecords(
+  collection: string,
+  unowned: Array<{ item: string; current_state: string }>,
+  keyByState: Map<string, string>,
+  clusters: Map<string, OwnerGapCluster>,
+  opts: { perStateCap?: number; clusterOf?: Map<string, string> } = {}
+): Promise<void> {
+  const cap = opts.perStateCap ?? 500
+  // Per state: prepared groups + the records' resolved filter values.
+  const byState = new Map<string, typeof unowned>()
+  for (const u of unowned) {
+    const sid = String(u.current_state)
+    byState.set(sid, [...(byState.get(sid) ?? []), u])
+  }
+  const groupData = await getOwnerGroupsForStates([...byState.keys()], db)
+
+  // One record read per binding (not one per state), with only the columns
+  // the states' filters read — up to 500 records per state, as before.
+  const itemsByState = new Map<string, string[]>()
+  const allItems = new Set<string>()
+  const allFields = new Set<string>()
+  for (const [sid, insts] of byState) {
+    const items = insts.map((i) => String(i.item)).slice(0, cap)
+    itemsByState.set(sid, items)
+    for (const it of items) allItems.add(it)
+    for (const f of groupData.get(sid)?.prepared?.filterFields ?? []) allFields.add(f)
+  }
+  const allRows = await readMatchRecords(collection, [...allItems], [...allFields])
+  const rowById = new Map(allRows.map((r) => [String(r.id), r]))
+
+  for (const [sid, insts] of byState) {
+    const prepared = groupData.get(sid)?.prepared
+    const fields = prepared?.filterFields ?? []
+    const records = new Map<string, Record<string, unknown>>()
+    for (const it of itemsByState.get(sid) ?? []) {
+      const row = rowById.get(it)
+      if (row) records.set(it, row)
+    }
+    const resolved = await resolveFilterValues(collection, records, fields, db)
+
+    const displayOf = (v: ResolvedFilterValue | undefined): string => {
+      if (!v) return ''
+      const d = v.display instanceof Set ? [...v.display] : v.display != null ? [v.display] : []
+      return d.map(String).sort().join(', ')
+    }
+
+    const firstOf = (v: unknown): unknown => {
+      if (v instanceof Set) {
+        const arr = [...v]
+        return arr.length > 0 ? arr.sort()[0] : null
+      }
+      return v ?? null
+    }
+
+    for (const inst of insts) {
+      const item = String(inst.item)
+      const rv = resolved.get(item)
+      const dims: Record<string, string> = {}
+      for (const f of fields)
+        dims[f] = displayOf(rv?.get(f)) || String(records.get(item)?.[f] ?? '')
+      const clusterKey = `${sid}|${collection}|${JSON.stringify(dims)}`
+      let cluster = clusters.get(clusterKey)
+      if (!cluster) {
+        // Closest group: fewest failing filters, at least one passing.
+        let bestSuggestion: OwnerGapCluster['suggestion'] = null
+        for (const { group, filters } of prepared?.candidates ?? []) {
+          const matched: string[] = []
+          const mismatched: string[] = []
+          for (const f of filters) {
+            const r = rv?.get(f.field)
+            const ok = r
+              ? f.id_value != null
+                ? evalAgainstResolved(f.op, r.ids, f.id_value)
+                : evalAgainstResolved(f.op, r.display, f.value)
+              : evalFilterOp(f.op, records.get(item)?.[f.field], f.id_value ?? f.value)
+            if (ok) matched.push(f.field)
+            else mismatched.push(`${f.field} (wants ${String(f.id_value ?? f.value)})`)
+          }
+          if (matched.length === 0) continue
+          if (
+            !bestSuggestion ||
+            mismatched.length < bestSuggestion.mismatched_filters.length ||
+            (mismatched.length === bestSuggestion.mismatched_filters.length &&
+              matched.length > bestSuggestion.matched_filters.length)
+          ) {
+            bestSuggestion = {
+              group_id: String(group.id),
+              group_label:
+                ((group as { name?: string | null }).name ?? '').trim() ||
+                // Unnamed group (legacy sync left a few): describe it by its
+                // own filter values rather than showing a uuid.
+                filters.map((f) => String(f.value)).join(' · ') ||
+                String(group.id),
+              matched_filters: matched,
+              mismatched_filters: mismatched
+            }
+          }
+        }
+        // Filters a remediation group would need: one eq per dimension the
+        // records actually resolved a value for (first id when multi-valued
+        // — Set membership makes a single-id eq still match those records).
+        const clusterFilters: OwnerGapCluster['filters'] = []
+        for (const f of fields) {
+          const r = rv?.get(f)
+          const display = dims[f]
+          if (!display) continue
+          const rawId = r ? firstOf(r.ids) : null
+          const idNum = rawId != null && !Number.isNaN(Number(rawId)) ? Number(rawId) : null
+          clusterFilters.push({
+            field: f,
+            op: 'eq',
+            value: display.split(', ')[0],
+            id_value: idNum
+          })
+        }
+        cluster = {
+          state_id: sid,
+          state_key: keyByState.get(sid.toUpperCase()) ?? null,
+          collection: collection,
+          count: 0,
+          sample_items: [],
+          dims,
+          filters: clusterFilters,
+          suggestion: bestSuggestion
+        }
+        clusters.set(clusterKey, cluster)
+      }
+      cluster.count++
+      opts.clusterOf?.set(item, clusterKey)
+      if (cluster.sample_items.length < 5) cluster.sample_items.push(item)
+    }
+  }
 }

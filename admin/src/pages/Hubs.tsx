@@ -111,7 +111,8 @@ const SCREENS: Record<string, Screens> = {
   },
   '/coverage': {
     '': lazy(() => import('@/pages/DelegationConsole')),
-    gaps: page(() => import('@/pages/CoverageGaps'), 'CoverageGapsPage')
+    gaps: page(() => import('@/pages/CoverageGaps'), 'CoverageGapsPage'),
+    'no-owner': page(() => import('@/pages/NoOwnerSteps'), 'NoOwnerStepsPage')
   },
   '/security-center': {
     '': lazy(() => import('@/pages/SecurityCenter')),

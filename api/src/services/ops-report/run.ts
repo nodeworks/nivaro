@@ -184,6 +184,25 @@ function short(text: string, max = 140): string {
   return first.length > max ? `${first.slice(0, max - 1).trimEnd()}…` : first
 }
 
+/** The email's "steps with no owner" line: null when nothing is stuck. The
+ *  link goes to Coverage › No owner on the same admin origin as the report. */
+export function noOwnerLine(
+  count: number | undefined,
+  reportUrl: string
+): { count: string; text: string; url: string } | null {
+  const n = Number(count ?? 0)
+  if (!Number.isFinite(n) || n <= 0) return null
+  const base = reportUrl.replace(/\/health\/daily-report.*$/, '')
+  return {
+    count: n.toLocaleString('en-US'),
+    text:
+      n === 1
+        ? 'record sits on a step nobody owns — only an administrator can move it.'
+        : 'records sit on steps nobody owns — only an administrator can move them.',
+    url: `${base}/coverage/no-owner`
+  }
+}
+
 /** What the email template reads (ops_daily_report.liquid). One verdict word for subject and body. */
 export function emailData(
   r: {
@@ -234,6 +253,9 @@ export function emailData(
     worse: (r.digest?.score?.parts ?? [])
       .slice(0, 5)
       .map((p) => ({ label: p.label, points: p.points })),
+    // Steps with no owner (services/no-owner-steps.ts, section owner_gaps):
+    // a heads-up line + link while records sit where only an admin can move them.
+    no_owner: noOwnerLine(k['owner_gaps.records'], url),
     report_url: url
   }
 }
