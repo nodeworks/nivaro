@@ -164,6 +164,8 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Session Replay** — opt-in rrweb screen recording of admin sessions, inputs masked, watch like video (7-day retention)
 - **Help Videos** — authors record screen tutorials in the browser, cut, speed up, annotate, zoom, blur and caption them in a visual editor, and publish; viewers watch from a library, from a Videos button on the screen each one explains, and from My Work when a video is required for their role (versions, view tracking, server-rendered MP4)
 - **Journey Trail** — session-by-session page breadcrumbs with time-on-page per user (admin-only, 30-day retention)
+- **Back to the exact list** — opening a record from a list, queue or search and going back returns to the same view, filters, search, sort, page and scroll; the crumb names it ("Workflows · My open · page 3")
+- **Recently edited by me** — a personal list of the records you created, edited, moved or commented on, newest first across collections, each saying what you did, read with your own access
 - **Import Templates** — file-to-form import with declarative mapping
 - **Full SDK Coverage** — ~175 typed SDK commands spanning every feature area, explorable in the in-browser SDK playground
 - **Team Chat: huddles & clips** — start a huddle from any room, record screen clips to share in a thread, custom emoji, drafts that follow you across devices, an outbox that retries unsent messages, and long rooms that load by window

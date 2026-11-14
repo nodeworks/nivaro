@@ -19,6 +19,14 @@ describe('describePath', () => {
     expect(describePath('/jobs/timeline')).toEqual({ kind: 'static', label: 'Jobs · Timeline' })
     expect(describePath('/tasks/42')).toEqual({ kind: 'static', label: 'Tasks #42' })
   })
+
+  it('names the search a search page held (#21)', () => {
+    expect(describePath('/search?q=pump&page=2')).toEqual({
+      kind: 'static',
+      label: 'Search · “pump” · page 3'
+    })
+    expect(describePath('/search')).toEqual({ kind: 'static', label: 'Search' })
+  })
 })
 
 describe('isTrailRoot', () => {

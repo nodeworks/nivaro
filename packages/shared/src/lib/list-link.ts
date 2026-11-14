@@ -13,7 +13,15 @@
  * the URL never bends a different list.
  */
 
+import { noteTrailAddress } from './nav-trail'
+
 export const LIST_LINK_PARAM = 'lv'
+/**
+ * Fired on `window` after a list rewrote its address (replaceListLinkParam), with
+ * `detail.path` = the new pathname + search + hash. Hosts that remember "where a record was
+ * opened from" (efp-new lib/back.ts) re-read the address on it: the router never saw it.
+ */
+export const LIST_ADDRESS_EVENT = 'nvr:list-address'
 const VERSION = 1
 /** Past this the link would not survive chat clients / proxies; refuse to build it. */
 export const LIST_LINK_MAX_CHARS = 7000
@@ -111,14 +119,20 @@ export function replaceListLinkParam(key: string, state: Record<string, unknown>
   if (next) params.set(LIST_LINK_PARAM, next)
   else params.delete(LIST_LINK_PARAM)
   const qs = params.toString()
+  const path = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`
   try {
-    window.history.replaceState(
-      window.history.state,
-      '',
-      `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`
-    )
+    window.history.replaceState(window.history.state, '', path)
   } catch {
     /* a sandboxed frame may refuse — the list still works, only without the address */
+    return
+  }
+  // The router never sees this address: tell the tab's trail and any host listening, so a
+  // crumb, a record's back arrow and "where was this opened from" all carry the list state.
+  noteTrailAddress(path)
+  try {
+    window.dispatchEvent(new CustomEvent(LIST_ADDRESS_EVENT, { detail: { path } }))
+  } catch {
+    /* no CustomEvent (very old engine) — the address itself is still right */
   }
 }
 
@@ -183,6 +197,8 @@ export interface CbvLinkState {
   p?: number
   /** Only records with an addendum in flight. */
   a?: boolean
+  /** The saved view the list was on (its pill shows active again when the reader has it). */
+  v?: number
 }
 
 export function sanitizeCbvLinkState(raw: Record<string, unknown> | null): CbvLinkState | null {
@@ -246,6 +262,8 @@ export function sanitizeCbvLinkState(raw: Record<string, unknown> | null): CbvLi
   const p = posInt(raw.p, 100000)
   if (p) out.p = p
   if (raw.a === true) out.a = true
+  const v = posInt(raw.v, Number.MAX_SAFE_INTEGER)
+  if (v) out.v = v
   return out
 }
 
@@ -259,6 +277,8 @@ export interface QueueLinkState {
   columns?: string[] | null
   pins?: Record<string, 'left' | 'right'> | null
   page?: number
+  /** The saved view the worklist was on (its pill shows active again when the reader has it). */
+  view_id?: number
 }
 
 export function sanitizeQueueLinkState(raw: Record<string, unknown> | null): QueueLinkState | null {
@@ -296,5 +316,7 @@ export function sanitizeQueueLinkState(raw: Record<string, unknown> | null): Que
   }
   const page = posInt(raw.page, 100000)
   if (page) out.page = page
+  const viewId = posInt(raw.view_id, Number.MAX_SAFE_INTEGER)
+  if (viewId) out.view_id = viewId
   return out
 }

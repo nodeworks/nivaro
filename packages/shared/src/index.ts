@@ -943,11 +943,15 @@ export {
   displayTrail,
   elementAtScrollPath,
   getNavTrail,
+  listTrailDetail,
   NAV_TRAIL_KEY,
+  noteTrailAddress,
   recordNavigation,
   reduceTrail,
   restoreTrailScroll,
   scrollPathOf,
+  scrollToRestore,
+  setTrailDetail,
   setTrailLabel,
   setTrailScroll,
   subscribeNavTrail,
@@ -958,6 +962,7 @@ export {
   type TrailScroll,
   type TrailState,
   trailChain,
+  trailCrumbText,
   useNavTrail
 } from './lib/nav-trail'
 export {

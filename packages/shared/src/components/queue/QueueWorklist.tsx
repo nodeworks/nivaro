@@ -87,6 +87,7 @@ import {
 import { arrivedByListReturn, ensureHistoryKey, historyKey } from '../../lib/list-page-memory'
 import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
+import { listTrailDetail, setTrailDetail } from '../../lib/nav-trail'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isOwnWrite } from '../../lib/own-writes'
 import { usePrefetchIntent } from '../../lib/prefetch'
@@ -2445,6 +2446,7 @@ export function QueueWorklist({
     setActiveViewId(null)
     setPage(1)
   }, [displayReady])
+  const sharedViewIdRef = useRef<number | null>(null)
   // #3233 — a shared queue link (`?lv=`): the view exactly as the sender saw it,
   // applied once over the default view. Settings only — the reader's own access applies.
   // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on ready
@@ -2463,7 +2465,17 @@ export function QueueWorklist({
     })
     setActiveViewId(null)
     if (shared.page) setPage(shared.page)
+    if (shared.view_id) sharedViewIdRef.current = shared.view_id
   }, [displayReady])
+  // #21 — the saved view the link was on: its pill shows active again once the views are in,
+  // only when this reader has that view. Re-run on displayReady: the link is read there.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: displayReady sets the ref read here
+  useEffect(() => {
+    const want = sharedViewIdRef.current
+    if (want == null || !views?.data) return
+    sharedViewIdRef.current = null
+    if (views.data.some((v) => v.id === want)) setActiveViewId(want)
+  }, [views, displayReady])
   /** What "Copy link" puts in the URL — the worklist as on screen. */
   const listLinkState = (): QueueLinkState => ({
     scope,
@@ -2473,7 +2485,8 @@ export function QueueWorklist({
     view,
     columns: visibleColumns,
     pins: columnPins,
-    ...(page > 1 ? { page } : {})
+    ...(page > 1 ? { page } : {}),
+    ...(activeViewId != null && activeViewId > 0 ? { view_id: activeViewId } : {})
   })
   useEffect(() => {
     if (pendingScrollRef.current == null || items.length === 0 || !scrollRef.current) return
@@ -3012,8 +3025,24 @@ export function QueueWorklist({
     visibleColumns,
     columnPins,
     page,
+    activeViewId,
     drillStack
   ])
+  // …and the crumb / back link that returns here names what it showed:
+  // "Back to Pending approvals · My Items · page 3" (nav-trail setTrailDetail).
+  const activeViewName = views?.data?.find((v) => v.id === activeViewId)?.name ?? null
+  const trailDetail = listTrailDetail({
+    view:
+      activeViewName ??
+      (scope !== 'all' ? (SCOPE_TABS.find((t) => t.value === scope)?.label ?? null) : null),
+    filters: Object.values(filterValues).filter((v) =>
+      Array.isArray(v) ? v.length > 0 : String(v ?? '').trim() !== ''
+    ).length,
+    page
+  })
+  useEffect(() => {
+    if (displayReady && queueId) setTrailDetail(trailDetail)
+  }, [displayReady, queueId, trailDetail])
 
   const drilldownConfigFor = (
     path: string

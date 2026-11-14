@@ -15,6 +15,39 @@ export interface RecentRecord {
   changed_since_viewed?: boolean
 }
 
+/** #22 — a record the person changed (GET /record-views/edited). */
+export interface EditedRecord {
+  collection: string
+  collection_label: string
+  item_id: string
+  label: string
+  /** What they did, newest first: "Moved to Approved · edited 3 fields". */
+  did: string
+  last_edited_at: string
+  kinds: Array<'create' | 'edit' | 'move' | 'comment'>
+  state: { key: string; label: string; color: string | null } | null
+}
+
+/** Which list the Recently viewed card shows. */
+export type RecentTab = 'viewed' | 'edited'
+export const RECENT_TAB_KEY = 'nvr:overview:recent-tab'
+
+export function readRecentTab(): RecentTab {
+  try {
+    return localStorage.getItem(RECENT_TAB_KEY) === 'edited' ? 'edited' : 'viewed'
+  } catch {
+    return 'viewed'
+  }
+}
+
+export function writeRecentTab(tab: RecentTab): void {
+  try {
+    localStorage.setItem(RECENT_TAB_KEY, tab)
+  } catch {
+    /* private mode: the card opens on Viewed next time */
+  }
+}
+
 export const changedSinceViewed = (r: RecentRecord) => !!(r.changed ?? r.changed_since_viewed)
 
 export type RecentBlock =

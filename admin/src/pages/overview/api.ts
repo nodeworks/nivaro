@@ -49,6 +49,7 @@ export const overviewKeys = {
   usage: ['overview', 'usage'] as const,
   pinnedWidgets: ['overview', 'pinned-widgets'] as const,
   recent: ['overview', 'recent-records'] as const,
+  edited: ['overview', 'recently-edited'] as const,
   activity: (scope: string) => ['overview', 'activity', scope] as const,
   roleDefaults: ['overview', 'role-defaults'] as const
 }
