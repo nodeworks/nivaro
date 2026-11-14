@@ -363,21 +363,141 @@ export interface EnvComponent {
   kind: string
   host: string
 }
+
+export type EnvTier = 'production' | 'nonproduction'
+/** An environment a name, host, token or user agent declares: its tier + the word it used. */
+export interface DeclaredTier {
+  tier: EnvTier
+  /** Canonical word: production, staging, development, test, qa, uat, sandbox, preview. */
+  word: string
+}
+
+const TIER_WORDS: Record<string, DeclaredTier> = {
+  production: { tier: 'production', word: 'production' },
+  prod: { tier: 'production', word: 'production' },
+  prd: { tier: 'production', word: 'production' },
+  staging: { tier: 'nonproduction', word: 'staging' },
+  stage: { tier: 'nonproduction', word: 'staging' },
+  stg: { tier: 'nonproduction', word: 'staging' },
+  development: { tier: 'nonproduction', word: 'development' },
+  dev: { tier: 'nonproduction', word: 'development' },
+  test: { tier: 'nonproduction', word: 'test' },
+  testing: { tier: 'nonproduction', word: 'test' },
+  qa: { tier: 'nonproduction', word: 'qa' },
+  uat: { tier: 'nonproduction', word: 'uat' },
+  sandbox: { tier: 'nonproduction', word: 'sandbox' },
+  preview: { tier: 'nonproduction', word: 'preview' }
+}
+
+/**
+ * The environment a piece of text declares ("PROD Fusion sync", "nvk_stg_…", "efp-staging"),
+ * by whole words split on anything that is not a letter or digit ("product" is not "prod").
+ * null when it names none, or names both a production and a non-production one.
+ */
+export function declaredTier(text: string | null | undefined): DeclaredTier | null {
+  if (!text) return null
+  let prod: DeclaredTier | null = null
+  let nonprod: DeclaredTier | null = null
+  for (const t of text.toLowerCase().split(/[^a-z0-9]+/)) {
+    const hit = TIER_WORDS[t]
+    if (!hit) continue
+    if (hit.tier === 'production') prod ??= hit
+    else nonprod ??= hit
+  }
+  if (prod && nonprod) return null
+  return prod ?? nonprod
+}
+
+/**
+ * Which tier THIS instance is: NIVARO_ENVIRONMENT when set, else what NIVARO_INSTANCE or the
+ * Environments registry's name for this instance declares. NODE_ENV is never read (staging
+ * runs NODE_ENV=production). null = unknown: no tier findings are made.
+ */
+export function selfTierOf(src: {
+  environment?: string | null
+  instance?: string | null
+  registrySelf?: string | null
+}): DeclaredTier | null {
+  const e = (src.environment ?? '').trim().toLowerCase()
+  if (e) return TIER_WORDS[e] ?? null
+  return declaredTier(src.instance) ?? declaredTier(src.registrySelf)
+}
+
+function stripEnvLabels(host: string): string {
+  return host
+    .replace(/:\d+$/, '')
+    .split('.')
+    .map((label) =>
+      label
+        .split('-')
+        .filter((part) => !TIER_WORDS[part])
+        .join('-')
+    )
+    .filter(Boolean)
+    .join('.')
+}
+
+/**
+ * The tier a foreign host (a Referer / Origin / user-agent URL) belongs to when the registry
+ * does not list it: a host that names an environment ("efp-prod.example.com"), or this
+ * instance's own address without its environment word ("efp.example.com" seen on
+ * "staging.efp.example.com" = production's address).
+ */
+export function hostTier(foreign: string, ownHosts: string[]): DeclaredTier | null {
+  const named = declaredTier(foreign.replace(/:\d+$/, ''))
+  if (named) return named
+  const bare = stripEnvLabels(foreign)
+  for (const own of ownHosts) {
+    const ownTier = declaredTier(own.replace(/:\d+$/, ''))
+    if (ownTier?.tier === 'nonproduction' && own !== foreign && stripEnvLabels(own) === bare)
+      return TIER_WORDS.production
+  }
+  return null
+}
+
+export interface UnknownTokenFact {
+  /** API keys: the 8-character display prefix the API keys page shows; null for other tokens. */
+  prefix: string | null
+  /** First 8 hex of the token's SHA-256 (= the start of an API key's stored key_hash). */
+  fingerprint?: string
+  kind?: 'api-key' | 'oauth' | 'token'
+  n: number
+  last_at: string
+  referer: string | null
+  ip?: string | null
+  app?: string | null
+  /** What the token's own text declares (`nvk_prod_…`, `stg-…`), never the token. */
+  tier?: DeclaredTier | null
+}
+
 export interface MisconfigFacts {
   /** caller → { host of the Referer / Origin it sent: count } (own hosts already left out). */
   referers: Record<string, Record<string, number>>
-  /** API keys this instance does not know: prefix → count + the hosts they came from. */
-  unknownKeys: Array<{ prefix: string; n: number; last_at: string; referer: string | null }>
-  /** Key callers seen in the window with their names. */
-  keys: Array<{ caller: string; name: string | null }>
+  /** Tokens this instance refused (401): fingerprints + counts + where they came from. */
+  unknownKeys: UnknownTokenFact[]
+  /** Key callers seen in the window with their names (and when the key row was created). */
+  keys: Array<{ caller: string; name: string | null; created_at?: string | null }>
+  /** caller → { `host:<h>` | `env:<word>` a non-browser user agent named: count }. */
+  uaClaims?: Record<string, Record<string, number>>
+  /** caller → the address and app it last called from. */
+  who?: Record<string, { ip: string | null; app: string | null }>
+  /** This instance's own hosts (PUBLIC_URL / ADMIN_URL / the request host). */
+  ownHosts?: string[]
+  /** UTC ISO time this database was last restored (msdb), null when unknown or never. */
+  restoredAt?: string | null
 }
 export interface MisconfigFinding {
   caller: string
-  kind: 'referer' | 'unknown-key' | 'key-name'
+  kind: 'referer' | 'unknown-key' | 'key-name' | 'restore-copy' | 'user-agent'
   /** The other environment the evidence names (null when it cannot be told). */
   environment: string | null
   text: string
   n: number
+  /** The caller's address and app (x-nivaro-app or the user agent's label), when seen. */
+  ip?: string | null
+  app?: string | null
+  /** Token / key fingerprint (hash prefix), never the secret. */
+  fingerprint?: string | null
 }
 
 /** The host of a URL or a bare host (lower case, port kept); null when unreadable. */
@@ -390,60 +510,170 @@ export function hostOf(raw: string | null | undefined): string | null {
   }
 }
 
+function dayOf(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        timeZone: 'UTC'
+      })
+}
+
+const TOKEN_NOUN = { 'api-key': 'API key', oauth: 'OAuth token', token: 'token' } as const
+
 /**
  * #2236 — calls aimed at the wrong environment: a Referer / Origin from another environment's
  * frontend or admin, an API key this instance never minted (sent by a client configured for
  * another environment), or a key named for another environment. `self` = this instance's
  * environment name in the registry (null when the registry does not name it).
+ *
+ * With `selfTier` (production or not, selfTierOf) it also catches a production key used
+ * against staging (and the reverse) without needing the registry: keys and refused tokens
+ * whose own name / text declares the other tier, keys created before this database was last
+ * restored (they came with a production copy), Referers from this instance's production
+ * sibling host, and non-browser user agents that name the other tier.
  */
 export function misconfigFindings(
   facts: MisconfigFacts,
   components: EnvComponent[],
-  self: string | null
+  self: string | null,
+  selfTier: DeclaredTier | null = null
 ): MisconfigFinding[] {
   const out: MisconfigFinding[] = []
+  const who = (caller: string) => facts.who?.[caller] ?? {}
+  const selfName = selfTier?.word ?? self ?? 'this instance'
+  const otherTier = (d: DeclaredTier | null | undefined): DeclaredTier | null =>
+    d && selfTier && d.tier !== selfTier.tier ? d : null
   const others = components.filter((c) => c.environment !== self)
   const envOfHost = (host: string): EnvComponent | null =>
     others.find((c) => c.host === host) ?? null
+  const own = facts.ownHosts ?? []
   for (const [caller, hosts] of Object.entries(facts.referers)) {
     for (const [host, n] of Object.entries(hosts)) {
       const c = envOfHost(host)
-      if (!c) continue
+      if (c) {
+        out.push({
+          caller,
+          kind: 'referer',
+          environment: c.environment,
+          text: `Calls come from ${c.environment}'s ${c.name} (${host})`,
+          n,
+          ...who(caller)
+        })
+        continue
+      }
+      // Not in the registry: judge the host by what it declares, or its likeness to ours.
+      const t = otherTier(hostTier(host, own))
+      if (!t) continue
       out.push({
         caller,
         kind: 'referer',
-        environment: c.environment,
-        text: `Calls come from ${c.environment}'s ${c.name} (${host})`,
-        n
+        environment: t.word,
+        text: `Calls come from ${host}, which looks like ${t.word}'s address, while this instance is ${selfName}`,
+        n,
+        ...who(caller)
       })
     }
   }
   for (const k of facts.unknownKeys) {
     const c = k.referer ? envOfHost(k.referer) : null
+    const t = otherTier(k.tier)
+    const noun = TOKEN_NOUN[k.kind ?? 'api-key']
+    const name = k.prefix ? `${noun} ${k.prefix}…` : `A ${noun}`
+    const fp = k.fingerprint ? ` (fingerprint ${k.fingerprint})` : ''
     out.push({
       caller: 'anon',
       kind: 'unknown-key',
-      environment: c?.environment ?? null,
-      text: c
-        ? `API key ${k.prefix}… is not one of this instance's keys; the calls come from ${c.environment}'s ${c.name}`
-        : `API key ${k.prefix}… is not one of this instance's keys (minted on another environment, or revoked)`,
-      n: k.n
+      environment: c?.environment ?? t?.word ?? null,
+      text: t
+        ? `${name}${fp} is marked for ${t.word} and was refused here: a client set up for ${t.word} is calling ${selfName}`
+        : c
+          ? `${name}${fp} is not one of this instance's keys; the calls come from ${c.environment}'s ${c.name}`
+          : `${name}${fp} is not one of this instance's keys (minted on another environment, or revoked)`,
+      n: k.n,
+      ip: k.ip ?? null,
+      app: k.app ?? null,
+      fingerprint: k.fingerprint ?? null
     })
   }
   const envNames = [...new Set(others.map((c) => c.environment))].filter((e) => e.length >= 3)
+  const named = new Set<string>()
   for (const k of facts.keys) {
     if (!k.name) continue
-    const named = envNames.find((e) =>
+    const reg = envNames.find((e) =>
       new RegExp(`\\b${e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(k.name ?? '')
     )
-    if (!named || (self && new RegExp(`\\b${self}\\b`, 'i').test(k.name))) continue
+    if (reg && !(self && new RegExp(`\\b${self}\\b`, 'i').test(k.name))) {
+      named.add(k.caller)
+      out.push({
+        caller: k.caller,
+        kind: 'key-name',
+        environment: reg,
+        text: `The key is named for ${reg} ("${k.name}") but calls ${self ?? 'this instance'}`,
+        n: 0,
+        ...who(k.caller)
+      })
+      continue
+    }
+    const t = otherTier(declaredTier(k.name))
+    if (!t) continue
+    named.add(k.caller)
     out.push({
       caller: k.caller,
       kind: 'key-name',
-      environment: named,
-      text: `The key is named for ${named} ("${k.name}") but calls ${self ?? 'this instance'}`,
-      n: 0
+      environment: t.word,
+      text: `The key "${k.name}" is named for ${t.word} but calls ${selfName}`,
+      n: 0,
+      ...who(k.caller)
     })
+  }
+  // A non-production database restored from a production copy keeps production's keys: a key
+  // created before the restore came with the copy. One a client still uses here is a
+  // production key pointed at this instance.
+  if (selfTier?.tier === 'nonproduction' && facts.restoredAt) {
+    const restored = Date.parse(facts.restoredAt)
+    for (const k of facts.keys) {
+      if (named.has(k.caller) || !k.created_at || !Number.isFinite(restored)) continue
+      const created = Date.parse(k.created_at)
+      if (!Number.isFinite(created) || created >= restored) continue
+      // A key named for a non-production environment was put back on purpose after the restore.
+      if (declaredTier(k.name)?.tier === 'nonproduction') continue
+      out.push({
+        caller: k.caller,
+        kind: 'restore-copy',
+        environment: 'production',
+        text: `${k.name ? `"${k.name}"` : 'This key'} looks like a production key: it was created on ${dayOf(k.created_at)}, before this ${selfName} database was restored on ${dayOf(facts.restoredAt)}, so it came with the copy. A client is using it against ${selfName}.`,
+        n: 0,
+        ...who(k.caller)
+      })
+    }
+  }
+  for (const [caller, claims] of Object.entries(facts.uaClaims ?? {})) {
+    for (const [claim, n] of Object.entries(claims)) {
+      const sep = claim.indexOf(':')
+      const kind = claim.slice(0, sep)
+      const value = claim.slice(sep + 1)
+      const reg = kind === 'host' ? envOfHost(value) : null
+      const t = reg
+        ? null
+        : otherTier(kind === 'host' ? hostTier(value, own) : (TIER_WORDS[value] ?? null))
+      const env = reg?.environment ?? t?.word
+      if (!env) continue
+      out.push({
+        caller,
+        kind: 'user-agent',
+        environment: env,
+        text:
+          kind === 'host'
+            ? `The caller's user agent names ${value} (${env}) while calling ${selfName}`
+            : `The caller's user agent says it is set up for ${env} while calling ${selfName}`,
+        n,
+        ...who(caller)
+      })
+    }
   }
   return out
 }

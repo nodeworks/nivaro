@@ -20,6 +20,7 @@ vi.mock('../../../services/notification-channels.js', () => ({ notifyUser: vi.fn
 import { securityRoutes } from '../../../routes/traffic-map-extras/security.js'
 import { advanceTo } from '../../../services/traffic-map.js'
 import { noteCacheFacts } from '../../../services/traffic-taps/http-cache.js'
+import { noteClientFacts } from '../../../services/traffic-taps/misconfigured.js'
 import { noteSessionHit, sessionKeyOf } from '../../../services/traffic-taps/session-guard.js'
 import { resetTapState } from '../../../services/traffic-taps.js'
 
@@ -81,5 +82,40 @@ describe('traffic map security routes', () => {
     const env = await app.inject({ url: '/security/misconfigured' })
     expect(env.json().data.registry.configured).toBe(false)
     await app.close()
+  })
+  it('names a production token refused on staging with the address and app, no secret', async () => {
+    const prev = process.env.NIVARO_ENVIRONMENT
+    process.env.NIVARO_ENVIRONMENT = 'staging'
+    try {
+      const sec = Math.floor(Date.now() / 1000)
+      advanceTo(sec)
+      noteClientFacts({
+        caller: 'anon',
+        sec,
+        at: Date.now(),
+        referer: null,
+        host: null,
+        status: 401,
+        code: 'UNAUTHORIZED',
+        authorization: 'Bearer prod_9a8b7c6d5e4f3a2b1c0d',
+        ip: '10.4.0.9',
+        ua: 'python-requests/2.31.0'
+      })
+      const app = await build()
+      const res = await app.inject({ url: '/security/misconfigured?window=300' })
+      const d = res.json().data
+      expect(d.self_tier).toEqual({ tier: 'nonproduction', word: 'staging' })
+      expect(d.findings[0]).toMatchObject({
+        kind: 'unknown-key',
+        environment: 'production',
+        ip: '10.4.0.9',
+        app: 'python-requests'
+      })
+      expect(res.body).not.toContain('9a8b7c6d5e4f')
+      await app.close()
+    } finally {
+      if (prev === undefined) delete process.env.NIVARO_ENVIRONMENT
+      else process.env.NIVARO_ENVIRONMENT = prev
+    }
   })
 })
