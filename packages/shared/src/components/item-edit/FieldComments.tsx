@@ -6,7 +6,7 @@ import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { fieldDeepLinkQuery, fieldThread, openFieldCommentCounts } from '../../lib/field-comments'
 import { cn, formatRelative } from '../../lib/utils'
-import { AutolinkedText } from '../AutolinkedText'
+import { CommentBody, CommentImageStrip, useCommentImages } from '../panels/CommentImages'
 import { MentionTextarea } from '../panels/CommentPanel'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { type FieldCommentsApi, useFieldComments } from './field-comments-context'
@@ -149,6 +149,7 @@ function FieldThread({
   const thread = useMemo(() => fieldThread(data ?? [], field), [data, field])
   const [showResolved, setShowResolved] = useState(false)
   const [draft, setDraft] = useState('')
+  const images = useCommentImages()
   const refresh = () => qc.invalidateQueries({ queryKey: commentsKey(ctx.collection, ctx.item) })
   const errorText = (err: unknown, fallback: string) =>
     (err as { response?: { data?: { error?: string } }; data?: { error?: string } })?.response?.data
@@ -169,6 +170,7 @@ function FieldThread({
       ),
     onSuccess: () => {
       setDraft('')
+      images.reset()
       void refresh()
     },
     onError: (err) => toast.error(errorText(err, 'Could not post the comment'))
@@ -180,8 +182,8 @@ function FieldThread({
     onError: (err) => toast.error(errorText(err, 'Could not update the comment'))
   })
   const send = () => {
-    const text = draft.trim()
-    if (text && !postMut.isPending) postMut.mutate(text)
+    const text = images.compose(draft)
+    if (text && !images.uploading && !postMut.isPending) postMut.mutate(text)
   }
   const copyLink = () => {
     const url = new URL(window.location.href)
@@ -219,16 +221,15 @@ function FieldThread({
           {resolved ? 'Reopen' : 'Resolve'}
         </button>
       </div>
-      <p
+      <CommentBody
+        text={c.text}
         className={cn(
           'm-0 mt-0.5 whitespace-pre-wrap text-[12.5px] leading-snug [overflow-wrap:anywhere]',
           resolved
             ? 'text-slate-400 dark:text-muted-foreground'
             : 'text-slate-600 dark:text-slate-300'
         )}
-      >
-        <AutolinkedText text={c.text} />
-      </p>
+      />
     </li>
   )
 
@@ -278,6 +279,7 @@ function FieldThread({
         <MentionTextarea
           value={draft}
           onChange={setDraft}
+          onImages={images.addFiles}
           rows={2}
           aria-label={`Comment on ${label}`}
           placeholder='Write a comment… type @ to mention someone'
@@ -289,6 +291,7 @@ function FieldThread({
             }
           }}
         />
+        <CommentImageStrip images={images} />
         <div className='flex items-center justify-between gap-2'>
           <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>
             Only people who can open this record are notified.
@@ -296,10 +299,10 @@ function FieldThread({
           <button
             type='button'
             onClick={send}
-            disabled={!draft.trim() || postMut.isPending}
+            disabled={(!draft.trim() && !images.hasReady) || images.uploading || postMut.isPending}
             className='inline-flex h-7 shrink-0 items-center rounded-md bg-nvr-cyan px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-nvr-cyan-dark disabled:opacity-50'
           >
-            {postMut.isPending ? 'Posting…' : 'Comment'}
+            {postMut.isPending ? 'Posting…' : images.uploading ? 'Uploading…' : 'Comment'}
           </button>
         </div>
       </div>
