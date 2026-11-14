@@ -1,10 +1,254 @@
 {
-  "generated_at": "2026-11-14T01:12:13.544Z",
+  "generated_at": "2026-11-14T15:25:23.863Z",
   "releases": [
+    {
+      "version": "0.3.158",
+      "tag": "v0.3.158",
+      "date": "2026-11-14T10:25:03-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "people",
+              "text": "slow-screen report per person for admins",
+              "hash": "c09eeb5bb"
+            },
+            {
+              "section": "Added",
+              "scope": "exports",
+              "text": "big exports run in the background with progress and cancel",
+              "hash": "16c57d398"
+            },
+            {
+              "section": "Added",
+              "scope": "data-integrity",
+              "text": "orphan finder tab for links to records that are gone",
+              "hash": "0439caefb"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "try a record against the owner matrix, saved or draft",
+              "hash": "57f1bc2f8"
+            },
+            {
+              "section": "Added",
+              "scope": "monitors",
+              "text": "freeze alerts name the request that stalled the server",
+              "hash": "09bbed99f"
+            },
+            {
+              "section": "Added",
+              "scope": "list",
+              "text": "column header menu, server totals row, relation bulk update UI",
+              "hash": "279258469"
+            },
+            {
+              "section": "Added",
+              "scope": "nav",
+              "text": "back to the exact list, and recently edited by me",
+              "hash": "5bf7bfef6"
+            },
+            {
+              "section": "Added",
+              "scope": "traffic-map",
+              "text": "catch a production key used against staging (#2236)",
+              "hash": "32f6cf2f4"
+            },
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "import banner for stored-procedure runs (#1826)",
+              "hash": "9de03931f"
+            },
+            {
+              "section": "Added",
+              "scope": "settings",
+              "text": "show server-set overrides on This Instance",
+              "hash": "8997e25c3"
+            },
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "search inside a record's lines grid",
+              "hash": "91540d62a"
+            },
+            {
+              "section": "Added",
+              "scope": "pipeline",
+              "text": "sign-off line and waiting vs working per step visit",
+              "hash": "2707aabed"
+            },
+            {
+              "section": "Added",
+              "scope": "pipeline",
+              "text": "see a record's moves exactly as a chosen person does",
+              "hash": "94bc8d467"
+            },
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "warn admins about heavy \"link to many\" list columns",
+              "hash": "4c7c38d9c"
+            },
+            {
+              "section": "Added",
+              "scope": "bulk",
+              "text": "relation fields, preview and named refusals in bulk update",
+              "hash": "f7c973aa8"
+            },
+            {
+              "section": "Added",
+              "scope": "records",
+              "text": "warn about likely duplicates while creating a record",
+              "hash": "fe80644a9"
+            },
+            {
+              "section": "Added",
+              "scope": "config",
+              "text": "show config changed on production that did not come from promotion",
+              "hash": "64f9ebd29"
+            },
+            {
+              "section": "Added",
+              "scope": "coverage",
+              "text": "steps with no owner — admin tab + daily heads-up",
+              "hash": "728fc01d8"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "app-info",
+              "text": "a blocked tenant never reads its settings for the environment notice",
+              "hash": "68101e4ab"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "do not time a step the history never moved the record into",
+              "hash": "8d603132d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipeline",
+              "text": "the creator line's View-as door takes a name that may be null",
+              "hash": "aef155689"
+            },
+            {
+              "section": "Fixed",
+              "scope": "query-keys",
+              "text": "one key, one shape — registry, guard and the collisions it found",
+              "hash": "d4d9bb3e3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "support tickets are never named through their record",
+              "hash": "de8a71aae"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "name system records, never their ids",
+              "hash": "fc3e1594b"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "rebuild the in-app docs index after the last four merges",
+              "hash": "04f35769a"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "rebuild the in-app docs index after merging view-as and crash tracking",
+              "hash": "564da0f38"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "rebuild the in-app docs index after merging list totals and relation bulk update",
+              "hash": "ed9689ca8"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "rebuild the in-app docs index after merging production-only config changes",
+              "hash": "7da559bd9"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "rebuild the in-app docs index after merging sign-offs and step timing",
+              "hash": "cff5714ea"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "rebuild the in-app docs index after merging no-owner steps and freeze causes",
+              "hash": "250275bbf"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "rebuild the in-app docs index after the heavy-columns merge",
+              "hash": "cb825e316"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "View-as: attribute pipeline moves on the activity log, no schema change",
+              "hash": "4867fe224"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "View-as: exactly the person, with the admin behind it shown to admins only",
+              "hash": "32827f853"
+            },
+            {
+              "section": "Other",
+              "scope": "nav",
+              "text": "type the window-widening mock in recently-edited",
+              "hash": "00301784e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Harden crash tracking against forged reports",
+              "hash": "3180822c6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Group front-end crashes by release and alert admins on new ones",
+              "hash": "fdd941bf6"
+            }
+          ]
+        }
+      ],
+      "count": 36
+    },
     {
       "version": "0.3.157",
       "tag": "v0.3.157",
-      "date": "2026-11-13T20:11:54-05:00",
+      "date": "2026-11-13T20:12:13-05:00",
       "sections": [
         {
           "label": "Added",
