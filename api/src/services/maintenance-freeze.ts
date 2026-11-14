@@ -48,6 +48,8 @@ export function maintenanceExemptPath(url: string): boolean {
     url.startsWith('/api/users/cards') ||
     // Activity sentence labels (migration 516): a read carrying the page's refs.
     url.startsWith('/api/activity/labels') ||
+    // Bulk update's preview (?dry_run=1 writes nothing — routes/items.ts answers before any write).
+    /^\/api\/items\/[^/?]+\/bulk-update\?(?:[^#]*&)?dry_run=(1|true)(&|$)/.test(url) ||
     // The layout editor canvas's draft field rows: a read carrying placements.
     /^\/api\/field-config\/[^/?]+\/project(\?|$)/.test(url) ||
     // Presence heartbeats (never a record write; were outside the freeze before).

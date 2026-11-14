@@ -135,6 +135,22 @@ describe('maintenanceExemptPath', () => {
     ])
       expect(maintenanceExemptPath(p), p).toBe(false)
   })
+
+  it('lets only the bulk update PREVIEW through (2026-11-13)', () => {
+    for (const p of [
+      '/api/items/locations/bulk-update?dry_run=1',
+      '/api/items/locations/bulk-update?progress=x&dry_run=true'
+    ])
+      expect(maintenanceExemptPath(p), p).toBe(true)
+    for (const p of [
+      '/api/items/locations/bulk-update',
+      '/api/items/locations/bulk-update?progress=abc',
+      '/api/items/locations/bulk-update?dry_run=0',
+      '/api/items/locations/bulk-update?not_dry_run=1',
+      '/api/items/locations/bulk-update?dry_run=10'
+    ])
+      expect(maintenanceExemptPath(p), p).toBe(false)
+  })
 })
 
 describe('maintenanceExemptCaller', () => {
