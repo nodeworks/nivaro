@@ -444,6 +444,35 @@ describe('ItemEditForm design mode', () => {
     }
   })
 
+  // Rob 2026-11-13: on the canvas every tab switched except "General" — it is no layout group,
+  // so no design target, and the canvas swallows any click that is neither a target nor
+  // marked pass-through. The synthetic General tab / step passes its click through.
+  for (const mode of ['tabs', 'steps'] as const) {
+    it(`${mode}: the General ${mode === 'tabs' ? 'tab' : 'step'} lets its click through on the canvas`, async () => {
+      const base = tabsLayout(mode)
+      // Tabs show General for sections; steps show it for fields in no step.
+      const layout: ActiveLayoutData =
+        mode === 'tabs'
+          ? { ...base, groups: [...base.groups, group(14, 's1', 'Section', 3)] }
+          : {
+              ...base,
+              assignments: [
+                ...base.assignments,
+                { field: 'status', sort: 0, group_key: null, is_visible: true }
+              ]
+            }
+      await mount(
+        { design: { layout, record: { ...RECORD }, context: makeDesign() } },
+        () => !!host.textContent?.includes('General')
+      )
+      const general = [...host.querySelectorAll<HTMLElement>('button, [data-design-tab]')].find(
+        (el) => el.textContent?.trim().startsWith('General')
+      )
+      expect(general, 'no General tab/step').toBeDefined()
+      expect(general?.closest('[data-design-pass]')).not.toBeNull()
+    })
+  }
+
   it('a widget placed in two tabs is two targets, one per tab', async () => {
     const base = tabsLayout('tabs')
     const layout: ActiveLayoutData = {

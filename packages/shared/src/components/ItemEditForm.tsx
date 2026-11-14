@@ -12833,6 +12833,9 @@ function ItemEditFormView({
                 type='button'
                 data-tab-key={t.key}
                 data-design-tab={designOn ? '' : undefined}
+                // "General" is no layout group, so no design target: on the canvas its click
+                // passes through (the canvas swallows every other untargeted click).
+                data-design-pass={designOn && t.key === '__general__' ? '' : undefined}
                 data-design-hidden={designHiddenTabs?.has(t.key) ? '' : undefined}
                 onClick={() => setActiveTab(t.key)}
                 className={cn(
