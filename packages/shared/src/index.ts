@@ -572,6 +572,11 @@ export {
   SignedInDevices
 } from './components/profile/SignedInDevices'
 export {
+  looksLikeSlowness,
+  SlowScreensCard,
+  type SlowScreensData
+} from './components/profile/SlowScreensCard'
+export {
   type PersonProfile as PersonProfileData,
   usePersonProfile
 } from './components/profile/types'

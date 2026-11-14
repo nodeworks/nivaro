@@ -298,6 +298,7 @@ import { settingsRoutes } from './settings.js'
 import { setupRoutes } from './setup.js'
 import { shareLinksRoutes } from './share-links.js'
 import { slaRoutes } from './sla.js'
+import { slowScreensRoutes } from './slow-screens.js'
 import { sqlChecksRoutes } from './sql-checks.js'
 import { sqlScratchpadRoutes } from './sql-scratchpad.js'
 import { ssoProviderRoutes } from './sso-providers.js'
@@ -457,6 +458,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(coverageGapsRoutes)
   await app.register(inactiveUserLinkRoutes, { prefix: '/inactive-user-links' })
   await app.register(orphanRoutes, { prefix: '/orphans' })
+  await app.register(slowScreensRoutes, { prefix: '/slow-screens' })
   await app.register(delegationRoutes)
   // A manager's view of their direct reports (#1030–#1043): /delegation/team,
   // /delegation/:userId/remind, /access-requests/:id/vouch.
