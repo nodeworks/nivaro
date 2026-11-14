@@ -1,3 +1,4 @@
+import { queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
@@ -522,12 +523,12 @@ type CollectionMetaRow = {
  */
 export function usePathNames(collection: string | null | undefined): PathNames | null {
   const list = useQuery<CollectionRow[]>({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get('/collections').then((r) => r.data.data),
     staleTime: 60_000
   })
   const meta = useQuery<CollectionMetaRow>({
-    queryKey: ['collection-meta', collection ?? ''],
+    queryKey: queryKeys.collectionMeta(collection ?? ''),
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
     enabled: !!collection,
     staleTime: 60_000

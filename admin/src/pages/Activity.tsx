@@ -1,4 +1,10 @@
-import { ActivityFeed, readableTitle, UndoButton, useActivityLabels } from '@nivaro/shared'
+import {
+  ActivityFeed,
+  queryKeys,
+  readableTitle,
+  UndoButton,
+  useActivityLabels
+} from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
@@ -77,7 +83,7 @@ export function ActivityPage() {
   const limit = 25
 
   const { data: collectionsData } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get('/collections').then((r) => r.data.data)
   })
 

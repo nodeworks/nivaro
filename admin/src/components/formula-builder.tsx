@@ -1,4 +1,5 @@
 import { FormulaEditor, type FormulaField } from '@nivaro/react'
+import { queryKeys } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, FunctionSquare, Plus, RefreshCw, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -474,7 +475,7 @@ export function FormulaBuilder({
   const [previewNonce, setPreviewNonce] = useState(0)
 
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
     enabled: !!collection,
     staleTime: 30_000
@@ -661,7 +662,7 @@ export function RawFormulaEditor({
   serverEvaluated?: boolean
 }) {
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
     enabled: !!collection,
     staleTime: 30_000

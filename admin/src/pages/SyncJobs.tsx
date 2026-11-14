@@ -1,3 +1,4 @@
+import { queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDownToLine,
@@ -347,14 +348,14 @@ function JobEditor({
   })
 
   const { data: collectionsData = [] } = useQuery<{ collection: string }[]>({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () =>
       api.get<{ data: { collection: string }[] }>('/collections').then((r) => r.data.data),
     staleTime: 60_000
   })
 
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', form.collection],
+    queryKey: queryKeys.collectionMeta(form.collection),
     queryFn: () =>
       api
         .get<{ data: { fields: { field: string; type: string; hidden?: boolean }[] } }>(

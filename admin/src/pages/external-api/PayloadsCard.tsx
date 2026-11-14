@@ -1,4 +1,4 @@
-import { TipLayer } from '@nivaro/shared'
+import { queryKeys, TipLayer } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronRight, ChevronsUpDown, Plus } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -133,7 +133,7 @@ function CreateForm({
   useEffect(() => labelRef.current?.focus(), [])
 
   const { data: collections = [] } = useQuery<{ collection: string }[]>({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () =>
       api.get<{ data: { collection: string }[] }>('/collections').then((r) => r.data.data)
   })

@@ -1,3 +1,4 @@
+import { queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
@@ -2316,14 +2317,14 @@ function ConnectorCard({ apiId, apiName }: { apiId: number; apiName: string }) {
   const [fetchErr, setFetchErr] = useState<string | null>(null)
 
   const { data: collectionsData = [] } = useQuery<{ collection: string }[]>({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () =>
       api.get<{ data: { collection: string }[] }>('/collections').then((r) => r.data.data),
     staleTime: 60_000
   })
 
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', targetCollection],
+    queryKey: queryKeys.collectionMeta(targetCollection),
     queryFn: () =>
       api
         .get<{ data: { fields: { field: string; type: string; hidden?: boolean }[] } }>(

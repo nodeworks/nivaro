@@ -50,6 +50,7 @@ import { useNavigation, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { describeTransition, sentenceLabelsFromFields } from '../../lib/config-sentences'
 import { toastError } from '../../lib/error-toast'
+import { queryKeys } from '../../lib/query-keys'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ExplainCard } from '../ai/ExplainButton'
 import { ConfigHistoryButton } from '../ConfigHistory'
@@ -886,7 +887,7 @@ function RelationValueCombobox({
   }, [open])
 
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', relatedCollection],
+    queryKey: queryKeys.collectionMeta(relatedCollection),
     queryFn: () =>
       client.request<{ data: any }>(get(`/collections/${relatedCollection}`)).then((r) => r.data),
     staleTime: 60_000,
@@ -1084,7 +1085,7 @@ function TransitionConditionsSection({
   const [fieldMeta, setFieldMeta] = useState<Record<string, RuleMeta>>({})
 
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () =>
       client.request<{ data: any }>(get(`/collections/${collection}`)).then((r) => r.data),
     enabled: !!collection
@@ -1277,7 +1278,7 @@ function TransitionRequirementEntry({
 }) {
   const client = useNivaroClient()
   const { data: childMeta } = useQuery({
-    queryKey: ['collection-meta', requirement.collection],
+    queryKey: queryKeys.collectionMeta(requirement.collection),
     queryFn: () =>
       client
         .request<{ data: any }>(get(`/collections/${requirement.collection}`))
@@ -1431,7 +1432,7 @@ function TransitionRequirementsSection({
   const [expanded, setExpanded] = useState(requirements.length > 0)
 
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () =>
       client.request<{ data: any }>(get(`/collections/${collection}`)).then((r) => r.data),
     enabled: !!collection
@@ -2653,7 +2654,7 @@ function BindingDimensionsPanel({
   })
 
   const { data: bindingColMeta } = useQuery({
-    queryKey: ['collection-meta', binding.collection],
+    queryKey: queryKeys.collectionMeta(binding.collection),
     queryFn: () =>
       client.request<{ data: any }>(get(`/collections/${binding.collection}`)).then((r) => r.data),
     enabled: !!binding.collection

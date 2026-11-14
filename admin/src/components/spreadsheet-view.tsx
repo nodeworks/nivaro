@@ -1,3 +1,4 @@
+import { queryKeys } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -69,7 +70,7 @@ export function SpreadsheetView({ collection }: { collection: string }) {
   const limit = 100
 
   const { data: fieldConfig } = useQuery({
-    queryKey: ['field-config', collection],
+    queryKey: queryKeys.fieldConfig(collection),
     queryFn: () =>
       api.get<{ data: GridField[] }>(`/field-config/${collection}`).then((r) => r.data.data)
   })

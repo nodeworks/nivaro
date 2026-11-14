@@ -1,4 +1,5 @@
 import type { DirectoryFolder as FolderOption } from '@nivaro/shared'
+import { queryKeys } from '@nivaro/shared'
 import { useQueryClient } from '@tanstack/react-query'
 import { Check, Folder, FolderX, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -49,7 +50,7 @@ export function MoveToFolderDialog(props: {
       await moveCollections(names, target ? target.key : null)
       const what = `${n} ${n === 1 ? 'collection' : 'collections'}`
       toast.success(target ? `Moved ${what} to ${target.label}` : `Moved ${what} out of folders`)
-      await qc.invalidateQueries({ queryKey: ['collections'] })
+      await qc.invalidateQueries({ queryKey: queryKeys.collections() })
       onOpenChange(false)
       onMoved()
     } catch (e: any) {

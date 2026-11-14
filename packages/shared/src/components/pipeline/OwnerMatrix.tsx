@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { queryKeys } from '../../lib/query-keys'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -284,7 +285,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   const scopeDims = useScopeDimensions()
   const firstCollection = bindings[0]?.collection ?? ''
   const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', firstCollection],
+    queryKey: queryKeys.collectionMeta(firstCollection),
     queryFn: () =>
       client.request<{ data: any }>(get(`/collections/${firstCollection}`)).then((r) => r.data),
     enabled: !!firstCollection && (!!rowDim || colFilterDims.length > 0)
@@ -406,7 +407,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
         }
       }
       return {
-        queryKey: ['collection-meta', baseCol],
+        queryKey: queryKeys.collectionMeta(baseCol),
         queryFn: (): Promise<any> =>
           client.request<{ data: any }>(get(`/collections/${baseCol}`)).then((r) => r.data)
       }
@@ -519,7 +520,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
           enabled: false as const
         }
       return {
-        queryKey: ['collection-meta', resolved.relatedCollection],
+        queryKey: queryKeys.collectionMeta(resolved.relatedCollection),
         queryFn: (): Promise<any> =>
           client
             .request<{ data: any }>(get(`/collections/${resolved.relatedCollection}`))
@@ -540,7 +541,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   })
 
   const { data: rowRelMeta } = useQuery({
-    queryKey: ['collection-meta', rowRelatedCollection],
+    queryKey: queryKeys.collectionMeta(rowRelatedCollection),
     queryFn: () =>
       client
         .request<{ data: any }>(get(`/collections/${rowRelatedCollection}`))

@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { queryKeys } from '../../lib/query-keys'
 import { titleCase } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import type { CMSField, CMSRelation } from './types'
@@ -179,7 +180,7 @@ function PickerRelatedFields({
 }) {
   const client = useNivaroClient()
   const { data, isLoading } = useQuery({
-    queryKey: ['collection-meta', relatedCollection],
+    queryKey: queryKeys.collectionMeta(relatedCollection),
     queryFn: () =>
       client
         .request<{ data: CollectionMeta }>(get(`/collections/${relatedCollection}`))
@@ -248,7 +249,7 @@ export function CollectionFieldPicker({
 }) {
   const client = useNivaroClient()
   const { data, isLoading } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () =>
       client.request<{ data: CollectionMeta }>(get(`/collections/${collection}`)).then((r) => r.data),
     enabled: !!collection
@@ -490,7 +491,7 @@ export function CollectionFieldPickerPanel({
 }) {
   const client = useNivaroClient()
   const { data, isLoading } = useQuery({
-    queryKey: ['collection-meta', collection],
+    queryKey: queryKeys.collectionMeta(collection),
     queryFn: () =>
       client.request<{ data: CollectionMeta }>(get(`/collections/${collection}`)).then((r) => r.data),
     enabled: !!collection

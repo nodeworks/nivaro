@@ -1,3 +1,4 @@
+import { queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Grid3x3, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -72,7 +73,7 @@ export default function M2MMatrix() {
   const [page, setPage] = useState(1)
 
   const { data: collections = [] } = useQuery<Array<{ collection: string }>>({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get('/collections').then((r) => r.data.data ?? r.data)
   })
 

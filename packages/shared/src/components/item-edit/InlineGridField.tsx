@@ -3,6 +3,7 @@ import { ChevronRight, Loader2, X } from 'lucide-react'
 import { memo, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, getActiveLayout, patch, post } from '../../lib/commands'
+import { queryKeys } from '../../lib/query-keys'
 import { cn, titleCase, toLocalDateString } from '../../lib/utils'
 import { NumberDraftInput } from '../ui/number-draft-input'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
@@ -70,7 +71,7 @@ export const InlineGridField = memo(function InlineGridField({
   const layoutId = layoutSlug ? (activeLayoutData?.layout?.id ?? null) : null
 
   const { data: cols = [] } = useQuery<CMSField[]>({
-    queryKey: ['field-config', relatedCollection, layoutId],
+    queryKey: queryKeys.fieldConfig(relatedCollection, layoutId),
     queryFn: () =>
       client
         .request<{ data: CMSField[] }>(

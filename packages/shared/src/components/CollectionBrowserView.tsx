@@ -126,6 +126,7 @@ import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-
 import { isOwnWrite } from '../lib/own-writes'
 import { intentProps, prefetchRecord, useIdleNextPage } from '../lib/prefetch'
 import { rowPresenceKey, useRowPresence } from '../lib/presence-hooks'
+import { queryKeys } from '../lib/query-keys'
 import {
   type CascadeSelection,
   cascadeFilter,
@@ -7179,7 +7180,7 @@ export function CollectionBrowserView({
       const target = rel.one_collection
       void qc
         .fetchQuery({
-          queryKey: ['collection-meta', target],
+          queryKey: queryKeys.collectionMeta(target),
           queryFn: () =>
             client
               .request<{

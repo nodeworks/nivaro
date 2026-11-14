@@ -1,4 +1,4 @@
-import { AgentBadge } from '@nivaro/shared'
+import { AgentBadge, queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Inbox, Loader2, X } from 'lucide-react'
 import { useState } from 'react'
@@ -63,7 +63,7 @@ function ProposalCard({ p }: { p: SchemaProposalRow }) {
   const done = () => {
     void qc.invalidateQueries({ queryKey: ['schema-proposals'] })
     void qc.invalidateQueries({ queryKey: ['data-model-tables'] })
-    void qc.invalidateQueries({ queryKey: ['collections'] })
+    void qc.invalidateQueries({ queryKey: queryKeys.collections() })
   }
   const apply = useMutation({
     mutationFn: () => api.post(`/schema-proposals/${p.id}/apply`),

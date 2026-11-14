@@ -1,3 +1,4 @@
+import { queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Replace } from 'lucide-react'
 import { useState } from 'react'
@@ -29,7 +30,7 @@ export default function FindReplace() {
   const [runId, setRunId] = useState<number | null>(null)
 
   const { data: collections = [] } = useQuery<Array<{ collection: string }>>({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get('/collections').then((r) => r.data.data ?? r.data)
   })
   const { data: meta } = useQuery<{ fields?: Array<{ field: string; type?: string }> }>({

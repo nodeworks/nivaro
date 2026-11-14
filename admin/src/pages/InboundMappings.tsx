@@ -1,3 +1,4 @@
+import { queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, History, Inbox, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -191,7 +192,7 @@ export function InboundMappingsPage() {
     queryFn: () => api.get<{ data: Mapping[] }>('/inbound-mappings').then((r) => r.data.data)
   })
   const { data: collections = [] } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get<{ data: Collection[] }>('/collections').then((r) => r.data.data),
     staleTime: 60_000
   })

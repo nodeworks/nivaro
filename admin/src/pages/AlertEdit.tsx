@@ -5,6 +5,7 @@ import {
   CollectionFieldPicker,
   ConfigReadBack,
   describeAlert,
+  queryKeys,
   sentenceLabelsFromFields
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -134,7 +135,7 @@ export function AlertEditPage() {
 
   // Collections list for the collection picker
   const { data: allCollections = [] } = useQuery<Collection[]>({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get('/collections').then((r) => r.data.data)
   })
   const realCollections = allCollections.filter(

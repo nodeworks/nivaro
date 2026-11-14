@@ -1,5 +1,5 @@
 import type { ImportParseResponse } from '@nivaro/sdk'
-import { ImportIssuesPanel } from '@nivaro/shared'
+import { ImportIssuesPanel, queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDown,
@@ -347,7 +347,7 @@ function fieldLabel(f: FieldConfigRow): string {
 
 export function useFieldOptions(collection: string | null) {
   return useQuery({
-    queryKey: ['field-config', collection],
+    queryKey: queryKeys.fieldConfig(collection),
     queryFn: () =>
       api.get<{ data: FieldConfigRow[] }>(`/field-config/${collection}`).then((r) => r.data.data),
     enabled: !!collection,

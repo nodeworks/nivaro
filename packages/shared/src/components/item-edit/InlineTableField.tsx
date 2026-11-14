@@ -145,6 +145,7 @@ import { useAfterIdle } from '../../lib/defer'
 import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
 import { isOwnWrite } from '../../lib/own-writes'
+import { fetchCollectionRelations, queryKeys } from '../../lib/query-keys'
 import { useOptionalRealtime } from '../../lib/realtime'
 import { useRecordReader } from '../../lib/record-loader'
 import { midairCollisionOf } from '../../lib/record-outbox'
@@ -1691,7 +1692,7 @@ export function InlineTableField({
     }
   })
   const { data: parentFieldCfg } = useQuery<CMSField[]>({
-    queryKey: ['field-config', parentCollection ?? '', null],
+    queryKey: queryKeys.fieldConfig(parentCollection ?? '', null),
     queryFn: () =>
       client
         .request<{ data: CMSField[] }>(get(`/field-config/${parentCollection}`))
@@ -2433,7 +2434,7 @@ export function InlineTableField({
 
   // Columns ordered by layout assignment when effectiveLayoutId is available
   const { data: cols = [], isLoading: colsLoading } = useQuery<CMSField[]>({
-    queryKey: ['field-config', relatedCollection, effectiveLayoutId],
+    queryKey: queryKeys.fieldConfig(relatedCollection, effectiveLayoutId),
     queryFn: () =>
       client
         .request<{ data: CMSField[] }>(
@@ -2451,12 +2452,8 @@ export function InlineTableField({
     // Its own key: other readers keep the WHOLE meta object under ['collection-meta', c], and
     // whichever filled the cache first decided the shape here (prod 2026-11-13: relations.find
     // is not a function).
-    queryKey: ['collection-relations', relatedCollection],
-    queryFn: () =>
-      client.request<{ data: unknown }>(get(`/collections/${relatedCollection}`)).then((r) => {
-        const d = r.data as { relations?: CMSRelation[] }
-        return d?.relations ?? []
-      }),
+    queryKey: queryKeys.collectionRelations(relatedCollection),
+    queryFn: () => fetchCollectionRelations(client, relatedCollection),
     staleTime: 10 * 60_000
   })
   const childRelations: CMSRelation[] = Array.isArray(childRelationsRaw) ? childRelationsRaw : []
@@ -3789,7 +3786,7 @@ export function InlineTableField({
   // Same query key shape as NestedRelationEditor — shares its cache when a drawer is open.
   const summaryFieldConfigQueries = useQueries({
     queries: summaryGrandCollections.map((gc) => ({
-      queryKey: ['field-config', gc, null],
+      queryKey: queryKeys.fieldConfig(gc, null),
       queryFn: () =>
         client.request<{ data: CMSField[] }>(get(`/field-config/${gc}`)).then((r) => r.data ?? []),
       staleTime: 60_000
@@ -3797,11 +3794,8 @@ export function InlineTableField({
   })
   const summaryRelationsQueries = useQueries({
     queries: summaryGrandCollections.map((gc) => ({
-      queryKey: ['collection-relations', gc],
-      queryFn: () =>
-        client
-          .request<{ data: unknown }>(get(`/collections/${gc}`))
-          .then((r) => (r.data as { relations?: CMSRelation[] })?.relations ?? []),
+      queryKey: queryKeys.collectionRelations(gc),
+      queryFn: () => fetchCollectionRelations(client, gc),
       staleTime: 10 * 60_000
     }))
   })

@@ -1,3 +1,4 @@
+import { CollectionFieldPickerPanel, type PickedField, queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
@@ -16,7 +17,6 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { CollectionFieldPickerPanel, type PickedField } from '@nivaro/shared'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -435,7 +435,7 @@ export function SubmissionFormEditPage() {
   const SUBS_LIMIT = 10
 
   const { data: collectionsData } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () => api.get<{ data: Collection[] }>('/collections').then((r) => r.data.data)
   })
   const collections = collectionsData ?? []
@@ -470,7 +470,9 @@ export function SubmissionFormEditPage() {
         .get<{
           data: Array<{ id: number; name: string; layout_type?: string; tab_mode?: string }>
         }>('/collection-layouts', { params: { collection } })
-        .then((r) => r.data.data.filter((l) => (l.layout_type ?? 'grouped') === 'grouped')),
+        .then((r) => r.data.data),
+    // The key holds every layout for other readers; only grouped ones are offered here.
+    select: (rows) => rows.filter((l) => (l.layout_type ?? 'grouped') === 'grouped'),
     enabled: !!collection
   })
 

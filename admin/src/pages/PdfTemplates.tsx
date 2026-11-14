@@ -1,7 +1,9 @@
+import { queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, FileText, Play, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { generateLiquid, type PdfBlock, PdfDesigner } from '@/components/pdf-designer'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -15,7 +17,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
-import { type PdfBlock, PdfDesigner, generateLiquid } from '@/components/pdf-designer'
 import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
 
@@ -367,12 +368,12 @@ export function PdfTemplatesPage() {
     queryFn: () => api.get<{ data: PdfTemplate[] }>('/pdf-templates').then((r) => r.data.data)
   })
 
+  // ['collections'] holds the API's rows for every reader; the names come from `select`.
   const { data: collections = [] } = useQuery({
-    queryKey: ['collections'],
+    queryKey: queryKeys.collections(),
     queryFn: () =>
-      api
-        .get<{ data: { collection: string }[] }>('/collections')
-        .then((r) => r.data.data.map((c) => c.collection))
+      api.get<{ data: { collection: string }[] }>('/collections').then((r) => r.data.data),
+    select: (rows) => rows.map((c) => c.collection)
   })
 
   const selected = creating ? null : (templates.find((t) => t.id === selectedId) ?? null)

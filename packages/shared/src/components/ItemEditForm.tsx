@@ -113,6 +113,7 @@ import { useLiveRefetchInterval } from '../lib/live-queries'
 import { requestMoveState } from '../lib/move-state'
 import { lockedAfterMoveText, movedNoticeId, namedMovedNoticeRecent } from '../lib/moved-notice'
 import { ownersHeaderTile } from '../lib/owners-header-tile'
+import { queryKeys } from '../lib/query-keys'
 import { useRecordReader } from '../lib/record-loader'
 import {
   bindRecordOutbox,
@@ -741,6 +742,7 @@ export {
   resolveLineCollision,
   withRowBaseRevision
 } from './item-edit/line-midair'
+
 export { M2MStagingContext, useM2MStaging } from './item-edit/M2MStagingContext'
 export type { M2MStagingCtx, RenderFieldProps }
 
@@ -6472,7 +6474,7 @@ function ItemEditFormView({
   // quantity), and summing the raw rows would report a total of zero.
   const stagedChildConfigs = useQueries({
     queries: stagedRollupRelations.map((r) => ({
-      queryKey: ['field-config', r.collection, null],
+      queryKey: queryKeys.fieldConfig(r.collection, null),
       queryFn: () =>
         client
           .request<{ data: CMSField[] }>(get(`/field-config/${r.collection}`))
@@ -6749,7 +6751,7 @@ function ItemEditFormView({
   // (e.g. currency, decimal) without requiring the user to re-save the agg config.
   const aggFieldConfigResults = useQueries({
     queries: aggRelations.map((r) => ({
-      queryKey: ['field-config', r.many_collection],
+      queryKey: queryKeys.fieldConfig(r.many_collection),
       queryFn: () =>
         client
           .request<{ data: Array<{ field: string; options: unknown }> }>(
@@ -9260,7 +9262,7 @@ function ItemEditFormView({
         .catch(() => null),
       qc
         .fetchQuery({
-          queryKey: ['field-config', rc, null],
+          queryKey: queryKeys.fieldConfig(rc, null),
           queryFn: () =>
             client
               .request<{ data: CMSField[] }>(get(`/field-config/${rc}`))
