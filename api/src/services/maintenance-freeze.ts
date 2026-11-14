@@ -48,6 +48,9 @@ export function maintenanceExemptPath(url: string): boolean {
     url.startsWith('/api/users/cards') ||
     // Activity sentence labels (migration 516): a read carrying the page's refs.
     url.startsWith('/api/activity/labels') ||
+    // The promote chain's overwrite check (routes/config-drift.ts): a read carrying the
+    // source's rows; promotions run while the target is in maintenance.
+    /^\/api\/config-drift\/guard(\?|$)/.test(url) ||
     // The layout editor canvas's draft field rows: a read carrying placements.
     /^\/api\/field-config\/[^/?]+\/project(\?|$)/.test(url) ||
     // Presence heartbeats (never a record write; were outside the freeze before).

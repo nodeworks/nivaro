@@ -106,6 +106,7 @@ export const ENVIRONMENTS_HUB: HubDef = {
   tabs: [
     { path: '', label: 'Environments', legacy: '/environments' },
     { path: 'config', label: 'Config diff', legacy: '/config-diff' },
+    { path: 'changed-here', label: 'Changed here' },
     { path: 'readiness', label: 'Go-live readiness', legacy: '/readiness' },
     { path: 'quality', label: 'Quality checks', legacy: '/quality-checks' }
   ]

@@ -98,6 +98,10 @@ const TRIGGER: Record<string, { label: string; cls: string }> = {
     label: 'Before deploy',
     cls: 'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
   },
+  promote: {
+    label: 'Promotion',
+    cls: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+  },
   'pre-restore': {
     label: 'Before restore',
     cls: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'

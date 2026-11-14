@@ -343,7 +343,8 @@ export async function buildMore(win: ReportWindow, extras: DigestExtras) {
         value: r.value,
         unit: r.unit,
         week_avg: r.week_avg ?? null,
-        note: r.note
+        note: r.note,
+        ...(r.href ? { href: r.href } : {})
       }))
     })),
     pages: {

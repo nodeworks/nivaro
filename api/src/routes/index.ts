@@ -89,6 +89,7 @@ import { commandCenterWorkRoutes } from './command-center-work.js'
 import { commentsRoutes } from './comments.js'
 import { configConformanceRecordRoutes, configConformanceRoutes } from './config-conformance.js'
 import { configDiffRoutes } from './config-diff.js'
+import { configDriftRoutes } from './config-drift.js'
 import { configHealthRoutes } from './config-health.js'
 import { configReviewRoutes } from './config-review.js'
 import { configSearchRoutes } from './config-search.js'
@@ -433,6 +434,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(internalRenderRoutes)
   await app.register(traceRoutes)
   await app.register(configDiffRoutes)
+  // Config changed here, not from promotion (services/config-drift).
+  await app.register(configDriftRoutes)
   await app.register(environmentRoutes, { prefix: '/environments' })
   await app.register(envPresenceRoutes, { prefix: '/environments' })
   await app.register(releaseRunsRoutes, { prefix: '/release' })

@@ -4,6 +4,12 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
+  checkOverwrite,
+  driftTrackingHere,
+  forgetDriftReport,
+  type OverwriteCheck
+} from '../services/config-drift/store.js'
+import {
   buildConfigSnapshot,
   type ConfigSnapshot,
   classifyTables,
@@ -20,10 +26,37 @@ import {
 import {
   diffSinceSnapshot,
   listConfigSnapshots,
+  loadConfigSnapshot,
   snapshotAtOrBefore,
   takeConfigSnapshot
 } from '../services/config-snapshots.js'
 import { NIVARO_VERSION } from '../version.js'
+
+/**
+ * Changes made on this instance (not from promotion) that a write would overwrite. Null when this
+ * instance does not track them (not production, or cloud).
+ */
+async function restoreOverwrites(
+  id: number,
+  tables: string[] | null
+): Promise<OverwriteCheck | null> {
+  if (!(await driftTrackingHere())) return null
+  const snap = await loadConfigSnapshot(id)
+  if (!snap) return null
+  const scope = (tables ?? Object.keys(snap.tables)).filter((t) => snap.tables[t])
+  return checkOverwrite(snap.tables, { tables: scope, deletes: true })
+}
+
+/** The 409 a write answers when the setting refuses overwriting unmarked changes made here. */
+export function prodOnlyRefusal(check: OverwriteCheck | null, override: unknown) {
+  if (!check?.refuse || check.items.length === 0 || override === true) return null
+  return {
+    error: `${check.items.length} change${check.items.length === 1 ? '' : 's'} made here, not from promotion, would be overwritten. Mark ${check.items.length === 1 ? 'it' : 'them'} as intended or copy ${check.items.length === 1 ? 'it' : 'them'} to dev first (Environments → Changed here).`,
+    code: 'PROD_ONLY_CHANGES',
+    items: check.items,
+    lines: check.lines
+  }
+}
 
 /**
  * Environment configuration diff.
@@ -95,12 +128,14 @@ export async function configDiffRoutes(app: FastifyInstance) {
    * Store a snapshot now. Body (optional): `{ trigger: 'manual' | 'pre-deploy', version?, note? }`.
    * The deploy script sends `{ trigger: 'pre-deploy', version: '<new version>' }` before it rolls
    * the stack (#2803). 'cron', 'pre-migration' and 'pre-restore' are taken by the server itself.
+   * The promote chain sends `{ trigger: 'promote', note? }` right after it copied config here: the
+   * baseline "Changed here, not from promotion" compares against (services/config-drift).
    */
   app.post('/config-diff/history', { preHandler: requireAdmin }, async (req, reply) => {
     const body = (req.body ?? {}) as { trigger?: unknown; version?: unknown; note?: unknown }
     const trigger = body.trigger == null || body.trigger === '' ? 'manual' : body.trigger
-    if (trigger !== 'manual' && trigger !== 'pre-deploy') {
-      return reply.code(400).send({ error: "trigger must be 'manual' or 'pre-deploy'" })
+    if (trigger !== 'manual' && trigger !== 'pre-deploy' && trigger !== 'promote') {
+      return reply.code(400).send({ error: "trigger must be 'manual', 'pre-deploy' or 'promote'" })
     }
     const version = body.version == null || body.version === '' ? null : body.version
     if (version !== null && (typeof version !== 'string' || !/^[\w.+-]{1,40}$/.test(version))) {
@@ -113,12 +148,15 @@ export async function configDiffRoutes(app: FastifyInstance) {
     const note =
       trigger === 'pre-deploy'
         ? [`Before deploying ${version ?? 'a new version'}`, extra].filter(Boolean).join(' — ')
-        : extra || null
+        : trigger === 'promote'
+          ? ['After a promotion', extra].filter(Boolean).join(' — ')
+          : extra || null
     const meta = await takeConfigSnapshot(trigger, {
       userId: req.user?.id ?? null,
       note,
       targetVersion: version
     })
+    if (trigger === 'promote') forgetDriftReport()
     if (!note) {
       await logActivity({
         action: 'config-snapshot-store',
@@ -146,6 +184,7 @@ export async function configDiffRoutes(app: FastifyInstance) {
       plan_hash?: unknown
       tables?: unknown
       allow_cascade?: unknown
+      overwrite_prod_changes?: unknown
     }
     const allowCascade = body.allow_cascade === true
     const mode = body.mode === 'apply' ? 'apply' : body.mode === 'preview' ? 'preview' : null
@@ -164,12 +203,26 @@ export async function configDiffRoutes(app: FastifyInstance) {
     try {
       if (mode === 'preview') {
         markConfigRead(req)
-        return { data: await previewRestore(id, tables, allowCascade) }
+        const preview = await previewRestore(id, tables, allowCascade)
+        const check = await restoreOverwrites(id, tables)
+        if (check?.items.length) {
+          preview.warnings.push(
+            `${check.items.length} change${check.items.length === 1 ? '' : 's'} made here, not from promotion, would be overwritten${check.refuse ? ' — the apply is refused until they are marked as intended' : ''}: ${check.lines.slice(0, 5).join('; ')}${check.lines.length > 5 ? `; and ${check.lines.length - 5} more` : ''}.`
+          )
+        }
+        if (check?.error)
+          preview.warnings.push(`Could not check for changes made here: ${check.error}`)
+        return { data: { ...preview, prod_only_changes: check?.items ?? [] } }
       }
       const hash = String(body.plan_hash ?? '')
       if (!/^[0-9a-f]{64}$/.test(hash)) {
         return reply.code(400).send({ error: 'plan_hash from the preview is required' })
       }
+      const refusal = prodOnlyRefusal(
+        await restoreOverwrites(id, tables),
+        body.overwrite_prod_changes
+      )
+      if (refusal) return reply.code(409).send(refusal)
       const result = await applyRestore(id, {
         planHash: hash,
         tables,
@@ -177,6 +230,7 @@ export async function configDiffRoutes(app: FastifyInstance) {
         userId: req.user?.id ?? null,
         req
       })
+      forgetDriftReport()
       return { data: result }
     } catch (err) {
       if (err instanceof RestoreError) {
@@ -269,7 +323,22 @@ export async function configDiffRoutes(app: FastifyInstance) {
         environment: config.NODE_ENV
       })
 
-      return reply.send({ data: diffSnapshots(mine, theirs) })
+      const diff = diffSnapshots(mine, theirs)
+      // A "Copy to dev" file carries only the rows changed there: every other row here is not
+      // "only here", and its removals ride in bundle.removed.
+      if (theirs.bundle?.kind === 'changed-here') {
+        diff.tables = diff.tables
+          .map((t) => ({ ...t, added: [], only_on: t.only_on === 'mine' ? null : t.only_on }))
+          .filter((t) => t.removed.length || t.changed.length || t.only_on)
+        diff.totals = {
+          added: 0,
+          removed: diff.tables.reduce((n, t) => n + t.removed.length, 0),
+          changed: diff.tables.reduce((n, t) => n + t.changed.length, 0),
+          tables_differing: diff.tables.length
+        }
+        return reply.send({ data: { ...diff, bundle: theirs.bundle } })
+      }
+      return reply.send({ data: diff })
     }
   )
 
@@ -305,6 +374,7 @@ export async function configDiffRoutes(app: FastifyInstance) {
         keys?: string[]
         mode?: 'preview' | 'apply'
         plan_hash?: string
+        overwrite_prod_changes?: boolean
       }
       const uploaded = body?.snapshot
       const table = String(body?.table ?? '')
@@ -320,11 +390,19 @@ export async function configDiffRoutes(app: FastifyInstance) {
       }
       if (mode === 'preview') markConfigRead(req)
       const theirs = redactSnapshot(uploaded)
+      const keys = Array.isArray(body?.keys) ? body.keys.map(String) : null
+      const check = (await driftTrackingHere())
+        ? await checkOverwrite(theirs.tables, { tables: [table], deletes: false, keys })
+        : null
+      if (mode === 'apply') {
+        const refusal = prodOnlyRefusal(check, body?.overwrite_prod_changes)
+        if (refusal) return reply.code(409).send(refusal)
+      }
       try {
         const out = await applyUploadedTable(theirs, table, {
           mode,
           planHash: body?.plan_hash ?? null,
-          keys: Array.isArray(body?.keys) ? body.keys.map(String) : null,
+          keys,
           userId: req.user?.id ?? null
         })
         if (mode === 'apply') {
@@ -336,8 +414,15 @@ export async function configDiffRoutes(app: FastifyInstance) {
             comment: `applied from snapshot (${theirs.instance?.environment ?? '?'} ${theirs.instance?.version ?? ''}): ${done.inserted} inserted, ${done.updated} updated`,
             req
           })
+          forgetDriftReport()
         }
-        return reply.send({ data: out })
+        return reply.send({
+          data: {
+            ...out,
+            prod_only_changes: check?.items ?? [],
+            ...(check?.error ? { prod_only_check_error: check.error } : {})
+          }
+        })
       } catch (err) {
         if (err instanceof RestoreError) {
           return reply.code(err.status).send({ error: err.message, code: err.code, ...err.extra })

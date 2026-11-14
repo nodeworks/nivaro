@@ -115,12 +115,17 @@ export const dbHealthDocs: DocSection = {
           'Before restore',
           'Just before a restore writes — only the tables that restore touches. Restoring it undoes the restore.',
           'Newest 10'
+        ],
+        [
+          'Promotion',
+          'The promote chain, right after it copied config here: `POST /config-diff/history {"trigger": "promote", "note"?}`. The baseline **Changed here** compares against.',
+          'Newest 10'
         ]
       ]
     },
     {
       type: 'p',
-      text: "Retention is per kind, so thirty nightly snapshots never push the last deploy's restore point out. Only `manual` and `pre-deploy` may be sent by a client; any other trigger answers 400."
+      text: "Retention is per kind, so thirty nightly snapshots never push the last deploy's restore point out. Only `manual`, `pre-deploy` and `promote` may be sent by a client; any other trigger answers 400."
     },
     { type: 'h3', text: 'Restoring' },
     {
@@ -140,6 +145,40 @@ export const dbHealthDocs: DocSection = {
     {
       type: 'p',
       text: 'API (admin): `POST /config-diff/history/:id/restore {mode: "preview"}` → `{plan_hash, tables[], refused[], totals, warnings}`; `{mode: "apply", plan_hash, tables?, allow_cascade?}` → `{pre_restore_id, tables[], totals}`; preview also returns `cascade[]` and `totals.skipped_inactive_user`. The single-table apply from an uploaded snapshot (`POST /config-diff/apply`) uses the same engine: upsert only, the same refused tables and grant rule, and `mode: "apply"` needs the preview\'s `plan_hash`.'
+    },
+    {
+      type: 'h2',
+      id: 'config-changed-here',
+      text: 'Environment Config — changed here, not from promotion'
+    },
+    {
+      type: 'p',
+      text: "Production's configuration should arrive by promotion (dev → staging → production). A fix made straight on production — a shared default saved view, the shared collection pins order — never reaches dev, and the next promotion replaces it without a word. **Environments → Changed here** lists every such change, so it can be copied back to dev or kept on purpose."
+    },
+    {
+      type: 'ul',
+      items: [
+        '**Where it runs:** on production (`NIVARO_ENVIRONMENT`, else the instance name, else `NODE_ENV`). Anywhere else turn on **Track here anyway**. Never in cloud mode.',
+        '**Compared with:** the newest **Promotion** restore point (the promote chain stores one after each promotion), or a restore point you choose under **Last promotion** (until the first promotion snapshot exists, pick the one taken right after the last promotion).',
+        '**What is compared:** every config table the config diff covers, except people accounts, sign-in providers, per-person pins, column choices and subscriptions, chat memberships, AI playbooks and per-instance settings. Personal saved views (not shared, not a default) and rows an instance keeps for itself are not listed; nor are rows that differ only in run stamps and counters (`last_*`, `updated_at`, `run_count`…). The page counts what it left out.',
+        "**Who and when:** the newest activity entry on that row since the promotion (the pins order is logged as `nivaro-core:collection_pins`), else the row's own updated-by columns, else a config apply from a file, else a configuration-change stamp naming the table (marked “probably”). A change nobody can be named for — a direct database fix — is still listed (“no record of who”).",
+        '**Field diff:** open a row to see each field as the promotion delivered it and as it is here now. Secret fields are masked.',
+        '**Copy to dev** downloads a config file of the chosen rows (all open ones by default). On dev, upload it under Environments → Config diff → Compare a snapshot: the compare lists only those rows (not every other dev row as “only here”), then **Apply** per table — upsert only, so a row removed on production is named in the file and has to be removed on dev by hand. A row added on production keeps its id; check the diff before applying, as the same id on dev may be another row. Nothing is ever written across environments from production.',
+        '**Mark as intended** (with a note) stops a change from nagging while the row stays as it was marked; it comes back once the row changes again. **Reopen** undoes a mark. Marks are activity entries, so a promotion never copies or wipes them.'
+      ]
+    },
+    { type: 'h3', text: 'Promotions that would overwrite them' },
+    {
+      type: 'p',
+      text: 'The config apply (`POST /config-diff/apply`) and restore (`POST /config-diff/history/:id/restore`) previews list the unmarked changes they would overwrite (`prod_only_changes`; the restore also as a warning). By default they only warn. With **Refuse promotions** on, the apply answers 409 `PROD_ONLY_CHANGES` with the list until the changes are marked as intended or copied to dev; a script may pass `overwrite_prod_changes: true` to go ahead anyway.'
+    },
+    {
+      type: 'p',
+      text: 'A promotion run outside the app (a database-to-database copy) asks the target first: `GET /api/config-drift/guard?tables=<comma list>` (admin token; a promotion copies whole tables, so every unmarked change in them counts) or `POST /api/config-drift/guard {tables?, snapshot?}` with the source export for an exact answer. It answers `{active, refuse, items[], lines[]}` — print the lines, stop when `refuse` is true unless the operator chose to overwrite — and after the copy stores the new baseline with `POST /api/config-diff/history {"trigger": "promote"}`. The guard is open during maintenance (promotions run then).'
+    },
+    {
+      type: 'p',
+      text: 'API (admin): `GET /config-drift` (`?fresh=1`) → `{active, baseline, items[], totals, skipped}`; `POST /config-drift/mark {ids[], note}` (or `{ids[], reopen: true}`); `POST /config-drift/bundle {ids?}` → the file; `PUT /config-drift/settings {refuse_overwrite?, baseline_snapshot_id?, track_here?}` (stored per instance). The daily operations report has a **Production-only config changes** section: open changes, new in the window, marked as intended, with a link to the page.'
     },
     { type: 'h2', id: 'layout-drift', text: 'Layout drift' },
     {
@@ -641,7 +680,7 @@ export const instanceOverridesDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Stored under the environment_notice key of this instance\'s override row (GET/PATCH /api/environment-notice, admin, audit-logged). Sign-in pages read it from the public GET /api/app-info (environment_notice). ENVIRONMENT_NOTICE=on|off on the server wins over the setting. Never shown in cloud mode.'
+      text: "Stored under the environment_notice key of this instance's override row (GET/PATCH /api/environment-notice, admin, audit-logged). Sign-in pages read it from the public GET /api/app-info (environment_notice). ENVIRONMENT_NOTICE=on|off on the server wins over the setting. Never shown in cloud mode."
     }
   ]
 }

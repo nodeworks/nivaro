@@ -14,6 +14,8 @@ export interface OpsSectionRow {
   unit?: 'ms' | 'usd' | 'count' | 'pct'
   week_avg?: number | null
   note?: string
+  /** An app path the row opens (`/environments/changed-here`); the report shows "Open". */
+  href?: string
   /** Which way is good for this number (Compare colours it). */
   better?: 'up' | 'down' | null
 }
@@ -67,7 +69,9 @@ export async function buildSections(win: OpsSectionWindow): Promise<
       const rows = (await s.build(win)).slice(0, 30).map((r) => ({
         ...r,
         key: KEY_RE.test(r.key ?? '') ? (r.key as string) : slugKey(r.label),
-        value: Number.isFinite(Number(r.value)) ? Number(r.value) : 0
+        value: Number.isFinite(Number(r.value)) ? Number(r.value) : 0,
+        href:
+          typeof r.href === 'string' && /^\/[^/\\]/.test(r.href) ? r.href.slice(0, 300) : undefined
       }))
       out.push({ key: s.key, title: s.title, rows })
     } catch {
