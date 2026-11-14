@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-14T18:23:51.911Z",
+  "generated_at": "2026-11-14T19:53:16.914Z",
   "releases": [
+    {
+      "version": "0.3.160",
+      "tag": "v0.3.160",
+      "date": "2026-11-14T14:52:59-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "queues",
+              "text": "totals row on queue worklists",
+              "hash": "355f2d7f9"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "queues",
+              "text": "offer formula columns in the worklist column chooser",
+              "hash": "78f39dd66"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.159",
       "tag": "v0.3.159",
-      "date": "2026-11-14T13:23:34-05:00",
+      "date": "2026-11-14T13:23:51-05:00",
       "sections": [
         {
           "label": "Added",
