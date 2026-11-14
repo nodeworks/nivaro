@@ -4460,6 +4460,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         collection,
         item: String(item),
         template: String(instance.template),
+        current_state: instance.current_state ?? null,
         completed_at: (instance as { completed_at?: Date | string | null }).completed_at ?? null
       })
       return reply.send({ data })

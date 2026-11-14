@@ -161,6 +161,9 @@ export async function loadStepTiming(instance: {
   collection: string
   item: string
   template: string
+  /** The record's real current step. History can lag it (a legacy import or a raw state
+   *  write set the step without a history row); the open visit is then not timed. */
+  current_state?: string | null
   completed_at: Date | string | null
 }): Promise<VisitTiming[]> {
   const { collection } = instance
@@ -195,6 +198,18 @@ export async function loadStepTiming(instance: {
       terminal: terminal.has(up(h.to_state))
     }
   })
+  // History that ends on another step than the record's (dev 2026-11-14: IR 22718 sat in
+  // Warehouse Submission with its last history row moving it to Draft in January) cannot
+  // say when the record entered its step or left the last one: leave that open visit out.
+  const last = visits[visits.length - 1]
+  if (
+    instance.current_state &&
+    !instance.completed_at &&
+    last.left_at == null &&
+    up(last.state) !== up(instance.current_state)
+  )
+    visits.pop()
+  if (visits.length === 0) return []
   const since = new Date(visits[0].entered_at)
 
   const [hasOrigin, hasCompletedBy] = await Promise.all([
