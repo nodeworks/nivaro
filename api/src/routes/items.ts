@@ -647,8 +647,6 @@ export async function itemsRoutes(app: FastifyInstance) {
   registerBulkFieldsRoute(app)
 
   app.post('/:collection/bulk-update', async (req, reply) => {
-    // Migration 516: every activity row this request writes is one burst.
-    markActivityBurst(req, 'bulk')
     const { collection } = req.params as { collection: string }
     const { ids, data, by_form } = req.body as {
       ids: string[]
@@ -656,6 +654,15 @@ export async function itemsRoutes(app: FastifyInstance) {
       /** #2722: also refuse fields that are not on a record's form. */
       by_form?: boolean
     }
+    // ?dry_run=1 (2026-11-13): the bar's preview — counts only, nothing written. The
+    // maintenance freeze lets a `dry_run=1` URL through, so anything but ONE plain
+    // value (a repeated key parses to an array) is refused rather than written.
+    const rawDry = (req.query as Record<string, unknown>).dry_run
+    if (rawDry !== undefined && typeof rawDry !== 'string')
+      return reply.code(400).send({ error: 'dry_run takes one value', code: 'BAD_DRY_RUN' })
+    const dryRun = rawDry === '1' || rawDry === 'true'
+    // Migration 516: every activity row this request writes is one burst.
+    if (!dryRun) markActivityBurst(req, 'bulk')
     if (!Array.isArray(ids) || ids.length === 0)
       return reply.code(400).send({ error: 'ids array required' })
     if (!(await builtinAllowed(collection, 'update-field', req)))
@@ -668,17 +675,39 @@ export async function itemsRoutes(app: FastifyInstance) {
     let refusedReason: string | null = null
     let upFailed = 0
     let upReason: string | null = null
-    const rp = openBulkRowProgress(
-      (req.query as Record<string, string>).progress,
-      req.user?.id,
-      () => ({
-        ok: updated,
-        failed: upFailed,
-        skipped,
-        reason: upReason
-      })
-    )
+    // Per-record outcomes the answer names (locked, no permission, a link that did not land).
+    const failures: Array<{ id: string | number; reason: string }> = []
+    const noteFailure = (id: string | number, reason: string) => {
+      upFailed++
+      upReason = reason
+      if (failures.length < 50) failures.push({ id, reason })
+    }
     const fields = Object.keys(data).filter((k) => !k.startsWith('_'))
+    // To-many fields (2026-11-13): append / replace / remove links, written by
+    // the items service's alias write per record (services/bulk-m2m.ts).
+    const { m2mFieldInfo, m2mIntent } = await import('../services/bulk-m2m.js')
+    const rels = await import('../services/collections.js')
+      .then((c) => c.getRelations(collection))
+      .catch(() => [])
+    const m2m = new Map(
+      fields
+        .map((f) => [f, m2mFieldInfo(collection, f, rels as never)] as const)
+        .filter((e): e is readonly [string, NonNullable<(typeof e)[1]>] => e[1] != null)
+    )
+    for (const f of m2m.keys())
+      if (!m2mIntent(data[f]))
+        return reply.code(400).send({
+          error: `${f} takes {create: ids}, {set: ids} or {delete: ids}`,
+          code: 'BAD_M2M_VALUE'
+        })
+    const rp = dryRun
+      ? null
+      : openBulkRowProgress((req.query as Record<string, string>).progress, req.user?.id, () => ({
+          ok: updated,
+          failed: upFailed,
+          skipped,
+          reason: upReason
+        }))
     // #2722 — a field the record's form locks for the caller is refused per
     // record (and, with by_form, one that is not on its form). A broken
     // layout never blocks the write.
@@ -724,8 +753,31 @@ export async function itemsRoutes(app: FastifyInstance) {
         )
       })
     for (const [k, why] of ruleRefusals) if (!refusals.has(k)) refusals.set(k, why)
+
+    // One batched read as the person: what each record holds now (the preview,
+    // and which records a to-many write can skip). Scalar-only writes keep
+    // their per-record read below.
+    const plan =
+      dryRun || m2m.size > 0
+        ? await import('../services/bulk-update-plan.js').then((p) =>
+            p.bulkUpdatePlan({
+              user: req.user!,
+              collection,
+              ids,
+              data,
+              m2m,
+              refusals,
+              read: readItems as never,
+              workspaceId: req.workspaceId ?? undefined
+            })
+          )
+        : null
+    if (dryRun) return reply.send({ data: plan?.preview })
+
+    let linksAdded = 0
+    let linksRemoved = 0
     for (const id of ids) {
-      rp.next(id)
+      rp?.next(id)
       const refusal = refusals.get(String(id).toLowerCase())
       if (refusal) {
         refused++
@@ -737,7 +789,12 @@ export async function itemsRoutes(app: FastifyInstance) {
       try {
         // A record already holding every value gets no write and no change
         // reason on its history — the note belongs to the ones that moved.
-        if (fields.length > 0) {
+        if (plan) {
+          if (plan.unchanged.has(String(id).toLowerCase())) {
+            skipped++
+            continue
+          }
+        } else if (fields.length > 0) {
           const current = (await readOne(req.user!, collection, id).catch(() => null)) as Record<
             string,
             unknown
@@ -749,27 +806,46 @@ export async function itemsRoutes(app: FastifyInstance) {
         }
         const held = await editLockRefusal(req, collection, String(id))
         if (held) {
-          upFailed++
-          upReason = String(held.body.error)
+          noteFailure(id, String(held.body.error))
           continue
         }
-        // A copy per record: the service drops fields the caller may not set.
-        await updateOne(req.user!, collection, id, { ...data }, req, req.workspaceId ?? undefined, {
-          callerPayload: true
+        // A copy per record: the service drops fields the caller may not set
+        // (and says nothing) — a field gone from the copy afterwards was not written.
+        const payload: Record<string, unknown> = { ...data }
+        const outcome: { linkFailures?: string[] } = {}
+        await updateOne(req.user!, collection, id, payload, req, req.workspaceId ?? undefined, {
+          callerPayload: true,
+          outcome
         })
+        const dropped = fields.filter((f) => !(f in payload))
+        if (dropped.length === fields.length) {
+          noteFailure(id, `You may not change ${dropped.join(', ')}`)
+          continue
+        }
+        if (outcome.linkFailures?.length) {
+          noteFailure(id, outcome.linkFailures[0] as string)
+          continue
+        }
+        for (const m of plan?.links.values() ?? []) {
+          const p = m.get(String(id).toLowerCase())
+          linksAdded += p?.adds.length ?? 0
+          linksRemoved += p?.removes.length ?? 0
+        }
         updated++
       } catch (err) {
-        // skip permission/not-found errors per item
-        upFailed++
-        upReason = err instanceof Error ? err.message : 'Not updated'
+        // A permission / not-found / lock error on one record never stops the rest.
+        noteFailure(id, err instanceof Error ? err.message : 'Not updated')
       }
     }
-    rp.end()
+    rp?.end()
     return reply.send({
       updated,
       skipped,
       refused,
-      ...(refusedReason ? { refused_reason: refusedReason } : {})
+      ...(refusedReason ? { refused_reason: refusedReason } : {}),
+      failed: upFailed - refused,
+      ...(failures.length ? { failures } : {}),
+      ...(m2m.size > 0 ? { links_added: linksAdded, links_removed: linksRemoved } : {})
     })
   })
 

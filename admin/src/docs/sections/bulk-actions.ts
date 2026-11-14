@@ -23,6 +23,20 @@ export const bulkActionsGuide: DocSection = {
       type: 'p',
       text: 'The server checks every record again: a field that record\'s form locks for you, or does not show, is refused for that record and counted in the result ("3 refused — …"). Saved recipes are checked for locks too.'
     },
+    {
+      type: 'p',
+      text: 'Before Apply the panel shows what the write would do, counted by the server as you over every selected record: "Changes 12 records · 3 already hold it · 1 refused — …". After Apply, every record that did not change is counted with why: already holding the value, refused by its form, held by someone editing it, or not yours to change. Nothing is skipped silently.'
+    },
+    { type: 'h3', text: 'Links to other records' },
+    {
+      type: 'p',
+      text: 'A field that links to one record (a picker) is set or cleared like any other field, with the form\'s own picker. A field that links to many records offers three ways to apply the picked records: Add (each record gains the links it does not have yet; links it already has stay and are never doubled), Replace (each record\'s links become exactly these; with nothing picked this removes every link, and the panel says so first) and Remove (takes only these links off). The preview counts links: "Adds 2 links to 14 records · 3 records already have them" or "Removes 21 links and adds 28 across 14 records". Each record is written as you through the normal save, so its permissions, edit lock, field rules, hooks and history apply, and the history reads "Added GA-210 to Location Atlanta Hub". A field that links to several kinds of record (people or external emails, say) is not offered.'
+    },
+    { type: 'h3', text: 'From a column header' },
+    {
+      type: 'p',
+      text: "In a list, a column header's menu (the arrow beside its name) has Set <column> on N selected rows…, which opens Update Field on that column. Turn on Select and tick the rows first; a column that cannot be changed in bulk says so and shows the field list instead. The same menu holds the column's totals row figure."
+    },
     { type: 'h3', text: 'Compare' },
     {
       type: 'p',

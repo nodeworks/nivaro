@@ -51,6 +51,8 @@ export function maintenanceExemptPath(url: string): boolean {
     // The promote chain's overwrite check (routes/config-drift.ts): a read carrying the
     // source's rows; promotions run while the target is in maintenance.
     /^\/api\/config-drift\/guard(\?|$)/.test(url) ||
+    // Bulk update's preview (?dry_run=1 writes nothing — routes/items.ts answers before any write).
+    /^\/api\/items\/[^/?]+\/bulk-update\?(?:[^#]*&)?dry_run=(1|true)(&|$)/.test(url) ||
     // The layout editor canvas's draft field rows: a read carrying placements.
     /^\/api\/field-config\/[^/?]+\/project(\?|$)/.test(url) ||
     // Presence heartbeats (never a record write; were outside the freeze before).

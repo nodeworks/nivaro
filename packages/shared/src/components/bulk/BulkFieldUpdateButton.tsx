@@ -8,6 +8,7 @@ import { errorToastOptions } from '../../lib/error-toast'
 import { userErrorMessage } from '../../lib/safe-error'
 import { invalidateRecordQueries } from '../item-edit/RecordLiveSync'
 import { BulkFieldUpdate } from './BulkFieldUpdate'
+import { type BulkUpdateAnswer, bulkUpdateOutcome } from './bulk-update-preview'
 
 /**
  * Army 11 N11: the worklist bar's "Update Field" — the same panel and the same
@@ -49,29 +50,17 @@ export function BulkFieldUpdateButton({
     const progress = newBulkProgressId()
     startBulkProgress(progress, ids)
     try {
-      const res = await client.request<{
-        updated: number
-        skipped?: number
-        refused?: number
-        refused_reason?: string
-      }>(
+      const res = await client.request<BulkUpdateAnswer>(
         post(`/items/${collection}/bulk-update?progress=${progress}`, {
           ids,
           data: { [field]: value ?? null },
           by_form: true
         })
       )
-      const parts = [
-        `Updated ${res.updated} record${res.updated === 1 ? '' : 's'}`,
-        res.skipped ? `${res.skipped} already set` : '',
-        res.refused ? `${res.refused} refused` : ''
-      ].filter(Boolean)
-      if (res.refused)
-        toast.warning(parts.join(' · '), {
-          description: res.refused_reason ?? undefined,
-          duration: 8000
-        })
-      else toast.success(parts.join(' · '))
+      // Every record that did not change is counted with why (2026-11-13).
+      const said = bulkUpdateOutcome(res)
+      if (res.refused || res.failed) toast.warning(said, { duration: 8000 })
+      else toast.success(said)
       invalidateRecordQueries(qc, collection, ids)
       onDone?.()
     } catch (err) {

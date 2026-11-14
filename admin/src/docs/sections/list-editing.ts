@@ -95,6 +95,19 @@ export const listEditing: DocSection = {
     {
       type: 'note',
       text: 'People’s picks follow a filter’s key. A rename or a move keeps them (including the YOUR DEFAULT picks from Profile → Default filters); removing a filter, or pointing it at another field, clears its picks. A list whose page passes its own quick filters cannot be edited this way.'
+    },
+    { type: 'h2', id: 'list-editing-totals', text: 'Totals row' },
+    {
+      type: 'p',
+      text: 'Any number column can show a figure in a totals row pinned to the bottom of the list: open the column header’s menu (the arrow beside its name) and pick Sum, Average, Minimum, Maximum or Count (records with the column filled in) under Σ Totals row, or Off. Sum is also one click on the column’s Σ in the Columns panel.'
+    },
+    {
+      type: 'p',
+      text: 'The figure covers every record the list matches, not just the page you see, and is worked out by the server as you: your search, filters and column filters, your role’s row filters and User Scopes all apply, and a field you cannot read is never totalled. It reads in the column’s own format (a currency column shows currency); Count is always a whole number. Each column asks once and asks again only when the filters settle after a change. The choice is remembered for you on this list in this browser, and a saved view keeps the totals it was saved with. Grouped lists and AI search results show no totals row.'
+    },
+    {
+      type: 'note',
+      text: 'Each figure is one `GET /api/items/:collection/aggregate?sum=<field>` (or avg / min / max / count) with the list’s `search` and `conditions`, the same gated read a list uses.'
     }
   ]
 }

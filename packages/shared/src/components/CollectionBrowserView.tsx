@@ -171,12 +171,25 @@ import {
 import { BulkCompareButton } from './bulk/BulkCompareButton'
 import { BulkFieldUpdate } from './bulk/BulkFieldUpdate'
 import { BulkRowMark } from './bulk/BulkRowMark'
+import { type BulkUpdateAnswer, bulkUpdateOutcome } from './bulk/bulk-update-preview'
 import { MessageStakeholdersForm } from './bulk/MessageStakeholders'
 import { type RowPushOp, runRowPush, useRowPushActions } from './bulk/RowPushActions'
 import { CellCopyLayer } from './CellCopyLayer'
 import { CollectionImportBanner } from './CollectionImportBanner'
 import { CopyAsButton } from './CopyAsButton'
 import { CollectionTree, useTreeConfig } from './cbv/CollectionTree'
+import { ColumnHeaderMenu } from './cbv/ColumnHeaderMenu'
+import {
+  formatTotal,
+  isTotalFn,
+  loadRememberedTotals,
+  readTotal,
+  rememberTotals,
+  type TotalFn,
+  totalsEligibleKey,
+  totalsParams,
+  totalTip
+} from './cbv/column-totals'
 import {
   type ListPage,
   localYmd,
@@ -239,6 +252,7 @@ import { SlowNoticeView } from './SlowNotice'
 import { TipLayer } from './TipLayer'
 import { UnseenDot } from './UnseenDot'
 import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
+import { Skeleton } from './ui/skeleton'
 
 /**
  * CollectionBrowserView — the admin `/collections/:collection` browser as an
@@ -427,8 +441,9 @@ type SavedViewColumn =
       pin?: 'left' | 'right' | 'none'
       tint?: TintRule[]
       width?: number
-      /** Footer aggregate — server-computed SUM over the whole filtered set. */
-      agg?: 'sum'
+      /** Totals row figure — server-computed over the whole filtered set (2026-11-13:
+       *  sum, avg, min, max or count; views saved before carry only 'sum'). */
+      agg?: TotalFn
       /** Shown to admins only (curation: the value still rides the read). */
       admin_only?: boolean
       /** #644 — a formula column (`__f:` key): `{{a}} - {{b}}` over the row. */
@@ -877,7 +892,8 @@ export function invalidateCbvRowQueries(qc: QueryClient, collection: string): vo
     'cbv-risk',
     'cbv-addendum-summary',
     'cbv-resolved',
-    'cbv-row-instance'
+    'cbv-row-instance',
+    'cbv-col-total'
   ])
     void qc.invalidateQueries({ queryKey: [key, collection] })
 }
@@ -3842,11 +3858,14 @@ function BulkBar({
   fields,
   relations,
   registryKeys,
+  pointField,
   onClear,
   onSuccess
 }: {
   collection: string
   selectedIds: Array<string | number>
+  /** The column header's "Set <column> on N selected rows…" (2026-11-13). */
+  pointField?: { field: string; nonce: number } | null
   transitions: Array<{
     id: string
     label: string
@@ -4044,25 +4063,15 @@ function BulkBar({
   // refuse, per record, a field its form locks for this person or does not show.
   const runFieldUpdate = (f: string, v: unknown) =>
     void run(async (pid) => {
-      const res = await client.request<{
-        updated: number
-        skipped?: number
-        refused?: number
-        refused_reason?: string
-      }>(
+      const res = await client.request<BulkUpdateAnswer>(
         post(`/items/${collection}/bulk-update?progress=${pid}`, {
           ids: selectedIds,
           data: { [f]: v ?? null },
           by_form: true
         })
       )
-      return [
-        `Updated ${res.updated} items`,
-        res.skipped ? `${res.skipped} already there` : '',
-        res.refused ? `${res.refused} refused — ${res.refused_reason ?? 'locked on its form'}` : ''
-      ]
-        .filter(Boolean)
-        .join(' · ')
+      // Every record that did not change is counted with why (locks, permissions, links).
+      return bulkUpdateOutcome(res)
     })
 
   return (
@@ -4182,6 +4191,7 @@ function BulkBar({
               selectedIds={selectedIds}
               disabled={busy}
               onApply={runFieldUpdate}
+              pointAt={pointField}
               onSaveRecipe={(f, v) => {
                 setRecipeName('')
                 setRecipeNaming({ action_type: 'update', config: { field: f, value: v } })
@@ -4522,7 +4532,11 @@ export function CollectionBrowserView({
   const [columnFormulas, setColumnFormulas] = useState<Record<string, string>>({})
   const [renamingCol, setRenamingCol] = useState<string | null>(null)
   const [columnFormats, setColumnFormats] = useState<Record<string, ColumnFormatConfig>>({})
-  const [columnAggs, setColumnAggs] = useState<Record<string, 'sum'>>({})
+  // Totals row (2026-11-13): per column, the figure the footer shows; remembered per
+  // person per list in this browser, and saved with a view.
+  const [columnAggs, setColumnAggs] = useState<Record<string, TotalFn>>(() =>
+    loadRememberedTotals(collection)
+  )
   // Column widths (#131): drag the header's right edge; persisted per view.
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [columnTints, setColumnTints] = useState<Record<string, TintRule[]>>({})
@@ -4729,7 +4743,7 @@ export function CollectionBrowserView({
     setColumnLabels({})
     setColumnFormulas({})
     setColumnFormats({})
-    setColumnAggs({})
+    setColumnAggs(loadRememberedTotals(collection))
     setSelectedIds([])
     setActiveViewId(null)
     setQuickSel({})
@@ -4797,6 +4811,21 @@ export function CollectionBrowserView({
     if (bulkMode) setSelectedIds([])
     setBulkMode(!bulkMode)
   }
+  // A column header's "Set <column> on N selected rows…" opens the bulk bar's
+  // Update field on that column (2026-11-13); a new nonce opens it again.
+  const [pointField, setPointField] = useState<{ field: string; nonce: number } | null>(null)
+  // A bar that mounts again for a new selection must not reopen an old request.
+  useEffect(() => {
+    if (selectedIds.length === 0) setPointField(null)
+  }, [selectedIds.length])
+  const headerBuiltin = useBuiltinGate(collection ? [collection] : [], bc.bulk_actions ?? null)
+  const bulkSetUnavailable = !enableCheckboxes
+    ? 'This list has no row selection.'
+    : !headerBuiltin('update-field')
+      ? 'Bulk update is switched off for this list.'
+      : !bulkMode
+        ? 'Turn on Select, then tick the rows to change.'
+        : null
   const canCreate = showCreate && bc.allow_create !== false
   // Collection setting (browser_config.create_label): "New request" instead of "New item".
   const createLabel =
@@ -5366,11 +5395,6 @@ export function CollectionBrowserView({
     }
   }, [conditionsParam])
 
-  // Plain physical columns only — dotted/synthetic keys can't be SUMmed
-  const aggParam = Object.keys(columnAggs)
-    .filter((k) => !k.includes('.') && !k.startsWith('__'))
-    .sort()
-    .join(',')
   const itemsPageKey = (p: number) => [
     'cbv-items',
     collection,
@@ -5378,8 +5402,7 @@ export function CollectionBrowserView({
     sort,
     groupBy ? 'grouped' : p,
     groupBy ? 500 : effPageSize,
-    conditionsParam,
-    aggParam
+    conditionsParam
   ]
   const fetchItemsPage = async (p: number) => {
     type Page = {
@@ -5388,13 +5411,11 @@ export function CollectionBrowserView({
       total_approx?: boolean
       total_timed_out?: boolean
       next_cursor?: string | null
-      aggregates?: Record<string, number>
     }
     const base = {
       limit: groupBy ? 500 : effPageSize,
       ...(appliedSearch ? { search: appliedSearch } : {}),
       ...(conditionsParam ? { conditions: conditionsParam } : {}),
-      ...(aggParam ? { agg: aggParam } : {}),
       // #2443 — the total may be a few seconds old (shown as "about"); rows are always fresh.
       count: 'approx'
     }
@@ -5404,14 +5425,7 @@ export function CollectionBrowserView({
       )
     if (groupBy) return byNumber(1)
     // #2447 — forward pages walk by cursor (page 200 costs what page 1 does).
-    const bookKey = JSON.stringify([
-      collection,
-      appliedSearch,
-      sort,
-      effPageSize,
-      conditionsParam,
-      aggParam
-    ])
+    const bookKey = JSON.stringify([collection, appliedSearch, sort, effPageSize, conditionsParam])
     const book = cursorBookRef.current
     const ask = pageRequest(book, bookKey, p, sort)
     if (ask.after === undefined && ask.sort === sort) return byNumber(p)
@@ -5499,7 +5513,47 @@ export function CollectionBrowserView({
     !aiResult && !!itemsRes && (itemsRes.total_timed_out === true || itemsRes.total == null)
   // #2443 — the total came from the short-lived count cache (or the table's row count).
   const totalApprox = !aiResult && itemsRes?.total_approx === true
-  const aggregates = itemsRes?.aggregates
+  // Totals row (2026-11-13): one aggregate read per visible column with a total on,
+  // over the whole filtered result as the viewer (GET /items/:c/aggregate runs the
+  // list's own gated query: search, conditions, row filters, User Scopes, field list).
+  // Filters settle first (debounced) so typing in a column filter asks once.
+  useEffect(() => rememberTotals(collection, columnAggs), [collection, columnAggs])
+  const totalsConditions = useDebounced(conditionsParam, 400)
+  const totalsSearch = useDebounced(appliedSearch, 400)
+  const totalCols = effectiveColumns.filter(
+    (k) => !!columnAggs[k] && totalsEligibleKey(k) && fieldByName.has(k)
+  )
+  const totalQueries = useQueries({
+    queries: totalCols.map((key) => {
+      const fn = columnAggs[key] as TotalFn
+      return {
+        queryKey: ['cbv-col-total', collection, totalsSearch, totalsConditions, key, fn],
+        queryFn: () =>
+          client
+            .request<{ data?: Array<Record<string, Record<string, unknown>>> }>(
+              get(
+                `/items/${collection}/aggregate`,
+                totalsParams(key, fn, { search: totalsSearch, conditions: totalsConditions })
+              )
+            )
+            .then((r) => readTotal(r as never, key, fn)),
+        enabled: !!collection && scopeGateOpen && !aiResult && !groupBy,
+        staleTime: 30_000,
+        retry: false
+      }
+    })
+  })
+  const columnTotals: Record<string, { value: number | null; loading: boolean; failed: boolean }> =
+    {}
+  totalCols.forEach((key, i) => {
+    const q = totalQueries[i]
+    columnTotals[key] = {
+      value: (q?.data as number | null | undefined) ?? null,
+      loading: !!q?.isLoading,
+      failed: !!q?.isError
+    }
+  })
+  const showTotals = totalCols.length > 0 && !groupBy && !aiResult
   const totalPages = totalUnknown
     ? page + (rows.length >= effPageSize ? 1 : 0)
     : Math.max(1, Math.ceil(total / effPageSize))
@@ -5693,8 +5747,7 @@ export function CollectionBrowserView({
     sort,
     groupBy ? 'grouped' : page,
     groupBy ? 500 : effPageSize,
-    conditionsParam,
-    aggParam
+    conditionsParam
   ]
   const liveCtxRef = useRef({
     conditions: conditionsParam,
@@ -6541,7 +6594,7 @@ export function CollectionBrowserView({
       let pinsStated = false
       const tints: Record<string, TintRule[]> = {}
       const widths: Record<string, number> = {}
-      const aggs: Record<string, 'sum'> = {}
+      const aggs: Record<string, TotalFn> = {}
       for (const c of v.columns) {
         if (typeof c !== 'string' && c.label) labels[c.key] = c.label
         if (typeof c !== 'string' && c.format) formats[c.key] = c.format
@@ -6551,9 +6604,10 @@ export function CollectionBrowserView({
         }
         if (typeof c !== 'string' && c.tint?.length) tints[c.key] = c.tint
         if (typeof c !== 'string' && c.width) widths[c.key] = c.width
-        if (typeof c !== 'string' && c.agg) aggs[c.key] = c.agg
+        if (typeof c !== 'string' && isTotalFn(c.agg)) aggs[c.key] = c.agg
       }
-      setColumnAggs(aggs)
+      // A view that states totals shows them; one that states none keeps the person's own.
+      setColumnAggs(Object.keys(aggs).length ? aggs : loadRememberedTotals(collection))
       setColumnLabels(labels)
       setColumnFormats(formats)
       setColumnTints(tints)
@@ -6580,7 +6634,7 @@ export function CollectionBrowserView({
     setColumnLabels({})
     setColumnFormulas({})
     setColumnFormats({})
-    setColumnAggs({})
+    setColumnAggs(loadRememberedTotals(collection))
     setColumnPins(null)
     setPage(1)
   }
@@ -9521,6 +9575,32 @@ export function CollectionBrowserView({
                             </span>
                           )}
                           {pinButton(key)}
+                          <ColumnHeaderMenu
+                            label={label}
+                            selectedCount={bulkMode ? selectedIds.length : 0}
+                            setUnavailable={bulkSetUnavailable}
+                            onSetSelected={
+                              // A to-many column (an alias the list resolves) is offered too: the
+                              // panel adds / replaces / removes its links.
+                              f && !key.includes('.') && !f.computed_formula
+                                ? () => setPointField({ field: key, nonce: Date.now() })
+                                : undefined
+                            }
+                            totals={
+                              isNumericCol(key) && totalsEligibleKey(key) && f && !readOnlyComputed
+                                ? {
+                                    fn: columnAggs[key] ?? null,
+                                    onChange: (fn) =>
+                                      setColumnAggs((a) => {
+                                        const next = { ...a }
+                                        if (fn) next[key] = fn
+                                        else delete next[key]
+                                        return next
+                                      })
+                                  }
+                                : undefined
+                            }
+                          />
                           {resizeHandle(key)}
                         </th>
                       )
@@ -10329,31 +10409,47 @@ export function CollectionBrowserView({
                     })
                   )}
                 </tbody>
-                {aggregates && Object.keys(aggregates).length > 0 && !groupBy && (
-                  <tfoot className='text-[12px] tabular-nums'>
+                {showTotals && (
+                  <tfoot className='text-[12px] tabular-nums' data-cbv-totals>
                     <tr className='sticky bottom-0 z-[2] border-t-2 border-slate-200 bg-slate-50 font-medium dark:border-slate-700 dark:bg-slate-800'>
                       {enableCheckboxes && (
                         <td className='sticky left-0 z-[3] w-11 bg-slate-50 py-1.5 pl-1.5 pr-3 dark:bg-slate-800' />
                       )}
                       {orderedCols.map((col, ci) => {
                         const key = col.key
-                        const v = aggregates[key]
+                        const fn = columnAggs[key]
+                        const t = fn ? columnTotals[key] : undefined
+                        const short = fn
+                          ? { sum: 'Sum', avg: 'Avg', min: 'Min', max: 'Max', count: 'Count' }[fn]
+                          : ''
                         return (
                           <td
                             key={key}
-                            className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[3]', 'bg-slate-50 dark:bg-slate-800')}`}
+                            data-cbv-total-cell={t ? key : undefined}
+                            className={`whitespace-nowrap px-3 py-1.5 ${t ? 'text-right' : ''} ${pinCls(key, 'z-[3]', 'bg-slate-50 dark:bg-slate-800')}`}
                             style={pinStyle(key)}
                             data-tip={
-                              v != null
-                                ? `Sum of ${columnLabel(key)} across all ${fmtNum(total)} matching records`
+                              t && fn
+                                ? t.failed
+                                  ? `This ${short.toLowerCase()} could not be worked out`
+                                  : totalTip(fn, columnLabel(key), totalUnknown ? null : total)
                                 : undefined
                             }
                           >
-                            {v != null ? (
-                              <span className='text-slate-700 dark:text-slate-200'>
-                                {columnFormats[key]
-                                  ? formatValue(String(v), columnFormats[key])
-                                  : fmtNum(Math.round(v * 100) / 100)}
+                            {t && fn ? (
+                              <span className='inline-flex items-baseline gap-1.5'>
+                                <span className='text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+                                  {short}
+                                </span>
+                                {t.loading ? (
+                                  <Skeleton className='inline-block h-3 w-12 align-middle' />
+                                ) : (
+                                  <span className='text-slate-700 dark:text-slate-200'>
+                                    {t.value == null || t.failed
+                                      ? '—'
+                                      : formatTotal(t.value, fn, columnFormats[key])}
+                                  </span>
+                                )}
                               </span>
                             ) : ci === 0 ? (
                               <span className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
@@ -10543,6 +10639,7 @@ export function CollectionBrowserView({
           fields={meta?.fields ?? []}
           relations={meta?.relations ?? []}
           registryKeys={bc.bulk_actions ?? null}
+          pointField={pointField}
           onClear={() => setSelectedIds([])}
           onSuccess={() => invalidateCbvRowQueries(qc, collection)}
         />

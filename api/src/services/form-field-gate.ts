@@ -11,6 +11,7 @@ import {
   bulkRuleTable,
   placementRequires
 } from './bulk-field-rules.js'
+import { type M2MFieldInfo, m2mFields } from './bulk-m2m.js'
 import { getFields, getRelations } from './collections.js'
 import { selectInChunks } from './db-batch.js'
 import { readItems } from './items.js'
@@ -372,6 +373,22 @@ export async function settableFields(collection: string): Promise<{
   return { settable, readonly, labels }
 }
 
+/**
+ * The collection's plain to-many fields a bulk write may change (2026-11-13):
+ * not polymorphic, not read-only or calculated. services/bulk-m2m.ts.
+ */
+export async function bulkToManyFields(collection: string): Promise<Map<string, M2MFieldInfo>> {
+  const [fields, rels] = await Promise.all([getFields(collection), getRelations(collection)])
+  const byName = new Map(fields.map((f) => [f.field, f]))
+  const out = new Map<string, M2MFieldInfo>()
+  for (const info of m2mFields(collection, rels as never)) {
+    const f = byName.get(info.field)
+    if (f && (f.readonly || f.computed_formula)) continue
+    out.set(info.field, info)
+  }
+  return out
+}
+
 export interface FieldReport {
   /** Records whose form shows this field. */
   records: number
@@ -380,6 +397,8 @@ export interface FieldReport {
   reason: string | null
   /** The form requires it: the bar never offers an empty value (army 11 N3). */
   required?: boolean
+  /** A to-many field (2026-11-13): the bar offers append / replace / remove of links. */
+  m2m?: { related: string; junction: string }
 }
 
 export interface BulkFieldsReport {
@@ -412,17 +431,22 @@ export async function bulkFieldsReport(opts: {
     opts.workspaceId
   )) as { data?: Array<Record<string, unknown>> }
   const readableIds = (res.data ?? []).map((r) => String(r.id))
-  const [forms, updatable, meta, rules] = await Promise.all([
+  const [forms, updatable, meta, rules, toMany] = await Promise.all([
     resolveFormsForRecords(collection, readableIds, user.role ?? null, isAdmin, callerId(user)),
     isAdmin ? Promise.resolve(null) : getAllowedFields(user, 'update', collection),
     settableFields(collection),
-    bulkRuleTable(collection).catch(() => new Map<string, BulkRuleField>())
+    bulkRuleTable(collection).catch(() => new Map<string, BulkRuleField>()),
+    bulkToManyFields(collection).catch(() => new Map<string, M2MFieldInfo>())
   ])
   // A read-only field is never offered (army 11 N4: "Creator", "Priority — read-only" rows).
   const mayUpdate = (f: string) =>
-    meta.settable.has(f) &&
+    (meta.settable.has(f) || toMany.has(f)) &&
     !meta.readonly.has(f) &&
     (updatable == null || updatable.includes('*') || updatable.includes(f))
+  const m2mOf = (f: string) => {
+    const info = toMany.get(f)
+    return info ? { m2m: { related: info.related, junction: info.junction } } : {}
+  }
   // The form's own field rules (army 11 N3): a cascade parent or a sequenced id's
   // part is locked for every record; a required field is flagged.
   const ruleLock = (f: string) => bulkFieldLock(rules.get(f))
@@ -463,7 +487,7 @@ export async function bulkFieldsReport(opts: {
         readonlyFields: meta.readonly
       })
       for (const p of offered) {
-        const r = fields[p.field] ?? { records: 0, locked: 0, reason: null }
+        const r = fields[p.field] ?? { records: 0, locked: 0, reason: null, ...m2mOf(p.field) }
         // Required by the field, or by THIS record's form (army 11 review #11).
         if (ruleRequired(p.field) || placementRequires(shape.placements, p.field)) r.required = true
         r.records++
@@ -478,13 +502,14 @@ export async function bulkFieldsReport(opts: {
   }
   // Records without a form offer every field the person may update.
   if (noForm > 0)
-    for (const f of meta.settable) {
+    for (const f of [...meta.settable, ...toMany.keys()]) {
       if (!mayUpdate(f)) continue
       const r = fields[f] ?? {
         records: 0,
         locked: 0,
         reason: null,
-        ...(ruleRequired(f) ? { required: true } : {})
+        ...(ruleRequired(f) ? { required: true } : {}),
+        ...m2mOf(f)
       }
       r.records += noForm
       const why = ruleLock(f)

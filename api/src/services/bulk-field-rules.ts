@@ -53,7 +53,12 @@ export const emptyBulkValue = (v: unknown) =>
   v === undefined ||
   v === null ||
   (typeof v === 'string' && v.trim() === '') ||
-  (Array.isArray(v) && v.length === 0)
+  (Array.isArray(v) && v.length === 0) ||
+  // A to-many Replace with nothing picked takes every link off (2026-11-13).
+  (typeof v === 'object' &&
+    !Array.isArray(v) &&
+    Array.isArray((v as { set?: unknown }).set) &&
+    (v as { set: unknown[] }).set.length === 0)
 
 const words = (field: string) => {
   const w = field
