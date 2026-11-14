@@ -353,7 +353,7 @@ export function RelationCombobox({
       junction_field?: string | null
     }>
   >({
-    queryKey: ['collection-meta', collection],
+    queryKey: ['collection-relations', collection],
     queryFn: () =>
       client
         .request<{ data: { relations?: Array<Record<string, unknown>> } }>(

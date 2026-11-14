@@ -2447,8 +2447,11 @@ export function InlineTableField({
   })
 
   // Relations for FieldRenderer M2O pickers
-  const { data: childRelations = [] } = useQuery<CMSRelation[]>({
-    queryKey: ['collection-meta', relatedCollection],
+  const { data: childRelationsRaw } = useQuery<CMSRelation[]>({
+    // Its own key: other readers keep the WHOLE meta object under ['collection-meta', c], and
+    // whichever filled the cache first decided the shape here (prod 2026-11-13: relations.find
+    // is not a function).
+    queryKey: ['collection-relations', relatedCollection],
     queryFn: () =>
       client.request<{ data: unknown }>(get(`/collections/${relatedCollection}`)).then((r) => {
         const d = r.data as { relations?: CMSRelation[] }
@@ -2456,6 +2459,7 @@ export function InlineTableField({
       }),
     staleTime: 10 * 60_000
   })
+  const childRelations: CMSRelation[] = Array.isArray(childRelationsRaw) ? childRelationsRaw : []
 
   // Fetch layout metadata to get row_order_field
   const { data: layoutMeta } = useQuery<{ row_order_field?: string | null }>({
@@ -3793,7 +3797,7 @@ export function InlineTableField({
   })
   const summaryRelationsQueries = useQueries({
     queries: summaryGrandCollections.map((gc) => ({
-      queryKey: ['collection-meta', gc],
+      queryKey: ['collection-relations', gc],
       queryFn: () =>
         client
           .request<{ data: unknown }>(get(`/collections/${gc}`))

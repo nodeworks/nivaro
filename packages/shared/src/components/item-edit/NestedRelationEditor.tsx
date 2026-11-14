@@ -114,7 +114,7 @@ export function NestedRelationEditor({
 
   // Resolve the grandchild relation off the LINE collection's own relations.
   const { data: parentRelations, isLoading: relationsLoading } = useQuery<CMSRelation[]>({
-    queryKey: ['collection-meta', parentCollection],
+    queryKey: ['collection-relations', parentCollection],
     queryFn: () =>
       client.request<{ data: unknown }>(get(`/collections/${parentCollection}`)).then((r) => {
         const d = r.data as { relations?: CMSRelation[] }
@@ -134,7 +134,7 @@ export function NestedRelationEditor({
 
   // Grandchild's own relations (for FieldRenderer's M2O pickers + read-only labels)
   const { data: grandRelations = [] } = useQuery<CMSRelation[]>({
-    queryKey: ['collection-meta', grandCollection],
+    queryKey: ['collection-relations', grandCollection],
     queryFn: () =>
       client.request<{ data: unknown }>(get(`/collections/${grandCollection}`)).then((r) => {
         const d = r.data as { relations?: CMSRelation[] }
