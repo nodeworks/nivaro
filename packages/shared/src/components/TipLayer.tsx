@@ -46,8 +46,8 @@ export function TipLayer() {
 
   useEffect(() => {
     if (!owns) return
-    const over = (e: MouseEvent) => {
-      const el = (e.target as HTMLElement)?.closest?.('[data-tip]')
+    const show = (target: EventTarget | null) => {
+      const el = (target as HTMLElement)?.closest?.('[data-tip]')
       const text = el?.getAttribute('data-tip')
       // A button whose menu or popover is open says nothing: its tip would
       // cover the first rows of what it opened.
@@ -69,14 +69,29 @@ export function TipLayer() {
       }
       setTip({ x: r.left, y: r.bottom + 4, text })
     }
+    const over = (e: MouseEvent) => show(e.target)
     const clear = () => setTip(null)
+    // Keyboard focus shows the tip of an element that opts in with
+    // `data-tip-focus` (a held-back pipeline move says why it cannot be made,
+    // BlockedMove.tsx) — opt-in so tabbing through a form does not trail tips.
+    const focusIn = (e: FocusEvent) => {
+      const el = (e.target as HTMLElement)?.closest?.('[data-tip-focus]')
+      if (el) show(el)
+    }
+    const focusOut = (e: FocusEvent) => {
+      if ((e.target as HTMLElement)?.closest?.('[data-tip-focus]')) setTip(null)
+    }
     // A press acts on the element (opens its menu, switches a panel): the tip
     // goes and comes back on the next hover.
     window.addEventListener('mouseover', over)
+    window.addEventListener('focusin', focusIn)
+    window.addEventListener('focusout', focusOut)
     window.addEventListener('pointerdown', clear, true)
     window.addEventListener('scroll', clear, true)
     return () => {
       window.removeEventListener('mouseover', over)
+      window.removeEventListener('focusin', focusIn)
+      window.removeEventListener('focusout', focusOut)
       window.removeEventListener('pointerdown', clear, true)
       window.removeEventListener('scroll', clear, true)
     }

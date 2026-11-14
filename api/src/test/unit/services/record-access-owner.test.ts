@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
-import { offeredToActor, ownerOnlyAllows, ownsStep } from '../../../services/record-access.js'
+import {
+  offeredToActor,
+  ownerOnlyAllows,
+  ownerOnlyMessage,
+  ownsStep
+} from '../../../services/record-access.js'
 
 const OWNER = '6D0C0E3A-1111-4A2B-9C3D-000000000001'
 const DELEGATE = '6D0C0E3A-1111-4A2B-9C3D-000000000002'
@@ -62,5 +67,33 @@ describe('allow_creator (army 2026-10-24)', () => {
     expect(ids({ is_owner: true, is_creator: false })).toEqual(['submit', 'approve', 'cancel'])
     expect(ids({ is_owner: false, is_creator: true })).toEqual(['submit', 'cancel'])
     expect(ids({ is_owner: false, is_creator: false })).toEqual(['submit'])
+  })
+})
+
+describe('ownerOnlyMessage (blocked moves, Rob 2026-11-13)', () => {
+  it('says nobody owns the step yet, and who can still make the move', () => {
+    expect(ownerOnlyMessage({ step: 'Warehouse Submission', ownerNames: [] })).toBe(
+      'Only the owner of Warehouse Submission can make this move. No one owns Warehouse Submission on this record yet — an administrator can make it, or ask to be made the owner.'
+    )
+  })
+
+  it('names the assigned owners', () => {
+    expect(ownerOnlyMessage({ step: 'Level 1', ownerNames: ['Kim Lee'] })).toBe(
+      "Only the owner of Level 1 can make this move. You don't own Level 1 on this record — Kim Lee does."
+    )
+    expect(
+      ownerOnlyMessage({ step: 'Level 1', allowCreator: true, ownerNames: ['Kim Lee', 'Ana Ruiz'] })
+    ).toBe(
+      "Only the owner of Level 1 or the person who created this record can make this move. You don't own Level 1 on this record — Kim Lee and Ana Ruiz do."
+    )
+  })
+
+  it('keeps the plain sentence when the owners are unknown or there is no step', () => {
+    expect(ownerOnlyMessage({ step: 'Level 1', ownerNames: null })).toBe(
+      'Only the owner of Level 1 can make this move.'
+    )
+    expect(ownerOnlyMessage({ step: null, ownerNames: [] })).toBe(
+      'Only the owner of the current step can make this move.'
+    )
   })
 })

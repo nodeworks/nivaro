@@ -20,6 +20,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { listPhrase, personName } from './access-words.js'
 import { applyRowFilter, can, getRowFilter } from './permissions.js'
 import {
   applyScopeHops,
@@ -337,6 +338,10 @@ export interface ActVerdict {
   can_act: boolean
   reasons: AccessReason[]
   summary: string
+  /** Names of the step's ASSIGNED owners — only when asked with
+   *  `assignedOwnersOnly` (the owner-only move sentence names them; the
+   *  record's Owners panel already shows the same people to its readers). */
+  assigned_owners?: string[]
 }
 
 /** Is `userId` among the resolved owners of a step (case-insensitive ids —
@@ -381,6 +386,7 @@ export async function canActOn(
 
   let isOwner: boolean | null = null
   let state: string | null = null
+  let assignedOwners: string[] | undefined
   const instQuery = db('nivaro_workflow_instances as i')
     .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
     .where({ 'i.collection': collection, 'i.item': String(id) })
@@ -398,6 +404,7 @@ export async function canActOn(
       { skipFallback: !!opts.assignedOwnersOnly }
     )
     isOwner = ownsStep(owners.get('x') ?? [], String(user.id))
+    if (opts.assignedOwnersOnly) assignedOwners = (owners.get('x') ?? []).map(personName)
   }
   const canAct = seen && !!canUpdate && !unavailable
   const summary = !exists
@@ -422,7 +429,8 @@ export async function canActOn(
     state,
     can_act: canAct,
     reasons,
-    summary
+    summary,
+    ...(assignedOwners ? { assigned_owners: assignedOwners } : {})
   }
 }
 
@@ -479,6 +487,30 @@ export async function recordCreators(
 export const sameUser = (a: unknown, b: unknown) =>
   a != null && b != null && String(a).toUpperCase() === String(b).toUpperCase()
 
+/**
+ * Why an owner-only move is refused — the words the refusal AND the record
+ * page's disabled button both use (GET /pipelines/instance
+ * `blocked_transitions`, services/blocked-moves.ts). `ownerNames` = the step's
+ * ASSIGNED owners (the fallback queue person is not one): none → nobody owns
+ * the step yet, so say who can still make the move; some → name them. Null
+ * (not known) keeps the first sentence alone.
+ */
+export function ownerOnlyMessage(opts: {
+  step: string | null
+  allowCreator?: boolean
+  ownerNames?: string[] | null
+}): string {
+  const step = opts.step ?? 'the current step'
+  const first = opts.allowCreator
+    ? `Only the owner of ${step} or the person who created this record can make this move.`
+    : `Only the owner of ${step} can make this move.`
+  const names = opts.ownerNames
+  if (!opts.step || !names) return first
+  if (names.length === 0)
+    return `${first} No one owns ${step} on this record yet — an administrator can make it, or ask to be made the owner.`
+  return `${first} You don't own ${step} on this record — ${listPhrase(names)} ${names.length === 1 ? 'does' : 'do'}.`
+}
+
 /** The gate both manual transition paths run for a `require_owner` transition. */
 export async function checkTransitionOwner(opts: {
   user: User
@@ -488,7 +520,16 @@ export async function checkTransitionOwner(opts: {
   instanceId: string
   /** The transition's allow_creator: the record's creator passes too. */
   allowCreator?: boolean
-}): Promise<{ allowed: boolean; message: string; is_owner: boolean; is_creator: boolean }> {
+}): Promise<{
+  allowed: boolean
+  message: string
+  is_owner: boolean
+  is_creator: boolean
+  /** The step judged (its label); null when the record has no open step. */
+  step?: string | null
+  /** The step's ASSIGNED owners by name ([] = nobody owns it yet). */
+  owner_names?: string[] | null
+}> {
   if (opts.isAdmin) return { allowed: true, message: '', is_owner: false, is_creator: false }
   let verdict: ActVerdict
   try {
@@ -515,18 +556,16 @@ export async function checkTransitionOwner(opts: {
     isCreator = sameUser(creator, opts.user.id)
   }
   const allowed = ownerOnlyAllows(false, { ...verdict, is_creator: isCreator }, !!opts.allowCreator)
-  const step = verdict.state ?? 'the current step'
+  const ownerNames = verdict.assigned_owners ?? null
   return {
     allowed,
     message: allowed
       ? ''
-      : opts.allowCreator
-        ? `Only the owner of ${step} or the person who created this record can make this move.`
-        : verdict.state
-          ? `Only the owner of ${verdict.state} can make this move.`
-          : 'Only the owner of the current step can make this move.',
+      : ownerOnlyMessage({ step: verdict.state, allowCreator: !!opts.allowCreator, ownerNames }),
     is_owner: verdict.is_owner === true,
-    is_creator: isCreator
+    is_creator: isCreator,
+    step: verdict.state,
+    owner_names: ownerNames
   }
 }
 

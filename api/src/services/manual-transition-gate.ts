@@ -81,11 +81,36 @@ export async function adminOnlyTransitionRefusal(opts: {
   if (!state) return null
   return {
     status: 403,
-    body: {
-      error: `Only administrators can make this move at ${state.label || state.key}. Use Request help to ask for a change.`,
-      code: ADMIN_ONLY_TRANSITION
-    }
+    body: { error: adminOnlyMoveMessage(state.label || state.key), code: ADMIN_ONLY_TRANSITION }
   }
+}
+
+/** The post-approval lock's sentence — the refusal and the record page's disabled button. */
+export function adminOnlyMoveMessage(stateLabel: string): string {
+  return `Only administrators can make this move at ${stateLabel}. Use Request help to ask for a change.`
+}
+
+/**
+ * Of `transitions`, the ones adminOnlyTransitionRefusal would refuse this
+ * person now → the refusal's sentence (empty for administrators). The record's
+ * state is read once, and only when a listed move is among them.
+ */
+export async function adminOnlyMoveMessages<T extends { id: unknown }>(opts: {
+  isAdmin: boolean
+  collection: string
+  item: string
+  transitions: T[]
+}): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (opts.isAdmin || opts.transitions.length === 0) return out
+  const listed = await adminOnlyTransitionsFor(opts.collection)
+  const hit = opts.transitions.filter((t) => listed.has(String(t.id).toUpperCase()))
+  if (hit.length === 0) return out
+  const state = await adminOnlyStateOf(opts.collection, opts.item)
+  if (!state) return out
+  const message = adminOnlyMoveMessage(state.label || state.key)
+  for (const t of hit) out.set(String(t.id), message)
+  return out
 }
 
 /**
