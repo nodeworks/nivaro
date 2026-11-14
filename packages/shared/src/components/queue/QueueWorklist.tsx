@@ -187,7 +187,12 @@ import {
 } from './queue-totals'
 import { needsTransitionNote, useTransitionNote } from './transition-note'
 import { worklistCsv, worklistCsvName } from './worklist-csv'
-import { atRiskBreakdown, extraChoiceText, worklistKeyTarget } from './worklist-helpers'
+import {
+  atRiskBreakdown,
+  extraChoiceText,
+  formulaColumnKeys as formulaKeysOf,
+  worklistKeyTarget
+} from './worklist-helpers'
 
 /** Root drill entry may pin a grouped layout; nested levels never do. */
 type DrillEntry = DrilldownTarget & { rootLayoutSlug?: string | null }
@@ -3401,6 +3406,7 @@ export function QueueWorklist({
     }
   }
 
+  const formulaColumnKeys = formulaKeysOf(displayConfig?.formula_columns)
   const TOGGLEABLE_KEYS = [
     ...(multiCollection ? ['collection'] : []),
     'state',
@@ -3414,7 +3420,10 @@ export function QueueWorklist({
     ...(integrationsEnabled ? ['integrations'] : []),
     ...(sendBacksEnabled ? ['send_backs'] : []),
     ...(tasksColumnEnabled ? ['tasks'] : []),
-    ...extraFieldKeys.map((f) => `extra.${f}`)
+    ...extraFieldKeys.map((f) => `extra.${f}`),
+    // Formula columns (#133) were built but never offered here, so no one could show them
+    // (found 2026-11-14 with the queue totals row).
+    ...formulaColumnKeys
   ]
 
   const DEFAULT_VISIBLE_COLUMNS = [
@@ -3453,6 +3462,9 @@ export function QueueWorklist({
   // builder column set saved before it existed would hide it forever (Rob,
   // 2026-09-23: "doesn't seem to be enabled by default").
   if (sendBacksEnabled && !hiddenByUser.has('send_backs')) effectiveVisible.add('send_backs')
+  // A formula column the queue's builder added shows until the viewer hides it — a column
+  // set saved before it existed must not hide it forever (same rule as Sent back).
+  for (const k of formulaColumnKeys) if (!hiddenByUser.has(k)) effectiveVisible.add(k)
   // Admin-only columns (display_config.admin_only_columns) never show for
   // anyone else, whatever the defaults or a saved view say.
   const adminOnlyColumns = new Set(isAdmin ? [] : (displayConfig?.admin_only_columns ?? []))

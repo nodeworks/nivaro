@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { atRiskBreakdown, extraChoiceText, worklistKeyTarget } from './worklist-helpers'
+import {
+  atRiskBreakdown,
+  extraChoiceText,
+  formulaColumnKeys,
+  worklistKeyTarget
+} from './worklist-helpers'
 
 describe('worklistKeyTarget (army 11 N10)', () => {
   it('list keys work on the page and on a focused row only', () => {
@@ -34,5 +39,18 @@ describe('extraChoiceText (army 11 Q1-2)', () => {
     expect(extraChoiceText(meta, 'good')).toBe('Good')
     expect(extraChoiceText(meta, 'other')).toBe('other')
     expect(extraChoiceText(undefined, 'x')).toBe('x')
+  })
+})
+
+describe('formulaColumnKeys', () => {
+  it('offers every formula column with a key and a formula', () => {
+    expect(
+      formulaColumnKeys([
+        { key: 'left', formula: '{{extra.req}} - {{extra.po}}' },
+        { key: 'broken', formula: '' },
+        { key: '', formula: '{{extra.req}}' }
+      ])
+    ).toEqual(['formula.left'])
+    expect(formulaColumnKeys(null)).toEqual([])
   })
 })

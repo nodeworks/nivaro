@@ -34,3 +34,16 @@ export function worklistKeyTarget(target: EventTarget | null): boolean {
   if (el.tagName === 'TR' && el.hasAttribute('data-row-key')) return true
   return false
 }
+
+/**
+ * Chooser keys for a queue's formula columns (display_config.formula_columns, #133). They were
+ * built but never offered in the column chooser, so nobody could show them (2026-11-14).
+ * Entries without a key or a formula are skipped.
+ */
+export function formulaColumnKeys(
+  formulaColumns: Array<{ key?: string | null; formula?: string | null }> | null | undefined
+): string[] {
+  return (formulaColumns ?? [])
+    .filter((fc) => fc?.key && fc.formula)
+    .map((fc) => `formula.${fc.key}`)
+}
