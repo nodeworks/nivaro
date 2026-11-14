@@ -249,18 +249,33 @@ export function crashHeaderLines(meta: Omit<CrashMeta, 'alerted_at'>): string[] 
   ]
 }
 
-/** The crash header of an issue's details, or null for an issue filed before crash grouping. */
+/**
+ * The crash header of an issue's details, or null for an issue filed before crash grouping.
+ *
+ * Anchored, because everything below it is the reporter's own text: the header is ONLY ever
+ * `[Alerted: <iso>\n]Route: <screen>\nCrash: …[\nFrame: …]` at the very top, exactly as
+ * error-tracking.ts writes it (the screen is a normalised pattern, never multi-line). A
+ * `Crash:` / `Frame:` / `Alerted:` line anywhere else — a message or stack that says
+ * "family=…" — is never read as the header.
+ */
 export function parseCrashMeta(details: string | null | undefined): CrashMeta | null {
-  const d = String(details ?? '')
-  const line = /^Crash: (.*)$/m.exec(d)
+  const lines = String(details ?? '').split('\n')
+  let i = 0
+  let alerted: string | null = null
+  // Prepended by the alert claim, so only ever the FIRST line.
+  const a = /^Alerted: (\S+)$/.exec(lines[0] ?? '')
+  if (a) {
+    alerted = a[1]
+    i = 1
+  }
+  if (!/^Route: /.test(lines[i] ?? '')) return null
+  const line = /^Crash: (.*)$/.exec(lines[i + 1] ?? '')
   if (!line) return null
   const f: Record<string, string> = {}
   for (const part of line[1].split(';')) {
     const at = part.indexOf('=')
     if (at > 0) f[part.slice(0, at).trim()] = part.slice(at + 1).trim()
   }
-  // Prepended by the alert claim, so only ever the FIRST line (a stack line can't fake it).
-  const alerted = /^Alerted: (\S+)/.exec(d)
   return {
     app: f.app || 'app',
     release: f.release || 'unknown',
@@ -269,8 +284,8 @@ export function parseCrashMeta(details: string | null | undefined): CrashMeta | 
     family: f.family || '',
     new_in: f.new_in || null,
     seen_in: f.seen_in || null,
-    frame: /^Frame: (.*)$/m.exec(d)?.[1] ?? null,
-    alerted_at: alerted ? alerted[1] : null
+    frame: /^Frame: (.*)$/.exec(lines[i + 2] ?? '')?.[1] ?? null,
+    alerted_at: alerted
   }
 }
 
@@ -312,24 +327,29 @@ export function newInRelease(
 }
 
 /**
- * Is `release` the app's current release? Not when a newer one of the same app has crashed
- * recently (`newestSeen`) and — for the admin, which the API serves itself — not when it is
- * older than the API's own version. Unknown comparisons count as current.
+ * Is `release` the app's CURRENT release — the only one whose new crashes alert? A report names
+ * its own release (untrusted), so the answer never comes from crash reports:
+ *
+ * - the admin, which the API serves itself: only the API's own version (a dev or unknown API
+ *   version never alerts);
+ * - any other app: the build the client-build roster says that app is on now (live sockets,
+ *   makeBuildJudge). When the roster knows nothing about the app, the alert's own rule (at least
+ *   two different people hit it, shouldAlertCrash) is the proof the release is real.
  */
 export function isCurrentRelease(
   app: string,
   release: string,
-  ctx: { apiVersion: string | null; newestSeen: string | null; apiServedApp?: string }
+  ctx: { apiVersion: string | null; rosterBuild: string | null; apiServedApp?: string }
 ): boolean {
-  if (ctx.newestSeen && compareBuilds(release, ctx.newestSeen) === -1) return false
-  if (
-    app === (ctx.apiServedApp ?? 'admin') &&
-    judgeableRelease(ctx.apiVersion) &&
-    compareBuilds(release, ctx.apiVersion) === -1
-  )
-    return false
+  if (!judgeableRelease(release)) return false
+  if (app === (ctx.apiServedApp ?? 'admin'))
+    return judgeableRelease(ctx.apiVersion) && release === ctx.apiVersion
+  if (ctx.rosterBuild) return release === ctx.rosterBuild
   return true
 }
+
+/** Never fewer than two different people: one account can never alert every admin alone. */
+export const CRASH_ALERT_PEOPLE_FLOOR = 2
 
 export interface CrashAlertFacts {
   meta: Pick<CrashMeta, 'release' | 'new_in' | 'alerted_at'>
@@ -341,16 +361,41 @@ export interface CrashAlertFacts {
   minPeople: number
 }
 
-/** Should admins hear about this crash now? */
+/** Should admins hear about this crash now? The hits AND at least two different people. */
 export function shouldAlertCrash(x: CrashAlertFacts): boolean {
   if (x.meta.alerted_at) return false
   if (!judgeableRelease(x.meta.release)) return false
   if (x.meta.new_in !== x.meta.release) return false
   if (!x.current) return false
-  return x.hits >= x.minHits || x.people >= x.minPeople
+  return x.hits >= x.minHits && x.people >= Math.max(CRASH_ALERT_PEOPLE_FLOOR, x.minPeople)
 }
 
-/** The alert's wording (subject ≤ 255, message ≤ 500). */
+/** One line of reporter text made safe to show an admin: scrubbed again, one line, ≤ max. */
+export function alertQuote(text: string, max = 120): string {
+  const one = scrubCrashText(text, 1000)
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029"]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!one) return 'Unknown error'
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one
+}
+
+/** A server-normalised token (screen pattern, version, app) with anything else dropped. */
+function token(v: string, max: number): string {
+  return (
+    String(v ?? '')
+      .replace(/[^\w./:@+-]/g, '')
+      .slice(0, max) || 'unknown'
+  )
+}
+
+/**
+ * The alert's wording. The subject is fixed — screen pattern and version only — so a reporter's
+ * free text never reaches an admin's notification title, push or email subject. The error
+ * appears once in the message, scrubbed again, cut to 120 characters and quoted as
+ * `Error: "…"`.
+ */
 export function crashAlertText(x: {
   app: string
   release: string
@@ -361,12 +406,14 @@ export function crashAlertText(x: {
   windowMin: number
   replay: boolean
 }): { subject: string; message: string } {
+  const screen = token(x.screen, 140)
+  const release = token(x.release, 60)
   const who = x.people === 1 ? '1 person' : `${x.people} people`
   const times = x.hits === 1 ? 'once' : `${x.hits} times`
   return {
-    subject: `New crash in ${x.app} ${x.release}: ${x.message}`.slice(0, 255),
+    subject: `App crash on ${screen} in ${release}`.slice(0, 255),
     message:
-      `${x.message} on ${x.screen} — ${times}, ${who} in the last ${x.windowMin} minutes. First seen in ${x.release}.${x.replay ? ' A replay of the moment is linked on the issue.' : ''}`.slice(
+      `Error: "${alertQuote(x.message)}" — ${times}, ${who} in the last ${x.windowMin} minutes (${token(x.app, 30)} ${release}, first seen in this release).${x.replay ? ' A replay of the moment is linked on the issue.' : ''}`.slice(
         0,
         500
       )

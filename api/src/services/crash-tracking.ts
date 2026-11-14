@@ -6,14 +6,21 @@
  *   signature + screen + release (crash-signature.ts) into ONE issue row whose fingerprint is
  *   that key. A row opened for a signature whose family was never seen in another release says
  *   `new_in=<release>` in its `Crash:` header line; otherwise `seen_in=<earliest release>`.
- * - Admin bundles: the minified frames are mapped back to source from the hidden source maps on
- *   this process's disk (crash-sourcemap.ts), appended under `Source-mapped stack:`.
- * - `maybeAlertCrash`: a crash new in the app's CURRENT release that reached
- *   CRASH_ALERT_MIN_HITS hits (default 3) or CRASH_ALERT_MIN_PEOPLE people (default 2) within
- *   CRASH_ALERT_WINDOW_MIN minutes (default 15) tells every active administrator once, through
- *   notifyUser (category `crashes`, so Profile → Notification rules apply). "Once" is an
+ * - Admin bundles of THIS server's own version: the minified frames are mapped back to source
+ *   from the hidden source maps on this process's disk (crash-sourcemap.ts), appended under
+ *   `Source-mapped stack:`. Never for another release (the maps on disk are not its maps).
+ * - `maybeAlertCrash`: a crash new in the app's CURRENT release (the admin: the API's own
+ *   version; another app: the build the live client roster names) that reached
+ *   CRASH_ALERT_MIN_HITS hits (default 3) AND CRASH_ALERT_MIN_PEOPLE different people (default 2,
+ *   never fewer than 2) within CRASH_ALERT_WINDOW_MIN minutes (default 15) tells every active
+ *   administrator once, through notifyUser (category `crashes`). At most
+ *   CRASH_ALERT_MAX_PER_HOUR (default 3) crash alerts go out per hour per tenant. "Once" is an
  *   `Alerted: <iso>` line claimed on the issue row by one conditional UPDATE, so two replicas
- *   never both send it.
+ *   never both send it. The subject is fixed (screen pattern + version); the reporter's text
+ *   appears only in the message, scrubbed and cut to 120 characters (crashAlertText).
+ *
+ * Reports are untrusted (any signed-in person can post one, naming any release): POST
+ * /issues/client is rate-limited per person before any of this runs (routes/issues.ts).
  * - `listCrashes` is the read behind GET /issues/crashes.
  *
  * Every function here is best-effort: a crash report must never fail the request.
@@ -22,6 +29,7 @@ import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
 import { logActivity } from './activity.js'
 import {
+  CRASH_ALERT_PEOPLE_FLOOR,
   type CrashKind,
   type CrashMeta,
   crashAlertText,
@@ -47,6 +55,7 @@ import { messageOfIssue } from './error-clusters.js'
 import { trackError } from './error-tracking.js'
 import { getApp } from './io-holder.js'
 import { compareBuilds } from './sticky-refresh.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 const OPEN = ['open', 'acknowledged']
 
@@ -55,11 +64,18 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
   return Number.isFinite(n) && n >= min && n <= max ? Math.floor(n) : fallback
 }
 
-export function crashAlertConfig(): { minHits: number; minPeople: number; windowMin: number } {
+export function crashAlertConfig(): {
+  minHits: number
+  minPeople: number
+  windowMin: number
+  maxPerHour: number
+} {
   return {
     minHits: envInt('CRASH_ALERT_MIN_HITS', 3, 1, 1000),
-    minPeople: envInt('CRASH_ALERT_MIN_PEOPLE', 2, 1, 1000),
-    windowMin: envInt('CRASH_ALERT_WINDOW_MIN', 15, 1, 1440)
+    // Below 2 is refused: one account must never be able to alert every admin alone.
+    minPeople: envInt('CRASH_ALERT_MIN_PEOPLE', 2, 2, 1000),
+    windowMin: envInt('CRASH_ALERT_WINDOW_MIN', 15, 1, 1440),
+    maxPerHour: envInt('CRASH_ALERT_MAX_PER_HOUR', 3, 1, 100)
   }
 }
 
@@ -87,6 +103,8 @@ export interface CrashDeps {
   /** Append the source-mapped stack to a freshly opened row (fire and forget). */
   resolve(issueId: number, stack: string): Promise<void>
   alert(issueId: number): Promise<boolean>
+  /** This server's own version: the only admin release whose stacks are source-mapped. */
+  apiVersion: string | null
 }
 
 async function findOpenDb(fingerprint: string) {
@@ -100,14 +118,33 @@ async function findOpenDb(fingerprint: string) {
   return row ? { id: Number(row.id), details: row.details } : null
 }
 
+/**
+ * The releases a family was seen in. The LIKE only narrows the read: details hold the reporter's
+ * own message and stack, which can say "family=…" too, so a row counts only when its anchored
+ * header (parseCrashMeta) names exactly this family.
+ */
+export function releasesOfFamily(
+  rows: Array<{ details: string | null }>,
+  family: string
+): string[] {
+  const out: string[] = []
+  for (const r of rows) {
+    const meta = parseCrashMeta(r.details)
+    if (meta && meta.family === family && meta.release) out.push(meta.release)
+  }
+  return out
+}
+
 async function familyReleasesDb(family: string): Promise<string[]> {
+  const key = family.replace(/[^0-9a-f]/g, '')
+  if (!key) return []
   const rows = (await db('nivaro_issues')
     .where('source', 'client')
-    .where('details', 'like', `%family=${family.replace(/[^0-9a-f]/g, '')}%`)
+    .where('details', 'like', `%family=${key}%`)
     .orderBy('id', 'desc')
     .limit(200)
     .select(db.raw('SUBSTRING(details, 1, 1200) as details'))) as Array<{ details: string | null }>
-  return rows.map((r) => parseCrashMeta(r.details)?.release ?? '').filter(Boolean)
+  return releasesOfFamily(rows, key)
 }
 
 async function resolveDb(issueId: number, stack: string): Promise<void> {
@@ -127,7 +164,8 @@ const defaultDeps: CrashDeps = {
   familyReleases: familyReleasesDb,
   track: trackError,
   resolve: resolveDb,
-  alert: (id) => maybeAlertCrash(id)
+  alert: (id) => maybeAlertCrash(id),
+  apiVersion: NIVARO_VERSION
 }
 
 /** File one crash report. Returns the issue id (or null) and the crash's header. */
@@ -180,7 +218,15 @@ export async function recordCrash(
   })
   const opened = issueId != null && !existing
   if (issueId != null) {
-    if (opened && stack && app === 'admin') void deps.resolve(issueId, stack).catch(() => {})
+    // Only the admin build this server carries has its maps on this disk.
+    if (
+      opened &&
+      stack &&
+      app === 'admin' &&
+      judgeableRelease(deps.apiVersion) &&
+      release === deps.apiVersion
+    )
+      void deps.resolve(issueId, stack).catch(() => {})
     void deps.alert(issueId).catch(() => {})
   }
   return { issueId, meta, opened }
@@ -196,8 +242,10 @@ export interface AlertDeps {
     recording_id: string | null
   } | null>
   recentHits(id: number, sinceMs: number): Promise<{ hits: number; people: number }>
-  /** The newest release of `app` with a crash in the last week (null = none). */
-  newestRelease(app: string): Promise<string | null>
+  /** The build the live client roster says `app` is on now (null = the roster doesn't know). */
+  rosterBuild(app: string): Promise<string | null>
+  /** Crash alerts sent since `sinceMs` (this tenant). */
+  alertsSince(sinceMs: number): Promise<number>
   /** Claim the alert on the row (true = this caller sends it). */
   claim(id: number, at: Date): Promise<boolean>
   admins(): Promise<string[]>
@@ -214,21 +262,12 @@ export interface AlertNote {
   label: string
 }
 
-async function newestReleaseDb(app: string): Promise<string | null> {
-  const rows = (await db('nivaro_issues')
-    .where('source', 'client')
-    .where('last_seen_at', '>=', new Date(Date.now() - 7 * 86_400_000))
-    .where('details', 'like', `%app=${app.replace(/[^\w-]/g, '')};%`)
-    .orderBy('last_seen_at', 'desc')
-    .limit(300)
-    .select(db.raw('SUBSTRING(details, 1, 600) as details'))) as Array<{ details: string | null }>
-  let best: string | null = null
-  for (const r of rows) {
-    const rel = parseCrashMeta(r.details)?.release
-    if (!judgeableRelease(rel)) continue
-    if (!best || compareBuilds(rel, best) === 1) best = rel
-  }
-  return best
+/** The live client roster's current build of `app` (makeBuildJudge), never a crash report's. */
+async function rosterBuildLive(app: string): Promise<string | null> {
+  const { getClusterBuildJudge } = await import('../plugins/socketio.js')
+  const tenant = process.env.CLOUD_META_DB_URL ? currentTenantKey() || '-' : null
+  const { judge } = await getClusterBuildJudge(tenant)
+  return judge.current.get(app) ?? null
 }
 
 const alertDeps: AlertDeps = {
@@ -248,7 +287,16 @@ const alertDeps: AlertDeps = {
     const people = new Set(rows.map((r) => String(r.user_id ?? '').toLowerCase()).filter(Boolean))
     return { hits: rows.length, people: people.size }
   },
-  newestRelease: newestReleaseDb,
+  rosterBuild: rosterBuildLive,
+  alertsSince: async (sinceMs) => {
+    // nivaro_activity has a (timestamp DESC, id DESC) index: the last hour is a short range.
+    const row = (await db('nivaro_activity')
+      .where('timestamp', '>=', new Date(sinceMs))
+      .where('action', 'crash-alert')
+      .count('* as n')
+      .first()) as { n?: number | string } | undefined
+    return Number(row?.n ?? 0)
+  },
   claim: async (id, at) => {
     const n = await db('nivaro_issues')
       .where({ id })
@@ -311,10 +359,13 @@ export async function maybeAlertCrash(
     const cfg = crashAlertConfig()
     const now = deps.now()
     const recent = await deps.recentHits(issueId, now - cfg.windowMin * 60_000)
-    const newestSeen = await deps.newestRelease(meta.app).catch(() => null)
+    // Under the people floor nothing else is read (the common case for a one-person report).
+    if (recent.people < Math.max(CRASH_ALERT_PEOPLE_FLOOR, cfg.minPeople)) return false
+    const rosterBuild =
+      meta.app === 'admin' ? null : await deps.rosterBuild(meta.app).catch(() => null)
     const current = isCurrentRelease(meta.app, meta.release, {
       apiVersion: deps.apiVersion,
-      newestSeen
+      rosterBuild
     })
     if (
       !shouldAlertCrash({
@@ -327,6 +378,9 @@ export async function maybeAlertCrash(
       })
     )
       return false
+    // A burst of new crashes tells admins a few times an hour, not once per crash; an issue left
+    // unclaimed here alerts on a later hit once the hour has room.
+    if ((await deps.alertsSince(now - 3_600_000)) >= cfg.maxPerHour) return false
     if (!(await deps.claim(issueId, new Date(now)))) return false
     const { route: screen, message } = messageOfIssue({ title: issue.title, source: 'client' })
     const text = crashAlertText({
@@ -342,7 +396,7 @@ export async function maybeAlertCrash(
     const admins = await deps.admins().catch(() => [] as string[])
     for (const id of admins) {
       await deps
-        .notify(id, { ...text, issueId, label: `${meta.app} ${meta.release}` })
+        .notify(id, { ...text, issueId, label: `App crash in ${meta.release}` })
         .catch(() => undefined)
     }
     await deps

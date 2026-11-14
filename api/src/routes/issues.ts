@@ -11,6 +11,35 @@ import { readOne } from '../services/items.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
 import { normalizeApp, normalizeScreenPath } from '../services/traffic-client-facts.js'
+import { overWindowLimit } from '../services/windowed-limit.js'
+
+function envLimit(name: string, fallback: number): number {
+  const n = Number(process.env[name])
+  return Number.isInteger(n) && n > 0 ? n : fallback
+}
+
+/** True when this person has sent too many crash reports (a minute window, then a day). */
+export async function crashReportsOverLimit(
+  redis: Parameters<typeof overWindowLimit>[0],
+  userId: string
+): Promise<boolean> {
+  const who = userId.toLowerCase() || '-'
+  if (
+    await overWindowLimit(
+      redis,
+      `crash-report:m:${who}`,
+      envLimit('CRASH_REPORTS_PER_MINUTE', 20),
+      60
+    )
+  )
+    return true
+  return overWindowLimit(
+    redis,
+    `crash-report:d:${who}`,
+    envLimit('CRASH_REPORTS_PER_DAY', 200),
+    86_400
+  )
+}
 
 const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'] as const
@@ -153,6 +182,11 @@ export async function issuesRoutes(app: FastifyInstance) {
     // #2840 — a crash in a tab running browser chaos mode was provoked on purpose (the client
     // marks its error reports while chaos is on): not a bug to file.
     if (req.headers['x-nivaro-client-chaos']) return reply.code(204).send()
+    // Reports are untrusted: per person at most CRASH_REPORTS_PER_MINUTE a minute and
+    // CRASH_REPORTS_PER_DAY a day reach the issue log (and so the source mapping and the alert).
+    // Over the limit answers a bare 429 — the browser reporter drops failures quietly.
+    if (await crashReportsOverLimit(app.redis, String(req.user?.id ?? '')))
+      return reply.code(429).send()
     // The replay link is caller-supplied — accept only a uuid-shaped id, and
     // only one that exists AND belongs to the reporting user, or a client
     // could attach someone else's recording to an issue.
@@ -178,7 +212,7 @@ export async function issuesRoutes(app: FastifyInstance) {
       const v = req.headers[name]
       return Array.isArray(v) ? v[0] : v
     }
-    const app = normalizeApp(body.app) ?? normalizeApp(header('x-nivaro-app')) ?? 'app'
+    const appName = normalizeApp(body.app) ?? normalizeApp(header('x-nivaro-app')) ?? 'app'
     const screen =
       normalizeScreenPath(body.screen) ??
       normalizeScreenPath(header('x-nivaro-page')) ??
@@ -189,7 +223,7 @@ export async function issuesRoutes(app: FastifyInstance) {
     const release =
       parseClientHeader(req.headers[CLIENT_HEADER])?.build ?? (bodyRelease || 'unknown')
     const { issueId } = await recordCrash({
-      app,
+      app: appName,
       release,
       kind: crashKind(body.kind),
       screen,

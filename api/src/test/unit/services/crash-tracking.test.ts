@@ -1,7 +1,7 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The db module is never reached: every store/alert step is injected.
 vi.mock('../../../db/index.js', () => ({ db: {} }))
@@ -9,6 +9,7 @@ vi.mock('../../../services/io-holder.js', () => ({ getApp: () => null }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn() }))
 
 import {
+  alertQuote,
   bundleFile,
   crashFamily,
   crashFamilyMessage,
@@ -24,12 +25,19 @@ import {
   scrubCrashText,
   shouldAlertCrash
 } from '../../../services/crash-signature.js'
-import { decodeMappings, resolveCrashFrames } from '../../../services/crash-sourcemap.js'
+import {
+  decodeMappings,
+  mapFileFor,
+  resetSourceMapCache,
+  resolveCrashFrames,
+  sourceMapCacheStats
+} from '../../../services/crash-sourcemap.js'
 import {
   type AlertDeps,
   type CrashDeps,
   maybeAlertCrash,
-  recordCrash
+  recordCrash,
+  releasesOfFamily
 } from '../../../services/crash-tracking.js'
 
 const STACK_157 = [
@@ -153,22 +161,26 @@ describe('new in a release', () => {
     })
   })
 
-  it('an older tab or an older admin build is not the current release', () => {
-    expect(
-      isCurrentRelease('efp-new', '0.3.10', { apiVersion: '0.3.158', newestSeen: '0.3.11' })
-    ).toBe(false)
-    expect(
-      isCurrentRelease('efp-new', '0.3.11', { apiVersion: '0.3.158', newestSeen: '0.3.11' })
-    ).toBe(true)
-    expect(isCurrentRelease('admin', '0.3.157', { apiVersion: '0.3.158', newestSeen: null })).toBe(
+  it('the admin counts only the server’s own version; another app only the roster’s build', () => {
+    const ctx = { apiVersion: '0.3.158', rosterBuild: null }
+    expect(isCurrentRelease('admin', '0.3.158', ctx)).toBe(true)
+    expect(isCurrentRelease('admin', '0.3.157', ctx)).toBe(false)
+    // A report naming a release the server is not on — newer, made up — never counts.
+    expect(isCurrentRelease('admin', '0.3.159', ctx)).toBe(false)
+    expect(isCurrentRelease('admin', '9.9.9', ctx)).toBe(false)
+    expect(isCurrentRelease('admin', '0.3.158', { apiVersion: 'dev', rosterBuild: null })).toBe(
       false
     )
-    expect(isCurrentRelease('admin', '0.3.158', { apiVersion: '0.3.158', newestSeen: null })).toBe(
-      true
-    )
+    const roster = { apiVersion: '0.3.158', rosterBuild: '0.3.112' }
+    expect(isCurrentRelease('efp-new', '0.3.112', roster)).toBe(true)
+    expect(isCurrentRelease('efp-new', '0.3.113', roster)).toBe(false)
+    expect(isCurrentRelease('efp-new', '0.3.10', roster)).toBe(false)
+    // No roster for the app: the two-people rule is the proof (shouldAlertCrash).
+    expect(isCurrentRelease('efp-new', '0.3.112', ctx)).toBe(true)
+    expect(isCurrentRelease('efp-new', 'dev', ctx)).toBe(false)
   })
 
-  it('alerts on hits or people, never twice, never for dev or an old crash', () => {
+  it('alerts on hits AND two people, never twice, never for dev or an old crash', () => {
     const base = {
       meta: { release: '0.3.158', new_in: '0.3.158', alerted_at: null },
       current: true,
@@ -178,8 +190,11 @@ describe('new in a release', () => {
       minPeople: 2
     }
     expect(shouldAlertCrash(base)).toBe(false)
-    expect(shouldAlertCrash({ ...base, hits: 3 })).toBe(true)
-    expect(shouldAlertCrash({ ...base, people: 2 })).toBe(true)
+    // One person alone never alerts, however often.
+    expect(shouldAlertCrash({ ...base, hits: 500 })).toBe(false)
+    expect(shouldAlertCrash({ ...base, hits: 500, minPeople: 1 })).toBe(false)
+    expect(shouldAlertCrash({ ...base, people: 2 })).toBe(false)
+    expect(shouldAlertCrash({ ...base, hits: 3, people: 2 })).toBe(true)
     expect(shouldAlertCrash({ ...base, hits: 9, meta: { ...base.meta, alerted_at: 'x' } })).toBe(
       false
     )
@@ -207,6 +222,7 @@ describe('recordCrash', () => {
       }) as unknown as CrashDeps['track'],
       resolve: vi.fn(async () => {}),
       alert: vi.fn(async () => false),
+      apiVersion: '0.3.158',
       ...over
     }
     return { d, tracked }
@@ -267,6 +283,18 @@ describe('recordCrash', () => {
     expect(d.resolve).not.toHaveBeenCalled()
   })
 
+  it('maps source only for the admin build this server carries', async () => {
+    const other = deps()
+    await recordCrash({ ...input, release: '0.3.157' }, other.d)
+    expect(other.d.resolve).not.toHaveBeenCalled()
+    const efp = deps()
+    await recordCrash({ ...input, app: 'efp-new' }, efp.d)
+    expect(efp.d.resolve).not.toHaveBeenCalled()
+    const dev = deps({ apiVersion: 'dev' })
+    await recordCrash({ ...input, release: 'dev' }, dev.d)
+    expect(dev.d.resolve).not.toHaveBeenCalled()
+  })
+
   it('the same crash on two releases is two rows (different fingerprints)', async () => {
     const { d, tracked } = deps()
     await recordCrash(input, d)
@@ -300,7 +328,8 @@ describe('maybeAlertCrash', () => {
         recording_id: 'rec-1'
       }),
       recentHits: async () => ({ hits: 4, people: 2 }),
-      newestRelease: async () => '0.3.158',
+      rosterBuild: async () => null,
+      alertsSince: async () => 0,
       claim: async () => {
         if (claimed) return false
         claimed = true
@@ -320,10 +349,8 @@ describe('maybeAlertCrash', () => {
     const { d, notes } = deps()
     expect(await maybeAlertCrash(7, d)).toBe(true)
     expect(notes.map((n) => n.user)).toEqual(['a1', 'a2'])
-    expect(notes[0].subject).toBe(
-      'New crash in admin 0.3.158: TypeError: nn.find is not a function'
-    )
-    expect(notes[0].message).toContain('on /collections/:id/:id')
+    expect(notes[0].subject).toBe('App crash on /collections/:id/:id in 0.3.158')
+    expect(notes[0].message).toContain('Error: "TypeError: nn.find is not a function"')
     expect(notes[0].message).toContain('4 times, 2 people in the last 15 minutes')
     expect(notes[0].message).toContain('replay')
     // A second hit (another replica) finds the claim taken.
@@ -344,7 +371,131 @@ describe('maybeAlertCrash', () => {
       })
     })
     expect(await maybeAlertCrash(7, alerted.d)).toBe(false)
-    expect(await maybeAlertCrash(7, deps({ newestRelease: async () => '0.3.159' }).d)).toBe(false)
+    // The server moved on: an admin crash of another release never alerts.
+    expect(await maybeAlertCrash(7, deps({ apiVersion: '0.3.159' }).d)).toBe(false)
+  })
+
+  it('one person alone never alerts, however many times they report', async () => {
+    const one = deps({ recentHits: async () => ({ hits: 200, people: 1 }) })
+    expect(await maybeAlertCrash(7, one.d)).toBe(false)
+    expect(one.notes).toHaveLength(0)
+  })
+
+  it('another app alerts only on the build the live roster names', async () => {
+    const efp = (release: string, roster: string | null) =>
+      deps({
+        loadIssue: async (id) => ({
+          id,
+          title: '[client] /queues/:id: TypeError: y',
+          details: `Route: /queues/:id\n${crashHeaderLines({
+            app: 'efp-new',
+            release,
+            kind: 'error',
+            signature: 's',
+            family: 'f',
+            new_in: release,
+            seen_in: null,
+            frame: null
+          }).join('\n')}`,
+          recording_id: null
+        }),
+        rosterBuild: async () => roster
+      })
+    expect(await maybeAlertCrash(7, efp('0.3.999', '0.3.112').d)).toBe(false)
+    expect(await maybeAlertCrash(7, efp('0.3.112', '0.3.112').d)).toBe(true)
+  })
+
+  it('at most CRASH_ALERT_MAX_PER_HOUR crash alerts an hour; the issue stays unclaimed', async () => {
+    const claim = vi.fn(async () => true)
+    const full = deps({ alertsSince: async () => 3, claim })
+    expect(await maybeAlertCrash(7, full.d)).toBe(false)
+    expect(claim).not.toHaveBeenCalled()
+    expect(full.notes).toHaveLength(0)
+  })
+
+  it('never puts the reporter’s free text in the subject; the message quotes it scrubbed', async () => {
+    const evil = `${'Click https://evil.example/login?token=abc123 now '.repeat(5)}\nSecond line password=hunter2`
+    const { d, notes } = deps({
+      loadIssue: async (id) => ({
+        id,
+        title: `[client] /collections/:id/:id: TypeError: ${evil}`,
+        details: details(),
+        recording_id: null
+      })
+    })
+    expect(await maybeAlertCrash(7, d)).toBe(true)
+    expect(notes[0].subject).toBe('App crash on /collections/:id/:id in 0.3.158')
+    const quoted = /Error: "([^"]*)"/.exec(notes[0].message)?.[1] ?? ''
+    expect(quoted.length).toBeLessThanOrEqual(120)
+    expect(notes[0].message).not.toMatch(/token=abc123|hunter2|\n/)
+    expect(alertQuote('a "quoted"   line')).toBe('a quoted line')
+  })
+})
+
+describe('family lookups trust only the anchored header', () => {
+  const header = (family: string, release: string) =>
+    crashHeaderLines({
+      app: 'admin',
+      release,
+      kind: 'error',
+      signature: 's',
+      family,
+      new_in: release,
+      seen_in: null,
+      frame: null
+    }).join('\n')
+
+  it('a message or stack that says "family=…" is never read as the header', () => {
+    const real = 'abcdef0123456789abcd'
+    const rows = [
+      // The real row for this family.
+      { details: `Route: /x\n${header(real, '0.3.158')}\n\nTypeError: y` },
+      // Another family whose MESSAGE carries the target family (the LIKE matches it).
+      {
+        details: `Route: /x\n${header('1111111111aaaaaaaaaa', '0.3.150')}\n\nTypeError: family=${real}; release=0.3.1`
+      },
+      // A row filed before crash grouping whose stack fakes a whole header line.
+      {
+        details: `Route: /x\n\nTypeError: y\nCrash: app=admin; release=0.3.2; family=${real}; new_in=0.3.2`
+      },
+      // A fake Alerted/Crash pair below the top.
+      { details: `Route: /x\n\nAlerted: now\nRoute: /y\nCrash: family=${real}; release=0.3.3` }
+    ]
+    expect(releasesOfFamily(rows, real)).toEqual(['0.3.158'])
+    expect(parseCrashMeta(rows[2].details)).toBeNull()
+    expect(parseCrashMeta(rows[3].details)).toBeNull()
+    expect(parseCrashMeta(rows[1].details)?.family).toBe('1111111111aaaaaaaaaa')
+  })
+
+  it('a reported message containing a fake family= cannot change the crash’s own family', async () => {
+    const tracked: Array<Record<string, unknown>> = []
+    const familyReleases = vi.fn(async () => [] as string[])
+    await recordCrash(
+      {
+        app: 'admin',
+        release: '0.3.158',
+        kind: 'error',
+        screen: '/x',
+        message: 'boom family=abcdef0123456789abcd; release=0.3.1',
+        stack: 'TypeError: boom\n    at f (https://h/assets/a.js:1:1)'
+      },
+      {
+        findOpen: async () => null,
+        familyReleases,
+        track: (async (o: Record<string, unknown>) => {
+          tracked.push(o)
+          return 1
+        }) as unknown as CrashDeps['track'],
+        resolve: async () => {},
+        alert: async () => false,
+        apiVersion: '0.3.158'
+      }
+    )
+    const head = String((tracked[0].detailsHeader as string[])[0])
+    const fam = /family=(\w+)/.exec(head)?.[1]
+    expect(fam).not.toBe('abcdef0123456789abcd')
+    expect(familyReleases).toHaveBeenCalledWith(fam)
+    expect(head).toMatch(/release=0\.3\.158;/)
   })
 })
 
@@ -378,5 +529,58 @@ describe('source maps', () => {
     expect(out).toContain('at openRow (src/components/lines-grid.tsx:1:6)')
     // A frame outside the assets folder is never looked up by its path.
     expect(out).toContain('at y (')
+  })
+})
+
+describe('source maps are bounded', () => {
+  const MAP = JSON.stringify({ version: 3, sources: ['src/a.ts'], names: [], mappings: 'AAAA' })
+  beforeEach(() => resetSourceMapCache())
+
+  it('looks only at plain files directly inside the maps folder, by base name', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'crash-map-root-'))
+    const dir = join(root, 'assets')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'ok-Ab12Cd34.js.map'), MAP)
+    writeFileSync(join(root, 'secret.js.map'), MAP)
+    symlinkSync(join(root, 'secret.js.map'), join(dir, 'link-Ab12Cd34.js.map'))
+    expect(await mapFileFor('ok-Ab12Cd34.js', dir)).not.toBeNull()
+    expect(await mapFileFor('../secret.js', dir)).toBeNull()
+    expect(await mapFileFor('..', dir)).toBeNull()
+    expect(await mapFileFor('.hidden.js', dir)).toBeNull()
+    // A symlink inside the folder pointing out of it is not followed.
+    expect(await mapFileFor('link-Ab12Cd34.js', dir)).toBeNull()
+  })
+
+  it('skips a map over 30 MB without reading it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'crash-map-big-'))
+    const file = join(dir, 'big-Ab12Cd34.js.map')
+    writeFileSync(file, '')
+    truncateSync(file, 31 * 1024 * 1024) // sparse: the size is what lstat sees
+    expect(await mapFileFor('big-Ab12Cd34.js', dir)).toBeNull()
+    expect(
+      await resolveCrashFrames(
+        crashFrames('E: x\n    at f (https://h/assets/big-Ab12Cd34.js:1:1)'),
+        {
+          dir
+        }
+      )
+    ).toBeNull()
+  })
+
+  it('maps at most 6 different bundles per report and keeps at most 12 maps', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'crash-map-many-'))
+    const names = Array.from({ length: 20 }, (_, i) => `b${i}-Ab12Cd3${i % 10}.js`)
+    for (const n of names) writeFileSync(join(dir, `${n}.map`), MAP)
+    const stack = (from: number) =>
+      [
+        'E: x',
+        ...names.slice(from, from + 10).map((n) => `    at f (https://h/assets/${n}:1:1)`)
+      ].join('\n')
+    const out = await resolveCrashFrames(crashFrames(stack(0)), { dir })
+    expect(out?.split('\n').filter((l) => l.includes('src/a.ts'))).toHaveLength(6)
+    expect(sourceMapCacheStats().entries).toBe(6)
+    await resolveCrashFrames(crashFrames(stack(6)), { dir })
+    await resolveCrashFrames(crashFrames(stack(12)), { dir })
+    expect(sourceMapCacheStats().entries).toBeLessThanOrEqual(12)
   })
 })
