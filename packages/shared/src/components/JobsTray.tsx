@@ -15,9 +15,11 @@ import { createPortal } from 'react-dom'
 import { useNavigation, useOptionalNivaroClient } from '../context'
 import { clock } from '../lib/background-runs'
 import { get, post } from '../lib/commands'
+import { withoutFileRef } from '../lib/export-runs'
 import { jobFailureText } from '../lib/job-failure-text'
 import {
   applyJobUpdate,
+  cancelLocalJob,
   dismissFinishedJobs,
   dismissJob,
   seedJobs,
@@ -128,8 +130,14 @@ export function JobsTray() {
               job={j}
               onOpen={openHref}
               onCancel={
-                client && j.cancel_path
-                  ? (path) => client.request(post(path)).then(() => undefined)
+                j.cancel_path
+                  ? (path) =>
+                      // An export this tab builds itself stops here; anything else asks the server.
+                      cancelLocalJob(path)
+                        ? Promise.resolve()
+                        : client
+                          ? client.request(post(path)).then(() => undefined)
+                          : Promise.reject(new Error('Not connected'))
                   : undefined
               }
             />
@@ -164,6 +172,14 @@ function JobRow({
       ? Math.max(0, Math.min(100, Math.round((count / total) * 100)))
       : null
   const phase = typeof prog.phase === 'string' ? prog.phase : null
+  const unit = typeof prog.unit === 'string' ? ` ${prog.unit}` : ''
+  // "12,400 of 86,000 rows" — or "12,400 rows" while the total is not known.
+  const counted =
+    pct != null
+      ? `${count.toLocaleString()} of ${total.toLocaleString()}${unit}`
+      : unit && Number.isFinite(count) && count > 0
+        ? `${count.toLocaleString()}${unit}`
+        : null
   const detail = waiting
     ? queueStanding(
         job.position != null
@@ -174,7 +190,8 @@ function JobRow({
       ? // Read, never shown as stored: a job's error is written for the log (lib/job-failure-text).
         jobFailureText(job.error)
       : done
-        ? job.outcome
+        ? // The file reference ("→ file <id>") is what the Download chip reads, not words.
+          withoutFileRef(job.outcome) || null
         : cancelled
           ? // An import's cancel sends no outcome: the row still says what happened.
             job.outcome || 'Cancelled'
@@ -183,8 +200,7 @@ function JobRow({
               Number(prog.expected_ms) >= 1000
               ? `Usually takes about ${clock(Number(prog.expected_ms))}`
               : 'Running on the server'
-            : [phase, pct != null ? `${count} of ${total}` : null].filter(Boolean).join(' · ') ||
-              null
+            : [phase, counted].filter(Boolean).join(' · ') || null
   return (
     <li
       data-job={job.key}

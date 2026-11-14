@@ -29,6 +29,15 @@ import { findRecordInstance } from '../services/branch-instances.js'
 import { builtinAllowed, valueUnchanged } from '../services/bulk-actions.js'
 import { withChainStep } from '../services/chain.js'
 import { noteDbRefusal } from '../services/error-enrich.js'
+import {
+  backgroundRefusal,
+  decideBackground,
+  type ExportContext,
+  ExportRunError,
+  noteExportDuration,
+  parseBackgroundMode,
+  startExportRun
+} from '../services/export-runs.js'
 import { isFilesCollection } from '../services/help-video-files.js'
 import { idempotencyPreHandler } from '../services/idempotency.js'
 import { instanceAccessAllowed } from '../services/instance-guard.js'
@@ -175,6 +184,119 @@ function toCsv(rows: Record<string, unknown>[], fields: string[]): string {
   const header = fields.map(escapeCsv).join(',')
   const lines = rows.map((r) => fields.map((f) => escapeCsv(r[f])).join(','))
   return [header, ...lines].join('\r\n')
+}
+
+export interface ItemsExportQuery {
+  format?: string
+  fields?: string
+  filter?: string
+  sort?: string
+}
+
+export interface ItemsExportFile {
+  buffer: Buffer
+  filename: string
+  contentType: string
+  format: 'csv' | 'json'
+  rows: number
+  truncated: boolean
+}
+
+/**
+ * GET /items/:collection/export's file — the synchronous answer and the background job run
+ * exactly this. One read returns at most LIST_READ_MAX rows, so it pages with offset, ordered
+ * by id as a tie-break so pages neither repeat nor skip rows, as the caller (`reqLike` carries
+ * the list's `conditions`). `opts.ctx` reports rows done / total and stops between pages on
+ * Cancel; `opts.gate` wraps each page read (the background job takes a heavy-read slot per
+ * page instead of one for the whole file).
+ */
+export async function buildItemsExport(
+  user: User,
+  collection: string,
+  q: ItemsExportQuery,
+  parsedFilter: Record<string, unknown> | undefined,
+  reqLike: unknown,
+  workspaceId: string | undefined,
+  opts: {
+    ctx?: ExportContext
+    gate?: <T>(fn: () => Promise<T>) => Promise<T>
+  } = {}
+): Promise<ItemsExportFile> {
+  const { ctx } = opts
+  const gate = opts.gate ?? (<T>(fn: () => Promise<T>) => fn())
+  const format = q.format === 'json' ? 'json' : 'csv'
+  const sort = q.sort?.split(',').filter(Boolean) ?? []
+  const hasId = [...(await getActualColumns(collection))].some((c) => c.toLowerCase() === 'id')
+  if (hasId && !sort.some((s) => s.replace(/^-/, '').toLowerCase() === 'id')) sort.push('id')
+  const query: ItemsQuery = {
+    fields: q.fields?.split(','),
+    sort,
+    limit: LIST_READ_MAX,
+    filter: parsedFilter
+  }
+
+  const rows: Record<string, unknown>[] = []
+  let truncated = false
+  let total: number | null = null
+  for (let offset = 0; ; offset += LIST_READ_MAX) {
+    await ctx?.throwIfCancelled()
+    if (rows.length >= EXPORT_MAX_ROWS) {
+      const more = await gate(() =>
+        readItems(
+          user,
+          collection,
+          { ...query, fields: ['id'], limit: 1, offset: EXPORT_MAX_ROWS, count: false },
+          reqLike as never,
+          workspaceId
+        )
+      )
+      truncated = more.data.length > 0
+      break
+    }
+    // Only the background job counts the whole set (its progress says "of N").
+    const page = await gate(() =>
+      readItems(
+        user,
+        collection,
+        { ...query, offset, count: !!ctx && offset === 0 },
+        reqLike as never,
+        workspaceId
+      )
+    )
+    if (ctx && offset === 0 && typeof page.total === 'number')
+      total = Math.min(page.total, EXPORT_MAX_ROWS)
+    const data = page.data as Record<string, unknown>[]
+    rows.push(...data)
+    ctx?.progress({ done: rows.length, total, phase: 'Reading rows' })
+    if (data.length < LIST_READ_MAX) break
+  }
+  await ctx?.throwIfCancelled()
+  ctx?.progress({ done: rows.length, total, phase: 'Writing the file' })
+
+  // Field set: explicit query fields, else the union of keys from the rows.
+  let fields: string[]
+  if (q.fields) {
+    fields = q.fields.split(',').filter((f) => f && f !== '*')
+  } else {
+    const keySet = new Set<string>()
+    for (const r of rows) for (const k of Object.keys(r)) keySet.add(k)
+    fields = [...keySet]
+  }
+  const base = { rows: rows.length, truncated, format } as const
+  if (format === 'json') {
+    return {
+      ...base,
+      buffer: Buffer.from(JSON.stringify({ data: rows }), 'utf8'),
+      filename: `${collection}-export.json`,
+      contentType: 'application/json'
+    }
+  }
+  return {
+    ...base,
+    buffer: Buffer.from(toCsv(rows, fields), 'utf8'),
+    filename: `${collection}-export.csv`,
+    contentType: 'text/csv'
+  }
 }
 
 function parseCsv(text: string): Record<string, string>[] {
@@ -468,11 +590,14 @@ export async function itemsRoutes(app: FastifyInstance) {
     }
   })
 
-  // Export — must be registered before /:collection/:id so "export" isn't read as an id
+  // Export — must be registered before /:collection/:id so "export" isn't read as an id.
+  // `background=auto|1` (#2122 follow-up): a big export (or one that usually takes long)
+  // answers 202 {data: {mode: 'background', run_id, …}} and runs the same build as a job —
+  // progress + Cancel in the Jobs tray, the file saved privately for the caller. Without the
+  // parameter the answer is the file, as it always was (API clients rely on that).
   app.get('/:collection/export', async (req, reply) => {
     const { collection } = req.params as { collection: string }
-    const q = req.query as { format?: string; fields?: string; filter?: string; sort?: string }
-    const format = q.format === 'json' ? 'json' : 'csv'
+    const q = req.query as ItemsExportQuery & { background?: string }
 
     let parsedFilter: Record<string, unknown> | undefined
     if (q.filter) {
@@ -482,83 +607,68 @@ export async function itemsRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'Invalid filter: must be valid JSON' })
       }
     }
-
-    // One read returns at most LIST_READ_MAX rows, so the export pages with
-    // offset (it used to ask for 10,000 and silently get 1,000). Ordered by id
-    // as a tie-break so pages neither repeat nor skip rows.
-    const sort = q.sort?.split(',').filter(Boolean) ?? []
-    const hasId = [...(await getActualColumns(collection))].some((c) => c.toLowerCase() === 'id')
-    if (hasId && !sort.some((s) => s.replace(/^-/, '').toLowerCase() === 'id')) sort.push('id')
-    const query: ItemsQuery = {
-      fields: q.fields?.split(','),
-      sort,
-      limit: LIST_READ_MAX,
-      filter: parsedFilter,
-      count: false
-    }
+    const user = req.user!
+    const workspaceId = req.workspaceId ?? undefined
+    const mode = parseBackgroundMode(q.background)
 
     try {
-      const { rows, truncated } = await gated(
-        req,
-        reply,
-        `items:export:${collection}`,
-        async () => {
-          const rows: Record<string, unknown>[] = []
-          let truncated = false
-          for (let offset = 0; ; offset += LIST_READ_MAX) {
-            if (rows.length >= EXPORT_MAX_ROWS) {
-              const more = await readItems(
-                req.user!,
-                collection,
-                { ...query, fields: ['id'], limit: 1, offset: EXPORT_MAX_ROWS },
-                req,
-                req.workspaceId ?? undefined
-              )
-              truncated = more.data.length > 0
-              break
-            }
-            const page = await readItems(
-              req.user!,
-              collection,
-              { ...query, offset },
-              req,
-              req.workspaceId ?? undefined
-            )
-            const data = page.data as Record<string, unknown>[]
-            rows.push(...data)
-            if (data.length < LIST_READ_MAX) break
-          }
-          return { rows, truncated }
+      if (mode !== 'off' && !backgroundRefusal(req)) {
+        // The count is the same gated read a list page makes, as the caller.
+        const counted = await readItems(
+          user,
+          collection,
+          { fields: ['id'], limit: 1, filter: parsedFilter },
+          req,
+          workspaceId
+        )
+        const rows = typeof counted.total === 'number' ? counted.total : null
+        if (
+          await decideBackground(mode, {
+            rows,
+            kind: 'items',
+            subject: collection,
+            redis: app.redis ?? null
+          })
+        ) {
+          const conditions = (req.query as { conditions?: string }).conditions
+          const reqLike = conditions ? { query: { conditions } } : undefined
+          const { getCollection } = await import('../services/collections.js')
+          const meta = await getCollection(collection).catch(() => null)
+          const started = await startExportRun(app, {
+            user,
+            kind: 'items',
+            subject: collection,
+            label: meta?.display_name || collection,
+            total: rows == null ? null : Math.min(rows, EXPORT_MAX_ROWS),
+            build: (ctx) =>
+              buildItemsExport(user, collection, q, parsedFilter, reqLike, workspaceId, {
+                ctx,
+                // Each page takes a heavy-read slot like any other read of this person.
+                gate: (fn) => withReadGate(String(user.id), fn, { label: `export:${collection}` })
+              })
+          })
+          return reply.code(202).send({ data: { mode: 'background', ...started } })
         }
-      )
-      // More rows matched than one export holds: say so rather than cut silently.
-      if (truncated) reply.header('x-nivaro-export-truncated', String(EXPORT_MAX_ROWS))
-
-      // Determine field set: explicit query fields, else union of keys from the rows
-      let fields: string[]
-      if (q.fields) {
-        fields = q.fields.split(',').filter((f) => f && f !== '*')
-      } else {
-        const keySet = new Set<string>()
-        for (const r of rows) {
-          for (const k of Object.keys(r)) keySet.add(k)
-        }
-        fields = [...keySet]
-      }
-
-      if (format === 'json') {
+      } else if (mode === 'always') {
         return reply
-          .header('Content-Type', 'application/json')
-          .header('Content-Disposition', `attachment; filename="${collection}-export.json"`)
-          .send({ data: rows })
+          .code(403)
+          .send({ error: backgroundRefusal(req), code: 'BACKGROUND_EXPORT_REFUSED' })
       }
 
-      const csv = toCsv(rows, fields)
+      const startedAt = Date.now()
+      const file = await gated(req, reply, `items:export:${collection}`, () =>
+        buildItemsExport(user, collection, q, parsedFilter, req, workspaceId)
+      )
+      noteExportDuration('items', collection, Date.now() - startedAt, app.redis ?? null)
+      // More rows matched than one export holds: say so rather than cut silently.
+      if (file.truncated) reply.header('x-nivaro-export-truncated', String(EXPORT_MAX_ROWS))
       return reply
-        .header('Content-Type', 'text/csv')
-        .header('Content-Disposition', `attachment; filename="${collection}-export.csv"`)
-        .send(csv)
+        .header('Content-Type', file.contentType)
+        .header('Content-Disposition', `attachment; filename="${file.filename}"`)
+        .send(file.buffer)
     } catch (err) {
+      if (err instanceof ExportRunError)
+        return reply.code(err.statusCode).send({ error: err.message, code: err.code })
       return handleError(err, reply)
     }
   })

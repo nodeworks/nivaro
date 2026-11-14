@@ -28,7 +28,7 @@ export const collabLiveProgress: DocSection = {
         ],
         [
           'Export',
-          'Export menu → a preset’s Background button (`POST /export-presets/:id/run-async`). The finished file is a Download chip.'
+          'Export menu → a preset (big ones go to the background by themselves, or press Background), the audit report’s Export CSV, and the list’s CSV export. Rows done of the total with Cancel while it runs; the tab that started it downloads the file, the tray keeps a Download chip.'
         ],
         [
           'PDF',

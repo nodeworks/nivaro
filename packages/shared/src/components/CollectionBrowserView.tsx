@@ -70,6 +70,15 @@ import {
 import { type DeleteOfferRun, rowDeleteOffered } from '../lib/delete-offer'
 import { errorSentence } from '../lib/error-message'
 import { errorToastOptions, toastError } from '../lib/error-toast'
+import {
+  downloadUrl,
+  ExportCancelledError,
+  followExportRun,
+  isStartedExportRun,
+  type StartedExportRun,
+  startLocalExport,
+  throwIfCancelled
+} from '../lib/export-runs'
 import { evaluateNumeric, extractExpressionTokens } from '../lib/expression'
 import {
   clauseFromCondition,
@@ -84,6 +93,7 @@ import {
   formatMultiValue,
   formatValue
 } from '../lib/format-value'
+import type { JobProgressPayload } from '../lib/jobs-tray'
 import {
   createCursorBook,
   isCursorRefusal,
@@ -176,6 +186,7 @@ import { CellCopyLayer } from './CellCopyLayer'
 import { CopyAsButton } from './CopyAsButton'
 import { CollectionTree, useTreeConfig } from './cbv/CollectionTree'
 import {
+  EXPORT_MAX_ROWS,
   type ListPage,
   localYmd,
   type M2OLabelSpec,
@@ -6682,26 +6693,42 @@ export function CollectionBrowserView({
     setPresetName('')
     void qc.invalidateQueries({ queryKey: ['cbv-export-presets', collection] })
   }
-  const runExportPreset = (id: number) => {
-    const params = new URLSearchParams()
-    if (appliedSearch) params.set('search', appliedSearch)
-    if (conditionsParam) params.set('conditions', conditionsParam)
-    if (sort) params.set('sort', sort)
-    window.open(`/api/export-presets/${id}/run?${params.toString()}`, '_blank')
-  }
-  // #2122 — a big export runs as a background job: progress and a download chip appear in the
-  // Jobs tray (and stay there when the person leaves the page).
-  const runExportPresetInBackground = (id: number, name: string) => {
+  // #2122 — a preset export asks the server first: a small one downloads at once through
+  // GET …/run; a big (or usually slow) one runs as a background job — progress and Cancel in
+  // the Jobs tray, the file downloads here when ready (and a notice carries the link). The
+  // menu's "Background" sends it to the background whatever its size.
+  const runExportPreset = (id: number, name: string, background: 'auto' | 'always' = 'auto') => {
     void client
-      .request(
+      .request<{ data: { mode: 'instant'; rows: number | null } | StartedExportRun }>(
         post(`/export-presets/${id}/run-async`, {
+          background,
           ...(appliedSearch ? { search: appliedSearch } : {}),
           ...(conditionsParam ? { conditions: conditionsParam } : {}),
           ...(sort ? { sort } : {})
         })
       )
-      .then(() => toast.info(`Exporting “${name}” in the background — follow it in the Jobs tray`))
-      .catch((e: unknown) => toast.error(userErrorMessage(e, 'Could not start the export')))
+      .then((r) => {
+        const started = r.data
+        if (isStartedExportRun(started)) {
+          followExportRun(started, {
+            read: () =>
+              client
+                .request<{ data: JobProgressPayload }>(get(`/export-runs/${started.run_id}`))
+                .then((x) => x.data)
+          })
+          return
+        }
+        const params = new URLSearchParams()
+        if (appliedSearch) params.set('search', appliedSearch)
+        if (conditionsParam) params.set('conditions', conditionsParam)
+        if (sort) params.set('sort', sort)
+        downloadUrl(`/api/export-presets/${id}/run?${params.toString()}`)
+      })
+      .catch((e: unknown) =>
+        toastError(e, `Could not start the “${name}” export`, {
+          retry: () => runExportPreset(id, name, background)
+        })
+      )
   }
 
   // #3233 — the shared link's columns (labels, formats, pins, widths…) go through
@@ -6851,19 +6878,34 @@ export function CollectionBrowserView({
   const exportCsv = async () => {
     if (exporting) return
     setExporting(true)
+    // A row in the Jobs tray: rows read of the total, Cancel between reads (#2122 follow-up).
+    // It keeps going when the person moves to another page of the app.
+    const job = startLocalExport(
+      (meta as { display_name?: string | null } | undefined)?.display_name || titleCase(collection),
+      total > 0 ? Math.min(total, EXPORT_MAX_ROWS) : null
+    )
+    const stop = () => throwIfCancelled(job.signal)
     try {
       // Paged to the end: one list read serves 1,000 rows, whatever it asks.
-      const { rows: all, truncated } = await readExportRows((offset, limit) =>
-        client.request<ListPage>(
-          get(`/items/${collection}`, {
-            limit,
-            offset,
-            ...(appliedSearch ? { search: appliedSearch } : {}),
-            sort: stableSort(sort),
-            ...(conditionsParam ? { conditions: conditionsParam } : {})
+      const { rows: all, truncated } = await readExportRows((offset, limit) => {
+        stop()
+        return client
+          .request<ListPage>(
+            get(`/items/${collection}`, {
+              limit,
+              offset,
+              ...(appliedSearch ? { search: appliedSearch } : {}),
+              sort: stableSort(sort),
+              ...(conditionsParam ? { conditions: conditionsParam } : {})
+            })
+          )
+          .then((page) => {
+            job.progress(offset + (page.data?.length ?? 0))
+            return page
           })
-        )
-      )
+      })
+      stop()
+      job.progress(all.length, all.length, 'Reading related values')
       const cols = effectiveColumns
       // Plain M2O columns export what the table shows (the target's display
       // template, a person's name), never the raw key.
@@ -6901,14 +6943,17 @@ export function CollectionBrowserView({
         all.map((r) => String(r.id)),
         paths,
         (ids, chunkPaths) =>
-          client
-            .request<{ data: { rows: ResolvedRows } }>(
-              get(`/items/${collection}/resolve-paths`, {
-                ids: ids.join(','),
-                paths: chunkPaths.join(',')
-              })
-            )
-            .then((r) => r.data?.rows ?? {})
+          // A cancelled export stops asking (the chunk reads blank; the file is never written).
+          job.signal.aborted
+            ? Promise.resolve({} as ResolvedRows)
+            : client
+                .request<{ data: { rows: ResolvedRows } }>(
+                  get(`/items/${collection}/resolve-paths`, {
+                    ids: ids.join(','),
+                    paths: chunkPaths.join(',')
+                  })
+                )
+                .then((r) => r.data?.rows ?? {})
       )
       const userIds = [
         ...new Set(
@@ -6968,6 +7013,7 @@ export function CollectionBrowserView({
         exportCols.filter((c) => c.kind !== 'data' && c.kind !== 'formula').map((c) => c.kind)
       ) as Set<CbvVirtualKind>
       const ids = all.map((r) => String(r.id))
+      stop()
       const extras = await readExportExtras(ids, kinds, {
         instances: (chunk) =>
           client
@@ -7064,6 +7110,7 @@ export function CollectionBrowserView({
           })
         )
         .catch(() => {})
+      stop()
       const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -7082,12 +7129,16 @@ export function CollectionBrowserView({
       a.click()
       // Revoked after the browser has taken the download, not under it.
       setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      job.finish(
+        `${truncated ? 'First ' : ''}${all.length.toLocaleString()} ${all.length === 1 ? 'row' : 'rows'} · ${a.download}`
+      )
       if (truncated)
         toast.warning(`Exported the first ${all.length.toLocaleString()} rows`, {
           description: `${total.toLocaleString()} match — narrow the filter to export the rest.`
         })
     } catch (err) {
-      toast.error(userErrorMessage(err, 'Export failed'))
+      if (err instanceof ExportCancelledError || job.signal.aborted) job.cancelled()
+      else job.fail(err)
     } finally {
       setExporting(false)
     }
@@ -8685,7 +8736,7 @@ export function CollectionBrowserView({
                     type='button'
                     onClick={() => {
                       setExportMenuOpen(false)
-                      runExportPreset(pr.id)
+                      runExportPreset(pr.id, pr.name)
                     }}
                     className='block min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
                   >
@@ -8700,7 +8751,7 @@ export function CollectionBrowserView({
                     data-tip='Run in the background — a download appears in the Jobs tray'
                     onClick={() => {
                       setExportMenuOpen(false)
-                      runExportPresetInBackground(pr.id, pr.name)
+                      runExportPreset(pr.id, pr.name, 'always')
                     }}
                     className='mr-1 shrink-0 rounded px-1.5 py-1 text-[10.5px] font-medium text-slate-500 hover:bg-muted hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
                   >

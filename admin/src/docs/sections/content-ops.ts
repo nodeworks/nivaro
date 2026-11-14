@@ -185,11 +185,21 @@ Content-Type: text/csv
     { type: 'h3', text: 'Background (async) exports' },
     {
       type: 'p',
-      text: 'Big exports do not have to be waited on: an export preset can be run asynchronously via `POST /api/export-presets/:id/run-async` (same filter body as the normal run). The call answers immediately with a run id while the export builds in the background as a tracked job run, using your identity and filters exactly as a foreground export would. When it finishes, the file lands in the file library and you get a notification — "Export ready" — that deep-links to the file for download. Failures are recorded on the job run.'
+      text: 'Big exports are never waited on. The app’s own Export buttons ask first: an export of more than 5,000 rows (`EXPORT_BACKGROUND_ROWS`), or one that usually takes longer than `BACKGROUND_RUN_SLOW_MS`, runs as a background job instead of one long request; a small one still downloads at once. The job runs exactly the build the direct download runs — same columns, labels, filters and formats, read as you (your permissions, row filters and User Scopes) — on the background connection pool, page by page. While it runs, the Jobs tray shows “Exporting Workflows · 12,400 of 86,000 rows” with Cancel. When it is done, the tab that started it downloads the file, the tray keeps a Download chip, and you get “Your export is ready” with the link. The file is saved as a private file: only you and administrators can open it. Each person runs at most 3 background exports or slow reads at once; not available while viewing as someone.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/export-presets/:id/run-async  {conditions?, search?, sort?, background: 'auto'|'always'}
+     → 200 {data: {mode: 'instant'}}  (small: download GET /export-presets/:id/run)
+     → 202 {data: {mode: 'background', run_id, key, total, cancel_path}}
+GET  /api/items/:collection/export?background=auto|1   → 202 as above, else the file
+GET  /api/reports/activity?format=csv&readable=1&background=auto|1   (audit report, admins)
+GET  /api/export-runs/:id          → your run: status, progress {done,total}, file_id
+POST /api/export-runs/:id/cancel   → stops it between pages (its starter or an admin)`
     },
     {
       type: 'note',
-      text: 'This is currently an API-level capability — the collection browser’s Export popover still downloads directly.'
+      text: 'Without `background` the endpoints answer the file as before, so API clients keep working. A preset run holds up to 50,000 rows and pages through them (it used to stop at the first 1,000); past the cap the answer says so in `x-nivaro-export-truncated` and the tray says “First 50,000 rows”. The list’s “CSV — visible columns” is built in the page from the same reads the table makes; it shows the same tray row with progress and Cancel and keeps going while you move around the app, but closing the tab stops it.'
     }
   ]
 }

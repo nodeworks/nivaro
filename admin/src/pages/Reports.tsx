@@ -2,8 +2,12 @@ import {
   ActivityFeed,
   type ActivityLabels,
   collectionNouns,
+  followExportRun,
+  isStartedExportRun,
+  type JobProgressPayload,
   QueryErrorState,
   readableTitle,
+  toastError,
   useActivityLabels
 } from '@nivaro/shared'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
@@ -694,10 +698,24 @@ export function ReportsPage() {
       } catch {
         tz = undefined
       }
+      // A big report (or one that usually takes long) runs as a background export: progress
+      // and Cancel in the Jobs tray, the file downloads here when ready (#2122 follow-up).
       const res = await api.get('/reports/activity', {
-        params: { ...params, format: 'csv', readable: '1', tz },
+        params: { ...params, format: 'csv', readable: '1', tz, background: 'auto' },
         responseType: 'blob'
       })
+      if (res.status === 202) {
+        const started = (JSON.parse(await (res.data as Blob).text()) as { data?: unknown }).data
+        if (isStartedExportRun(started)) {
+          followExportRun(started, {
+            read: () =>
+              api
+                .get<{ data: JobProgressPayload }>(`/export-runs/${started.run_id}`)
+                .then((r) => r.data.data)
+          })
+          return
+        }
+      }
       const url = URL.createObjectURL(res.data as Blob)
       const a = document.createElement('a')
       a.href = url
@@ -721,7 +739,7 @@ export function ReportsPage() {
           // keep the generic message
         }
       }
-      toast.error(`The export did not finish: ${message}`)
+      toastError(new Error(message), 'The export did not finish', { retry: () => void exportCSV() })
     } finally {
       setExporting(false)
     }

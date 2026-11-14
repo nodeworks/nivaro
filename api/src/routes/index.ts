@@ -122,6 +122,7 @@ import { environmentRoutes } from './environments.js'
 import { erpSubmissionsRoutes } from './erp-submissions.js'
 import { eventsStreamRoutes } from './events-stream.js'
 import { exportPresetRoutes } from './export-presets.js'
+import { exportRunsRoutes } from './export-runs.js'
 import { extensionEventRoutes } from './extension-events.js'
 import { extensionRegistryRoutes } from './extension-registry.js'
 import { extensionsRoutes } from './extensions.js'
@@ -540,6 +541,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(sqlScratchpadRoutes, { prefix: '/sql-scratchpad' })
   await app.register(collectionSnapshotRoutes, { prefix: '/collection-snapshots' })
   await app.register(exportPresetRoutes, { prefix: '/export-presets' })
+  // Background exports: status + cancel (services/export-runs.ts).
+  await app.register(exportRunsRoutes, { prefix: '/export-runs' })
   await app.register(recordMergeRoutes, { prefix: '/record-merge' })
   await app.register(realtimeRoutes, { prefix: '/realtime' })
   // #2937 — sign-in only: is this tab on an old build (reload old tabs when idle).

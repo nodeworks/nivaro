@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { listRuns, trayEvent } from '../services/background-runs.js'
+import { cancelPath, EXPORT_JOB_PREFIX } from '../services/export-runs.js'
 import type { JobProgressEvent } from '../services/live-progress.js'
 
 /**
@@ -63,6 +64,9 @@ export async function myJobsRoutes(app: FastifyInstance): Promise<void> {
       const fileId = outcome?.match(/→ file ([0-9a-fA-F-]{8,})\s*$/)?.[1] ?? null
       // A background Ask AI question (#2456) links to its conversation and can be cancelled.
       const research = r.kind === 'ai' && r.job_id === 'ask-research'
+      // A background export (services/export-runs.ts) can be cancelled; a cancelled one says so.
+      const bgExport = r.kind === 'export' && String(r.job_id ?? '').startsWith(EXPORT_JOB_PREFIX)
+      const cancelled = bgExport && r.status === 'completed' && outcome === 'Cancelled'
       const conversation = research ? parseProgress(r.progress)?.conversation_id : null
       out.push({
         key: `job:${r.id}`,
@@ -72,7 +76,9 @@ export async function myJobsRoutes(app: FastifyInstance): Promise<void> {
           ? 'error'
           : r.status === 'running'
             ? 'running'
-            : 'completed') as 'error' | 'running' | 'completed',
+            : cancelled
+              ? 'canceled'
+              : 'completed') as 'error' | 'running' | 'completed' | 'canceled',
         progress: parseProgress(r.progress),
         outcome,
         error: short(r.error),
@@ -83,6 +89,7 @@ export async function myJobsRoutes(app: FastifyInstance): Promise<void> {
         ...(research && r.status === 'running'
           ? { cancel_path: `/ai/research/${r.id}/cancel` }
           : {}),
+        ...(bgExport && r.status === 'running' ? { cancel_path: cancelPath(Number(r.id)) } : {}),
         at: new Date(String(r.finished_at ?? r.started_at ?? Date.now())).toISOString()
       })
     }
