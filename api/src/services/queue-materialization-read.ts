@@ -30,6 +30,14 @@ import {
   hasTypedExtraFilter,
   twinJsonPath
 } from './queue-materialization-extra.js'
+import {
+  addValue,
+  emptyPart,
+  finishTotal,
+  type QueueTotals,
+  type TotalPart,
+  totalsFromGroupedRows
+} from './queue-totals.js'
 import type { QueueGroupSummary, QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
 import { atRiskWeight, normalizeDisplayConfig } from './queues.js'
 
@@ -97,6 +105,82 @@ export function requiresLiveResolveFallback(
 // come from stored source config, not raw user input).
 function extraJsonPath(field: string): string {
   return `$."${field.replace(/"/g, '')}"`
+}
+
+/**
+ * Queue totals row (2026-11-14): one extra column's number on a cache row — its typed twin
+ * (#801, written with numberOfValue) when the writer stored one, else the displayed text read
+ * the way numberOfValue reads it ($, commas and spaces dropped; empty = no number). A cache
+ * written before the twins still totals.
+ */
+export function cachedNumberSql(field: string): { sql: string; bindings: string[] } {
+  const strip = (inner: string) =>
+    ["'$'", "','", "' '", 'CHAR(9)', 'CHAR(10)', 'CHAR(13)'].reduce(
+      (acc, ch) => `REPLACE(${acc}, ${ch}, '')`,
+      inner
+    )
+  return {
+    sql: `COALESCE(TRY_CONVERT(float, JSON_VALUE(qi.extra, ?)), TRY_CONVERT(float, NULLIF(${strip('JSON_VALUE(qi.extra, ?)')}, '')))`,
+    bindings: [twinJsonPath(field, 'n'), extraJsonPath(field)]
+  }
+}
+
+/**
+ * The totals over every cache row a builder matches, per source collection: one grouped
+ * read (SUM / COUNT / MIN / MAX of each column's number). Grouped over a derived table, as
+ * the group sums are: a parameterised expression cannot be repeated in an aggregate.
+ */
+export async function materializedTotals(
+  builder: Knex.QueryBuilder,
+  paths: string[]
+): Promise<QueueTotals> {
+  if (paths.length === 0) return {}
+  const rows = (await materializedTotalsQuery(db, builder, paths)) as Array<Record<string, unknown>>
+  return totalsFromGroupedRows(rows, paths)
+}
+
+/** The grouped totals read itself (separate so its SQL can be checked without a database). */
+export function materializedTotalsQuery(
+  k: Knex,
+  builder: Knex.QueryBuilder,
+  paths: string[]
+): Knex.QueryBuilder {
+  const inner = builder.clone().clearSelect().clearOrder().select('qi.collection')
+  paths.forEach((p, i) => {
+    const e = cachedNumberSql(p)
+    inner.select(k.raw(`${e.sql} AS v${i}`, e.bindings))
+  })
+  const q = k.from(inner.as('t')).select('t.collection').groupBy('t.collection')
+  paths.forEach((_p, i) => {
+    q.select(
+      k.raw(
+        `SUM(t.v${i}) AS s${i}, COUNT(t.v${i}) AS c${i}, MIN(t.v${i}) AS n${i}, MAX(t.v${i}) AS x${i}`
+      )
+    )
+  })
+  return q
+}
+
+/** Totals over narrow-scanned rows the JS path kept (`tv{i}` = column i's number). */
+export function totalsFromNarrow(
+  rows: Array<{ collection: string; raw: Record<string, unknown> }>,
+  paths: string[]
+): QueueTotals {
+  const out: QueueTotals = {}
+  paths.forEach((p, i) => {
+    const byCol: Record<string, TotalPart> = {}
+    for (const r of rows) {
+      const v = r.raw[`tv${i}`]
+      if (v == null || v === '') continue
+      const n = Number(v)
+      if (!Number.isFinite(n)) continue
+      const part = byCol[r.collection] ?? emptyPart()
+      addValue(part, n)
+      byCol[r.collection] = part
+    }
+    out[p] = finishTotal(byCol)
+  })
+  return out
 }
 
 // One narrow-scanned cache row with its SLA already computed — the unit the
@@ -950,12 +1034,15 @@ export async function fetchMaterializedQueueItems(
     after?: string
     withUnseen?: boolean
     group?: { by: string; key?: string | null; sums?: string[] }
+    /** Queue totals row: extra-column paths to total over every matching row. */
+    totals?: string[]
   } = {}
 ): Promise<{
   /** #2447 — present when the page was read by cursor: the next page's cursor (null at the end). */
   nextCursor?: string | null
   items: QueueItem[]
   groups?: QueueGroupSummary[]
+  totals?: QueueTotals
   stats: QueueStats
   filteredStats: QueueStats | null
   /** Rows per state under every active filter except State itself — the
@@ -1147,6 +1234,8 @@ export async function fetchMaterializedQueueItems(
   let nextCursor: string | null = null
   let jsFilteredStats: QueueStats | null = null
   let stateCounts: Record<string, number> = {}
+  const totalPaths = options.totals ?? []
+  let totals: QueueTotals | undefined
 
   if (useJsPath) {
     // Scanned without the State filter so the state counts see every state;
@@ -1172,6 +1261,12 @@ export async function fetchMaterializedQueueItems(
     // No sort key (an sla_status / aging filter alone): the JS step keeps the
     // scan's order, so the scan needs one — the cache row id, as the SQL path.
     if (!sortKey) narrowQuery.orderBy('qi.id', 'asc')
+    // Totals row: each column's number rides the narrow scan (the SLA / aging filters that
+    // sent this read down the JS path are applied in JS, so the totals are too).
+    totalPaths.forEach((p, i) => {
+      const e = cachedNumberSql(p)
+      narrowQuery.select(db.raw(`${e.sql} AS tv${i}`, e.bindings))
+    })
     if (sortKey.startsWith('extra.')) {
       const field = sortKey.slice('extra.'.length)
       narrowQuery.select(
@@ -1236,6 +1331,13 @@ export async function fetchMaterializedQueueItems(
     const ordered = orderedAll.filter((r) => inStateFilter(r.state))
     total = ordered.length
     jsFilteredStats = statsFromNarrowRows(ordered)
+    if (totalPaths.length > 0) {
+      const rawById = new Map(narrowRaw.map((r) => [r.id, r as Record<string, unknown>]))
+      totals = totalsFromNarrow(
+        ordered.map((r) => ({ collection: r.collection, raw: rawById.get(r.id) ?? {} })),
+        totalPaths
+      )
+    }
 
     const limit = groupHeadersOnly ? 0 : (options.limit ?? total)
     const pageIds = (limit > 0 ? ordered.slice((page - 1) * limit, page * limit) : []).map(
@@ -1252,6 +1354,7 @@ export async function fetchMaterializedQueueItems(
   } else {
     const countRow = (await base.clone().count('* as n').first()) as { n: number }
     total = Number(countRow.n)
+    if (totalPaths.length > 0) totals = await materializedTotals(base, totalPaths)
     const stateRows = (await baseNoState
       .clone()
       .select('qi.state')
@@ -1453,6 +1556,7 @@ export async function fetchMaterializedQueueItems(
   return {
     items,
     ...(groups ? { groups } : {}),
+    ...(totals ? { totals } : {}),
     ...(keyset ? { nextCursor } : {}),
     stats,
     filteredStats,

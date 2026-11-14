@@ -116,6 +116,23 @@ export const listEditing: DocSection = {
     {
       type: 'note',
       text: 'Each figure is one `GET /api/items/:collection/aggregate?sum=<field>` (or avg / min / max / count) with the list’s `search` and `conditions`, the same gated read a list uses.'
+    },
+    { type: 'h3', id: 'list-editing-queue-totals', text: 'Totals on a queue worklist' },
+    {
+      type: 'p',
+      text: 'A queue’s table has the same totals row: the same header menu on every number column (Sum, Average, Minimum, Maximum, Count or Off), the same sticky footer, remembered for you per queue in this browser and saved with the queue’s saved views and shared links. The figures cover every row of the tab you are on (My Items, No Owners, Claimed by me or All Items) under your column filters, not just the page, read as you — the same rows the worklist would page through.'
+    },
+    {
+      type: 'p',
+      text: 'A queue can mix sources from different collections. Each row adds its own source’s value for the column, and a source that has no such column adds nothing. The sums and counts of the sources add up, Minimum and Maximum take the least and greatest, and Average is the whole sum over the whole count (never an average of the sources’ averages). When a column’s rows come from more than one source, the figure’s tooltip gives the same figure per source.'
+    },
+    {
+      type: 'p',
+      text: 'A number column is a number field reached through many-to-one links, a per-row aggregate the queue works out (sum / average / count of linked rows) or an addendum’s cost impact; a column that lists several values per row has no totals entry. A calculated field worked out when the record is read (never stored) says it has no total. A formula column that only adds and subtracts number columns offers Sum alone, worked out from those columns’ sums; any other formula says why it has none. Grouped tables (their headers carry their own sums) and the board and workload views show no totals row.'
+    },
+    {
+      type: 'note',
+      text: 'The worklist asks for the figures on its own rows read — `GET /api/queues/:id/items?totals=extra.amount,extra.qty` adds `totals` (per column: sum, count, min, max, avg and `by_collection`) and `totals_partial` (a live read past its 20,000-row ceiling covers the rows it read) — so turning totals on costs no second read of the sources. `GET /api/queues/:id/totals?scope=&filters=&totals=` answers the same figures alone. Both are gated by the queue’s read access, read every source as you through the heavy-read gate, and read a materialized queue from its cache.'
     }
   ]
 }

@@ -37,6 +37,7 @@ import { applyQueueGate, queueGateFor } from './queue-access.js'
 import { integrationsFilterBuckets, integrationsMatchKeys } from './queue-integrations.js'
 import { markInactiveOwners } from './queue-owner-status.js'
 import { PathReadBatch } from './queue-path-batch.js'
+import { parseTotalsParam, type QueueTotals, totalsFromItems } from './queue-totals.js'
 import { withReadGateEach } from './read-gate.js'
 import { span } from './request-trace.js'
 import { sendBackBatch } from './send-backs.js'
@@ -1243,6 +1244,8 @@ export interface QueueItemsQuery {
   group_sums?: string
   after?: string
   tail?: string
+  /** Queue totals row: comma list of extra-column paths (`extra.` prefix optional, ≤12). */
+  totals?: string
 }
 
 export interface ParsedQueueItemsQuery {
@@ -1258,6 +1261,8 @@ export interface ParsedQueueItemsQuery {
   /** The LAST n rows of the same sorted set too (1–50), oldest-first in reverse — one read
    *  answers both ends of a worklist (dashboard "Waiting on you" used to read twice). */
   tail?: number
+  /** Queue totals row: plain extra-column paths to total over the whole result. */
+  totals?: string[]
 }
 
 /**
@@ -1302,6 +1307,7 @@ export function parseQueueItemsQuery(
   const { page, limit } = parsePaginationParams(q.page, q.limit)
   const tailN = Number(q.tail)
   const tail = !group && Number.isInteger(tailN) && tailN > 0 ? Math.min(tailN, 50) : 0
+  const totals = parseTotalsParam(q.totals)
   return {
     ok: true,
     value: {
@@ -1313,7 +1319,8 @@ export function parseQueueItemsQuery(
       ...(paginationRequested && typeof q.after === 'string' && q.after.length <= 2048
         ? { after: q.after }
         : {}),
-      ...(tail ? { tail } : {})
+      ...(tail ? { tail } : {}),
+      ...(totals.length ? { totals } : {})
     }
   }
 }
@@ -1429,6 +1436,121 @@ export interface ExtraFieldMeta {
   /** The final field's select choices ({value, text}) — the list shows "At Risk",
    *  never the stored key "at_risk" (army 11 Q1-2). Absent for free-text fields. */
   choices?: Array<{ value: string; text: string }>
+  /** Totals row (2026-11-14): the column holds one number per row — a number field
+   *  reached by a plain or many-to-one path on some source, a per-row aggregate, or an
+   *  addendum's cost. A list of values (to-many) is never a number column. */
+  number?: true
+  /** The column lists several values per row (a to-many hop, no per-row aggregate) on some
+   *  source: never a number column, whatever its display format says. */
+  multi_value?: true
+  /** A number column the worklist cannot total, and why (a calculated field worked out
+   *  when the record is read, never stored, so the cache and the totals have no figure). */
+  no_total?: string
+}
+
+const NUMBER_FIELD_TYPES = new Set(['integer', 'biginteger', 'decimal', 'float'])
+
+/**
+ * Where one path ends on one source collection: the leaf field's collection, and whether
+ * every hop is many-to-one (one value per row). Null when a hop is not a relation.
+ */
+function pathLeaf(
+  base: string,
+  path: string,
+  relations: CMSRelation[]
+): { collection: string; field: string; single: boolean } | null {
+  const segments = path.split('.')
+  let current = base
+  let single = true
+  for (let i = 0; i < segments.length - 1; i++) {
+    const info = classifyRelationSegment(current, segments[i], relations)
+    if (!info) return null
+    if (info.type !== 'm2o') single = false
+    current = info.relatedCollection
+  }
+  const field = segments[segments.length - 1] as string
+  // A relation field itself (an FK id, or a to-many alias) is never a number to add up.
+  if (classifyRelationSegment(current, field, relations)) return null
+  return { collection: current, field, single }
+}
+
+/** Why a calculated number field has no total (the list's wording, column-totals.ts). */
+export function unstoredTotalReason(computedType: string | null | undefined): string {
+  return computedType === 'rollup'
+    ? 'Worked out from linked records each time the record is read, so it has no total.'
+    : 'Calculated each time the record is read and never stored, so it has no total.'
+}
+
+/**
+ * Marks the number columns of a queue's extra fields (`number`, `no_total`). A path is
+ * judged on EVERY source that lists it (its own collection's field), since each row
+ * carries its own source's value.
+ */
+async function markNumberColumns(
+  out: ExtraFieldMeta[],
+  sources: QueueSourceRow[],
+  relations: CMSRelation[],
+  database: typeof db
+): Promise<void> {
+  const leavesByPath = new Map<string, Array<{ collection: string; field: string }>>()
+  const multi = new Set<string>()
+  for (const source of sources) {
+    if (source.type !== 'collection' || !source.collection) continue
+    const fields = (parseJson(source.extra_fields) as string[] | null) ?? []
+    for (const f of fields) {
+      const leaf = pathLeaf(source.collection, f, relations)
+      if (leaf && !leaf.single) multi.add(f)
+      if (!leaf?.single) continue
+      const list = leavesByPath.get(f) ?? []
+      list.push({ collection: leaf.collection, field: leaf.field })
+      leavesByPath.set(f, list)
+    }
+  }
+  const cols = [...new Set([...leavesByPath.values()].flat().map((l) => l.collection))]
+  const rows = cols.length
+    ? ((await Promise.resolve()
+        .then(() =>
+          database('nivaro_fields')
+            .whereIn('collection', cols)
+            .select(
+              'collection',
+              'field',
+              'type',
+              'computed_formula',
+              'computed_store',
+              'computed_type'
+            )
+        )
+        .catch(() => [])) as Array<{
+        collection: string
+        field: string
+        type: string | null
+        computed_formula: string | null
+        computed_store: boolean | number | null
+        computed_type: string | null
+      }>)
+    : []
+  for (const m of out) {
+    if (multi.has(m.path) && !m.aggregate) m.multi_value = true
+    if (m.aggregate || m.path === 'cost_impact') {
+      m.number = true
+      continue
+    }
+    let stored = false
+    let unstored: string | null = null
+    for (const leaf of leavesByPath.get(m.path) ?? []) {
+      const f = rows.find((r) => r.collection === leaf.collection && r.field === leaf.field)
+      if (!f || !NUMBER_FIELD_TYPES.has(String(f.type ?? '').toLowerCase())) continue
+      if (f.computed_formula && !(f.computed_store === true || f.computed_store === 1))
+        unstored = unstored ?? unstoredTotalReason(f.computed_type)
+      else stored = true
+    }
+    if (stored) m.number = true
+    else if (unstored) {
+      m.number = true
+      m.no_total = unstored
+    }
+  }
 }
 
 /** Classify each configured extra-field path so the admin can render the right
@@ -1539,6 +1661,7 @@ export async function computeExtraFieldMeta(
       if (choices) m.choices = choices
     }
   }
+  await markNumberColumns(out, sources, allRelations, database)
   return out
 }
 
@@ -3624,6 +3747,9 @@ export async function fetchQueueItems(
     /** #741: group summaries for `by`; rows only for the group `key` (none
      *  when key is absent — the headers come first, rows on expand). */
     group?: { by: string; key?: string | null; sums?: string[] }
+    /** Queue totals row (2026-11-14): extra-column paths totalled over every row the
+     *  viewer sees with this scope and these filters (not just the page). */
+    totals?: string[]
     /** #2452 — run a LIVE (non-materialized) source fan-out through the
      *  heavy-read gate; request paths pass it, background work does not. */
     readGate?: {
@@ -3643,6 +3769,8 @@ export async function fetchQueueItems(
   tail?: QueueItem[]
   items: QueueItem[]
   groups?: QueueGroupSummary[]
+  /** Per requested path: sum / count / min / max / avg, and the same per collection. */
+  totals?: QueueTotals
   stats: QueueStats
   /** Stats over the column-filtered set; null when no column filters are active. */
   filteredStats: QueueStats | null
@@ -3832,6 +3960,9 @@ export async function fetchQueueItems(
   const groups = options.group
     ? summarizeQueueGroups(sorted, options.group.by, options.group.sums ?? [])
     : undefined
+  // Totals row: over the whole scoped + filtered set, before paging (each row's own
+  // source's value; a row without the column adds nothing).
+  const totals = options.totals?.length ? totalsFromItems(sorted, options.totals) : undefined
   const pageSource = options.group
     ? options.group.key == null
       ? []
@@ -3876,6 +4007,7 @@ export async function fetchQueueItems(
     items: paged,
     ...(tailItems ? { tail: tailItems } : {}),
     ...(groups ? { groups } : {}),
+    ...(totals ? { totals } : {}),
     stats: exact?.stats ?? liveExact ?? computeStats(scoped),
     filteredStats: hasActiveColumnFilters(options.filters) ? computeStats(filtered) : null,
     stateCounts,

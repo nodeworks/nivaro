@@ -1479,7 +1479,17 @@ export async function queuesRoutes(app: FastifyInstance) {
     // One parser for the route and the cache warm's replayed first pages.
     const parsed = parseQueueItemsQuery(req.query as QueueItemsQuery)
     if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
-    const { scope, sort, filters: parsedFilters, group, page, limit, after, tail } = parsed.value
+    const {
+      scope,
+      sort,
+      filters: parsedFilters,
+      group,
+      page,
+      limit,
+      after,
+      tail,
+      totals
+    } = parsed.value
 
     const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
       | QueueRow
@@ -1509,6 +1519,7 @@ export async function queuesRoutes(app: FastifyInstance) {
           filters: parsedFilters,
           withUnseen: true,
           group,
+          ...(totals ? { totals } : {}),
           ...(page !== undefined ? { page, limit } : {}),
           ...(after !== undefined ? { after } : {}),
           ...(tail ? { tail } : {}),
@@ -1548,6 +1559,9 @@ export async function queuesRoutes(app: FastifyInstance) {
       data: result.items,
       ...(result.tail ? { tail: result.tail } : {}),
       ...(result.groups ? { groups: result.groups } : {}),
+      // Totals row: over every row of this scope + filters; partial = the live read
+      // stopped at the sanity ceiling, so the figures cover the rows it read.
+      ...(result.totals ? { totals: result.totals, totals_partial: result.truncated } : {}),
       stats: result.stats,
       filtered_stats: result.filteredStats,
       state_counts: result.stateCounts,
@@ -1557,6 +1571,58 @@ export async function queuesRoutes(app: FastifyInstance) {
       // #2447 — only when the page was read by cursor; otherwise the client keeps paging by number.
       ...(result.nextCursor !== undefined ? { next_cursor: result.nextCursor } : {}),
       ...(empty ? { empty } : {})
+    })
+  })
+
+  // GET /:id/totals?scope=&filters=&totals=extra.a,extra.b — the totals row on its own
+  // (2026-11-14): the same gated read as /items (canReadQueue, every source read as the
+  // viewer through the heavy-read gate, a materialized queue from its cache) with the same
+  // scope + column filters, answering sum / count / min / max / avg per column over the
+  // whole result, combined across sources, plus the same per collection. The worklist asks
+  // for these on its /items read (`totals=`), which costs no second fan-out.
+  app.get('/:id/totals', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const parsed = parseQueueItemsQuery(req.query as QueueItemsQuery)
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
+    const { scope, filters: parsedFilters, totals } = parsed.value
+    if (!totals?.length)
+      return reply
+        .code(400)
+        .send({ error: 'totals must name at least one column (extra.<path>, comma separated)' })
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+    const signal = clientGoneSignal(reply.raw)
+    const flightKey = [
+      'queue-totals',
+      currentTenantKey(),
+      id,
+      req.user!.id,
+      req.isAdmin ? 1 : 0,
+      JSON.stringify({ scope, parsedFilters, totals })
+    ].join('|')
+    const { promise } = singleFlight(
+      flightKey,
+      ({ signal: shared }) =>
+        fetchQueueItems(id, req.user!, scope, {
+          filters: parsedFilters,
+          totals,
+          page: 1,
+          limit: 1,
+          readGate: {
+            signal: shared,
+            onWait: (ms) => gateServerTiming(reply, { waitedMs: ms })
+          }
+        }),
+      { signal }
+    )
+    const result = await promise
+    return reply.send({
+      data: result.totals ?? {},
+      total: result.total,
+      partial: result.truncated
     })
   })
 

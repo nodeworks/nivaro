@@ -1370,7 +1370,9 @@ describe('computeExtraFieldMeta aggregates', () => {
         relation_type: 'm2m',
         target_collection: 'purchase_orders',
         display_field: 'amount',
-        aggregate: 'sum'
+        aggregate: 'sum',
+        // A per-row aggregate is one number per row: the totals row may total it.
+        number: true
       }
     ])
   })
