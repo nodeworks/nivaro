@@ -249,3 +249,223 @@ describe('addendum and notification labels', () => {
     expect(admin.records?.['nivaro_addendums:b-hidden']).toBe('“Secret”')
   })
 })
+
+// Rob 2026-11-13: no activity line shows an internal id for a system record.
+describe('system record labels', () => {
+  const VIEW_MINE = '11111111-2222-3333-4444-555555555555'
+  const VIEW_ROB = '11111111-2222-3333-4444-666666666666'
+  const TASK_ON_ITEM = '22222222-2222-3333-4444-555555555555'
+  const TASK_HIDDEN = '22222222-2222-3333-4444-666666666666'
+  const FILE_OK = '33333333-2222-3333-4444-555555555555'
+  const FILE_NO = '33333333-2222-3333-4444-666666666666'
+  const tables: Record<string, Array<Record<string, unknown> & { id: unknown }>> = {
+    nivaro_collection_layouts: [{ id: 5, name: 'Intake form' }],
+    nivaro_roles: [{ id: 'ROLE-1', name: 'Approver' }],
+    nivaro_policies: [{ id: 7, action: 'read', collection: 'invoices' }],
+    nivaro_activity: [{ id: 99 }],
+    nivaro_saved_views: [
+      { id: VIEW_MINE, name: 'My open invoices', user: PAT },
+      { id: VIEW_ROB, name: 'Rob only', user: ROB }
+    ],
+    nivaro_tasks: [
+      {
+        id: TASK_ON_ITEM,
+        title: 'Check totals',
+        assignee: ROB,
+        created_by: ROB,
+        collection: 'invoices',
+        item: '1'
+      },
+      {
+        id: TASK_HIDDEN,
+        title: 'Hidden task',
+        assignee: ROB,
+        created_by: ROB,
+        collection: 'invoices',
+        item: '2'
+      }
+    ],
+    nivaro_comments: [
+      { id: 40, user: ROB, collection: 'invoices', item: '1' },
+      { id: 41, user: ROB, collection: 'invoices', item: '2' },
+      { id: 42, user: ROB, collection: 'nivaro_tasks', item: TASK_ON_ITEM }
+    ]
+  }
+  const asked: string[][] = []
+  const more = {
+    systemRows: vi.fn(async (table: string, ids: string[], columns: string[]) => {
+      asked.push(columns)
+      return (tables[table] ?? [])
+        .filter((r) => ids.some((i) => i.toLowerCase() === String(r.id).toLowerCase()))
+        .map((r) => ({ ...r }))
+    }),
+    readableFiles: vi.fn(async (_u: User, isAdmin: boolean, ids: string[]) => {
+      const all = new Map([
+        [FILE_OK.toLowerCase(), 'quote.pdf'],
+        [FILE_NO.toLowerCase(), 'payroll.xlsx']
+      ])
+      return new Map(
+        ids
+          .map((i) => i.toLowerCase())
+          .filter((i) => all.has(i) && (isAdmin || i === FILE_OK.toLowerCase()))
+          .map((i) => [i, all.get(i)!] as [string, string])
+      )
+    }),
+    chatChannels: vi.fn(
+      async (_u: User, keys: string[]) =>
+        new Map(keys.filter((k) => k === 'ops').map((k) => [k, 'ops'] as [string, string]))
+    )
+  }
+
+  it('configuration is named for administrators only; others read the generic phrase', async () => {
+    const refs = [
+      { collection: 'nivaro_collection_layouts', id: '5' },
+      { collection: 'nivaro_roles', id: 'ROLE-1' },
+      { collection: 'nivaro_policies', id: '7' },
+      { collection: 'nivaro_activity', id: '99' }
+    ]
+    const d = deps(more)
+    const admin = await activityLabelsFor(reader, { refs, users: [ROB] }, { isAdmin: true }, d)
+    expect(admin.records?.['nivaro_collection_layouts:5']).toBe('“Intake form”')
+    expect(admin.records?.['nivaro_roles:ROLE-1']).toBe('“Approver”')
+    expect(admin.records?.['nivaro_policies:7']).toBe('“read on invoices”')
+    expect(admin.records?.['nivaro_activity:99']).toBeNull()
+    expect(
+      renderActivitySentence(
+        { action: 'update', user: ROB, collection: 'nivaro_collection_layouts', item: '5' },
+        admin
+      )
+    ).toBe('Rob Lee updated Layout “Intake form”')
+    // System rows are never read through the items service.
+    expect(d.visibleIds).not.toHaveBeenCalled()
+    // A credential column is never asked for.
+    expect(asked.flat().some((c) => /secret|token|hash|password/i.test(c))).toBe(false)
+    const pat = await activityLabelsFor(reader, { refs, users: [ROB] }, {}, deps(more))
+    expect(pat.records?.['nivaro_collection_layouts:5']).toBeNull()
+    expect(
+      renderActivitySentence(
+        { action: 'update', user: ROB, collection: 'nivaro_collection_layouts', item: '5' },
+        pat
+      )
+    ).toBe('Rob Lee updated a layout')
+    expect(
+      renderActivitySentence(
+        { action: 'delete', user: ROB, collection: 'nivaro_activity', item: '99' },
+        pat
+      )
+    ).toBe('Rob Lee deleted an activity entry')
+  })
+
+  it('a personal row is named for its owner and administrators', async () => {
+    const refs = [
+      { collection: 'nivaro_saved_views', id: VIEW_MINE },
+      { collection: 'nivaro_saved_views', id: VIEW_ROB }
+    ]
+    const pat = await activityLabelsFor(reader, { refs, users: [ROB] }, {}, deps(more))
+    expect(pat.records?.[`nivaro_saved_views:${VIEW_MINE}`]).toBe('“My open invoices”')
+    expect(pat.records?.[`nivaro_saved_views:${VIEW_ROB}`]).toBeNull()
+    expect(
+      renderActivitySentence(
+        { action: 'delete', user: ROB, collection: 'nivaro_saved_views', item: VIEW_ROB },
+        pat
+      )
+    ).toBe('Rob Lee deleted a saved view')
+    const admin = await activityLabelsFor(
+      reader,
+      { refs, users: [ROB] },
+      { isAdmin: true },
+      deps(more)
+    )
+    expect(admin.records?.[`nivaro_saved_views:${VIEW_ROB}`]).toBe('“Rob only”')
+  })
+
+  it('a row on a record is only as visible as that record', async () => {
+    const refs = [
+      { collection: 'nivaro_tasks', id: TASK_ON_ITEM },
+      { collection: 'nivaro_tasks', id: TASK_HIDDEN },
+      { collection: 'nivaro_comments', id: '40' },
+      { collection: 'nivaro_comments', id: '41' },
+      { collection: 'nivaro_comments', id: '42' }
+    ]
+    const pat = await activityLabelsFor(reader, { refs, users: [ROB] }, {}, deps(more))
+    expect(pat.records?.[`nivaro_tasks:${TASK_ON_ITEM}`]).toBe('“Check totals” on INV-1')
+    expect(pat.records?.[`nivaro_tasks:${TASK_HIDDEN}`]).toBeNull()
+    expect(pat.records?.['nivaro_comments:40']).toBe('on INV-1')
+    expect(pat.records?.['nivaro_comments:41']).toBeNull()
+    // A comment on a task follows the task, which follows its record.
+    expect(pat.records?.['nivaro_comments:42']).toBe('on Task “Check totals” on INV-1')
+    expect(
+      renderActivitySentence(
+        { action: 'create', user: ROB, collection: 'nivaro_comments', item: '40' },
+        pat
+      )
+    ).toBe('Rob Lee created Comment on INV-1')
+    expect(
+      renderActivitySentence(
+        { action: 'create', user: ROB, collection: 'nivaro_comments', item: '41' },
+        pat
+      )
+    ).toBe('Rob Lee created a comment')
+    const admin = await activityLabelsFor(
+      reader,
+      { refs, users: [ROB] },
+      { isAdmin: true },
+      deps(more)
+    )
+    expect(admin.records?.[`nivaro_tasks:${TASK_HIDDEN}`]).toBe('“Hidden task”')
+  })
+
+  it('files follow the file gate and channels follow canSeeRoom', async () => {
+    const refs = [
+      { collection: 'nivaro_files', id: FILE_OK },
+      { collection: 'nivaro_files', id: FILE_NO },
+      { collection: 'nivaro_chat_channels', id: 'ops' },
+      { collection: 'nivaro_chat_channels', id: 'board' }
+    ]
+    const pat = await activityLabelsFor(reader, { refs, users: [ROB] }, {}, deps(more))
+    expect(pat.records?.[`nivaro_files:${FILE_OK}`]).toBe('“quote.pdf”')
+    expect(pat.records?.[`nivaro_files:${FILE_NO}`]).toBeNull()
+    expect(pat.records?.['nivaro_chat_channels:ops']).toBe('#ops')
+    expect(pat.records?.['nivaro_chat_channels:board']).toBeNull()
+    expect(
+      renderActivitySentence(
+        { action: 'update', user: ROB, collection: 'nivaro_chat_channels', item: 'board' },
+        pat
+      )
+    ).toBe('Rob Lee updated a channel')
+  })
+
+  it('never shows an id, whoever reads and whatever the labels say', async () => {
+    const refs = [
+      ...Object.entries(tables).flatMap(([c, rows]) =>
+        rows.map((r) => ({ collection: c, id: String(r.id) }))
+      ),
+      { collection: 'nivaro_webhooks', id: '12' },
+      { collection: 'nivaro_saved_views', id: '44444444-0000-0000-0000-000000000000' },
+      { collection: 'nivaro_files', id: FILE_NO },
+      { collection: 'nivaro_chat_channels', id: 'board' }
+    ]
+    const actions = ['create', 'update', 'delete', 'restore', 'api_key_created', 'share']
+    for (const isAdmin of [false, true]) {
+      const sets = [
+        await activityLabelsFor(reader, { refs, users: [ROB] }, { isAdmin }, deps(more)),
+        null,
+        // A label that is the id itself (an older resolver) still never prints it.
+        { records: Object.fromEntries(refs.map((r) => [`${r.collection}:${r.id}`, r.id])) }
+      ]
+      for (const labels of sets) {
+        for (const r of refs) {
+          for (const action of actions) {
+            const s = renderActivitySentence(
+              { action, user: ROB, collection: r.collection, item: r.id },
+              labels
+            )
+            expect(s, s).not.toContain(r.id)
+            expect(s, s).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/i)
+            expect(s, s).not.toMatch(/\ba [aeiou]/i)
+          }
+        }
+      }
+    }
+  })
+})

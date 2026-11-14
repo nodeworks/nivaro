@@ -164,7 +164,7 @@ describe('renderActivitySentence', () => {
     ).toBe('Pat Lee changed the role of Rob Lee')
     expect(
       renderActivitySentence(base({ action: 'update', collection: 'nivaro_policies', item: '7' }))
-    ).toBe('Pat Lee updated Policy 7')
+    ).toBe('Pat Lee updated a policy')
     expect(
       renderActivitySentence(
         base({ action: 'import-create', collection: 'invoices', item: '5' }),

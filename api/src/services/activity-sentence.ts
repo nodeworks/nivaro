@@ -261,28 +261,78 @@ function midSentence(s: string): string {
 
 const SYSTEM_NOUNS: Record<string, string> = {
   nivaro_activity: 'Activity entry',
+  nivaro_activity_views: 'Activity view',
+  nivaro_addendums: 'Addendum',
+  nivaro_agent_questions: 'Agent question',
+  nivaro_agent_triggers: 'Agent trigger',
+  nivaro_ai_conversations: 'AI conversation',
+  nivaro_ai_proposals: 'AI proposal',
+  nivaro_alert_definitions: 'Alert',
   nivaro_api_keys: 'API key',
   nivaro_approval_chains: 'Approval chain',
   nivaro_approval_instances: 'Approval',
+  nivaro_chat_channels: 'Channel',
+  nivaro_collection_layouts: 'Layout',
+  nivaro_collection_presets: 'Column preset',
   nivaro_collections: 'Collection',
   nivaro_comments: 'Comment',
   nivaro_custom_queries: 'Custom query',
+  nivaro_dashboard_widgets: 'Widget',
   nivaro_dashboards: 'Dashboard',
+  nivaro_drafts: 'Draft',
+  nivaro_erp_submissions: 'ERP submission',
+  nivaro_external_api_endpoints: 'Endpoint',
   nivaro_external_apis: 'External API',
+  nivaro_field_groups: 'Field group',
+  nivaro_field_rules: 'Field rule',
+  nivaro_field_watches: 'Field watch',
   nivaro_fields: 'Field',
   nivaro_files: 'File',
+  nivaro_flow_operations: 'Flow step',
   nivaro_flows: 'Flow',
+  nivaro_help_videos: 'Help video',
   nivaro_import_definitions: 'Import definition',
   nivaro_import_queue: 'Import run',
+  nivaro_inbound_mappings: 'Inbound mapping',
+  nivaro_issues: 'Issue',
+  nivaro_notification_subscriptions: 'Notification subscription',
+  nivaro_notifications: 'Notification',
+  nivaro_payload_templates: 'Payload template',
   nivaro_permissions: 'Permission',
+  nivaro_pipeline_owner_groups: 'Owner group',
   nivaro_policies: 'Policy',
+  nivaro_queue_claims: 'Queue claim',
+  nivaro_queue_views: 'Queue view',
+  nivaro_queues: 'Queue',
+  nivaro_record_templates: 'Record template',
   nivaro_relations: 'Relation',
+  nivaro_replay_clips: 'Replay clip',
+  nivaro_replay_shares: 'Replay share',
+  nivaro_report_defs: 'Report',
+  nivaro_report_filter_presets: 'Report filter preset',
   nivaro_roles: 'Role',
+  nivaro_saved_views: 'Saved view',
+  nivaro_session_recordings: 'Session recording',
   nivaro_settings: 'Settings',
+  nivaro_share_links: 'Share link',
+  nivaro_sla_rules: 'SLA rule',
   nivaro_tasks: 'Task',
+  nivaro_user_groups: 'Team',
+  nivaro_user_scopes: 'User scope',
   nivaro_users: 'User',
   nivaro_webhooks: 'Webhook',
-  nivaro_workflow_templates: 'Pipeline'
+  nivaro_workflow_instances: 'Pipeline run',
+  nivaro_workflow_states: 'Pipeline state',
+  nivaro_workflow_templates: 'Pipeline',
+  nivaro_workflow_transitions: 'Pipeline move'
+}
+
+const SYSTEM_RE = /^(nivaro|directus)_/i
+
+/** A system row (`nivaro_*`) is never named by its internal id: "a saved view". */
+function genericOf(singular: string): string {
+  const noun = midSentence(singular)
+  return `${/^[aeiou]/i.test(noun) ? 'an' : 'a'} ${noun}`
 }
 
 /** The singular + plural nouns of a collection ("Purchase Order" / "Purchase Orders"). */
@@ -462,14 +512,16 @@ export function recordPhrase(
   const key = `${collection}:${id}`
   const records = labels?.records
   const { singular } = collectionNouns(collection, labels)
+  const system = SYSTEM_RE.test(text(collection))
   if (records && key in records) {
     const label = records[key]
-    if (label == null) return HIDDEN_RECORD
+    if (label == null) return system ? genericOf(singular) : HIDDEN_RECORD
     const l = text(label)
-    if (!l) return singular
+    if (!l) return system ? genericOf(singular) : singular
+    if (system && (l === id || UUID_RE.test(l))) return genericOf(singular)
     return l.toLowerCase().startsWith(singular.toLowerCase()) ? l : `${singular} ${l}`
   }
-  if (UUID_RE.test(id)) return `a ${midSentence(singular)}`
+  if (system || UUID_RE.test(id)) return genericOf(singular)
   return `${singular} ${id}`
 }
 
