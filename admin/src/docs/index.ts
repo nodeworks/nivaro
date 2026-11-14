@@ -189,7 +189,8 @@ import {
   sessionReplayDocs,
   spreadsheetDocs,
   timeTravelDocs,
-  trashDocs
+  trashDocs,
+  widgetImageDocs
 } from './sections/data-safety.js'
 import { dbTuning } from './sections/db-tuning.js'
 import { detailSheets } from './sections/detail-sheets.js'
@@ -939,7 +940,13 @@ export const navSections: NavGroup[] = [
   {
     id: 'low-code',
     label: 'Low-Code Builders',
-    items: [lowCodePageBuilder, lowCodeRuleBuilder, lowCodeFormulaBuilder, dashboardLinkDocs]
+    items: [
+      lowCodePageBuilder,
+      lowCodeRuleBuilder,
+      lowCodeFormulaBuilder,
+      dashboardLinkDocs,
+      widgetImageDocs
+    ]
   },
   {
     id: 'observability',

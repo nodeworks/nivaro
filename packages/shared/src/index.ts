@@ -653,6 +653,7 @@ export { TickerNumber } from './components/TickerNumber'
 export { TipLayer, useOverflowTip } from './components/TipLayer'
 export { UndoButton, type UndoPreviewAnswer } from './components/UndoButton'
 export { UserAvatar } from './components/UserAvatar'
+export { WidgetImageMenu } from './components/WidgetImageMenu'
 export type { InputBinding } from './components/WidgetSlot'
 export { WidgetSlot } from './components/WidgetSlot'
 export type {
@@ -1334,6 +1335,25 @@ export {
   viewAs,
   viewAsPath
 } from './lib/view-as'
+export {
+  buildWidgetImageLabel,
+  describeDateRangeFilter,
+  describeEntityFilters,
+  describeGlobalFilters,
+  describeWidgetOwnFilter,
+  describeWidgetRules,
+  formatAsOf,
+  type WidgetImageInput,
+  type WidgetImageLabel,
+  widgetImageFileName,
+  widgetImageSubtitleLines
+} from './lib/widget-image'
+export {
+  copyPngOrSave,
+  downloadBlob,
+  renderWidgetImage,
+  WIDGET_IMAGE_IGNORE_ATTR
+} from './lib/widget-image-render'
 export * from './lib/worker-socket'
 export * from './lib/write-formula'
 export * from './types'

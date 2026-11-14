@@ -112,6 +112,31 @@ export const dashboardLinkDocs: DocSection = {
   ]
 }
 
+export const widgetImageDocs: DocSection = {
+  id: 'widget-images',
+  label: 'Copy a Figure as a Picture',
+  content: [
+    { type: 'h1', id: 'widget-images', text: 'Copy a Figure as a Picture' },
+    {
+      type: 'p',
+      text: 'Every dashboard and report widget has a ⋯ menu with Copy as image and Download PNG. Copy puts the picture on your clipboard, so you can paste it straight into an email or a Teams message.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The picture is white and light-coloured even when you work in dark mode, drawn at twice the screen size so it stays sharp.',
+        'It is labelled with the widget title, "As of" the date and time the figures were read (your own clock, 12-hour), and the filters in effect in plain words: the dashboard filters, the report date range and the widget’s own filter. When nothing is filtered it says "No filters".',
+        'It shows the figures you see on screen, which were already worked out for you, so the picture never includes more than you are allowed to see.',
+        'Where your browser will not copy a picture (some browsers, or a page that is not secure), the picture is saved as a file instead and a message says so.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'A long table is pictured as it is shown on screen, not its hidden rows. Use Download CSV on the widget for the full list.'
+    }
+  ]
+}
+
 export const bugReporterDocs: DocSection = {
   id: 'bug-reporter',
   label: 'Bug Reporter',
