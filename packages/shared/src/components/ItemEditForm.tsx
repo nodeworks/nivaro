@@ -11616,7 +11616,7 @@ function ItemEditFormView({
           sticky
             ? 'md:sticky md:top-[var(--nvr-sticky-top,0px)] md:z-20'
             : half
-              ? 'min-w-0'
+              ? 'flex min-w-0 flex-col [&>[data-section-key]:not([data-collapsed])]:flex-1'
               : undefined
         }
       >
@@ -12460,9 +12460,11 @@ function ItemEditFormView({
               key={`row:${(row.items[0] as FieldGroup).key}`}
               data-form-row=''
               data-form-row-cols={formPairs ? 2 : 1}
+              // Side by side, both cards reach the taller one's height (Rob 2026-11-13: no
+              // ragged gap under the shorter); a folded section keeps its own height.
               className={cn(
-                'grid items-start gap-4 [&>:empty]:hidden',
-                formPairs ? 'grid-cols-2' : 'grid-cols-1'
+                'grid gap-4 [&>:empty]:hidden',
+                formPairs ? 'grid-cols-2 items-stretch' : 'grid-cols-1 items-start'
               )}
             >
               {row.items.map((item, j) => sectionShell(item, keyOf(item, j), stickyKey, true))}

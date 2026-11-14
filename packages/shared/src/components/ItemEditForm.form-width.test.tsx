@@ -202,6 +202,20 @@ describe('record-form section width', () => {
     expect(pair?.querySelectorAll('[data-form-width="half"]').length).toBe(2)
   })
 
+  // Rob 2026-11-13: side by side, the shorter card left a ragged gap under it.
+  it('side by side, open cards stretch to the taller one; a folded one keeps its height', async () => {
+    await mount({ itemId: '1' })
+    const pair = rowOf('left')
+    expect(pair?.className).toContain('items-stretch')
+    for (const shell of pair?.querySelectorAll('[data-form-width="half"]') ?? [])
+      expect(shell.className).toContain('[&>[data-section-key]:not([data-collapsed])]:flex-1')
+    // The folded half (fixture) is marked, so the stretch rule leaves it alone.
+    const folded = [...(pair?.querySelectorAll('[data-section-key]') ?? [])].filter((el) =>
+      el.hasAttribute('data-collapsed')
+    )
+    expect(folded.length).toBeGreaterThanOrEqual(1)
+  })
+
   it('stacks the pair on a narrow form (phones)', async () => {
     stackWidth = FORM_PAIR_MIN_PX - 1
     await mount({ itemId: '1' })
