@@ -48,6 +48,7 @@ import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
 import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
 import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
+import { HeavyListColumnsCard } from '@/components/heavy-list-columns-card'
 import { InlineEditSetting } from '@/components/inline-edit-setting'
 import { LabelSearchFieldsSetting } from '@/components/label-search-fields-setting'
 import { PagePresence } from '@/components/page-presence'
@@ -4366,6 +4367,7 @@ function SettingsTab({
       <ItemLockingSection tableName={tableName} />
       <AddendumsSection tableName={tableName} />
       <PickerFilterSection tableName={tableName} />
+      <HeavyListColumnsCard collection={tableName} />
       <BrowserSettingsSection tableName={tableName} />
       <EmptyStateSlugSection tableName={tableName} />
       <RenameCollectionSection tableName={tableName} />

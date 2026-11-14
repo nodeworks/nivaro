@@ -40,6 +40,23 @@ export interface CollectionStat {
 }
 export type OverviewStats = Record<string, CollectionStat>
 
+/**
+ * GET /api/collections/list-weight (admin only): collections whose list opens on a "link to
+ * many" column (O2M / M2M) whose records carry so many linked rows that the column is slow
+ * and unreadable. Only collections with such a column appear.
+ */
+export interface HeavyListFlag {
+  fields: Array<{
+    field: string
+    label: string
+    /** Linked rows per record, on average. */
+    avg: number
+    /** Most linked rows on one record. */
+    max: number
+  }>
+}
+export type HeavyListFlags = Record<string, HeavyListFlag>
+
 /** GET /api/collections/:collection/summary (admin only) — the row hover card. */
 export interface CollectionSummary {
   collection: string

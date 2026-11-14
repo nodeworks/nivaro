@@ -1,9 +1,10 @@
-import { ArrowLeft, ArrowRight, LayoutTemplate, Workflow } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowRight, LayoutTemplate, Workflow } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
-import { formatDateTime, formatRelative, titleCase } from '../../lib/utils'
+import { formatDateTime, formatNumber, formatRelative, titleCase } from '../../lib/utils'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { useCollectionSummary } from './directory-data'
+import type { HeavyListFlag } from './types'
 
 const OPEN_DELAY_MS = 400
 const CLOSE_DELAY_MS = 150
@@ -77,6 +78,32 @@ function SectionLabel({ icon, children }: { icon?: ReactNode; children: ReactNod
       {icon}
       {children}
     </p>
+  )
+}
+
+/** The list opens on a "link to many" column with thousands of rows per record. */
+function HeavyListNote({ flag }: { flag: HeavyListFlag }) {
+  return (
+    <div
+      data-heavy-list-note
+      className='flex gap-2 rounded-md bg-amber-50 px-2 py-1.5 text-[11.5px] leading-snug text-amber-800 ring-1 ring-inset ring-amber-200 dark:bg-amber-400/10 dark:text-amber-200 dark:ring-amber-400/25'
+    >
+      <AlertTriangle className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden='true' />
+      <div className='min-w-0'>
+        <p className='font-medium'>Heavy list columns</p>
+        <ul className='mt-0.5 space-y-px'>
+          {flag.fields.map((f) => (
+            <li key={f.field}>
+              {f.label}: up to {formatNumber(f.max)} per record (avg{' '}
+              {formatNumber(Math.round(f.avg))})
+            </li>
+          ))}
+        </ul>
+        <p className='mt-0.5 text-amber-700/90 dark:text-amber-300/80'>
+          The list opens on them. Fix it in Data model → Collection Browser.
+        </p>
+      </div>
+    </div>
   )
 }
 
@@ -200,6 +227,7 @@ function SummaryBody({ collection }: { collection: string }) {
 export function CollectionHoverCard({
   collection,
   title,
+  heavyList,
   open,
   onClose,
   onCardEnter,
@@ -208,6 +236,8 @@ export function CollectionHoverCard({
 }: {
   collection: string
   title: string
+  /** The list opens on a heavy "link to many" column (shown above the summary). */
+  heavyList?: HeavyListFlag
   open: boolean
   onClose: () => void
   onCardEnter: () => void
@@ -238,6 +268,11 @@ export function CollectionHoverCard({
           <p className='mb-2 truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
             {title}
           </p>
+          {heavyList && heavyList.fields.length > 0 && (
+            <div className='mb-2.5'>
+              <HeavyListNote flag={heavyList} />
+            </div>
+          )}
           <SummaryBody collection={collection} />
         </PopoverContent>
       )}

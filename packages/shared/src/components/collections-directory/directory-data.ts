@@ -7,6 +7,7 @@ import type {
   CollectionFavorites,
   CollectionSummary,
   DirectoryCollection,
+  HeavyListFlags,
   OverviewStats
 } from './types'
 
@@ -18,6 +19,7 @@ import type {
 export const DIRECTORY_KEYS = {
   collections: ['collections'] as const,
   stats: ['collections-overview-stats'] as const,
+  heavyLists: ['collections-list-weight'] as const,
   summary: (collection: string) => ['collection-summary', collection] as const
 }
 
@@ -42,6 +44,25 @@ export function useOverviewStats(enabled: boolean) {
         .then((r) => r.data ?? {}),
     enabled,
     staleTime: 60_000,
+    retry: false
+  })
+}
+
+/**
+ * Collections whose list opens on a heavy "link to many" column (admin only; `enabled` false
+ * for others — no request). Measured on the server and cached there for an hour, so a quiet
+ * read: it never blocks the page and a failure just shows no badges.
+ */
+export function useHeavyListFlags(enabled: boolean) {
+  const client = useNivaroClient()
+  return useQuery<HeavyListFlags>({
+    queryKey: DIRECTORY_KEYS.heavyLists,
+    queryFn: () =>
+      client
+        .request<{ data: HeavyListFlags }>(get('/collections/list-weight'))
+        .then((r) => r.data ?? {}),
+    enabled,
+    staleTime: 10 * 60_000,
     retry: false
   })
 }

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
+import { forgetListWeightReport } from '../services/list-weight.js'
 import { writeRevision } from '../services/revisions.js'
 
 interface SavedViewRow {
@@ -164,6 +165,8 @@ export async function savedViewsRoutes(app: FastifyInstance) {
         created_at: new Date()
       })
       .returning('*')) as unknown as [SavedViewRow]
+    // The heavy-list-columns warning reads the defaults: let it see this one at once.
+    if (row.is_default || row.default_for_role) forgetListWeightReport(collection)
 
     await logActivity({
       action: 'create',
@@ -248,6 +251,7 @@ export async function savedViewsRoutes(app: FastifyInstance) {
     const updated = (await db<SavedViewRow>('nivaro_saved_views')
       .where({ id: Number(id) })
       .first()) as SavedViewRow
+    forgetListWeightReport(view.collection)
 
     // Saved views are raw-knex rows (never through the items service), so
     // snapshot them here — a deleted collection default was unrecoverable
@@ -319,6 +323,7 @@ export async function savedViewsRoutes(app: FastifyInstance) {
     await db('nivaro_saved_views')
       .where({ id: Number(id) })
       .delete()
+    if (view.is_default || view.default_for_role) forgetListWeightReport(view.collection)
     // Full snapshot rides the delete activity so the view can be rebuilt
     // (columns, filters, sort, default flag) from revision history.
     const deleteActivity = await logActivity({
