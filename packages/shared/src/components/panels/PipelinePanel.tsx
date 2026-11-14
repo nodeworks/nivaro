@@ -1994,7 +1994,7 @@ function OwnersSection({
             </button>
           </UserChip>
           <ViewAsPersonButton
-            person={{ id: String(withCreator.id), name: withCreator.name }}
+            person={{ id: String(withCreator.id), name: withCreator.name ?? '' }}
             className='ml-1 inline-flex align-middle'
           />
         </p>
