@@ -27,6 +27,11 @@ import { writeStartHistory } from '../services/instance-start.js'
 import { adminOnlyMoveMessages } from '../services/manual-transition-gate.js'
 import { originFields, originSelect } from '../services/note-authorship.js'
 import { can, getAllowedFields } from '../services/permissions.js'
+import {
+  notePreviewRead,
+  type PreviewPerson,
+  previewPersonFor
+} from '../services/pipeline-as-user.js'
 import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
 import {
   bustOwnerGroupCache,
@@ -2565,7 +2570,37 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // Get pipeline state for a specific item
   app.get('/instance/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
+    // `?as_user=<id>` (admin only, read only — services/pipeline-as-user.ts):
+    // the whole answer is judged as that person — role, admin access, owner of
+    // the step, edit lock — so the admin sees their exact buttons and why the
+    // others are locked. The admin must be able to open the record (restrict
+    // User Scopes bind admins too), and so must the person.
     if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
+    const asUserRaw = (req.query as { as_user?: string } | undefined)?.as_user
+    let asPerson: PreviewPerson | null = null
+    if (asUserRaw) {
+      const answer = await previewPersonFor(req, asUserRaw)
+      if ('status' in answer) return reply.code(answer.status).send(answer.body)
+      asPerson = answer.person
+      try {
+        await assertInstanceAccess(
+          asPerson.user,
+          asPerson.isAdmin,
+          collection,
+          String(item),
+          undefined,
+          'read'
+        )
+      } catch (err) {
+        if (err instanceof InstanceAccessError)
+          return reply.code(403).send({
+            error: `${asPerson.name} cannot open this record`,
+            code: 'AS_USER_CANNOT_READ'
+          })
+        throw err
+      }
+      notePreviewRead(req, app.redis, asPerson, collection, String(item))
+    }
 
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
@@ -2621,9 +2656,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // would show and the preview would be meaningless.
     const currentState = instance.current_state
     const asRoleRaw = (req.query as { as_role?: string } | undefined)?.as_role
-    const asRole = req.isAdmin && asRoleRaw ? String(asRoleRaw).toUpperCase() : null
-    const userRole = asRole ?? req.user?.role ?? null
-    const isAdmin = asRole ? false : (req.isAdmin ?? false)
+    // A person preview wins over a role preview: it has a role AND a person.
+    const asRole = !asPerson && req.isAdmin && asRoleRaw ? String(asRoleRaw).toUpperCase() : null
+    // Who every check below is asked about: the caller, or the previewed person.
+    const judged: User | undefined = asPerson ? asPerson.user : req.user
+    const userRole = asPerson ? asPerson.role : (asRole ?? req.user?.role ?? null)
+    const isAdmin = asPerson ? asPerson.isAdmin : asRole ? false : (req.isAdmin ?? false)
 
     // Load the bound item row once when any transition carries condition rules,
     // so conditional branching can filter the offered transitions.
@@ -2679,9 +2717,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // `allow_creator` moves are offered to the record's creator as well.
     let offeredTransitions = availableTransitions
     let actor: Awaited<ReturnType<typeof checkTransitionOwner>> | null = null
-    if (!isAdmin && !asRole && req.user && availableTransitions.some((t) => t.require_owner)) {
+    if (!isAdmin && !asRole && judged && availableTransitions.some((t) => t.require_owner)) {
       actor = await checkTransitionOwner({
-        user: req.user,
+        user: judged,
         isAdmin: false,
         collection,
         item,
@@ -2771,7 +2809,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
             item: String(item),
             currentState,
             transitions: offeredTransitions,
-            user: req.user,
+            user: judged,
             isAdmin
           }).catch(() => new Map<string, TransitionAdvisory>())
 
@@ -2870,9 +2908,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // Whether THIS caller may change the record right now (edit-lock.ts) — the
     // form shows read-only from it; the write itself is judged again.
     const editLock =
-      isAdmin || !req.user
+      isAdmin || !judged
         ? null
-        : await editLockVerdictFor(req.user, collection, item).catch(() => ({
+        : await editLockVerdictFor(judged, collection, item).catch(() => ({
             locked: true,
             allowed: false,
             message: 'Could not confirm you may change this record while it waits.'
@@ -2916,8 +2954,19 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         // The collection's highlight rules this record matches ("On hold",
         // "Sent back") — chips beside the state, so an approver sees a hold
         // before pressing Approve (army 11 a1 F-2).
-        flags: await recordFlags(req.user, isAdmin, collection, String(item)),
-        owners_configured: await ownersConfigured()
+        flags: await recordFlags(judged, isAdmin, collection, String(item)),
+        owners_configured: await ownersConfigured(),
+        // Whose answer this is when previewed as someone (never set otherwise).
+        ...(asPerson
+          ? {
+              as_user: {
+                id: String(asPerson.user.id),
+                name: asPerson.name,
+                role: asPerson.role,
+                is_admin: asPerson.isAdmin
+              }
+            }
+          : {})
       }
     })
   })

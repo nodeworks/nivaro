@@ -8,7 +8,6 @@ import {
   GitBranch,
   Loader2,
   Minus,
-  Search,
   Send,
   Undo2,
   UserPlus,
@@ -42,7 +41,6 @@ import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-t
 import { userErrorMessage } from '../../lib/safe-error'
 import { serverNow } from '../../lib/server-clock'
 import { useStartsOpen } from '../../lib/use-starts-open'
-import { userCardQuery } from '../../lib/user-cards'
 import {
   cn,
   formatDateTime,
@@ -70,7 +68,9 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { ViewAsPersonButton } from '../ViewAsPersonButton'
 import { deniedToastAction, isAccessRefusal, WhyOwnersButton } from './AccessInsights'
+import { AsyncUserPicker } from './AsyncUserPicker'
 import {
   type MoveProblem,
   MoveProblemNotice,
@@ -279,6 +279,8 @@ interface PipelinePanelData {
   running_move?: RunningMove | null
   /** The last background move that did not move the record, since it came to this step. */
   last_move_problem?: MoveProblem | null
+  /** Set when an admin previews the record as this person (`?as_user=`). */
+  as_user?: { id: string; name: string; role: string | null; is_admin: boolean } | null
 }
 interface RecordFlag {
   name: string
@@ -1821,138 +1823,6 @@ function HistoryTimeline({
   )
 }
 
-// ─── Async user picker ────────────────────────────────────────────────────────
-
-function AsyncUserPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const client = useNivaroClient()
-  const [open, setOpen] = useState(false)
-  const [query, setQuery] = useState('')
-  const [debouncedQuery, setDebouncedQuery] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 50)
-    else setQuery('')
-  }, [open])
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => setDebouncedQuery(query), 250)
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-    }
-  }, [query])
-
-  type User = { id: string; first_name: string | null; last_name: string | null; email: string }
-  const { data, isLoading } = useQuery<User[]>({
-    queryKey: ['users', 'async-search', debouncedQuery],
-    queryFn: () =>
-      client
-        .request<{ data: User[]; total: number }>(
-          get('/users', {
-            limit: 50,
-            sort: 'first_name',
-            ...(debouncedQuery ? { search: debouncedQuery } : {})
-          })
-        )
-        .then((r) => r.data),
-    enabled: open,
-    staleTime: 30_000
-  })
-  // The directory card (any signed-in person), never GET /users/:id — that
-  // is admin-only and left a non-admin looking at the picked person's raw id.
-  const { data: selectedUser } = useQuery<User | null>({
-    ...userCardQuery<User>(client, value),
-    enabled: !!value,
-    staleTime: 5 * 60_000
-  })
-  const users = data ?? []
-  // The search row it was picked from answers at once; the card after.
-  const picked = selectedUser ?? users.find((u) => u.id === value) ?? null
-  const selectedLabel = picked
-    ? [picked.first_name, picked.last_name].filter(Boolean).join(' ').trim() || picked.email
-    : value
-      ? 'Selected person'
-      : null
-  const nameOf = (u: User) => [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <div className='relative flex h-8 w-full'>
-        <PopoverTrigger asChild>
-          <button
-            type='button'
-            className='flex h-full w-full items-center justify-between gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-left text-[13px] text-slate-700 hover:border-slate-300'
-          >
-            <span className={`flex-1 truncate ${selectedLabel ? '' : 'text-slate-400'}`}>
-              {selectedLabel ?? 'Select a user…'}
-            </span>
-            <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-          </button>
-        </PopoverTrigger>
-        {value && (
-          <button
-            type='button'
-            onClick={(e) => {
-              e.stopPropagation()
-              onChange('')
-            }}
-            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'
-          >
-            <X className='h-3 w-3' />
-          </button>
-        )}
-      </div>
-      <PopoverContent align='start' className='w-72 p-0' sideOffset={4}>
-        <div className='border-b border-slate-100 px-2 py-1.5'>
-          <div className='relative'>
-            <Search className='absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
-            <input
-              ref={inputRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder='Search users…'
-              className='h-7 w-full rounded-md bg-slate-50 pl-7 pr-2 text-[12px] placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan/40'
-            />
-          </div>
-        </div>
-        <div className='max-h-56 overflow-y-auto py-1'>
-          {isLoading ? (
-            <div className='flex items-center gap-2 px-3 py-2 text-[12px] text-slate-400'>
-              <Loader2 className='h-3.5 w-3.5 animate-spin' />
-              Loading…
-            </div>
-          ) : users.length === 0 ? (
-            <div className='px-3 py-2 text-[12px] text-slate-400'>No results</div>
-          ) : (
-            users.map((u) => {
-              const name = nameOf(u)
-              const label = name ? `${name} (${u.email})` : u.email
-              const selected = u.id === value
-              return (
-                <button
-                  key={u.id}
-                  type='button'
-                  onClick={() => {
-                    onChange(u.id)
-                    setOpen(false)
-                  }}
-                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-slate-50 ${selected ? 'font-medium text-slate-800' : 'text-slate-600'}`}
-                >
-                  <Check
-                    className={`h-3.5 w-3.5 shrink-0 ${selected ? 'text-nvr-cyan' : 'opacity-0'}`}
-                  />
-                  {label}
-                </button>
-              )
-            })
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
 // ─── Owners section ───────────────────────────────────────────────────────────
 
 /** An owner's avatar + name as one button that opens the shared user card
@@ -2215,6 +2085,10 @@ function OwnersSection({
               {withCreator.name}
             </button>
           </UserChip>
+          <ViewAsPersonButton
+            person={{ id: String(withCreator.id), name: withCreator.name ?? '' }}
+            className='ml-1 inline-flex align-middle'
+          />
         </p>
       ) : resolvedCount === 0 ? (
         <p className='text-[12px] text-slate-400'>No owners assigned.</p>
@@ -2230,9 +2104,13 @@ function OwnersSection({
             return (
               <div
                 key={`group-${o.id}`}
-                className='-mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50 dark:hover:bg-white/5'
+                className='group/row -mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50 dark:hover:bg-white/5'
               >
                 <OwnerPersonButton userId={o.id} name={name} email={o.email} initials={initials} />
+                <ViewAsPersonButton
+                  person={{ id: String(o.id), name, firstName: o.first_name }}
+                  className='opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100'
+                />
                 {(() => {
                   const u = unavailableById.get(String(o.id).toUpperCase())
                   if (!u) return null
@@ -2282,6 +2160,14 @@ function OwnersSection({
                 name={[o.first_name, o.last_name].filter(Boolean).join(' ') || o.email}
                 email={o.email}
                 initials={ownerInitials(o)}
+              />
+              <ViewAsPersonButton
+                person={{
+                  id: String(o.user),
+                  name: [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email,
+                  firstName: o.first_name
+                }}
+                className='opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100'
               />
               <span className='shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'>
                 manual
@@ -2688,7 +2574,8 @@ export function PipelinePanel({
   onBeforeTransition,
   addendumPending,
   addendumView,
-  asRole
+  asRole,
+  asUser
 }: {
   collection: string
   item: string
@@ -2697,6 +2584,9 @@ export function PipelinePanel({
   showApprovalChain?: boolean
   /** Admin "view as role" (#8): evaluate available transitions for this role instead of the caller. */
   asRole?: string | null
+  /** Admin "view as person": the moves, blocked moves and owner checks judged as
+   *  this person (`?as_user=`). A preview: nothing is pressed from it. */
+  asUser?: string | null
   /** Layout-configurable: suppress the transition buttons inside the slot
    * (collapsed header row / expanded body) — redundant when the record header
    * already renders PipelineTransitionButtons. */
@@ -2721,6 +2611,7 @@ export function PipelinePanel({
       addendumPending={addendumPending}
       addendumView={addendumView}
       asRole={asRole}
+      asUser={asUser}
     />
   )
 }
@@ -2864,7 +2755,8 @@ function PipelinePanelInner({
   onBeforeTransition,
   addendumPending,
   addendumView,
-  asRole
+  asRole,
+  asUser
 }: {
   collection: string
   item: string
@@ -2877,7 +2769,10 @@ function PipelinePanelInner({
   addendumPending?: boolean
   addendumView?: boolean
   asRole?: string | null
+  asUser?: string | null
 }) {
+  // A role or person preview shows that answer; it never makes a move.
+  const previewing = !!asRole || !!asUser
   const client = useNivaroClient()
   const queryClient = useQueryClient()
   const { isAdmin: canMoveState } = useItemEditAuth()
@@ -2923,6 +2818,7 @@ function PipelinePanelInner({
   const transitionBusyRef = useRef(false)
   const runTransition = (vars: { transition_id: string; comment?: string; lock_ack?: boolean }) => {
     if (transitionBusyRef.current) return
+    if (previewing) return
     transitionBusyRef.current = true
     setFixOffer(null)
     executeTransition.mutate(vars, {
@@ -2940,6 +2836,15 @@ function PipelinePanelInner({
   }
   const trySetPending = async (txId: string, opts?: { cleared?: boolean }) => {
     if (transitionBusyRef.current) return
+    // A preview shows the buttons exactly as they would be; pressing one does nothing.
+    if (previewing) {
+      toast.info(
+        data?.as_user
+          ? `Previewing as ${data.as_user.name}: moves are not made from a preview.`
+          : 'Previewing as a role: moves are not made from a preview.'
+      )
+      return
+    }
     // A background move is running on this record: every move waits for it.
     if (data?.running_move) return
     if (pendingTransition === txId) {
@@ -3008,9 +2913,11 @@ function PipelinePanelInner({
   }
   // Same key as every other instance read on the page when no role preview is
   // active — three panels (header buttons, slot, summary strip) share one fetch.
-  const queryKey = asRole
-    ? ['pipeline-instance', collection, item, asRole]
-    : ['pipeline-instance', collection, item]
+  const queryKey = asUser
+    ? ['pipeline-instance', collection, item, 'as-user', asUser]
+    : asRole
+      ? ['pipeline-instance', collection, item, asRole]
+      : ['pipeline-instance', collection, item]
   const { settling, settle } = useTransitionSettle(queryKey)
   const { data, isLoading } = useQuery<PipelinePanelData>({
     queryKey,
@@ -3018,7 +2925,13 @@ function PipelinePanelInner({
       client
         .request<{ data: PipelinePanelData | null }>(
           get(
-            `/pipelines/instance/${collection}/${item}${asRole ? `?as_role=${encodeURIComponent(asRole)}` : ''}`
+            `/pipelines/instance/${collection}/${item}${
+              asUser
+                ? `?as_user=${encodeURIComponent(asUser)}`
+                : asRole
+                  ? `?as_role=${encodeURIComponent(asRole)}`
+                  : ''
+            }`
           )
         )
         .then(
@@ -3116,15 +3029,17 @@ function PipelinePanelInner({
       /** "<name> is editing this record" was shown and the person moves it anyway. */
       lock_ack?: boolean
     }) =>
-      client.request(
-        post(`/pipelines/instance/${collection}/${item}/transition`, {
-          transition_id,
-          comment,
-          ...(reviewed ? { reviewed: true } : {}),
-          ...(lock_ack ? { lock_ack: true } : {}),
-          ...pendingOptIn(data?.available_transitions, transition_id)
-        })
-      ),
+      previewing
+        ? Promise.reject(new Error('Moves are not made from a preview'))
+        : client.request(
+            post(`/pipelines/instance/${collection}/${item}/transition`, {
+              transition_id,
+              comment,
+              ...(reviewed ? { reviewed: true } : {}),
+              ...(lock_ack ? { lock_ack: true } : {}),
+              ...pendingOptIn(data?.available_transitions, transition_id)
+            })
+          ),
     onMutate: (variables) => ({
       slow: slowMoveToast(
         [...(data?.available_transitions ?? []), ...(data?.all_transitions ?? [])].find(
@@ -3274,7 +3189,7 @@ function PipelinePanelInner({
   useEffect(() => {
     const onRun = (ev: Event) => {
       const d = (ev as CustomEvent<RunTransitionRequest>).detail
-      if (!d || d.claimed) return
+      if (!d || d.claimed || previewing) return
       if (d.collection !== collection || String(d.item) !== String(item)) return
       d.claimed = true
       const wanted = String(d.transition_id).toUpperCase()
@@ -3287,7 +3202,7 @@ function PipelinePanelInner({
     }
     window.addEventListener(RUN_TRANSITION_EVENT, onRun)
     return () => window.removeEventListener(RUN_TRANSITION_EVENT, onRun)
-  }, [collection, item])
+  }, [collection, item, previewing])
 
   if (isLoading)
     // Collapsed-shell skeleton at the real header height (px-5 py-3.5 row) —
@@ -3910,7 +3825,9 @@ export function PipelineTransitionButtons({
   collection,
   item,
   onBeforeTransition,
-  wrap = true
+  wrap = true,
+  asRole,
+  asUser
 }: {
   collection: string
   item: string
@@ -3920,6 +3837,10 @@ export function PipelineTransitionButtons({
    *  the header row still overflows with its tool strip folded, the buttons
    *  fold into one "Actions" menu so every step stays reachable. */
   wrap?: boolean
+  /** Admin preview (same as PipelinePanel): the buttons this role / person
+   *  would get, drawn exactly — never pressed. */
+  asRole?: string | null
+  asUser?: string | null
 }) {
   if (item === 'new') return null
   return (
@@ -3928,6 +3849,8 @@ export function PipelineTransitionButtons({
       item={item}
       onBeforeTransition={onBeforeTransition}
       wrap={wrap}
+      asRole={asRole}
+      asUser={asUser}
     />
   )
 }
@@ -3936,13 +3859,18 @@ function PipelineTransitionButtonsInner({
   collection,
   item,
   onBeforeTransition,
-  wrap = true
+  wrap = true,
+  asRole,
+  asUser
 }: {
   collection: string
   item: string
   onBeforeTransition?: () => boolean | Promise<boolean>
   wrap?: boolean
+  asRole?: string | null
+  asUser?: string | null
 }) {
+  const previewing = !!asRole || !!asUser
   const client = useNivaroClient()
   const queryClient = useQueryClient()
   const [comment, setComment] = useState('')
@@ -3965,6 +3893,7 @@ function PipelineTransitionButtonsInner({
   const transitionBusyRef = useRef(false)
   const runTransition = (vars: { transition_id: string; comment?: string; lock_ack?: boolean }) => {
     if (transitionBusyRef.current) return
+    if (previewing) return
     transitionBusyRef.current = true
     setFixOffer(null)
     executeTransition.mutate(vars, {
@@ -3982,6 +3911,14 @@ function PipelineTransitionButtonsInner({
   }
   const trySetPending = async (txId: string, opts?: { cleared?: boolean }) => {
     if (transitionBusyRef.current) return
+    if (previewing) {
+      toast.info(
+        data?.as_user
+          ? `Previewing as ${data.as_user.name}: moves are not made from a preview.`
+          : 'Previewing as a role: moves are not made from a preview.'
+      )
+      return
+    }
     // A background move is running on this record: every move waits for it.
     if (data?.running_move) return
     if (pendingTransition === txId) {
@@ -4048,14 +3985,27 @@ function PipelineTransitionButtonsInner({
     setForwardWarning([])
     setPendingTransition(txId)
   }
-  const queryKey = ['pipeline-instance', collection, item]
+  // The same keys as the panel: a preview shares the panel's preview read.
+  const queryKey = asUser
+    ? ['pipeline-instance', collection, item, 'as-user', asUser]
+    : asRole
+      ? ['pipeline-instance', collection, item, asRole]
+      : ['pipeline-instance', collection, item]
   const { settling, settle } = useTransitionSettle(queryKey)
   const { data } = useQuery<PipelinePanelData>({
     queryKey,
     queryFn: () =>
       client
         .request<{ data: PipelinePanelData | null }>(
-          get(`/pipelines/instance/${collection}/${item}`)
+          get(
+            `/pipelines/instance/${collection}/${item}${
+              asUser
+                ? `?as_user=${encodeURIComponent(asUser)}`
+                : asRole
+                  ? `?as_role=${encodeURIComponent(asRole)}`
+                  : ''
+            }`
+          )
         )
         .then(
           (r) =>
@@ -4116,15 +4066,17 @@ function PipelineTransitionButtonsInner({
       /** "<name> is editing this record" was shown and the person moves it anyway. */
       lock_ack?: boolean
     }) =>
-      client.request(
-        post(`/pipelines/instance/${collection}/${item}/transition`, {
-          transition_id,
-          comment,
-          ...(reviewed ? { reviewed: true } : {}),
-          ...(lock_ack ? { lock_ack: true } : {}),
-          ...pendingOptIn(data?.available_transitions, transition_id)
-        })
-      ),
+      previewing
+        ? Promise.reject(new Error('Moves are not made from a preview'))
+        : client.request(
+            post(`/pipelines/instance/${collection}/${item}/transition`, {
+              transition_id,
+              comment,
+              ...(reviewed ? { reviewed: true } : {}),
+              ...(lock_ack ? { lock_ack: true } : {}),
+              ...pendingOptIn(data?.available_transitions, transition_id)
+            })
+          ),
     onMutate: (variables) => ({
       slow: slowMoveToast(
         [...(data?.available_transitions ?? []), ...(data?.all_transitions ?? [])].find(
@@ -4274,7 +4226,7 @@ function PipelineTransitionButtonsInner({
   useEffect(() => {
     const onRun = (ev: Event) => {
       const d = (ev as CustomEvent<RunTransitionRequest>).detail
-      if (!d || d.claimed) return
+      if (!d || d.claimed || previewing) return
       if (d.collection !== collection || String(d.item) !== String(item)) return
       d.claimed = true
       const wanted = String(d.transition_id).toUpperCase()
@@ -4287,7 +4239,7 @@ function PipelineTransitionButtonsInner({
     }
     window.addEventListener(RUN_TRANSITION_EVENT, onRun)
     return () => window.removeEventListener(RUN_TRANSITION_EVENT, onRun)
-  }, [collection, item])
+  }, [collection, item, previewing])
 
   if (!data?.binding || !data?.instance) return null
   // Completed instances keep only escape hatches from their terminal state
