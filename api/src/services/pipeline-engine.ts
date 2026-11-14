@@ -756,6 +756,44 @@ export interface OwnerResolutionOptions {
    *  only. The fallback keeps a record in someone's queue; it is not a claim
    *  to approve it (owner-only transitions judge without it). */
   skipFallback?: boolean
+  /** Resolve against THESE owner groups instead of the saved ones (the owner
+   *  preview's unsaved draft). `byState` replaces each listed state's groups
+   *  wholesale (a state not listed has none); `members` gives the people of
+   *  every group whose membership is not the saved one (draft-only ids
+   *  included) — any other group's members are read as usual. Everything
+   *  else (record reads, dotted values, instance owners, the fallback field,
+   *  delegation) is the normal path. Bypasses the owner-group cache. */
+  groups?: InjectedOwnerGroups
+  /** Filled per request key with what the resolver decided — the owner
+   *  preview's "why". Costs nothing when absent. */
+  trace?: Map<string, OwnerResolutionTrace>
+}
+
+export interface InjectedOwnerGroups {
+  byState: Map<string, OwnerGroup[]>
+  members: Map<string, ResolvedOwner[]>
+}
+
+/** What resolveStateOwnersBatch decided for one request (opts.trace). */
+export interface OwnerResolutionTrace {
+  stateId: string
+  /** The state has owner groups at all. */
+  hasGroups: boolean
+  prepared: PreparedOwnerGroups | null
+  /** The winning group(s): the most specific match, else the defaults; empty = none. */
+  winning: OwnerGroup[]
+  /** The record row the filters were matched against (narrowed to the filter columns). */
+  record: Record<string, unknown>
+  relations: RelationInfo[]
+  resolved: Map<string, ResolvedFilterValue> | undefined
+  /** People the winning groups name (members + team rosters), before delegation. */
+  groupOwners: ResolvedOwner[]
+  /** People added to this record by hand (instance owners) for this step. */
+  instanceOwners: ResolvedOwner[]
+  /** The binding's fallback user, standing in because nobody is assigned. */
+  standIn: ResolvedOwner[]
+  /** Out-of-office owners swapped for their delegate. */
+  substitutions: Array<{ from: ResolvedOwner; to: ResolvedOwner }>
 }
 
 /** A step's owners: the assigned ones (groups, instance owners), else the
@@ -790,11 +828,19 @@ export async function resolveStateOwnersBatch(
   const stateIds = [...new Set(requests.map((r) => r.stateId))]
   // Spanned: on a cold cache this is the ~3,900-group fetch + filter parse,
   // which sat outside every named span and read as "unaccounted".
-  const groupData = await span(
-    'owners:groups',
-    () => getOwnerGroupsForStates(stateIds, database),
-    `${stateIds.length} states`
-  )
+  const injected = opts.groups
+  const groupData = injected
+    ? new Map(
+        stateIds.map((id) => {
+          const groups = injected.byState.get(id) ?? []
+          return [id, { groups, prepared: prepareOwnerGroups(groups) }] as const
+        })
+      )
+    : await span(
+        'owners:groups',
+        () => getOwnerGroupsForStates(stateIds, database),
+        `${stateIds.length} states`
+      )
   const groupsByState = new Map<string, OwnerGroup[]>()
   for (const [id, entry] of groupData) groupsByState.set(id, entry.groups)
 
@@ -1105,6 +1151,15 @@ export async function resolveStateOwnersBatch(
     }
     winningGroupsByKey.set(req.key, winning)
     for (const g of winning) allGroupIds.add(g.id)
+    opts.trace?.set(req.key, {
+      ...emptyTrace(req.stateId),
+      hasGroups: true,
+      prepared,
+      winning,
+      record,
+      relations,
+      resolved
+    })
   }
   if (withGroups.length > 0) {
     markSpan(
@@ -1115,6 +1170,16 @@ export async function resolveStateOwnersBatch(
   }
 
   const groupUsersByGroup = new Map<string, ResolvedOwner[]>()
+  // Injected (draft) memberships first; those groups are never read from the
+  // tables (a draft-only id is not even a uuid there).
+  if (injected) {
+    for (const id of [...allGroupIds]) {
+      const members = injected.members.get(id)
+      if (!members) continue
+      groupUsersByGroup.set(id, dedupeOwners(members))
+      allGroupIds.delete(id)
+    }
+  }
   if (allGroupIds.size > 0) {
     // Direct members ∪ TEAM members (nivaro_user_groups linked via
     // nivaro_pipeline_owner_group_teams) — teams edit in one place, every
@@ -1259,9 +1324,46 @@ export async function resolveStateOwnersBatch(
     } else {
       result.set(req.key, owners)
     }
+    if (opts.trace) {
+      const t = opts.trace.get(req.key) ?? emptyTrace(req.stateId)
+      const winning = winningGroupsByKey.get(req.key) ?? []
+      const groupOwners = dedupeOwners(winning.flatMap((g) => groupUsersByGroup.get(g.id) ?? []))
+      const instanceOwners = instanceOwnersFor(req)
+      const assigned = groupOwners.length + instanceOwners.length > 0
+      const subs: OwnerResolutionTrace['substitutions'] = []
+      if (withGroupsKeys.has(req.key)) {
+        for (const o of owners) {
+          const to = substitutions.get(o.id)
+          if (to) subs.push({ from: o, to })
+        }
+      }
+      opts.trace.set(req.key, {
+        ...t,
+        groupOwners,
+        instanceOwners,
+        standIn: assigned ? [] : fallbackOwnersFor(req),
+        substitutions: subs
+      })
+    }
   }
 
   return result
+}
+
+function emptyTrace(stateId: string): OwnerResolutionTrace {
+  return {
+    stateId,
+    hasGroups: false,
+    prepared: null,
+    winning: [],
+    record: {},
+    relations: [],
+    resolved: undefined,
+    groupOwners: [],
+    instanceOwners: [],
+    standIn: [],
+    substitutions: []
+  }
 }
 
 export async function resolveStateOwners(

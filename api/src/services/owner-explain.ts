@@ -142,7 +142,8 @@ async function relatedCollectionOf(collection: string, path: string): Promise<st
   return cur
 }
 
-function display(v: ResolvedFilterValue | undefined, raw: unknown): string {
+/** A filter field's value on the record, as words (resolved display value(s), else the raw column). */
+export function display(v: ResolvedFilterValue | undefined, raw: unknown): string {
   if (v) {
     const d = v.display instanceof Set ? [...v.display] : v.display != null ? [v.display] : []
     if (d.length > 0) return d.map(String).sort().join(', ')
