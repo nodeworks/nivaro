@@ -345,6 +345,7 @@ import {
   saveLeftWorkStaged
 } from './item-edit/save-outcome'
 import { refusedFieldOf } from './item-edit/save-refusal'
+import { isHalfSection, sectionRows, useFormPairs } from './item-edit/section-rows'
 import { foldStagedLinks, foldStagedRows } from './item-edit/staged-links'
 import { staleBannerMode, touchedEditsDiffer } from './item-edit/stale-banner'
 import { useFormUsageBeacon } from './item-edit/useFormUsageBeacon'
@@ -8807,6 +8808,12 @@ function ItemEditFormView({
     ownersGroupKey,
     assignments
   ])
+  // Record-form section width (migration 526): half sections pair up while the
+  // section stack is wide enough (section-rows.ts). Measured, so the canvas's
+  // phone/tablet frames stack them as those screens do.
+  const [sectionStackEl, setSectionStackEl] = useState<HTMLDivElement | null>(null)
+  const hasHalfSections = useMemo(() => groups.some(isHalfSection), [groups])
+  const formPairs = useFormPairs(sectionStackEl, hasHalfSections)
 
   // ── Client-side validation ─────────────────────────────────────────────────
   function validateAll(): boolean {
@@ -11594,7 +11601,8 @@ function ItemEditFormView({
   const sectionShell = (
     item: FieldGroup | string,
     key: string | number,
-    stickyKey?: string | null
+    stickyKey?: string | null,
+    half?: boolean
   ) => {
     const content = renderSectionItem(item)
     const sticky =
@@ -11603,7 +11611,14 @@ function ItemEditFormView({
       <div
         key={key}
         data-form-sticky={sticky ? '' : undefined}
-        className={sticky ? 'md:sticky md:top-[var(--nvr-sticky-top,0px)] md:z-20' : undefined}
+        data-form-width={half ? 'half' : undefined}
+        className={
+          sticky
+            ? 'md:sticky md:top-[var(--nvr-sticky-top,0px)] md:z-20'
+            : half
+              ? 'min-w-0'
+              : undefined
+        }
       >
         {content}
       </div>
@@ -12425,12 +12440,35 @@ function ItemEditFormView({
     const stickyKey = stickyGroupKey(
       sectionOrder.filter((x): x is FieldGroup => typeof x !== 'string' && !x.container_id)
     )
+    const keyOf = (item: (typeof sectionOrder)[number], i: number) =>
+      (typeof item === 'string' ? item : (item as FieldGroup).key) ?? i
+    // Half sections pair into one row (form_width); the sticky section keeps the
+    // whole row — sticking inside a row would only stick for that row's height.
+    const rows = hasHalfSections
+      ? sectionRows(
+          sectionOrder,
+          (item) => isHalfSection(item) && (item as FieldGroup).key !== stickyKey
+        )
+      : sectionOrder.map((item) => ({ kind: 'full' as const, item }))
     return (
-      <div data-section-stack='' className='nvr-stagger space-y-4'>
-        {sectionOrder.map((item, i) => {
-          const key = typeof item === 'string' ? item : (item as FieldGroup).key
-          return sectionShell(item, key ?? i, stickyKey)
-        })}
+      <div ref={setSectionStackEl} data-section-stack='' className='nvr-stagger space-y-4'>
+        {rows.map((row, i) =>
+          row.kind === 'full' ? (
+            sectionShell(row.item, keyOf(row.item, i), stickyKey)
+          ) : (
+            <div
+              key={`row:${(row.items[0] as FieldGroup).key}`}
+              data-form-row=''
+              data-form-row-cols={formPairs ? 2 : 1}
+              className={cn(
+                'grid items-start gap-4 [&>:empty]:hidden',
+                formPairs ? 'grid-cols-2' : 'grid-cols-1'
+              )}
+            >
+              {row.items.map((item, j) => sectionShell(item, keyOf(item, j), stickyKey, true))}
+            </div>
+          )
+        )}
         {!pipelineSlot && showPipeline && (
           <PipelinePanel
             collection={pipelineCollection}

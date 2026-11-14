@@ -1179,6 +1179,15 @@
     "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
   },
   {
+    "key": "group.form_width",
+    "label": "Record-form width: full or half (migration 526)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
     "key": "group.read_width",
     "label": "Read-view width",
     "home": "inspector",

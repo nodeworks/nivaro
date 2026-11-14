@@ -72,6 +72,8 @@ export interface GroupPatch {
   hidden_for_roles?: string | null
   locked_for_roles?: string | null
   read_width?: string | null
+  /** Record-form width of a top-level section: 'full' | 'half' | null (= full). Migration 526. */
+  form_width?: string | null
   /** #2608: an editor-only note, JSON {text, by, by_name, at}. Never sent to record pages. */
   editor_note?: string | null
   /** Label translations per locale, JSON `{ "es": { "label": "…" } }` (#2665). */
@@ -100,6 +102,8 @@ export interface GroupRow {
   hidden_for_roles: string | null
   locked_for_roles: string | null
   read_width: string | null
+  /** Record-form width ('full' | 'half' | null = full); null on databases before migration 526. */
+  form_width: string | null
   /** #2608 — absent on databases without the column (migration 460). */
   editor_note?: string | null
   /** Label translations per locale (#2665); absent before migration 465. */
@@ -227,6 +231,7 @@ export const GROUP_PATCH_KEYS = [
   'hidden_for_roles',
   'locked_for_roles',
   'read_width',
+  'form_width',
   'editor_note',
   'i18n'
 ] as const
@@ -392,7 +397,8 @@ export function newGroup(
     visible_when: null,
     hidden_for_roles: null,
     locked_for_roles: null,
-    read_width: null
+    read_width: null,
+    form_width: null
   }
 }
 
@@ -529,6 +535,8 @@ function applyOne(d: Draft, op: LayoutOp, i: number): void {
       fail(`Group type must be one of ${GROUP_TYPES.join(', ')}`)
     if (p.read_width != null && !['full', 'half', 'third'].includes(p.read_width as string))
       fail("read_width must be 'full', 'half', 'third' or null")
+    if (p.form_width != null && !['full', 'half'].includes(p.form_width as string))
+      fail("form_width must be 'full', 'half' or null")
     if (
       p.editor_note != null &&
       (typeof p.editor_note !== 'string' || p.editor_note.length > EDITOR_NOTE_MAX)

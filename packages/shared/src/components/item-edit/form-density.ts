@@ -23,6 +23,7 @@ const C = '[data-form-density=compact]'
 export const FORM_DENSITY_CSS = `
 ${C} [data-form-body]{padding:1rem 1.25rem}
 ${C} [data-form-body]>:not([hidden])~:not([hidden]),${C} [data-section-stack]>:not([hidden])~:not([hidden]){margin-top:.625rem}
+${C} [data-form-row]{gap:.625rem}
 ${C} [data-usage-header]{padding-top:.5rem;padding-bottom:.5rem}
 ${C} [data-section-body]{padding:.625rem 1rem .75rem}
 ${C} [data-section-grid]{row-gap:.625rem;column-gap:.875rem}
