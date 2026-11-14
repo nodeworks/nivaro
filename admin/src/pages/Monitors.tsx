@@ -14,6 +14,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { detailWithoutCause, StallCausePanel, type StallCauses } from './monitors/StallCausePanel'
 
 /**
  * Monitors — the always-watching checks: data freshness (an integration-fed
@@ -40,6 +41,8 @@ interface Monitor {
   last_status: 'ok' | 'failing' | 'unknown'
   last_checked_at: string | null
   last_detail: string | null
+  /** event_loop while failing: what ran through the worst stalls (2026-11-13). */
+  causes?: StallCauses | null
 }
 
 const TYPE_LABEL: Record<Monitor['type'], string> = {
@@ -665,7 +668,7 @@ export default function Monitors() {
             <div
               key={m.id}
               className={cn(
-                'flex items-start gap-3 rounded-lg border bg-white px-4 py-3 dark:bg-card',
+                'flex flex-wrap items-start gap-3 rounded-lg border bg-white px-4 py-3 dark:bg-card',
                 m.last_status === 'failing' && m.is_active
                   ? 'border-red-200 dark:border-red-500/30'
                   : 'border-slate-200 dark:border-border',
@@ -678,21 +681,28 @@ export default function Monitors() {
                   STATUS_DOT[m.last_status]
                 )}
               />
-              <div className='min-w-0 flex-1'>
+              {/* Wraps the actions under the text on a phone instead of squeezing it. */}
+              <div className='min-w-[min(100%,240px)] flex-1'>
                 <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
                   {m.name}
                   <span className='ml-2 rounded-full bg-slate-100 px-2 py-px text-[10.5px] font-medium text-slate-500 dark:bg-muted dark:text-muted-foreground'>
                     {TYPE_LABEL[m.type]}
                   </span>
                 </p>
+                {m.causes && m.last_status === 'failing' && <StallCausePanel causes={m.causes} />}
                 <p className='mt-0.5 whitespace-pre-wrap text-[12px] text-slate-500 dark:text-muted-foreground'>
-                  {m.last_detail ?? 'Not checked yet'}
+                  {m.last_detail
+                    ? detailWithoutCause(
+                        m.last_detail,
+                        m.last_status === 'failing' ? (m.causes ?? null) : null
+                      )
+                    : 'Not checked yet'}
                 </p>
                 <p className='mt-0.5 text-[11px] text-slate-400'>
                   Checked {rel(m.last_checked_at)}
                 </p>
               </div>
-              <div className='flex shrink-0 items-center gap-2'>
+              <div className='flex shrink-0 flex-wrap items-center gap-2'>
                 <SubscribersControl monitorId={m.id} />
                 <button
                   type='button'

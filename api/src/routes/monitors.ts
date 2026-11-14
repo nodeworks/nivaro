@@ -41,7 +41,11 @@ export async function monitorRoutes(app: FastifyInstance): Promise<void> {
       data: rows.map((r) => ({
         ...r,
         config: parseJsonSafe(r.config),
-        state: undefined // evaluator memory, not API surface
+        // The freeze cause (event_loop, while failing) — the rest of the state is evaluator memory.
+        ...(r.type === 'event_loop'
+          ? { causes: parseJsonSafe<{ causes?: unknown }>(r.state)?.causes ?? null }
+          : {}),
+        state: undefined
       }))
     }
   })

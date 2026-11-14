@@ -14,6 +14,11 @@
  * - routes: requests per route template per minute (Fastify's route url, so ids never become
  *   keys) for RECENT_MINUTES + BASELINE_MINUTES minutes, at most ROUTE_CAP routes, plus the total.
  *
+ * - stalls (2026-11-13): each stall of 500 ms+ with the requests that were running through it
+ *   (services/stall-causes.ts), so the freeze alert names its likely cause from the process that
+ *   stalled. Published right after a stall too (a few seconds later, so culprits that finish just
+ *   after it carry their whole duration).
+ *
  * Off in cloud mode: one process serves many tenants there and neither series is kept per tenant
  * (module-level state would mix them, gotchas) — the monitors answer `unknown` instead.
  */
@@ -21,6 +26,14 @@ import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
 import { instanceKey } from './instance-key.js'
 import { INSTANCE_ID } from './instance-roster.js'
+import {
+  describeStallCauses,
+  type StallCauses,
+  type StallLabels,
+  stallCauseLines,
+  stallLabels
+} from './stall-cause-words.js'
+import type { StallRecord } from './stall-causes.js'
 
 export const LAG_MINUTES = 10
 /** Index 0 is the current (partial) minute; 1… are complete minutes. */
@@ -85,6 +98,8 @@ export interface NodeSignals {
   lag: number[]
   total: RouteSignal
   routes: Array<RouteSignal & { route: string }>
+  /** Recent stalls with the requests running through them (absent on older processes). */
+  stalls?: StallRecord[]
 }
 
 /** One process's series. A class so tests can run several "nodes" side by side. */
@@ -100,8 +115,19 @@ export class SignalBook {
 
   noteLag(ms: number, at: number = Date.now()): void {
     if (!Number.isFinite(ms) || ms < 0) return
-    const i = slotOf(this.lag, minuteOf(at))
+    const minute = minuteOf(at)
+    const i = slotOf(this.lag, minute)
     if (ms > this.lag.v[i]) this.lag.v[i] = ms
+    // A long stall also blocked the minutes before the one it ended in, and no sample could be
+    // taken in them: each gets the part of the stall that fell inside it (a 61 s stall is two
+    // stalled minutes, not one minute and a silent one).
+    const start = at - ms
+    for (let m = minute - 1; m >= minuteOf(start) && m > minute - LAG_MINUTES; m--) {
+      const covered = Math.min((m + 1) * 60_000, at) - Math.max(m * 60_000, start)
+      if (covered <= 0) break
+      const j = slotOf(this.lag, m)
+      if (covered > this.lag.v[j]) this.lag.v[j] = covered
+    }
   }
 
   noteRequest(route: string, at: number = Date.now()): void {
@@ -136,7 +162,7 @@ export class SignalBook {
     return { recent, baseline }
   }
 
-  summary(now: number = Date.now()): NodeSignals {
+  summary(now: number = Date.now(), stalls?: StallRecord[]): NodeSignals {
     const minute = minuteOf(now)
     const lag = Array.from({ length: LAG_MINUTES }, (_, k) =>
       hasMinute(this.lag, minute - k) ? Math.round(valueAt(this.lag, minute - k)) : -1
@@ -156,7 +182,8 @@ export class SignalBook {
       history_minutes: Math.max(0, minute - this.startedMinute),
       lag,
       total: this.signalOf(this.total, minute),
-      routes
+      routes,
+      ...(stalls ? { stalls } : {})
     }
   }
 }
@@ -173,10 +200,28 @@ const cloud = (): boolean => !!process.env.CLOUD_META_DB_URL
 let book: SignalBook | null = null
 let timer: ReturnType<typeof setInterval> | null = null
 let redisRef: Redis | null = null
+/** services/stall-causes.ts once loaded (dynamic import keeps this module light). */
+let stalls: {
+  note: (ms: number, at: number) => void
+  recent: (now: number) => StallRecord[]
+} | null = null
+let stallPublish: ReturnType<typeof setTimeout> | null = null
+/** After a stall, publish once this much later (culprits that finish just after carry their time). */
+const STALL_PUBLISH_DELAY_MS = 3_000
 
 /** The runtime monitor's sampler hands every lag sample here (no-op until started). */
 export function noteLagSample(ms: number, at: number = Date.now()): void {
   book?.noteLag(ms, at)
+  stalls?.note(ms, at)
+}
+
+function publishSoonAfterStall(): void {
+  if (stallPublish || !redisRef) return
+  stallPublish = setTimeout(() => {
+    stallPublish = null
+    void publish()
+  }, STALL_PUBLISH_DELAY_MS)
+  stallPublish.unref?.()
 }
 
 /** `GET /api/items/:collection` — Fastify's route url; a request no route matched keeps its template. */
@@ -193,7 +238,13 @@ export function routeKeyOf(
 async function publish(): Promise<void> {
   if (!redisRef || !book) return
   try {
-    await redisRef.set(`${KEY_PREFIX}${INSTANCE_ID}`, JSON.stringify(book.summary()), 'EX', TTL_S)
+    const now = Date.now()
+    await redisRef.set(
+      `${KEY_PREFIX}${INSTANCE_ID}`,
+      JSON.stringify(book.summary(now, stalls?.recent(now))),
+      'EX',
+      TTL_S
+    )
   } catch {
     /* the next beat retries */
   }
@@ -204,10 +255,13 @@ export async function startOpsSignals(redis: Redis | null): Promise<void> {
   if (cloud() || book) return
   book = new SignalBook()
   redisRef = redis
-  const [{ onRequestNoted }, { routeTemplate }] = await Promise.all([
+  const [{ onRequestNoted }, { routeTemplate }, sc] = await Promise.all([
     import('./traffic-map.js'),
-    import('./traffic-entities.js')
+    import('./traffic-entities.js'),
+    import('./stall-causes.js')
   ])
+  sc.startStallCauses(publishSoonAfterStall)
+  stalls = { note: sc.noteStallSample, recent: sc.recentStalls }
   onRequestNoted((ev) => {
     book?.noteRequest(
       routeKeyOf(ev, (m, p) => routeTemplate(m, p)),
@@ -242,7 +296,10 @@ export async function readNodeSignals(
       if (!v) continue
       try {
         const s = JSON.parse(v) as NodeSignals
-        if (s?.v === 1 && Array.isArray(s.lag) && now - Number(s.at) <= STALE_MS) out.push(s)
+        if (s?.v === 1 && Array.isArray(s.lag) && now - Number(s.at) <= STALE_MS) {
+          if (s.stalls != null && !Array.isArray(s.stalls)) delete s.stalls
+          out.push(s)
+        }
       } catch {
         /* a torn value is skipped */
       }
@@ -259,6 +316,8 @@ export interface SignalVerdict {
   status: 'ok' | 'failing' | 'unknown'
   detail: string
   metric?: number
+  /** event_loop only: the stalled processes' worst stalls and what ran through them. */
+  causes?: StallCauses
 }
 
 const clampInt = (v: unknown, d: number, lo: number, hi: number): number => {
@@ -304,7 +363,11 @@ export function normalizeEventLoopConfig(cfg: Record<string, unknown>): EventLoo
  * complete minutes peaked above `threshold_ms`. Every complete minute the summary holds is
  * searched (sliding), so a stall between two 5-minute monitor runs is still caught.
  */
-export function judgeEventLoop(nodes: NodeSignals[], raw: Record<string, unknown>): SignalVerdict {
+export function judgeEventLoop(
+  nodes: NodeSignals[],
+  raw: Record<string, unknown>,
+  labels: StallLabels = { users: new Map(), collections: new Map(), zone: 'UTC' }
+): SignalVerdict {
   const cfg = normalizeEventLoopConfig(raw)
   if (nodes.length === 0)
     return {
@@ -322,26 +385,48 @@ export function judgeEventLoop(nodes: NodeSignals[], raw: Record<string, unknown
       if (breaches > best) best = breaches
     }
     const worst = Math.max(0, ...complete)
-    return { node: n.node, role: n.role, best, worst, failing: best >= cfg.breach_minutes }
+    return {
+      node: n.node,
+      role: n.role,
+      best,
+      worst,
+      failing: best >= cfg.breach_minutes,
+      stalls: stallsInWindow(n)
+    }
   })
   const worstAll = Math.max(0, ...rows.map((r) => r.worst))
   const label = (r: (typeof rows)[number]) => `${r.node}${r.role ? ` (${r.role})` : ''}`
   const failing = rows.filter((r) => r.failing)
   if (failing.length) {
+    // What ran through the stalls on the processes that stalled (their own records only).
+    const causes = describeStallCauses(
+      failing.map((r) => ({
+        node: r.node,
+        role: r.role,
+        stalls: r.stalls.filter((s) => s.ms > cfg.threshold_ms)
+      })),
+      labels
+    )
+    const recorded = failing.some((r) => r.stalls.length > 0)
     return {
       status: 'failing',
       metric: worstAll,
+      ...(causes.nodes.length ? { causes } : {}),
       detail: [
         `Event loop stalled on ${failing.length} of ${rows.length} API process${
           rows.length === 1 ? '' : 'es'
         }: lag above ${cfg.threshold_ms} ms in ${cfg.breach_minutes}+ of ${cfg.window_minutes} minutes.`,
+        ...(causes.headline ? [causes.headline] : []),
         ...rows.map(
           (r) =>
             `  ${label(r)}: ${r.best} of ${cfg.window_minutes} minutes over, worst ${r.worst} ms${
               r.failing ? ' ← stalled' : ''
             }`
         ),
-        'Requests on a stalled process wait for the loop: look for a hot route (route-rate monitor, Traffic Map) or a synchronous step (Health → Telemetry → Slowest requests).'
+        ...stallCauseLines(causes, labels.zone),
+        recorded
+          ? 'Every request on a stalled process waits for the loop, so the one that covers the whole stall and was running code (not waiting on the database) is the likely cause.'
+          : 'Requests on a stalled process wait for the loop: look for a hot route (route-rate monitor, Traffic Map) or a synchronous step (Health → Telemetry → Slowest requests).'
       ].join('\n')
     }
   }
@@ -350,6 +435,15 @@ export function judgeEventLoop(nodes: NodeSignals[], raw: Record<string, unknown
     metric: worstAll,
     detail: `Event loop healthy on ${rows.length} process${rows.length === 1 ? '' : 'es'} (worst minute ${worstAll} ms, limit ${cfg.threshold_ms} ms)`
   }
+}
+
+/** A node's stalls inside the lag series' window (its own summary's clock). */
+function stallsInWindow(n: NodeSignals): StallRecord[] {
+  if (!Array.isArray(n.stalls)) return []
+  const since = Number(n.at) - LAG_MINUTES * 60_000
+  return n.stalls.filter(
+    (s) => s && Number(s.at) >= since && Number(s.ms) > 0 && Array.isArray(s.culprits)
+  )
 }
 
 export interface RouteSpikeConfig {
@@ -566,7 +660,18 @@ async function appRedis(): Promise<Redis | null> {
 
 export async function evalEventLoop(cfg: Record<string, unknown>): Promise<SignalVerdict> {
   if (cloud()) return { status: 'unknown', detail: CLOUD_DETAIL }
-  return judgeEventLoop(await readNodeSignals(await appRedis()), cfg)
+  const nodes = await readNodeSignals(await appRedis())
+  // Names are read now, at alert time — the published records carry ids only.
+  const records = nodes.flatMap(stallsInWindow)
+  const zone = await import('./liquid-dates.js')
+    .then((m) => m.instanceTimezone())
+    .catch(() => 'UTC')
+  const labels = records.length
+    ? await stallLabels(records, zone).catch(
+        (): StallLabels => ({ users: new Map(), collections: new Map(), zone })
+      )
+    : { users: new Map(), collections: new Map(), zone }
+  return judgeEventLoop(nodes, cfg, labels)
 }
 
 export async function evalRouteSpike(cfg: Record<string, unknown>): Promise<SignalVerdict> {
@@ -580,4 +685,7 @@ export function _resetOpsSignalsForTests(): void {
   if (timer) clearInterval(timer)
   timer = null
   redisRef = null
+  stalls = null
+  if (stallPublish) clearTimeout(stallPublish)
+  stallPublish = null
 }

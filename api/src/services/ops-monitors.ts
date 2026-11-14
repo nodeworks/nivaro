@@ -6,6 +6,7 @@ import { NIVARO_VERSION } from '../version.js'
 import { noteAlertFired } from './alert-fired.js'
 import { startJobRun } from './job-runs.js'
 import { notifyUser } from './notification-channels.js'
+import type { StallCauses } from './stall-cause-words.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
@@ -45,6 +46,46 @@ export interface EvalResult {
   detail: string
   /** Probe latency etc — lands as the job run's outcome for trend reads. */
   metric?: number
+  /** event_loop: what ran through the stalls (kept in the monitor's state while failing). */
+  causes?: StallCauses
+}
+
+/** Room the causes may take in `nivaro_monitors.state` (the whole state is capped at 8000). */
+const CAUSES_STATE_MAX = 6000
+
+/**
+ * The causes as stored for the Monitors page: trimmed until they fit (fewer culprits, then fewer
+ * nodes) — the state column is sliced at 8000 characters and a cut JSON would not parse.
+ */
+export function causesForState(causes: StallCauses): StallCauses | null {
+  const c: StallCauses = {
+    headline: causes.headline,
+    nodes: causes.nodes.slice(0, 3).map((n) => ({ ...n, culprits: n.culprits.slice(0, 5) }))
+  }
+  while (JSON.stringify(c).length > CAUSES_STATE_MAX) {
+    const widest = c.nodes.reduce<StallCauses['nodes'][number] | null>(
+      (w, n) => (n.culprits.length > 1 && (!w || n.culprits.length > w.culprits.length) ? n : w),
+      null
+    )
+    if (widest) widest.culprits.pop()
+    else if (c.nodes.length > 1) c.nodes.pop()
+    else return c.headline ? { headline: c.headline, nodes: [] } : null
+  }
+  return c
+}
+
+/**
+ * The text a person is told (in-app, push, email, Teams — one notice): the likely cause first,
+ * so it survives the 500-character cut; the full detail stays on the issue and the monitor.
+ */
+export function noticeText(detail: string, causes?: StallCauses | null): string {
+  const head = causes?.headline
+  if (!head) return detail.slice(0, 500)
+  const rest = detail
+    .split('\n')
+    .filter((l) => l !== head)
+    .join('\n')
+  return `${head}\n${rest}`.slice(0, 500)
 }
 
 function parseJson<T>(raw: unknown, fallback: T): T {
@@ -362,7 +403,8 @@ async function adminsAmong(userIds: string[]): Promise<Set<string>> {
 async function raiseIssue(
   monitor: MonitorRow,
   detail: string,
-  app: FastifyInstance | null
+  app: FastifyInstance | null,
+  causes?: StallCauses | null
 ): Promise<void> {
   try {
     const fingerprint = createHash('sha256').update(`ops-monitor|${monitor.id}`).digest('hex')
@@ -418,7 +460,7 @@ async function raiseIssue(
       for (const userId of recipients) {
         await notifyUser(app, userId, {
           subject: `Monitor failing: ${monitor.name}`,
-          message: withDrillNote(detail.slice(0, 500), drill),
+          message: withDrillNote(noticeText(detail, causes), drill),
           ...(admins.has(userId.toUpperCase()) ? { target: MONITOR_NOTICE_TARGET } : {})
         }).catch(() => {})
       }
@@ -426,7 +468,7 @@ async function raiseIssue(
         await tellDrillParticipants(
           app,
           drill,
-          { subject: `Monitor failing: ${monitor.name}`, message: detail.slice(0, 500) },
+          { subject: `Monitor failing: ${monitor.name}`, message: noticeText(detail, causes) },
           recipients
         )
     }
@@ -645,6 +687,12 @@ export async function evaluateMonitor(
     }
   }
 
+  // The freeze cause rides the state while the monitor fails (the Monitors page shows it).
+  if (monitor.type === 'event_loop') {
+    const kept = result.status === 'failing' && result.causes ? causesForState(result.causes) : null
+    nextState = { ...nextState, causes: kept, causes_at: kept ? new Date().toISOString() : null }
+  }
+
   // Flip detection BEFORE the row update reads the prior status.
   const flippedToFailing = result.status === 'failing' && monitor.last_status !== 'failing'
   await db('nivaro_monitors')
@@ -659,7 +707,7 @@ export async function evaluateMonitor(
     .catch(() => {})
   if (flippedToFailing) {
     noteAlertFired({ source: 'monitor', key: String(monitor.id), label: monitor.name })
-    await raiseIssue(monitor, result.detail, app)
+    await raiseIssue(monitor, result.detail, app, result.causes)
     // #1371 — people on the pages this monitor watches record what they see.
     const paths = [
       cfg.path,
