@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-11-13T23:16:19.764Z",
+  "generated_at": "2026-11-14T00:25:18.131Z",
   "releases": [
+    {
+      "version": "0.3.155",
+      "tag": "v0.3.155",
+      "date": "2026-11-13T19:24:57-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "layout",
+              "text": "Full or half width for sections on the record form",
+              "hash": "4c1969a57"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "grids",
+              "text": "relation lists keep their own cache key",
+              "hash": "ae42574d3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "the General tab and step switch on the canvas",
+              "hash": "4cd306cd2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "imports",
+              "text": "collection and field pickers by name, without the junk",
+              "hash": "34c3bcc43"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "addendums and notifications by name, \"an addendum\"",
+              "hash": "fc165b6c6"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.3.154",
       "tag": "v0.3.154",
-      "date": "2026-11-13T18:16:00-05:00",
+      "date": "2026-11-13T18:16:19-05:00",
       "sections": [
         {
           "label": "Added",
