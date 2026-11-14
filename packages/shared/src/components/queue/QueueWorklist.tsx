@@ -121,6 +121,18 @@ import { BulkFieldUpdateButton } from '../bulk/BulkFieldUpdateButton'
 import { BulkRowMark } from '../bulk/BulkRowMark'
 import { BulkMessageButton } from '../bulk/MessageStakeholders'
 import { compareCell, RowActionsMenu, roleMayUpdate } from '../CollectionBrowserView'
+import { ColumnHeaderMenu } from '../cbv/ColumnHeaderMenu'
+import {
+  formatTotal,
+  isTotalFn,
+  loadTotalOverridesAt,
+  overridesAfterSave,
+  rememberTotalOverridesAt,
+  setOverride,
+  shownTotals,
+  type TotalFn,
+  type TotalOverrides
+} from '../cbv/column-totals'
 import { type Column, DataTable, type FilterDef } from '../DataTable'
 import { EmptyState } from '../EmptyState'
 import { FocusModeToggle } from '../FocusModeToggle'
@@ -161,6 +173,18 @@ import { QueueItemSheet } from './QueueItemSheet'
 import { QueueKanbanBoard } from './QueueKanbanBoard'
 import { QueueQuickFilters } from './QueueQuickFilters'
 import { QueueWorkloadView } from './QueueWorkloadView'
+import {
+  formulaTotalFormat,
+  type QueueTotalsAnswer,
+  type QueueTotalsSupport,
+  queueTotalColumns,
+  queueTotalPaths,
+  queueTotalsEligibleKey,
+  queueTotalsStoreKey,
+  queueTotalsSupport,
+  queueTotalTip,
+  queueTotalValue
+} from './queue-totals'
 import { needsTransitionNote, useTransitionNote } from './transition-note'
 import { worklistCsv, worklistCsvName } from './worklist-csv'
 import { atRiskBreakdown, extraChoiceText, worklistKeyTarget } from './worklist-helpers'
@@ -322,6 +346,10 @@ interface ExtraFieldMeta {
   aggregate?: string
   /** The field's select choices — values show as their labels (army 11 Q1-2). */
   choices?: Array<{ value: string; text: string }>
+  /** Totals row: one number per row / several values per row / a number with no total. */
+  number?: boolean
+  multi_value?: boolean
+  no_total?: string
 }
 
 interface QueueMeta {
@@ -386,6 +414,8 @@ interface QueueView {
     columns?: string[] | null
     /** Per-column pin sides; null/absent = default (first column pinned left). */
     pins?: Record<string, 'left' | 'right'> | null
+    /** Totals row (2026-11-14): column → function, as the list showed when saved. */
+    totals?: Record<string, TotalFn> | null
   } | null
 }
 
@@ -744,6 +774,31 @@ export function QueueWorklist({
   // Per-column pinning (CBV parity) — null = default (first column pinned left).
   // Session state, snapshotted into saved views as `pins`.
   const [columnPins, setColumnPins] = useState<Record<string, 'left' | 'right'> | null>(null)
+  // Totals row (2026-11-14, the collection list's model): what shows = the open view's totals
+  // with the person's OWN choices laid over them; the choices are remembered per queue in
+  // this browser and never replaced by a view's; a saved view gets what is on screen.
+  const [viewTotals, setViewTotals] = useState<Record<string, TotalFn>>({})
+  const [totalOverrides, setTotalOverrides] = useState<TotalOverrides>(() =>
+    loadTotalOverridesAt(queueTotalsStoreKey(queueId), queueTotalsEligibleKey)
+  )
+  const totalsLoadedFor = useRef(queueId)
+  if (totalsLoadedFor.current !== queueId) {
+    // Another queue in the same mounted worklist: its own remembered choices.
+    totalsLoadedFor.current = queueId
+    setTotalOverrides(loadTotalOverridesAt(queueTotalsStoreKey(queueId), queueTotalsEligibleKey))
+    setViewTotals({})
+  }
+  const columnAggs = useMemo(
+    () => shownTotals(viewTotals, totalOverrides),
+    [viewTotals, totalOverrides]
+  )
+  // Stored when the person changes them, never from an effect.
+  const setColumnTotal = (key: string, fn: TotalFn | null) =>
+    setTotalOverrides((o) => {
+      const next = setOverride(o, key, fn)
+      rememberTotalOverridesAt(queueTotalsStoreKey(queueId), next)
+      return next
+    })
   // Socket-driven updates no longer refetch under the user — they accumulate here
   // and surface as a "N updates · Refresh" pill the user triggers explicitly.
   const [pendingUpdates, setPendingUpdates] = useState(0)
@@ -1072,6 +1127,29 @@ export function QueueWorklist({
   const serverGrouped = view === 'table' && !!groupBy
   // Numeric extra columns get a per-group sum in the header — never ids or years.
   const groupSumPaths = groupSumPathsFor(queue)
+  // Totals row (2026-11-14): which columns can carry a footer figure, and the extra-column
+  // paths the items read asks the server to total over the WHOLE result (scope tab + column
+  // filters, every page) — riding the read the rows already make, so no second fan-out.
+  // A table only, ungrouped (a grouped table's headers carry their own sums).
+  const totalsCtx = useMemo(
+    () => ({
+      meta: queue?.extra_field_meta ?? null,
+      numberFormatPaths: new Set(
+        (queue?.sources ?? []).flatMap((src) =>
+          Object.entries(src.column_formats ?? {})
+            .filter(([, cfg]) => cfg?.type === 'number')
+            .map(([p]) => p)
+        )
+      ),
+      formulas: queue?.display_config?.formula_columns ?? null
+    }),
+    [queue]
+  )
+  const totalsSupportOf = (key: string): QueueTotalsSupport | null =>
+    queueTotalsSupport(key, totalsCtx)
+  const totalCols = queueTotalColumns(columnAggs, totalsSupportOf)
+  const totalsOn = view === 'table' && !serverGrouped && totalCols.length > 0
+  const totalPaths = totalsOn ? queueTotalPaths(totalCols, totalsSupportOf) : []
 
   const apiFilters = (() => {
     const out: Record<string, unknown> = {}
@@ -1279,6 +1357,10 @@ export function QueueWorklist({
     next_cursor?: string | null
     /** #502: why a view came back empty — nothing yours / filtered / unreadable. */
     empty?: { reason: string; message: string; unreadable: string[]; queue_total: number | null }
+    /** Totals row: per asked path, over the whole result (not just this page). */
+    totals?: QueueTotalsAnswer
+    /** The live read stopped at its row ceiling — the totals cover the rows it read. */
+    totals_partial?: boolean
   }
   const {
     data,
@@ -1297,7 +1379,8 @@ export function QueueWorklist({
       sort,
       debouncedFilterValues,
       view === 'table' && !groupBy ? page : 'all',
-      groupBy
+      groupBy,
+      totalPaths.join(',')
     ],
     queryFn: async () => {
       // #2447 — table pages walk forward by cursor when the server can (a materialized
@@ -1326,7 +1409,8 @@ export function QueueWorklist({
               }
             : view === 'table'
               ? { page, limit, ...(after ? { after } : {}) }
-              : {})
+              : {}),
+          ...(totalPaths.length ? { totals: totalPaths.join(',') } : {})
         })
       )
       if (after) noteNextCursor(cursorBookRef.current, bookKey, page, res.next_cursor)
@@ -2326,6 +2410,14 @@ export function QueueWorklist({
     // Full snapshot: a view without saved columns resets to the queue default.
     setVisibleColumns(s.columns ?? null)
     setColumnPins(s.pins ?? null)
+    // The view's totals, under the person's own choices (which a view never replaces).
+    setViewTotals(
+      Object.fromEntries(
+        Object.entries(s.totals ?? {}).filter(
+          ([k, fn]) => queueTotalsEligibleKey(k) && isTotalFn(fn)
+        )
+      ) as Record<string, TotalFn>
+    )
     if (s.view) setView(allowedViews.includes(s.view) ? s.view : allowedViews[0])
     setPage(1)
     setActiveViewId(v.id)
@@ -2345,6 +2437,7 @@ export function QueueWorklist({
     setGroupBy(null)
     setVisibleColumns(null)
     setColumnPins(null)
+    setViewTotals({})
     if (queue?.display_config?.default_view) setView(queue.display_config.default_view)
     setPage(1)
     setActiveViewId(null)
@@ -2486,6 +2579,7 @@ export function QueueWorklist({
     view,
     columns: visibleColumns,
     pins: columnPins,
+    ...(totalCols.length ? { totals: totalsOnScreen() } : {}),
     ...(page > 1 ? { page } : {}),
     ...(activeViewId != null && activeViewId > 0 ? { view_id: activeViewId } : {})
   })
@@ -2539,11 +2633,13 @@ export function QueueWorklist({
             group_by: groupBy,
             view,
             columns: visibleColumns,
-            pins: columnPins
+            pins: columnPins,
+            totals: totalsOnScreen()
           }
         })
       ),
     onSuccess: (res) => {
+      afterViewSaved(totalsOnScreen())
       setSaveOpen(false)
       setSaveName('')
       setSaveShared(false)
@@ -2568,11 +2664,13 @@ export function QueueWorklist({
             group_by: groupBy,
             view,
             columns: visibleColumns,
-            pins: columnPins
+            pins: columnPins,
+            totals: totalsOnScreen()
           }
         })
       ),
     onSuccess: (_r, v) => {
+      if (v.id === activeViewId) afterViewSaved(totalsOnScreen())
       qc.invalidateQueries({ queryKey: ['queue-views', queueId] })
       setViewJustSaved(v.id)
       setTimeout(() => setViewJustSaved((cur) => (cur === v.id ? null : cur)), 2000)
@@ -3471,15 +3569,119 @@ export function QueueWorklist({
       )
   }
 
+  // Totals row: a number column's header menu offers Σ Sum / Average / Min / Max / Count / Off
+  // (the collection list's menu); a formula column Sum alone, or why it has no total.
+  const columnHeaderText = (c: Column<QueueItemRow>) =>
+    typeof c.header === 'string' ? c.header : c.key
+  const derivedText = (terms: Array<{ field: string; sign: 1 | -1 }>) =>
+    terms
+      .map((t, i) => {
+        const label = aliasFor(`extra.${t.field}`, formatColumnHeader(t.field))
+        return `${i === 0 ? (t.sign < 0 ? '− ' : '') : t.sign < 0 ? ' − ' : ' + '}${label}`
+      })
+      .join('')
+  const withTotalsMenu = (c: Column<QueueItemRow>): Column<QueueItemRow> => {
+    if (view !== 'table' || serverGrouped) return c
+    const sup = totalsSupportOf(c.key)
+    if (!sup) return c
+    const onChange = (fn: TotalFn | null) => setColumnTotal(c.key, fn)
+    const totals =
+      sup.kind === 'none'
+        ? { fn: null, onChange, unavailable: sup.why }
+        : sup.kind === 'derived'
+          ? {
+              fn: columnAggs[c.key] === 'sum' ? ('sum' as TotalFn) : null,
+              onChange,
+              only: ['sum'] as TotalFn[],
+              note: `Sum only: worked out as ${derivedText(sup.terms)}.`
+            }
+          : { fn: columnAggs[c.key] ?? null, onChange }
+    return {
+      ...c,
+      headerMenu: <ColumnHeaderMenu label={columnHeaderText(c)} selectedCount={0} totals={totals} />
+    }
+  }
   const columns: Column<QueueItemRow>[] = [
     labelColumn,
     ...orderedToggleableKeys
       .filter((k) => effectiveVisible.has(k))
       .map((k) => allToggleable.find((c) => c.key === k))
-      .filter((c): c is Column<QueueItemRow> => c !== undefined),
+      .filter((c): c is Column<QueueItemRow> => c !== undefined)
+      .map(withTotalsMenu),
     ...(claimsEnabled ? [claimColumn] : []),
     actionsColumn
   ]
+  // The footer: one figure per visible column with a total on, over the whole result.
+  const totalsAnswer = data?.totals
+  const totalsRow = (() => {
+    if (!totalsOn) return undefined
+    const cells: Record<string, React.ReactNode> = {}
+    let any = false
+    for (const c of columns) {
+      if (!totalCols.includes(c.key)) continue
+      const sup = totalsSupportOf(c.key)
+      const fn = columnAggs[c.key]
+      if (!sup || sup.kind === 'none' || !fn) continue
+      any = true
+      const value = queueTotalValue(totalsAnswer, sup, fn)
+      const fc = c.key.startsWith('formula.')
+        ? (displayConfig?.formula_columns ?? []).find((f) => `formula.${f.key}` === c.key)
+        : null
+      const fmt = fc ? formulaTotalFormat(fc.format) : formatConfigFor(c.key.slice('extra.'.length))
+      const format = (v: number) =>
+        formatTotal(v, fn, (fmt?.type === 'number' ? fmt : null) as never)
+      const short = { sum: 'Sum', avg: 'Avg', min: 'Min', max: 'Max', count: 'Count' }[fn]
+      const loading = value === undefined
+      const tip = loading
+        ? undefined
+        : queueTotalTip({
+            fn,
+            label: columnHeaderText(c),
+            rows: data?.total ?? null,
+            byCollection:
+              sup.kind === 'server' ? totalsAnswer?.[sup.path]?.by_collection : undefined,
+            collectionLabel,
+            format,
+            partial: data?.totals_partial === true,
+            derivedText: sup.kind === 'derived' ? derivedText(sup.terms) : undefined
+          })
+      cells[c.key] = (
+        <span className='inline-flex items-baseline gap-1.5' data-tip={tip} data-queue-total={fn}>
+          <span className='text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+            {short}
+          </span>
+          {loading ? (
+            <Skeleton className='inline-block h-3 w-12 align-middle' />
+          ) : (
+            <span className='text-slate-700 dark:text-slate-200'>
+              {value == null ? '—' : format(value)}
+              {data?.totals_partial ? '*' : ''}
+            </span>
+          )}
+        </span>
+      )
+    }
+    if (!any) return undefined
+    return {
+      cells,
+      label: (
+        <span className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+          Σ totals
+        </span>
+      )
+    }
+  })()
+  // A view saved with the totals on screen states them from now on.
+  const totalsOnScreen = (): Record<string, TotalFn> =>
+    Object.fromEntries(totalCols.map((k) => [k, columnAggs[k] as TotalFn]))
+  const afterViewSaved = (saved: Record<string, TotalFn>) => {
+    setViewTotals(saved)
+    setTotalOverrides((o) => {
+      const next = overridesAfterSave(o, saved)
+      rememberTotalOverridesAt(queueTotalsStoreKey(queueId), next)
+      return next
+    })
+  }
 
   // Army 11 N9: worklist CSV — every row of this tab + filters + sort (paged reads,
   // capped), the columns on screen, the words on screen.
@@ -5250,6 +5452,7 @@ export function QueueWorklist({
                   }}
                   columnFilterRow
                   hScrollProxy
+                  totalsRow={totalsRow}
                   footer={
                     <RowHighlightLegend
                       collections={sourceCollections}

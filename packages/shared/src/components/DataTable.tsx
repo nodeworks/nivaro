@@ -52,6 +52,9 @@ export interface Column<T = Record<string, unknown>> {
   className?: string
   headerClassName?: string
   render?: (row: T, index: number) => React.ReactNode
+  /** A column menu beside the header (e.g. the totals row choice, cbv/ColumnHeaderMenu); it
+   *  stops its own clicks, and shows on header hover (`group/hcell`). */
+  headerMenu?: React.ReactNode
 }
 
 /** Plain text of a header node (strings, numbers, nested elements). */
@@ -191,6 +194,12 @@ export interface DataTableProps<T = Record<string, unknown>> {
   activeRowKey?: string | null
   /** Accessible name of a focusable row (e.g. its record id and title). */
   rowAriaLabel?: (row: T) => string | undefined
+  /**
+   * Totals row (2026-11-14): a footer row that stays at the bottom of the scrolling rows,
+   * one cell per column (`cells[key]`, absent = empty); `label` fills the first empty data
+   * cell ("Σ totals"). Hidden while grouped, loading or empty.
+   */
+  totalsRow?: { cells: Record<string, React.ReactNode>; label?: React.ReactNode }
 }
 
 // ─── Sort helpers ─────────────────────────────────────────────────────────────
@@ -916,7 +925,8 @@ export function DataTable<T = Record<string, unknown>>({
   onToggleGroup,
   onRowFocus,
   activeRowKey,
-  rowAriaLabel
+  rowAriaLabel,
+  totalsRow
 }: DataTableProps<T>) {
   const totalPages = Math.ceil(total / limit)
   const start = (page - 1) * limit + 1
@@ -1320,7 +1330,7 @@ export function DataTable<T = Record<string, unknown>>({
                         }}
                         style={pinStyle(col.key)}
                         className={cn(
-                          'group/th h-9 whitespace-nowrap bg-slate-50 px-3 py-0 text-[11px] font-medium text-slate-500',
+                          'group/th group/hcell h-9 whitespace-nowrap bg-slate-50 px-3 py-0 text-[11px] font-medium text-slate-500',
                           col.sortable &&
                             onSortChange &&
                             'cursor-pointer select-none hover:text-slate-600',
@@ -1408,6 +1418,7 @@ export function DataTable<T = Record<string, unknown>>({
                               />
                             </button>
                           )}
+                          {col.headerMenu}
                         </span>
                       </TableHead>
                     ))}
@@ -1505,6 +1516,52 @@ export function DataTable<T = Record<string, unknown>>({
                     </TableRow>
                   )}
                 </TableBody>
+                {totalsRow && !rowGroups && rows.length > 0 && (
+                  // Sticky per cell (not per row): a pinned cell sticks left/right AND bottom.
+                  <tfoot className='text-[12px] tabular-nums' data-dt-totals>
+                    <tr>
+                      {onSelectionChange && (
+                        <td
+                          className={cn(
+                            'sticky bottom-0 z-[3] border-t-2 border-slate-200 bg-slate-50 px-3 py-1.5 dark:border-border dark:bg-muted',
+                            (pinFirstColumn || pinsActive) && 'left-0 z-[4]'
+                          )}
+                        />
+                      )}
+                      {(() => {
+                        const labelAt = orderedColumns.findIndex(
+                          (c) => totalsRow.cells[c.key] == null
+                        )
+                        return orderedColumns.map((col, i) => {
+                          const pinned = pinsActive && !!pinPos[col.key]
+                          const content = totalsRow.cells[col.key]
+                          return (
+                            <td
+                              key={col.key}
+                              style={pinStyle(col.key)}
+                              data-dt-total-cell={content != null ? col.key : undefined}
+                              className={cn(
+                                'sticky bottom-0 z-[3] whitespace-nowrap border-t-2 border-slate-200 bg-slate-50 px-3 py-1.5 font-medium dark:border-border dark:bg-muted',
+                                pinned && 'z-[4]',
+                                pinned &&
+                                  pinPos[col.key]?.seam &&
+                                  (pinPos[col.key]?.side === 'left' ? 'border-r' : 'border-l'),
+                                !pinsActive && pinFirstColumn && i === 0 && 'z-[4]',
+                                !pinsActive &&
+                                  pinFirstColumn &&
+                                  i === 0 &&
+                                  (onSelectionChange ? 'left-[39px]' : 'left-0')
+                              )}
+                            >
+                              {content ??
+                                (i === labelAt && totalsRow.label != null ? totalsRow.label : null)}
+                            </td>
+                          )
+                        })
+                      })()}
+                    </tr>
+                  </tfoot>
+                )}
               </Table>
             </div>
             {hScrollProxy && <HScrollProxy scrollerRef={hScrollRef} />}

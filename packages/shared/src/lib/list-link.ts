@@ -276,6 +276,8 @@ export interface QueueLinkState {
   view?: 'table' | 'kanban' | 'workload'
   columns?: string[] | null
   pins?: Record<string, 'left' | 'right'> | null
+  /** Totals row: column → sum | avg | min | max | count, as the sender saw it. */
+  totals?: Record<string, 'sum' | 'avg' | 'min' | 'max' | 'count'>
   page?: number
   /** The saved view the worklist was on (its pill shows active again when the reader has it). */
   view_id?: number
@@ -313,6 +315,16 @@ export function sanitizeQueueLinkState(raw: Record<string, unknown> | null): Que
     const pins: Record<string, 'left' | 'right'> = {}
     for (const [k, v] of Object.entries(raw.pins)) if (v === 'left' || v === 'right') pins[k] = v
     if (Object.keys(pins).length) out.pins = pins
+  }
+  if (isObj(raw.totals)) {
+    const totals: NonNullable<QueueLinkState['totals']> = {}
+    for (const [k, v] of Object.entries(raw.totals))
+      if (
+        /^(extra|formula)\.[A-Za-z_][\w.]*$/.test(k) &&
+        (v === 'sum' || v === 'avg' || v === 'min' || v === 'max' || v === 'count')
+      )
+        totals[k] = v
+    if (Object.keys(totals).length) out.totals = totals
   }
   const page = posInt(raw.page, 100000)
   if (page) out.page = page

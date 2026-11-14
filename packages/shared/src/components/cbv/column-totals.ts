@@ -77,8 +77,23 @@ const isOverride = (v: unknown): v is TotalOverride => v === 'off' || isTotalFn(
  * what the list showed; each entry is read as the person's choice for that column.
  */
 export function loadTotalOverrides(collection: string): TotalOverrides {
+  return loadTotalOverridesAt(storeKey(collection), totalsEligibleKey)
+}
+
+export function rememberTotalOverrides(collection: string, overrides: TotalOverrides): void {
+  rememberTotalOverridesAt(storeKey(collection), overrides)
+}
+
+/**
+ * The same choices under any list's own storage key (a queue worklist keeps its own,
+ * `nvr_queue_totals_<queue id>`, with `extra.` / `formula.` column keys).
+ */
+export function loadTotalOverridesAt(
+  key: string,
+  eligible: (column: string) => boolean
+): TotalOverrides {
   try {
-    const raw = localStorage.getItem(storeKey(collection))
+    const raw = localStorage.getItem(key)
     const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : null
     if (!parsed || typeof parsed !== 'object') return {}
     const map =
@@ -86,17 +101,17 @@ export function loadTotalOverrides(collection: string): TotalOverrides {
         ? (parsed.o as Record<string, unknown>)
         : parsed
     const out: TotalOverrides = {}
-    for (const [k, v] of Object.entries(map)) if (totalsEligibleKey(k) && isOverride(v)) out[k] = v
+    for (const [k, v] of Object.entries(map)) if (eligible(k) && isOverride(v)) out[k] = v
     return out
   } catch {
     return {}
   }
 }
 
-export function rememberTotalOverrides(collection: string, overrides: TotalOverrides): void {
+export function rememberTotalOverridesAt(key: string, overrides: TotalOverrides): void {
   try {
-    if (Object.keys(overrides).length === 0) localStorage.removeItem(storeKey(collection))
-    else localStorage.setItem(storeKey(collection), JSON.stringify({ v: 2, o: overrides }))
+    if (Object.keys(overrides).length === 0) localStorage.removeItem(key)
+    else localStorage.setItem(key, JSON.stringify({ v: 2, o: overrides }))
   } catch {
     /* private window / blocked storage: the choice lasts this visit only */
   }
@@ -180,7 +195,9 @@ export function linearSumTerms(formula: string): TotalTerm[] | null {
       i += item[0].length
       return item[1] as string
     }
-    const mustache = /^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/.exec(rest)
+    // A dotted name (`{{extra.amount}}`, a queue formula column) is kept whole; the caller
+    // decides whether it names a column it can sum.
+    const mustache = /^\{\{\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\}\}/.exec(rest)
     if (mustache) {
       i += mustache[0].length
       return mustache[1] as string
