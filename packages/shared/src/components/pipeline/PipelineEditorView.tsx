@@ -3342,6 +3342,20 @@ export function PipelineEditorView({
     onError: () => toast.error('Failed to update binding')
   })
 
+  // `#owner-matrix` (Coverage › No owner's "Open owner matrix") scrolls to
+  // the matrix once the template has loaded and drawn it — once per visit.
+  const matrixScrolled = useRef(false)
+  const templateLoaded = !!templateData
+  useEffect(() => {
+    if (!templateLoaded || matrixScrolled.current) return
+    if (typeof window === 'undefined' || window.location.hash !== '#owner-matrix') return
+    matrixScrolled.current = true
+    const t = window.setTimeout(() => {
+      document.getElementById('owner-matrix')?.scrollIntoView({ block: 'start' })
+    }, 50)
+    return () => window.clearTimeout(t)
+  }, [templateLoaded])
+
   if (templateFailed && !templateData) {
     return (
       <QueryErrorState
@@ -4277,7 +4291,10 @@ export function PipelineEditorView({
 
         {/* Owner Matrix */}
         {!hiddenSet.has('matrix') && hasMatrix && (
-          <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-4'>
+          <div
+            id='owner-matrix'
+            className='scroll-mt-4 rounded-xl border border-slate-200 bg-white p-6 space-y-4'
+          >
             <div className='flex items-start justify-between gap-4'>
               <h2 className='text-[13px] font-semibold text-slate-800'>
                 <Term id='owner-matrix'>Owner Matrix</Term>

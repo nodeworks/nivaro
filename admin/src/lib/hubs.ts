@@ -250,7 +250,8 @@ export const COVERAGE_HUB: HubDef = {
   icon: Users,
   tabs: [
     { path: '', label: 'Delegation', legacy: '/delegation' },
-    { path: 'gaps', label: 'Coverage gaps', legacy: '/coverage-gaps' }
+    { path: 'gaps', label: 'Coverage gaps', legacy: '/coverage-gaps' },
+    { path: 'no-owner', label: 'No owner' }
   ]
 }
 
