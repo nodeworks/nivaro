@@ -101,8 +101,9 @@ import {
 } from '../lib/list-inline-edit'
 import {
   type CbvLinkState,
-  dropListLinkParam,
+  encodeListLink,
   readListLinkFromLocation,
+  replaceListLinkParam,
   sanitizeCbvLinkState
 } from '../lib/list-link'
 import {
@@ -122,6 +123,7 @@ import {
   writerOf
 } from '../lib/live-list'
 import { listLoadErrorText, loadErrorStatus } from '../lib/load-error'
+import { listTrailDetail, setTrailDetail } from '../lib/nav-trail'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
 import { intentProps, prefetchRecord, useIdleNextPage } from '../lib/prefetch'
@@ -6527,7 +6529,7 @@ export function CollectionBrowserView({
   }
 
   // ── Saved views ───────────────────────────────────────────────────────────
-  const { data: views = [] } = useQuery({
+  const { data: views = [], isFetched: viewsFetched } = useQuery({
     queryKey: ['cbv-views', collection],
     queryFn: () =>
       client
@@ -6782,15 +6784,21 @@ export function CollectionBrowserView({
       setPage(sharedLink.p ?? 1)
     }
   }, [nonHidden])
-  // The link has done its job once applied: a reload starts from the person's own defaults.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: once per mount
+  // The saved view the link was on: its pill shows active again once the views are in —
+  // only a view this reader has (another person's private view is just its settings).
+  const sharedViewApplied = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot once views + fields land
   useEffect(() => {
-    if (sharedLink) dropListLinkParam()
-  }, [])
+    if (sharedViewApplied.current || !sharedLink?.v || !viewsFetched) return
+    if (!sharedColumnsApplied.current) return
+    sharedViewApplied.current = true
+    if (views.some((v) => v.id === sharedLink.v)) setActiveViewId(sharedLink.v)
+  }, [views, viewsFetched, nonHidden])
   /** What "Copy link" puts in the URL — the view exactly as on screen. */
   const listLinkState = (): CbvLinkState => {
     const vs = viewState()
     return {
+      ...(activeViewId != null && activeViewId > 0 ? { v: activeViewId } : {}),
       q: appliedSearch,
       f: vs.filters as unknown as Array<Record<string, unknown>>,
       s: sort,
@@ -6805,6 +6813,73 @@ export function CollectionBrowserView({
       ...(addendumsOnly ? { a: true } : {})
     }
   }
+
+  // #21 Back to the exact list — the list's state rides on the address (`?lv=`, replaced,
+  // never pushed), so Back from a record, a crumb, a record's back arrow (efp-new reads the
+  // address through LIST_ADDRESS_EVENT), a reload and a copied address bar all come back to
+  // the same view, filters, search, sort, columns and page (the queue worklist's army 11
+  // rule, now on every list). The state the list first SETTLED on (default view applied,
+  // scope defaults seeded) keeps a clean address; a shared link is always written back.
+  // Re-written after a drill sheet opens: that push carries the router's own, older address.
+  const listSettled =
+    scopeGateOpen &&
+    nonHidden.length > 0 &&
+    viewsFetched &&
+    (defaultAppliedRef.current || views.length === 0)
+  const urlBaselineRef = useRef<string | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: listLinkState reads exactly these values
+  useEffect(() => {
+    if (!listSettled || !collection) return
+    const key = `cbv:${collection}`
+    const state = listLinkState() as Record<string, unknown>
+    const enc = encodeListLink(key, state)
+    if (urlBaselineRef.current == null) {
+      urlBaselineRef.current = sharedLink ? '' : enc
+      if (!sharedLink) return
+    }
+    replaceListLinkParam(key, enc === urlBaselineRef.current ? null : state)
+  }, [
+    listSettled,
+    collection,
+    appliedSearch,
+    filters,
+    riskFilter,
+    sort,
+    displayColumns,
+    columnLabels,
+    columnFormats,
+    columnWidths,
+    columnPins,
+    appliedQuick,
+    colFilters,
+    linkConds,
+    cellExcludes,
+    groupBy,
+    effPageSize,
+    page,
+    addendumsOnly,
+    activeViewId,
+    drillStack
+  ])
+  // …and the crumb / back link that returns here names what it showed:
+  // "Back to Workflows · My open · page 3" (nav-trail setTrailDetail).
+  const trailDetail = listTrailDetail({
+    view: views.find((v) => v.id === activeViewId)?.name ?? null,
+    search: appliedSearch,
+    filters:
+      filters.length +
+      riskFilter.length +
+      Object.entries(appliedQuick).filter(([k, v]) => v.length > 0 && !scopeSeededKeys.has(k))
+        .length +
+      Object.keys(colFilters).length +
+      cellExcludes.length +
+      linkConds.length +
+      (addendumsOnly ? 1 : 0),
+    page
+  })
+  useEffect(() => {
+    if (listSettled) setTrailDetail(trailDetail)
+  }, [listSettled, trailDetail])
 
   const saveView = useMutation({
     mutationFn: () =>
@@ -9070,6 +9145,8 @@ export function CollectionBrowserView({
         {views.map((v) => (
           <span
             key={v.id}
+            data-view-pill={v.id}
+            data-active={activeViewId === v.id ? 'true' : undefined}
             className={`inline-flex h-6 items-center gap-1 rounded-full border px-2.5 text-[12px] transition-colors ${
               activeViewId === v.id
                 ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'

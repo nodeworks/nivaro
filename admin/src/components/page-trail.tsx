@@ -1,4 +1,10 @@
-import { displayTrail, setTrailLabel, trailChain, useNavTrail } from '@nivaro/shared'
+import {
+  displayTrail,
+  setTrailLabel,
+  trailChain,
+  trailCrumbText,
+  useNavTrail
+} from '@nivaro/shared'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { ChevronRight } from 'lucide-react'
 import { type MouseEvent, useEffect, useMemo } from 'react'
@@ -20,7 +26,15 @@ import { cn, titleCase } from '@/lib/utils'
  * through /global-search/labels, collections through their metadata, queues
  * through the queue itself. Cmd/Ctrl/middle-click opens a crumb in a new tab.
  */
-type Crumb = { id: string; href: string; delta: number | null; label?: string; kind: PathKind }
+type Crumb = {
+  id: string
+  href: string
+  delta: number | null
+  label?: string
+  /** What a list showed when it was left ("My open · page 3", #21). */
+  detail?: string
+  kind: PathKind
+}
 
 const histIdx = () => (window.history.state as { idx?: number } | null)?.idx ?? 0
 
@@ -55,6 +69,7 @@ export function PageTrail({
         href: c.path,
         delta: c.delta,
         label: c.label,
+        detail: c.detail,
         kind: describePath(c.path)
       }))
     }
@@ -87,6 +102,8 @@ export function PageTrail({
       <ol className='flex min-w-0 items-center gap-1'>
         {crumbs.map((c, i) => {
           const last = i === crumbs.length - 1
+          // #21 — a list names what it showed: "Workflows · My open · page 3".
+          const text = trailCrumbText(c.label || labels[c.id] || fallbackLabel(c.kind), c.detail)
           return (
             <li
               key={c.id}
@@ -96,11 +113,11 @@ export function PageTrail({
               <a
                 href={c.href}
                 onClick={(e) => go(e, c)}
-                className='block max-w-[180px] truncate rounded text-slate-500 transition-colors hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-slate-400 dark:hover:text-slate-100'
+                className='block max-w-[280px] truncate rounded text-slate-500 transition-colors hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-slate-400 dark:hover:text-slate-100'
                 data-trail-crumb={c.delta ?? 'structural'}
-                data-tip={c.delta != null ? 'Back to where you were' : undefined}
+                data-tip={c.delta != null ? `Back to ${text}` : undefined}
               >
-                {c.label || labels[c.id] || fallbackLabel(c.kind)}
+                {text}
               </a>
               {(showCurrent || !last) && (
                 <ChevronRight

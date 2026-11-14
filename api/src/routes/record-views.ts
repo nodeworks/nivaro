@@ -122,6 +122,24 @@ export async function recordRecapSince(
 }
 
 export async function recordViewRoutes(app: FastifyInstance) {
+  /** #22 — "Recently edited by me": the records the caller changed (created, edited, moved,
+   *  commented on), newest first across collections, each with what they did ("Moved to
+   *  Approved · edited 3 fields"). Read from their own activity rows by the (user, timestamp)
+   *  index; every record judged and labelled AS THE CALLER (services/recently-edited.ts) —
+   *  one they can no longer read is left out. */
+  app.get<{ Querystring: { limit?: string } }>(
+    '/record-views/edited',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { recentlyEditedBy } = await import('../services/recently-edited.js')
+      const data = await recentlyEditedBy(req.user!, {
+        limit: Number(req.query.limit) || 10,
+        isAdmin: !!req.isAdmin
+      })
+      return reply.send({ data })
+    }
+  )
+
   /** #43 — the caller's recently viewed records, newest first, with the
    *  record's friendly label and current pipeline state. The watermark table
    *  already knows every record the person opened; this is a read of it

@@ -32,6 +32,21 @@ export const navigationPersonal: DocSection = {
       ]
     },
 
+    { type: 'h2', id: 'navigation-back-to-list', text: 'Back to the exact list' },
+    {
+      type: 'p',
+      text: 'Open a record from a list — a collection’s records, a queue worklist, search results — and going back returns to that list exactly as you left it: the same saved view, filters, search, sort, columns, page and scroll position. The crumb names it, for example **Workflows · My open · page 3**.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The list keeps what it shows in its own address (the `lv` parameter), so the browser’s Back button, a crumb, a record’s back arrow, a reload and a copied address all bring the same list back.',
+        'A list in its plain state (your default view, nothing changed) keeps a clean address.',
+        'The saved view comes back highlighted when you still have it; someone you send the address to sees the same settings, read with their own access.',
+        'Scroll positions are kept per browser tab and are not sent anywhere.'
+      ]
+    },
+
     { type: 'h2', id: 'navigation-recent', text: 'Recently viewed everywhere' },
     {
       type: 'p',
@@ -48,6 +63,20 @@ export const navigationPersonal: DocSection = {
     {
       type: 'note',
       text: 'The dot only counts what you can see: an edit to a field your role cannot read does not light it, and records that have left your view are not listed.'
+    },
+
+    { type: 'h2', id: 'navigation-edited-by-me', text: 'Recently edited by me' },
+    {
+      type: 'p',
+      text: 'Beside the records you opened, a second list shows the records you **changed** — created, edited, moved in the pipeline or commented on — newest first across every collection, each saying what you did: **Moved to Approved · edited 3 fields**. It is the **Edited by me** tab on the home page’s Recently viewed card, and the Edited by me section of the command palette in the portal.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Built from your own entries in the activity log; nothing extra is recorded.',
+        'Every record is checked as you: one you can no longer read (a scope or filter change, or it was deleted) is left out, and names are the ones you are allowed to see.',
+        'Linking records (for example adding a division) counts as an edit of the record you linked them on.'
+      ]
     },
 
     { type: 'h2', id: 'navigation-sidebar', text: 'Your own sidebar' },
@@ -79,6 +108,11 @@ export const navigationPersonal: DocSection = {
           '`GET /api/record-views/recent?limit=&changed=1`',
           'signed in',
           'Your recently viewed records; `changed=1` adds `changed` + `changed_at` (judged on what you can read).'
+        ],
+        [
+          '`GET /api/record-views/edited?limit=`',
+          'signed in',
+          'Records you changed, newest first (≤30): `{collection, collection_label, item_id, label, did, last_edited_at, kinds, state}`; each read as you.'
         ],
         [
           '`PATCH /api/users/me/preferences {nav_layout}`',

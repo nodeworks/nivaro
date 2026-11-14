@@ -76,12 +76,14 @@ import { createNivaro } from '@nivaro/sdk'
 import {
   AnnouncementBanner,
   ApiUpdateBanner,
+  arrivedByListReturn,
   CLIENT_CHAOS_SHORTCUT,
   ClientChaosToolbar,
   DrillBanner,
   defaultItemUrl,
   ErrorSurface,
   focusPopoutOpener,
+  getNavTrail,
   HelpVideoMatchChip,
   HelpVideoRecordingProvider,
   HuddleCallLayer,
@@ -100,6 +102,7 @@ import {
   restoreTrailScroll,
   SOMETHING_WENT_WRONG,
   scrollPathOf,
+  scrollToRestore,
   setTrailScroll,
   TipLayer,
   useClientChaosGate,
@@ -399,16 +402,17 @@ export function AppLayout() {
   const mainRef = useRef<HTMLElement>(null)
   useLayoutEffect(() => {
     const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
-    const entry = recordNavigation({
+    const path = location.pathname + location.search + location.hash
+    recordNavigation({ action: navigationType, key: location.key, idx, path })
+    // Back / forward onto an entry with a remembered scroll — or a "return to the list"
+    // push (#21) onto a page visited before — puts the scroll back.
+    const scroll = scrollToRestore(getNavTrail(), {
       action: navigationType,
-      key: location.key,
       idx,
-      path: location.pathname + location.search + location.hash
+      path,
+      returning: arrivedByListReturn()
     })
-    // Back / forward onto an entry with a remembered scroll: put it back.
-    if (navigationType === 'POP' && entry?.scroll?.length && mainRef.current) {
-      return restoreTrailScroll(mainRef.current, entry.scroll)
-    }
+    if (scroll?.length && mainRef.current) return restoreTrailScroll(mainRef.current, scroll)
   }, [location.key, location.pathname, location.search, location.hash, navigationType])
   // Remember where the page was scrolled (the outlet and the inner list the
   // person scrolled), so a crumb or Back returns to the same spot.

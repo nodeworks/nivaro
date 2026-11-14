@@ -32,6 +32,8 @@ export interface TrailEntry {
   /** pathname + search + hash */
   path: string
   label?: string
+  /** What the page showed, for a list: "My open · page 3" (setTrailDetail). */
+  detail?: string
   scroll?: TrailScroll[]
   at: number
 }
@@ -70,13 +72,20 @@ export function reduceTrail(state: TrailState, ev: TrailEvent): TrailState {
     // REPLACE, or a POP onto an entry we did not know: (re)write that one entry.
     // Same pathname keeps the label (a tab or filter change on the same page).
     const keep = prev && pathnameOf(prev.path) === pathnameOf(ev.path) ? prev : null
+    // A POP lands on a history entry the trail already holds at that index (a PUSH drops
+    // everything from its index on, so a stale one cannot linger): the same page there is the
+    // same entry, even when its address was rewritten outside the router (`?lv=`, list-link.ts)
+    // or its key changed (list-page-memory mints a key on the first entry after a load, which
+    // react-router first saw as 'default'). Its scroll comes back with it.
+    const sameEntry = ev.action === 'POP' && !!keep
     const next: TrailEntry = {
       key: ev.key,
       idx,
       path: ev.path,
       at,
       ...(keep?.label ? { label: keep.label } : {}),
-      ...(keep?.scroll && ev.action === 'REPLACE' ? { scroll: keep.scroll } : {})
+      ...(keep?.detail ? { detail: keep.detail } : {}),
+      ...(keep?.scroll && (ev.action === 'REPLACE' || sameEntry) ? { scroll: keep.scroll } : {})
     }
     entries = [...state.entries.filter((e) => e.idx !== idx), next].sort((a, b) => a.idx - b.idx)
   }
@@ -102,6 +111,8 @@ export interface TrailCrumb {
   key: string
   path: string
   label?: string
+  /** What a list showed when it was left ("My open · page 3"). */
+  detail?: string
   /** History steps to go back to reach it (negative). */
   delta: number
 }
@@ -126,10 +137,45 @@ export function displayTrail(
     const p = pathnameOf(e.path)
     if (seen.has(p)) continue
     seen.add(p)
-    out.unshift({ key: e.key, path: e.path, label: e.label, delta: e.idx - current.idx })
+    out.unshift({
+      key: e.key,
+      path: e.path,
+      label: e.label,
+      ...(e.detail ? { detail: e.detail } : {}),
+      delta: e.idx - current.idx
+    })
     if (opts.isRoot?.(p)) break
   }
   return out
+}
+
+/**
+ * The words a list adds after its name in a crumb / back link: the saved view (else the
+ * scope it shows), the search, how many filters when no view names them, and the page past
+ * the first — "My open · “pump” · page 3". '' when the list is in its plain state.
+ */
+export function listTrailDetail(p: {
+  view?: string | null
+  search?: string | null
+  filters?: number
+  page?: number
+}): string {
+  const parts: string[] = []
+  const view = (p.view ?? '').trim()
+  if (view) parts.push(view.length > 40 ? `${view.slice(0, 39)}…` : view)
+  const q = (p.search ?? '').trim()
+  if (q) parts.push(`“${q.length > 24 ? `${q.slice(0, 23)}…` : q}”`)
+  const n = Math.max(0, Math.floor(p.filters ?? 0))
+  if (!view && n > 0) parts.push(`${n} filter${n === 1 ? '' : 's'}`)
+  const page = Math.floor(p.page ?? 1)
+  if (page > 1) parts.push(`page ${page}`)
+  return parts.join(' · ')
+}
+
+/** A crumb's full name: its label and, for a list, what it showed. */
+export function trailCrumbText(label: string, detail?: string | null): string {
+  const d = (detail ?? '').trim()
+  return d ? `${label} · ${d}` : label
 }
 
 // ─── Store (sessionStorage, per tab) ──────────────────────────────────────────
@@ -208,6 +254,56 @@ export function setTrailLabel(label: string | null | undefined, key?: string) {
   const clean = (label ?? '').trim().slice(0, 120)
   if (!clean) return
   patchEntry(key, (e) => (e.label === clean ? null : { ...e, label: clean }))
+}
+
+/**
+ * What a list shows right now, for the crumb / back link that returns to it ("My open ·
+ * page 3" → "Back to Workflows · My open · page 3"). The list component calls it on every
+ * change; '' clears it. Lands on the current entry only.
+ */
+export function setTrailDetail(detail: string | null | undefined) {
+  const clean = (detail ?? '').trim().slice(0, 120)
+  patchCurrent((e) => {
+    if ((e.detail ?? '') === clean) return null
+    const { detail: _old, ...rest } = e
+    return clean ? { ...rest, detail: clean } : rest
+  })
+}
+
+/**
+ * The current entry's address changed outside the router (a list writing its state into
+ * `?lv=` with history.replaceState): keep the trail's copy in step, so a crumb's link (new
+ * tab, copied) carries it and a POP back is recognised as the same entry. Same page only.
+ */
+export function noteTrailAddress(path: string) {
+  if (!path) return
+  patchCurrent((e) =>
+    e.path === path || pathnameOf(e.path) !== pathnameOf(path) ? null : { ...e, path }
+  )
+}
+
+/**
+ * The scroll to put back on arriving at the current entry: its own remembered scroll on a
+ * POP (Back / a crumb); on a "return to the list" PUSH (a record's back arrow — efp-new opens
+ * the list as a NEW entry, LIST_RETURN_STATE), the newest earlier visit of the same page.
+ * Null = nothing to restore.
+ */
+export function scrollToRestore(
+  state: TrailState,
+  arrival: { action: TrailAction; idx: number; path: string; returning?: boolean }
+): TrailScroll[] | null {
+  const here = pathnameOf(arrival.path)
+  if (arrival.action === 'POP') {
+    const own = state.entries.find((e) => e.idx === arrival.idx)
+    return own?.scroll?.length && pathnameOf(own.path) === here ? own.scroll : null
+  }
+  if (arrival.action !== 'PUSH' || !arrival.returning) return null
+  let best: TrailEntry | null = null
+  for (const e of state.entries) {
+    if (e.idx >= arrival.idx || pathnameOf(e.path) !== here || !e.scroll?.length) continue
+    if (!best || e.idx > best.idx) best = e
+  }
+  return best?.scroll ?? null
 }
 
 /** Remember the current page's scroll positions (restored on a POP back to it). */

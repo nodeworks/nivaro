@@ -37,8 +37,21 @@ function parentNavItem(pathname: string) {
   return best
 }
 
+/** "Search · “pump” · page 2" — the search page's address holds the search (#21). */
+function searchLabel(path: string): string {
+  const qs = path.includes('?') ? path.slice(path.indexOf('?') + 1).split('#')[0] : ''
+  const params = new URLSearchParams(qs)
+  const q = (params.get('q') ?? '').trim()
+  const page = Math.max(0, Math.floor(Number(params.get('page') ?? '0') || 0))
+  const parts = ['Search']
+  if (q) parts.push(`“${q.length > 24 ? `${q.slice(0, 23)}…` : q}”`)
+  if (page > 0) parts.push(`page ${page + 1}`)
+  return parts.join(' · ')
+}
+
 export function describePath(path: string): PathKind {
   const p = clean(path) || '/'
+  if (p === '/search') return { kind: 'static', label: searchLabel(path) }
   const rec = p.match(/^\/collections\/([^/]+)\/([^/]+)$/)
   if (rec && IDENT.test(decodeURIComponent(rec[1]))) {
     const collection = decodeURIComponent(rec[1])
