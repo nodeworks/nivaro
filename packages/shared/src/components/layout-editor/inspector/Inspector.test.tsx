@@ -717,6 +717,26 @@ describe('Inspector', () => {
     expect(opts.label).toBe('Make Title required')
   })
 
+  it('Width on the form sets form_width on a top-level section only, never read_width', async () => {
+    const { apply } = await mount({ kind: 'group', key: 'main' })
+    const row = host.querySelector('[data-setting="group.form_width"]')
+    expect(row?.textContent).toContain('Width on the form')
+    expect(row?.textContent).toContain('Phones always stack')
+    // Right above Width when reading.
+    const keys = settingsIn()
+    expect(keys.indexOf('group.form_width')).toBe(keys.indexOf('group.read_width') - 1)
+    await click([...(row?.querySelectorAll('button') ?? [])].find((b) => b.textContent === '½'))
+    expect(apply).toHaveBeenCalledTimes(1)
+    expect(apply.mock.calls[0][0]).toEqual([
+      { op: 'group_update', key: 'main', patch: { form_width: 'half' } }
+    ])
+    // Not on a step/tab, a tabs holder or a text block.
+    for (const key of ['step_one', 'steps', 'note_block']) {
+      await mount({ kind: 'group', key })
+      expect(host.querySelector('[data-setting="group.form_width"]')).toBeNull()
+    }
+  })
+
   it('types text as one coalesced setting and sends it on blur', async () => {
     const { apply, flush } = await mount(field('title'))
     const input = host.querySelector('[data-setting="field.label"] input') as HTMLInputElement

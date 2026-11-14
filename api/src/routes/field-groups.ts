@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { nameConfigCollection } from '../services/config-live.js'
@@ -53,6 +54,8 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
         'hidden_for_roles',
         'locked_for_roles',
         'read_width',
+        // Record-form section width, once migration 526 added the column.
+        ...((await hasColumn('nivaro_field_groups', 'form_width')) ? ['form_width'] : []),
         // Section label translations (#2665), once migration 465 added the column.
         ...((await groupI18nSupported()) ? ['i18n'] : [])
       )
@@ -148,6 +151,7 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
       hidden_for_roles?: string | null
       locked_for_roles?: string | null
       read_width?: string | null
+      form_width?: string | null
     }>
 
     const patch: Record<string, unknown> = {}
@@ -158,6 +162,15 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "read_width must be 'full', 'half', 'third' or null" })
       }
       patch.read_width = rw || null
+    }
+    // Migration 526: record-form section width — full | half | null (= full).
+    // Separate from read_width; ignored on a database without the column.
+    if ('form_width' in body) {
+      const fw = body.form_width
+      if (fw != null && fw !== '' && !['full', 'half'].includes(fw)) {
+        return reply.code(400).send({ error: "form_width must be 'full', 'half' or null" })
+      }
+      if (await hasColumn('nivaro_field_groups', 'form_width')) patch.form_width = fw || null
     }
     if (body.key !== undefined) patch.key = body.key
     if (body.label !== undefined) patch.label = body.label

@@ -86,6 +86,11 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
     .filter((t) => t === type || !(holdsFields && (t === 'container' || t === 'content')))
     .map((t) => ({ value: t, label: TYPE_LABELS[t] }))
   const sectionLike = type === 'section' || type === 'metadata' || type === 'tab'
+  // Record-form width (migration 526): top-level sections only — never a tab, a
+  // tabs holder or a text block. Loose top-level tabs put the form in tabs/steps
+  // mode, where sections fold into one pane and never pair.
+  const formWidthApplies = (type === 'section' || type === 'metadata') && !group.parent_key
+  const looseTabs = env.bundle.groups.some((g) => g.type === 'tab' && !g.parent_key)
   // #2713: kept in the layout's conditions.lazy_sections, by section key.
   const lazy = lazySectionsOf(env.bundle.layout.conditions).includes(group.key)
   // #3228: kept in conditions.quiet_hidden_sections (keys with the hint OFF; on by default).
@@ -322,6 +327,31 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
             checked={group.hide_when_empty}
             onChange={(v) => update({ hide_when_empty: v }, `Change when ${name} hides`)}
           />
+          {formWidthApplies && (
+            <Setting
+              k='group.form_width'
+              label='Width on the form'
+              effect={
+                looseTabs
+                  ? 'Two half-width sections next to each other share a row. Phones always stack. This form opens on tabs or steps, so its sections do not sit side by side.'
+                  : 'Two half-width sections next to each other share a row. Phones always stack.'
+              }
+            >
+              <Segmented
+                value={group.form_width === 'half' ? 'half' : 'full'}
+                options={[
+                  { value: 'full', label: 'Full' },
+                  { value: 'half', label: '½' }
+                ]}
+                onChange={(v) =>
+                  update(
+                    { form_width: v === 'half' ? 'half' : null },
+                    `Change the form width of ${name}`
+                  )
+                }
+              />
+            </Setting>
+          )}
           <Setting
             k='group.read_width'
             label='Width when reading'

@@ -111,6 +111,12 @@ vi.mock('../../../middleware/authenticate.js', () => ({
   })
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => {}) }))
+// Which optional nivaro_field_groups columns this fake database has (none by default).
+const columns = vi.hoisted(() => new Set<string>())
+vi.mock('../../../lib/column-probe.js', () => ({
+  hasColumn: vi.fn(async (_t: string, c: string) => columns.has(c)),
+  resetColumnProbes: vi.fn()
+}))
 vi.mock('../../../db/index.js', () => ({ db: fake.db }))
 vi.mock('../../../services/layout-versions.js', () => ({
   snapshotLayoutVersion: vi.fn(async () => {}),
@@ -272,6 +278,43 @@ describe('GET /collection-layouts/:id/bundle', () => {
     expect(b.groups.find((g) => g.key === '__ungrouped__')?.sort).toBe(2)
     expect(b.placements.some((p) => p.field === '__ungrouped_pos__')).toBe(false)
     expect(b.placements.find((p) => p.group_key === '__header__')?.overrides).toEqual({ x: 1 })
+  })
+})
+
+describe('record-form width (migration 526)', () => {
+  it('writes form_width once the column exists, and never read_width with it', async () => {
+    columns.add('form_width')
+    try {
+      const res = await ops([
+        { op: 'group_update', key: 'main', patch: { form_width: 'half' } },
+        { op: 'group_update', key: 'details', patch: { form_width: 'half' } }
+      ])
+      expect(res.statusCode).toBe(200)
+      expect(groups().find((g) => g.key === 'main')).toMatchObject({ form_width: 'half' })
+      expect(groups().find((g) => g.key === 'main')?.read_width ?? null).toBeNull()
+      const b = await bundle()
+      expect(b.groups.find((g) => g.key === 'details')?.form_width).toBe('half')
+      expect(b.groups.find((g) => g.key === 't1')?.form_width).toBeNull()
+    } finally {
+      columns.delete('form_width')
+    }
+  })
+
+  it('leaves the column out on a database before the migration', async () => {
+    const res = await ops([{ op: 'group_update', key: 'main', patch: { form_width: 'half' } }])
+    expect(res.statusCode).toBe(200)
+    expect(groups().find((g) => g.key === 'main')).not.toHaveProperty('form_width')
+  })
+
+  it('refuses a width other than full or half (400, nothing written)', async () => {
+    columns.add('form_width')
+    try {
+      const res = await ops([{ op: 'group_update', key: 'main', patch: { form_width: 'third' } }])
+      expect(res.statusCode).toBe(400)
+      expect(groups().find((g) => g.key === 'main')).not.toHaveProperty('form_width')
+    } finally {
+      columns.delete('form_width')
+    }
   })
 })
 

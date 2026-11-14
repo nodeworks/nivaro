@@ -35,6 +35,7 @@ const group = (key: string, extra: Partial<GroupRow> = {}): GroupRow => ({
   hidden_for_roles: null,
   locked_for_roles: null,
   read_width: null,
+  form_width: null,
   ...extra
 })
 const place = (field: string, extra: Partial<PlacementRow> = {}): PlacementRow => ({

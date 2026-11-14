@@ -79,6 +79,9 @@ export interface FieldGroup {
   summary_hide_empty?: boolean | number
   swap_config?: string | null
   skip_if_filled?: string[] | string | null
+  /** Record-form width of a top-level section (migration 526): 'half' pairs it with the
+   *  next half section on a wide form; anything else = full. Never read_width (read view). */
+  form_width?: string | null
 }
 
 export interface SlotAssignment {

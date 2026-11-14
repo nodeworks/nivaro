@@ -143,6 +143,22 @@ describe('layout as a file (#3189)', () => {
     expect(target.layout).toMatchObject({ tab_mode: 'steps', parent_layout_id: 4 })
   })
 
+  it('carries the record-form width beside the read width, and only when set', () => {
+    const b = bundle()
+    b.groups = b.groups.map((g) =>
+      g.key === 'basics' ? { ...g, form_width: 'half', read_width: 'third' } : g
+    )
+    const form = layoutToFile(b, refs, new Date(0)).form as Array<Record<string, unknown>>
+    expect(form[0]).toMatchObject({ key: 'basics', form_width: 'half', read_width: 'third' })
+    expect(form[1]).not.toHaveProperty('form_width')
+    const { target } = roundTrip(b)
+    expect(target.groups.find((g) => g.key === 'basics')).toMatchObject({
+      form_width: 'half',
+      read_width: 'third'
+    })
+    expect(target.groups.find((g) => g.key === 'tabs')?.form_width).toBeNull()
+  })
+
   it('refuses another collection, another kind of layout and unknown settings, naming each', () => {
     const doc = layoutToFile(bundle(), refs)
     expect(() => fileToTarget({ ...doc, collection: 'invoices' }, ctx())).toThrow(LayoutFileError)
