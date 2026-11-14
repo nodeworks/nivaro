@@ -8,6 +8,8 @@ import {
   extraSearchRows,
   GRID_READ_LIMIT,
   GRID_SEARCH_LIMIT,
+  GRID_SEARCH_ROOT_ATTR,
+  GRID_SEARCH_TIP,
   GridSearchBox,
   type GridServerSearch,
   matchRanges,
@@ -15,6 +17,7 @@ import {
   searchWords,
   textMatchesWords,
   useGridChildTotal,
+  useGridSearchShortcut,
   useGridServerSearch
 } from './grid-search'
 import type { CMSField } from './types'
@@ -288,6 +291,163 @@ describe('GridSearchBox', () => {
     expect(onChange).toHaveBeenCalledWith('')
     act(() => root.unmount())
     el.remove()
+  })
+
+  it('says what the box does and the shortcut in plain words', () => {
+    expect(GRID_SEARCH_TIP).toBe(
+      'Search these rows by any column. Shortcut: / while in the table. Esc clears.'
+    )
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    const root = createRoot(el)
+    function Box() {
+      const ref = useRef<HTMLInputElement | null>(null)
+      return createElement(GridSearchBox, {
+        value: '',
+        onChange: () => {},
+        inputRef: ref,
+        searching: false,
+        shown: 0,
+        total: 20
+      })
+    }
+    act(() => root.render(createElement(Box)))
+    expect(el.querySelector('input')?.getAttribute('data-tip')).toBe(GRID_SEARCH_TIP)
+    act(() => root.unmount())
+    el.remove()
+  })
+})
+
+// ── "/" jumps to the box ─────────────────────────────────────────────────────
+describe('useGridSearchShortcut', () => {
+  // A grid like InlineTableField's: plain (non-focusable) cells, a focusable control in a
+  // row, a cell input, and the search box — with the root marker while the box shows.
+  function Grid(props: { id: string; withBox?: boolean; children?: React.ReactNode }) {
+    const rootRef = useRef<HTMLDivElement | null>(null)
+    const inputRef = useRef<HTMLInputElement | null>(null)
+    useGridSearchShortcut(rootRef, inputRef, true)
+    const box = props.withBox !== false
+    return createElement(
+      'div',
+      { ref: rootRef, 'data-grid': props.id, ...(box ? { [GRID_SEARCH_ROOT_ATTR]: '' } : {}) },
+      box ? createElement('input', { ref: inputRef, 'data-box': props.id, type: 'search' }) : null,
+      createElement(
+        'table',
+        null,
+        createElement(
+          'tbody',
+          null,
+          createElement(
+            'tr',
+            { tabIndex: 0, 'data-row': props.id },
+            createElement('td', { 'data-cell': props.id }, 'Unit 42'),
+            createElement(
+              'td',
+              null,
+              createElement('button', { type: 'button', 'data-btn': props.id }, 'Open')
+            ),
+            createElement('td', null, createElement('input', { 'data-cell-input': props.id }))
+          )
+        )
+      ),
+      props.children
+    )
+  }
+  const mountGrids = (tree: React.ReactElement) => {
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    const outside = document.createElement('p')
+    outside.textContent = 'Elsewhere on the page'
+    document.body.appendChild(outside)
+    const root = createRoot(el)
+    act(() => root.render(tree))
+    return {
+      el,
+      outside,
+      done: () => {
+        act(() => root.unmount())
+        el.remove()
+        outside.remove()
+      }
+    }
+  }
+  const press = (target: Element) => {
+    const e = new KeyboardEvent('keydown', { key: '/', bubbles: true, cancelable: true })
+    act(() => {
+      target.dispatchEvent(e)
+    })
+    return e
+  }
+  const pointer = (target: Element) =>
+    act(() => {
+      target.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    })
+  const q = (sel: string) => document.querySelector(sel) as HTMLElement
+
+  it('jumps from a focused row or control in the grid', () => {
+    const h = mountGrids(createElement(Grid, { id: 'a' }))
+    q('[data-row="a"]').focus()
+    const e = press(document.activeElement as Element)
+    expect(e.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(q('[data-box="a"]'))
+    q('[data-btn="a"]').focus()
+    press(document.activeElement as Element)
+    expect(document.activeElement).toBe(q('[data-box="a"]'))
+    h.done()
+  })
+
+  it('jumps after a click on a plain cell, which leaves focus on the page', () => {
+    const h = mountGrids(createElement(Grid, { id: 'a' }))
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    pointer(q('[data-cell="a"]'))
+    expect(document.activeElement).toBe(document.body)
+    const e = press(document.body)
+    expect(e.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(q('[data-box="a"]'))
+    h.done()
+  })
+
+  it('never takes "/" while typing, from outside the grid, or with a modifier', () => {
+    const h = mountGrids(createElement(Grid, { id: 'a' }))
+    const cellInput = q('[data-cell-input="a"]')
+    cellInput.focus()
+    expect(press(cellInput).defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(cellInput)
+    cellInput.blur()
+    pointer(h.outside)
+    expect(press(document.body).defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(document.body)
+    q('[data-row="a"]').focus()
+    const mod = new KeyboardEvent('keydown', {
+      key: '/',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true
+    })
+    act(() => {
+      q('[data-row="a"]').dispatchEvent(mod)
+    })
+    expect(mod.defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(q('[data-row="a"]'))
+    h.done()
+  })
+
+  it('a grid inside a grid: the inner box wins; an inner grid without one hands it out', () => {
+    const h = mountGrids(
+      createElement(
+        Grid,
+        { id: 'outer' },
+        createElement(Grid, { id: 'inner' }),
+        createElement(Grid, { id: 'bare', withBox: false })
+      )
+    )
+    q('[data-row="inner"]').focus()
+    press(document.activeElement as Element)
+    expect(document.activeElement).toBe(q('[data-box="inner"]'))
+    q('[data-row="bare"]').focus()
+    press(document.activeElement as Element)
+    expect(document.activeElement).toBe(q('[data-box="outer"]'))
+    h.done()
   })
 })
 
