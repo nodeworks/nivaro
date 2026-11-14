@@ -20,7 +20,7 @@ import type { Knex } from 'knex'
 import { db as defaultDb } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
 import { type NoteOrigin, originFields } from './note-authorship.js'
-import { viewAsColumns } from './view-as-attribution.js'
+import { noteViewAsHistory } from './view-as-attribution.js'
 
 export interface StartHistoryInput {
   instanceId: string
@@ -75,11 +75,10 @@ export async function writeStartHistory(
   const origin = input.origin ?? startOrigin(input.userId, input.comment)
   await database('nivaro_workflow_history').insert({
     ...(await chainFields('nivaro_workflow_history')),
-    // Migration 527: the administrator behind a View-as move (admins-only display).
-    ...(await viewAsColumns('nivaro_workflow_history')),
     ...startHistoryRow(input),
     ...(await originFields('nivaro_workflow_history', origin))
   })
+  noteViewAsHistory({ instance: input.instanceId, from_state: null, to_state: input.stateId })
 }
 
 // ─── Backfill planning (pure) ────────────────────────────────────────────────

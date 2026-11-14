@@ -45,7 +45,7 @@ import {
   takeTransitionRun
 } from './transition-runs.js'
 import { TRIGGER_SAFE } from './trigger-safe.js'
-import { viewAsColumns } from './view-as-attribution.js'
+import { noteViewAsHistory } from './view-as-attribution.js'
 import { runTransitionActions, TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
 
@@ -1687,9 +1687,7 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
         'nivaro_workflow_history',
         opts.source === 'auto' || !opts.userId ? 'machine' : 'person'
       )),
-      ...(await chainFields('nivaro_workflow_history')),
-      // Migration 527: the administrator behind a View-as move (admins-only display).
-      ...(await viewAsColumns('nivaro_workflow_history'))
+      ...(await chainFields('nivaro_workflow_history'))
     })
     // History can carry a trigger (efp-ops' current-state snapshot): OUTPUT
     // without INTO is refused there (services/trigger-safe.ts).
@@ -1703,6 +1701,13 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
         ? Number(firstHistory)
         : null
   const historyId = rawHistoryId != null && Number.isFinite(rawHistoryId) ? rawHistoryId : null
+  // View-as (admins-only attribution): the admin behind this move, on its own activity row.
+  noteViewAsHistory({
+    instance: instance.id,
+    from_state: previousState,
+    to_state: newState,
+    history_id: historyId
+  })
   // What this transition sets off (post-phase actions, the flow trigger)
   // hangs under its history row in the integration event chain.
   const historyStep = historyId ? `history:${historyId}` : 'history:unknown'

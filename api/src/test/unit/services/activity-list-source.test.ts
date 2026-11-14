@@ -18,9 +18,10 @@ describe('activityListSource', () => {
       'WITH (NOLOCK)'
     )
   })
+  // A View-as pipeline move's attribution row is never a list entry (view-as-attribution.ts).
   it('is a plain aliased table elsewhere', () => {
     expect(activityListSource(pg, false).select('a.id').toString()).toBe(
-      'select "a"."id" from "nivaro_activity" as "a"'
+      'select "a"."id" from "nivaro_activity" as "a" where (not "a"."action" = \'view-as-move\' or "a"."action" is null)'
     )
   })
 })

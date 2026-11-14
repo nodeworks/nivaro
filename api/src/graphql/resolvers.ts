@@ -33,7 +33,7 @@ import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { registeredTransitionRefusal } from '../services/transition-checks.js'
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
-import { viewAsColumns } from '../services/view-as-attribution.js'
+import { noteViewAsHistory } from '../services/view-as-attribution.js'
 import type { User } from '../types.js'
 import { pubsub, topics } from './pubsub.js'
 import {
@@ -902,8 +902,6 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
             })
           await db('nivaro_workflow_history').insert({
             ...(await chainFields('nivaro_workflow_history')),
-            // Migration 527: the administrator behind a View-as move (admins-only display).
-            ...(await viewAsColumns('nivaro_workflow_history')),
             instance: instanceId,
             transition: null,
             from_state: initialState.id,
@@ -912,6 +910,11 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
             comment: 'Auto-advanced via skip criteria',
             timestamp: new Date(),
             ...(await originFields('nivaro_workflow_history', 'machine'))
+          })
+          noteViewAsHistory({
+            instance: instanceId,
+            from_state: initialState.id,
+            to_state: finalId
           })
         }
       }
@@ -1015,8 +1018,6 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         })
       await db('nivaro_workflow_history').insert({
         ...(await chainFields('nivaro_workflow_history')),
-        // Migration 527: the administrator behind a View-as move (admins-only display).
-        ...(await viewAsColumns('nivaro_workflow_history')),
         instance: instance.id,
         transition: transition.id,
         from_state: previousState,
@@ -1025,6 +1026,7 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         comment: args.comment ?? null,
         timestamp: new Date()
       })
+      noteViewAsHistory({ instance: instance.id, from_state: previousState, to_state: newStateId })
 
       const binding = await db('nivaro_workflow_bindings').where({ collection }).first()
       if (binding?.state_field && newStateObj) {
@@ -1113,8 +1115,6 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
             })
           await db('nivaro_workflow_history').insert({
             ...(await chainFields('nivaro_workflow_history')),
-            // Migration 527: the administrator behind a View-as move (admins-only display).
-            ...(await viewAsColumns('nivaro_workflow_history')),
             instance: instanceId,
             transition: null,
             from_state: initialState.id,
@@ -1123,6 +1123,11 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
             comment: 'Auto-advanced via skip criteria',
             timestamp: new Date(),
             ...(await originFields('nivaro_workflow_history', 'machine'))
+          })
+          noteViewAsHistory({
+            instance: instanceId,
+            from_state: initialState.id,
+            to_state: finalId
           })
         }
       }
@@ -1226,8 +1231,6 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         })
       await db('nivaro_workflow_history').insert({
         ...(await chainFields('nivaro_workflow_history')),
-        // Migration 527: the administrator behind a View-as move (admins-only display).
-        ...(await viewAsColumns('nivaro_workflow_history')),
         instance: instance.id,
         transition: transition.id,
         from_state: previousState,
@@ -1236,6 +1239,7 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         comment: args.comment ?? null,
         timestamp: new Date()
       })
+      noteViewAsHistory({ instance: instance.id, from_state: previousState, to_state: newStateId })
 
       const binding = await db('nivaro_workflow_bindings').where({ collection }).first()
       if (binding?.state_field && newStateObj) {

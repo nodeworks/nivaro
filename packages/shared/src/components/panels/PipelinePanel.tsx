@@ -185,7 +185,7 @@ interface PipelineHistoryEntry {
   /** #645 — a delegate's move: the out-of-office owner they stood in for. */
   on_behalf_of?: string | null
   on_behalf_of_name?: string | null
-  /** Migration 527 — moved in a View-as tab of this person: the administrator behind it. The
+  /** Moved in a View-as tab of this person: the administrator behind it (view-as-move row). The
    *  server sends it to administrator readers only ("Rob Lee as David Pry"). */
   acting_admin?: { id: string; name: string } | null
 }

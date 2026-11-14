@@ -2,38 +2,47 @@
  * View-as attribution (Rob 2026-11-14).
  *
  * A View-as tab (Bearer nvm_, authenticate.ts) IS the person being viewed: same screens, same
- * permissions, same writes — every write is the person's. The administrator behind it is stored
- * beside the write (nivaro_activity.actor from migration 516 for record saves, comments, tasks,
- * tickets, uploads and approval decisions; nivaro_workflow_history.acting_admin from migration
- * 527 for pipeline moves; chat_messages.masquerade_admin from 367) and shown to ADMINISTRATORS ONLY, as
+ * permissions, same writes — every write is the person's. The administrator behind it is kept
+ * on the activity log only — no schema change: nivaro_activity.actor (migration 516) =
+ * {kind:'view_as', id:<admin>, on_behalf_of:<person>} — and shown to ADMINISTRATORS ONLY, as
  * "Rob Lee as David Pry". Everyone else — the person included, and everyone a write notifies —
  * sees exactly what they would see had the person done it themselves: no "as" in sentences,
  * no extra field in any answer, no change to notifications, mail, webhooks or payloads.
  *
- * Write side: `viewAsColumns(table)` → `{ acting_admin }` while the current request is a View-as
- * and the column exists (feature-detected per tenant), else `{}` — spread it into the insert.
- * The request is the one handed in, else the one the current trace serves (GraphQL resolvers,
- * effects deferred inside the request), so services need no extra parameter.
+ * Write side. Record saves, comments, tasks, tickets, uploads and approval decisions already log
+ * an activity row (logActivity stamps the actor from the request). A pipeline move writes only a
+ * nivaro_workflow_history row, so every history insert calls `noteViewAsHistory(...)` after it:
+ * outside a View-as that is one synchronous check and nothing else; under View-as it logs ONE
+ * activity row `view-as-move` on (nivaro_workflow_history, <history id>), comment JSON
+ * {collection, item, from, to} (the record + state keys). Fire-and-forget: never awaited, so a
+ * caller inside a transaction never waits on it (its reads wait for the transaction instead).
+ * Those rows are left out of every activity list (activityListSource) — the move itself is what
+ * people see; the row only names the admin behind it.
  *
- * Read side: `hideViewAsActor` (activity / revision rows for a non-admin reader) and
- * `actingAdminNames` (admin readers: one users read for a page of rows).
+ * Read side: `hideViewAsActor` (activity / revision rows for a non-admin reader),
+ * `viewAsMovesFor` (admin readers of pipeline history, one read per page of moves) and
+ * `viewAsCreators` (admin readers of comments).
  *
  * Run-as-key (nvq_) is NOT View-as: it also sets masqueradeAdminId, but it acts as a key and
- * stamps nothing here (its activity rows keep their existing actor).
+ * logs nothing here (its activity rows keep their existing actor).
  */
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { logActivity } from './activity.js'
+import { VIEW_AS_MOVE_ACTION } from './activity-filters.js'
 import type { ActivityActor } from './activity-sentence.js'
 import { currentTraceRequestObject } from './request-trace.js'
 
-/** Tables with an acting_admin column (migration 527). Every other View-as write is attributed
- *  through its nivaro_activity row's actor (migration 516). */
-export const ACTING_ADMIN_TABLES = ['nivaro_workflow_history'] as const
-export type ActingAdminTable = (typeof ACTING_ADMIN_TABLES)[number]
+/** The activity action of a View-as pipeline move's attribution row (activity lists skip it). */
+export { VIEW_AS_MOVE_ACTION } from './activity-filters.js'
+/** Its collection: the row names the history row (item = history id), never the record, so no
+ *  record feed (timeline, history, recently edited) ever lists it as a second "moved" entry. */
+export const VIEW_AS_MOVE_COLLECTION = 'nivaro_workflow_history'
 
 interface ViewAsSource {
   authMethod?: string
   masqueradeAdminId?: string
+  user?: { id?: unknown } | null
 }
 
 /** The administrator behind this View-as request (nvm_ only), else null. */
@@ -49,27 +58,86 @@ export function currentViewAsAdmin(req?: unknown): string | null {
   return viewAsAdminOf(req ?? currentTraceRequestObject())
 }
 
-/** Does this table carry acting_admin yet (migration 527)? Never throws. */
-export async function hasActingAdmin(table: ActingAdminTable): Promise<boolean> {
-  try {
-    return await hasColumn(table, 'acting_admin')
-  } catch {
-    return false
-  }
+export interface ViewAsHistoryInput {
+  /** The workflow instance the history row belongs to. */
+  instance: string | number | null | undefined
+  from_state?: string | null
+  to_state?: string | null
+  /** The history row's id when the insert returned it; else the newest matching row is read. */
+  history_id?: string | number | null
 }
 
 /**
- * `{ acting_admin }` for an insert made in a View-as request, else `{}`. Outside a View-as it
- * reads nothing (no probe), so ordinary writes pay nothing.
+ * Call right after every nivaro_workflow_history insert (guard test). Outside a View-as: one
+ * synchronous check, no I/O. Under View-as: logs the attribution row in the background.
  */
-export async function viewAsColumns(
-  table: ActingAdminTable,
-  req?: unknown
-): Promise<{ acting_admin?: string }> {
-  const admin = currentViewAsAdmin(req)
-  if (!admin) return {}
-  if (!(await hasActingAdmin(table))) return {}
-  return { acting_admin: admin }
+export function noteViewAsHistory(input: ViewAsHistoryInput, req?: unknown): void {
+  const source = req ?? currentTraceRequestObject()
+  if (!viewAsAdminOf(source) || input.instance == null) return
+  void recordViewAsHistory(input, source).catch(() => {})
+}
+
+/** The attribution row itself (exported for tests; callers use noteViewAsHistory). */
+export async function recordViewAsHistory(
+  input: ViewAsHistoryInput,
+  req: unknown
+): Promise<number | null> {
+  if (!viewAsAdminOf(req) || input.instance == null) return null
+  const person = (req as ViewAsSource).user?.id
+  let historyId = input.history_id ?? null
+  if (historyId == null) {
+    const q = db('nivaro_workflow_history').where('instance', input.instance)
+    if (input.to_state) q.where('to_state', input.to_state)
+    if (person) q.where('user', String(person))
+    const row = (await q.orderBy('id', 'desc').first('id')) as { id?: number } | undefined
+    historyId = row?.id ?? null
+  }
+  if (historyId == null) return null
+  const [inst, states] = await Promise.all([
+    db('nivaro_workflow_instances')
+      .where('id', input.instance)
+      .first('collection', 'item') as Promise<
+      { collection?: string; item?: string | number } | undefined
+    >,
+    stateKeys([input.from_state, input.to_state])
+  ])
+  return logActivity({
+    action: VIEW_AS_MOVE_ACTION,
+    user: person ? String(person) : null,
+    collection: VIEW_AS_MOVE_COLLECTION,
+    item: String(historyId),
+    comment: JSON.stringify({
+      collection: inst?.collection ?? null,
+      item: inst?.item != null ? String(inst.item) : null,
+      from: input.from_state ? (states.get(String(input.from_state)) ?? null) : null,
+      to: input.to_state ? (states.get(String(input.to_state)) ?? null) : null
+    }),
+    req: req as Parameters<typeof logActivity>[0]['req']
+  })
+}
+
+async function stateKeys(ids: Array<string | null | undefined>): Promise<Map<string, string>> {
+  const want = [...new Set(ids.filter((v): v is string => !!v).map(String))]
+  const out = new Map<string, string>()
+  if (want.length === 0) return out
+  const rows = (await db('nivaro_workflow_states')
+    .whereIn('id', want)
+    .select('id', 'key')
+    .catch(() => [])) as Array<{ id: string; key: string | null }>
+  for (const r of rows) if (r.key) out.set(String(r.id), r.key)
+  return out
+}
+
+/**
+ * For an ADMINISTRATOR reader of pipeline history: which of these history rows a View-as tab
+ * wrote, and the administrator behind each. One activity read (item IN the ids) + one users read.
+ * Never throws; any failure answers an empty map (the person alone, as everyone else sees it).
+ */
+export async function viewAsMovesFor(
+  historyIds: Array<string | number | null | undefined>
+): Promise<Map<string, { id: string; name: string }>> {
+  const ids = [...new Set(historyIds.filter((v) => v != null).map((v) => String(v)))]
+  return viewAsCreators(VIEW_AS_MOVE_COLLECTION, ids, VIEW_AS_MOVE_ACTION)
 }
 
 /**

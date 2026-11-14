@@ -569,7 +569,7 @@ export type PipelineHistoryEntry = {
   /** #645 — the out-of-office owner a delegate's move stood in for. */
   on_behalf_of?: string | null
   on_behalf_of_name?: string | null
-  /** Migration 527 — the administrator behind a View-as move (administrator readers only). */
+  /** The administrator behind a View-as move (administrator readers only). */
   acting_admin?: { id: string; name: string } | null
 }
 

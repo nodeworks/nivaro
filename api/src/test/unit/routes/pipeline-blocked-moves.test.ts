@@ -97,9 +97,12 @@ vi.mock('../../../services/workflow-conditions.js', async (orig) => ({
   // An MDSi warehouse: the Fusion variant's condition does not match.
   fetchRecordForConditions: vi.fn(async () => ({ warehouse_kind: 'mdsi' }))
 }))
-const probe = vi.hoisted(() => ({ actingAdmin: false }))
+const probe = vi.hoisted(() => ({ activityActor: false }))
 vi.mock('../../../lib/column-probe.js', () => ({
-  hasColumn: vi.fn(async (_t: string, c: string) => c === 'acting_admin' && probe.actingAdmin)
+  hasColumn: vi.fn(
+    async (t: string, c: string) =>
+      probe.activityActor && t === 'nivaro_activity' && (c === 'actor' || c === 'auth_method')
+  )
 }))
 
 const tables = vi.hoisted(() => ({}) as Record<string, Array<Record<string, unknown>>>)
@@ -149,7 +152,7 @@ const tx = (row: Record<string, unknown>) => ({
 beforeEach(() => {
   who.admin = false
   who.viewAs = false
-  probe.actingAdmin = false
+  probe.activityActor = false
   who.owner = {
     allowed: false,
     message: '',
@@ -340,13 +343,19 @@ describe('View-as is exactly the person (Rob 2026-11-14)', () => {
   })
 })
 
-describe('pipeline history: the administrator behind a View-as move (migration 527)', () => {
+describe('pipeline history: the administrator behind a View-as move', () => {
   beforeEach(() => {
-    probe.actingAdmin = true
+    probe.activityActor = true
     tables['nivaro_workflow_history as h'] = [
       { id: 7, from_state: 'S-DRAFT', to_state: S_WAREHOUSE, first_name: 'David', last_name: 'Pry' }
     ]
-    tables.nivaro_workflow_history = [{ id: 7, acting_admin: 'u-rob' }]
+    // The move's own view-as-move activity row (services/view-as-attribution.ts).
+    tables.nivaro_activity = [
+      {
+        item: '7',
+        actor: JSON.stringify({ kind: 'view_as', id: 'u-rob', on_behalf_of: 'u-david' })
+      }
+    ]
     tables.nivaro_users = [{ id: 'u-rob', first_name: 'Rob', last_name: 'Lee', email: 'r@x.test' }]
   })
 
@@ -370,9 +379,9 @@ describe('pipeline history: the administrator behind a View-as move (migration 5
     expect('acting_admin' in h).toBe(false)
   })
 
-  it('a database behind migration 527 answers no acting_admin, and still answers', async () => {
+  it('a database without the activity actor columns answers no acting_admin, and still answers', async () => {
     who.admin = true
-    probe.actingAdmin = false
+    probe.activityActor = false
     const [h] = await historyOf()
     expect('acting_admin' in h).toBe(false)
   })

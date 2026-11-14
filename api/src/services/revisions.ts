@@ -4,12 +4,7 @@ import { optionalActivityColumns } from './activity-readable.js'
 import { type ActivityActor, actorOf } from './activity-sentence.js'
 import { agentBadgesForActivity } from './mcp-attribution.js'
 import { noteDerivedWrite } from './request-trace.js'
-import {
-  actingAdminNames,
-  actingAdminOf,
-  hasActingAdmin,
-  hideViewAsActor
-} from './view-as-attribution.js'
+import { hideViewAsActor, viewAsMovesFor } from './view-as-attribution.js'
 
 export interface Revision {
   id: number | null
@@ -48,8 +43,8 @@ export interface Revision {
     addendum?: { id: string; title: string | null } | null
     /** #645 — the out-of-office owner the actor stood in for. */
     on_behalf_of?: { id: string; name: string | null } | null
-    /** Migration 527 — the administrator who made this move in a View-as tab of the person.
-     *  Present for ADMINISTRATOR readers only ("Rob Lee as David Pry"). */
+    /** The administrator who made this move in a View-as tab of the person (its view-as-move
+     *  activity row). Present for ADMINISTRATOR readers only ("Rob Lee as David Pry"). */
     acting_admin?: { id: string; name: string } | null
   } | null
 }
@@ -79,7 +74,7 @@ function historyComment(comment: unknown, transition: unknown): string | null {
   return String(comment)
 }
 
-function historySelect(q: ReturnType<typeof db>, behalfCol = false, adminCol = false) {
+function historySelect(q: ReturnType<typeof db>, behalfCol = false) {
   return q
     .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
     .leftJoin('nivaro_workflow_states as fs', 'fs.id', 'h.from_state')
@@ -95,8 +90,6 @@ function historySelect(q: ReturnType<typeof db>, behalfCol = false, adminCol = f
           'ob.last_name as behalf_last_name',
           'ob.email as behalf_email'
         )
-      // Migration 527 — the View-as administrator; selected only for an administrator reader.
-      if (adminCol) qb.select('h.acting_admin')
     })
     .select(
       'h.id as history_id',
@@ -122,8 +115,7 @@ function historySelect(q: ReturnType<typeof db>, behalfCol = false, adminCol = f
 async function addendumTransitionRows(
   collection: string,
   item: string,
-  behalfCol: boolean,
-  adminCol = false
+  behalfCol: boolean
 ): Promise<{ rows: Record<string, unknown>[]; titles: Map<string, string | null> }> {
   const titles = new Map<string, string | null>()
   try {
@@ -132,7 +124,7 @@ async function addendumTransitionRows(
       .select('id', 'title')) as { id: string; title: string | null }[]
     if (addendums.length === 0) return { rows: [], titles }
     for (const a of addendums) titles.set(String(a.id).toUpperCase(), a.title ?? null)
-    const rows = (await historySelect(db('nivaro_workflow_history as h'), behalfCol, adminCol)
+    const rows = (await historySelect(db('nivaro_workflow_history as h'), behalfCol)
       .where('i.collection', 'nivaro_addendums')
       .whereIn(
         'i.item',
@@ -243,7 +235,7 @@ function settleActor(row: Record<string, unknown>): Record<string, unknown> {
 
 /**
  * A record's history. `isAdmin` = the READER is an administrator: only then does a View-as
- * write name the administrator behind it (activity actor + the move's acting_admin); every
+ * write name the administrator behind it (activity actor + the move's view-as-move row); every
  * other reader sees it exactly as the person's own write (services/view-as-attribution.ts).
  */
 export async function listRevisions(
@@ -252,10 +244,9 @@ export async function listRevisions(
   opts: { isAdmin?: boolean } = {}
 ): Promise<Revision[]> {
   const isAdmin = opts.isAdmin === true
-  const [behalfCol, actCols, adminCol] = await Promise.all([
+  const [behalfCol, actCols] = await Promise.all([
     hasColumn('nivaro_workflow_history', 'on_behalf_of').catch(() => false),
-    optionalActivityColumns().catch(() => new Set<string>()),
-    isAdmin ? hasActingAdmin('nivaro_workflow_history') : Promise.resolve(false)
+    optionalActivityColumns().catch(() => new Set<string>())
   ])
   const [revRows, activityRows, transitionRows, addendumHistory] = await Promise.all([
     db('nivaro_revisions as r')
@@ -314,22 +305,24 @@ export async function listRevisions(
     // a revision, so the history read them out of order until now — one row
     // per transition of every instance this record has had (its addendums'
     // instances live on their own records and are folded in separately).
-    historySelect(db('nivaro_workflow_history as h'), behalfCol, adminCol)
+    historySelect(db('nivaro_workflow_history as h'), behalfCol)
       .where('i.collection', collection)
       .where('i.item', item)
       .orderBy('h.id', 'desc')
       .limit(100)
       .catch(() => []) as Promise<Record<string, unknown>[]>,
 
-    addendumTransitionRows(collection, item, behalfCol, adminCol)
+    addendumTransitionRows(collection, item, behalfCol)
   ])
-  const adminNames = adminCol
-    ? await actingAdminNames(
+  // View-as: the administrator behind a move (its own view-as-move activity row), for an
+  // ADMINISTRATOR reader only; everyone else reads the person's own move.
+  const viewAsMoves = isAdmin
+    ? await viewAsMovesFor(
         [...(transitionRows as Record<string, unknown>[]), ...addendumHistory.rows].map(
-          (r) => r.acting_admin as string | null
+          (r) => r.history_id as string | number | null
         )
       )
-    : new Map<string, string>()
+    : new Map<string, { id: string; name: string }>()
 
   // #1219: an instance start is a history row (no from_state, no transition).
   // It reads 'started it in <state>'; the older 'pipeline-start' activity row
@@ -373,7 +366,9 @@ export async function listRevisions(
                 ((r.behalf_email as string | null) ?? null)
             }
           : null,
-        ...(adminCol ? { acting_admin: actingAdminOf(r.acting_admin, adminNames) } : {})
+        ...(viewAsMoves.has(String(r.history_id).toUpperCase())
+          ? { acting_admin: viewAsMoves.get(String(r.history_id).toUpperCase()) }
+          : {})
       }
     }
   }

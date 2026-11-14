@@ -79,7 +79,7 @@ interface Revision {
     addendum?: { id: string; title: string | null } | null
     /** #645 — the out-of-office owner a delegate's move stood in for. */
     on_behalf_of?: { id: string; name: string | null } | null
-    /** Migration 527 — the administrator who made this move in a View-as tab of the person.
+    /** The administrator who made this move in a View-as tab of the person (its view-as-move row).
      *  The server sends it to administrator readers only ("Rob Lee as David Pry"). */
     acting_admin?: { id: string; name: string } | null
   } | null
