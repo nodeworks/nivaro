@@ -248,6 +248,17 @@ export interface LabelDeps {
   notifications?(
     ids: string[]
   ): Promise<Array<{ id: string; subject: string | null; recipient: string | null }>>
+  /** System rows by id, only `columns` (those that exist): the live row, else the newest
+   *  revision snapshot of a deleted one. Never more columns than asked for. */
+  systemRows?(
+    table: string,
+    ids: string[],
+    columns: string[]
+  ): Promise<Array<Record<string, unknown> & { id: unknown }>>
+  /** Files the reader may open (services/file-access.ts): lower-cased id → title. */
+  readableFiles?(user: User, isAdmin: boolean, ids: string[]): Promise<Map<string, string>>
+  /** Chat channels the reader may see (canSeeRoom, admins included): key → name. */
+  chatChannels?(user: User, keys: string[]): Promise<Map<string, string>>
 }
 
 export interface JunctionRow {
@@ -323,7 +334,284 @@ async function readJunctionRows(
   return out
 }
 
+// ─── System rows by name (Rob 2026-11-13: no activity line shows an internal id) ──
+
+/**
+ * How a system row (`nivaro_*`) is named in activity, and who may see that name.
+ *
+ * - No `owners` and no `parent`: configuration — administrators only.
+ * - `owners`: a personal row — the people in those columns (and administrators).
+ * - `parent`: a row that hangs off a record (comment, task, share link) — anyone who may
+ *   see that record, read as the reader (the addendum rule); administrators always.
+ *
+ * Everyone else reads the generic phrase ("a saved view"), never the id. A table not
+ * listed here is configuration named by the first of DEFAULT_NAME_COLUMNS it has.
+ */
+export interface SystemLabelSpec {
+  /** Columns that name the row, first non-empty wins; a missing column is skipped. */
+  name?: string[]
+  /** Builds the name when no single column does (reads only `columns`). */
+  compose?: (row: Record<string, unknown>) => string | null
+  columns?: string[]
+  /** People the row belongs to. */
+  owners?: string[]
+  /** The record the row hangs off: its collection column (or a fixed collection) + id column. */
+  parent?: { collection?: string; fixedCollection?: string; item: string }
+}
+
+const DEFAULT_NAME_COLUMNS = ['name', 'title', 'label', 'subject', 'key', 'slug']
+
+export const SYSTEM_LABELS: Record<string, SystemLabelSpec> = {
+  // Personal rows: the owner and administrators.
+  nivaro_saved_views: { name: ['name'], owners: ['user'] },
+  nivaro_activity_views: { name: ['name'], owners: ['owner'] },
+  nivaro_api_keys: { name: ['name'], owners: ['user'] },
+  nivaro_notification_subscriptions: { name: ['label'], owners: ['user'] },
+  nivaro_dashboards: { name: ['name'], owners: ['user'] },
+  nivaro_report_defs: { name: ['name'], owners: ['owner'] },
+  nivaro_queue_views: { name: ['name'], owners: ['user'] },
+  nivaro_report_filter_presets: { name: ['name'], owners: ['user'] },
+  nivaro_collection_presets: { name: ['name'], owners: ['user_id'] },
+  nivaro_ai_conversations: { name: ['title'], owners: ['owner'] },
+  nivaro_ai_proposals: { name: [], owners: ['user'] },
+  nivaro_session_recordings: { name: [], owners: ['user'] },
+  nivaro_replay_shares: { name: [], owners: ['shared_by', 'user_id'] },
+  nivaro_replay_clips: { name: ['name'], owners: ['saved_by'] },
+  nivaro_record_templates: { name: ['name'], owners: ['created_by'] },
+  nivaro_drafts: { name: [], owners: ['user'] },
+  nivaro_agent_triggers: { name: ['name'], owners: ['owner'] },
+  nivaro_field_watches: { name: ['name'], owners: ['created_by'] },
+  nivaro_help_videos: { name: ['title'], owners: ['created_by'] },
+  nivaro_issues: { name: ['title'], owners: ['raised_by', 'assigned_to'] },
+  // Rows on a record: as visible as that record (plus their own people).
+  nivaro_tasks: {
+    name: ['title'],
+    owners: ['assignee', 'created_by'],
+    parent: { collection: 'collection', item: 'item' }
+  },
+  nivaro_comments: {
+    name: [],
+    owners: ['user'],
+    parent: { collection: 'collection', item: 'item' }
+  },
+  nivaro_agent_questions: {
+    name: [],
+    owners: ['asker', 'recipient'],
+    parent: { collection: 'collection', item: 'item' }
+  },
+  nivaro_erp_submissions: { name: [], parent: { collection: 'collection', item: 'item' } },
+  nivaro_workflow_instances: { name: [], parent: { collection: 'collection', item: 'item' } },
+  nivaro_approval_instances: {
+    name: [],
+    owners: ['started_by'],
+    parent: { collection: 'collection', item: 'item' }
+  },
+  nivaro_share_links: {
+    name: [],
+    owners: ['created_by'],
+    parent: { collection: 'collection', item: 'item' }
+  },
+  nivaro_queue_claims: {
+    name: [],
+    owners: ['claimed_by'],
+    parent: { collection: 'source_collection', item: 'item_id' }
+  },
+  // Configuration with no single name column.
+  nivaro_policies: {
+    columns: ['action', 'collection'],
+    compose: (r) => {
+      const a = String(r.action ?? '').trim()
+      const c = String(r.collection ?? '').trim()
+      return a && c ? `${a} on ${c}` : null
+    }
+  },
+  nivaro_workflow_states: { name: ['label', 'key'] },
+  nivaro_workflow_transitions: { name: ['label', 'group_label'] },
+  nivaro_field_groups: { name: ['label', 'key'] },
+  nivaro_import_definitions: { name: ['label', 'key'] },
+  nivaro_inbound_mappings: { name: ['label', 'key'] },
+  nivaro_payload_templates: { name: ['label', 'key'] },
+  nivaro_import_queue: { name: [] },
+  nivaro_activity: { name: [] },
+  nivaro_api_logs: { name: [] },
+  nivaro_settings: { name: [] }
+}
+
+/** Handled elsewhere: people, addendums and notifications above, files and channels below. */
+const SYSTEM_SPECIAL = new Set([
+  'nivaro_users',
+  'directus_users',
+  'nivaro_addendums',
+  'nivaro_notifications',
+  'nivaro_files',
+  'directus_files',
+  'nivaro_chat_channels'
+])
+const SYSTEM_TABLE = /^(nivaro|directus)_/i
+const SAFE_COLUMN = /^[a-z_][a-z0-9_]*$/i
+const UUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export function systemLabelSpec(table: string): SystemLabelSpec {
+  return SYSTEM_LABELS[table] ?? { name: DEFAULT_NAME_COLUMNS }
+}
+
+/** Every column a spec reads besides id — never a credential. */
+function specColumns(spec: SystemLabelSpec): string[] {
+  const cols = [
+    ...(spec.name ?? []),
+    ...(spec.columns ?? []),
+    ...(spec.owners ?? []),
+    ...(spec.parent?.collection ? [spec.parent.collection] : []),
+    ...(spec.parent ? [spec.parent.item] : [])
+  ]
+  return [...new Set(cols)].filter((c) => SAFE_COLUMN.test(c) && !SECRET_FIELD.test(c))
+}
+
+/** A short, quoted name — never an id, never empty. */
+function quotedName(raw: unknown, id: string): string | null {
+  if (raw == null || typeof raw === 'object') return null
+  const s = String(raw).trim()
+  if (!s || s.toLowerCase() === id.toLowerCase() || UUID_LIKE.test(s) || /^\d+$/.test(s))
+    return null
+  return `“${s.length > 120 ? `${s.slice(0, 117)}…` : s}”`
+}
+
+function nameOfRow(spec: SystemLabelSpec, row: Record<string, unknown>, id: string): string | null {
+  if (spec.compose) return quotedName(spec.compose(row), id)
+  for (const c of spec.name ?? []) {
+    const n = quotedName(row[c], id)
+    if (n) return n
+  }
+  return null
+}
+
+/** The record a row hangs off, as stored on it. */
+function parentOf(
+  spec: SystemLabelSpec,
+  row: Record<string, unknown>
+): { collection: string; id: string } | null {
+  if (!spec.parent) return null
+  const collection = spec.parent.fixedCollection ?? String(row[spec.parent.collection ?? ''] ?? '')
+  const raw = row[spec.parent.item]
+  const id = raw == null || typeof raw === 'object' ? '' : String(raw).trim()
+  if (!collection || !IDENT.test(collection) || !id || id.length > 100) return null
+  return { collection, id }
+}
+
+async function readSystemRows(
+  table: string,
+  ids: string[],
+  columns: string[]
+): Promise<Array<Record<string, unknown> & { id: unknown }>> {
+  if (!SYSTEM_TABLE.test(table) || !IDENT.test(table)) return []
+  const have = await Promise.all(columns.map((c) => hasColumn(table, c).catch(() => false)))
+  const cols = columns.filter((_, i) => have[i])
+  const pick = (r: Record<string, unknown>, id: unknown) => {
+    const out: Record<string, unknown> & { id: unknown } = { id }
+    for (const c of cols) out[c] = r[c]
+    return out
+  }
+  const read = (list: string[]) =>
+    selectInChunks(list, 500, (chunk) =>
+      Promise.resolve(
+        db(table)
+          .whereIn('id', chunk)
+          .select('id', ...cols)
+      )
+    ) as Promise<Array<Record<string, unknown>>>
+  let live: Array<Record<string, unknown>> = []
+  try {
+    live = await read(ids)
+  } catch {
+    // An int id column refuses a uuid: try the numeric ids alone.
+    const nums = ids.filter((i) => /^\d+$/.test(i))
+    live = nums.length && nums.length < ids.length ? await read(nums).catch(() => []) : []
+  }
+  const out = live.map((r) => pick(r, r.id))
+  const seen = new Set(out.map((r) => String(r.id).toLowerCase()))
+  const missing = ids.filter((i) => !seen.has(i.toLowerCase()))
+  if (!missing.length) return out
+  // Deleted: the newest revision snapshot, when the table keeps them.
+  try {
+    const snaps = (await db('nivaro_revisions')
+      .where('collection', table)
+      .whereIn('item', missing.slice(0, 500))
+      .whereNotNull('data')
+      .orderBy('id', 'desc')
+      .select('item', 'data')
+      .limit(1000)) as Array<{ item: unknown; data: string }>
+    for (const s of snaps) {
+      const id = String(s.item)
+      if (seen.has(id.toLowerCase())) continue
+      try {
+        const data = JSON.parse(s.data) as Record<string, unknown>
+        // Snapshot columns are not probed: read only the asked names.
+        const row: Record<string, unknown> & { id: unknown } = { id }
+        for (const c of columns) row[c] = data?.[c]
+        out.push(row)
+        seen.add(id.toLowerCase())
+      } catch {
+        /* unreadable snapshot: generic */
+      }
+    }
+  } catch {
+    /* no snapshots: generic */
+  }
+  return out
+}
+
+async function readReadableFiles(
+  user: User,
+  isAdmin: boolean,
+  ids: string[]
+): Promise<Map<string, string>> {
+  const uuids = ids.filter((i) => UUID_LIKE.test(i))
+  if (!uuids.length) return new Map()
+  const rows = (await selectInChunks(uuids, 500, (chunk) =>
+    Promise.resolve(
+      db('nivaro_files')
+        .whereIn('id', chunk)
+        .select('id', 'title', 'filename_download', 'uploaded_by', 'uploaded_on')
+    )
+  )) as Array<Record<string, unknown> & { id: unknown }>
+  if (!rows.length) return new Map()
+  const { readableFileIds } = await import('./file-access.js')
+  const ok = await readableFileIds(rows, { user, isAdmin, workspaceId: undefined } as never)
+  const out = new Map<string, string>()
+  for (const r of rows) {
+    const id = String(r.id).toLowerCase()
+    if (!ok.has(id)) continue
+    const name = String(r.title || r.filename_download || '').trim()
+    if (name) out.set(id, name)
+  }
+  return out
+}
+
+async function readChatChannels(user: User, keys: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const { canSeeRoom, channelsWith } = await import('./chat.js')
+  // Chat's own audit rows name the General room this way (routes/chat.ts).
+  if (keys.includes('__general__')) out.set('__general__', 'General')
+  const wanted = keys.filter((k) => k !== '__general__' && /^[A-Za-z0-9_-]{1,100}$/.test(k))
+  if (!wanted.length) return out
+  const channels = await channelsWith(wanted)
+  const cache = new Map<string, boolean>()
+  await Promise.all(
+    wanted.map(async (k) => {
+      const ch = channels.get(k)
+      if (!ch) return
+      if (!(await canSeeRoom(user, `ch:${k}`, cache).catch(() => false))) return
+      const name = String(ch.name ?? '').trim()
+      if (name) out.set(k, name)
+    })
+  )
+  return out
+}
+
 const defaultLabelDeps: LabelDeps = {
+  systemRows: readSystemRows,
+  readableFiles: readReadableFiles,
+  chatChannels: readChatChannels,
   async canRead(user, collection) {
     const { can } = await import('./permissions.js')
     return can(user, 'read', collection)
@@ -554,6 +842,46 @@ export async function activityLabelsFor(
     )
       refs.push({ collection: a.parent_collection, id: a.parent_id })
   }
+  // Every other system row (saved views, layouts, tasks, comments, …): read once per table,
+  // in at most two rounds (a comment on a task needs the task). Business parents join the
+  // refs and are judged as the reader below, like an addendum's record.
+  const isRegistrySystem = (c: string) =>
+    SYSTEM_TABLE.test(c) && !SYSTEM_SPECIAL.has(c) && !jmap.has(c)
+  const sysRows = new Map<string, Record<string, unknown>>()
+  const sysAsked = new Set<string>()
+  let pendingSys = deps.systemRows ? refs.filter((r) => isRegistrySystem(r.collection)) : []
+  for (let round = 0; round < 2 && pendingSys.length; round++) {
+    const byTable = new Map<string, string[]>()
+    for (const r of pendingSys) {
+      const k = `${r.collection}:${r.id}`
+      if (sysAsked.has(k)) continue
+      sysAsked.add(k)
+      byTable.set(r.collection, [...(byTable.get(r.collection) ?? []), r.id])
+    }
+    const next: Array<{ collection: string; id: string }> = []
+    await Promise.all(
+      [...byTable].map(async ([table, ids]) => {
+        const spec = systemLabelSpec(table)
+        const rows = await deps.systemRows!(table, ids, specColumns(spec)).catch(() => [])
+        for (const row of rows) {
+          const id = ids.find((i) => i.toLowerCase() === String(row.id).toLowerCase())
+          if (!id) continue
+          sysRows.set(`${table}:${id}`, row)
+          const p = parentOf(spec, row)
+          if (!p) continue
+          if (isRegistrySystem(p.collection)) {
+            if (!sysAsked.has(`${p.collection}:${p.id}`)) next.push(p)
+          } else if (
+            !SYSTEM_TABLE.test(p.collection) &&
+            refs.length < refBudget &&
+            !refs.some((x) => x.collection === p.collection && x.id === p.id)
+          )
+            refs.push(p)
+        }
+      })
+    )
+    pendingSys = next
+  }
   const userIds = new Set(
     (Array.isArray(body.users) ? body.users : [])
       .map((u) => String(u ?? '').trim())
@@ -597,11 +925,12 @@ export async function activityLabelsFor(
   // Records: visible ids per collection (read as the reader), then their labels.
   const byCollection = new Map<string, string[]>()
   for (const r of refs) {
-    if (r.collection === 'nivaro_users') {
+    if (r.collection === 'nivaro_users' || r.collection === 'directus_users') {
       userIds.add(r.id)
       continue
     }
-    if (r.collection === 'nivaro_addendums' || r.collection === 'nivaro_notifications') continue
+    // System rows are named below by their own rules, never read as items.
+    if (SYSTEM_TABLE.test(r.collection) && !jmap.has(r.collection)) continue
     const list = byCollection.get(r.collection) ?? []
     list.push(r.id)
     byCollection.set(r.collection, list)
@@ -682,9 +1011,78 @@ export async function activityLabelsFor(
   }
   // A person named as the record ("changed the role of Pat"): the same directory name.
   for (const r of refs) {
-    if (r.collection !== 'nivaro_users') continue
+    if (r.collection !== 'nivaro_users' && r.collection !== 'directus_users') continue
     const name = labels.users[r.id.toUpperCase()]
-    if (name) labels.records[`nivaro_users:${r.id}`] = name
+    if (name) labels.records[`${r.collection}:${r.id}`] = name
+  }
+  // Files and chat channels: as the file-access gate and canSeeRoom say.
+  const fileRefs = refs.filter((r) => FILE_TABLES.has(r.collection))
+  if (fileRefs.length) {
+    const names = deps.readableFiles
+      ? await deps
+          .readableFiles(
+            user,
+            admin,
+            fileRefs.map((r) => r.id)
+          )
+          .catch(() => new Map<string, string>())
+      : new Map<string, string>()
+    for (const r of fileRefs)
+      labels.records[`${r.collection}:${r.id}`] = quotedName(names.get(r.id.toLowerCase()), r.id)
+  }
+  const channelRefs = refs.filter((r) => r.collection === 'nivaro_chat_channels')
+  if (channelRefs.length) {
+    const names = deps.chatChannels
+      ? await deps
+          .chatChannels(
+            user,
+            channelRefs.map((r) => r.id)
+          )
+          .catch(() => new Map<string, string>())
+      : new Map<string, string>()
+    for (const r of channelRefs) {
+      const n = names.get(r.id)
+      labels.records[`nivaro_chat_channels:${r.id}`] = n ? `#${n.replace(/^#/, '')}` : null
+    }
+  }
+  // Every other system row: its name only for whom the registry says, else generic.
+  const me = String(user.id ?? '').toUpperCase()
+  const sysMemo = new Map<string, string | null>()
+  const systemLabel = (table: string, id: string, depth: number): string | null => {
+    const key = `${table}:${id}`
+    if (sysMemo.has(key)) return sysMemo.get(key) ?? null
+    sysMemo.set(key, null) // cycle guard
+    const row = sysRows.get(key)
+    let out: string | null = null
+    if (row) {
+      const spec = systemLabelSpec(table)
+      const mine =
+        !!me && (spec.owners ?? []).some((c) => String(row[c] ?? '').toUpperCase() === me)
+      const p = parentOf(spec, row)
+      let parentText: string | null = null
+      let parentVisible = false
+      if (p) {
+        if (isRegistrySystem(p.collection)) {
+          const pl = depth < 2 ? systemLabel(p.collection, p.id, depth + 1) : null
+          parentVisible = pl != null
+          if (pl) parentText = `${collectionNouns(p.collection, null).singular} ${pl}`
+        } else if (!SYSTEM_TABLE.test(p.collection)) {
+          const pl = labels.records[`${p.collection}:${p.id}`]
+          parentVisible = pl !== null && pl !== undefined
+          if (pl && pl !== p.id && !UUID_LIKE.test(pl)) parentText = pl
+        }
+      }
+      if (admin || mine || parentVisible) {
+        const name = nameOfRow(spec, row, id)
+        out = [name ?? '', parentText ? `on ${parentText}` : ''].filter(Boolean).join(' ') || null
+      }
+    }
+    sysMemo.set(key, out)
+    return out
+  }
+  for (const r of refs) {
+    if (!isRegistrySystem(r.collection)) continue
+    labels.records[`${r.collection}:${r.id}`] = systemLabel(r.collection, r.id, 0)
   }
   const asked = new Set(fieldAsks.map((f) => `${f.collection}.${f.field}`))
   for (const f of fieldRows) {

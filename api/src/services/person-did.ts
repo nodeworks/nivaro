@@ -314,7 +314,10 @@ function targetOf(
   const id = String(item)
   const key = `${collection}:${id}`
   const { singular } = collectionNouns(collection, labels)
-  const generic = `${aOrAn(lowerNoun(singular))} record`
+  // A system row says what it is ("a saved view"); a business record "a workflow record".
+  const generic = SYSTEM_RE.test(collection)
+    ? aOrAn(lowerNoun(singular))
+    : `${aOrAn(lowerNoun(singular))} record`
   const records = labels.records ?? {}
   const linkable = !SYSTEM_RE.test(collection) && action !== 'delete'
   if (key in records && records[key] == null) return { text: generic, record: null, hidden: true }
