@@ -194,6 +194,17 @@ describe('computeNoOwnerSteps', () => {
     expect(wh?.conditions_unchecked).toBe(1)
   })
 
+  // Prod 2026-11-14: 3 Workflows instances whose records were deleted showed as bare ids.
+  it('leaves out instances whose record no longer exists', async () => {
+    const deps = fakeDeps({
+      existingItems: async (_c, ids) => new Set(ids.filter((id) => id !== '37713'))
+    })
+    const r = await computeNoOwnerSteps(deps)
+    const wh = r.groups.find((g) => g.state_key === 'warehouse_submission')
+    expect(wh?.records.map((x) => x.item)).toEqual(['37714'])
+    expect(r.checked).toBe(4)
+  })
+
   it('answers empty when no move is owner-only', async () => {
     const r = await computeNoOwnerSteps(fakeDeps({ loadMoves: async () => [] }))
     expect(r.groups).toEqual([])

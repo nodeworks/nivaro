@@ -275,6 +275,9 @@ export interface NoOwnerDeps {
   loadMoves(): Promise<NoOwnerMoveRow[]>
   loadStates(templateIds: string[]): Promise<NoOwnerStateRow[]>
   loadInstances(stateIds: string[]): Promise<NoOwnerInstanceRow[]>
+  /** Of the given record ids, the ones whose record still exists. A pipeline instance can
+   *  outlive its record (deleted outside the items service) — those are not stuck work. */
+  existingItems?(collection: string, ids: string[]): Promise<Set<string>>
   /** ASSIGNED owners per request key (no fallback user) — the owner-only gate's answer. */
   resolveAssigned(requests: OwnerResolutionRequest[]): Promise<Map<string, ResolvedOwner[]>>
   /** Records for a condition check: rows by id + ids that could not be read. */
@@ -334,6 +337,18 @@ export const realDeps: NoOwnerDeps = {
         .whereIn('current_state', chunk)
         .select('id', 'template', 'collection', 'item', 'current_state', 'started_at')
     )) as NoOwnerInstanceRow[]
+  },
+  async existingItems(collection, ids) {
+    const { whereInList } = await import('./db-batch.js')
+    try {
+      const rows = (await selectInChunks(ids, 1000, (chunk) =>
+        whereInList(db(collection).select({ id: 'id' }), 'id', chunk)
+      )) as Array<{ id: unknown }>
+      return new Set(rows.map((r) => String(r.id)))
+    } catch {
+      // An unreadable table (dropped, renamed): none of its instances are live work.
+      return new Set()
+    }
   },
   async resolveAssigned(requests) {
     const out = new Map<string, ResolvedOwner[]>()
@@ -460,9 +475,19 @@ export async function computeNoOwnerSteps(deps: NoOwnerDeps = realDeps): Promise
   const steps = ownerOnlySteps(states, moves)
   if (steps.size === 0) return { computed_at, checked: 0, groups: [] }
 
-  const instances = (await deps.loadInstances([...steps.values()].map((s) => s.state.id))).filter(
+  let instances = (await deps.loadInstances([...steps.values()].map((s) => s.state.id))).filter(
     (i) => steps.has(up(i.current_state))
   )
+  // Instances whose record is gone (prod 2026-11-14: 3 Workflows instances listed with
+  // bare ids that opened "doesn't exist") are left out before anything is counted.
+  if (deps.existingItems) {
+    const byCollection = new Map<string, string[]>()
+    for (const i of instances)
+      byCollection.set(i.collection, [...(byCollection.get(i.collection) ?? []), String(i.item)])
+    const live = new Map<string, Set<string>>()
+    for (const [c, ids] of byCollection) live.set(c, await deps.existingItems(c, [...new Set(ids)]))
+    instances = instances.filter((i) => live.get(i.collection)?.has(String(i.item)))
+  }
   const owners = await deps.resolveAssigned(
     instances.map((i) => ({
       key: String(i.id),
