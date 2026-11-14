@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-14T00:25:18.131Z",
+  "generated_at": "2026-11-14T00:51:52.819Z",
   "releases": [
+    {
+      "version": "0.3.156",
+      "tag": "v0.3.156",
+      "date": "2026-11-13T19:51:30-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "layout",
+              "text": "half sections side by side share the taller height",
+              "hash": "d1f2c58a1"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.155",
       "tag": "v0.3.155",
-      "date": "2026-11-13T19:24:57-05:00",
+      "date": "2026-11-13T19:25:18-05:00",
       "sections": [
         {
           "label": "Added",
