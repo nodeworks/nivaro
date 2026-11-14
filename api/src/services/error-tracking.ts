@@ -91,16 +91,22 @@ export async function trackError(opts: {
   requestContext?: string | null
   /** The frontend build the error came from (client reports); server errors name this API's version. */
   build?: string | null
+  /** A caller's own grouping (front-end crashes: signature + screen + release); default source|route|message. */
+  fingerprint?: string
+  /** Lines written under `Route:` when the issue is opened (front-end crashes: the `Crash:` header). */
+  detailsHeader?: string[]
+  /** Wait for the occurrence row before returning (a caller that counts recent hits next). */
+  awaitOccurrence?: boolean
 }): Promise<number | null> {
   // Returns the issue id (new or bumped); null when tracking failed.
   try {
     const message = issueMessage(opts.message)
-    const fingerprint = issueFingerprint(opts.source, opts.route, message)
+    const fingerprint = opts.fingerprint ?? issueFingerprint(opts.source, opts.route, message)
 
     // The occurrence an open issue page streams (admin room): who, where, which build.
     // Names a person by id only — the page resolves it through an admin-only route.
-    const announce = (issueId: number, count: number) => {
-      void recordOccurrence(issueId, opts)
+    const announce = (issueId: number, count: number): Promise<void> => {
+      const recorded = recordOccurrence(issueId, opts)
       emitOps(`issue:${issueId}`, {
         occurrence: {
           route: opts.route.slice(0, 300),
@@ -110,6 +116,7 @@ export async function trackError(opts: {
           count
         }
       })
+      return recorded
     }
 
     const existing = await db('nivaro_issues')
@@ -133,12 +140,14 @@ export async function trackError(opts: {
               }
             : {})
         })
-      announce(Number(existing.id), Number(existing.occurrence_count ?? 0) + 1)
+      const recorded = announce(Number(existing.id), Number(existing.occurrence_count ?? 0) + 1)
+      if (opts.awaitOccurrence) await recorded
       return Number(existing.id)
     }
 
     const details = [
       `Route: ${opts.route}`,
+      ...(opts.detailsHeader ?? []),
       opts.requestContext ? `Request context: ${String(opts.requestContext).slice(0, 2000)}` : null,
       opts.stack ? `\n${String(opts.stack).slice(0, 4000)}` : null
     ]
@@ -165,7 +174,10 @@ export async function trackError(opts: {
     // `.returning('id')` yields an OBJECT on this stack
     const first = (inserted as unknown[])[0] as { id?: unknown } | number | undefined
     const id = typeof first === 'object' && first ? Number(first.id) : Number(first)
-    if (Number.isFinite(id)) announce(id, 1)
+    if (Number.isFinite(id)) {
+      const recorded = announce(id, 1)
+      if (opts.awaitOccurrence) await recorded
+    }
     return Number.isFinite(id) ? id : null
   } catch {
     /* tracking must never break the request path */

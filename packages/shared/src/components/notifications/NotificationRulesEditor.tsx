@@ -93,6 +93,11 @@ export const NOTIFY_RULE_CATS: Array<{ key: string; label: string; help: string 
     help: 'Chaos Monkey drills starting and ending, and pushes about drills you started or take part in (with a Stop button). Only administrators and chaos operators get these.'
   },
   {
+    key: 'crashes',
+    label: 'App crashes',
+    help: 'A crash that is new in the current release reached several times or more than one person within 15 minutes. Only administrators get these.'
+  },
+  {
     key: 'system',
     label: 'System & digests',
     help: 'Maintenance windows, failing monitors, import results, updates on support requests you raised, and the daily action summary itself. Maintenance and monitor failures always email immediately.'
@@ -107,7 +112,7 @@ export const NOTIFY_RULE_CATS: Array<{ key: string; label: string; help: string 
 /** Categories only administrators can ever receive (army 8 b16): chaos drills
  *  reach admins and chaos operators, audit-log pattern alerts are defined and
  *  subscribed to on admin-only screens. A business user's rules leave them out. */
-export const ADMIN_ONLY_RULE_CATS: ReadonlySet<string> = new Set(['chaos', 'audit'])
+export const ADMIN_ONLY_RULE_CATS: ReadonlySet<string> = new Set(['chaos', 'audit', 'crashes'])
 
 /** The categories a person's rules list (pure). Roles always list every one. */
 export function ruleCatsFor(subject: 'person' | 'role', isAdmin: boolean) {

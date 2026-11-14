@@ -819,6 +819,17 @@ export {
   mergeGlossary,
   uiHint
 } from './lib/core-glossary'
+export {
+  buildCrashBody,
+  type CrashBody,
+  type CrashKind,
+  type CrashReporter,
+  type CrashReporterOptions,
+  crashKey,
+  createCrashReporter,
+  isCrashWorthy,
+  scrubCrashText
+} from './lib/crash-report'
 export { useAfterIdle } from './lib/defer'
 export { deliveryAckFor } from './lib/delivery-ack'
 export {

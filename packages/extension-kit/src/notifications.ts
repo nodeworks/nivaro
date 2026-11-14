@@ -14,6 +14,8 @@ export type NotifyCategory =
   | 'huddle'
   /** Chaos drills, game days and monkey runs (#2829, #2852). */
   | 'chaos'
+  /** Front-end crashes new in a release (Issue Log → Crashes). Administrators only. */
+  | 'crashes'
   | 'other'
 
 export type NotificationKind =

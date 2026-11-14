@@ -28,7 +28,10 @@ GET /api/backups/manifest?include_system=true  (admin — what would be exported
         'Files on disk/object storage are not part of the stream — back the storage root or bucket up separately.'
       ]
     },
-    { type: 'note', text: 'Export only. Restore into a live instance is intentionally not offered through the API.' }
+    {
+      type: 'note',
+      text: 'Export only. Restore into a live instance is intentionally not offered through the API.'
+    }
   ]
 }
 
@@ -56,7 +59,10 @@ POST /api/promotion/apply   { "bundle": { … } }   // id-keyed upsert`
         'Admin-only; exports and applies are activity-logged.'
       ]
     },
-    { type: 'warn', text: 'Apply is a write operation on production data — always read the preview table first. The admin page (System → Content Promotion) enforces this order.' }
+    {
+      type: 'warn',
+      text: 'Apply is a write operation on production data — always read the preview table first. The admin page (System → Content Promotion) enforces this order.'
+    }
   ]
 }
 
@@ -124,19 +130,67 @@ export const opsErrorTracking: DocSection = {
     { type: 'h1', id: 'error-tracking', text: 'Error Tracking' },
     {
       type: 'p',
-      text: 'Server 5xx responses and admin UI render crashes are captured into the Issues log automatically — no external service required.'
+      text: 'Server 5xx responses and front-end crashes are captured into the Issues log automatically — no external service required.'
     },
     {
       type: 'ul',
       items: [
         'Server: any unhandled error on an /api route creates an issue with route, message, and stack.',
-        'Client: the admin error boundary reports crashes via POST /api/issues/client with the component stack.',
+        'Client: see Front-end crashes below.',
         'Dedupe: repeats of the same error (fingerprint of source + route + message) bump occurrence_count on the open issue instead of flooding the list.',
         'Resolving an issue and hitting the error again opens a fresh issue — regressions surface as new rows.',
         'Database outage: requests that fail because the database refused or dropped connections answer 503 DB_UNAVAILABLE and are counted into one issue ("The database refused or dropped connections") instead of one per route. Its count is the number of failed requests, its occurrences name their routes, and it is written once the database answers again.'
       ]
     },
-    { type: 'note', text: 'Issues appear at /issues with severity high, source server or client, and a live last-seen timestamp.' }
+    {
+      type: 'note',
+      text: 'Issues appear at /issues with severity high, source server or client, and a live last-seen timestamp.'
+    },
+    { type: 'h2', id: 'front-end-crashes', text: 'Front-end crashes' },
+    {
+      type: 'p',
+      text: 'The admin and efp-new report every screen that crashes (error boundaries), every uncaught error and every unhandled promise rejection to POST /api/issues/client. Issue Log → Crashes (administrators) lists them grouped by release.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'One report: message, error name, stack, kind (render, error, rejection), app, screen (the route pattern, never ids or the query string), release (the build) and the person signed in. With error replay on, the last minute before the crash is uploaded and linked.',
+        'Nothing typed leaves the tab: tokens, passwords, emails, long opaque strings, URL query strings and quoted values that are not identifiers are replaced, in the browser and again on the server.',
+        'Per tab: the same error is sent at most once every 5 minutes, at most 6 reports a minute and 30 per page load. Network failures, server answers, aborts and browser extensions are never filed. Per person on the server: at most 20 reports a minute and 200 a day (CRASH_REPORTS_PER_MINUTE, CRASH_REPORTS_PER_DAY); more answer 429 and are not filed.',
+        'Grouping: same signature (error name, message without ids or numbers, top three frames) + screen + release = one issue with its count, first and last seen and the people affected.',
+        'New in a release: a crash never seen in an earlier release is marked "New in <version>". Minified names change between builds, so this is judged on the message with short names blanked, the bundle file and the screen.',
+        'Admin stacks of the version the server runs are mapped back to the source files from the build\u2019s source maps on the server (they are built hidden and never served).',
+        'Alert: a crash new in the app\u2019s current release that happens 3 times AND to at least 2 different people within 15 minutes tells every administrator once (notification category App crashes). The current release is the server\u2019s own version for the admin and the build the live tabs report for another app \u2014 never what a crash report says. The title is fixed ("App crash on <screen> in <version>"); the error appears only in the message, cut to 120 characters. At most 3 crash alerts go out an hour. CRASH_ALERT_MIN_HITS, CRASH_ALERT_MIN_PEOPLE (never below 2), CRASH_ALERT_WINDOW_MIN and CRASH_ALERT_MAX_PER_HOUR change them.',
+        'Health → Telemetry shows crashes since each app\u2019s current release.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `// A front end of your own (packages/shared or @nivaro/react):
+import { createCrashReporter } from '@nivaro/react'
+
+const crashes = createCrashReporter({
+  app: 'my-app',
+  release: BUILD_VERSION,
+  send: (body) => client.request(post('/issues/client', body)),
+  captureReplay: () => captureErrorClip()
+})
+crashes.install() // window errors + unhandled rejections
+// in an error boundary:
+componentDidCatch(error, info) { crashes.report(error, 'render', info.componentStack) }`
+    },
+    {
+      type: 'table',
+      head: ['Route', 'Who', 'What'],
+      rows: [
+        ['POST /api/issues/client', 'signed in', 'One crash report (body as above). 204.'],
+        [
+          'GET /api/issues/crashes?days=14&release=&screen=&app=&status=open',
+          'admin',
+          'Crash groups with people, stack, source-mapped stack, replay link; facets and since_release per app.'
+        ]
+      ]
+    }
   ]
 }
 

@@ -119,11 +119,12 @@ import { useCloudPlugins, useExtensionPlugins } from '@/extensions/store'
 import type { NavSidebarSlot } from '@/extensions/types'
 import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
+import { reportRenderCrash } from '@/lib/global-error-report'
 import { hubForPath, isPathDisabled } from '@/lib/hubs'
 import { useT } from '@/lib/i18n'
 import { openViewAsTab, readMasquerade, stopMasquerade } from '@/lib/masquerade'
 import { usePagePresence } from '@/lib/use-page-presence'
-import { captureErrorClip, useSessionRecorder } from '@/lib/use-session-recorder'
+import { useSessionRecorder } from '@/lib/use-session-recorder'
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
@@ -159,22 +160,9 @@ class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
     return { error }
   }
   componentDidCatch(error: Error, info: { componentStack?: string | null }) {
-    // Report to the issue log (deduped server-side); never block rendering.
-    // captureErrorClip resolves the replay link (live recording offset, or an
-    // uploaded last-minute clip in buffer mode) — null when neither mode is
-    // on, and it self-times-out so the report never waits long for it.
-    void captureErrorClip().then((replay) => {
-      api
-        .post('/issues/client', {
-          message: error.message,
-          stack: [error.stack, info.componentStack].filter(Boolean).join('\n---\n').slice(0, 6000),
-          url: window.location.pathname,
-          ...(replay
-            ? { recording_id: replay.recording_id, recording_offset_ms: replay.offset_ms }
-            : {})
-        })
-        .catch(() => {})
-    })
+    // Report to the issue log (Issue Log → Crashes: grouped by signature + screen + release,
+    // with the replay clip when a recorder runs); never blocks rendering.
+    reportRenderCrash(error, info.componentStack)
   }
   render() {
     if (this.state.error) {
