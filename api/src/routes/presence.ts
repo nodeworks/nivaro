@@ -549,6 +549,34 @@ export async function resolveRecordLabels(
 ): Promise<Map<string, string>> {
   const wanted = new Map<string, Set<string>>()
   const out = new Map<string, string>()
+  // Worklists: "/queues/<id>" (admin and the portal) reads "Queues › <name>" — named only
+  // for a viewer who may see that queue (canUserReadQueue, the one queue gate).
+  const queueIds = new Set<string>()
+  for (const raw of paths) {
+    const q = raw ? /^\/(?:admin\/)?queues\/([^/?#]+)/.exec(raw) : null
+    if (q && /^[0-9a-f-]{8,64}$/i.test(q[1])) queueIds.add(q[1].toUpperCase())
+  }
+  if (queueIds.size > 0) {
+    try {
+      const { canUserReadQueue } = await import('../services/queue-access.js')
+      const { isActiveAdmin } = await import('../middleware/authenticate.js')
+      const admin = await isActiveAdmin(viewer.id)
+      const rows = (await db('nivaro_queues')
+        .whereIn('id', [...queueIds])
+        .select('id', 'name', 'owner', 'is_shared', 'role_id')) as Array<{
+        id: string
+        name: string | null
+        owner: string | null
+        is_shared: boolean | number | null
+        role_id: string | null
+      }>
+      for (const r of rows)
+        if (r.name && canUserReadQueue(r, viewer, admin))
+          out.set(`queue:${String(r.id).toUpperCase()}`, r.name)
+    } catch {
+      /* the page still reads "Queues" */
+    }
+  }
   for (const raw of paths) {
     if (!raw) continue
     // /records/<collection>/<id> and /collections/<collection>/<id>

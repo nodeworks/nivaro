@@ -321,6 +321,11 @@ export function presencePageLabel(
     const label = m[2] ? labels.get(`${m[1]}:${m[2]}`) : undefined
     return label ? `${titleCase(m[1])} › ${label}` : titleCase(m[1])
   }
+  const q = /^\/(?:admin\/)?queues\/([^/?#]+)/.exec(path)
+  if (q) {
+    const name = labels.get(`queue:${q[1].toUpperCase()}`)
+    if (name) return `Queues › ${name}`
+  }
   const parts = path.split(/[?#]/)[0].split('/').filter(Boolean)
   const first = parts[0]
   if (!first) return 'Home'
