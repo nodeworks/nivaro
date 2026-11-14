@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
+  Clock,
   GitBranch,
   Loader2,
   Minus,
@@ -102,6 +103,16 @@ import {
   useRecordFixAction
 } from './MoveAdvisory'
 import { MoveToStatePanel } from './MoveToStatePanel'
+import {
+  firstTouchText,
+  type SignOffSummary,
+  SignOffSummaryLines,
+  TimingLegend,
+  timingWords,
+  useStepTiming,
+  waitingFill,
+  workingFill
+} from './PipelineInsight'
 import { SlaClockLine } from './SlaClock'
 import type { TransitionRequirementsPayload } from './TransitionRequirementsDialog'
 
@@ -257,6 +268,8 @@ interface PipelinePanelData {
   binding: { id: number; template: string; collection: string; state_field: string | null } | null
   /** Parallel branches of the most recent split, drawn as lanes (#1240). */
   branches?: BranchLanesData | null
+  /** Sign-offs the current step waits on (several approvals); [] / absent = none. */
+  sign_offs?: SignOffSummary[]
   /** Automatic transitions the engine stopped re-firing (#1217): their push
    *  was refused and nothing they would send has changed since. */
   auto_held?: HeldAutoTransition[]
@@ -1238,11 +1251,22 @@ function fmtDur(ms: number): string {
 
 function StateDurationTimeline({
   history,
-  completedAt
+  completedAt,
+  collection,
+  item
 }: {
   history: PipelineHistoryEntry[]
   completedAt: string | null
+  collection?: string
+  item?: string
 }) {
+  // Waiting vs working per visit, read once this bar is on screen (lazy).
+  const timing = useStepTiming(
+    collection ?? '',
+    item ?? '',
+    timingVersion(history, completedAt),
+    !!collection && !!item && history.length > 1
+  )
   const ordered = [...history].sort(
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
   )
@@ -1257,39 +1281,73 @@ function StateDurationTimeline({
         label: h.to_state_label,
         color: h.to_state_color,
         ms: Math.max(0, stop - start),
-        current: i === ordered.length - 1 && !completedAt
+        current: i === ordered.length - 1 && !completedAt,
+        timing: timing?.get(Number(h.id)) ?? null
       }
     })
     .filter((seg) => seg.ms > 0 || seg.current)
   if (segments.length < 2) return null
   const total = segments.reduce((sum, seg) => sum + seg.ms, 0)
   if (total <= 0) return null
+  const split = segments.some((seg) => seg.timing)
 
   return (
-    <div data-state-timeline>
-      <div className='mb-1 flex items-center justify-between'>
+    <div data-state-timeline data-step-timing={split ? 'split' : undefined}>
+      <div className='mb-1 flex items-center justify-between gap-3'>
         <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
           Time in step
         </p>
-        <p className='text-[10px] tabular-nums text-slate-400 dark:text-slate-500'>
-          {fmtDur(total)} total{completedAt ? '' : ' · so far'}
-        </p>
+        <div className='flex items-center gap-3 text-[10px] tabular-nums text-slate-400 dark:text-slate-500'>
+          {split && <TimingLegend />}
+          <span>
+            {fmtDur(total)} total{completedAt ? '' : ' · so far'}
+          </span>
+        </div>
       </div>
       <div className='flex h-4 w-full overflow-hidden rounded'>
         {segments.map((seg) => {
           const pct = (seg.ms / total) * 100
+          const t = seg.timing
+          const parts = t ? t.waiting_ms + t.working_ms : 0
+          const waitPct = t && parts > 0 ? (t.waiting_ms / parts) * 100 : 0
+          const tip = [
+            `${seg.label} — ${fmtDur(seg.ms)}${seg.current ? ' (current)' : ''}`,
+            t ? timingWords(t) : null,
+            t ? firstTouchText(t) : null
+          ]
+            .filter(Boolean)
+            .join(' · ')
           return (
             <div
               key={seg.key}
-              data-tip={`${seg.label} — ${fmtDur(seg.ms)}${seg.current ? ' (current)' : ''}`}
+              data-tip={tip}
+              data-step-visit={seg.key}
               className='relative flex min-w-[8px] items-center overflow-hidden border-r border-white/60 last:border-r-0 dark:border-black/30'
               style={{
                 width: `${pct}%`,
-                backgroundColor: seg.color ? `${seg.color}55` : 'rgba(100,116,139,.25)'
+                backgroundColor: t
+                  ? undefined
+                  : seg.color
+                    ? `${seg.color}55`
+                    : 'rgba(100,116,139,.25)'
               }}
             >
+              {t && (
+                <span className='absolute inset-0 flex' aria-hidden>
+                  <span
+                    className='h-full'
+                    style={{ width: `${waitPct}%`, background: waitingFill(seg.color) }}
+                    data-step-waiting
+                  />
+                  <span
+                    className='h-full flex-1'
+                    style={{ background: workingFill(seg.color) }}
+                    data-step-working
+                  />
+                </span>
+              )}
               {pct >= 14 && (
-                <span className='truncate px-1.5 text-[9.5px] font-medium leading-none text-slate-700 dark:text-slate-200'>
+                <span className='relative truncate px-1.5 text-[9.5px] font-medium leading-none text-slate-700 dark:text-slate-200'>
                   {seg.label} · {fmtDur(seg.ms)}
                 </span>
               )}
@@ -1305,6 +1363,12 @@ function StateDurationTimeline({
       </div>
     </div>
   )
+}
+
+/** Refetch key for step timing: a move or a completion changes it. */
+function timingVersion(history: PipelineHistoryEntry[], completedAt: string | null): string {
+  const newest = history.reduce((m, h) => Math.max(m, Number(h.id) || 0), 0)
+  return `${newest}:${history.length}:${completedAt ?? ''}`
 }
 
 function StateTrack({
@@ -1685,7 +1749,24 @@ function StateTrack({
 
 // ─── History timeline ─────────────────────────────────────────────────────────
 
-function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
+function HistoryTimeline({
+  history,
+  collection,
+  item,
+  completedAt = null
+}: {
+  history: PipelineHistoryEntry[]
+  collection?: string
+  item?: string
+  completedAt?: string | null
+}) {
+  // Per visit: "waited 2 d, worked 3 h" (same lazy read as the Time in step bar).
+  const timing = useStepTiming(
+    collection ?? '',
+    item ?? '',
+    timingVersion(history, completedAt),
+    !!collection && !!item && history.length > 0
+  )
   if (history.length === 0)
     return <p className='text-[12px] text-slate-400 italic'>No transitions yet.</p>
   return (
@@ -1699,6 +1780,7 @@ function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
         const lifecycle = lifecycleNote(h)
         const note = h.comment && !machine && !lifecycle ? h.comment : null
         const detail = lifecycle ?? (machine ? machineDetail(h) : null)
+        const visit = timing?.get(Number(h.id)) ?? null
         return (
           <div key={h.id} className='flex items-start gap-2.5 text-[12px]'>
             <div className='mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-200' />
@@ -1721,6 +1803,16 @@ function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
                 {userName}
                 {detail ? ` · ${detail}` : ''} · {formatRelative(h.timestamp)}
               </p>
+              {visit && (
+                <p
+                  className='mt-0.5 flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400'
+                  data-history-timing={h.id}
+                  data-tip={firstTouchText(visit) ?? undefined}
+                >
+                  <Clock className='h-3 w-3 shrink-0 text-slate-400' aria-hidden />
+                  In {h.to_state_label}: {timingWords(visit)}
+                </p>
+              )}
             </div>
           </div>
         )
@@ -3705,6 +3797,8 @@ function PipelinePanelInner({
                     <StateDurationTimeline
                       history={history ?? []}
                       completedAt={instance.completed_at}
+                      collection={collection}
+                      item={String(item)}
                     />
                   </div>
                 )}
@@ -3713,6 +3807,8 @@ function PipelinePanelInner({
                   {!instance.completed_at && (
                     <SlaClockLine collection={collection} itemId={String(item)} />
                   )}
+                  {/* "2 of 3 signed — waiting on …" when this step needs several sign-offs. */}
+                  {!instance.completed_at && <SignOffSummaryLines summaries={data?.sign_offs} />}
                   <OwnersSection
                     collection={collection}
                     item={item}
@@ -3750,7 +3846,12 @@ function PipelinePanelInner({
                   </button>
                   {showHistory && (
                     <div className='mt-3'>
-                      <HistoryTimeline history={history ?? []} />
+                      <HistoryTimeline
+                        history={history ?? []}
+                        collection={collection}
+                        item={String(item)}
+                        completedAt={instance.completed_at}
+                      />
                     </div>
                   )}
                 </div>
