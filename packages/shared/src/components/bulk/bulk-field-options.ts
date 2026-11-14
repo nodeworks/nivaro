@@ -42,7 +42,14 @@ export interface BulkFieldsReport {
   forms: BulkFieldsForm[]
   fields: Record<
     string,
-    { records: number; locked: number; reason: string | null; required?: boolean }
+    {
+      records: number
+      locked: number
+      reason: string | null
+      required?: boolean
+      /** A to-many field: the bar adds, replaces or removes links (2026-11-13). */
+      m2m?: { related: string; junction: string }
+    }
   >
 }
 
@@ -57,6 +64,8 @@ export interface BulkFieldOption {
   reason: string | null
   /** The form requires it: an empty value is never applied (army 11 N3). */
   required: boolean
+  /** A to-many field: the related collection its links point at. */
+  m2m?: { related: string; junction: string }
 }
 
 export interface BulkFieldSection {
@@ -100,7 +109,8 @@ export function bulkFieldSections(
           offForm: Math.max(0, report.readable - r.records),
           locked: r.locked,
           reason: r.reason,
-          required: r.required === true
+          required: r.required === true,
+          ...(r.m2m ? { m2m: r.m2m } : {})
         }
       ]
     })

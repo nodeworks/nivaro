@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Lock } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
+import { useDebounced } from '../../hooks/useDebounced'
 import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { FieldRenderer } from '../item-edit/FieldRenderer'
@@ -16,12 +17,19 @@ import {
 } from '../ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
+import { BulkLinksValue } from './BulkLinksValue'
 import {
   type BulkFieldOption,
   type BulkFieldsReport,
   bulkFieldNote,
   bulkFieldSections
 } from './bulk-field-options'
+import {
+  type BulkLinkMode,
+  type BulkUpdatePreviewAnswer,
+  bulkLinksValue,
+  bulkPreviewSentence
+} from './bulk-update-preview'
 
 /**
  * Bulk "Update field" by form (#2722): an anchored panel beside the bar's
@@ -30,6 +38,10 @@ import {
  * form's reason, and one only some records take says how many. The value is
  * edited with the form's own input. The write itself is the bar's
  * (`onApply`) — the server refuses locked and off-form fields per record too.
+ *
+ * `pointAt` (2026-11-13) opens the panel straight on one field — the list's
+ * column-header "Set <column> on N selected rows…" entry. A new `nonce` opens
+ * it again.
  */
 export function BulkFieldUpdate({
   collection,
@@ -37,7 +49,8 @@ export function BulkFieldUpdate({
   disabled,
   className,
   onApply,
-  onSaveRecipe
+  onSaveRecipe,
+  pointAt
 }: {
   collection: string
   selectedIds: Array<string | number>
@@ -45,13 +58,23 @@ export function BulkFieldUpdate({
   className?: string
   onApply: (field: string, value: unknown) => void
   onSaveRecipe?: (field: string, value: unknown) => void
+  pointAt?: { field: string; nonce: number } | null
 }) {
   const [open, setOpen] = useState(false)
+  const [initialField, setInitialField] = useState<string | null>(null)
+  const lastNonce = useRef<number | null>(null)
+  useEffect(() => {
+    if (!pointAt || disabled || pointAt.nonce === lastNonce.current) return
+    lastNonce.current = pointAt.nonce
+    setInitialField(pointAt.field)
+    setOpen(true)
+  }, [pointAt, disabled])
   return (
     <Popover
       open={open}
       onOpenChange={(o) => {
         if (!disabled || !o) setOpen(o)
+        if (!o) setInitialField(null)
       }}
     >
       <PopoverTrigger asChild>
@@ -74,8 +97,10 @@ export function BulkFieldUpdate({
       >
         {open && (
           <BulkFieldPanel
+            key={initialField ?? ''}
             collection={collection}
             selectedIds={selectedIds}
+            initialField={initialField}
             onCancel={() => setOpen(false)}
             onApply={(f, v) => {
               setOpen(false)
@@ -99,12 +124,14 @@ export function BulkFieldUpdate({
 function BulkFieldPanel({
   collection,
   selectedIds,
+  initialField,
   onCancel,
   onApply,
   onSaveRecipe
 }: {
   collection: string
   selectedIds: Array<string | number>
+  initialField?: string | null
   onCancel: () => void
   onApply: (field: string, value: unknown) => void
   onSaveRecipe?: (field: string, value: unknown) => void
@@ -150,6 +177,42 @@ function BulkFieldPanel({
   )
   const [picked, setPicked] = useState<BulkFieldOption | null>(null)
   const [value, setValue] = useState<unknown>(null)
+  // To-many fields: how the picked links apply, and which (2026-11-13).
+  const [linkMode, setLinkMode] = useState<BulkLinkMode>('append')
+  const [linkIds, setLinkIds] = useState<Array<string | number>>([])
+  // The header entry names a field: open on it once the report says what it offers.
+  const [pointMissed, setPointMissed] = useState<string | null>(null)
+  const pointedRef = useRef(false)
+  useEffect(() => {
+    if (!initialField || pointedRef.current || !report.data) return
+    pointedRef.current = true
+    const option = sections.flatMap((s) => s.options).find((o) => o.field === initialField)
+    if (option && option.writable > 0) {
+      setPicked(option)
+      setValue(null)
+    } else setPointMissed(option ? (bulkFieldNote(option, report.data.readable) ?? null) : '')
+  }, [initialField, report.data, sections])
+  const isLinks = !!picked?.m2m
+  const sendValue = isLinks ? bulkLinksValue(linkMode, linkIds) : value
+  const previewValue = useDebounced(JSON.stringify(sendValue ?? null), 300)
+  // A to-many Add / Remove with nothing picked asks nothing.
+  const previewReady = !!picked && (!isLinks || linkMode === 'replace' || linkIds.length > 0)
+  const preview = useQuery<BulkUpdatePreviewAnswer>({
+    queryKey: ['bulk-update-preview', collection, idsKey, picked?.field ?? '', previewValue],
+    queryFn: () =>
+      client
+        .request<{ data: BulkUpdatePreviewAnswer }>(
+          post(`/items/${collection}/bulk-update?dry_run=1`, {
+            ids: selectedIds,
+            data: { [picked?.field as string]: JSON.parse(previewValue) },
+            by_form: true
+          })
+        )
+        .then((r) => r.data),
+    enabled: previewReady && previewValue === JSON.stringify(sendValue ?? null),
+    staleTime: 10_000,
+    retry: false
+  })
 
   const total = report.data?.readable ?? selectedIds.length
   const forms = report.data?.forms ?? []
@@ -164,12 +227,18 @@ function BulkFieldPanel({
   if (picked) {
     const cfg = (fieldConfig.data ?? []).find((f) => f.field === picked.field)
     const note = bulkFieldNote(picked, total)
-    const isEmpty =
-      value == null ||
-      (typeof value === 'string' && value.trim() === '') ||
-      (Array.isArray(value) && value.length === 0)
+    const isEmpty = isLinks
+      ? linkIds.length === 0
+      : value == null ||
+        (typeof value === 'string' && value.trim() === '') ||
+        (Array.isArray(value) && value.length === 0)
     // A required field is never cleared in bulk (army 11 N3; the server refuses it too).
-    const needsValue = picked.required && isEmpty
+    const needsValue = isLinks
+      ? isEmpty && (linkMode !== 'replace' || picked.required)
+      : picked.required && isEmpty
+    const said = preview.data
+      ? bulkPreviewSentence(preview.data, { mode: isLinks ? linkMode : null })
+      : null
     return (
       <div className='flex flex-col' data-bulk-field-value>
         <div className='flex items-center gap-2 border-b border-border px-3 py-2.5'>
@@ -178,6 +247,8 @@ function BulkFieldPanel({
             onClick={() => {
               setPicked(null)
               setValue(null)
+              setLinkIds([])
+              setLinkMode('append')
             }}
             aria-label='Choose another field'
             data-tip='Choose another field'
@@ -193,7 +264,17 @@ function BulkFieldPanel({
           </div>
         </div>
         <div className='space-y-2 px-3 py-3'>
-          {cfg ? (
+          {picked.m2m ? (
+            <BulkLinksValue
+              related={picked.m2m.related}
+              fieldLabel={picked.label}
+              fieldOptions={cfg?.options}
+              mode={linkMode}
+              ids={linkIds}
+              onMode={setLinkMode}
+              onIds={setLinkIds}
+            />
+          ) : cfg ? (
             <FieldRenderer
               field={{ ...cfg, readonly: false } as Parameters<typeof FieldRenderer>[0]['field']}
               value={value}
@@ -217,12 +298,57 @@ function BulkFieldPanel({
             id='bulk-field-hint'
             data-bulk-field-hint
           >
-            {needsValue
-              ? `${picked.label} is required — choose a value to apply.`
-              : isEmpty
-                ? `Leave it empty to clear ${picked.label} on every record.`
-                : 'Records that already hold this value are left as they are.'}
+            {isLinks
+              ? linkMode === 'replace'
+                ? isEmpty
+                  ? picked.required
+                    ? `${picked.label} is required — pick at least one.`
+                    : null
+                  : `Each record’s ${picked.label} becomes exactly these.`
+                : isEmpty
+                  ? `Pick the records to ${linkMode === 'append' ? 'add' : 'remove'}.`
+                  : linkMode === 'append'
+                    ? 'Links a record already has are left as they are.'
+                    : 'Only these links come off; the rest stay.'
+              : needsValue
+                ? `${picked.label} is required — choose a value to apply.`
+                : isEmpty
+                  ? `Leave it empty to clear ${picked.label} on every record.`
+                  : 'Records that already hold this value are left as they are.'}
           </p>
+          {isLinks && linkMode === 'replace' && isEmpty && !picked.required && (
+            <p
+              role='alert'
+              data-bulk-links-clear-warning
+              className='rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11.5px] leading-4 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200'
+            >
+              Nothing picked: this removes every {picked.label} link from the selected records.
+            </p>
+          )}
+          {!needsValue && previewReady && (
+            <div
+              aria-live='polite'
+              data-bulk-update-preview
+              className='rounded-md bg-muted/60 px-2 py-1.5 text-[11.5px] leading-4'
+            >
+              {preview.isError ? (
+                <span className='text-muted-foreground'>
+                  Could not count the changes — Apply still checks every record.
+                </span>
+              ) : said ? (
+                <>
+                  <span className='font-medium text-foreground' data-bulk-update-preview-headline>
+                    {said.headline}
+                  </span>
+                  {said.notes.length > 0 && (
+                    <span className='text-muted-foreground'> · {said.notes.join(' · ')}</span>
+                  )}
+                </>
+              ) : (
+                <Skeleton className='h-3 w-40' />
+              )}
+            </div>
+          )}
           {note && (
             <p
               className='text-[11.5px] leading-4 text-amber-700 dark:text-amber-300'
@@ -233,7 +359,7 @@ function BulkFieldPanel({
           )}
         </div>
         <div className='flex items-center gap-1.5 border-t border-border px-3 py-2'>
-          {onSaveRecipe && (
+          {onSaveRecipe && !isLinks && (
             <button
               type='button'
               onClick={() => onSaveRecipe(picked.field, value)}
@@ -253,13 +379,16 @@ function BulkFieldPanel({
           </button>
           <button
             type='button'
-            disabled={picked.writable === 0 || needsValue}
+            disabled={picked.writable === 0 || needsValue || preview.data?.would_update === 0}
             aria-describedby={needsValue ? 'bulk-field-hint' : undefined}
-            onClick={() => onApply(picked.field, value)}
+            onClick={() => onApply(picked.field, sendValue)}
             data-bulk-field-apply
             className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white transition-colors hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:opacity-40'
           >
-            Apply to {picked.writable} record{picked.writable === 1 ? '' : 's'}
+            {(() => {
+              const n = preview.data ? preview.data.would_update : picked.writable
+              return `Apply to ${n.toLocaleString()} record${n === 1 ? '' : 's'}`
+            })()}
           </button>
         </div>
       </div>
@@ -272,6 +401,16 @@ function BulkFieldPanel({
         <p className='text-[13px] font-semibold text-foreground'>
           Update a field on {total} record{total === 1 ? '' : 's'}
         </p>
+        {pointMissed != null && (
+          <p
+            data-bulk-field-point-missed
+            className='mt-1 text-[11.5px] leading-4 text-amber-700 dark:text-amber-300'
+          >
+            {labels[initialField ?? ''] || initialField} can’t be changed in bulk here
+            {pointMissed ? ` — ${pointMissed.charAt(0).toLowerCase()}${pointMissed.slice(1)}` : ''}.
+            Pick another field.
+          </p>
+        )}
         {subtitle ? (
           <p className='text-[11.5px] text-muted-foreground'>{subtitle}</p>
         ) : (
@@ -323,6 +462,8 @@ function BulkFieldPanel({
                       onSelect={() => {
                         setPicked(o)
                         setValue(null)
+                        setLinkIds([])
+                        setLinkMode('append')
                       }}
                       data-bulk-field-option={o.field}
                       className='items-start py-1.5 text-[13px] data-[disabled=true]:opacity-100'
