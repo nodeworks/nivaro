@@ -14,6 +14,7 @@
  * GET /security/http-cache?window=  per-route browser caching: 304 rate, headers sent, flags
  */
 import type { FastifyInstance } from 'fastify'
+import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { selectInChunks } from '../../services/db-batch.js'
@@ -30,13 +31,14 @@ import {
   knownProxies,
   type MisconfigFinding,
   misconfigFindings,
+  selfTierOf,
   uaLabel,
   type WriteRow
 } from '../../services/traffic-security.js'
 import { enableTwoPlacesAlerts } from '../../services/traffic-security-alerts.js'
 import { geoFlags, geoOf } from '../../services/traffic-taps/caller-geo.js'
 import { cacheRows } from '../../services/traffic-taps/http-cache.js'
-import { misconfigFacts } from '../../services/traffic-taps/misconfigured.js'
+import { configuredOwnHosts, misconfigFacts } from '../../services/traffic-taps/misconfigured.js'
 import { type Addr, flaggedSessions, type Sess } from '../../services/traffic-taps/session-guard.js'
 import { tapState } from '../../services/traffic-taps.js'
 
@@ -110,13 +112,42 @@ function readRegistry(requestHost: string): Promise<Registry> {
 
 async function keyNames(
   callers: string[]
-): Promise<Array<{ caller: string; name: string | null }>> {
+): Promise<Array<{ caller: string; name: string | null; created_at: string | null }>> {
   const ids = callers.filter((c) => /^k\d{1,9}$/.test(c)).map((c) => Number(c.slice(1)))
   if (ids.length === 0) return []
   const rows = (await selectInChunks(ids.slice(0, 500), 500, (chunk) =>
-    db('nivaro_api_keys').whereIn('id', chunk).select('id', 'name')
-  ).catch(() => [])) as Array<{ id: number; name: string | null }>
-  return rows.map((r) => ({ caller: `k${r.id}`, name: r.name ?? null }))
+    db('nivaro_api_keys').whereIn('id', chunk).select('id', 'name', 'created_at')
+  ).catch(() => [])) as Array<{
+    id: number
+    name: string | null
+    created_at: Date | string | null
+  }>
+  return rows.map((r) => ({
+    caller: `k${r.id}`,
+    name: r.name ?? null,
+    created_at: r.created_at ? new Date(r.created_at).toISOString() : null
+  }))
+}
+
+/**
+ * When this database was last restored (msdb.dbo.restorehistory), as UTC. restore_date is the
+ * server's local time, so it is shifted by the server's own UTC offset. null when the login
+ * cannot read msdb, the database was never restored, or this is not SQL Server.
+ */
+export async function lastRestoreUtc(): Promise<string | null> {
+  if (!isMssql(db)) return null
+  try {
+    const res = (await db.raw(
+      'SELECT CONVERT(varchar(33), DATEADD(minute, DATEDIFF(minute, GETDATE(), GETUTCDATE()), MAX(restore_date)), 126) AS restored FROM msdb.dbo.restorehistory WHERE destination_database_name = DB_NAME()'
+    )) as unknown
+    const rows = Array.isArray(res) ? res : ((res as { recordset?: unknown[] })?.recordset ?? [])
+    const v = (rows[0] as { restored?: string | null } | undefined)?.restored
+    if (!v) return null
+    const d = new Date(/[zZ]$|[+-]\d\d:?\d\d$/.test(v) ? v : `${v}Z`)
+    return Number.isNaN(d.getTime()) ? null : d.toISOString()
+  } catch {
+    return null
+  }
 }
 
 async function misconfigured(windowS: number, requestHost: string) {
@@ -124,11 +155,31 @@ async function misconfigured(windowS: number, requestHost: string) {
   const facts = misconfigFacts(windowS, sec)
   const reg = await readRegistry(requestHost)
   const keys = await cachedRead('key-names', String(windowS), () =>
-    keyNames([...new Set([...seenCallerKeys(), ...Object.keys(facts.referers)])])
+    keyNames([
+      ...new Set([...seenCallerKeys(), ...Object.keys(facts.referers), ...Object.keys(facts.who)])
+    ])
   )
+  // This instance's tier (production or not): NIVARO_ENVIRONMENT, else what NIVARO_INSTANCE or
+  // the registry's name for it says. Unknown = no production-key checks.
+  const selfTier = selfTierOf({
+    environment: process.env.NIVARO_ENVIRONMENT,
+    instance: process.env.NIVARO_INSTANCE,
+    registrySelf: reg.self
+  })
+  const restoredAt =
+    selfTier?.tier === 'nonproduction' ? await cachedRead('restored-at', '', lastRestoreUtc) : null
+  const reqHost = hostOf(requestHost)
+  const own = [...new Set([...configuredOwnHosts(), ...(reqHost ? [reqHost] : [])])]
   return {
-    findings: misconfigFindings({ ...facts, keys }, reg.components, reg.self),
-    registry: { configured: reg.configured, self: reg.self, components: reg.components.length }
+    findings: misconfigFindings(
+      { ...facts, keys, ownHosts: own, restoredAt },
+      reg.components,
+      reg.self,
+      selfTier
+    ),
+    registry: { configured: reg.configured, self: reg.self, components: reg.components.length },
+    self_tier: selfTier,
+    restored_at: restoredAt
   }
 }
 

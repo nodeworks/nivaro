@@ -47,6 +47,8 @@ vi.mock('../../../services/session-replay-settings.js', () => ({
 vi.mock('../../../services/settings-overrides.js', () => ({
   bustInstanceOverridesCache: vi.fn(),
   envOverrideKeys: vi.fn(() => []),
+  envOverrideMap: vi.fn(() => ({})),
+  describeEnvOverrides: vi.fn(() => []),
   INSTANCE_RESERVED_KEYS: [],
   instanceKey: vi.fn(() => 'test'),
   withoutReservedKeys: vi.fn((x: unknown) => x)

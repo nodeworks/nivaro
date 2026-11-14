@@ -174,6 +174,7 @@ import { BulkRowMark } from './bulk/BulkRowMark'
 import { MessageStakeholdersForm } from './bulk/MessageStakeholders'
 import { type RowPushOp, runRowPush, useRowPushActions } from './bulk/RowPushActions'
 import { CellCopyLayer } from './CellCopyLayer'
+import { CollectionImportBanner } from './CollectionImportBanner'
 import { CopyAsButton } from './CopyAsButton'
 import { CollectionTree, useTreeConfig } from './cbv/CollectionTree'
 import {
@@ -7793,6 +7794,8 @@ export function CollectionBrowserView({
       `}</style>
       <TipLayer />
       <CellCopyLayer />
+      {/* #1826 — a procedure-mode staged import writing this collection right now. */}
+      <CollectionImportBanner collection={collection} className='mx-4 mt-3 shrink-0' />
       {cellMenu &&
         createPortal(
           <div

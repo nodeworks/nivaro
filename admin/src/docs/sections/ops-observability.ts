@@ -622,7 +622,7 @@ export const instanceOverridesDocs: DocSection = {
       items: [
         'Overrides are read exactly where mail and SMS configuration is resolved — SMTP host/port/credentials/from, mail test mode and its allowlist, the environment label, and the SMS provider settings. Every other setting reads the shared row and is unaffected.',
         'The This Instance tab offers exactly those keys. Set a value to override it for this instance; leave a value blank to clear the shared value and fall back to this instance’s environment variables.',
-        'A second layer exists for containers: the NIVARO_SETTINGS_OVERRIDES environment variable can hold a JSON object of the same keys, and it wins over anything set in the tab. It is read once at startup, so changing it requires a restart.',
+        'A second layer exists for containers: the NIVARO_SETTINGS_OVERRIDES environment variable can hold a JSON object of the same keys, and it wins over anything set in the tab. It is read once at startup, so changing it requires a restart. The This Instance tab lists every key that variable sets, read-only and marked "Set on the server", with secret values hidden; a key you also set in the tab is marked as not used, because the server value wins.',
         'Saving replaces this instance’s whole override set — the tab always shows and submits the complete list.'
       ]
     },

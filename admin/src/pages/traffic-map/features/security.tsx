@@ -59,10 +59,29 @@ export interface SessionView {
 }
 interface MisconfigFinding {
   caller: string
-  kind: 'referer' | 'unknown-key' | 'key-name'
+  kind: 'referer' | 'unknown-key' | 'key-name' | 'restore-copy' | 'user-agent'
   environment: string | null
   text: string
   n: number
+  /** Where the caller called from (#2236): address + app, and a token fingerprint (hash prefix). */
+  ip?: string | null
+  app?: string | null
+  fingerprint?: string | null
+}
+
+/** "from 10.4.0.9 · python-requests · 3 calls" under a wrong-environment sentence. */
+function MisconfigMeta({ f }: { f: MisconfigFinding }) {
+  const parts = [
+    f.ip ? `from ${f.ip}` : null,
+    f.app ?? null,
+    f.n ? `${fmtCount(f.n)} calls` : null
+  ].filter(Boolean)
+  if (parts.length === 0) return null
+  return (
+    <p className='text-[11.5px] text-[var(--tm-muted)]' data-tm-misconfig-meta>
+      {parts.join(' · ')}
+    </p>
+  )
 }
 interface BadDataCaller {
   caller: string
@@ -368,9 +387,7 @@ function CallerSecurityPanel({ sel }: { sel: Selection }) {
             {d.misconfigured.map((m) => (
               <li key={`${m.kind}-${m.text}`} data-tm-security-misconfig={m.kind}>
                 {m.text}
-                {m.n ? (
-                  <span className='text-[var(--tm-fg-2)]'> · {fmtCount(m.n)} calls</span>
-                ) : null}
+                <MisconfigMeta f={m} />
               </li>
             ))}
           </ul>
@@ -464,6 +481,7 @@ function SecurityPanel() {
         .data as {
         findings: MisconfigFinding[]
         registry: { configured: boolean; self: string | null; components: number }
+        self_tier?: { tier: 'production' | 'nonproduction'; word: string } | null
       },
     enabled: live,
     refetchInterval: paused ? false : 30_000
@@ -538,8 +556,8 @@ function SecurityPanel() {
             <Note tone='error'>Could not be read.</Note>
           ) : !mis.data?.findings.length ? (
             <Empty>
-              {mis.data?.registry.configured === false
-                ? 'Register your environments (Environments page) to check clients against them.'
+              {mis.data?.registry.configured === false && !mis.data?.self_tier
+                ? 'Register your environments (Environments page), or set NIVARO_ENVIRONMENT, to check clients against them.'
                 : 'No client looks aimed at another environment.'}
             </Empty>
           ) : (
@@ -551,10 +569,18 @@ function SecurityPanel() {
                     name={f.caller === 'anon' ? 'Not signed in' : name(f.caller)}
                   />
                   <p className='break-words text-[var(--tm-fg-2)]'>{f.text}</p>
+                  <MisconfigMeta f={f} />
                 </li>
               ))}
             </ul>
           )}
+          {mis.data?.self_tier ? (
+            <p className={NOTE}>
+              This instance counts as {mis.data.self_tier.word}: keys, tokens and callers that name{' '}
+              {mis.data.self_tier.tier === 'production' ? 'another environment' : 'production'} are
+              listed here. Keys show a fingerprint (the start of the key's hash), never the key.
+            </p>
+          ) : null}
           {mis.data?.registry.self ? (
             <p className={NOTE}>This instance is {mis.data.registry.self} in the registry.</p>
           ) : null}

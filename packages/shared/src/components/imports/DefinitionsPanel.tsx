@@ -628,7 +628,7 @@ export function DefinitionsPanel({
               {!draft.processor && (
                 <Field
                   label='Recalculate rollups for'
-                  hint='Collections the procedure writes, comma separated. After each run the stored rollups those rows feed are recomputed (a procedure bypasses the hooks that normally do it).'
+                  hint='Collections the procedure writes, comma separated. After each run the stored rollups those rows feed are recomputed (a procedure bypasses the hooks that normally do it), and while a run is going their list and record pages say an import is running.'
                 >
                   <Input
                     value={draft.recalc_rollups}

@@ -64,7 +64,7 @@ GET  /api/background-runs/:id/result   → the response, kept 30 minutes`
     { type: 'h3', id: 'live-progress-import-banner', text: 'Import in progress on a record' },
     {
       type: 'p',
-      text: 'While a staged import writes a record through the items service, its change events carry `source: "import"`. A form open on that record shows "An import is updating this record" and refreshes the changed fields; the notice lapses 8 seconds after the last import write. Imports that run a stored procedure write outside the items service and are announced when they finish instead.'
+      text: 'While a staged import writes a record through the items service, its change events carry `source: "import"`. A form open on that record shows "An import is updating this record" and refreshes the changed fields; the notice lapses 8 seconds after the last import write. Imports that run a stored procedure write outside the items service, all at once when the procedure ends, so they are announced per collection instead: the list and record pages of every collection the import definition says the procedure writes ("Recalculate rollups for") show "<import> import is running" with the time since it started and an indeterminate progress bar, then "finished" with the rows the run reported, or "failed". Ended runs stay for 10 minutes and can be dismissed. `GET /staged-imports/collection-runs?collection=` returns them to readers of the collection.'
     },
     { type: 'h3', id: 'live-progress-bulk', text: 'Bulk action progress on rows' },
     {

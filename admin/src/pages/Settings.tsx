@@ -10,6 +10,7 @@ import {
   HardDrive,
   Headphones,
   KeyRound,
+  Lock,
   Mail,
   MessageSquare,
   Palette,
@@ -294,17 +295,31 @@ function coerceOverrideValue(raw: string): unknown {
   return v
 }
 
+/** One key set by the server's NIVARO_SETTINGS_OVERRIDES env JSON (read-only, secrets masked). */
+interface EnvOverride {
+  key: string
+  value: string | null
+  secret: boolean
+  shadows_db: boolean
+}
+
 function InstanceOverridesSection() {
   const queryClient = useQueryClient()
   const { data } = useQuery({
     queryKey: ['instance-overrides'],
     queryFn: () =>
       api
-        .get<{ data: { instance_key: string; overrides: Record<string, unknown> } }>(
-          '/settings/instance-overrides'
-        )
+        .get<{
+          data: {
+            instance_key: string
+            overrides: Record<string, unknown>
+            env_overrides?: EnvOverride[]
+          }
+        }>('/settings/instance-overrides')
         .then((r) => r.data.data)
   })
+  const envOverrides = data?.env_overrides ?? []
+  const envKeys = new Set(envOverrides.map((e) => e.key))
   const [rows, setRows] = useState<Array<{ key: string; value: string }>>([])
   const [hydrated, setHydrated] = useState(false)
   if (data && !hydrated) {
@@ -339,44 +354,97 @@ function InstanceOverridesSection() {
         settings on this instance — e.g. a local mail server while staging keeps its relay. Leave a
         value blank to force the setting back to this instance's env-var fallback.
       </p>
+      {envOverrides.length > 0 && (
+        <div
+          className='rounded-lg border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-500/30 dark:bg-amber-500/10'
+          data-testid='env-overrides'
+        >
+          <div className='mb-1 flex items-center gap-1.5 text-[12.5px] font-medium text-amber-900 [overflow-wrap:anywhere] dark:text-amber-200'>
+            <Lock className='h-3.5 w-3.5 shrink-0' />
+            Set on the server (NIVARO_SETTINGS_OVERRIDES) — wins over this page
+          </div>
+          <p className='mb-2 text-[11.5px] text-amber-800/80 dark:text-amber-200/70'>
+            These come from the server's environment and can only be changed there. Secret values
+            are hidden.
+          </p>
+          <div className='divide-y divide-amber-200/70 rounded-md border border-amber-200/70 bg-white dark:divide-amber-500/20 dark:border-amber-500/20 dark:bg-card'>
+            {envOverrides.map((e) => (
+              <div
+                key={e.key}
+                className='flex flex-wrap items-center gap-x-3 gap-y-0.5 px-2.5 py-1.5 text-[12px]'
+              >
+                <span className='w-40 max-w-full shrink-0 truncate font-mono text-slate-700 dark:text-slate-300'>
+                  {e.key}
+                </span>
+                <span
+                  data-tip={e.value ?? undefined}
+                  className={cn(
+                    'min-w-0 flex-1 truncate font-mono',
+                    e.value == null
+                      ? 'italic text-slate-400 dark:text-muted-foreground'
+                      : 'text-slate-900 dark:text-foreground'
+                  )}
+                >
+                  {e.value == null ? 'cleared (env fallback)' : e.value}
+                </span>
+                {e.shadows_db && (
+                  <Badge
+                    variant='outline'
+                    className='shrink-0 border-amber-300 text-[10.5px] text-amber-800 dark:border-amber-500/40 dark:text-amber-200'
+                  >
+                    replaces this page's value
+                  </Badge>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className='space-y-2'>
         {rows.map((r, i) => (
-          <div key={i} className='flex items-center gap-2'>
-            <div className='w-52 shrink-0'>
-              <Select
-                value={r.key}
-                onValueChange={(v) =>
-                  setRows((rs) => rs.map((x, j) => (j === i ? { ...x, key: v } : x)))
+          <div key={i}>
+            <div className='flex items-center gap-2'>
+              <div className='w-52 shrink-0'>
+                <Select
+                  value={r.key}
+                  onValueChange={(v) =>
+                    setRows((rs) => rs.map((x, j) => (j === i ? { ...x, key: v } : x)))
+                  }
+                >
+                  <SelectTrigger className='h-8 text-[12px]'>
+                    <SelectValue placeholder='Setting…' />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[r.key, ...unused].filter(Boolean).map((k) => (
+                      <SelectItem key={k} value={k} className='font-mono text-[12px]'>
+                        {k}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Input
+                value={r.value}
+                onChange={(e) =>
+                  setRows((rs) => rs.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))
                 }
+                placeholder='value (blank = clear to env fallback)'
+                className='h-8 flex-1 text-[12.5px]'
+              />
+              <button
+                type='button'
+                className='rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-red-500 dark:hover:bg-accent'
+                onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
+                aria-label='Remove override'
               >
-                <SelectTrigger className='h-8 text-[12px]'>
-                  <SelectValue placeholder='Setting…' />
-                </SelectTrigger>
-                <SelectContent>
-                  {[r.key, ...unused].filter(Boolean).map((k) => (
-                    <SelectItem key={k} value={k} className='font-mono text-[12px]'>
-                      {k}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                <X className='h-3.5 w-3.5' />
+              </button>
             </div>
-            <Input
-              value={r.value}
-              onChange={(e) =>
-                setRows((rs) => rs.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))
-              }
-              placeholder='value (blank = clear to env fallback)'
-              className='h-8 flex-1 text-[12.5px]'
-            />
-            <button
-              type='button'
-              className='rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-red-500 dark:hover:bg-accent'
-              onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
-              aria-label='Remove override'
-            >
-              <X className='h-3.5 w-3.5' />
-            </button>
+            {r.key && envKeys.has(r.key) && (
+              <p className='mt-1 pl-1 text-[11.5px] text-amber-700 [overflow-wrap:anywhere] dark:text-amber-300'>
+                Not used: the server sets {r.key} (NIVARO_SETTINGS_OVERRIDES), and that value wins.
+              </p>
+            )}
           </div>
         ))}
         <Button

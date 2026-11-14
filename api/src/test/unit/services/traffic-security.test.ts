@@ -41,7 +41,11 @@ import {
   noteCallerPlace
 } from '../../../services/traffic-taps/caller-geo.js'
 import { cacheRows, noteCacheFacts } from '../../../services/traffic-taps/http-cache.js'
-import { misconfigFacts, noteClientFacts } from '../../../services/traffic-taps/misconfigured.js'
+import {
+  misconfigFacts,
+  noteClientFacts,
+  tokenFingerprint
+} from '../../../services/traffic-taps/misconfigured.js'
 import {
   flaggedSessions,
   noteSessionHit,
@@ -354,7 +358,17 @@ describe('#2236 misconfigured clients', () => {
     const facts = misconfigFacts(300, 1000)
     expect(facts.referers).toEqual({ k3: { 'staging.example.com': 1 } })
     expect(facts.unknownKeys).toEqual([
-      { prefix: 'nvk_ab12', n: 1, last_at: new Date(1e6).toISOString(), referer: null }
+      {
+        prefix: 'nvk_ab12',
+        fingerprint: tokenFingerprint('nvk_ab12cd34ef56secret'),
+        kind: 'api-key',
+        n: 1,
+        last_at: new Date(1e6).toISOString(),
+        referer: null,
+        ip: null,
+        app: null,
+        tier: null
+      }
     ])
     expect(JSON.stringify(facts)).not.toContain('secret')
   })
