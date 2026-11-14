@@ -47,6 +47,10 @@ import { toast } from 'sonner'
 import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
 import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
+import {
+  DuplicateCheckSetting,
+  type DuplicateCheckValue
+} from '@/components/duplicate-check-setting'
 import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
 import { InlineEditSetting } from '@/components/inline-edit-setting'
 import { LabelSearchFieldsSetting } from '@/components/label-search-fields-setting'
@@ -7343,6 +7347,8 @@ interface BrowserConfig {
   label_search_fields?: string[]
   /** #3224 — edit in the list: {enabled, fields}; absent = off. */
   inline_edit?: InlineEditConfig | null
+  /** Duplicate warnings on create (api services/duplicate-check.ts); absent = auto. */
+  duplicate_check?: DuplicateCheckValue
   /** Keys edited elsewhere (export_filename, fulfilment, …) ride along untouched. */
   [key: string]: unknown
 }
@@ -7757,6 +7763,12 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           displayTemplate={col?.display_template}
           value={cfg.label_search_fields}
           onChange={(v) => void patch({ label_search_fields: v })}
+        />
+        <DuplicateCheckSetting
+          collection={tableName}
+          fields={col?.fields ?? []}
+          value={cfg.duplicate_check}
+          onChange={(v) => void patch({ duplicate_check: v })}
         />
         <div className='flex items-center justify-between gap-4'>
           <div>

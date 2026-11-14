@@ -1,4 +1,5 @@
 import { type MutableRefObject, useLayoutEffect, useMemo, useRef } from 'react'
+import { type DuplicateHint, duplicateHintsEqual } from './DuplicateNotice'
 import type { ApplyToLinesSpec, FieldAffordances } from './FieldAffordances'
 
 // Render stability for the record form. Every row of the form is memoized
@@ -73,6 +74,8 @@ function applySpecsEqual(
  * not. The callbacks become stable delegates to the newest value; an optional
  * callback stays absent when the newest value has none (rows test for it).
  */
+const NO_DUPLICATES: Record<string, DuplicateHint> = {}
+
 export function useStableFieldAffordances(next: FieldAffordances): FieldAffordances {
   const latest = useRef(next)
   useLayoutEffect(() => {
@@ -103,6 +106,10 @@ export function useStableFieldAffordances(next: FieldAffordances): FieldAffordan
   const hasHover = !!next.onLockHover
   const hasOpen = !!next.openRelated
   const { remoteChanges, layoutId, pickerMisses, fromAutofill, glossaryHelp, placementText } = next
+  const duplicates = useKeepIfEqual<Record<string, DuplicateHint>>(
+    next.duplicates ?? NO_DUPLICATES,
+    duplicateHintsEqual
+  )
   return useMemo<FieldAffordances>(
     () => ({
       remoteChanges,
@@ -116,7 +123,8 @@ export function useStableFieldAffordances(next: FieldAffordances): FieldAffordan
       pickerMisses,
       fromAutofill,
       glossaryHelp,
-      placementText
+      placementText,
+      duplicates
     }),
     [
       remoteChanges,
@@ -130,7 +138,8 @@ export function useStableFieldAffordances(next: FieldAffordances): FieldAffordan
       pickerMisses,
       fromAutofill,
       glossaryHelp,
-      placementText
+      placementText,
+      duplicates
     ]
   )
 }

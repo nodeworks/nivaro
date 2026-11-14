@@ -205,6 +205,7 @@ import {
 import { columnLengthError } from './item-edit/column-length'
 import { configUpdateReaction } from './item-edit/config-update'
 import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
+import { useDuplicateCheck } from './item-edit/DuplicateNotice'
 import {
   type CopiedLineChange,
   copiedLineLabel,
@@ -11483,6 +11484,9 @@ function ItemEditFormView({
         : it.onRevert
     }
   }
+  // Likely duplicates of a new record's label fields (Rob 2026-11-13): an inline
+  // notice under the field, never a block here (the server refuses where configured).
+  const duplicateHints = useDuplicateCheck({ collection, enabled: isNew && !designOn, draft })
   const fieldAffordancesRaw = {
     remoteChanges,
     dismissRemoteChange: (field: string) => {
@@ -11518,7 +11522,8 @@ function ItemEditFormView({
     pickerMisses: !designOn,
     fromAutofill,
     glossaryHelp: entryCfg.glossary !== false,
-    placementText: placementTextCtx
+    placementText: placementTextCtx,
+    duplicates: duplicateHints
   }
   // The same context object while nothing a field reads changed — a fresh
   // object here re-rendered every (memoized) field row on every form render.

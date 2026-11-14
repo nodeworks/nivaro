@@ -29,6 +29,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Submission Forms** — public-facing forms with token auth, rate limiting, password protection
 - **Field Watches & Subscriptions** — granular change notifications
 - **Data Import Queue** — CSV import with live progress via Socket.io
+- **Duplicate Warnings** — a new record whose name already exists shows the likely copies under the field before saving (exact and near matches, judged as the person); import previews count rows that would create a copy; optionally block exact copies per collection
 - **SLA Tracking** — business-hours elapsed time, warning/breach alerts
 - **Alert Engine** — threshold-based alerts with cooldown + in-app/email delivery
 - **Rollup Computed Fields** — aggregate (sum/count/avg/min/max) of related items; recursive tree rollups via CTE

@@ -40,7 +40,7 @@ const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const NEVER = /password|token|secret|totp|external_id/i
 const FACTS_TTL_MS = 60_000
 
-interface TableFacts {
+export interface TableFacts {
   rows: number
   kinds: Record<string, TextKind>
 }
@@ -49,7 +49,7 @@ const factsCache = tenantState(() => new Map<string, { at: number; facts: TableF
 
 /** String columns (with their text kind) and the row count of one table; null off SQL
  *  Server or when the table cannot be read. Cached a minute per tenant. */
-async function tableFacts(collection: string): Promise<TableFacts | null> {
+export async function tableFacts(collection: string): Promise<TableFacts | null> {
   const cache = factsCache()
   const hit = cache.get(collection)
   if (hit && Date.now() - hit.at < FACTS_TTL_MS) return hit.facts

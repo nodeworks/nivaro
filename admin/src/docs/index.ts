@@ -31,6 +31,7 @@ export * from './sections/db-tuning.js'
 export * from './sections/detail-sheets.js'
 export * from './sections/devex.js'
 export * from './sections/disaster-recovery.js'
+export * from './sections/duplicate-warnings.js'
 export * from './sections/ext-assistant-tools.js'
 export * from './sections/extensions-system.js'
 export * from './sections/features.js'
@@ -59,8 +60,8 @@ export * from './sections/low-code.js'
 export * from './sections/mobile-app.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
-export * from './sections/ops-daily-report.js'
 export * from './sections/offline-popout.js'
+export * from './sections/ops-daily-report.js'
 export * from './sections/ops-observability.js'
 export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
@@ -211,6 +212,7 @@ import {
   devexWebhookSigning
 } from './sections/devex.js'
 import { disasterRecoveryDocs } from './sections/disaster-recovery.js'
+import { duplicateWarningsDocs } from './sections/duplicate-warnings.js'
 import { extAssistantTools } from './sections/ext-assistant-tools.js'
 import {
   extContext,
@@ -924,6 +926,7 @@ export const navSections: NavGroup[] = [
       adminUxGlobalSearch,
       adminUxSavedViews,
       adminUxFormCollaboration,
+      duplicateWarningsDocs,
       adminUxListSignals,
       adminUxImportFromUrl,
       adminUxAiMapping,

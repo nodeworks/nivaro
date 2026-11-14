@@ -8,6 +8,7 @@ import { logActivity } from '../services/activity.js'
 import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { importRowErrorText } from '../services/db-refusal-labels.js'
+import { importDuplicateScan } from '../services/duplicate-check.js'
 import {
   currentLinks,
   type ImportLinkField,
@@ -783,8 +784,12 @@ export async function importsRoutes(app: FastifyInstance) {
       fields: Array<{ field: string; old: unknown; new: unknown }>
     }> = []
 
+    // Rows the import would CREATE (no match field, an empty id, or no match): the
+    // duplicate scan below asks whether each copies an existing record's label.
+    const createRows: number[] = []
     if (!idField) {
       newCount = mapped.length
+      for (let i = 0; i < mapped.length; i++) createRows.push(i)
     } else {
       // Batch-fetch every existing match in chunks — the per-row lookup the
       // real import does would make previewing a 5k file 5k round trips.
@@ -838,6 +843,7 @@ export async function importsRoutes(app: FastifyInstance) {
         const idStr = idVal == null ? '' : String(idVal).trim()
         if (!idStr) {
           newCount++
+          createRows.push(i)
           return
         }
         if ((seenInFile.get(idStr) ?? 0) > 1 && !dupReported.has(idStr)) {
@@ -859,6 +865,7 @@ export async function importsRoutes(app: FastifyInstance) {
         const existing = existingById.get(idStr)
         if (!existing) {
           newCount++
+          createRows.push(i)
           return
         }
         const fieldDiffs: Array<{ field: string; old: unknown; new: unknown }> = []
@@ -904,11 +911,19 @@ export async function importsRoutes(app: FastifyInstance) {
       })
     }
 
+    // New rows that copy an existing record (or an earlier row of the file) on the
+    // collection's duplicate-check fields (services/duplicate-check.ts).
+    const duplicates = await importDuplicateScan(
+      collection,
+      createRows.map((i) => ({ row: i + 2, values: mapped[i] }))
+    ).catch(() => null)
+
     return reply.send({
       data: {
         total: mapped.length,
         truncated,
         new: newCount,
+        duplicates,
         unchanged,
         changed,
         conflicts,

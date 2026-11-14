@@ -116,6 +116,7 @@ import { directoryRoutes } from './directory.js'
 import { dossierRoutes } from './dossier.js'
 import { draftPublishRoutes } from './draft-publish.js'
 import { draftsRoutes } from './drafts.js'
+import { duplicateRoutes } from './duplicates.js'
 import { envPresenceRoutes } from './env-presence.js'
 import { environmentNoticeRoutes } from './environment-notice.js'
 import { environmentRoutes } from './environments.js'
@@ -636,6 +637,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(rulesRoutes, { prefix: '/rules' })
   await app.register(fieldRulesRoutes, { prefix: '/field-rules' })
   await app.register(fieldDefaultsRoutes, { prefix: '/field-defaults' })
+  await app.register(duplicateRoutes, { prefix: '/duplicates' })
   await app.register(pinnedRoutes, { prefix: '/pinned' })
   await app.register(dashboardsRoutes, { prefix: '/dashboards' })
   await app.register(reportsRoutes, { prefix: '/reports' })

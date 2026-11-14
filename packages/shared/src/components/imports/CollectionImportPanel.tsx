@@ -47,6 +47,7 @@ import { SimpleSelect } from '../ui/SimpleSelect'
 import { Sheet, SheetContent } from '../ui/sheet'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
+import { type ImportDuplicates, ImportDuplicatesNotice } from './ImportDuplicatesNotice'
 import {
   collectionPickerOptions,
   fieldPickerOptions,
@@ -781,6 +782,8 @@ function ImportWizard({
             /** Rows whose relation cells name a record that does not exist (or several). */
             link_error_rows?: number
             link_problems?: Array<{ row: number; error: string }>
+            /** New rows that copy an existing record's label (or an earlier row). */
+            duplicates?: ImportDuplicates | null
           }
         }>('/imports/preview', {
           collection,
@@ -1424,6 +1427,7 @@ function ImportWizard({
                     drop or resolve by last-write-wins.
                   </p>
                 )}
+                {preview.duplicates && <ImportDuplicatesNotice dup={preview.duplicates} />}
                 {(preview.link_error_rows ?? 0) > 0 && (
                   <div className='rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-500/30 dark:bg-red-500/10'>
                     <p className='text-[12px] font-medium text-red-700 dark:text-red-300'>
