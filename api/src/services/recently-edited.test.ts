@@ -8,6 +8,7 @@ import {
   didSummary,
   type EditRow,
   foldEdits,
+  hasReadableLabel,
   type RecentlyEditedDeps,
   recentlyEditedBy
 } from './recently-edited.js'
@@ -87,6 +88,23 @@ describe('foldEdits + didSummary', () => {
     expect(out).toEqual([])
   })
 
+  it('chat tables never count, not even through a comment or a link row', () => {
+    const out = foldEdits(
+      [
+        row(4, 'create', 'chat_messages', '21', '2026-11-13T10:00:00Z'),
+        row(3, 'create', 'nivaro_comments', 'c1', '2026-11-13T09:30:00Z', 'chat_messages:20'),
+        row(2, 'create', 'chat_links', '5', '2026-11-13T09:20:00Z'),
+        row(1, 'update', 'hidden_things', '9', '2026-11-13T09:00:00Z')
+      ],
+      {
+        isLinkTable: (c) => c === 'chat_links',
+        links: new Map([['chat_links:5', { collection: 'chat_rooms', id: '1', field: 'x' }]]),
+        isHidden: (c) => c === 'hidden_things'
+      }
+    )
+    expect(out).toEqual([])
+  })
+
   it('several moves without a named target', () => {
     const out = foldEdits([
       row(2, 'transition', 'po', '1', '2026-11-13T10:00:00Z', 'auto-transition "Escalate"'),
@@ -115,6 +133,7 @@ describe('recentlyEditedBy', () => {
     junctions: vi.fn(
       async () => new Map([['workflows_divisions', { parent: 'workflows', alias: 'divisions' }]])
     ),
+    registered: vi.fn(async (names: string[]) => new Set(names.filter((n) => n !== 'raw_table'))),
     labels: vi.fn(async () => ({
       // workflows:8 left the caller's scope since: null → left out.
       records: { 'workflows:7': 'CM26-7', 'workflows:8': null, 'units:3': 'Unit 3' },
@@ -194,6 +213,68 @@ describe('recentlyEditedBy', () => {
     const deps = base({ rows: vi.fn(async () => []) })
     expect(await recentlyEditedBy(user, { limit: 10, isAdmin: false }, deps)).toEqual([])
     expect(deps.labels).not.toHaveBeenCalled()
+  })
+
+  // 2026-11-14: Rob's Home "Edited by me" listed "21 · Created · Chat Messages".
+  it('lists only record pages: no chat, system, raw or nameless rows; links fold in', async () => {
+    const deps = base({
+      rows: vi.fn(async () => [
+        row(9, 'create', 'chat_messages', '21', '2026-11-13T11:00:00Z'),
+        row(8, 'create', 'chat_rooms', '4', '2026-11-13T10:55:00Z'),
+        row(7, 'update', 'nivaro_saved_views', '11', '2026-11-13T10:50:00Z'),
+        row(6, 'create', 'nivaro_comments', 'c1', '2026-11-13T10:45:00Z', 'chat_messages:20'),
+        row(5, 'update', 'raw_table', '3', '2026-11-13T10:40:00Z'),
+        row(4, 'create', 'workflows_divisions', '11', '2026-11-13T10:30:00Z'),
+        row(3, 'create', 'notes', '19', '2026-11-13T10:20:00Z'),
+        row(2, 'update', 'workflows', '7', '2026-11-13T10:00:00Z'),
+        row(1, 'create', 'directus_files', 'f1', '2026-11-13T09:00:00Z')
+      ]),
+      labels: vi.fn(async () => ({
+        records: {
+          'workflows:7': 'CM26-7',
+          // a record with no name comes back as its id: never shown as "19"
+          'notes:19': '19'
+        },
+        collections: { workflows: { singular: 'Workflow', plural: 'Workflows' } },
+        junctions: {
+          'workflows_divisions:11': {
+            parent_collection: 'workflows',
+            parent_id: '7',
+            noun: 'Division'
+          }
+        }
+      }))
+    })
+    const out = await recentlyEditedBy(
+      user,
+      { limit: 10, isAdmin: true, now: new Date('2026-11-13T12:00:00Z') },
+      deps
+    )
+    expect(out.map((r) => `${r.collection}:${r.item_id}:${r.label}`)).toEqual([
+      'workflows:7:CM26-7'
+    ])
+    // the link row became a field edit (divisions) on its workflow
+    expect(out[0].did).toBe('Edited 1 field')
+    expect(out[0].last_edited_at).toBe('2026-11-13T10:30:00Z')
+    // chat, system and unregistered tables are never even judged
+    const asked = (deps.labels as ReturnType<typeof vi.fn>).mock.calls[0][1] as Array<{
+      collection: string
+    }>
+    expect([...new Set(asked.map((r) => r.collection))].sort()).toEqual([
+      'notes',
+      'workflows',
+      'workflows_divisions'
+    ])
+    expect(
+      ((deps.registered as ReturnType<typeof vi.fn>).mock.calls[0][0] as string[]).sort()
+    ).toEqual(['notes', 'raw_table', 'workflows'])
+  })
+
+  it('a label that is only the id is not a label', () => {
+    expect(hasReadableLabel('21', '21')).toBe(false)
+    expect(hasReadableLabel(' ', 'x')).toBe(false)
+    expect(hasReadableLabel('ABC-1', 'abc-1')).toBe(false)
+    expect(hasReadableLabel('CM26-7', '7')).toBe(true)
   })
 
   it('a failed state read still answers', async () => {

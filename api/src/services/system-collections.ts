@@ -16,6 +16,16 @@ export function isSystemCollection(collection: string): boolean {
   return SYSTEM_COLLECTION.test(collection)
 }
 
+/**
+ * Tables that are never a record page a person opens: the system tables, and chat's own
+ * tables (messages, rooms, read markers… — served only through /api/chat, which judges each
+ * room; the items API refuses chat_messages). Lists of "records" (recently edited, …) leave
+ * them out.
+ */
+export function isInternalCollection(collection: string): boolean {
+  return SYSTEM_COLLECTION.test(collection) || /^chat_/i.test(collection)
+}
+
 /** System collections a non-admin may READ through the items API, and the
  *  columns they may read: the person directory (what GET /users gives a
  *  non-admin) plus what pickers and avatars show. */
