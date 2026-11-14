@@ -110,7 +110,8 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
     version: NIVARO_VERSION,
     cloud: !!process.env.CLOUD_META_DB_URL,
     environment: appEnvironment(),
-    environment_notice: await currentNotice(),
+    // A blocked tenant has no database to read (its settings row included).
+    environment_notice: block ? null : await currentNotice(),
     min_app_version: process.env.MOBILE_MIN_APP_VERSION?.trim() || null,
     sign_in: {
       mobile: mobileSignInEnabled(),
