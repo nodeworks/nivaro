@@ -185,11 +185,16 @@ interface PipelineHistoryEntry {
   /** #645 — a delegate's move: the out-of-office owner they stood in for. */
   on_behalf_of?: string | null
   on_behalf_of_name?: string | null
+  /** Moved in a View-as tab of this person: the administrator behind it (view-as-move row). The
+   *  server sends it to administrator readers only ("Rob Lee as David Pry"). */
+  acting_admin?: { id: string; name: string } | null
 }
 
-/** "Kim Lee, for Beth Ross" when a delegate moved it for an out-of-office owner. */
+/** "Kim Lee, for Beth Ross" when a delegate moved it for an out-of-office owner; "Rob Lee as
+ *  Kim Lee" (administrators only) when an administrator moved it in a View-as tab of Kim. */
 function withBehalf(name: string | null | undefined, h: PipelineHistoryEntry): string {
-  const base = name || 'System'
+  const person = name || 'System'
+  const base = h.acting_admin?.name && name ? `${h.acting_admin.name} as ${person}` : person
   return h.on_behalf_of_name ? `${base}, for ${h.on_behalf_of_name}` : base
 }
 
@@ -1800,6 +1805,7 @@ function HistoryTimeline({
               <p
                 className='mt-0.5 text-slate-400'
                 data-history-on-behalf={h.on_behalf_of_name ? (h.on_behalf_of ?? '') : undefined}
+                data-history-acting-admin={h.acting_admin?.id || undefined}
               >
                 {machine && <Zap className='mr-1 inline h-3 w-3' aria-hidden />}
                 {userName}

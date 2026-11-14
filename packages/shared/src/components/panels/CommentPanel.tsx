@@ -57,6 +57,9 @@ interface Comment {
   deleted?: boolean
   /** #3213 — posted by an AI assistant through MCP: the badge text ("via Claude"). */
   via_agent?: string | null
+  /** Written in a View-as tab of `user`: the administrator behind it. The server sends it to
+   *  administrator readers only, so the line reads "Rob Lee as David Pry" for them alone. */
+  acting_admin?: { id: string; name: string } | null
   /** #3232 — left on one field of the record ("on Amount"); resolved from that field. */
   field?: string | null
   resolved_at?: string | null
@@ -101,6 +104,13 @@ function MentionReceipts({ comment }: { comment: Comment }) {
 
 function displayName(u: Comment['user']): string {
   return [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+}
+
+/** The author line: "Rob Lee as David Pry" when an administrator wrote it in a View-as tab of
+ *  David (acting_admin reaches administrator readers only), else the person. */
+function authorName(c: Pick<Comment, 'user' | 'acting_admin'>): string {
+  const person = displayName(c.user)
+  return c.acting_admin?.name ? `${c.acting_admin.name} as ${person}` : person
 }
 
 /** "on Amount" beside a comment left on one field (#3232); jumps to the field on the form. */
@@ -1041,9 +1051,7 @@ export function CommentPanel({
             // Newest entry — the thread sorts newest-first now.
             const last = threadEntries[0]
             const who =
-              last.kind === 'comment'
-                ? displayName(last.comment.user)
-                : (last.note.user_name ?? 'System')
+              last.kind === 'comment' ? authorName(last.comment) : (last.note.user_name ?? 'System')
             // A recorded note (a Send Back reason) is plain text as typed —
             // "qty <5 per site>" must not lose its words to the tag strip a
             // comment's markup needs (army 11 a1 F-5).
@@ -1241,8 +1249,11 @@ export function CommentPanel({
                         />
                         <div className='min-w-0 flex-1'>
                           <div className='flex items-center gap-2'>
-                            <span className='text-[13px] font-medium text-slate-800'>
-                              {displayName(c.user)}
+                            <span
+                              className='text-[13px] font-medium text-slate-800'
+                              data-comment-acting-admin={c.acting_admin?.id || undefined}
+                            >
+                              {authorName(c)}
                             </span>
                             <AgentBadge label={c.via_agent} />
                             <span

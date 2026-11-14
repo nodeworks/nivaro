@@ -79,6 +79,9 @@ interface Revision {
     addendum?: { id: string; title: string | null } | null
     /** #645 — the out-of-office owner a delegate's move stood in for. */
     on_behalf_of?: { id: string; name: string | null } | null
+    /** The administrator who made this move in a View-as tab of the person (its view-as-move row).
+     *  The server sends it to administrator readers only ("Rob Lee as David Pry"). */
+    acting_admin?: { id: string; name: string } | null
   } | null
 }
 
@@ -813,11 +816,12 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
   const ev = revision.event
   const auto = ev?.source === 'auto' || (!revision.user_id && ev?.kind === 'transition')
   const behalf = !auto && ev?.on_behalf_of?.name ? ev.on_behalf_of.name : null
-  const who = auto
-    ? 'Automatic rule'
-    : behalf
-      ? `${revisionUserName(revision, labels)}, for ${behalf}`
-      : revisionUserName(revision, labels)
+  // View-as (admins only — the server sends acting_admin to administrator readers alone).
+  const actingAdmin = !auto && ev?.acting_admin?.name ? ev.acting_admin.name : null
+  const person = actingAdmin
+    ? `${actingAdmin} as ${revisionUserName(revision, labels)}`
+    : revisionUserName(revision, labels)
+  const who = auto ? 'Automatic rule' : behalf ? `${person}, for ${behalf}` : person
   let sentence: React.ReactNode
   if (ev?.kind === 'transition' && ev.addendum) {
     sentence = (
@@ -904,6 +908,7 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
       className='relative pl-9'
       data-revision-event={ev?.kind ?? revision.action ?? ''}
       data-revision-on-behalf={behalf ? ev?.on_behalf_of?.id : undefined}
+      data-revision-acting-admin={actingAdmin ? ev?.acting_admin?.id : undefined}
     >
       <span
         className={cn(

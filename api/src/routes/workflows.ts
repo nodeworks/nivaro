@@ -11,6 +11,7 @@ import { manualTransitionRefusal } from '../services/manual-transition-gate.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from '../services/record-access.js'
 import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
+import { noteViewAsHistory } from '../services/view-as-attribution.js'
 import { syncStateField } from '../services/workflow-transitions.js'
 
 // ─── Types (mirrors routes/pipelines.ts — same underlying tables) ─────────────
@@ -336,6 +337,11 @@ async function checkJoin(childInstanceId: string, userId: string | null) {
       comment: JSON.stringify({ action: 'join', children: split.children }),
       timestamp: now
     })
+    noteViewAsHistory({
+      instance: parentId,
+      from_state: parent.current_state,
+      to_state: joinState.id
+    })
 
     // Sync state_field on the record if the binding configures one
     // (honors state_field_map for legacy INT/enum state columns).
@@ -641,6 +647,11 @@ export async function workflowsRoutes(app: FastifyInstance) {
       } satisfies SplitRecord),
       timestamp: now
     })
+    noteViewAsHistory({
+      instance: id,
+      from_state: instance.current_state,
+      to_state: instance.current_state ?? joinState.id
+    })
 
     await logActivity({
       action: 'update',
@@ -863,6 +874,11 @@ export async function workflowsRoutes(app: FastifyInstance) {
       user: req.user?.id ?? null,
       comment: body.comment ?? null,
       timestamp: now
+    })
+    noteViewAsHistory({
+      instance: id,
+      from_state: instance.current_state,
+      to_state: transition.to_state
     })
     await logActivity({
       action: 'update',

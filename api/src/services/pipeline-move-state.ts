@@ -15,6 +15,7 @@
 import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
 import { originFields } from './note-authorship.js'
+import { noteViewAsHistory } from './view-as-attribution.js'
 
 export class MoveStateError extends Error {
   constructor(
@@ -108,6 +109,13 @@ export async function moveRecordToState(input: MoveStateInput): Promise<MoveStat
       .returning('id', { includeTriggerModifications: true })) as Array<{ id: number } | number>
     const first = res[0]
     historyId = first == null ? null : typeof first === 'object' ? Number(first.id) : Number(first)
+  })
+  // View-as (admins-only attribution): the admin behind this move, on its own activity row.
+  noteViewAsHistory({
+    instance: instance.id,
+    from_state: fromStateId,
+    to_state: target.id,
+    history_id: historyId
   })
 
   const { syncStateField, runAutoTransitions } = await import('./workflow-transitions.js')

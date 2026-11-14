@@ -125,7 +125,7 @@ import { logout, useAuth } from '@/lib/auth'
 import { reportRenderCrash } from '@/lib/global-error-report'
 import { hubForPath, isPathDisabled } from '@/lib/hubs'
 import { useT } from '@/lib/i18n'
-import { openViewAsTab, readMasquerade, stopMasquerade } from '@/lib/masquerade'
+import { openViewAsTab, readMasquerade } from '@/lib/masquerade'
 import { usePagePresence } from '@/lib/use-page-presence'
 import { useSessionRecorder } from '@/lib/use-session-recorder'
 import { useSettings } from '@/lib/useSettings'
@@ -145,6 +145,7 @@ import {
 import { applyNavLayout, applyRail, permittedCategories } from './nav-layout'
 import { RecentNav } from './RecentNav'
 import { useNavLayout } from './useNavLayout'
+import { ViewAsBar } from './ViewAsBar'
 
 const announcementsClient = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
@@ -1315,38 +1316,6 @@ function PopoutBar() {
         className='ml-auto h-6 rounded-md px-2 font-medium text-slate-600 hover:bg-muted dark:text-slate-300'
       >
         Main window
-      </button>
-    </div>
-  )
-}
-
-/** The amber bar of a "View as" tab (#640): who this tab is, and the way out. */
-function ViewAsBar() {
-  const m = readMasquerade()
-  const [leaving, setLeaving] = useState(false)
-  if (!m) return null
-  return (
-    <div
-      data-view-as-bar
-      data-nvr-recording-hide='always'
-      role='status'
-      className='flex shrink-0 items-center gap-3 border-b border-amber-300 bg-amber-100 px-4 py-1.5 text-[12.5px] text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-100'
-    >
-      <span>
-        Viewing as <b>{m.name || 'another person'}</b> in this tab. Everything here is what they see
-        and can do; your other tabs are still you.
-      </span>
-      <button
-        type='button'
-        data-view-as-stop
-        disabled={leaving}
-        onClick={() => {
-          setLeaving(true)
-          void stopMasquerade()
-        }}
-        className='ml-auto h-7 rounded-md border border-amber-400 px-2.5 text-[12px] font-semibold hover:bg-amber-200 disabled:opacity-60 dark:border-amber-500/50 dark:hover:bg-amber-500/25'
-      >
-        {leaving ? 'Leaving…' : 'Stop viewing as'}
       </button>
     </div>
   )

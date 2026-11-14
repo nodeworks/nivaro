@@ -62,6 +62,7 @@ import { loadSignOffs } from '../services/sign-offs.js'
 import { type TransitionAdvisory, transitionAdvisories } from '../services/transition-checks.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
 import { runsInBackground, transitionRunState } from '../services/transition-runs.js'
+import { noteViewAsHistory, viewAsMovesFor } from '../services/view-as-attribution.js'
 import {
   pickRerunAction,
   runTransitionActions,
@@ -1385,6 +1386,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           timestamp: new Date(),
           ...(await originFields('nivaro_workflow_history', 'machine'))
         })
+        noteViewAsHistory({ instance: inst.id, from_state: b.from_state, to_state: target.id })
         await syncStateField(inst.collection, inst.item, target).catch(() => {})
         await syncMaterializedQueueItem(inst.collection, inst.item).catch(() => {})
         migrated++
@@ -2861,6 +2863,13 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         'u.last_name',
         'u.email as user_email'
       )
+    // View-as: a move made in a View-as tab names the administrator behind it (its own
+    // view-as-move activity row) for an ADMINISTRATOR reader only — not under a person / role
+    // preview, which shows exactly what that person sees. Everyone else reads the person's move.
+    const actingById =
+      req.isAdmin && !asPerson && !asRole
+        ? await viewAsMovesFor((historyRows as Array<{ id?: unknown }>).map((h) => h.id as string))
+        : new Map<string, { id: string; name: string }>()
     const history = (historyRows as Array<Record<string, unknown>>).map((h) => {
       const {
         on_behalf_of_first_name: bf,
@@ -2871,7 +2880,13 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const behalfName = h.on_behalf_of
         ? [bf, bl].filter(Boolean).join(' ') || (be as string | null) || null
         : null
-      return { ...rest, on_behalf_of: h.on_behalf_of ?? null, on_behalf_of_name: behalfName }
+      const acting = actingById.get(String(h.id).toUpperCase())
+      return {
+        ...rest,
+        on_behalf_of: h.on_behalf_of ?? null,
+        on_behalf_of_name: behalfName,
+        ...(acting ? { acting_admin: acting } : {})
+      }
     })
 
     const currentStateObj = states.find((s) => s.id === currentState)
@@ -3102,6 +3117,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           comment: 'Auto-advanced via skip criteria',
           timestamp: new Date(),
           ...(await originFields('nivaro_workflow_history', 'machine'))
+        })
+        noteViewAsHistory({
+          instance: instanceId,
+          from_state: initialState.id,
+          to_state: finalStateId
         })
       }
     }

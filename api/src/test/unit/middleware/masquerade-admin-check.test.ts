@@ -49,6 +49,12 @@ function buildApp(del: ReturnType<typeof vi.fn>) {
     id: req.user?.id,
     admin: req.masqueradeAdminId
   }))
+  app.get('/judged', { preHandler: authenticate }, async (req) => ({
+    id: req.user?.id,
+    role: req.user?.role,
+    is_admin: !!req.isAdmin,
+    auth: req.authMethod
+  }))
   return app
 }
 
@@ -90,5 +96,28 @@ describe('View-as token re-checks the administrator', () => {
     expect(res.statusCode).toBe(401)
     expect(JSON.parse(res.body).code).toBe('MASQUERADE_ADMIN_INACTIVE')
     expect(del).toHaveBeenCalledWith('masq:nvm_x')
+  })
+})
+
+describe('View-as is exactly the person (Rob 2026-11-14)', () => {
+  it('a View-as request is judged as the person: their id, role and non-admin standing', async () => {
+    wireDb(
+      [TARGET, { id: 'admin-1', role: 'role-admin', status: 'active' }],
+      [USER_ROLE, ADMIN_ROLE]
+    )
+    const app = buildApp(vi.fn().mockResolvedValue(1))
+    await app.ready()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/judged',
+      headers: { authorization: 'Bearer nvm_x' }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({
+      id: TARGET.id,
+      role: 'role-user',
+      is_admin: false,
+      auth: 'masquerade'
+    })
   })
 })

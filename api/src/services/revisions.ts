@@ -4,6 +4,7 @@ import { optionalActivityColumns } from './activity-readable.js'
 import { type ActivityActor, actorOf } from './activity-sentence.js'
 import { agentBadgesForActivity } from './mcp-attribution.js'
 import { noteDerivedWrite } from './request-trace.js'
+import { hideViewAsActor, viewAsMovesFor } from './view-as-attribution.js'
 
 export interface Revision {
   id: number | null
@@ -42,6 +43,9 @@ export interface Revision {
     addendum?: { id: string; title: string | null } | null
     /** #645 — the out-of-office owner the actor stood in for. */
     on_behalf_of?: { id: string; name: string | null } | null
+    /** The administrator who made this move in a View-as tab of the person (its view-as-move
+     *  activity row). Present for ADMINISTRATOR readers only ("Rob Lee as David Pry"). */
+    acting_admin?: { id: string; name: string } | null
   } | null
 }
 
@@ -229,7 +233,17 @@ function settleActor(row: Record<string, unknown>): Record<string, unknown> {
   return out
 }
 
-export async function listRevisions(collection: string, item: string): Promise<Revision[]> {
+/**
+ * A record's history. `isAdmin` = the READER is an administrator: only then does a View-as
+ * write name the administrator behind it (activity actor + the move's view-as-move row); every
+ * other reader sees it exactly as the person's own write (services/view-as-attribution.ts).
+ */
+export async function listRevisions(
+  collection: string,
+  item: string,
+  opts: { isAdmin?: boolean } = {}
+): Promise<Revision[]> {
+  const isAdmin = opts.isAdmin === true
   const [behalfCol, actCols] = await Promise.all([
     hasColumn('nivaro_workflow_history', 'on_behalf_of').catch(() => false),
     optionalActivityColumns().catch(() => new Set<string>())
@@ -300,6 +314,15 @@ export async function listRevisions(collection: string, item: string): Promise<R
 
     addendumTransitionRows(collection, item, behalfCol)
   ])
+  // View-as: the administrator behind a move (its own view-as-move activity row), for an
+  // ADMINISTRATOR reader only; everyone else reads the person's own move.
+  const viewAsMoves = isAdmin
+    ? await viewAsMovesFor(
+        [...(transitionRows as Record<string, unknown>[]), ...addendumHistory.rows].map(
+          (r) => r.history_id as string | number | null
+        )
+      )
+    : new Map<string, { id: string; name: string }>()
 
   // #1219: an instance start is a history row (no from_state, no transition).
   // It reads 'started it in <state>'; the older 'pipeline-start' activity row
@@ -342,7 +365,10 @@ export async function listRevisions(collection: string, item: string): Promise<R
                 [r.behalf_first_name, r.behalf_last_name].filter(Boolean).join(' ') ||
                 ((r.behalf_email as string | null) ?? null)
             }
-          : null
+          : null,
+        ...(viewAsMoves.has(String(r.history_id).toUpperCase())
+          ? { acting_admin: viewAsMoves.get(String(r.history_id).toUpperCase()) }
+          : {})
       }
     }
   }
@@ -384,7 +410,8 @@ export async function listRevisions(collection: string, item: string): Promise<R
     all.map((r) => Number(r.activity)).filter((n) => Number.isInteger(n) && n > 0)
   ).catch(() => new Map<number, string>())
   return all.map((r) => {
-    const rev = hydrateRevision(settleActor(r as Record<string, unknown>))
+    const settled = settleActor(r as Record<string, unknown>)
+    const rev = hydrateRevision(isAdmin ? settled : hideViewAsActor(settled))
     const badge = rev.activity != null ? badges.get(Number(rev.activity)) : undefined
     return badge ? { ...rev, via_agent: badge } : rev
   })

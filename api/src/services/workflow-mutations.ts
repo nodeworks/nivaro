@@ -19,6 +19,7 @@ import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access
 import { registeredTransitionRefusal } from './transition-checks.js'
 import { claimTransition, TransitionDuplicateError } from './transition-guard.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
+import { noteViewAsHistory } from './view-as-attribution.js'
 import { TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
 import {
@@ -160,6 +161,11 @@ export async function startWorkflowInstance(opts: {
         comment: 'Auto-advanced via skip criteria',
         timestamp: new Date(),
         ...(await originFields('nivaro_workflow_history', 'machine'))
+      })
+      noteViewAsHistory({
+        instance: instanceId,
+        from_state: initialState.id,
+        to_state: finalStateId
       })
     }
   }

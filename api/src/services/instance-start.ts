@@ -20,6 +20,7 @@ import type { Knex } from 'knex'
 import { db as defaultDb } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
 import { type NoteOrigin, originFields } from './note-authorship.js'
+import { noteViewAsHistory } from './view-as-attribution.js'
 
 export interface StartHistoryInput {
   instanceId: string
@@ -77,6 +78,7 @@ export async function writeStartHistory(
     ...startHistoryRow(input),
     ...(await originFields('nivaro_workflow_history', origin))
   })
+  noteViewAsHistory({ instance: input.instanceId, from_state: null, to_state: input.stateId })
 }
 
 // ─── Backfill planning (pure) ────────────────────────────────────────────────

@@ -256,7 +256,14 @@ export function applyActivityFilters<T extends Knex.QueryBuilder>(
  * a row whose write then rolls back; the rows themselves are re-read by id (pageRows).
  */
 export function activityListSource(knex: Knex, mssql: boolean): Knex.QueryBuilder {
-  return mssql
+  const q = mssql
     ? knex.from(knex.raw('?? AS a WITH (NOLOCK)', ['nivaro_activity']))
     : knex('nivaro_activity as a')
+  // A View-as pipeline move's attribution row (services/view-as-attribution.ts) only names the
+  // administrator behind a move; the move itself is the history row. Never a list entry of its
+  // own, for anyone — null-safe (an action-less row stays listed).
+  return q.where((w) => w.whereNot('a.action', VIEW_AS_MOVE_ACTION).orWhereNull('a.action'))
 }
+
+/** The activity action of a View-as pipeline move's attribution row (view-as-attribution.ts). */
+export const VIEW_AS_MOVE_ACTION = 'view-as-move'

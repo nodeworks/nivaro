@@ -27,6 +27,7 @@ import { loadRecordNotes } from '../services/record-notes.js'
 import { canSeeRecordRoom, visibleRecordIds } from '../services/socket-access.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import { seesAllRecords } from '../services/user-scopes.js'
+import { viewAsCreators } from '../services/view-as-attribution.js'
 import type { User } from '../types.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -356,12 +357,18 @@ export async function commentsRoutes(app: FastifyInstance) {
 
     // #3213: comments an agent posted through MCP carry its badge ("via Claude").
     const agentBadges = await agentBadgesForComments(ids).catch(() => new Map<string, string>())
+    // View-as (Rob 2026-11-14): a comment written in a View-as tab is the person's; only an
+    // administrator reader also learns which administrator wrote it ("Rob Lee as David Pry").
+    const viewAs = req.isAdmin
+      ? await viewAsCreators('nivaro_comments', ids)
+      : new Map<string, { id: string; name: string }>()
 
     const data = comments.map((c) => ({
       id: c.id,
       collection: c.collection,
       item: c.item,
       via_agent: agentBadges.get(String(c.id).toLowerCase()) ?? null,
+      ...(viewAs.size ? { acting_admin: viewAs.get(String(c.id).toUpperCase()) ?? null } : {}),
       user: c.user
         ? {
             id: c.user,
