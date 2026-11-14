@@ -20,6 +20,12 @@ import { cn } from '../../lib/utils'
 import { canOpenDm, openDmWith } from '../chat/chat-core'
 import { HuddlePresenceLine } from '../chat/huddle/HuddleLiveBadge'
 import { useHuddleLive } from '../chat/huddle/huddle-live'
+import {
+  StandInMark,
+  type StandInReason,
+  StandInReasonLines,
+  standInIds
+} from '../panels/StandInReason'
 import { MailSuppressedPill } from '../profile/MailSuppressedPill'
 import { SignOutMessageInput } from '../profile/SignOutMessageInput'
 import {
@@ -153,12 +159,16 @@ export function rosterLabel(
 export function UserRosterCluster({
   users,
   showSingleName = true,
-  nameLabel = false
+  nameLabel = false,
+  standIn = null
 }: {
   users: Array<{ id: string; name: string; inactive?: RosterInactive }>
   showSingleName?: boolean
   /** Always name the first owner who can act (+N), not just a single one. */
   nameLabel?: boolean
+  /** Why a stand-in holds the step (the owners tile): its people are marked
+   *  "stand-in" and the roster says why (Rob 2026-11-14). */
+  standIn?: StandInReason | null
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -212,6 +222,8 @@ export function UserRosterCluster({
     )
   const shown = users.slice(0, 4)
   const extra = users.length - shown.length
+  const standInSet = standInIds(standIn)
+  const isStandIn = (id: string) => standInSet.has(String(id).toUpperCase())
   // NOTE: solid tint hex, never bg-nvr-cyan/N — the opacity modifier is a
   // silent no-op on the opaque nvr-cyan var (documented gotcha).
   const avatarCls =
@@ -242,6 +254,7 @@ export function UserRosterCluster({
         ? (() => {
             const l = rosterLabel(users)
             if (!l) return null
+            const first = users.find((u) => !u.inactive) ?? users[0]
             return (
               <span
                 data-roster-label=''
@@ -250,6 +263,7 @@ export function UserRosterCluster({
               >
                 <span className='truncate'>{l.name}</span>
                 {l.mark && <InactiveMark mark={l.mark} />}
+                {!l.mark && isStandIn(first.id) && <StandInMark className='self-center' />}
                 {l.more > 0 && (
                   <span className='shrink-0 font-normal text-slate-500 dark:text-slate-400'>
                     +{l.more}
@@ -290,8 +304,16 @@ export function UserRosterCluster({
               <div key={o.id} className='flex items-center gap-1.5 px-2 py-0.5'>
                 <UserChip userId={o.id} size='compact' />
                 {o.inactive && <InactiveMark mark={o.inactive} />}
+                {!o.inactive && isStandIn(o.id) && <StandInMark />}
               </div>
             ))}
+            {standIn && users.some((u) => isStandIn(u.id)) && (
+              <StandInReasonLines
+                reason={standIn}
+                onNavigate={() => setOpen(null)}
+                className='mx-3 mt-1.5 border-t border-slate-100 pt-1.5 pb-0.5 dark:border-slate-700'
+              />
+            )}
           </div>,
           rosterPortalContainer(anchorRef.current)
         )}
@@ -361,11 +383,37 @@ export function OwnersInlineCompact({
         ? prev
         : undefined
   })
+  // Why a stand-in holds the step: the instance read the record page already
+  // makes (same key + shape as ItemEditForm's owners-setup read — no extra request).
+  const { data: instanceRead } = useQuery<{
+    stand_in_reason?: StandInReason | null
+    instance?: { current_state?: string | null } | null
+  } | null>({
+    queryKey: ['pipeline-instance', collection, itemId],
+    queryFn: () =>
+      client!
+        .request<{
+          data: {
+            stand_in_reason?: StandInReason | null
+            instance?: { current_state?: string | null } | null
+          } | null
+        }>(get(`/pipelines/instance/${collection}/${itemId}`))
+        .then((r) => r.data ?? null),
+    enabled: !!client && !!collection && !!itemId && itemId !== 'new',
+    staleTime: 10_000
+  })
   if (isLoading || (isFetching && owners.length === 0))
     return (
       <span className='animate-pulse h-3 w-20 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))] inline-block' />
     )
-  return <UserRosterCluster users={owners} nameLabel />
+  const reason = instanceRead?.stand_in_reason ?? null
+  const current = instanceRead?.instance?.current_state
+  // A reason for another step (a read from before a move) says nothing here.
+  const standIn =
+    reason && (!current || String(current).toUpperCase() === reason.state.id.toUpperCase())
+      ? reason
+      : null
+  return <UserRosterCluster users={owners} nameLabel standIn={standIn} />
 }
 
 // Inline owners display — renders pipeline state owners as avatar chips, no panel wrapper

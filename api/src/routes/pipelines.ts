@@ -2801,6 +2801,33 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       currentStateId: currentState
     })
 
+    // Why the current step is held by a stand-in (Rob 2026-11-14,
+    // services/stand-in-reason.ts): asked only when the binding names an owner
+    // fallback field, for this one record + step; null when an owner is
+    // assigned. Group names, the closest group and the matrix link go to a
+    // real administrator only — never under View-as or a person/role preview.
+    const fallbackField = (effectiveBinding as { owner_fallback_field?: string | null })
+      .owner_fallback_field
+    const standInAsked =
+      fallbackField && !instance.completed_at && currentState
+        ? import('../services/stand-in-reason.js')
+            .then(({ standInReasonFor }) =>
+              standInReasonFor({
+                collection,
+                item: String(item),
+                instance: {
+                  id: String(instance.id),
+                  template: String(instance.template),
+                  current_state: String(currentState)
+                },
+                fallbackField,
+                viewer: { user: judged, isAdmin },
+                showAdmin: !!req.isAdmin && !asPerson && !asRole && !req.masqueradeAdminId
+              })
+            )
+            .catch(() => null)
+        : Promise.resolve(null)
+
     // What an extension's transition check would answer for each move on
     // offer, said before it is pressed (transition-checks.ts): the panel shows
     // it beside the move. Asked as the caller; a role preview has no person to
@@ -2974,6 +3001,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         // before pressing Approve (army 11 a1 F-2).
         flags: await recordFlags(judged, isAdmin, collection, String(item)),
         owners_configured: await ownersConfigured(),
+        // Why a stand-in holds the current step (null = an owner is assigned).
+        stand_in_reason: await standInAsked,
         // Whose answer this is when previewed as someone (never set otherwise).
         ...(asPerson
           ? {

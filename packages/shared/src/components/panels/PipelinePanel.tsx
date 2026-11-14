@@ -114,6 +114,7 @@ import {
   workingFill
 } from './PipelineInsight'
 import { SlaClockLine } from './SlaClock'
+import { type StandInReason, StandInReasonLines, standInIds } from './StandInReason'
 import type { TransitionRequirementsPayload } from './TransitionRequirementsDialog'
 
 // Opens only when a transition needs answers first; loads then.
@@ -286,6 +287,8 @@ interface PipelinePanelData {
   last_move_problem?: MoveProblem | null
   /** Set when an admin previews the record as this person (`?as_user=`). */
   as_user?: { id: string; name: string; role: string | null; is_admin: boolean } | null
+  /** Why a stand-in holds the current step; null/absent = an owner is assigned. */
+  stand_in_reason?: StandInReason | null
 }
 interface RecordFlag {
   name: string
@@ -1879,7 +1882,8 @@ function OwnersSection({
   item,
   states,
   currentStateId,
-  returned = false
+  returned = false,
+  standInReason = null
 }: {
   collection: string
   item: string
@@ -1887,6 +1891,8 @@ function OwnersSection({
   currentStateId?: string | null
   /** The record came back to its current step (a send-back). */
   returned?: boolean
+  /** Why a stand-in holds the current step (the instance read's `stand_in_reason`). */
+  standInReason?: StandInReason | null
 }) {
   const client = useNivaroClient()
   const queryClient = useQueryClient()
@@ -1987,6 +1993,12 @@ function OwnersSection({
     groupOwners.length > 0 &&
     groupOwners.every((o) => o.queue_only) &&
     !manualOnStep
+  // The reason is for THIS step only (a stale read after a move says nothing).
+  const reasonForStep =
+    standInReason && standInReason.state.id.toUpperCase() === String(currentStateId).toUpperCase()
+      ? standInReason
+      : null
+  const standInSet = standInIds(reasonForStep)
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ownersKey })
@@ -2146,7 +2158,9 @@ function OwnersSection({
                     className='shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400'
                     data-tip='The record is in their queue, but only the step’s owners can move it'
                   >
-                    in their queue
+                    {standInOnly && standInSet.has(String(o.id).toUpperCase())
+                      ? 'stand-in'
+                      : 'in their queue'}
                   </span>
                 ) : (
                   <span className='shrink-0 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy/70 dark:text-nvr-cyan'>
@@ -2194,14 +2208,20 @@ function OwnersSection({
           ))}
         </div>
       )}
-      {standInOnly && !ownersLoading && !groupOwnersLoading && (
-        <p
-          data-owners-stand-in
-          className='mt-1.5 text-[11px] leading-snug text-slate-500 dark:text-slate-400'
-        >
-          Shown as a stand-in — no one is assigned to {currentStep?.label}.
-        </p>
-      )}
+      {standInOnly &&
+        !ownersLoading &&
+        !groupOwnersLoading &&
+        (reasonForStep ? (
+          // Why nobody is assigned + why this person stands in (Rob 2026-11-14).
+          <StandInReasonLines reason={reasonForStep} className='mt-2' />
+        ) : (
+          <p
+            data-owners-stand-in
+            className='mt-1.5 text-[11px] leading-snug text-slate-500 dark:text-slate-400'
+          >
+            Shown as a stand-in — no one is assigned to {currentStep?.label}.
+          </p>
+        ))}
       {adding && (
         <div className='mt-3 space-y-2 rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-border p-3'>
           <p className='text-[11px] font-semibold text-slate-500'>Add owner</p>
@@ -3738,6 +3758,7 @@ function PipelinePanelInner({
                     returned={(data?.history ?? []).some(
                       (h) => !!h.from_state && h.to_state === data?.instance?.current_state
                     )}
+                    standInReason={data?.stand_in_reason ?? null}
                   />
                 </div>
                 {hasTransitions && !hideActionsExpanded && (
