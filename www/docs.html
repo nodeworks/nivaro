@@ -9553,7 +9553,7 @@ bearer_token_env_var = "NIVARO_TOKEN"</code></pre>
           <!-- /SYNC:file-downloads -->
         </div>
 
-        <div class="doc-section" id="s-team-throughput" data-toc='[{"id":"team-throughput","label":"Team Throughput"},{"id":"team-throughput-metrics","label":"Metrics"},{"id":"team-throughput-first-open","label":"Time until an owner opens a record"}]'>
+        <div class="doc-section" id="s-team-throughput" data-toc='[{"id":"team-throughput","label":"Team Throughput"},{"id":"team-throughput-metrics","label":"Metrics"},{"id":"team-throughput-first-open","label":"Time until an owner opens a record"},{"id":"team-throughput-step-timing","label":"Waiting vs working per step"},{"id":"team-throughput-sign-offs","label":"Steps that need several sign-offs"}]'>
           <!-- SYNC:team-throughput -->
           <h1 class="doc-h1" id="team-throughput">Team Throughput</h1>
           <p class="doc-p">Team Throughput is an admin-only report showing how each user is moving work through a workflow-bound collection over time — transitions performed, completions, send-backs, and average time to act.</p>
@@ -9571,6 +9571,15 @@ bearer_token_env_var = "NIVARO_TOKEN"</code></pre>
             <li>An open comes from the record view history. Nivaro keeps only each person's last two views of a record, so the first open is the earliest of those inside the stay. A wait can read longer than it was, never shorter.</li>
             <li>The card covers the newest 4,000 state entries in the range.</li>
           </ul>
+          <h2 class="doc-h2" id="team-throughput-step-timing">Waiting vs working per step</h2>
+          <p class="doc-p">On a record, the pipeline panel splits each stay in a step in two. Waiting runs from when the record entered the step until one of its owners first touched it; working runs from that first touch until it left the step (or now). The Time in step bar draws waiting hatched and working solid, and the transition history says it per visit ("In Review: waited 2 d, worked 3 h"). A send-back that brings the record to a step again is a second visit, timed on its own (<code class="doc-code">GET /pipelines/instance/:collection/:item/step-timing</code>, read once the panel is open).</p>
+          <ul class="doc-ul">
+            <li>A touch is an edit or any other logged action on the record, a comment, a task made or finished on it, an open of the record, or the move that took it out of the step. A move with no touch before it is all waiting.</li>
+            <li>Owners are the people the pipeline names for that step today, plus whoever moved the record out. The person who moved the record in is not working on it during the first minute after the move. Machine, import and integration writes never count.</li>
+            <li>Opens come from the record view history (each person's last two views), so a wait can read longer than it was, never shorter.</li>
+          </ul>
+          <h2 class="doc-h2" id="team-throughput-sign-offs">Steps that need several sign-offs</h2>
+          <p class="doc-p">When the current step needs several sign-offs — an open parallel split, or a pending approval chain for this step — the panel shows one line: "2 of 3 signed — waiting on Ana Ruiz (Finance)". Hovering lists who signed and when; clicking expands the list. Names follow the Owners panel (a redacted account reads "Former user"); a step with a single approver shows nothing new. The line rides <code class="doc-code">sign_offs</code> on <code class="doc-code">GET /pipelines/instance/:collection/:item</code>.</p>
           <div class="doc-note">Computed live from <code class="doc-code">nivaro_workflow_history</code> — fully retroactive, including imported legacy history. Per-owner backlog trends (My Items sparklines) accumulate daily from the snapshot cron and are not retroactive.</div>
           <div class="doc-note">Every pipeline instance begins with a start entry in its history (no previous state, no transition): "started in &lt;state&gt;". It is never counted as a transition, completion or send-back, but it is where time in the first state is measured from — so avg time to action, SLA clocks and the record's Time in step bar read the first state from history like every other state. Instances started before this existed get their start entry from <code class="doc-code">pnpm --filter @nivaro/api run backfill:start-history -- --execute</code> (dry run without the flag).</div>
           <!-- /SYNC:team-throughput -->

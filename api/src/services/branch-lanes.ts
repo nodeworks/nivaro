@@ -52,6 +52,8 @@ export interface LaneStep {
   left_at: string | null
   /** Who moved the branch INTO this state (null = the split itself / engine). */
   by: string | null
+  /** Their user id — the sign-off line re-checks the name (redacted people). */
+  by_id?: string | null
 }
 
 export interface BranchLane {
@@ -207,7 +209,8 @@ export function buildBranchLanes(input: {
         state,
         entered_at: entered,
         left_at: next ? iso(next.timestamp) : null,
-        by: lifecycle ? null : nameOf(row)
+        by: lifecycle ? null : nameOf(row),
+        by_id: lifecycle ? null : row.user ? String(row.user) : null
       })
     })
     const current = ref(child.current_state) ?? steps[steps.length - 1]?.state ?? null

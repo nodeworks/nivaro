@@ -32,6 +32,24 @@ export const teamThroughputGuide: DocSection = {
         'The card covers the newest 4,000 state entries in the range.'
       ]
     },
+    { type: 'h2', id: 'team-throughput-step-timing', text: 'Waiting vs working per step' },
+    {
+      type: 'p',
+      text: 'On a record, the pipeline panel splits each stay in a step in two. Waiting runs from when the record entered the step until one of its owners first touched it; working runs from that first touch until it left the step (or now). The Time in step bar draws waiting hatched and working solid, and the transition history says it per visit ("In Review: waited 2 d, worked 3 h"). A send-back that brings the record to a step again is a second visit, timed on its own (`GET /pipelines/instance/:collection/:item/step-timing`, read once the panel is open).'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A touch is an edit or any other logged action on the record, a comment, a task made or finished on it, an open of the record, or the move that took it out of the step. A move with no touch before it is all waiting.',
+        'Owners are the people the pipeline names for that step today, plus whoever moved the record out. The person who moved the record in is not working on it during the first minute after the move. Machine, import and integration writes never count.',
+        "Opens come from the record view history (each person's last two views), so a wait can read longer than it was, never shorter."
+      ]
+    },
+    { type: 'h2', id: 'team-throughput-sign-offs', text: 'Steps that need several sign-offs' },
+    {
+      type: 'p',
+      text: 'When the current step needs several sign-offs — an open parallel split, or a pending approval chain for this step — the panel shows one line: "2 of 3 signed — waiting on Ana Ruiz (Finance)". Hovering lists who signed and when; clicking expands the list. Names follow the Owners panel (a redacted account reads "Former user"); a step with a single approver shows nothing new. The line rides `sign_offs` on `GET /pipelines/instance/:collection/:item`.'
+    },
     {
       type: 'note',
       text: 'Computed live from `nivaro_workflow_history` — fully retroactive, including imported legacy history. Per-owner backlog trends (My Items sparklines) accumulate daily from the snapshot cron and are not retroactive.'

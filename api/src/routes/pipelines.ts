@@ -53,6 +53,7 @@ import {
 } from '../services/record-transition.js'
 import { labelSeatFilters } from '../services/seat-labels.js'
 import { skippedSendBackTargets, withoutSkippedSendBacks } from '../services/send-back-skips.js'
+import { loadSignOffs } from '../services/sign-offs.js'
 import { type TransitionAdvisory, transitionAdvisories } from '../services/transition-checks.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
 import { runsInBackground, transitionRunState } from '../services/transition-runs.js'
@@ -504,6 +505,7 @@ async function loadBranchLanes(
       .select(
         'h.id',
         'h.instance',
+        'h.user',
         'h.transition',
         'h.from_state',
         'h.to_state',
@@ -2833,6 +2835,15 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
     const currentStateObj = states.find((s) => s.id === currentState)
     const branches = await loadBranchLanes(instance, history, states).catch(() => null)
+    // "2 of 3 signed — waiting on …" when this step needs several sign-offs
+    // (an open parallel split, a pending approval chain for this step).
+    const signOffs = await loadSignOffs({
+      collection,
+      item: String(item),
+      template: String(instance.template),
+      currentStateKey: currentStateObj?.key ?? null,
+      branches
+    }).catch(() => [])
     const advisories = await advisoriesAsked
     // Moves that run in the background (transition-runs.ts): the run holding
     // this record now, and the last one that did not move it since the record
@@ -2875,6 +2886,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         },
         /** Parallel branches of the most recent split (#1240), null if none. */
         branches,
+        /** Sign-offs the current step still waits on (services/sign-offs.ts); [] if none. */
+        sign_offs: signOffs,
         states: states.map(formatState),
         // `actions` (erp_submit payload templates, create_record configs) run
         // ONLY on the server after a transition lands; the panel never reads
@@ -4355,6 +4368,29 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         )
       }
       return reply.send({ data: result })
+    }
+  )
+
+  // Waiting vs working per step visit (services/step-timing.ts) — read by the
+  // panel's Time in step bar and transition history once the panel is open,
+  // never on a plain record open. Names nobody: only times and touch kinds.
+  app.get(
+    '/instance/:collection/:item/step-timing',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, item } = req.params as { collection: string; item: string }
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
+      const instance = await findRecordInstance<WorkflowInstance>(collection, item)
+      if (!instance) return reply.send({ data: [] })
+      const { loadStepTiming } = await import('../services/step-timing.js')
+      const data = await loadStepTiming({
+        id: String(instance.id),
+        collection,
+        item: String(item),
+        template: String(instance.template),
+        completed_at: (instance as { completed_at?: Date | string | null }).completed_at ?? null
+      })
+      return reply.send({ data })
     }
   )
 
