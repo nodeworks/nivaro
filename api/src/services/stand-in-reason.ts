@@ -84,12 +84,14 @@ export interface StandInDeps {
   }): Promise<StandInGap | null>
   creatorColumn(collection: string): Promise<string | null>
   fieldLabel(collection: string, field: string): Promise<string | null>
-  /** null = every field (admins, unrestricted roles). */
-  readableFields(
-    user: User | undefined,
-    isAdmin: boolean,
-    collection: string
-  ): Promise<string[] | null>
+  /** The viewer may read this (possibly dotted) field path on the collection —
+   *  EVERY hop, not just the root (a related record's value is named only when
+   *  the viewer may read that field of that record's collection). */
+  canReadPath(
+    viewer: { user: User | undefined; isAdmin: boolean },
+    collection: string,
+    path: string
+  ): Promise<boolean>
 }
 
 const up = (v: unknown) => String(v ?? '').toUpperCase()
@@ -156,21 +158,35 @@ export const realStandInDeps: StandInDeps = {
       .catch(() => undefined)) as { label?: string | null } | undefined
     return row?.label?.trim() || null
   },
-  async readableFields(user, isAdmin, collection) {
-    if (isAdmin) return null
-    if (!user) return []
-    const { getAllowedFields } = await import('./permissions.js')
-    return getAllowedFields(user, 'read', collection).catch(() => [])
+  async canReadPath(viewer, collection, path) {
+    if (viewer.isAdmin) return true
+    if (!viewer.user) return false
+    // The Ask AI guard: the base collection's readable fields, then every hop's
+    // related collection (its own field list, row filters and User Scopes) —
+    // anything it cannot check is refused, so the value is left out.
+    try {
+      const [{ chatFieldSet, chatRelationsFor }, guard] = await Promise.all([
+        import('./ai-chat.js'),
+        import('./ai-aggregate-guard.js')
+      ])
+      const all = await chatFieldSet(collection)
+      const readable = await guard.readableFieldSet(viewer.user, collection, all)
+      const root = path.split('.')[0]
+      if (!readable.has(root)) return false
+      const hidden = new Set([...all].filter((f) => !readable.has(f)))
+      await guard.assertFilterReadable(
+        viewer.user,
+        collection,
+        [path.split('.')],
+        hidden,
+        chatRelationsFor,
+        { toMany: true }
+      )
+      return true
+    } catch {
+      return false
+    }
   }
-}
-
-/** The field a dotted filter path starts from ("zone_id.name" → "zone_id"). */
-const rootOf = (field: string) => field.split('.')[0].toLowerCase()
-
-function canRead(allowed: string[] | null, field: string): boolean {
-  if (allowed === null) return true
-  const root = rootOf(field)
-  return allowed.some((f) => f === '*' || f.toLowerCase() === root)
 }
 
 /** "Zone 3, Project 201979 or Region PNR" — each value with its dimension's label. */
@@ -214,9 +230,15 @@ export async function standInReasonFor(
   const people = t.standIn.map((o) => ({ id: String(o.id), name: personName(o) }))
   const who = people.map((p) => p.name).join(' and ')
 
-  const [allowed, creatorCol] = await Promise.all([
-    deps.readableFields(input.viewer.user, input.viewer.isAdmin, input.collection),
-    deps.creatorColumn(input.collection)
+  const canRead = (path: string) =>
+    deps.canReadPath(input.viewer, input.collection, path).catch(() => false)
+  const readableOnly = async <T extends { field: string }>(values: T[]): Promise<T[]> => {
+    const ok = await Promise.all(values.map((v) => canRead(v.field)))
+    return values.filter((_v, i) => ok[i])
+  }
+  const [creatorCol, readable] = await Promise.all([
+    deps.creatorColumn(input.collection),
+    canRead(field)
   ])
 
   // ── Why nobody is assigned ────────────────────────────────────────────────
@@ -248,15 +270,19 @@ export async function standInReasonFor(
           })
           .catch(() => null)
       : null
-    const uncovered = (gap?.uncovered ?? []).filter((v) => canRead(allowed, v.field))
-    const dims = (gap?.dims ?? []).filter((v) => canRead(allowed, v.field))
-    if (uncovered.length > 0) {
+    const rawUncovered = gap?.uncovered ?? []
+    const rawDims = gap?.dims ?? []
+    const [uncovered, dims] = await Promise.all([readableOnly(rawUncovered), readableOnly(rawDims)])
+    // A value the viewer may not read is never named. "Covers … together" is
+    // said only over the WHOLE combination (a partial one would point at the
+    // wrong values), and an uncovered list with nothing readable says nothing.
+    if (rawUncovered.length > 0 && uncovered.length > 0) {
       whyUnassigned = {
         kind: 'uncovered',
         sentence: `No owner group covers ${valuePhrase(uncovered, 'or')} for ${step}.`,
         values: uncovered.map(({ label, value }) => ({ label, value }))
       }
-    } else if (dims.length > 0) {
+    } else if (rawUncovered.length === 0 && dims.length > 0 && dims.length === rawDims.length) {
       whyUnassigned = {
         kind: 'no_match',
         sentence: `No owner group covers ${valuePhrase(dims, 'and')} together for ${step}.`,
@@ -278,7 +304,6 @@ export async function standInReasonFor(
 
   // ── Why this person ──────────────────────────────────────────────────────
   let whyThisPerson: StandInReason['why_this_person']
-  const readable = canRead(allowed, field)
   if (readable && creatorCol && creatorCol.toLowerCase() === field.toLowerCase()) {
     whyThisPerson = {
       kind: 'creator',

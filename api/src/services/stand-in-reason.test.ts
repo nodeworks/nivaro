@@ -49,6 +49,12 @@ const gapOf = (over: Partial<StandInGap> = {}): StandInGap => ({
   ...over
 })
 
+/** canReadPath that allows exactly these paths. */
+const only =
+  (...paths: string[]): StandInDeps['canReadPath'] =>
+  async (_v, _c, path) =>
+    paths.includes(path)
+
 function deps(over: Partial<StandInDeps> & { t?: OwnerResolutionTrace } = {}): StandInDeps {
   return {
     trace: async () => over.t ?? trace(),
@@ -56,7 +62,7 @@ function deps(over: Partial<StandInDeps> & { t?: OwnerResolutionTrace } = {}): S
     gap: async () => gapOf(),
     creatorColumn: async () => 'user_created',
     fieldLabel: async (_c, f) => (f === 'requester' ? 'Requester' : null),
-    readableFields: async () => null,
+    canReadPath: async () => true,
     ...over
   }
 }
@@ -153,7 +159,7 @@ describe('standInReasonFor', () => {
     const r = await standInReasonFor(
       input(),
       deps({
-        readableFields: async () => ['division', 'user_created'],
+        canReadPath: only('division.name', 'user_created'),
         gap: async () =>
           gapOf({
             uncovered: [
@@ -168,13 +174,55 @@ describe('standInReasonFor', () => {
     )
     expect(JSON.stringify(r)).not.toContain('CRAN')
 
-    const none = await standInReasonFor(
-      input(),
-      deps({ readableFields: async () => ['user_created'] })
-    )
+    const none = await standInReasonFor(input(), deps({ canReadPath: only('user_created') }))
     expect(none?.why_unassigned.sentence).toBe(
       'No owner group matches this record for Engineering Review.'
     )
+  })
+
+  it('a readable root with an unreadable hop leaves that value out', async () => {
+    // division (the link) is readable, division.name on the related table is not.
+    const r = await standInReasonFor(
+      input(),
+      deps({
+        canReadPath: only('region.name', 'project_type.name', 'user_created'),
+        gap: async () =>
+          gapOf({
+            uncovered: [
+              { field: 'division.name', label: 'Division', value: 'Zone 3' },
+              { field: 'region.name', label: 'Region', value: 'CRAN' }
+            ]
+          })
+      })
+    )
+    expect(r?.why_unassigned.sentence).toBe(
+      'No owner group covers Region CRAN for Engineering Review.'
+    )
+    expect(JSON.stringify(r)).not.toContain('Zone 3')
+  })
+
+  it('says only the generic sentence when every uncovered value is unreadable', async () => {
+    const r = await standInReasonFor(
+      input(),
+      deps({
+        canReadPath: only('region.name', 'project_type.name', 'user_created'),
+        gap: async () =>
+          gapOf({ uncovered: [{ field: 'division.name', label: 'Division', value: 'Zone 3' }] })
+      })
+    )
+    expect(r?.why_unassigned).toEqual({
+      kind: 'no_match',
+      sentence: 'No owner group matches this record for Engineering Review.'
+    })
+    // A combination is never said over part of its values.
+    const partial = await standInReasonFor(
+      input(),
+      deps({ canReadPath: only('region.name', 'user_created') })
+    )
+    expect(partial?.why_unassigned.sentence).toBe(
+      'No owner group matches this record for Engineering Review.'
+    )
+    expect(JSON.stringify(partial)).not.toContain('CRAN')
   })
 
   it('says the winning group is empty (its name for administrators only)', async () => {
@@ -218,7 +266,7 @@ describe('standInReasonFor', () => {
     })
     const hidden = await standInReasonFor(
       input({ fallbackField: 'requester' }),
-      deps({ readableFields: async () => ['division'] })
+      deps({ canReadPath: only('division.name') })
     )
     expect(hidden?.why_this_person.sentence).toBe(
       'Nathan Winger stands in because this record names them.'
