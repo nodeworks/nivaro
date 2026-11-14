@@ -78,6 +78,7 @@ import { resolveTransitionTarget } from '../services/workflow-transitions.js'
 import type { User } from '../types.js'
 import { matchingRules, parseActiveRules, referencedFields } from './at-risk.js'
 import { ownerMatrixVersionRoutes, registerOwnerMatrixCapture } from './owner-matrix-versions.js'
+import { ownerPreviewRoutes } from './owner-preview.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -767,6 +768,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // onRoute only sees routes added after it.
   registerOwnerMatrixCapture(app)
   await ownerMatrixVersionRoutes(app)
+  // Owner preview ("Try a record" in the Owner Matrix): saved vs draft owners per step.
+  await ownerPreviewRoutes(app)
   if (!ownerFilterCheckRegistered) {
     ownerFilterCheckRegistered = true
     registerReadinessCheck({

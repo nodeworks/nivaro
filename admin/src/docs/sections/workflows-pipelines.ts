@@ -353,6 +353,37 @@ export const pipelineOwnerMatrix: DocSection = {
 POST /api/pipelines/:id/owner-matrix/versions            { note? }  — checkpoint now
 GET  /api/pipelines/:id/owner-matrix/versions/:vid/diff  ?against=current|<vid>
 POST /api/pipelines/:id/owner-matrix/versions/:vid/restore`
+    },
+    {
+      type: 'h3',
+      id: 'pipeline-owner-matrix-try',
+      text: 'Draft changes and Try a record'
+    },
+    {
+      type: 'p',
+      text: 'Matrix edits normally save the moment you make them. To try owner groups safely first, click "Draft changes": cell edits (add or remove a person or team, create an override, priority, WIP limit) now change a local draft and write nothing. A violet bar counts the changed groups; "Save draft" writes them through the normal owner routes (one matrix version, so it can be restored), "Discard draft" throws them away. Creating a new team and "Add a user to many cells" are not offered in draft mode — both are real writes.'
+    },
+    {
+      type: 'p',
+      text: '"Try a record" (above the grid) takes a real record of the bound collection — search it or type its id — and shows one card per step: who would own it, a warning on every step that would have NO assigned owner (only a stand-in, such as the binding\'s fallback person, or nobody), and a "Why?" popover: which owner group matched and on which dimension values, broader groups it outranked, optional dimensions that fell back to the base group (inherited) or have an override, and out-of-office owners replaced by their delegate. While a draft is open each card shows the draft answer, marks the steps the draft changes, and keeps what the saved matrix says beside it. The answer follows the draft as you edit (about half a second behind).'
+    },
+    {
+      type: 'note',
+      text: 'Both answers come from the same owner resolver queues, notifications and the record page use — the draft is laid over the saved groups on the server for that one request. The record is read as you (admin), nothing is written, and only administrators can call it.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/pipelines/:id/owner-preview
+{ "collection": "inventory_requests", "item": "42",
+  "draft": [ { "id": "draft:k1", "state": "<state id>", "filters": [{ "field": "zone", "op": "eq", "value": "East" }],
+               "users": ["<user id>"], "teams": [], "priority": 0 },
+             { "id": "<saved group id>", "state": "<state id>", "filters": [...], "users": [], "teams": [], "removed": true } ] }
+→ { data: { label, current_state, has_instance, has_draft, unowned,
+            steps: [ { state, changed,
+                       saved: { owners: [{ id, name, via: group|manual|stand_in, delegate_for, inactive }],
+                                no_assigned_owner, match: { kind, group, facts, inherited, override, outranked },
+                                delegations, why: [ … ] },
+                       draft: { …same… } | null } ] } }`
     }
   ]
 }

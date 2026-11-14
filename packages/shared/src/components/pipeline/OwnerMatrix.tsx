@@ -1,13 +1,27 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronDown, Loader2, Plus, Search, Users2, X } from 'lucide-react'
+import { Check, ChevronDown, FilePen, Loader2, Plus, Search, Users2, X } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { toastError } from '../../lib/error-toast'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { OwnerRecordTrial } from './OwnerRecordTrial'
+import {
+  cloneGroupsMap,
+  type DraftSaveOp,
+  draftAddTeam,
+  draftAddUser,
+  draftCreateGroup,
+  draftDelta,
+  draftPatchGroup,
+  draftRemoveTeam,
+  draftRemoveUser,
+  draftSaveOps
+} from './owner-matrix-draft'
 import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from './relations'
 import { TeamScopeEditor } from './TeamScopeEditor'
 import {
@@ -281,6 +295,11 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   })
 
   const [bulkOpen, setBulkOpen] = useState(false)
+  // Draft mode: cell edits change a local copy (nothing is written) until Save.
+  // The record trial below resolves owners under it (owner-preview).
+  const [draft, setDraft] = useState<PipelineOwnerGroupsMap | null>(null)
+  const matrixMap = draft ?? groupsMap
+  const delta = useMemo(() => draftDelta(groupsMap, draft), [groupsMap, draft])
   const scopeDims = useScopeDimensions()
   const firstCollection = bindings[0]?.collection ?? ''
   const { data: colMeta } = useQuery({
@@ -575,9 +594,9 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   }, [expandedCell])
 
   const rowsFromGroups = useMemo<MatrixRow[]>(() => {
-    if (!rowDim || !groupsMap) return []
+    if (!rowDim || !matrixMap) return []
     const seen = new Map<string, string>()
-    for (const groups of Object.values(groupsMap)) {
+    for (const groups of Object.values(matrixMap)) {
       for (const group of groups) {
         for (const f of group.filters ?? []) {
           if (f.field === rowDim.field && f.op === 'eq' && !seen.has(String(f.value))) {
@@ -587,7 +606,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       }
     }
     return [...seen.entries()].map(([value, label]) => ({ value, label }))
-  }, [rowDim, groupsMap])
+  }, [rowDim, matrixMap])
 
   const rowValues = useMemo<MatrixRow[]>(() => {
     // AUTO-POPULATE from the row dimension's related collection — the matrix
@@ -630,8 +649,8 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
     stateId: string,
     rowValue: string
   ): { group: PipelineOwnerGroup | null; isInherited: boolean } {
-    if (!rowDim || !groupsMap) return { group: null, isInherited: false }
-    const stateGroups = groupsMap[stateId] ?? []
+    if (!rowDim || !matrixMap) return { group: null, isInherited: false }
+    const stateGroups = matrixMap[stateId] ?? []
 
     // Full context: row value + all active col filter values
     const context: Record<string, string> = { [rowDim.field]: rowValue }
@@ -677,8 +696,8 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   }
 
   function hasOverrides(stateId: string, rowValue: string): boolean {
-    if (!rowDim || !groupsMap) return false
-    const stateGroups = groupsMap[stateId] ?? []
+    if (!rowDim || !matrixMap) return false
+    const stateGroups = matrixMap[stateId] ?? []
     const optionalFields = new Set(colFilterDims.filter((d) => !d.required).map((d) => d.field))
     if (optionalFields.size === 0) return false
     return stateGroups.some(
@@ -692,16 +711,39 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: ['pipeline-all-owner-groups', templateId] })
 
+  // In Draft mode a cell edit changes the local copy and writes nothing.
+  const DRAFTED = 'drafted' as const
+  const cellGroupId = (stateId: string, rowValue: string) => {
+    const { group, isInherited } = getCellResult(stateId, rowValue)
+    return !isInherited && group ? group.id : null
+  }
+
   const addUserToCell = useMutation({
     mutationFn: async ({
       stateId,
       rowValue,
-      userId
+      userId,
+      user
     }: {
       stateId: string
       rowValue: string
       userId: string
+      user?: User
     }) => {
+      if (draft) {
+        const groupId = cellGroupId(stateId, rowValue)
+        const filters = buildCellFilters(stateId, rowValue)
+        const person = user
+          ? {
+              id: String(user.id),
+              first_name: user.first_name ?? null,
+              last_name: user.last_name ?? null,
+              email: user.email
+            }
+          : { id: userId, first_name: null, last_name: null, email: userId }
+        setDraft((d) => d && draftAddUser(d, { stateId, groupId, filters, user: person }))
+        return DRAFTED
+      }
       const { group: existing, isInherited } = getCellResult(stateId, rowValue)
       let group = !isInherited ? existing : null
       if (!group) {
@@ -735,7 +777,8 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       }
       return client.request(post(`/pipelines/owner-groups/${group.id}/users`, { user: userId }))
     },
-    onSuccess: () => {
+    onSuccess: (r) => {
+      if (r === DRAFTED) return
       invalidate()
       toast.success('Owner added')
     },
@@ -789,6 +832,18 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       rowValue: string
       teamId: number
     }) => {
+      if (draft) {
+        const team = (allTeams ?? []).find((t) => t.id === teamId) ?? {
+          id: teamId,
+          name: `Team ${teamId}`,
+          slug: '',
+          member_count: 0
+        }
+        const groupId = cellGroupId(stateId, rowValue)
+        const filters = buildCellFilters(stateId, rowValue)
+        setDraft((d) => d && draftAddTeam(d, { stateId, groupId, filters, team }))
+        return DRAFTED
+      }
       const { group: existing, isInherited } = getCellResult(stateId, rowValue)
       let group = !isInherited ? existing : null
       if (!group) {
@@ -804,7 +859,8 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       }
       return client.request(post(`/pipelines/owner-groups/${group.id}/teams`, { team_id: teamId }))
     },
-    onSuccess: () => {
+    onSuccess: (r) => {
+      if (r === DRAFTED) return
       invalidate()
       toast.success('Team assigned')
     },
@@ -812,9 +868,15 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   })
 
   const removeTeam = useMutation({
-    mutationFn: ({ groupId, teamId }: { groupId: string; teamId: number }) =>
-      client.request(del(`/pipelines/owner-groups/${groupId}/teams/${teamId}`)),
-    onSuccess: () => {
+    mutationFn: async ({ groupId, teamId }: { groupId: string; teamId: number }) => {
+      if (draft) {
+        setDraft((d) => d && draftRemoveTeam(d, groupId, teamId))
+        return DRAFTED
+      }
+      return client.request(del(`/pipelines/owner-groups/${groupId}/teams/${teamId}`))
+    },
+    onSuccess: (r) => {
+      if (r === DRAFTED) return
       invalidate()
       toast.success('Team unassigned')
     },
@@ -869,6 +931,11 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
 
   const createOverride = useMutation({
     mutationFn: async ({ stateId, rowValue }: { stateId: string; rowValue: string }) => {
+      if (draft) {
+        const filters = buildCellFilters(stateId, rowValue)
+        setDraft((d) => d && draftCreateGroup(d, stateId, filters))
+        return DRAFTED
+      }
       const colFilterItems = colFilterItemQueries.flatMap(
         (q) => (q.data as Record<string, unknown>[] | undefined) ?? []
       )
@@ -896,7 +963,8 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
         })
       )
     },
-    onSuccess: () => {
+    onSuccess: (r) => {
+      if (r === DRAFTED) return
       invalidate()
       toast.success('Override created')
     },
@@ -904,27 +972,96 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   })
 
   const updatePriority = useMutation({
-    mutationFn: ({ groupId, priority }: { groupId: string; priority: number }) =>
-      client.request(patch(`/pipelines/owner-groups/${groupId}`, { priority })),
-    onSuccess: () => invalidate(),
+    mutationFn: async ({ groupId, priority }: { groupId: string; priority: number }) => {
+      if (draft) {
+        setDraft((d) => d && draftPatchGroup(d, groupId, { priority }))
+        return DRAFTED
+      }
+      return client.request(patch(`/pipelines/owner-groups/${groupId}`, { priority }))
+    },
+    onSuccess: (r) => {
+      if (r !== DRAFTED) invalidate()
+    },
     onError: () => toast.error('Failed to update priority')
   })
 
   const updateMaxWip = useMutation({
-    mutationFn: ({ groupId, maxWip }: { groupId: string; maxWip: number | null }) =>
-      client.request(patch(`/pipelines/owner-groups/${groupId}`, { max_wip: maxWip })),
-    onSuccess: () => invalidate(),
+    mutationFn: async ({ groupId, maxWip }: { groupId: string; maxWip: number | null }) => {
+      if (draft) {
+        setDraft((d) => d && draftPatchGroup(d, groupId, { max_wip: maxWip }))
+        return DRAFTED
+      }
+      return client.request(patch(`/pipelines/owner-groups/${groupId}`, { max_wip: maxWip }))
+    },
+    onSuccess: (r) => {
+      if (r !== DRAFTED) invalidate()
+    },
     onError: () => toast.error('Failed to update WIP limit')
   })
 
   const removeUser = useMutation({
-    mutationFn: (linkId: number) => client.request(del(`/pipelines/owner-group-users/${linkId}`)),
-    onSuccess: () => {
+    mutationFn: async (linkId: number) => {
+      if (draft) {
+        setDraft((d) => d && draftRemoveUser(d, linkId))
+        return DRAFTED
+      }
+      return client.request(del(`/pipelines/owner-group-users/${linkId}`))
+    },
+    onSuccess: (r) => {
+      if (r === DRAFTED) return
       invalidate()
       toast.success('Owner removed')
     },
     onError: () => toast.error('Failed to remove owner')
   })
+
+  // Save: the draft's writes, in order, through the normal owner-group routes
+  // (each one snapshots the matrix first — owner-matrix versions).
+  const saveDraft = useMutation({
+    mutationFn: async (ops: DraftSaveOp[]) => {
+      const realId = new Map<string, string>()
+      const gid = (id: string) => realId.get(id) ?? id
+      for (const op of ops) {
+        if (op.kind === 'create') {
+          const r = await client.request<{ data: PipelineOwnerGroup }>(
+            post(`/pipelines/states/${op.stateId}/owner-groups`, {
+              filters: op.filters ?? [],
+              is_default: false,
+              sort: 0,
+              priority: op.priority
+            })
+          )
+          realId.set(op.draftId, r.data.id)
+        } else if (op.kind === 'patch') {
+          await client.request(patch(`/pipelines/owner-groups/${gid(op.group)}`, op.body))
+        } else if (op.kind === 'add-user') {
+          await client.request(
+            post(`/pipelines/owner-groups/${gid(op.group)}/users`, { user: op.user })
+          )
+        } else if (op.kind === 'remove-user') {
+          await client.request(del(`/pipelines/owner-group-users/${op.linkId}`))
+        } else if (op.kind === 'add-team') {
+          await client.request(
+            post(`/pipelines/owner-groups/${gid(op.group)}/teams`, { team_id: op.team })
+          )
+        } else {
+          await client.request(del(`/pipelines/owner-groups/${gid(op.group)}/teams/${op.team}`))
+        }
+      }
+      return ops.length
+    },
+    onSuccess: (n) => {
+      setDraft(null)
+      invalidate()
+      toast.success(`Draft saved — ${n} change${n === 1 ? '' : 's'} written`)
+    },
+    onError: (e) => {
+      // Part of it may have been written: show the saved matrix as it is now.
+      invalidate()
+      toastError(e, 'Could not save the draft')
+    }
+  })
+  const draftOps = useMemo(() => draftSaveOps(groupsMap, draft), [groupsMap, draft])
 
   const unmetRequired = colFilterDims.filter((d) => d.required && !filterValues[d.id])
 
@@ -962,64 +1099,126 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
         />
       )}
       {/* One toolbar: dimension filters left, bulk action right */}
-      <div className='flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 dark:border-border dark:bg-muted/40'>
-        {colFilterDims.length > 0 && (
-          <>
-            <span className='text-[11px] font-medium text-slate-400 uppercase tracking-wide shrink-0 dark:text-muted-foreground'>
-              Filter
-            </span>
-            {colFilterDims.map((dim, i) => {
-              const resolved = colFilterResolved[i]
-              const rawItems = (colFilterItemQueries[i]?.data ?? []) as Record<string, unknown>[]
-              const relMeta = colFilterRelMetaQueries[i]?.data
-              const options: { value: string; label: string }[] = resolved?.relatedCollection
-                ? rawItems.map((item) => {
-                    if (resolved.subField) {
-                      const v = String(item[resolved.subField] ?? '')
-                      return { value: v, label: v }
-                    }
-                    return {
-                      value: String(item.id),
-                      label: renderDisplayTemplate(relMeta?.display_template ?? null, item)
-                    }
-                  })
-                : []
-              return (
-                <div key={dim.id} className='flex items-center gap-1.5'>
-                  <span className='text-[12px] font-medium text-slate-600'>{dim.label}</span>
-                  <FilterCombobox
-                    label={dim.label}
-                    value={filterValues[dim.id] ?? ''}
-                    options={options}
-                    onChange={(v) =>
-                      setFilterValues((prev) => {
-                        const next = { ...prev, [dim.id]: v }
-                        // Changing a parent clears every dimension cascading
-                        // off it — its old pick may no longer be an option.
-                        for (const child of colFilterDims) {
-                          if ((child.cascade ?? []).some((r) => r.parent_field === dim.field)) {
-                            next[child.id] = ''
+      {(colFilterDims.length > 0 || !draft) && (
+        <div className='flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 dark:border-border dark:bg-muted/40'>
+          {colFilterDims.length > 0 && (
+            <>
+              <span className='text-[11px] font-medium text-slate-400 uppercase tracking-wide shrink-0 dark:text-muted-foreground'>
+                Filter
+              </span>
+              {colFilterDims.map((dim, i) => {
+                const resolved = colFilterResolved[i]
+                const rawItems = (colFilterItemQueries[i]?.data ?? []) as Record<string, unknown>[]
+                const relMeta = colFilterRelMetaQueries[i]?.data
+                const options: { value: string; label: string }[] = resolved?.relatedCollection
+                  ? rawItems.map((item) => {
+                      if (resolved.subField) {
+                        const v = String(item[resolved.subField] ?? '')
+                        return { value: v, label: v }
+                      }
+                      return {
+                        value: String(item.id),
+                        label: renderDisplayTemplate(relMeta?.display_template ?? null, item)
+                      }
+                    })
+                  : []
+                return (
+                  <div key={dim.id} className='flex items-center gap-1.5'>
+                    <span className='text-[12px] font-medium text-slate-600'>{dim.label}</span>
+                    <FilterCombobox
+                      label={dim.label}
+                      value={filterValues[dim.id] ?? ''}
+                      options={options}
+                      onChange={(v) =>
+                        setFilterValues((prev) => {
+                          const next = { ...prev, [dim.id]: v }
+                          // Changing a parent clears every dimension cascading
+                          // off it — its old pick may no longer be an option.
+                          for (const child of colFilterDims) {
+                            if ((child.cascade ?? []).some((r) => r.parent_field === dim.field)) {
+                              next[child.id] = ''
+                            }
                           }
-                        }
-                        return next
-                      })
-                    }
-                    onSearch={(q) => setSearchTerms((prev) => ({ ...prev, [dim.id]: q }))}
-                    loading={colFilterItemQueries[i]?.isLoading}
-                  />
-                </div>
-              )
-            })}
-          </>
-        )}
-        <button
-          type='button'
-          onClick={() => setBulkOpen((v) => !v)}
-          className='ml-auto shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[12px] font-medium text-slate-600 transition-colors hover:border-nvr-cyan/50 hover:text-nvr-cyan-dark dark:border-border dark:bg-card dark:text-slate-300 dark:hover:text-nvr-cyan'
+                          return next
+                        })
+                      }
+                      onSearch={(q) => setSearchTerms((prev) => ({ ...prev, [dim.id]: q }))}
+                      loading={colFilterItemQueries[i]?.isLoading}
+                    />
+                  </div>
+                )
+              })}
+            </>
+          )}
+          <div className='ml-auto flex shrink-0 items-center gap-2'>
+            {!draft && (
+              <button
+                type='button'
+                onClick={() => setBulkOpen((v) => !v)}
+                className='shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[12px] font-medium text-slate-600 transition-colors hover:border-nvr-cyan/50 hover:text-nvr-cyan-dark dark:border-border dark:bg-card dark:text-slate-300 dark:hover:text-nvr-cyan'
+              >
+                ＋ Add a user to many cells…
+              </button>
+            )}
+            {!draft && (
+              <button
+                type='button'
+                data-tip='Edit the matrix without saving, and try the changes on a record first'
+                onClick={() => {
+                  setBulkOpen(false)
+                  setDraft(cloneGroupsMap(groupsMap))
+                }}
+                className='inline-flex shrink-0 items-center gap-1.5 rounded-md border border-violet-300 bg-white px-2.5 py-1 text-[12px] font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-500/40 dark:bg-card dark:text-violet-300 dark:hover:bg-violet-500/10'
+              >
+                <FilePen className='h-3.5 w-3.5' />
+                Draft changes
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {draft && (
+        <div
+          data-owner-draft-bar
+          className='flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-violet-300 bg-violet-50 px-4 py-2 text-[12px] text-violet-900 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-200'
         >
-          ＋ Add a user to many cells…
-        </button>
-      </div>
+          <FilePen className='h-3.5 w-3.5 shrink-0' />
+          <span className='font-semibold'>Draft mode</span>
+          <span className='text-violet-800/80 dark:text-violet-200/80'>
+            {delta.length === 0
+              ? 'Edit cells as usual — nothing is saved until you say so.'
+              : `${delta.length} owner group${delta.length === 1 ? '' : 's'} changed, not saved yet.`}
+          </span>
+          <div className='ml-auto flex items-center gap-2'>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-7 text-[12px]'
+              disabled={saveDraft.isPending}
+              onClick={() => setDraft(null)}
+            >
+              {delta.length === 0 ? 'Leave draft mode' : 'Discard draft'}
+            </Button>
+            <Button
+              size='sm'
+              className='h-7 bg-nvr-cyan text-[12px] text-white'
+              disabled={draftOps.length === 0 || saveDraft.isPending}
+              onClick={() => saveDraft.mutate(draftOps)}
+            >
+              {saveDraft.isPending && <Loader2 className='mr-1 h-3 w-3 animate-spin' />}
+              Save draft
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <OwnerRecordTrial
+        templateId={templateId}
+        collections={[...new Set(bindings.map((b) => b.collection))]}
+        draft={draft ? delta : null}
+        displayTemplates={{ [firstCollection]: colMeta?.display_template ?? null }}
+      />
 
       {unmetRequired.length > 0 && (
         <div className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400'>
@@ -1324,11 +1523,12 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                 cellFilters={buildCellFilters(s.id, row.value) as CellFilterLite[]}
                                 scopeDims={scopeDims}
                                 boundCollection={firstCollection || null}
-                                onAdd={(userId) =>
+                                onAdd={(userId, user) =>
                                   addUserToCell.mutate({
                                     stateId: s.id,
                                     rowValue: row.value,
-                                    userId
+                                    userId,
+                                    user
                                   })
                                 }
                                 onAddTeam={(teamId) =>
@@ -1338,12 +1538,16 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                     teamId
                                   })
                                 }
-                                onCreateTeam={(name) =>
-                                  createTeamForCell.mutate({
-                                    stateId: s.id,
-                                    rowValue: row.value,
-                                    name
-                                  })
+                                onCreateTeam={
+                                  // A new team is a real write — not offered in Draft mode.
+                                  draft
+                                    ? undefined
+                                    : (name) =>
+                                        createTeamForCell.mutate({
+                                          stateId: s.id,
+                                          rowValue: row.value,
+                                          name
+                                        })
                                 }
                                 isPending={
                                   addUserToCell.isPending ||
@@ -1522,7 +1726,7 @@ function AddUserToCell({
   cellFilters?: CellFilterLite[]
   scopeDims?: ReturnType<typeof useScopeDimensions>
   boundCollection?: string | null
-  onAdd: (userId: string) => void
+  onAdd: (userId: string, user?: User) => void
   onAddTeam?: (teamId: number) => void
   onCreateTeam?: (name: string) => void
   isPending: boolean
@@ -1698,7 +1902,7 @@ function AddUserToCell({
               key={u.id}
               type='button'
               onClick={() => {
-                onAdd(u.id)
+                onAdd(u.id, u)
                 setOpen(false)
               }}
               className='flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
