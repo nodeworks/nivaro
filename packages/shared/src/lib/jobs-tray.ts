@@ -65,9 +65,32 @@ function read<T>(key: string, fallback: T): T {
   }
 }
 
+/**
+ * A job this TAB runs itself (`local:` keys — the collection list's CSV, built in the browser)
+ * lives only as long as the tab: never stored, so a closed tab cannot leave another tab a
+ * "running" entry nobody will ever finish. Its Cancel is a function, not an API path.
+ */
+export const LOCAL_JOB_PREFIX = 'local:'
+const isLocal = (key: string) => key.startsWith(LOCAL_JOB_PREFIX)
+const localCancels = new Map<string, () => void>()
+
+/** Register the Cancel of a tab-local job (its `cancel_path` is its key). */
+export function setLocalCancel(key: string, cancel: (() => void) | null): void {
+  if (cancel) localCancels.set(key, cancel)
+  else localCancels.delete(key)
+}
+
+/** Cancel a tab-local job; false when the path is not one. */
+export function cancelLocalJob(path: string): boolean {
+  const fn = localCancels.get(path)
+  if (!fn) return false
+  fn()
+  return true
+}
+
 function persist(): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs.filter((j) => !isLocal(j.key))))
     localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissed].slice(-200)))
   } catch {
     /* private window or blocked storage: the tray still works for this page */
@@ -90,13 +113,15 @@ function prune(): void {
 function load(): void {
   if (loaded || typeof window === 'undefined') return
   loaded = true
-  jobs = read<TrayJob[]>(STORAGE_KEY, [])
+  jobs = read<TrayJob[]>(STORAGE_KEY, []).filter((j) => !isLocal(j.key))
   dismissed = new Set(read<string[]>(DISMISSED_KEY, []))
   prune()
   // Another tab changed the list (an update or a dismissal): follow it.
   window.addEventListener('storage', (e) => {
     if (e.key !== STORAGE_KEY && e.key !== DISMISSED_KEY) return
-    jobs = read<TrayJob[]>(STORAGE_KEY, [])
+    // This tab's own local jobs are not in storage: keep them.
+    const mine = jobs.filter((j) => isLocal(j.key))
+    jobs = [...mine, ...read<TrayJob[]>(STORAGE_KEY, []).filter((j) => !isLocal(j.key))]
     dismissed = new Set(read<string[]>(DISMISSED_KEY, []))
     notify()
   })
@@ -218,6 +243,20 @@ export function dismissFinishedJobs(): void {
   notify()
 }
 
+/** Follow every change of the list (export-runs.ts downloads a finished export with it). */
+export function subscribeJobs(cb: () => void): () => void {
+  listeners.add(cb)
+  return () => {
+    listeners.delete(cb)
+  }
+}
+
+/** The current list (newest first). */
+export function trayJobs(): TrayJob[] {
+  load()
+  return jobs
+}
+
 export function useTrayJobs(): TrayJob[] {
   load()
   useSyncExternalStore(
@@ -233,6 +272,7 @@ export function useTrayJobs(): TrayJob[] {
 
 /** Test seam. */
 export function __resetJobsTray(): void {
+  localCancels.clear()
   jobs = []
   dismissed = new Set()
   loaded = true

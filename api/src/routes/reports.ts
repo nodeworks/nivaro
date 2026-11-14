@@ -27,6 +27,17 @@ import {
 } from '../services/activity-report-filters.js'
 import { activityLabelRefs } from '../services/activity-sentence.js'
 import { selectInChunks } from '../services/db-batch.js'
+import {
+  backgroundRefusal,
+  decideBackground,
+  type ExportContext,
+  type ExportFile,
+  ExportRunError,
+  noteExportDuration,
+  parseBackgroundMode,
+  startExportRun
+} from '../services/export-runs.js'
+import type { User } from '../types.js'
 import { pageRows } from './activity.js'
 
 function toCSV(rows: Record<string, unknown>[], columns?: readonly string[]): string {
@@ -53,7 +64,7 @@ export async function reportsRoutes(app: FastifyInstance) {
     const q = req.query as Record<string, string>
     // The Audit report's export: GET /api/activity's filters, sentences + raw columns.
     if (q.format === 'csv' && (q.readable === '1' || q.readable === 'true')) {
-      return readableCsv(req, reply, q)
+      return readableCsv(app, req, reply, q)
     }
     const page = Math.max(1, q.page ? Number(q.page) : 1)
     const limit = Math.min(q.limit ? Number(q.limit) : 50, 500)
@@ -185,10 +196,68 @@ export async function reportsRoutes(app: FastifyInstance) {
  * The readable CSV: the newest READABLE_CSV_MAX matching entries, each with its sentence (read
  * as the exporting administrator) and the raw columns. Past the cap the answer says so in
  * X-Export-Truncated and X-Export-Rows; the page tells the reader to narrow the dates.
+ *
+ * `background=auto|1` (#2122 follow-up): a big one (more than EXPORT_BACKGROUND_ROWS entries,
+ * or one that usually takes long) answers 202 and runs the same build as a job — progress and
+ * Cancel in the Jobs tray, the file saved privately for the administrator.
  */
-async function readableCsv(req: FastifyRequest, reply: FastifyReply, q: Record<string, string>) {
+async function readableCsv(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  reply: FastifyReply,
+  q: Record<string, string>
+) {
   const parsed = normalizeActivityFilters(q)
   if (parsed.errors.length) return reply.status(400).send({ error: parsed.errors.join('; ') })
+  const mode = parseBackgroundMode(q.background)
+  const refusal = mode === 'off' ? null : backgroundRefusal(req)
+  if (mode === 'always' && refusal)
+    return reply.status(403).send({ error: refusal, code: 'BACKGROUND_EXPORT_REFUSED' })
+  const user = req.user!
+  const isAdmin = !!req.isAdmin
+  if (mode !== 'off' && !refusal) {
+    const ids = await readableCsvIds(parsed.filters)
+    const rows = Math.min(ids.length, READABLE_CSV_MAX)
+    if (
+      await decideBackground(mode, {
+        rows,
+        kind: 'audit',
+        subject: 'audit',
+        redis: app.redis ?? null
+      })
+    ) {
+      try {
+        const started = await startExportRun(app, {
+          user,
+          kind: 'audit',
+          subject: 'audit',
+          label: 'the audit report',
+          total: rows,
+          build: (ctx) => buildReadableCsv(user, isAdmin, parsed.filters, q.tz, ctx)
+        })
+        return reply.code(202).send({ data: { mode: 'background', ...started } })
+      } catch (err) {
+        if (err instanceof ExportRunError)
+          return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+        throw err
+      }
+    }
+  }
+  const startedAt = Date.now()
+  const file = await buildReadableCsv(user, isAdmin, parsed.filters, q.tz)
+  noteExportDuration('audit', 'audit', Date.now() - startedAt, app.redis ?? null)
+  reply.header('Content-Type', file.contentType)
+  reply.header('Content-Disposition', 'attachment; filename="audit-report.csv"')
+  reply.header('X-Export-Rows', String(file.rows))
+  reply.header('X-Export-Truncated', file.truncated ? '1' : '0')
+  reply.header('Access-Control-Expose-Headers', 'X-Export-Rows, X-Export-Truncated')
+  return reply.send(file.buffer)
+}
+
+type ActivityFilters = ReturnType<typeof normalizeActivityFilters>['filters']
+
+/** The matching entry ids, newest first, one past the cap (so the cap can be told). */
+async function readableCsvIds(filters: ActivityFilters): Promise<number[]> {
   const idQuery = db('nivaro_activity as a')
     .select('a.id')
     .orderBy([
@@ -196,25 +265,39 @@ async function readableCsv(req: FastifyRequest, reply: FastifyReply, q: Record<s
       { column: 'a.id', order: 'desc' }
     ])
     .limit(READABLE_CSV_MAX + 1)
-  applyActivityFilters(idQuery, parsed.filters, { mssql: isMssql(db) })
-  const all = ((await idQuery) as Array<{ id: number | string }>).map((r) => Number(r.id))
+  applyActivityFilters(idQuery, filters, { mssql: isMssql(db) })
+  return ((await idQuery) as Array<{ id: number | string }>).map((r) => Number(r.id))
+}
+
+/** The audit CSV — the synchronous answer and the background job build exactly this. */
+export async function buildReadableCsv(
+  user: User,
+  isAdmin: boolean,
+  filters: ActivityFilters,
+  tz: string | undefined,
+  ctx?: ExportContext
+): Promise<ExportFile> {
+  const all = await readableCsvIds(filters)
   const truncated = all.length > READABLE_CSV_MAX
   const ids = truncated ? all.slice(0, READABLE_CSV_MAX) : all
-  const timeZone = csvTimeZone(q.tz)
+  const timeZone = csvTimeZone(tz)
 
   const out: ReadableCsvRow[] = []
   for (let i = 0; i < ids.length; i += READABLE_CSV_CHUNK) {
+    await ctx?.throwIfCancelled()
     const rows = await pageRows(ids.slice(i, i + READABLE_CSV_CHUNK))
-    const labels = await activityLabelsFor(req.user!, activityLabelRefs(rows as never), {
-      isAdmin: !!req.isAdmin
+    const labels = await activityLabelsFor(user, activityLabelRefs(rows as never), {
+      isAdmin
     }).catch(() => ({}))
     for (const r of rows) out.push(readableCsvRow(r as never, { ...labels, timeZone }))
+    ctx?.progress({ done: out.length, total: ids.length, phase: 'Reading entries' })
   }
-  reply.header('Content-Type', 'text/csv; charset=utf-8')
-  reply.header('Content-Disposition', 'attachment; filename="audit-report.csv"')
-  reply.header('X-Export-Rows', String(out.length))
-  reply.header('X-Export-Truncated', truncated ? '1' : '0')
-  reply.header('Access-Control-Expose-Headers', 'X-Export-Rows, X-Export-Truncated')
   // A BOM so Excel reads the sentences' quotes and dashes as UTF-8.
-  return reply.send(`\uFEFF${toCSV(out, READABLE_CSV_COLUMNS)}`)
+  return {
+    buffer: Buffer.from(`﻿${toCSV(out, READABLE_CSV_COLUMNS)}`, 'utf8'),
+    filename: `audit-report-${new Date().toISOString().slice(0, 10)}.csv`,
+    contentType: 'text/csv; charset=utf-8',
+    rows: out.length,
+    truncated
+  }
 }

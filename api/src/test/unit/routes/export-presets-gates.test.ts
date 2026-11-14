@@ -18,6 +18,7 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
 vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => who.canRead) }))
 vi.mock('../../../services/items.js', () => ({
+  LIST_READ_MAX: 1000,
   readItems: vi.fn(async () => ({ data: [{ id: 1 }, { id: 2 }] }))
 }))
 vi.mock('../../../services/record-access.js', () => ({

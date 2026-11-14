@@ -31,7 +31,51 @@ vi.mock('../../../services/items.js', async (orig) => ({
   ...svc
 }))
 
+const bg = vi.hoisted(() => ({
+  uploads: [] as Array<{ user: string; buffer: Buffer; private: boolean }>,
+  notices: [] as string[],
+  progress: [] as Array<Record<string, unknown>>
+}))
+vi.mock('../../../services/job-runs.js', () => ({
+  startJobRun: vi.fn(async () => ({
+    id: 77,
+    progress: (p: Record<string, unknown>) => bg.progress.push(p),
+    log: () => {},
+    complete: async () => {},
+    fail: async () => {}
+  }))
+}))
+vi.mock('../../../services/live-progress.js', async (orig) => ({
+  ...(await orig<object>()),
+  emitJobProgress: vi.fn()
+}))
+vi.mock('../../../services/files.js', () => ({
+  uploadFileBuffer: vi.fn(
+    async (
+      u: { id: string },
+      buffer: Buffer,
+      _n: string,
+      _t: string,
+      _f: unknown,
+      o: { private?: boolean }
+    ) => {
+      bg.uploads.push({ user: u.id, buffer, private: !!o?.private })
+      return { id: 'f1234567-0000-0000-0000-000000000000' }
+    }
+  )
+}))
+vi.mock('../../../services/notification-channels.js', () => ({
+  notifyUser: vi.fn(async (_a: unknown, user: string) => {
+    bg.notices.push(user)
+    return { id: 1 }
+  })
+}))
+vi.mock('../../../services/mail-builders.js', () => ({
+  buildExportReadyMail: async () => null
+}))
+
 import { itemsRoutes } from '../../../routes/items.js'
+import { __waitForExportRun } from '../../../services/export-runs.js'
 
 async function app() {
   const a = Fastify()
@@ -74,5 +118,27 @@ describe('GET /items/:collection/export', () => {
     const res = await (await app()).inject({ url: '/api/items/articles/export?format=json' })
     expect(res.json().data).toHaveLength(10000)
     expect(res.headers['x-nivaro-export-truncated']).toBeUndefined()
+  })
+
+  it('background=1 runs the same build as a job and saves the same file privately', async () => {
+    state.total = 2500
+    const a = await app()
+    const sync = await a.inject({ url: '/api/items/articles/export' })
+    const res = await a.inject({ url: '/api/items/articles/export?background=1' })
+    expect(res.statusCode).toBe(202)
+    expect(res.json().data).toMatchObject({ mode: 'background', run_id: 77, key: 'job:77' })
+    await __waitForExportRun(77)
+    expect(bg.uploads).toHaveLength(1)
+    expect(bg.uploads[0].buffer.toString('utf8')).toBe(sync.body)
+    expect(bg.uploads[0]).toMatchObject({ user: 'ADMIN-1', private: true })
+    expect(bg.notices).toEqual(['ADMIN-1'])
+    expect(bg.progress.at(-1)).toMatchObject({ phase: 'Saving the file', done: 2500 })
+  }, 20_000)
+
+  it('background=auto keeps a small export instant', async () => {
+    state.total = 30
+    const res = await (await app()).inject({ url: '/api/items/articles/export?background=auto' })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['content-disposition']).toContain('articles-export.csv')
   })
 })
