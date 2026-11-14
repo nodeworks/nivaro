@@ -357,6 +357,9 @@ export interface SystemLabelSpec {
   owners?: string[]
   /** The record the row hangs off: its collection column (or a fixed collection) + id column. */
   parent?: { collection?: string; fixedCollection?: string; item: string }
+  /** Rows that are private to their own people + admins even though they hang off a record
+   *  (support tickets in nivaro_tasks): the parent's visibility never names them. */
+  privateWhen?: { column: string; values: string[] }
 }
 
 const DEFAULT_NAME_COLUMNS = ['name', 'title', 'label', 'subject', 'key', 'slug']
@@ -387,7 +390,10 @@ export const SYSTEM_LABELS: Record<string, SystemLabelSpec> = {
   nivaro_tasks: {
     name: ['title'],
     owners: ['assignee', 'created_by'],
-    parent: { collection: 'collection', item: 'item' }
+    parent: { collection: 'collection', item: 'item' },
+    // A support ticket is the requester's and the desk's, not everyone's who reads the record
+    // (security review 2026-11-13): named only for its own people and administrators.
+    privateWhen: { column: 'kind', values: ['support'] }
   },
   nivaro_comments: {
     name: [],
@@ -462,7 +468,8 @@ function specColumns(spec: SystemLabelSpec): string[] {
     ...(spec.columns ?? []),
     ...(spec.owners ?? []),
     ...(spec.parent?.collection ? [spec.parent.collection] : []),
-    ...(spec.parent ? [spec.parent.item] : [])
+    ...(spec.parent ? [spec.parent.item] : []),
+    ...(spec.privateWhen ? [spec.privateWhen.column] : [])
   ]
   return [...new Set(cols)].filter((c) => SAFE_COLUMN.test(c) && !SECRET_FIELD.test(c))
 }
@@ -1072,7 +1079,10 @@ export async function activityLabelsFor(
           if (pl && pl !== p.id && !UUID_LIKE.test(pl)) parentText = pl
         }
       }
-      if (admin || mine || parentVisible) {
+      const isPrivate =
+        !!spec.privateWhen &&
+        spec.privateWhen.values.includes(String(row[spec.privateWhen.column] ?? ''))
+      if (admin || mine || (parentVisible && !isPrivate)) {
         const name = nameOfRow(spec, row, id)
         out = [name ?? '', parentText ? `on ${parentText}` : ''].filter(Boolean).join(' ') || null
       }

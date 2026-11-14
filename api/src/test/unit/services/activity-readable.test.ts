@@ -283,6 +283,16 @@ describe('system record labels', () => {
         created_by: ROB,
         collection: 'invoices',
         item: '2'
+      },
+      // A support ticket on a record the reader CAN see: still the requester's and the desk's.
+      {
+        id: 'TICKET-1',
+        title: 'Payroll question',
+        kind: 'support',
+        assignee: ROB,
+        created_by: ROB,
+        collection: 'invoices',
+        item: '1'
       }
     ],
     nivaro_comments: [
@@ -413,6 +423,17 @@ describe('system record labels', () => {
       deps(more)
     )
     expect(admin.records?.[`nivaro_tasks:${TASK_HIDDEN}`]).toBe('“Hidden task”')
+  })
+
+  // Security review 2026-11-13: a support ticket is never named through its record.
+  it('a support ticket on a visible record is named only for its own people and admins', async () => {
+    const refs = [{ collection: 'nivaro_tasks', id: 'TICKET-1' }]
+    const pat = await activityLabelsFor(reader, { refs }, {}, deps(more))
+    expect(pat.records?.['nivaro_tasks:TICKET-1']).toBeNull()
+    const rob = await activityLabelsFor({ id: ROB } as User, { refs }, {}, deps(more))
+    expect(rob.records?.['nivaro_tasks:TICKET-1']).toBe('“Payroll question” on INV-1')
+    const admin = await activityLabelsFor(reader, { refs }, { isAdmin: true }, deps(more))
+    expect(admin.records?.['nivaro_tasks:TICKET-1']).toBe('“Payroll question” on INV-1')
   })
 
   it('files follow the file gate and channels follow canSeeRoom', async () => {
