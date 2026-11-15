@@ -137,6 +137,7 @@ export function BugReporter() {
     <button
       type='button'
       data-bug-reporter
+      data-floating-help
       data-nvr-recording-hide
       onClick={openReporter}
       title='Report a bug'

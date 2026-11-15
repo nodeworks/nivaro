@@ -439,12 +439,29 @@ export interface ShareHistoryRow {
 
 function endedWord(text: string): string | null {
   if (/^Stopped sharing/i.test(text)) return null
-  if (/page closed/i.test(text)) return 'page closed'
-  if (/30 minutes/i.test(text)) return 'time limit'
-  if (/moved/i.test(text)) return 'request moved'
-  if (/request closed/i.test(text)) return 'request closed'
+  if (/page closed/i.test(text)) return 'ended when the page closed'
+  if (/30 minutes/i.test(text)) return 'ended after 30 minutes'
+  if (/moved/i.test(text)) return 'ended when the request moved'
+  if (/request closed/i.test(text)) return 'ended when the request closed'
   if (/restarted/i.test(text)) return 'restarted'
   return 'ended'
+}
+
+/**
+ * The support person's look at the requester's activity (`support-traffic-view`) is an access
+ * audit row the requester sees too, so it is worded for whoever reads it and names the person
+ * itself (the row then shows no separate author). Other rows: unchanged, author shown.
+ */
+export function historyLine(
+  row: { action?: string | null; text: string; user_name: string | null },
+  reader: { isRequester: boolean; requesterName: string | null }
+): { text: string; showAuthor: boolean } {
+  if (row.action !== 'support-traffic-view') return { text: row.text, showAuthor: true }
+  const who = row.user_name ?? 'Someone'
+  if (reader.isRequester)
+    return { text: `${who} looked at your recent activity around this ticket`, showAuthor: false }
+  const whose = reader.requesterName ? `${reader.requesterName}'s` : 'the requester’s'
+  return { text: `${who} viewed ${whose} activity around the ticket`, showAuthor: false }
 }
 
 /**

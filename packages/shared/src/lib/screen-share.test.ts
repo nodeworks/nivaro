@@ -7,6 +7,7 @@ import {
   createFrameAssembler,
   FLUSH_MS,
   foldShareHistory,
+  historyLine,
   packBatch,
   type ScreenShareInfo,
   type ScreenShareTransport,
@@ -225,10 +226,18 @@ describe('stopping', () => {
     const tr = fakeTransport()
     const rec = fakeRecord()
     const rt = { loadRecord: async () => rec.record as never, loadReplayer: async () => null }
-    await startScreenShare({ share: SHARE, transport: tr.t, runtime: rt, win: null, now: () => 0 })
-    await vi.advanceTimersByTimeAsync(30 * 60_000)
+    // The deadline is the share's expires_at (30 minutes in real life; 3 s here, same code path).
+    await startScreenShare({
+      share: { ...SHARE, expires_at: 3_000 },
+      transport: tr.t,
+      runtime: rt,
+      win: null,
+      now: () => 0
+    })
+    await vi.advanceTimersByTimeAsync(3_000)
     expect(screenShareRunning()).toBe(false)
     expect(tr.stops).toHaveLength(1)
+    expect(tr.stops[0][2]).toBe('expired')
     await vi.advanceTimersByTimeAsync(5_000)
 
     await startScreenShare({ share: SHARE, transport: tr.t, runtime: rt, win: window })
@@ -297,7 +306,7 @@ describe('ticket history', () => {
     ])
     expect(out.map((r) => r.text)).toEqual([
       'Picked up by Beth · In progress',
-      'Shared their screen with Beth · 4 min · watched · page closed',
+      'Shared their screen with Beth · 4 min · watched · ended when the page closed',
       'Viewed the requester traffic',
       'Shared their screen with Beth · 1 min · not watched'
     ])
@@ -323,5 +332,32 @@ describe('ticket history', () => {
       row(2, 'screen-share-watch', "Watched Rita's shared screen", 'Beth')
     ])
     expect(out.map((r) => r.text)).toEqual(['Sharing their screen with Beth now · watching now'])
+  })
+})
+
+describe('history worded per reader', () => {
+  const look = {
+    action: 'support-traffic-view',
+    text: 'Viewed the requester traffic',
+    user_name: 'Beth'
+  }
+  it('the requester reads what support looked at as their own activity', () => {
+    expect(historyLine(look, { isRequester: true, requesterName: 'Rita' })).toEqual({
+      text: 'Beth looked at your recent activity around this ticket',
+      showAuthor: false
+    })
+  })
+  it('support reads whose activity it was', () => {
+    expect(historyLine(look, { isRequester: false, requesterName: 'Rita' })).toEqual({
+      text: "Beth viewed Rita's activity around the ticket",
+      showAuthor: false
+    })
+  })
+  it('other rows are unchanged', () => {
+    const r = { action: 'update', text: 'Picked up by Beth', user_name: 'Beth' }
+    expect(historyLine(r, { isRequester: true, requesterName: 'Rita' })).toEqual({
+      text: 'Picked up by Beth',
+      showAuthor: true
+    })
   })
 })

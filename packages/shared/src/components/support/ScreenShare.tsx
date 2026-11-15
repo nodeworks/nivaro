@@ -203,6 +203,20 @@ export function ScreenShareBar() {
     // A new share starts expanded.
     if (shareId) setChosenMin(null)
   }, [shareId])
+  const showing = !!status
+  const covered = showing && placement.kind === 'covered'
+  useEffect(() => {
+    if (!showing || typeof document === 'undefined') return
+    // Phone: the pill is the bottom-edge control while sharing; floating help buttons step aside.
+    document.documentElement.setAttribute('data-screen-sharing', '')
+    return () => document.documentElement.removeAttribute('data-screen-sharing')
+  }, [showing])
+  useEffect(() => {
+    if (!covered || typeof document === 'undefined') return
+    // A sheet fills the screen: its scrolling body keeps room for the folded pill.
+    document.documentElement.setAttribute('data-screen-share-covered', '')
+    return () => document.documentElement.removeAttribute('data-screen-share-covered')
+  }, [covered])
   if (!status || typeof document === 'undefined') return null
   const { share, watching, ended } = status
   const who = shareTargetName(share)
@@ -224,8 +238,9 @@ export function ScreenShareBar() {
         onClick={() => setChosenMin(false)}
         aria-label={`Sharing this app with ${who}, ${watchText}. Show the sharing controls`}
         data-tip={timeTip}
-        className={`nvr-no-record fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-[160] flex h-8 items-center gap-2 rounded-full border border-white/10 bg-[#111827] pl-2.5 pr-3 text-[12px] font-medium text-slate-100 shadow-[0_6px_18px_-6px_rgba(15,23,42,0.5)] transition-colors hover:bg-[#1f2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 ${placement.kind === 'covered' ? 'left-3' : 'right-3 sm:right-20'}`}
+        className={`nvr-no-record fixed bottom-[max(1rem,env(safe-area-inset-bottom))] z-[160] flex h-9 items-center gap-2 rounded-full border border-white/10 bg-[#111827] pl-2.5 pr-3 text-[12px] font-medium text-slate-100 shadow-[0_6px_18px_-6px_rgba(15,23,42,0.5)] transition-colors hover:bg-[#1f2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 ${placement.kind === 'covered' ? 'left-3' : 'right-3 sm:right-20'}`}
       >
+        <PillRules />
         <LiveDot />
         Sharing
       </button>,
@@ -248,6 +263,7 @@ export function ScreenShareBar() {
       style={style}
       className={`nvr-no-record pointer-events-none fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-[160] flex justify-center px-3 sm:px-4 ${placement.kind === 'beside' ? '' : 'inset-x-0'}`}
     >
+      <PillRules />
       <div className='pointer-events-auto flex w-full items-center gap-2.5 rounded-full border border-white/10 bg-[#111827] py-1 pl-3.5 pr-1 text-[12.5px] text-slate-100 shadow-[0_8px_24px_-6px_rgba(15,23,42,0.45)] sm:w-auto sm:max-w-full sm:gap-3 sm:py-1.5 sm:pr-1.5'>
         {ended ? (
           <span className='px-1 py-1 text-slate-300'>{ended}</span>
@@ -290,6 +306,20 @@ export function ScreenShareBar() {
       </div>
     </div>,
     document.body
+  )
+}
+
+/**
+ * Phone: floating help buttons (bug report, Report a problem) hide while sharing — the pill is
+ * the bottom-edge control and they come back when sharing stops. A sheet that fills the screen
+ * keeps room at the end of its scrolling body for the folded pill.
+ */
+function PillRules() {
+  return (
+    <style>
+      {'@media (max-width: 639px){html[data-screen-sharing] [data-floating-help]{display:none!important}}' +
+        'html[data-screen-share-covered] [role="dialog"] [data-sheet-body]{padding-bottom:calc(2.25rem + 2rem + env(safe-area-inset-bottom))}'}
+    </style>
   )
 }
 
@@ -563,6 +593,8 @@ export function LiveScreenViewer({
     'joining' | 'waiting' | 'live' | 'denied' | 'ended' | 'unavailable'
   >('joining')
   const [wide, setWide] = useState(false)
+  const wideRef = useRef(false)
+  wideRef.current = wide
   const [endedReason, setEndedReason] = useState<string | null>(null)
   const ticket = share.ticket
 
@@ -580,7 +612,11 @@ export function LiveScreenViewer({
     // Fill the frame's width at the recording's aspect ratio (up or down), the frame's height
     // follows, and the page is centred should it ever come out narrower than the frame.
     const width = box.clientWidth
-    const scale = width / Math.max(1, size.width)
+    // Larger: the whole shared screen fits the window too (width and height), centred.
+    const maxH = wideRef.current
+      ? Math.max(240, window.innerHeight - 140)
+      : Number.POSITIVE_INFINITY
+    const scale = Math.min(width / Math.max(1, size.width), maxH / Math.max(1, size.height))
     wrapper.style.transform = `scale(${scale})`
     wrapper.style.left = `${Math.max(0, Math.round((width - size.width * scale) / 2))}px`
     box.style.height = `${Math.round(size.height * scale)}px`
@@ -719,7 +755,11 @@ export function LiveScreenViewer({
 
   useEffect(() => {
     onWideChange?.(wide)
-    const t = setTimeout(fitToBox, 320)
+    const t = setTimeout(() => {
+      fitToBox()
+      // Bring the enlarged frame to the top of the sheet so all of it is in view.
+      if (wide) boxRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    }, 320)
     return () => clearTimeout(t)
   }, [wide, onWideChange, fitToBox])
   useEffect(() => () => onWideChange?.(false), [onWideChange])
