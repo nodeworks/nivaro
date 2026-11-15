@@ -18,11 +18,7 @@ import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post } from '../../lib/commands'
 import { stripCommentImages } from '../../lib/comment-images'
 import { usePresenceOnlinePoll } from '../../lib/presence-live'
-import {
-  signalSentence,
-  useRecordSignalPeers,
-  useRecordSignalSender
-} from '../../lib/presence-signals'
+import { signalSentence, useDraftTypingSignal, useNoteTypists } from '../../lib/presence-signals'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import { formatDateTime, formatRelative, titleCase } from '../../lib/utils'
@@ -851,23 +847,12 @@ export function CommentPanel({
       setCleaning(false)
     }
   }
-  // Typing (#263, #1721): co-viewers' "writing a note…" and our own signal while the draft
-  // changes (throttled; the signal lapses on its own a few seconds after the last keystroke).
-  const typingNames = useRecordSignalPeers(collection, item, 'note')
-  const sendNoteSignal = useRecordSignalSender(collection, item, 'note')
-  const lastTypedOutRef = useRef(0)
-  useEffect(() => {
-    if (!draft.trim()) {
-      if (lastTypedOutRef.current) sendNoteSignal('stop')
-      lastTypedOutRef.current = 0
-      return
-    }
-    const now = Date.now()
-    if (now - lastTypedOutRef.current < 2500) return
-    lastTypedOutRef.current = now
-    sendNoteSignal('start')
-  }, [draft, sendNoteSignal])
-  useEffect(() => () => sendNoteSignal('stop'), [sendNoteSignal])
+  // Typing (#263, #1721, realtime round 2): co-viewers' "Beth is replying…" — on this thread
+  // and on the field threads this viewer may read (the server sends a field's signal only to
+  // its readers) — and our own signal while the draft changes: throttled, `stop` after 6 s
+  // without a keystroke and on send.
+  const typists = useNoteTypists(collection, item)
+  useDraftTypingSignal(collection, item, draft)
   const [editingId, setEditingId] = useState<string | null>(null)
   // Delete asks first (in place, second click deletes): one stray click on
   // the trash icon used to remove a comment with no way back.
@@ -1158,15 +1143,23 @@ export function CommentPanel({
                   </span>
                 </div>
               </form>
-              {typingNames.length > 0 && (
+              {typists.map((t) => (
                 <p
-                  className='flex items-center gap-1.5 text-[11.5px] italic text-slate-400'
-                  data-note-typing
+                  key={t.field ?? ''}
+                  className='flex items-center gap-1.5 text-[11.5px] italic text-slate-400 dark:text-slate-500'
+                  data-note-typing={t.field ?? ''}
+                  aria-live='polite'
                 >
-                  <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
-                  {signalSentence(typingNames, 'writing a note')}…
+                  <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan motion-reduce:animate-none' />
+                  {signalSentence(
+                    t.names,
+                    t.field
+                      ? `replying on ${fieldComments?.labelOf(t.field) ?? titleCase(t.field)}`
+                      : 'replying'
+                  )}
+                  …
                 </p>
-              )}
+              ))}
               <Separator className='my-4' />
               {threadEntries.length > 0 && (
                 <div className='mb-3 flex flex-wrap items-center gap-1.5' data-notes-filters>

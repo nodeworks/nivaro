@@ -5,6 +5,11 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { fieldDeepLinkQuery, fieldThread, openFieldCommentCounts } from '../../lib/field-comments'
+import {
+  signalSentence,
+  useDraftTypingSignal,
+  useRecordSignalPeers
+} from '../../lib/presence-signals'
 import { cn, formatRelative } from '../../lib/utils'
 import { CommentBody, CommentImageStrip, useCommentImages } from '../panels/CommentImages'
 import { MentionTextarea } from '../panels/CommentPanel'
@@ -150,6 +155,10 @@ function FieldThread({
   const [showResolved, setShowResolved] = useState(false)
   const [draft, setDraft] = useState('')
   const images = useCommentImages()
+  // Realtime round 2: "Beth is replying…" on this field's thread — only people who may read
+  // the field hear it (the server judges each one); stops after 6 s idle and on send.
+  useDraftTypingSignal(ctx.collection, ctx.item, draft, field)
+  const typing = useRecordSignalPeers(ctx.collection, ctx.item, 'note', { field })
   const refresh = () => qc.invalidateQueries({ queryKey: commentsKey(ctx.collection, ctx.item) })
   const errorText = (err: unknown, fallback: string) =>
     (err as { response?: { data?: { error?: string } }; data?: { error?: string } })?.response?.data
@@ -275,6 +284,16 @@ function FieldThread({
           </button>
         )}
       </div>
+      {typing.length > 0 && (
+        <p
+          data-field-comment-typing={field}
+          aria-live='polite'
+          className='m-0 flex items-center gap-1.5 border-t border-slate-100 px-3 py-1.5 text-[11.5px] italic text-slate-400 dark:border-border dark:text-slate-500'
+        >
+          <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan motion-reduce:animate-none' />
+          {signalSentence(typing, 'replying')}…
+        </p>
+      )}
       <div className='space-y-1.5 border-t border-slate-200 p-2 dark:border-border'>
         <MentionTextarea
           value={draft}

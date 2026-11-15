@@ -1135,6 +1135,22 @@ export async function buildServer() {
         const { runSlaEscalations } = await import('./services/sla-escalations.js')
         await runSlaEscalations(app)
       })
+      // Realtime round 2: SLA clocks that turned amber / red with no write — announce `$sla`
+      // on each so open lists and records recolour (only collections someone has open).
+      app.cron.schedule(
+        'sla-live-flips',
+        '* * * * *',
+        async () => {
+          const { runSlaFlipPass } = await import('./services/sla-flips.js')
+          await runSlaFlipPass()
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Tells open pages when a record’s SLA clock passes its warning or breach line, so colours change without a reload. Reads only collections someone has open.'
+        }
+      )
 
       // Cumulative flow (#2758): a year of daily state counts per pipeline
       // template + collection, so long ranges read a stored series.

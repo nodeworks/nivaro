@@ -91,6 +91,8 @@ export const LIVE_ASPECTS = {
   /** The files the record carries changed: a file field or file link, a file renamed, replaced
    *  or deleted (Files panels and file fields refetch as the viewer). */
   files: '$files',
+  /** The SLA clock crossed its warning / breach line with no write (server flip pass). */
+  sla: '$sla',
   /** A child or linked record changed — a line, a PO made from it, an invoice matched to it
    *  (line grids, related lists and record widgets refetch; coalesced server-side, `'*'` when a
    *  burst named more records than the cap). */

@@ -178,6 +178,21 @@ useQuery({
         'The notification badge, the Issue log, broadcast receipts, a record’s partner submissions, a help video’s render status and the chat Online list follow socket events the same way: while the socket is live their polls drop to a safety net (five minutes; two for the badge, since a timed snooze coming back sends no event). Operations pages with no event behind them (Traffic Map, health, logs, jobs, crons) keep polling, and only while the tab is visible.'
       ]
     },
+    { type: 'h3', id: 'live-records-round2', text: 'Moves, deadlines, replies and widgets' },
+    {
+      type: 'ul',
+      items: [
+        'Move buttons follow other people’s changes. When someone else fills the field a move needs, a partner writes back a PO number, a file is uploaded or a line is added, the pipeline panel asks again which moves you may make and the button appears (or goes away) without a reload. It asks at most once every 1.5 seconds per record, and waits while you have a move’s confirm or requirements open.',
+        'Deadlines count down. The SLA line on a record, the SLA column on queues and the chips on My Work say "due in 1 h 59 m" or "overdue by 20 m" and turn amber and red at the rule’s own lines, from times the server already sent — nothing is re-read to tick. One page clock moves every 30 seconds and pauses while the tab is hidden.',
+        'Clocks that pass a line with nobody writing are announced. Every minute the server checks the SLA collections someone has open and tells their pages about records that just turned amber or red (the `$sla` notice, ids only), so counts and colours are right without a reload. Highlight (at-risk) rules compare field values, never the time, so they do not change by themselves.',
+        '"Beth is replying…" shows under a record’s comments and inside a field’s comment thread while someone types there. It stops 6 seconds after their last keystroke or when they send. A field thread’s signal reaches only people who may read that field; everyone else sees nothing.',
+        'Record widgets (custom query panels, roll-ups, review lists and widgets fed from the record) refresh when someone else changes the record or a line under it — the `$related` notice — at most once every 5 seconds each, worked out as you. A folded widget refreshes when it is opened.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'New notices on `collection:update`: `$sla` (an SLA clock passed its warning or breach line) and `$related` (a child row of the record changed; one per parent per 0.8 s). List pages ignore both for their rows. SLA answers (`GET /sla/status/:collection/:item`, `POST /sla/status/batch`, queue rows, My Work) now carry `warning_at` and `due_at` (queue rows: `sla_warning_at`, `sla_due_at`). A `record:signal` of kind `note` may carry `field`.'
+    },
     { type: 'h3', id: 'live-ops-pages', text: 'Live operations pages' },
     {
       type: 'p',
@@ -362,7 +377,7 @@ export const collabPresence: DocSection = {
       head: ['You see', 'Where', 'Who sees it'],
       rows: [
         [
-          '"Beth is writing a note"',
+          '"Beth is replying"',
           'Under the Notes thread while someone has an unsent note',
           'Everyone viewing that record (the record read gate, row filters and User Scopes included)'
         ],

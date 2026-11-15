@@ -146,6 +146,7 @@ import {
   sensitiveColumns,
   systemReadableColumns
 } from './system-collections.js'
+import { currentTenantKey } from './tenant-rooms.js'
 import { writeTrashRow } from './trash.js'
 import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'

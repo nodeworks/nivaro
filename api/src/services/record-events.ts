@@ -34,6 +34,8 @@ export type RecordAspect =
   | '$lock'
   /** The files a record carries changed (realtime 3; services/related-announce.ts). */
   | '$files'
+  /** The SLA clock crossed its warning or breach line with no write (services/sla-flips.ts). */
+  | '$sla'
   /** A child or linked record changed (realtime 18; services/related-announce.ts). */
   | '$related'
 

@@ -30,6 +30,7 @@ import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { errorToastOptions, toastError } from '../../lib/error-toast'
+import { useLiveMoves } from '../../lib/live-moves'
 import { partnerMoveFailure, partnerMoveReading } from '../../lib/move-failure'
 import { OPEN_MOVE_STATE_EVENT, type OpenMoveStateRequest } from '../../lib/move-state'
 import {
@@ -2864,6 +2865,8 @@ function PipelinePanelInner({
   // #1722 — "Kim is approving" for the others, while this panel's confirm or requirements
   // dialog is open; and the same notice from anyone else's.
   useRecordSignalWhile(collection, item, 'transition', !!pendingTransition || !!requirementsDialog)
+  // Realtime round 2: the moves on offer follow changes others make (lib/live-moves.ts).
+  useLiveMoves(collection, item, { hold: !!pendingTransition || !!requirementsDialog })
   const approvingNames = useRecordSignalPeers(collection, item, 'transition')
   // One decision per press: a double click sent the transition twice (the
   // guard below is awaited, so the button had not disabled yet) and the twin
@@ -3939,6 +3942,8 @@ function PipelineTransitionButtonsInner({
   const checkForwardMove = useForwardMoveCheck(collection, String(item))
   // #1722 — other viewers of the record see "Kim is approving" while this dialog is open.
   useRecordSignalWhile(collection, item, 'transition', !!pendingTransition || !!requirementsDialog)
+  // Realtime round 2: the moves on offer follow changes others make (lib/live-moves.ts).
+  useLiveMoves(collection, item, { hold: !!pendingTransition || !!requirementsDialog })
   const rootRef = useRef<HTMLDivElement>(null)
   const folded = useHeaderFold(rootRef, !wrap)
   // One decision per press: a double click sent the transition twice (the

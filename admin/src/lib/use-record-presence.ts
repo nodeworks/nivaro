@@ -86,10 +86,18 @@ export function useRecordPresence(collection: string | undefined, item: string |
     // through this socket too: it, not the feed socket, sits in the record room.
     const onSignalOut = (e: Event) => {
       const d = (e as CustomEvent).detail as
-        | { collection?: string; item?: string; kind?: string; state?: string }
+        | { collection?: string; item?: string; kind?: string; state?: string; field?: string }
         | undefined
+      // `field` (a field comment thread) must ride along: the server sends it only to people
+      // who may read that field — dropped here, it would go to the whole record room.
       if (d?.collection === collection && String(d.item) === String(item) && d.kind)
-        socket.emit('record:signal', { collection, item, kind: d.kind, state: d.state })
+        socket.emit('record:signal', {
+          collection,
+          item,
+          kind: d.kind,
+          state: d.state,
+          ...(d.field ? { field: d.field } : {})
+        })
     }
     // On the shared socket the sender's own `realtime.emit('record:signal')` already reaches it.
     if (!shared) window.addEventListener('nvr:record-signal-out', onSignalOut)

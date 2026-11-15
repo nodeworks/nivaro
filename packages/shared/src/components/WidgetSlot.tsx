@@ -77,6 +77,7 @@ import {
   HEADER_VALUE_HERO,
   HEADER_VALUE_LINE
 } from '../lib/header-strip'
+import { LIVE_ASPECTS, type LiveBatch, useLiveRecord } from '../lib/live'
 import { loadErrorText } from '../lib/load-error'
 import { useStartsOpen } from '../lib/use-starts-open'
 import { affixesFor, formatWidgetValue } from '../lib/widget-value-format'
@@ -1088,6 +1089,36 @@ export function hostStepChange(
   return { next, moved: before !== undefined && before !== next }
 }
 
+/** A widget re-renders on a live record change at most this often. */
+export const LIVE_WIDGET_GAP_MS = 5_000
+
+/** Aspects that never change what a record widget shows. */
+const WIDGET_QUIET_ASPECTS: ReadonlySet<string> = new Set([
+  LIVE_ASPECTS.comments,
+  LIVE_ASPECTS.tasks,
+  LIVE_ASPECTS.lock,
+  LIVE_ASPECTS.sla,
+  // A move refreshes widgets through the host's pipeline read (hostStepChange below).
+  LIVE_ASPECTS.state
+])
+
+/**
+ * Should a live record batch re-render a record widget? Yes for a child-row change
+ * (`$related`), a partner answer or addendum, a write that names no fields, or a column the
+ * form does not hold (its draft — the widget's inputs — will not change for it). A column the
+ * form holds reaches the widget through its inputs already. Exported for tests.
+ */
+export function widgetLiveRelevant(
+  batch: Pick<LiveBatch, 'changedFields' | 'deleted'>,
+  draftKeys: ReadonlySet<string>
+): boolean {
+  if (batch.deleted) return false
+  if (batch.changedFields === null) return true
+  return batch.changedFields.some((f) =>
+    f.startsWith('$') ? !WIDGET_QUIET_ASPECTS.has(f) : !draftKeys.has(f)
+  )
+}
+
 export function WidgetSlot({
   widgetId,
   inputBindings = [],
@@ -1229,6 +1260,60 @@ export function WidgetSlot({
       unsub()
     }
   }, [qc, widget?.widget_type])
+
+  // Realtime round 2: someone else changed THIS record or a record under it (a line — the
+  // `$related` notice — a partner answer, an addendum, a field the form does not hold): a
+  // widget that reads the record re-renders past its cache, as the viewer (the render route
+  // judges the caller). Coalesced — one render per widget per LIVE_WIDGET_GAP_MS at most —
+  // and held while the widget is folded away (it renders when opened).
+  const hostId = itemDraft.id as string | number | undefined
+  const draftKeysRef = useRef<Set<string>>(new Set())
+  draftKeysRef.current = new Set(Object.keys(itemDraft))
+  const recordScoped =
+    !!widget &&
+    (widget.widget_type === 'rollup' ||
+      widget.widget_type === 'review_list' ||
+      widget.widget_type === 'custom-query' ||
+      inputBindings.length > 0)
+  const liveOwedRef = useRef(false)
+  const liveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const liveLastRef = useRef(0)
+  const openRef = useRef(open)
+  openRef.current = open
+  const liveRender = useCallback(() => {
+    if (!openRef.current) {
+      liveOwedRef.current = true
+      return
+    }
+    if (liveTimerRef.current) return
+    const wait = Math.max(1200, liveLastRef.current + LIVE_WIDGET_GAP_MS - Date.now())
+    liveTimerRef.current = setTimeout(() => {
+      liveTimerRef.current = null
+      liveLastRef.current = Date.now()
+      forceRenderRef.current = true
+      setRefetchTick((n) => n + 1)
+    }, wait)
+  }, [])
+  useLiveRecord(
+    itemCollection,
+    hostId,
+    (batch) => {
+      if (widgetLiveRelevant(batch, draftKeysRef.current)) liveRender()
+    },
+    { enabled: recordScoped && hostId != null && hostId !== '' }
+  )
+  useEffect(() => {
+    if (open && liveOwedRef.current) {
+      liveOwedRef.current = false
+      liveRender()
+    }
+  }, [open, liveRender])
+  useEffect(
+    () => () => {
+      if (liveTimerRef.current) clearTimeout(liveTimerRef.current)
+    },
+    []
+  )
 
   // Auto-include scalar item draft fields so toggle/field-update actions work
   // without requiring explicit input bindings for every field. Explicit bindings override.

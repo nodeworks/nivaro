@@ -56,6 +56,7 @@ import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import { useSlowReason } from '../../hooks/useSlowReason'
 import { useBulkProgressFeed } from '../../lib/bulk-progress'
 import { del, get, patch, post, put } from '../../lib/commands'
+import { dueInText, liveDeadlineStatus, useDeadlineNow } from '../../lib/deadline-ticker'
 import { deepenForLightSurface } from '../../lib/display-prefs'
 import { evaluateExpression } from '../../lib/expression'
 import {
@@ -252,6 +253,9 @@ export interface QueueItemRow {
   predicted_risk?: boolean
   predicted_note?: string | null
   aging_hours: number | null
+  /** When the SLA clock turns amber / red (ISO) — the pill counts down to them live. */
+  sla_warning_at?: string | null
+  sla_due_at?: string | null
   /** When the record entered its current state (ISO; absent on older servers). */
   state_entered_at?: string | null
   claimed_by: QueueOwner | null
@@ -495,15 +499,45 @@ function formatAging(hours: number | null): string {
   return humanHours(hours)
 }
 
-function SlaPill({ status }: { status: QueueItemRow['sla_status'] }) {
+/**
+ * The SLA cell. With the clock's instants (realtime round 2) it counts down on the page's shared
+ * clock — "due in 1 h 59 m", amber and red at the rule's lines — without re-reading the list;
+ * without them (an older server, a due-date basis) it shows the status the list was read with.
+ */
+function SlaPill({
+  status: readStatus,
+  warningAt,
+  dueAt
+}: {
+  status: QueueItemRow['sla_status']
+  warningAt?: string | null
+  dueAt?: string | null
+}) {
+  const lines = { warning_at: warningAt ?? null, due_at: dueAt ?? null }
+  const counting = !!readStatus && !!dueAt
+  const now = useDeadlineNow(counting)
+  const live = counting ? liveDeadlineStatus(lines, now) : null
+  const status: QueueItemRow['sla_status'] = live ? (live === 'on_track' ? 'ok' : live) : readStatus
   if (!status) return <span className='text-slate-300'>—</span>
+  const text = counting ? dueInText(lines, now) : null
   const cls =
     status === 'breached'
       ? 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400'
       : status === 'warning'
         ? 'bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400'
         : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'
-  return <span className={cn('rounded px-1.5 py-0.5 text-[11px] font-medium', cls)}>{status}</span>
+  return (
+    <span
+      data-sla-pill={status}
+      data-tip={text ? `SLA ${status === 'ok' ? 'on track' : status}` : undefined}
+      className={cn(
+        'whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium tabular-nums transition-colors duration-500',
+        cls
+      )}
+    >
+      {text ?? status}
+    </span>
+  )
 }
 
 function Sparkline({ points, inline = false }: { points: number[]; inline?: boolean }) {
@@ -1084,6 +1118,9 @@ export function QueueWorklist({
             aspectKeys.add('queue-integrations-summary')
           if (fields.includes(LIVE_ASPECTS.addendums)) aspectKeys.add('queue-collection-addendums')
           if (fields.includes(LIVE_ASPECTS.lock)) setLockTick((n) => n + 1)
+          // A clock passed its line (server flip pass): the counts move; the row's pill has
+          // already recoloured on the page clock, so the rows themselves are not re-read.
+          if (fields.includes(LIVE_ASPECTS.sla)) stats = true
           if (fields.includes(LIVE_ASPECTS.state)) {
             // Off screen = the pill (a record entering by a pipeline start, army 4 a06-1).
             const fx = stateAspectEffect(visible, viewRef.current === 'kanban')
@@ -2966,7 +3003,9 @@ export function QueueWorklist({
       key: 'sla_status',
       header: aliasFor('sla_status', 'SLA'),
       sortable: true,
-      render: (row) => <SlaPill status={row.sla_status} />
+      render: (row) => (
+        <SlaPill status={row.sla_status} warningAt={row.sla_warning_at} dueAt={row.sla_due_at} />
+      )
     },
     {
       key: 'at_risk',

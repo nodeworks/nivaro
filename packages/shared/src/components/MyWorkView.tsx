@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bot, Check } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNavigation } from '../context'
+import { liveSlaReading, useDeadlineNow } from '../lib/deadline-ticker'
 import { useLiveEvent } from '../lib/live'
 import { useFreshIds, useLiveOps } from '../lib/live-ops'
 import {
@@ -38,6 +39,9 @@ import { UserAvatar } from './UserAvatar'
 interface SlaInfo {
   status: 'ok' | 'warning' | 'breached' | null
   remaining_hours: number | null
+  /** When the clock turns amber / red (ISO) — the chip counts down to them live. */
+  warning_at?: string | null
+  due_at?: string | null
 }
 
 interface OwnedRow {
@@ -147,13 +151,16 @@ const SLA_TONE_CLASS: Record<'ok' | 'warn' | 'alert' | 'neutral', string> = {
 
 // Time-to-breach chip — "breaches in 6h" / "breached 2d ago" — amber for a
 // soon-due warning, red once breached, slate otherwise. #853.
-function SlaChip({ sla }: { sla: SlaInfo | null }) {
+function SlaChip({ sla: read }: { sla: SlaInfo | null }) {
+  // Realtime round 2: moved on by the page's shared clock between reads.
+  const now = useDeadlineNow(!!read?.due_at)
+  const sla = read?.due_at ? liveSlaReading(read, now) : read
   const chip = slaChip(sla)
   if (!chip) return null
   return (
     <span
       data-sla-chip={chip.tone}
-      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${SLA_TONE_CLASS[chip.tone]}`}
+      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums transition-colors duration-500 ${SLA_TONE_CLASS[chip.tone]}`}
     >
       {chip.label}
     </span>
