@@ -279,7 +279,7 @@ export function ActivityPage() {
                 hoverRef.current = false
                 reread()
               }}
-              className='flex w-full items-center justify-center gap-1.5 border-b border-slate-100 py-1.5 text-[12px] font-medium text-nvr-cyan transition-colors hover:bg-muted motion-safe:animate-[nvr-fade-in_240ms_ease-out_backwards] dark:border-border'
+              className='sticky -top-4 z-10 flex w-full sm:-top-6 items-center justify-center gap-1.5 rounded-t-lg border-b border-slate-100 bg-card py-1.5 text-[12px] font-medium text-nvr-cyan shadow-sm transition-colors hover:bg-muted motion-safe:animate-[nvr-fade-in_240ms_ease-out_backwards] dark:border-border'
             >
               {waiting === 1 ? '1 newer entry' : `${formatNumber(waiting)} newer entries`}
             </button>

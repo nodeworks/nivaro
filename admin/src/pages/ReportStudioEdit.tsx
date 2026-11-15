@@ -3,6 +3,7 @@ import {
   NivaroProvider,
   QueryWidgetBody,
   queryKeys,
+  useConfigWatch,
   usePublishAskContext,
   userErrorMessage
 } from '@nivaro/shared'
@@ -3444,6 +3445,24 @@ export function ReportStudioEditPage() {
       setWidgets(report.widgets)
     }
   }, [report])
+
+  // rt4 #18 — the owner's edits reach everyone looking at this report: the definition is
+  // re-read in place (widgets keep their keys, the page its scroll; a widget whose definition
+  // changed reads its figures again through its own query key). Someone arranging widgets here
+  // keeps their layout; the change lands when they press Done.
+  const followPending = useRef(false)
+  useConfigWatch('report', id, {
+    onChange: () => {
+      if (editMode) followPending.current = true
+      else void queryClient.invalidateQueries({ queryKey: ['report-def', id] })
+    }
+  })
+  useEffect(() => {
+    if (!editMode && followPending.current) {
+      followPending.current = false
+      void queryClient.invalidateQueries({ queryKey: ['report-def', id] })
+    }
+  }, [editMode, id, queryClient])
 
   useEffect(() => {
     if (skipSaveRef.current) {
