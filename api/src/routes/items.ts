@@ -2472,7 +2472,9 @@ export async function itemsRoutes(app: FastifyInstance) {
       // never-copy list. The copy is a NEW record: the create below starts its
       // pipeline at the start state, resolves owners and starts SLA clocks fresh.
       const { getCollection, getFields } = await import('../services/collections.js')
-      const { copyRulesFor, copyableValues } = await import('../services/copy-rules.js')
+      const { copyRulesFor, copyableValues, linkSetsToCopy } = await import(
+        '../services/copy-rules.js'
+      )
       const colMeta = await getCollection(collection)
       if (!colMeta) throw new CollectionNotFoundError(collection)
       const registered = await getFields(collection)
@@ -2487,6 +2489,25 @@ export async function itemsRoutes(app: FastifyInstance) {
           if (allowedSet.has(field) && !skip.has(field)) clone[field] = value
         }
       }
+
+      // The many-to-many lists (Zone, Project Sub Type…) follow the copy like
+      // More → Duplicate's, under the same rule. Each link is written by the create
+      // as the caller; a list the caller may not set, or a link refused there, is
+      // left out quietly and named in the answer (`not_copied`, field names only).
+      const notCopied: Array<{ field: string; reason: string }> = []
+      const links = await linkSetsToCopy(req.user!, collection, id).catch(
+        () => ({}) as Record<string, unknown>
+      )
+      if (Object.keys(links).length > 0 && !req.isAdmin) {
+        const allowed = await getAllowedFields(req.user!, 'create', collection).catch(() => null)
+        if (allowed && !allowed.includes('*'))
+          for (const f of Object.keys(links))
+            if (!allowed.includes(f)) {
+              delete links[f]
+              notCopied.push({ field: f, reason: 'no-access' })
+            }
+      }
+      Object.assign(clone, links)
 
       if (body.exclude_fields) {
         for (const field of body.exclude_fields) delete clone[field]
@@ -2521,6 +2542,11 @@ export async function itemsRoutes(app: FastifyInstance) {
         req.workspaceId ?? undefined
       )
       const newId = made.id
+      for (const failure of made.linkFailures) {
+        const field = failure.split(':')[0]?.trim()
+        if (field && !notCopied.some((n) => n.field === field))
+          notCopied.push({ field, reason: 'refused' })
+      }
 
       // Clone sub-rows for requested fields
       if (body.include_sub_rows?.length) {
@@ -2552,7 +2578,9 @@ export async function itemsRoutes(app: FastifyInstance) {
         req
       })
 
-      return reply.code(201).send({ data: { id: newId } })
+      return reply
+        .code(201)
+        .send({ data: { id: newId, ...(notCopied.length ? { not_copied: notCopied } : {}) } })
     } catch (err) {
       return handleError(err, reply)
     }

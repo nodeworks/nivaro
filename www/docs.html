@@ -18221,7 +18221,7 @@ GET /api/duplicates/unit_types/check?values={"name":"mx480"}&amp;exclude=&lt;id&
           <p class="doc-p">A copy of a record is a new record. It starts at the first step of its workflow, like any record someone creates by hand: its owners are worked out again, its deadline clocks start now, and none of the original’s history, approvals or notes come along. Only the values a person would type again are copied.</p>
           <h2 class="doc-h2" id="copying-records-paths">Where people copy records</h2>
           <ul class="doc-ul">
-            <li>**Clone** on the record page (More menu, admin and efp-new) — a dialog to change or leave out fields, then <code class="doc-code">POST /api/items/:collection/:id/clone</code>; the copy opens at once, so nobody mistakes the original (still at its step) for the copy.</li>
+            <li>**Clone** on the record page (More menu, admin and efp-new) — a dialog to change or leave out fields, then <code class="doc-code">POST /api/items/:collection/:id/clone</code>; the copy opens at once, so nobody mistakes the original (still at its step) for the copy. Linked lists (Zone, Project Sub Type…) copy too; a list you may not set stays behind and the message names it.</li>
             <li>**More → Duplicate** on the record page (admin and efp-new) — opens a new, filled-in form; nothing is saved until the person saves it.</li>
             <li>**Save as template** — the template keeps the same values a copy would.</li>
             <li>Lines copied with a record (a grid’s child rows) follow the same rule for their own collection.</li>
@@ -18243,7 +18243,7 @@ GET /api/duplicates/unit_types/check?values={"name":"mx480"}&amp;exclude=&lt;id&
           <h2 class="doc-h2" id="copying-records-api">API</h2>
           <pre class="doc-pre"><code>GET /api/copy-rules/:collection
 → { "data": { "skip": { "request_state": "pipeline-state", "order_number": "do-not-duplicate", … } } }</code></pre>
-          <p class="doc-p">Signed in, and only for collections the caller may read. Field names and reasons only, never values. The clone endpoint applies the same rule, so <code class="doc-code">field_overrides</code> cannot set a field that never copies.</p>
+          <p class="doc-p">Signed in, and only for collections the caller may read. Field names and reasons only, never values. The clone endpoint applies the same rule, so <code class="doc-code">field_overrides</code> cannot set a field that never copies. It also copies the many-to-many lists under the same rule, each link written as the caller; a list the caller may not set or a refused link comes back as <code class="doc-code">not_copied: [{ field, reason }]</code> (<code class="doc-code">no-access</code> | <code class="doc-code">refused</code>).</p>
           <!-- /SYNC:copying-records -->
         </div>
 

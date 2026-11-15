@@ -146,7 +146,8 @@ vi.mock('../../../services/item-lock-guard.js', async (orig) => ({
 
 import { draftPublishRoutes } from '../../../routes/draft-publish.js'
 import { itemsRoutes } from '../../../routes/items.js'
-import { getCollection, getFields } from '../../../services/collections.js'
+import { getCollection, getFields, getRelations } from '../../../services/collections.js'
+import { createOneReported } from '../../../services/items.js'
 import { getAllowedFields } from '../../../services/permissions.js'
 
 async function app() {
@@ -265,6 +266,89 @@ describe('POST /items/:collection/:id/clone', () => {
     )
     expect(res.statusCode).toBe(201)
     expect(svc.created).toEqual([{ name: 'Copy' }])
+  })
+
+  // Clone copies the many-to-many lists (Zone, sub types) like Duplicate does; one the
+  // caller may not set, or a link refused by the create, is named in `not_copied`.
+  it('copies link sets, leaving out what the caller may not set', async () => {
+    const zones = {
+      many_collection: 'workflows_regions',
+      many_field: 'workflows_id',
+      one_collection: 'workflows',
+      one_field: 'regions',
+      junction_field: 'regions_id'
+    }
+    const zonesLeg = {
+      many_collection: 'workflows_regions',
+      many_field: 'regions_id',
+      one_collection: 'regions',
+      one_field: null,
+      junction_field: 'workflows_id'
+    }
+    const subTypes = {
+      many_collection: 'workflows_sub_types',
+      many_field: 'workflows_id',
+      one_collection: 'workflows',
+      one_field: 'sub_types',
+      junction_field: 'sub_types_id'
+    }
+    const files = {
+      many_collection: 'workflows_files',
+      many_field: 'workflows_id',
+      one_collection: 'workflows',
+      one_field: 'files',
+      junction_field: 'directus_files_id'
+    }
+    const prevRelations = vi.mocked(getRelations).getMockImplementation()
+    vi.mocked(getRelations).mockImplementation(
+      async (c?: string) =>
+        (c === 'workflows'
+          ? [zones, subTypes, files]
+          : c === 'workflows_regions'
+            ? [zones, zonesLeg]
+            : []) as never
+    )
+    raw.rows.workflows_regions = [{ regions_id: 2 }, { regions_id: 5 }]
+    raw.rows.workflows_sub_types = [{ sub_types_id: 9 }]
+    raw.rows.workflows_files = [{ directus_files_id: 'F-1' }]
+    vi.mocked(getAllowedFields).mockImplementation(async (_u, action) =>
+      action === 'create' ? ['name', 'regions'] : null
+    )
+    svc.row = { id: 7, name: 'Line' }
+    try {
+      const res = await (await app()).inject({
+        method: 'POST',
+        url: '/api/items/workflows/7/clone',
+        payload: {}
+      })
+      expect(res.statusCode).toBe(201)
+      expect(svc.created).toEqual([{ name: 'Line', regions: [2, 5] }])
+      expect(res.json().data.not_copied).toEqual([{ field: 'sub_types', reason: 'no-access' }])
+    } finally {
+      vi.mocked(getAllowedFields).mockImplementation(async () => null)
+      if (prevRelations) vi.mocked(getRelations).mockImplementation(prevRelations)
+    }
+  })
+
+  it('names a link the create refused', async () => {
+    vi.mocked(createOneReported).mockImplementationOnce(async (_u, _c, data) => {
+      svc.created.push(data)
+      return {
+        id: 99,
+        item: { id: 99 },
+        readable: true,
+        linkFailures: ['regions: Forbidden'],
+        upserted: false
+      }
+    })
+    svc.row = { id: 7, name: 'Line' }
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/items/workflows/7/clone',
+      payload: {}
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json().data.not_copied).toEqual([{ field: 'regions', reason: 'refused' }])
   })
 })
 

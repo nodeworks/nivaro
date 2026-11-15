@@ -198,7 +198,9 @@ export function CloneDialog({
       const include_sub_rows = subRowFields
         .filter((f) => subRowIncludes[f.field])
         .map((f) => f.field)
-      const res = await client.request<{ data: { id: string | number } }>(
+      const res = await client.request<{
+        data: { id: string | number; not_copied?: Array<{ field: string; reason: string }> }
+      }>(
         post(`/items/${collection}/${itemId}/clone`, {
           field_overrides,
           exclude_fields,
@@ -212,7 +214,14 @@ export function CloneDialog({
         toast.success('Item cloned — open it from the list')
         return
       }
-      toast.success('Item cloned — opening the copy')
+      // Linked lists (Zone, sub types…) copy too; one the person may not set,
+      // or a link refused, stays behind and is named here.
+      const left = (res?.data?.not_copied ?? []).map((n) => titleCase(n.field))
+      if (left.length)
+        toast.warning(`Item cloned — not copied: ${left.join(', ')}`, {
+          description: 'You may not set these on a new record. Opening the copy.'
+        })
+      else toast.success('Item cloned — opening the copy')
       onSuccess(newId)
       // Open the COPY. Hosts only navigate from a new-record form, so the person
       // used to stay on the original (still at its workflow step) and read it as

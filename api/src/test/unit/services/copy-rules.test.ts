@@ -5,6 +5,8 @@ import {
   copyableValues,
   copySkipMap,
   copySkipReason,
+  linkPlans,
+  linkSkipReason,
   parseNeverCopy
 } from '../../../services/copy-rules.js'
 
@@ -105,5 +107,66 @@ describe('parseNeverCopy', () => {
     expect(parseNeverCopy({ never_copy: ['a', 'a', 'b'] })).toEqual(['a', 'b'])
     expect(parseNeverCopy(null)).toEqual([])
     expect(parseNeverCopy('not json')).toEqual([])
+  })
+})
+
+describe('linkPlans — many-to-many lists that follow a copy', () => {
+  const rels = [
+    {
+      many_collection: 'workflows_regions',
+      many_field: 'workflows_id',
+      one_collection: 'workflows',
+      one_field: 'regions',
+      junction_field: 'regions_id'
+    },
+    {
+      many_collection: 'workflows_files',
+      many_field: 'workflows_id',
+      one_collection: 'workflows',
+      one_field: 'attachments',
+      junction_field: 'directus_files_id'
+    },
+    {
+      many_collection: 'workflows_files',
+      many_field: 'directus_files_id',
+      one_collection: 'directus_files',
+      one_field: null,
+      junction_field: 'workflows_id'
+    },
+    {
+      many_collection: 'workflows_contacts',
+      many_field: 'workflows_id',
+      one_collection: 'workflows',
+      one_field: 'contacts',
+      junction_field: 'users_id'
+    },
+    {
+      many_collection: 'workflow_lines',
+      many_field: 'workflow',
+      one_collection: 'workflows',
+      one_field: 'lines',
+      junction_field: null
+    }
+  ]
+  const lctx = { neverCopy: new Set<string>(), mayRead: () => true }
+  const names = (plans: Array<{ field: string }>) => plans.map((p) => p.field)
+
+  it('copies plain link lists, never files or child rows', () => {
+    expect(names(linkPlans('workflows', rels, [], lctx))).toEqual(['regions', 'contacts'])
+  })
+
+  it('honours do-not-duplicate, the never-copy list and read access', () => {
+    const fields = [{ field: 'contacts', options: { no_duplicate: true } }]
+    expect(names(linkPlans('workflows', rels, fields, lctx))).toEqual(['regions'])
+    const never = { ...lctx, neverCopy: new Set(['regions']) }
+    expect(names(linkPlans('workflows', rels, [], never))).toEqual(['contacts'])
+    const unread = { ...lctx, mayRead: (f: string) => f !== 'contacts' }
+    expect(names(linkPlans('workflows', rels, [], unread))).toEqual(['regions'])
+  })
+
+  it('says why a list stays behind', () => {
+    expect(linkSkipReason({ field: 'z', hidden: true }, 'z', lctx, 'zones', 'j')).toBe('hidden')
+    expect(linkSkipReason(undefined, 'z', lctx, 'nivaro_files', 'j')).toBe('files')
+    expect(linkSkipReason(undefined, 'z', lctx, 'zones', 'j')).toBeNull()
   })
 })

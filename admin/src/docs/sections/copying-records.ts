@@ -13,7 +13,7 @@ export const copyingRecordsDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        '**Clone** on the record page (More menu, admin and efp-new) — a dialog to change or leave out fields, then `POST /api/items/:collection/:id/clone`; the copy opens at once, so nobody mistakes the original (still at its step) for the copy.',
+        '**Clone** on the record page (More menu, admin and efp-new) — a dialog to change or leave out fields, then `POST /api/items/:collection/:id/clone`; the copy opens at once, so nobody mistakes the original (still at its step) for the copy. Linked lists (Zone, Project Sub Type…) copy too; a list you may not set stays behind and the message names it.',
         '**More → Duplicate** on the record page (admin and efp-new) — opens a new, filled-in form; nothing is saved until the person saves it.',
         '**Save as template** — the template keeps the same values a copy would.',
         'Lines copied with a record (a grid’s child rows) follow the same rule for their own collection.'
@@ -53,7 +53,7 @@ export const copyingRecordsDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Signed in, and only for collections the caller may read. Field names and reasons only, never values. The clone endpoint applies the same rule, so `field_overrides` cannot set a field that never copies.'
+      text: 'Signed in, and only for collections the caller may read. Field names and reasons only, never values. The clone endpoint applies the same rule, so `field_overrides` cannot set a field that never copies. It also copies the many-to-many lists under the same rule, each link written as the caller; a list the caller may not set or a refused link comes back as `not_copied: [{ field, reason }]` (`no-access` | `refused`).'
     }
   ]
 }
