@@ -79,7 +79,9 @@ export async function myJobsRoutes(app: FastifyInstance): Promise<void> {
             : cancelled
               ? 'canceled'
               : 'completed') as 'error' | 'running' | 'completed' | 'canceled',
-        progress: parseProgress(r.progress),
+        // A job that stores its whole result in progress (ready-to-send, restore drill) is
+        // not tray material: only a small live blob rides the tray.
+        progress: String(r.progress ?? '').length <= 20_000 ? parseProgress(r.progress) : null,
         outcome,
         error: short(r.error),
         ...(fileId ? { file_id: fileId } : {}),

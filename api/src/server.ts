@@ -2601,13 +2601,17 @@ export async function buildServer() {
         'ops-daily-report',
         '5 * * * *',
         async () => {
-          const [{ getOpsReportSettings }, { dayIn, hourIn, instanceZone }, store, { startOpsReport }] =
-            await Promise.all([
-              import('./services/ops-report/settings.js'),
-              import('./services/ops-report/window.js'),
-              import('./services/ops-report/store.js'),
-              import('./services/ops-report/run.js')
-            ])
+          const [
+            { getOpsReportSettings },
+            { dayIn, hourIn, instanceZone },
+            store,
+            { startOpsReport }
+          ] = await Promise.all([
+            import('./services/ops-report/settings.js'),
+            import('./services/ops-report/window.js'),
+            import('./services/ops-report/store.js'),
+            import('./services/ops-report/run.js')
+          ])
           if (!(await store.reportsTableReady())) return
           await store.failStaleRuns()
           const s = await getOpsReportSettings()
@@ -2626,7 +2630,26 @@ export async function buildServer() {
           heavy: true,
           idempotent: 'safe',
           description:
-            'Hourly at :05 — once the day\'s report window has closed (Health → Daily report settings; 6 AM–11 PM by default, so 11:05 PM), builds the daily operations report: the day\'s numbers from the request log, issues, jobs, partner sends, mail, work and security (read-only SQL), the bug tracker and the comparison with earlier days, then an AI investigation that drills into the rows behind them; stores it and tells administrators (in-app and email). Off until turned on in its settings.'
+            "Hourly at :05 — once the day's report window has closed (Health → Daily report settings; 6 AM–11 PM by default, so 11:05 PM), builds the daily operations report: the day's numbers from the request log, issues, jobs, partner sends, mail, work and security (read-only SQL), the bug tracker and the comparison with earlier days, then an AI investigation that drills into the rows behind them; stores it and tells administrators (in-app and email). Off until turned on in its settings."
+        }
+      )
+      // Idea 37 — ready-to-send board: every open record whose next manual move pushes to a
+      // partner, preflighted in batches; the result is stored on this job's run row.
+      app.cron.schedule(
+        'ready-to-send',
+        '20 4 * * *',
+        async () => {
+          const { readyToSendTick } = await import('./services/ready-to-send/run.js')
+          const r = await readyToSendTick('cron')
+          app.log.info(
+            `ready-to-send: ${r.checked} checked, ${r.entries.length} moves with problems${r.partial ? ` (partial: ${r.partial.reason})` : ''}`
+          )
+        },
+        {
+          heavy: true,
+          idempotent: 'safe',
+          description:
+            "Nightly 04:20 — finds every open record whose next manual step sends to a partner API and checks that send the way the record's own Push readiness chip does (requirements, conditions, push guards, payload build, partner contract), many records at a time. Stores what would be refused on Integrations → Ready to send. Reads only: nothing is sent or written back. Checks at most 1,500 records (newest first) within 10 minutes and says when it stopped short."
         }
       )
       // #2801 — nightly restore drill: restores the newest database backup into a scratch

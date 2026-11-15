@@ -70,6 +70,7 @@ export * from './sections/platform.js'
 export * from './sections/platform-additions.js'
 export * from './sections/quality-checks.js'
 export * from './sections/queues.js'
+export * from './sections/ready-to-send.js'
 export * from './sections/realtime-tier.js'
 export * from './sections/record-insights.js'
 export * from './sections/record-integrations.js'
@@ -414,6 +415,7 @@ import {
 } from './sections/platform-additions.js'
 import { qualityChecksDocs } from './sections/quality-checks.js'
 import { queuesGuide } from './sections/queues.js'
+import { readyToSend } from './sections/ready-to-send.js'
 import { realtimeLoadTest } from './sections/realtime-load-test.js'
 import { realtimePresenceLoad } from './sections/realtime-presence-load.js'
 import { realtimeTierDocs } from './sections/realtime-tier.js'
@@ -872,6 +874,7 @@ export const navSections: NavGroup[] = [
     label: 'Integration & Sync',
     items: [
       integrationsConsole,
+      readyToSend,
       integrationsErp,
       payloadTemplates,
       integrationObligations,

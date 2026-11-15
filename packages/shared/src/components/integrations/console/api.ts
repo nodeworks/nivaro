@@ -20,12 +20,50 @@ import type {
   PartnerCard,
   PartnerDetailData,
   PartnersSummary,
+  ReadyBoard,
+  ReadyCheckAnswer,
   RowView,
   SignalSettingsEntry,
   SignalsSnapshot,
   SubmissionAttempt,
   SubmissionDetail
 } from './types'
+
+export const READY_BOARD_KEY = ['ready-to-send'] as const
+
+/** The newest ready-to-send board, only the records the viewer may read (idea 37). Polls while
+ *  a run is going so the board fills in when it finishes. */
+export function useReadyBoard() {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: READY_BOARD_KEY,
+    queryFn: () => client.request<{ data: ReadyBoard }>(get('/ready-to-send')).then((r) => r.data),
+    refetchInterval: (q) => (q.state.data?.running ? 5_000 : false)
+  })
+}
+
+/** Administrators: run the check now (202 — the board polls until it lands). */
+export function useRunReadyCheck() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => client.request(post('/ready-to-send/run')),
+    onSettled: () => qc.invalidateQueries({ queryKey: READY_BOARD_KEY })
+  })
+}
+
+/** "Check again" for one record, live, as the person asking. */
+export function useCheckReadyRecord() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (b: { collection: string; item: string }) =>
+      client
+        .request<{ data: ReadyCheckAnswer }>(post('/ready-to-send/check', b))
+        .then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: READY_BOARD_KEY })
+  })
+}
 
 export function useSignals(tab?: string) {
   const client = useNivaroClient()

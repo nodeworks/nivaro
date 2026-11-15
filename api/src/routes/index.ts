@@ -254,6 +254,7 @@ import { pushRoutes } from './push.js'
 import { qualityCheckRoutes } from './quality-checks.js'
 import { queuesRoutes } from './queues.js'
 import { readinessRoutes } from './readiness.js'
+import { readyToSendRoutes } from './ready-to-send.js'
 import { realtimeBuildRoutes, realtimeRoutes, recordViewersRoutes } from './realtime.js'
 import { realtimeVerifyRoutes } from './realtime-verify.js'
 import { realtimeWorkerRoutes } from './realtime-worker.js'
@@ -481,6 +482,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(catalogRelatedRoutes)
   // What the record form shows about partner integrations (#609 #615 #616 #617).
   await app.register(recordIntegrationsRoutes)
+  // Idea 37: Integrations console → Ready to send (nightly partner-send preflight board).
+  await app.register(readyToSendRoutes)
   await app.register(recordViewRoutes)
   // #3227 — role starter sidebar layouts (a person's own rides preferences.nav_layout)
   await app.register(navLayoutRoutes, { prefix: '/nav-layout' })
