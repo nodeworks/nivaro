@@ -207,3 +207,116 @@ describe('what the submitter may read', () => {
     expect(submitterEmail(cfg, { other: 'pat@example.com' })).toBeNull()
   })
 })
+
+describe('receipt email caps (security review M2)', () => {
+  it('folds case, spaces and +tags into one mailbox key; never the address itself', async () => {
+    const { receiptAddressKey } = await import('../../../services/submission-status.js')
+    const k = receiptAddressKey('pat@example.com')
+    expect(receiptAddressKey(' PAT+news@Example.COM ')).toBe(k)
+    expect(receiptAddressKey('sam@example.com')).not.toBe(k)
+    expect(k).not.toContain('pat')
+  })
+
+  it('3 a day per mailbox, 60 an hour per form, independent of who submits', async () => {
+    const { mayMailReceipt, RECEIPT_MAILS_PER_ADDRESS_DAY, RECEIPT_MAILS_PER_FORM_HOUR } =
+      await import('../../../services/submission-status.js')
+    const { resetWindowedMemory } = await import('../../../services/windowed-limit.js')
+    resetWindowedMemory()
+    const got: boolean[] = []
+    for (let i = 0; i <= RECEIPT_MAILS_PER_ADDRESS_DAY; i++)
+      got.push(await mayMailReceipt(null, 'f-1', 'pat@example.com'))
+    expect(got).toEqual([true, true, true, false])
+    // The same mailbox through another form: still capped (the cap is per mailbox).
+    expect(await mayMailReceipt(null, 'f-2', 'pat@example.com')).toBe(false)
+
+    resetWindowedMemory()
+    let sent = 0
+    for (let i = 0; i < RECEIPT_MAILS_PER_FORM_HOUR + 5; i++)
+      if (await mayMailReceipt(null, 'f-3', `p@d${i}.example`)) sent++
+    expect(sent).toBe(RECEIPT_MAILS_PER_FORM_HOUR)
+    // Another form is not held back by this one.
+    expect(await mayMailReceipt(null, 'f-4', 'fresh@example.com')).toBe(true)
+  })
+
+  it('the status link names the tenant origin in cloud mode (security review L4)', async () => {
+    const { statusPageUrl } = await import('../../../services/submission-status.js')
+    const { runWithTenantDb } = await import('../../../db/tenant-context.js')
+    expect(statusPageUrl('abc')).toBe('https://nivaro.test/form-status/abc')
+    const url = await new Promise<string>((resolve) =>
+      runWithTenantDb(
+        {} as never,
+        'acme',
+        () => resolve(statusPageUrl('abc')),
+        'tid',
+        'https://acme.nivaro.dev'
+      )
+    )
+    expect(url).toBe('https://acme.nivaro.dev/form-status/abc')
+  })
+})
+
+describe('receipt mailbox normalization + domain / instance caps (review follow-up)', () => {
+  it('dot, +tag, quote, case and googlemail variants of one Gmail box share one bucket', async () => {
+    const { receiptAddressKey } = await import('../../../services/submission-status.js')
+    const k = receiptAddressKey('johnsmith@gmail.com')
+    for (const v of [
+      'John.Smith@gmail.com',
+      'j.o.h.n.smith+promo@googlemail.com',
+      '"johnsmith"@GMAIL.COM',
+      ' johnsmith+a+b@gmail.com. '
+    ])
+      expect(receiptAddressKey(v)).toBe(k)
+    // Dots matter outside Gmail.
+    expect(receiptAddressKey('john.smith@example.com')).not.toBe(
+      receiptAddressKey('johnsmith@example.com')
+    )
+  })
+
+  it('the Gmail variants are capped together', async () => {
+    const { mayMailReceipt } = await import('../../../services/submission-status.js')
+    const { resetWindowedMemory } = await import('../../../services/windowed-limit.js')
+    resetWindowedMemory()
+    const got: boolean[] = []
+    for (const v of [
+      'jo.smith@gmail.com',
+      'josmith+1@googlemail.com',
+      'JOSMITH@gmail.com',
+      'j.o.smith@googlemail.com'
+    ])
+      got.push(await mayMailReceipt(null, 'f-g', v, { ownDomains: new Set() }))
+    expect(got).toEqual([true, true, true, false])
+  })
+
+  it('30 an hour per recipient domain across forms; our own sending domain is exempt', async () => {
+    const { mayMailReceipt, RECEIPT_MAILS_PER_DOMAIN_HOUR } = await import(
+      '../../../services/submission-status.js'
+    )
+    const { resetWindowedMemory } = await import('../../../services/windowed-limit.js')
+    resetWindowedMemory()
+    const own = new Set(['ourco.example'])
+    let sent = 0
+    for (let i = 0; i < RECEIPT_MAILS_PER_DOMAIN_HOUR + 5; i++)
+      if (await mayMailReceipt(null, `f-${i % 3}`, `v${i}@victim.example`, { ownDomains: own }))
+        sent++
+    expect(sent).toBe(RECEIPT_MAILS_PER_DOMAIN_HOUR)
+    // Googlemail counts as gmail for the domain cap too; another domain is unaffected.
+    expect(await mayMailReceipt(null, 'f-9', 'x@other.example', { ownDomains: own })).toBe(true)
+    let ours = 0
+    for (let i = 0; i < 40; i++)
+      if (await mayMailReceipt(null, `f-own-${i}`, `staff${i}@ourco.example`, { ownDomains: own }))
+        ours++
+    expect(ours).toBe(40)
+  })
+
+  it('300 an hour for the whole instance', async () => {
+    const { mayMailReceipt, RECEIPT_MAILS_PER_INSTANCE_HOUR } = await import(
+      '../../../services/submission-status.js'
+    )
+    const { resetWindowedMemory } = await import('../../../services/windowed-limit.js')
+    resetWindowedMemory()
+    let sent = 0
+    for (let i = 0; i < RECEIPT_MAILS_PER_INSTANCE_HOUR + 10; i++)
+      if (await mayMailReceipt(null, `f-${i}`, `p@d${i}.example`, { ownDomains: new Set() })) sent++
+    expect(sent).toBe(RECEIPT_MAILS_PER_INSTANCE_HOUR)
+  })
+})

@@ -8,6 +8,12 @@ vi.mock('../db/index.js', () => {
   const chain = () => {
     const c: Record<string, unknown> = {}
     c.where = () => c
+    c.whereNull = () => c
+    c.whereIn = () => c
+    c.limit = () => c
+    c.select = () => c
+    // Lists of people (direct reports, listable people): none here.
+    c.catch = async () => []
     c.first = async () => ({ preferences: stored })
     c.update = async (v: { preferences: string }) => {
       stored = v.preferences
@@ -43,6 +49,7 @@ import { watchListRoutes } from './watch-list.js'
 
 let app: FastifyInstance
 let viewAs = false
+let authMethod: string | undefined = 'session'
 
 beforeEach(async () => {
   stored = JSON.stringify({ theme_accent: 'teal' })
@@ -50,9 +57,11 @@ beforeEach(async () => {
   visibleAsked.length = 0
   announced.length = 0
   viewAs = false
+  authMethod = 'session'
   app = Fastify()
   app.addHook('preHandler', async (req) => {
     ;(req as unknown as { user: unknown }).user = { id: 'u-me' }
+    ;(req as unknown as { authMethod?: string }).authMethod = authMethod
     if (viewAs) Object.assign(req, { authMethod: 'masquerade', masqueradeAdminId: 'admin-1' })
   })
   await app.register(watchListRoutes, { prefix: '/watch-list' })
@@ -190,5 +199,38 @@ describe('watch list routes', () => {
       tab: 'waiting',
       sort: 'mine'
     })
+  })
+
+  it('shared lists are made and changed only on a person’s own sign-in (L7)', async () => {
+    for (const m of ['api_key', 'oauth', 'token', 'key_sim', undefined]) {
+      authMethod = m
+      const res = await app.inject({
+        method: 'POST',
+        url: '/watch-list/teams',
+        payload: { name: 'Ops', members: ['u-other'] }
+      })
+      expect(res.statusCode).toBe(403)
+      expect(res.json().code).toBe('TEAM_LIST_PEOPLE_ONLY')
+      for (const [method, url] of [
+        ['PATCH', '/watch-list/teams/u-me~abcdefgh'],
+        ['DELETE', '/watch-list/teams/u-me~abcdefgh'],
+        ['POST', '/watch-list/teams/u-me~abcdefgh/take-over']
+      ] as const) {
+        const r = await app.inject({ method, url, payload: { name: 'X' } })
+        expect(r.json().code).toBe('TEAM_LIST_PEOPLE_ONLY')
+      }
+    }
+    expect(writes).toEqual([])
+    // A browser session (or the phone app) makes one.
+    for (const m of ['session', 'device']) {
+      authMethod = m
+      const ok = await app.inject({
+        method: 'POST',
+        url: '/watch-list/teams',
+        payload: { name: `Ops ${m}` }
+      })
+      expect(ok.statusCode).toBe(200)
+      expect(ok.json().data.created).toBeTruthy()
+    }
   })
 })

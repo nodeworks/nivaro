@@ -16,6 +16,7 @@ import {
   resolveStatusLink
 } from '../services/submission-status.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
+import { takeBudget } from '../services/widget-live.js'
 import { overWindowLimit } from '../services/windowed-limit.js'
 
 /**
@@ -141,9 +142,13 @@ export async function formStatusPublicRoutes(app: FastifyInstance) {
               watches: (ev) =>
                 ev.collection === link.collection &&
                 (ev.item === '*' || String(ev.item).toLowerCase() === item),
+              // Budgeted like every public stream (share links, embeds).
               signature: () =>
-                sharedSignature(sigs, `${tenant}|${link.submissionId}`, async () =>
-                  signatureOf(await loadPublicStatus(link))
+                sharedSignature(
+                  sigs,
+                  `${tenant}|${link.submissionId}`,
+                  async () => signatureOf(await loadPublicStatus(link)),
+                  { budget: () => takeBudget(tenant) }
                 ),
               // Expired, switched off or removed: the page reloads into "not valid".
               stillServes: async () => !!(await resolveStatusLink(token))

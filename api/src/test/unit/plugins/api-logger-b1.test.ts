@@ -29,6 +29,7 @@ vi.mock('../../../services/traffic-taps/public-clients.js', () => ({ notePublicH
 
 import { apiLoggerPlugin, internalDispatchStamps } from '../../../plugins/api-logger.js'
 import { legacyCompatRoutes } from '../../../plugins/legacy-compat.js'
+import { MASK } from '../../../services/secret-mask.js'
 import { notePublicHit } from '../../../services/traffic-taps/public-clients.js'
 
 async function app(opts: { trustProxy?: boolean } = { trustProxy: true }) {
@@ -85,7 +86,8 @@ describe('public pages', () => {
     await a.close()
     expect(notePublicHit).toHaveBeenCalledTimes(1)
     expect(vi.mocked(notePublicHit).mock.calls[0][0]).toMatchObject({
-      path: '/share/abc123token',
+      // The token is the access: it never leaves the request (security review I8).
+      path: `/share/${MASK}`,
       userAgent: 'curl/8',
       ip: '203.0.113.5',
       signedIn: false

@@ -13,6 +13,7 @@ import {
   loadApprovalLinkState,
   redactLinkState
 } from '../services/approval-link-state.js'
+import { adminLinkBase, ownOrigins, publicLinkBase } from '../services/instance-links.js'
 import {
   type LiveMode,
   publicLiveCsp,
@@ -21,6 +22,7 @@ import {
 } from '../services/public-live-page.js'
 import { SignalStreamRoute, sharedSignature } from '../services/public-signal-stream.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
+import { takeBudget } from '../services/widget-live.js'
 import { overWindowLimit } from '../services/windowed-limit.js'
 import type { User } from '../types.js'
 
@@ -31,7 +33,10 @@ import type { User } from '../types.js'
  * with action buttons that hit GET /api/message-actions/callback?token=<signed>.
  * Tokens are HMAC-SHA256 signed with a key derived from SESSION_SECRET for this purpose only:
  *   base64url(JSON payload) + '.' + base64url(hmac)
- * Payload: { action_id, kind, ref_id, user?, collection?, item?, exp, jti? }
+ * Payload: { action_id, kind, ref_id, user?, collection?, item?, exp, jti?, t? }
+ *
+ * `t` is the tenant the token was minted for (currentTenantKey(); '' self-hosted): a token minted
+ * for one cloud tenant is refused on every other (they share SESSION_SECRET in one process).
  *
  * A card goes to a SHARED channel, so the link alone never decides anything (security audit
  * H8): an Approve/Reject link works only for the approver it names, signed in to Nivaro in that
@@ -49,6 +54,8 @@ export interface ActionTokenPayload {
   exp: number // unix seconds
   /** One-time id: a decision token is spent when its decision is made. */
   jti?: string
+  /** The tenant it was minted for ('' / absent = self-hosted). */
+  t?: string
 }
 
 export const TOKEN_TTL_SECONDS = 24 * 60 * 60 // 24 hours
@@ -72,8 +79,10 @@ function hmac(data: string): Buffer {
 export function signActionToken(
   payload: Omit<ActionTokenPayload, 'exp'> & { exp?: number }
 ): string {
+  const tenant = currentTenantKey()
   const full: ActionTokenPayload = {
     ...payload,
+    ...(tenant ? { t: tenant } : {}),
     jti: payload.jti ?? randomUUID(),
     exp: payload.exp ?? Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS
   }
@@ -101,6 +110,8 @@ export function verifyActionToken(token: string): ActionTokenPayload | null {
       Buffer.from(body, 'base64url').toString('utf8')
     ) as ActionTokenPayload
     if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null
+    // Minted for another tenant (cloud): not ours to act on.
+    if ((payload.t ?? '') !== currentTenantKey()) return null
     return payload
   } catch {
     return null
@@ -145,7 +156,7 @@ export async function sendActionCard(opts: ActionCardOptions): Promise<boolean> 
   const buttons = opts.actions.map((a) => ({
     type: 'Action.OpenUrl',
     title: a.label,
-    url: `${config.PUBLIC_URL}/api/message-actions/callback?token=${encodeURIComponent(
+    url: `${publicLinkBase()}/api/message-actions/callback?token=${encodeURIComponent(
       signActionToken({
         action_id: a.action_id,
         kind: opts.context.kind,
@@ -290,7 +301,7 @@ async function judgeDecision(
   const me = await sessionUser(req, reply)
   if (!me) {
     if (signInRedirect) {
-      const base = config.PUBLIC_URL.replace(/\/$/, '')
+      const base = publicLinkBase()
       const back = `${base}/api/message-actions/callback?token=${encodeURIComponent(token)}`
       return {
         ok: false,
@@ -369,7 +380,7 @@ export function linkPage(opts: {
   const decidable = h.decidable && opts.holderHere && !opts.spent
   const openUrl =
     opts.payload.collection && opts.payload.item
-      ? `${config.ADMIN_URL}/collections/${encodeURIComponent(opts.payload.collection)}/${encodeURIComponent(opts.payload.item)}`
+      ? `${adminLinkBase()}/collections/${encodeURIComponent(opts.payload.collection)}/${encodeURIComponent(opts.payload.item)}`
       : undefined
   const q = `token=${encodeURIComponent(opts.token)}`
   return publicLivePageHtml({
@@ -385,6 +396,29 @@ export function linkPage(opts: {
     refreshUrl: `callback?${q}`,
     liveMode: opts.liveMode
   })
+}
+
+/**
+ * Did this decision POST come from our own landing page (security review L5)? The session
+ * cookie is SameSite=Lax, which alone still lets a same-site page (another subdomain) post the
+ * form. Rules, in order:
+ *  - `Sec-Fetch-Site` present (every current browser): only `same-origin` passes.
+ *  - otherwise `Origin` present and not `null`: it must be one of our own origins.
+ *  - neither (or `Origin: null` without fetch metadata): refused. The landing page is served
+ *    with `Referrer-Policy: no-referrer`, so its own form posts `Origin: null` — which is why
+ *    `Sec-Fetch-Site: same-origin` is the header that carries a same-origin form post.
+ */
+export function decisionPostFromOwnPage(
+  headers: Record<string, string | string[] | undefined>,
+  own: string[] = ownOrigins()
+): boolean {
+  const one = (v: string | string[] | undefined) =>
+    (Array.isArray(v) ? v[0] : v)?.trim().toLowerCase() || null
+  const site = one(headers['sec-fetch-site'])
+  if (site) return site === 'same-origin'
+  const origin = one(headers.origin)
+  if (!origin || origin === 'null') return false
+  return own.some((o) => o.toLowerCase() === origin)
 }
 
 const EXPIRED_TEXT = 'This link has expired or was changed. Open the request in Nivaro to decide.'
@@ -458,7 +492,7 @@ export async function messageActionsRoutes(app: FastifyInstance) {
     )
 
   const viewRedirect = (payload: ActionTokenPayload) =>
-    `${config.ADMIN_URL}/collections/${encodeURIComponent(payload.collection ?? '')}/${encodeURIComponent(payload.item ?? '')}`
+    `${adminLinkBase()}/collections/${encodeURIComponent(payload.collection ?? '')}/${encodeURIComponent(payload.item ?? '')}`
 
   const isView = (payload: ActionTokenPayload) =>
     payload.action_id === 'view' || payload.kind === 'view'
@@ -512,9 +546,14 @@ export async function messageActionsRoutes(app: FastifyInstance) {
       const instanceId = Number(payload.ref_id)
       const holder = payload.user ?? null
       const tenant = currentTenantKey()
+      // Budgeted like every public stream (share links, embeds): a burst of writes cannot turn
+      // into a burst of recomputes.
       const signature = () =>
-        sharedSignature(linkSigs, `${tenant}|${instanceId}|${holder}`, async () =>
-          linkStateSignature(await loadApprovalLinkState(instanceId, holder))
+        sharedSignature(
+          linkSigs,
+          `${tenant}|${instanceId}|${holder}`,
+          async () => linkStateSignature(await loadApprovalLinkState(instanceId, holder)),
+          { budget: () => takeBudget(tenant) }
         )
       await streams.serve(req, reply, {
         perIp: LINK_STREAMS_PER_IP,
@@ -544,6 +583,16 @@ export async function messageActionsRoutes(app: FastifyInstance) {
   app.post<{ Querystring: { token?: string }; Body: { token?: string } | null }>(
     '/callback',
     async (req, reply) => {
+      // A decision is made only by the button on our own page, never by a form elsewhere.
+      if (!decisionPostFromOwnPage(req.headers))
+        return send(
+          reply,
+          htmlPage(
+            'Decide in Nivaro',
+            'Open the link from your email or chat again to decide.',
+            403
+          )
+        )
       const token = req.query.token ?? (req.body as { token?: string } | null)?.token
       if (!token) return send(reply, htmlPage('Link incomplete', INCOMPLETE_TEXT, 400))
       const payload = verifyActionToken(token)
@@ -622,7 +671,7 @@ export function emailDecisionLinks(opts: {
   instance: { id: number; collection: string; item: string }
   userId: string
 }): { approve_url: string; reject_url: string } {
-  const base = `${config.PUBLIC_URL.replace(/\/$/, '')}/api/message-actions/callback?token=`
+  const base = `${publicLinkBase()}/api/message-actions/callback?token=`
   const exp = Math.floor(Date.now() / 1000) + EMAIL_TOKEN_TTL_SECONDS
   const mk = (action_id: 'approve' | 'reject') =>
     base +

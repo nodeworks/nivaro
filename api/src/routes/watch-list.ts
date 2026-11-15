@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { isSessionLike } from '../lib/auth-method.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { recordVisibleTo } from '../services/revision-access.js'
 import { viewAsAdminOf } from '../services/view-as-attribution.js'
@@ -41,6 +42,7 @@ import {
   teamName,
   teamRemovePin,
   teamsFor,
+  updateTeam,
   withMembers
 } from '../services/watch-list/teams.js'
 import { loadWatchList, saveWatchList } from '../services/watch-list/user-store.js'
@@ -155,6 +157,21 @@ function refusedWrite(req: FastifyRequest, reply: FastifyReply): boolean {
   void reply.code(403).send({
     error: 'While viewing as someone, their watch list can be looked at but not changed',
     code: 'VIEW_AS_READ_ONLY'
+  })
+  return true
+}
+
+/**
+ * True (and answered) when this sign-in may not make or change a shared list (security review
+ * L7): a list puts people on it and tells them, so only a person on their own sign-in (browser
+ * session or phone app) does it — never an API key, a token or a connected app (the same rule as
+ * Send my view, routes/send-view.ts senderRefusal).
+ */
+function refusedListManage(req: FastifyRequest, reply: FastifyReply): boolean {
+  if (isSessionLike(req.authMethod)) return false
+  void reply.code(403).send({
+    error: 'Shared lists are made and changed by a person signed in, not by an API key or app',
+    code: 'TEAM_LIST_PEOPLE_ONLY'
   })
   return true
 }
@@ -383,6 +400,7 @@ export async function watchListRoutes(app: FastifyInstance): Promise<void> {
     '/teams',
     async (req, reply) => {
       if (refusedWrite(req, reply)) return
+      if (refusedListManage(req, reply)) return
       const userId = String(req.user!.id)
       const name = teamName(req.body?.name)
       if (!name) return reply.code(400).send({ error: 'Give the list a name' })
@@ -409,27 +427,30 @@ export async function watchListRoutes(app: FastifyInstance): Promise<void> {
     '/teams/:id',
     async (req, reply) => {
       if (refusedWrite(req, reply)) return
+      if (refusedListManage(req, reply)) return
       const team = await teamFor(req, reply, req.params.id, 'manage')
       if (!team) return
-      let next: TeamList = team
+      let name: string | null = null
       if (req.body?.name !== undefined) {
-        const name = teamName(req.body.name)
+        name = teamName(req.body.name)
         if (!name) return reply.code(400).send({ error: 'Give the list a name' })
-        next = { ...next, name }
       }
-      if (req.body?.members !== undefined) {
-        const wanted = memberIds(req.body.members)
-        // People already on it stay even if their account changed; new people must be listable.
-        const fresh = await listablePeople(
-          wanted.filter((w) => !team.members.some((m) => m.u.toLowerCase() === w.toLowerCase()))
-        )
-        const keep = wanted.filter(
-          (w) =>
-            team.members.some((m) => m.u.toLowerCase() === w.toLowerCase()) || fresh.includes(w)
-        )
-        next = withMembers(next, keep, new Date())
-      }
-      await saveTeam(team, next)
+      const wanted = req.body?.members !== undefined ? memberIds(req.body.members) : null
+      // New people must be listable (asked once, before the write).
+      const listable = wanted ? await listablePeople(wanted) : []
+      // Applied to the list as it is stored at write time: a pin added meanwhile is kept.
+      await updateTeam(team.id, (cur) => {
+        let next: TeamList = name ? { ...cur, name } : cur
+        if (wanted) {
+          // People already on it stay even if their account changed.
+          const keep = wanted.filter(
+            (w) =>
+              cur.members.some((m) => m.u.toLowerCase() === w.toLowerCase()) || listable.includes(w)
+          )
+          next = withMembers(next, keep, new Date())
+        }
+        return next
+      })
       const { list } = await loadWatchList(String(req.user!.id))
       return reply.send({ data: await answer(req, list) })
     }
@@ -437,6 +458,7 @@ export async function watchListRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { id: string } }>('/teams/:id', async (req, reply) => {
     if (refusedWrite(req, reply)) return
+    if (refusedListManage(req, reply)) return
     // An administrator may delete a list whose owner is gone; otherwise owner or admin.
     const team = await teamFor(req, reply, req.params.id, 'see')
     if (!team) return
@@ -453,6 +475,7 @@ export async function watchListRoutes(app: FastifyInstance): Promise<void> {
   // An administrator takes over a list whose owner can no longer sign in (it moves to their row).
   app.post<{ Params: { id: string } }>('/teams/:id/take-over', async (req, reply) => {
     if (refusedWrite(req, reply)) return
+    if (refusedListManage(req, reply)) return
     if (!req.isAdmin)
       return reply.code(403).send({ error: 'Only an administrator can take over a shared list' })
     const team = await teamFor(req, reply, req.params.id, 'see')
@@ -473,16 +496,15 @@ export async function watchListRoutes(app: FastifyInstance): Promise<void> {
     const team = await teamFor(req, reply, req.params.id, 'see')
     if (!team) return
     const userId = String(req.user!.id)
-    if (isMember(team, userId)) {
-      await saveTeam(
-        team,
-        withMembers(
-          team,
-          team.members.filter((m) => m.u.toLowerCase() !== userId.toLowerCase()).map((m) => m.u),
-          new Date()
-        )
-      )
-    }
+    await updateTeam(team.id, (cur) =>
+      isMember(cur, userId)
+        ? withMembers(
+            cur,
+            cur.members.filter((m) => m.u.toLowerCase() !== userId.toLowerCase()).map((m) => m.u),
+            new Date()
+          )
+        : undefined
+    )
     const { list } = await loadWatchList(userId)
     return reply.send({ data: await answer(req, list) })
   })
@@ -518,9 +540,18 @@ export async function watchListRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: 'Name a record to watch', code: 'NOT_PINNABLE' })
       if (!(await recordVisibleTo(req, String(c), String(rid))))
         return reply.code(404).send({ error: 'Not found' })
-      const res = teamAddPin(team, String(c), String(rid), String(req.user!.id), new Date())
-      if (!res.ok) return reply.code(409).send({ error: res.message, code: res.code })
-      if (res.changed) await saveTeam(team, res.team)
+      // Applied to the list as stored at write time: two people pinning at once both land.
+      let refused: { code: string; message: string } | null = null
+      await updateTeam(team.id, (cur) => {
+        const res = teamAddPin(cur, String(c), String(rid), String(req.user!.id), new Date())
+        if (!res.ok) {
+          refused = { code: res.code, message: res.message }
+          return undefined
+        }
+        return res.changed ? res.team : undefined
+      })
+      const no = refused as { code: string; message: string } | null
+      if (no) return reply.code(409).send({ error: no.message, code: no.code })
       const { list } = await loadWatchList(String(req.user!.id))
       return reply.send({ data: await answer(req, list) })
     }
@@ -532,8 +563,10 @@ export async function watchListRoutes(app: FastifyInstance): Promise<void> {
       if (refusedWrite(req, reply)) return
       const team = await teamFor(req, reply, req.params.id, 'member')
       if (!team) return
-      const next = teamRemovePin(team, req.params.collection, req.params.rid)
-      if (next.pins.length !== team.pins.length) await saveTeam(team, next)
+      await updateTeam(team.id, (cur) => {
+        const next = teamRemovePin(cur, req.params.collection, req.params.rid)
+        return next.pins.length !== cur.pins.length ? next : undefined
+      })
       const { list } = await loadWatchList(String(req.user!.id))
       return reply.send({ data: await answer(req, list) })
     }

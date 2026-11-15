@@ -14,6 +14,8 @@ import {
   isSensitiveKey,
   MASK,
   maskBodySecrets,
+  maskUrlPath,
+  maskUrlQuery,
   sameLoggedBody
 } from '../../../services/secret-mask.js'
 
@@ -99,5 +101,20 @@ describe('sameLoggedBody', () => {
     expect(sameLoggedBody('{"order": 13}', { order: 12 })).toBe(false)
     expect(sameLoggedBody(null, { order: 12 })).toBe(false)
     expect(sameLoggedBody('{"order":12}', null)).toBe(false)
+  })
+})
+
+describe('maskUrlPath — tokens that ride the path (security review I8)', () => {
+  it('masks share-link and shared-replay tokens, keeps the rest of the path', () => {
+    expect(maskUrlPath('/share/AbC123token')).toBe(`/share/${MASK}`)
+    expect(maskUrlPath('/share/AbC123token/stream')).toBe(`/share/${MASK}/stream`)
+    expect(maskUrlPath('/api/session-replay-shares/view/tok-9')).toBe(
+      `/api/session-replay-shares/view/${MASK}`
+    )
+    expect(maskUrlQuery('/share/AbC123token?x=1')).toBe(`/share/${MASK}?x=1`)
+    // Unchanged: the admin CRUD by id; the older masked paths still masked.
+    expect(maskUrlPath('/api/share-links/12')).toBe('/api/share-links/12')
+    expect(maskUrlPath('/form-status/abc.def')).toBe(`/form-status/${MASK}`)
+    expect(maskUrlPath('/command/kiosk/xyz')).toBe(`/command/kiosk/${MASK}`)
   })
 })

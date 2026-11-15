@@ -2,6 +2,8 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { publicLinkBase } from './instance-links.js'
+import { overWindowLimit } from './windowed-limit.js'
 
 /**
  * Public submission status pages (realtime round 9, item 22).
@@ -316,6 +318,124 @@ export function submitterEmail(
     : null
 }
 
+/** The status page's address — on the tenant's own origin in cloud mode (services/instance-links). */
 export function statusPageUrl(token: string): string {
-  return `${config.PUBLIC_URL.replace(/\/$/, '')}/form-status/${token}`
+  return `${publicLinkBase()}/form-status/${token}`
+}
+
+// ── "We received your …" email caps (security review M2) ─────────────────────────
+// The address is whatever an anonymous submitter typed, and the per-IP submission cap can be
+// walked around (many addresses, a forwarded-for header): the receipt mail has caps of its own
+// that no IP enters. Hitting any of them simply means no email; the answer never says which.
+
+/** Receipt emails one address gets per day, across every form. */
+export const RECEIPT_MAILS_PER_ADDRESS_DAY = 3
+/** Receipt emails one form sends per hour, whoever submits. */
+export const RECEIPT_MAILS_PER_FORM_HOUR = 60
+/** Receipt emails one recipient domain gets per hour, across every form (not our own domains). */
+export const RECEIPT_MAILS_PER_DOMAIN_HOUR = 30
+/** Receipt emails this instance sends per hour, all forms together. */
+export const RECEIPT_MAILS_PER_INSTANCE_HOUR = 300
+
+const GMAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com'])
+
+/**
+ * One mailbox, however it is spelled: lower case, quotes and spaces gone, `+tag` dropped, and for
+ * Gmail the dots in the name dropped and googlemail.com read as gmail.com. Pure.
+ */
+export function normalizeReceiptAddress(address: string): { local: string; domain: string } {
+  const a = address
+    .trim()
+    .toLowerCase()
+    .replace(/["'`\s]/g, '')
+  const at = a.lastIndexOf('@')
+  let local = at > 0 ? a.slice(0, at) : a
+  let domain = at > 0 ? a.slice(at + 1) : ''
+  domain = domain.replace(/\.+$/, '')
+  const plus = local.indexOf('+')
+  if (plus > 0) local = local.slice(0, plus)
+  if (GMAIL_DOMAINS.has(domain)) {
+    domain = 'gmail.com'
+    local = local.replace(/\./g, '')
+  }
+  return { local, domain }
+}
+
+const hashKey = (v: string) => createHash('sha256').update(v).digest('hex').slice(0, 40)
+
+/** A mailbox's counter key (normalized, hashed: no address is ever stored). */
+export function receiptAddressKey(address: string): string {
+  const { local, domain } = normalizeReceiptAddress(address)
+  return hashKey(`${local}@${domain}`)
+}
+
+const domainOf = (from: string | null | undefined): string | null => {
+  const m = /@([^\s>@]+)\s*>?\s*$/.exec(
+    String(from ?? '')
+      .trim()
+      .toLowerCase()
+  )
+  return m ? m[1].replace(/\.+$/, '') : null
+}
+
+let ownDomainsCache: { at: number; value: Set<string> } | null = null
+/** The mail domains this instance sends from (MAIL_FROM, Settings → Email "from"). */
+async function ownMailDomains(): Promise<Set<string>> {
+  if (ownDomainsCache && Date.now() - ownDomainsCache.at < 60_000) return ownDomainsCache.value
+  const out = new Set<string>()
+  const env = domainOf(config.MAIL_FROM)
+  if (env) out.add(env)
+  try {
+    const row = (await db('nivaro_settings').where({ id: 1 }).first('smtp_from')) as
+      | { smtp_from?: string | null }
+      | undefined
+    const d = domainOf(row?.smtp_from)
+    if (d) out.add(d)
+  } catch {
+    /* no settings row: the env address only */
+  }
+  ownDomainsCache = { at: Date.now(), value: out }
+  return out
+}
+
+type LimitRedis = Parameters<typeof overWindowLimit>[0]
+
+/**
+ * May the receipt go to this address now? Caps, in order (each takes a unit only once the ones
+ * before it passed): the mailbox (a day), the recipient domain (an hour, our own sending domains
+ * exempt), the form (an hour) and the whole instance (an hour).
+ */
+export async function mayMailReceipt(
+  redis: LimitRedis,
+  formId: string | number,
+  address: string,
+  opts: { ownDomains?: Set<string> } = {}
+): Promise<boolean> {
+  const { domain } = normalizeReceiptAddress(address)
+  if (
+    await overWindowLimit(
+      redis,
+      `subform-rcpt:${receiptAddressKey(address)}`,
+      RECEIPT_MAILS_PER_ADDRESS_DAY,
+      86_400
+    )
+  )
+    return false
+  const own = opts.ownDomains ?? (await ownMailDomains())
+  if (
+    domain &&
+    !own.has(domain) &&
+    (await overWindowLimit(
+      redis,
+      `subform-rcpt-dom:${hashKey(domain)}`,
+      RECEIPT_MAILS_PER_DOMAIN_HOUR,
+      3600
+    ))
+  )
+    return false
+  if (
+    await overWindowLimit(redis, `subform-rcpt-form:${formId}`, RECEIPT_MAILS_PER_FORM_HOUR, 3600)
+  )
+    return false
+  return !(await overWindowLimit(redis, 'subform-rcpt-all', RECEIPT_MAILS_PER_INSTANCE_HOUR, 3600))
 }

@@ -18,7 +18,12 @@ vi.mock('../../../services/submission-status.js', async (orig) => ({
   loadPublicStatus: (l: unknown) => status(l)
 }))
 
+// The pushed-widget recompute budget (security review L3): off = every recompute is over budget.
+const budget = { open: true }
+vi.mock('../../../services/widget-live.js', () => ({ takeBudget: () => budget.open }))
+
 import { formStatusPublicRoutes } from '../../../routes/form-status.js'
+import { BUSY, SignalStreamRoute } from '../../../services/public-signal-stream.js'
 
 const LINK = {
   submissionId: 'sub-a',
@@ -103,5 +108,33 @@ describe('GET /form-status/:token/stream', () => {
     resolve.mockResolvedValue(null)
     const res = await (await app()).inject({ method: 'GET', url: '/form-status/x.y/stream' })
     expect(res.statusCode).toBe(404)
+  })
+})
+
+describe('stream recomputes are budgeted (security review L3)', () => {
+  it('an over-budget recompute answers BUSY and reads nothing', async () => {
+    resolve.mockResolvedValue(LINK)
+    status.mockResolvedValue({ stage: 'in_review', label: 'Being looked at', gone: false })
+    let subject: { signature(): Promise<string | null> } | null = null
+    const spy = vi
+      .spyOn(SignalStreamRoute.prototype, 'serve')
+      .mockImplementation(async (_req, reply, opts) => {
+        const r = await opts.open()
+        if (r.ok) subject = r.subject
+        void reply.send({ ok: true })
+      })
+    try {
+      await (await app()).inject({ method: 'GET', url: '/form-status/budget.token/stream' })
+      expect(subject).not.toBeNull()
+      budget.open = false
+      expect(await subject!.signature()).toBe(BUSY)
+      expect(status).not.toHaveBeenCalled()
+      budget.open = true
+      expect(await subject!.signature()).not.toBe(BUSY)
+      expect(status).toHaveBeenCalledTimes(1)
+    } finally {
+      budget.open = true
+      spy.mockRestore()
+    }
   })
 })
