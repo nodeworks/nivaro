@@ -53,6 +53,7 @@ export function RepliesWhileTyping({
   if (replies.length === 0) return null
   const shown = replies.slice(-3)
   const more = replies.length - shown.length
+  const newest = replies[replies.length - 1]?.created_at
   return (
     <section
       data-replies-while-typing={replies.length}
@@ -70,40 +71,55 @@ export function RepliesWhileTyping({
         />
         <p className='m-0 min-w-0 flex-1 text-[11.5px] font-medium text-slate-700 dark:text-slate-200'>
           {repliesWhileTypingText(replies.length)}
+          {/* Narrow (phone, field popover): the time once here, so each reply keeps its width. */}
+          {newest && (
+            <span
+              className={cn(
+                'font-normal text-slate-500 dark:text-slate-400',
+                compact ? '' : 'min-[480px]:hidden'
+              )}
+            >
+              {' · '}
+              {formatRelative(newest)}
+            </span>
+          )}
         </p>
         <button
           type='button'
           onClick={onDismiss}
           aria-label='Dismiss new replies'
           data-replies-while-typing-dismiss
-          className='rounded p-0.5 text-slate-400 transition-colors hover:bg-slate-200/70 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-200'
+          className='rounded p-0.5 text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-200'
         >
           <X aria-hidden className='h-3 w-3' />
         </button>
       </div>
-      <ul className='m-0 mt-1 list-none space-y-0.5 p-0'>
+      <ul className='m-0 mt-1 list-none space-y-1 p-0'>
         {shown.map((r) => (
           <li
             key={r.id}
             data-reply-while-typing={r.id}
-            className='flex min-w-0 items-baseline gap-1.5 text-[11.5px] leading-snug'
+            className='flex min-w-0 items-baseline gap-2 text-[11.5px] leading-snug'
           >
-            {onJump ? (
-              <button
-                type='button'
-                onClick={() => onJump(r.id)}
-                className='shrink-0 font-medium text-slate-700 underline-offset-2 hover:text-[#0e7490] hover:underline dark:text-slate-200 dark:hover:text-nvr-cyan'
-              >
-                {r.name}
-              </button>
-            ) : (
-              <span className='shrink-0 font-medium text-slate-700 dark:text-slate-200'>
-                {r.name}
-              </span>
-            )}
-            <span className='min-w-0 truncate text-slate-500 dark:text-slate-400'>{r.text}</span>
-            {r.created_at && (
-              <span className='ml-auto shrink-0 text-[10.5px] text-slate-400 dark:text-slate-500'>
+            {/* Name and words share up to two lines; nothing else competes for the width. */}
+            <p className='m-0 line-clamp-2 min-w-0 flex-1 text-slate-600 dark:text-slate-300'>
+              {onJump ? (
+                <button
+                  type='button'
+                  onClick={() => onJump(r.id)}
+                  className='mr-1.5 font-medium text-slate-800 underline-offset-2 hover:text-[#0e7490] hover:underline dark:text-slate-100 dark:hover:text-nvr-cyan'
+                >
+                  {r.name}
+                </button>
+              ) : (
+                <span className='mr-1.5 font-medium text-slate-800 dark:text-slate-100'>
+                  {r.name}
+                </span>
+              )}
+              {r.text}
+            </p>
+            {r.created_at && !compact && (
+              <span className='hidden shrink-0 text-[10.5px] text-slate-500 min-[480px]:inline dark:text-slate-400'>
                 {formatRelative(r.created_at)}
               </span>
             )}
@@ -111,7 +127,7 @@ export function RepliesWhileTyping({
         ))}
       </ul>
       {more > 0 && (
-        <p className='m-0 mt-0.5 text-[10.5px] text-slate-400 dark:text-slate-500'>
+        <p className='m-0 mt-0.5 text-[10.5px] text-slate-500 dark:text-slate-400'>
           and {more} earlier
         </p>
       )}
@@ -246,7 +262,7 @@ export function SeenByLine({
           type='button'
           data-comment-seen-by={list.length}
           {...hover}
-          className='mt-1 inline-flex max-w-full items-center gap-1 rounded text-[11px] text-slate-400 transition-colors hover:text-slate-600 focus-visible:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300'
+          className='mt-1 inline-flex max-w-full items-center gap-1 rounded text-[11px] text-slate-500 transition-colors hover:text-slate-700 focus-visible:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
         >
           <Eye aria-hidden className='h-3 w-3 shrink-0' />
           <span className='truncate'>{text}</span>
@@ -254,7 +270,10 @@ export function SeenByLine({
       </PopoverTrigger>
       <PopoverContent
         align='start'
-        className='w-[240px] p-0'
+        side='bottom'
+        sideOffset={6}
+        collisionPadding={8}
+        className='w-[260px] p-0 shadow-lg dark:border-slate-700 dark:shadow-black/40'
         onMouseEnter={hover.onMouseEnter}
         onMouseLeave={hover.onMouseLeave}
         onOpenAutoFocus={(e) => e.preventDefault()}
@@ -276,7 +295,7 @@ export function SeenByLine({
                 {p.name}
               </span>
               <span
-                className='shrink-0 text-[11px] text-slate-400 dark:text-slate-500'
+                className='shrink-0 text-[11px] text-slate-500 dark:text-slate-400'
                 data-tip={formatDateTime(p.seen_at)}
               >
                 {formatRelative(p.seen_at)}
@@ -352,7 +371,7 @@ export function MentionDeliveryButton({
           {...hover}
           data-mention-delivery={commentId}
           aria-label='Who this reached'
-          className='inline-flex items-center gap-1 rounded px-1 py-px text-[11px] text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-muted dark:hover:text-slate-300'
+          className='inline-flex items-center gap-1 rounded px-1 py-px text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-200'
         >
           <Send aria-hidden className='h-3 w-3' />
           Delivery
@@ -360,7 +379,7 @@ export function MentionDeliveryButton({
       </PopoverTrigger>
       <PopoverContent
         align='start'
-        className='w-[300px] p-0'
+        className='w-[300px] p-0 shadow-lg dark:border-slate-700 dark:shadow-black/40'
         onMouseEnter={hover.onMouseEnter}
         onMouseLeave={hover.onMouseLeave}
         onOpenAutoFocus={(e) => e.preventDefault()}
@@ -425,9 +444,10 @@ export function MentionDeliveryButton({
                       ))}
                     </ul>
                   )}
-                  {p.reason && (
-                    <p className='m-0 mt-0.5 pl-3.5 text-[10.5px] text-slate-400 dark:text-slate-500'>
-                      {p.reason}
+                  {/* A muted person's reason is already in the headline ("Muted — …"). */}
+                  {p.reason && p.headline !== 'muted' && (
+                    <p className='m-0 mt-0.5 pl-3.5 text-[11px] text-slate-500 dark:text-slate-400'>
+                      {p.reason.charAt(0).toUpperCase() + p.reason.slice(1)}
                     </p>
                   )}
                 </li>

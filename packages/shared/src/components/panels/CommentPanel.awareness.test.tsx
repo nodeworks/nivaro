@@ -134,7 +134,7 @@ describe('CommentPanel — seen by + delivery', () => {
       })
     ])
     const seen = ui.host.querySelector('[data-comment-seen-by]')
-    expect(seen?.textContent).toBe('Also seen by Mark')
+    expect(seen?.textContent).toBe('Also seen by Mark Ode')
     expect(ui.host.querySelectorAll('[data-mention-delivery]').length).toBe(1)
     expect(ui.host.querySelector('[data-mention-delivery="c1"]')).toBeTruthy()
     ui.done()
