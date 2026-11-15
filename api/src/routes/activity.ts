@@ -5,6 +5,12 @@ import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
+  FEED_IDS_PER_SOURCE,
+  narrowToTypes,
+  parseFeedBody,
+  resolveFeedScope
+} from '../services/activity-feed.js'
+import {
   activityListSource,
   activityWindow,
   applyActivityFilters,
@@ -19,11 +25,14 @@ import {
   optionalActivityColumns
 } from '../services/activity-readable.js'
 import { markConfigRead } from '../services/config-live.js'
+import { whereInList } from '../services/db-batch.js'
 import { agentBadgesForActivity } from '../services/mcp-attribution.js'
 import { agentBadgeLabel, readMcpSettings } from '../services/mcp-calls.js'
 import { myRecordSet, whereInRecordSet } from '../services/overview/my-records.js'
 import { getAllowedFields } from '../services/permissions.js'
+import { withReadGate } from '../services/read-gate.js'
 import { isStatementTimeout } from '../services/request-trace.js'
+import { recordVisibleTo } from '../services/revision-access.js'
 import { hideViewAsActor } from '../services/view-as-attribution.js'
 import type { User } from '../types.js'
 import { registerActivityUndoRoutes } from './activity-undo.js'
@@ -266,6 +275,111 @@ export async function activityRoutes(app: FastifyInstance) {
     ])
     if (!rows.length) return reply.code(404).send({ error: 'Not found' })
     return reply.send({ data: { ...rows[0], user_agent: ua?.user_agent ?? null } })
+  })
+
+  /**
+   * What changed across a set of related records, newest first (the Project 360 stream).
+   * The caller names sources (`{collection, filter}`: "the workflows of project 12") and single
+   * records; every one is resolved to ids AS THE CALLER (read policy, row filter, User Scopes —
+   * services/activity-feed.ts), so a record they cannot open contributes nothing. Rows then read
+   * exactly like `scope=my_records`: no IP / agent, no administrator behind a View-as write,
+   * changed fields cut to what the role may read. Open to anyone signed in; a scoped API key or
+   * a connected app gets nothing (the feed crosses collections). A read: never a config write.
+   * Body: `{sources, records, collections?, before?, limit?}`. Answer: `{data, next, types}`.
+   */
+  app.post('/feed', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ error: 'Sign in first' })
+    const user = req.user as User
+    if (user.api_key_scopes || (req as FastifyRequest & { mcpInner?: unknown }).mcpInner) {
+      return reply
+        .code(403)
+        .send({ error: 'This key or connected app cannot read activity trails', code: 'FORBIDDEN' })
+    }
+    markConfigRead(req)
+    const parsed = parseFeedBody(req.body)
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
+    const feed = parsed.value
+    const workspaceId = req.workspaceId ?? undefined
+    let badFilter: string | null = null
+    const scope = await withReadGate(user.id, async () => {
+      const { readItems, ForbiddenError, CollectionNotFoundError } = await import(
+        '../services/items.js'
+      )
+      return resolveFeedScope(feed, {
+        sourceIds: async (collection, filter) => {
+          try {
+            const res = (await readItems(
+              user,
+              collection,
+              {
+                fields: ['id'],
+                ...(filter ? { filter } : {}),
+                sort: ['-id'],
+                limit: FEED_IDS_PER_SOURCE + 1,
+                count: false
+              },
+              req,
+              workspaceId
+            )) as { data?: Array<{ id?: unknown }> }
+            const rows = res.data ?? []
+            return {
+              ids: rows.slice(0, FEED_IDS_PER_SOURCE).map((r) => String(r.id)),
+              truncated: rows.length > FEED_IDS_PER_SOURCE
+            }
+          } catch (err) {
+            if (err instanceof ForbiddenError || err instanceof CollectionNotFoundError) return null
+            const status = (err as { statusCode?: number }).statusCode
+            if (status === 400 || status === 422) {
+              badFilter = (err as Error).message
+              return null
+            }
+            throw err
+          }
+        },
+        recordVisible: (collection, id) => recordVisibleTo(req, collection, id)
+      })
+    })
+    if (badFilter) return reply.code(400).send({ error: badFilter, code: 'BAD_FEED_FILTER' })
+
+    const groups = narrowToTypes(scope.groups, feed.collections)
+    if (groups.size === 0) return reply.send({ data: [], next: null, types: scope.types })
+
+    // The ids first (a narrow (id) sort over the activity index), then those rows in full.
+    const mssql = isMssql(db)
+    const pageIds = activityListSource(db, mssql)
+      .select('a.id')
+      .whereNot('a.action', 'read')
+      .where((w) => {
+        for (const [collection, ids] of groups) {
+          w.orWhere((s) => {
+            s.where('a.collection', collection)
+            whereInList(s, 'a.item', ids)
+          })
+        }
+      })
+      .orderBy('a.id', 'desc')
+      .limit(feed.limit)
+    if (feed.before) pageIds.where('a.id', '<', feed.before)
+    let ids: number[]
+    try {
+      ids = ((await pageIds) as Array<{ id: number }>).map((r) => Number(r.id))
+    } catch (err) {
+      if (!isStatementTimeout(err)) throw err
+      req.log.warn({ err }, 'activity feed: statement timed out')
+      return reply.code(503).send({
+        error: 'The activity feed took too long to read.',
+        hint: 'Narrow it to one type of record, then try again.',
+        code: 'ACTIVITY_BUSY'
+      })
+    }
+    const rows = await pageRows(ids)
+    const data = req.isAdmin ? rows : await forNonAdmin(user, rows)
+    return reply.send({
+      data,
+      // A full page may have older rows behind it: the cursor for "Show earlier".
+      next: ids.length >= feed.limit ? ids[ids.length - 1] : null,
+      types: scope.types
+    })
   })
 
   /**

@@ -42,6 +42,7 @@ import {
 import { type LintState, type LintTransition, lintTemplate } from '../services/pipeline-lint.js'
 import { loadPipelineOutline } from '../services/pipeline-outline-load.js'
 import { ADDENDUM_COLLECTION } from '../services/pipeline-subject.js'
+import { withReadGate } from '../services/read-gate.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import {
   checkTransitionOwner,
@@ -1417,15 +1418,33 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       color: string | null
     }>
     const stateById = new Map(states.map((st) => [String(st.id).toUpperCase(), st]))
-    const counts = (await db('nivaro_workflow_instances')
-      .where({ template: id })
-      .whereNull('completed_at')
-      .groupBy('current_state', 'collection')
-      .count({ c: '*' })
-      .select('current_state', 'collection')) as Array<{
+    // Per state: how many live records sit there and since when the longest-waiting one has —
+    // "entered" = the newest history row INTO the state it sits in, else when it started (the
+    // same reading as a record's `$state.entered_at`). History is read only for this template's
+    // open instances, through the (instance, to_state) index; the whole read holds a gate slot.
+    const entered = db('nivaro_workflow_history as h')
+      .join('nivaro_workflow_instances as ii', 'ii.id', 'h.instance')
+      .where('ii.template', id)
+      .whereNull('ii.completed_at')
+      .whereRaw('h.to_state = ii.current_state')
+      .groupBy('h.instance')
+      .select('h.instance')
+      .max({ at: 'h.timestamp' })
+      .as('e')
+    const counts = (await withReadGate(req.user?.id, () =>
+      db('nivaro_workflow_instances as i')
+        .leftJoin(entered, 'e.instance', 'i.id')
+        .where('i.template', id)
+        .whereNull('i.completed_at')
+        .groupBy('i.current_state', 'i.collection')
+        .count({ c: '*' })
+        .select('i.current_state', 'i.collection')
+        .select(db.raw('MIN(COALESCE(e.at, i.started_at)) as oldest'))
+    )) as Array<{
       current_state: string | null
       collection: string
       c: number
+      oldest: Date | string | null
     }>
     return reply.send({
       data: counts.map((row) => {
@@ -1436,6 +1455,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           state_id: row.current_state,
           collection: row.collection,
           count: Number(row.c),
+          oldest_at: row.oldest ? new Date(row.oldest).toISOString() : null,
           key: st?.key ?? null,
           label: st?.label ?? null,
           color: st?.color ?? null,

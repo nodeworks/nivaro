@@ -50,7 +50,15 @@ import { useNavigation, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { describeTransition, sentenceLabelsFromFields } from '../../lib/config-sentences'
 import { toastError } from '../../lib/error-toast'
+import { useLiveFade } from '../../lib/live-screen'
 import { queryKeys } from '../../lib/query-keys'
+import {
+  type CensusState,
+  censusByState,
+  oldestHint,
+  stateListPath,
+  useStateCensus
+} from '../../lib/state-census'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ExplainCard } from '../ai/ExplainButton'
 import { ConfigHistoryButton } from '../ConfigHistory'
@@ -2281,13 +2289,72 @@ function OwnerAvatarStack({
   )
 }
 
+/**
+ * "7 records · oldest 12 d" beside a step. One chip per bound collection when the pipeline
+ * runs on several; each opens that collection's list filtered to this step. Numbers change in
+ * place (the row never moves); a step nobody is in reads quietly as "none now".
+ */
+function StateCensusChips({
+  s,
+  census,
+  onOpen
+}: {
+  s: PipelineState
+  census: CensusState
+  onOpen: (path: string) => void
+}) {
+  if (census.count === 0) {
+    return (
+      <span data-state-census='0' className='text-[11.5px] tabular-nums text-slate-400'>
+        none now
+      </span>
+    )
+  }
+  const many = census.byCollection.filter((c) => c.count > 0)
+  const chip =
+    'rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11.5px] tabular-nums text-slate-600'
+  return (
+    <div data-state-census={census.count} className='flex flex-wrap items-center gap-1'>
+      {many.map((c) => {
+        const hint = oldestHint(c.oldestAt)
+        // Addendums are a system table: counted, but there is no list to open.
+        const system = /^nivaro_/.test(c.collection)
+        const name = c.collection === 'nivaro_addendums' ? 'Addendums' : titleCase(c.collection)
+        const body = (
+          <>
+            <b className='font-semibold text-slate-800'>{c.count.toLocaleString('en-US')}</b>
+            {many.length > 1 || system ? ` ${name}` : c.count === 1 ? ' record' : ' records'}
+            {hint ? <span className='text-slate-400'> · {hint}</span> : null}
+          </>
+        )
+        return system ? (
+          <span key={c.collection} className={chip}>
+            {body}
+          </span>
+        ) : (
+          <button
+            key={c.collection}
+            type='button'
+            onClick={() => onOpen(stateListPath(c.collection, s.key))}
+            data-tip={`Open the ${name} sitting in ${s.label}`}
+            className={`${chip} transition-colors hover:border-nvr-cyan/50 hover:bg-nvr-cyan/5 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan`}
+          >
+            {body}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function SortableStateRow({
   s,
   groups,
   expandedStateId: _expandedStateId,
   onToggleExpand,
   onEdit,
-  onDelete
+  onDelete,
+  census
 }: {
   s: PipelineState
   groups: PipelineOwnerGroup[]
@@ -2295,10 +2362,13 @@ function SortableStateRow({
   onToggleExpand: () => void
   onEdit: () => void
   onDelete: () => void
+  /** Live records in this step (undefined until the first answer). */
+  census?: CensusState
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: s.id
   })
+  const nav = useNavigation()
   return (
     <div
       ref={setNodeRef}
@@ -2342,6 +2412,11 @@ function SortableStateRow({
               </Badge>
             )}
           </div>
+          {census && (
+            <div className='mt-1.5'>
+              <StateCensusChips s={s} census={census} onOpen={(path) => nav.navigate(path)} />
+            </div>
+          )}
         </div>
         <OwnerAvatarStack
           users={getBaseOwners(groups)}
@@ -3030,6 +3105,25 @@ export function PipelineEditorView({
     enabled: !!templateId
   })
 
+  // How many records sit in each step now (live), for the step list's chips.
+  const censusCollections = useMemo(
+    () => (templateData?.bindings ?? []).map((b) => b.collection),
+    [templateData?.bindings]
+  )
+  const { data: censusData, dataUpdatedAt: censusAt } = useStateCensus(
+    templateId,
+    censusCollections
+  )
+  const census = useMemo(
+    () =>
+      censusByState(
+        censusData?.data ?? [],
+        (templateData?.states ?? []).map((st) => st.id)
+      ),
+    [censusData, templateData?.states]
+  )
+  const censusFade = useLiveFade(censusAt)
+
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['pipeline-template', templateId] })
     queryClient.invalidateQueries({ queryKey: ['pipeline-templates'] })
@@ -3616,7 +3710,7 @@ export function PipelineEditorView({
                   onDragEnd={handleStateDragEnd}
                 >
                   <SortableContext items={localStateOrder} strategy={verticalListSortingStrategy}>
-                    <div className='space-y-2'>
+                    <div className='space-y-2' ref={censusFade}>
                       {orderedStates.map((s) => (
                         <div key={s.id}>
                           {editingState?.id === s.id ? (
@@ -3636,6 +3730,7 @@ export function PipelineEditorView({
                               }
                               onEdit={() => setEditingState(s)}
                               onDelete={() => deleteState.mutate(s.id)}
+                              census={censusData ? census.get(s.id) : undefined}
                             />
                           )}
                           {expandedStateId === s.id && editingState?.id !== s.id && (
@@ -6372,30 +6467,6 @@ function InstanceMigrationCard({ templateId }: { templateId: string }) {
   const [toState, setToState] = useState('')
   const [confirming, setConfirming] = useState(false)
 
-  const { data } = useQuery({
-    queryKey: ['instance-distribution', templateId],
-    queryFn: () =>
-      client.request<{
-        data: Array<{
-          state_id: string | null
-          collection: string
-          count: number
-          key: string | null
-          label: string | null
-          color: string | null
-          orphaned: boolean
-        }>
-        states: Array<{ id: string; key: string; label: string }>
-      }>(get(`/pipelines/${templateId}/instance-distribution`)),
-    staleTime: 30_000
-  })
-  const rows = data?.data ?? []
-  const states = data?.states ?? []
-  const orphans = rows.filter((r) => r.orphaned)
-  const fromCount = rows
-    .filter((r) => String(r.state_id) === fromState)
-    .reduce((sum, r) => sum + r.count, 0)
-
   const { data: bindingsForStart } = useQuery<{ data: Array<{ collection: string }> }>({
     queryKey: ['pipeline-bindings-start', templateId],
     queryFn: () =>
@@ -6404,6 +6475,14 @@ function InstanceMigrationCard({ templateId }: { templateId: string }) {
       )
   })
   const boundCollections = (bindingsForStart?.data ?? []).map((b) => b.collection)
+
+  const { data } = useStateCensus(templateId, boundCollections)
+  const rows = data?.data ?? []
+  const states = data?.states ?? []
+  const orphans = rows.filter((r) => r.orphaned)
+  const fromCount = rows
+    .filter((r) => String(r.state_id) === fromState)
+    .reduce((sum, r) => sum + r.count, 0)
   const startMissing = useMutation({
     mutationFn: (collection: string) =>
       client.request<{ data: { started: number } }>(
