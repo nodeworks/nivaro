@@ -1885,6 +1885,19 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             `ops:${spec.topic}`,
             async () => {
               if (spec.gate === 'auth') return true
+              // rt4 #18 — a dashboard / report the person may open (owner, shared, admin).
+              if (spec.gate === 'dashboard' || spec.gate === 'report') {
+                const role = user.role
+                  ? await db('nivaro_roles').where({ id: user.role }).first('admin_access')
+                  : null
+                const { canFollowSharedView } = await import('../services/config-watch.js')
+                return await canFollowSharedView(
+                  spec.gate,
+                  spec.topic.slice(spec.topic.indexOf(':') + 1),
+                  { id: String(user.id), role: user.role ?? null },
+                  !!role?.admin_access
+                )
+              }
               if (!user.role) return false
               const role = await db('nivaro_roles').where({ id: user.role }).first()
               const isAdmin = !!role?.admin_access

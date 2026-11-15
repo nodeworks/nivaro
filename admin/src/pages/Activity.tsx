@@ -5,8 +5,9 @@ import {
   UndoButton,
   useActivityLabels
 } from '@nivaro/shared'
-import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArrowUp } from 'lucide-react'
+import { useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import {
   ActivityFilterChips,
@@ -29,7 +30,10 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { type ActivityEntry, api, type Collection } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { formatDate, formatNumber, titleCase } from '@/lib/utils'
+import { type PulseEvent, usePulse, useThrottledCall } from '@/pages/overview/live'
+import { pulseMatchesLog } from './activity-live'
 
 function collectionLabel(name: string, collections: Collection[]): string {
   const found = collections.find((c) => c.collection === name)
@@ -109,6 +113,48 @@ export function ActivityPage() {
 
   const rows: ActivityEntry[] = data?.data ?? []
   const labels = useActivityLabels(rows)
+
+  // rt4 #15 — the first page follows new entries as they are written (administrators: the
+  // activity pulse room). One re-read per 2 s at most for writes, 15 s for record views; never
+  // while the person has scrolled down or has the pointer over the list — then the new entries
+  // wait behind a quiet "N newer" line and land when they come back to the top.
+  const { user } = useAuth()
+  const qc = useQueryClient()
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const hoverRef = useRef(false)
+  const [waiting, setWaiting] = useState(0)
+  // The newest id before a live re-read, for the filters it was taken under.
+  const [freshFrom, setFreshFrom] = useState<{ id: number; key: string } | null>(null)
+  const liveKey = JSON.stringify([filters, groupKey])
+  const following = page === 1 && !!user?.is_admin
+  const topId = rows[0]?.id ?? null
+  const reread = () => {
+    setFreshFrom(typeof topId === 'number' ? { id: topId, key: liveKey } : null)
+    setWaiting(0)
+    void qc.invalidateQueries({ queryKey: ['activity', filters, groupKey, page] })
+  }
+  const canApply = () => !hoverRef.current && (scrollRef.current?.scrollTop ?? 0) < 24
+  const rereadSoon = useThrottledCall(() => (canApply() ? reread() : undefined), 2000)
+  const rereadLater = useThrottledCall(() => (canApply() ? reread() : undefined), 15_000)
+  usePulse(
+    following,
+    (e: PulseEvent) => {
+      const verdict = pulseMatchesLog(e, filters, groupKey)
+      if (!verdict) return
+      if (!canApply()) {
+        setWaiting((n) => n + 1)
+        return
+      }
+      if (verdict === 'read') rereadLater()
+      else rereadSoon()
+    },
+    user?.id
+  )
+  const applyWaiting = () => {
+    if (waiting > 0 && canApply()) reread()
+  }
+  const fresh = (e: { id?: unknown }) =>
+    freshFrom?.key === liveKey && typeof e.id === 'number' && e.id > freshFrom.id
   const total: number = data?.total ?? 0
   const totalPages = Math.ceil(total / limit)
 
@@ -194,7 +240,11 @@ export function ActivityPage() {
         </div>
       </HubToolbar>
 
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+      <div
+        ref={scrollRef}
+        onScroll={applyWaiting}
+        className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'
+      >
         {groupKey && (
           <div className='mb-3 flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'>
             <span>Showing every entry of one bulk change, import or automation run.</span>
@@ -213,7 +263,29 @@ export function ActivityPage() {
             </Button>
           </div>
         )}
-        <Card>
+        <Card
+          onMouseEnter={() => {
+            hoverRef.current = true
+          }}
+          onMouseLeave={() => {
+            hoverRef.current = false
+            applyWaiting()
+          }}
+        >
+          {following && waiting > 0 && (
+            <button
+              type='button'
+              onClick={() => {
+                scrollRef.current?.scrollTo({ top: 0 })
+                hoverRef.current = false
+                reread()
+              }}
+              className='sticky -top-4 z-10 flex w-full items-center justify-center gap-1.5 rounded-t-lg border-b border-slate-100 bg-card py-2 text-[12px] font-medium text-nvr-cyan shadow-sm transition-colors hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan motion-safe:animate-[nvr-fade-in_240ms_ease-out_backwards] sm:-top-6 dark:border-border dark:hover:bg-nvr-cyan/15'
+            >
+              <ArrowUp className='h-3.5 w-3.5' aria-hidden />
+              {waiting === 1 ? 'Show 1 newer entry' : `Show ${formatNumber(waiting)} newer entries`}
+            </button>
+          )}
           {isLoading ? (
             <div className='p-6 space-y-3'>
               {[...Array(8)].map((_, i) => (
@@ -227,6 +299,7 @@ export function ActivityPage() {
                 className='px-2 py-1'
                 entries={rows}
                 labels={labels}
+                isFresh={following ? fresh : undefined}
                 onOpen={(e) => e.id != null && navigate(`/activity/${e.id}`)}
                 actionsFor={(g) =>
                   g.entries[0]?.id != null ? <UndoButton activityId={g.entries[0].id} /> : null

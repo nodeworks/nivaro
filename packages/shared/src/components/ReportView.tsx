@@ -119,6 +119,7 @@ const compactYTick = (v: unknown): string => {
 
 import { type DrilldownTarget, useDrilldown, useNivaroClient, useOverlayState } from '../context'
 import { del, get, post, put } from '../lib/commands'
+import { changedWidgetIds, useConfigWatch } from '../lib/config-watch'
 import { type RunEnvelope, useAutoRefreshPref, useLiveStamp } from '../lib/live-data-changed'
 import { liveWidgetInterval, useLiveWidget } from '../lib/live-widgets'
 import { loadErrorText, serverErrorText } from '../lib/load-error'
@@ -4334,6 +4335,41 @@ export function ReportView({
       client.request(readReport(reportId)).then((r) => (r as { data: ReportDef }).data),
     staleTime: 30_000
   })
+
+  // rt4 #18 — the owner's edits (widgets added, moved, changed) reach everyone looking at this
+  // report: the definition is re-read in place (widgets keep their keys, so nothing scrolls) and
+  // only widgets whose definition changed read their figures again. Someone in edit mode here
+  // keeps their draft; the change lands when they leave edit mode.
+  const followPending = useRef(false)
+  const followReport = useCallback(async () => {
+    const before = qc.getQueryData<ReportDef>(['nivaro-report', reportId])?.widgets
+    const after = await qc
+      .fetchQuery<ReportDef>({
+        queryKey: ['nivaro-report', reportId],
+        queryFn: () =>
+          client.request(readReport(reportId)).then((r) => (r as { data: ReportDef }).data),
+        staleTime: 0
+      })
+      .catch(() => null)
+    if (!after) return
+    for (const wid of changedWidgetIds(
+      before as unknown as Array<Record<string, unknown>>,
+      after.widgets as unknown as Array<Record<string, unknown>>
+    ))
+      void qc.invalidateQueries({ queryKey: ['nivaro-report-widget', reportId, wid] })
+  }, [qc, client, reportId])
+  useConfigWatch('report', reportId, {
+    onChange: () => {
+      if (editMode) followPending.current = true
+      else void followReport()
+    }
+  })
+  useEffect(() => {
+    if (!editMode && followPending.current) {
+      followPending.current = false
+      void followReport()
+    }
+  }, [editMode, followReport])
 
   const effectiveRangeRef = useRef<ReportDateRange | null>(null)
   const entityFiltersRef = useRef<ReportEntityFilter[]>([])

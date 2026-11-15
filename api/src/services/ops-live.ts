@@ -33,8 +33,9 @@ export type OpsTopic =
   | 'webhooks'
   | 'dead-letters'
 
-/** 'ticket' — the person must be able to see that support ticket (canSeeTicket). */
-export type OpsGate = 'admin' | 'auth' | 'ticket'
+/** 'ticket' — the person must be able to see that support ticket (canSeeTicket).
+ *  'dashboard' / 'report' — that dashboard / report is visible to the person (rt4 #18). */
+export type OpsGate = 'admin' | 'auth' | 'ticket' | 'dashboard' | 'report'
 
 const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   readiness: 'admin',
@@ -71,10 +72,16 @@ const ID_TOPICS: Record<string, OpsGate> = {
 
 /** A client-supplied topic string → its room suffix and gate, or null when not a real topic. */
 export function opsTopicGate(raw: unknown): { topic: string; gate: OpsGate } | null {
-  if (typeof raw !== 'string' || raw.length > 40) return null
+  if (typeof raw !== 'string' || raw.length > 100) return null
   if (raw in TOPIC_GATES) return { topic: raw, gate: TOPIC_GATES[raw as OpsTopic] }
   const m = /^([a-z-]+):(\d{1,12})$/.exec(raw)
   if (m && m[1] in ID_TOPICS) return { topic: raw, gate: ID_TOPICS[m[1]] }
+  // Config editors + shared dashboards (services/config-watch.ts): `cfg-<kind>:<id>`.
+  const c =
+    /^cfg-(pipeline|flow|rule|external-api|payload|dashboard|report):[A-Za-z0-9_.-]{1,80}$/.exec(
+      raw
+    )
+  if (c) return { topic: raw, gate: c[1] === 'dashboard' || c[1] === 'report' ? c[1] : 'admin' }
   return null
 }
 

@@ -2,9 +2,13 @@ import {
   AudienceConfirmPanel,
   type AudiencePreview,
   audienceConfirmFromError,
+  ConfigChangeStrip,
   ConfigReadBack,
   CronBuilder,
-  describeFlow
+  configBaseRevHeaders,
+  describeFlow,
+  isConfigStale,
+  useConfigWatch
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -81,6 +85,7 @@ import { DiagramTabs, type EditorView } from '@/components/diagram/DiagramTabs'
 import { Textarea } from '@/components/ui/textarea'
 import { UserCombobox } from '@/components/user-combobox'
 import { api, exportFlow } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { useGoBack } from '@/lib/nav'
 import { cn, formatRelative } from '@/lib/utils'
 
@@ -4480,16 +4485,41 @@ export function FlowEditPage() {
   // #3080 — turning on a flow whose mail / notification steps reach many people asks first.
   const [audienceAsk, setAudienceAsk] = useState<AudiencePreview | null>(null)
   const lastFlowBody = useRef<Partial<Flow> | null>(null)
+  // rt4 #14 — another administrator's save to this flow: a quiet line, never a silent reload,
+  // and a save made from the older copy is refused (409) instead of overwriting theirs.
+  const { user } = useAuth()
+  const { change, clear: clearChange } = useConfigWatch('flow', id, { meId: user?.id })
+  const [stale, setStale] = useState(false)
+  const formDirty = Object.entries(form).some(
+    ([k, v]) => JSON.stringify(v ?? null) !== JSON.stringify((flow as never)?.[k] ?? null)
+  )
+  const showTheirs = () => {
+    void queryClient.invalidateQueries({ queryKey: ['flows', id] })
+    clearChange()
+    setStale(false)
+  }
   const updateFlow = useMutation({
-    mutationFn: (body: Partial<Flow> & { confirm_audience?: boolean }) =>
-      api.patch(`/flows/${id}`, body).then((r) => r.data),
+    mutationFn: (body: Partial<Flow> & { confirm_audience?: boolean; __force?: boolean }) => {
+      const { __force, ...rest } = body
+      return api
+        .patch(`/flows/${id}`, rest, {
+          headers: __force ? {} : configBaseRevHeaders(flow?.updated_at)
+        })
+        .then((r) => r.data)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['flows', id] })
       queryClient.invalidateQueries({ queryKey: ['flows'] })
       setAudienceAsk(null)
+      setStale(false)
+      clearChange()
       toast.success('Flow saved')
     },
     onError: (err) => {
+      if (isConfigStale(err)) {
+        setStale(true)
+        return
+      }
       const ask = audienceConfirmFromError(err)
       if (ask) {
         setAudienceAsk(ask)
@@ -4643,6 +4673,19 @@ export function FlowEditPage() {
           />
         )}
       </div>
+      <ConfigChangeStrip
+        change={change}
+        stale={stale}
+        dirty={formDirty}
+        onShow={showTheirs}
+        onSaveAnyway={() => {
+          if (lastFlowBody.current) updateFlow.mutate({ ...lastFlowBody.current, __force: true })
+        }}
+        onDismiss={() => {
+          clearChange()
+          setStale(false)
+        }}
+      />
 
       <DiagramTabs value={view} onChange={setView} />
 

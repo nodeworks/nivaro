@@ -19,6 +19,7 @@ import {
 } from '../services/branch-lanes.js'
 import { chainFields } from '../services/chain-columns.js'
 import { getCollection } from '../services/collections.js'
+import { staleConfigRefusal } from '../services/config-watch.js'
 import { getCumulativeFlow, parseCfdParams } from '../services/cumulative-flow.js'
 import { selectInChunks, whereInList } from '../services/db-batch.js'
 import { editLockVerdictFor } from '../services/edit-lock.js'
@@ -1639,6 +1640,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const body = req.body as Partial<WorkflowTemplate>
     const existing = await db<WorkflowTemplate>('nivaro_workflow_templates').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    // rt4 #14 — a save from an older copy never silently overwrites someone else's newer save.
+    const stale = staleConfigRefusal(req, existing.updated_at)
+    if (stale) return reply.code(409).send(stale)
     await snapshotTemplateVersion(id, req.user?.id, 'before template update')
 
     await db('nivaro_workflow_templates')
