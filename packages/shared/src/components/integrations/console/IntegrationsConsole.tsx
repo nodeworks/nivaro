@@ -1,8 +1,9 @@
 import { type ReactNode, useState } from 'react'
 import { cn } from '../../../lib/utils'
+import { LiveCount } from '../../LiveCount'
 import { TipLayer } from '../../TipLayer'
 import { AlertsView } from './AlertsView'
-import { useSignals } from './api'
+import { useLiveIntegrations, useSignals } from './api'
 import { EventsView } from './EventsView'
 import { FirefightView } from './FirefightView'
 import { InboundView } from './InboundView'
@@ -49,6 +50,7 @@ export function IntegrationsConsole({
   const active = tab ?? localTab
   const [partnerId, setPartnerId] = useState<number | null>(null)
   const signals = useSignals()
+  useLiveIntegrations()
 
   const go = (key: string) => {
     if (tab == null) setLocalTab(key)
@@ -144,7 +146,7 @@ export function IntegrationsConsole({
                       : cn(TONE_SOFT.warning, TONE_TEXT.warning)
                   )}
                 >
-                  {openCount}
+                  <LiveCount value={openCount} />
                 </span>
               )}
             </button>

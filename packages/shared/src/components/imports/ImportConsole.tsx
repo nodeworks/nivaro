@@ -17,6 +17,7 @@ import { useItemEditAuth, useItemNavigation, useNavigation, useNivaroClient } fr
 import { useDebounced } from '../../hooks/useDebounced'
 import { get, post } from '../../lib/commands'
 import { useLiveEvent } from '../../lib/live'
+import { createCoalescer } from '../../lib/live-counts'
 import { cn, formatDateTime, formatFileSize, formatNumber, formatRelative } from '../../lib/utils'
 import { type Column, DataTable } from '../DataTable'
 import { Button } from '../ui/button'
@@ -359,11 +360,19 @@ export function ImportConsole({
     () => new Map((standingQuery.data ?? []).map((q) => [q.id, q])),
     [standingQuery.data]
   )
+  // The strip's counts (running / queued / failed, per-import run counts) are re-read once per
+  // quiet window, never per progress tick.
+  const statsCoalescer = useMemo(
+    () => createCoalescer(() => void qc.invalidateQueries({ queryKey: ['staged-import-stats'] })),
+    [qc]
+  )
+  useEffect(() => () => statsCoalescer.cancel(), [statsCoalescer])
   useLiveEvent(
     'job:progress',
     () => {
       void qc.invalidateQueries({ queryKey: ['staged-import-queue'] })
       void qc.invalidateQueries({ queryKey: ['staged-import-runs'] })
+      statsCoalescer.poke()
     },
     { match: (p) => p?.kind === 'import', debounceMs: 400, includeOwn: true }
   )

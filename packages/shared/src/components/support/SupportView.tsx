@@ -6,6 +6,7 @@ import { del, get, patch, post } from '../../lib/commands'
 import { type SupportDraft, takeSupportDraft } from '../../lib/error-actions'
 import { useLiveOps } from '../../lib/live-ops'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
+import { LiveCount } from '../LiveCount'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { SupportAnalytics } from './SupportAnalytics'
 import { SupportRequestDialog } from './SupportRequestDialog'
@@ -78,11 +79,16 @@ export function SupportView({
   const desk = !!summary?.desk
   // Live: new tickets, claims, replies and status moves land for everyone with the desk open.
   // The refetch goes through the permission-checked routes (a poke names nothing).
-  useLiveOps('support', () => {
-    void qc.invalidateQueries({ queryKey: ['support-tickets'] })
-    void qc.invalidateQueries({ queryKey: ['support-summary'] })
-    void qc.invalidateQueries({ queryKey: ['support-ticket'] })
-  })
+  // The summary counts (tab and filter badges) wait out a 2 s quiet window like every count.
+  useLiveOps(
+    'support',
+    () => {
+      void qc.invalidateQueries({ queryKey: ['support-tickets'] })
+      void qc.invalidateQueries({ queryKey: ['support-summary'] })
+      void qc.invalidateQueries({ queryKey: ['support-ticket'] })
+    },
+    { debounceMs: 2000 }
+  )
   // A desk worker lands on the desk, everyone else on their own requests.
   const [defaulted, setDefaulted] = useState(false)
   useEffect(() => {
@@ -142,7 +148,7 @@ export function SupportView({
               {t.label}
               {t.count ? (
                 <span className='rounded-full bg-slate-200 px-1.5 text-[10.5px] font-semibold tabular-nums text-slate-700 dark:bg-white/10 dark:text-slate-200'>
-                  {t.count}
+                  <LiveCount value={t.count} />
                 </span>
               ) : null}
             </button>

@@ -123,6 +123,7 @@ import {
   restoreWindowOutcome
 } from '../lib/list-page-memory'
 import { expandCoalesced, LIVE_ASPECTS } from '../lib/live'
+import { createCoalescer } from '../lib/live-counts'
 import {
   conditionFields,
   lockLabel,
@@ -244,6 +245,7 @@ import { usePickerExclusion } from './item-edit/RecordGrantTools'
 import { invalidateRecordQueries } from './item-edit/RecordLiveSync'
 import { relatedMissing } from './item-edit/related-missing'
 import { UserChip, UserRosterCluster } from './item-edit/UserChip'
+import { LiveCount } from './LiveCount'
 import { LiveRowMark } from './LiveRowMark'
 import { CopyListLinkButton } from './list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from './list/InlineEdit'
@@ -4492,6 +4494,23 @@ const CBV_KIND_SHAPE: Partial<Record<string, CellShape>> = {
   addendums: 'short'
 }
 
+/** How often a live collection re-reads quietly in case a write was never announced. */
+const CBV_SAFETY_MS = 2 * 60_000
+
+/** True when a quiet re-read of the list cannot disturb the person: tab visible, nothing
+ *  selected, no field focused in the table, pointer not over it. Exported for tests. */
+export function cbvQuietNow(selectedCount: number): boolean {
+  if (typeof document === 'undefined') return false
+  if (document.visibilityState === 'hidden' || selectedCount > 0) return false
+  const scroller = document.querySelector('[data-cbv-scroll]')
+  if (!scroller) return true
+  if (scroller.matches(':hover')) return false
+  const active = document.activeElement
+  if (active && scroller.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || ''))
+    return false
+  return true
+}
+
 export function CollectionBrowserView({
   collection,
   quickFilters = [],
@@ -5500,6 +5519,22 @@ export function CollectionBrowserView({
     refetchInterval: bc.live_events === 'off' ? 30_000 : false,
     retry: false
   })
+  // Live collections keep a slow, quiet safety read for writes nothing announces (a procedure
+  // or a script that wrote set-based). It never runs while the person has rows selected, a field
+  // focused in the table, or the pointer over it, so rows never move under them; a hidden tab
+  // does not read at all.
+  const selectedIdsRef = useRef<Array<string | number>>([])
+  selectedIdsRef.current = selectedIds
+  const refetchRef = useRef(refetch)
+  refetchRef.current = refetch
+  const livePolling = !!collection && bc.live_events !== 'off'
+  useEffect(() => {
+    if (!livePolling) return
+    const t = setInterval(() => {
+      if (cbvQuietNow(selectedIdsRef.current.length)) void refetchRef.current()
+    }, CBV_SAFETY_MS)
+    return () => clearInterval(t)
+  }, [livePolling])
   // The prefetched page's relation labels + dotted columns are warmed with it, or Next paints the
   // rows, then their placeholders fill a second later (assigned below, once the columns are known).
   const warmPageRef = useRef<(pageRows: Array<Record<string, unknown>>) => void>(() => {})
@@ -5872,8 +5907,8 @@ export function CollectionBrowserView({
       if (fields.includes(LIVE_ASPECTS.state)) {
         add(['cbv-pipeline-instances', collection])
         add(['cbv-owners', collection])
-        // A state move can put a record into / out of a saved view.
-        add(['cbv-view-count', collection])
+        // A state move can put a record into / out of a saved view (coalesced with the rest).
+        viewCountCo.poke()
       }
       if (fields.includes(LIVE_ASPECTS.lock)) setLockTick((n) => n + 1)
       if (aspectTimer) return
@@ -5898,7 +5933,12 @@ export function CollectionBrowserView({
 
     let buf: CollectionUpdateEvent[] = []
     let flushTimer: ReturnType<typeof setTimeout> | null = null
-    let countsTimer: ReturnType<typeof setTimeout> | null = null
+    // Saved-view pill counts: one re-read per 3 s quiet window (never later than 15 s into a
+    // steady stream of writes), however many writes the feed delivers.
+    const viewCountCo = createCoalescer(
+      () => void qc.invalidateQueries({ queryKey: ['cbv-view-count', collection] }),
+      { quietMs: 3000, maxWaitMs: 15_000 }
+    )
     let disposed = false
 
     const flush = async () => {
@@ -5907,11 +5947,7 @@ export function CollectionBrowserView({
       buf = []
       if (events.length === 0 || disposed) return
       // Saved-view pills count as the viewer; re-ask once the burst settles.
-      if (!countsTimer)
-        countsTimer = setTimeout(() => {
-          countsTimer = null
-          void qc.invalidateQueries({ queryKey: ['cbv-view-count', collection] })
-        }, 1500)
+      viewCountCo.poke()
       const latest = new Map<string, CollectionUpdateEvent>()
       let bulk = false
       for (const ev of events) {
@@ -6065,7 +6101,7 @@ export function CollectionBrowserView({
       releaseLiveOwner(liveOwner)
       if (aspectTimer) clearTimeout(aspectTimer)
       if (flushTimer) clearTimeout(flushTimer)
-      if (countsTimer) clearTimeout(countsTimer)
+      viewCountCo.cancel()
     }
   }, [realtime, collection, qc, client, selfUserId, rowChanges, liveOwner])
   const rowLocks = useRowLocks(
@@ -9335,7 +9371,10 @@ export function CollectionBrowserView({
                 data-tip='Records matching this view right now (as you see them)'
                 className='rounded-full bg-slate-100 px-1.5 text-[10.5px] font-medium tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400'
               >
-                {(viewCounts.get(v.id) as number).toLocaleString()}
+                <LiveCount
+                  value={viewCounts.get(v.id) as number}
+                  format={(n) => Number(n).toLocaleString()}
+                />
               </span>
             )}
             {v.default_for_role && (

@@ -1,3 +1,4 @@
+import { useLiveRefresh } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, GripVertical, Plus, ThumbsUp, Trash2, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -393,6 +394,9 @@ function ActiveInstances() {
   } | null>(null)
   const [comment, setComment] = useState('')
 
+  // Live: an approval created, decided or reassigned anywhere pokes `my-work`; the pending list
+  // is re-read once per quiet window, in place (placeholder keeps the rows on screen).
+  useLiveRefresh({ topic: 'my-work', keys: [['approval-instances']] })
   const { data: instances = [], isLoading } = useQuery<ApprovalInstance[]>({
     queryKey: ['approval-instances', 'pending'],
     queryFn: () =>

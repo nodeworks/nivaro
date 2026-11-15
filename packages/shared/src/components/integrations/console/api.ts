@@ -7,6 +7,8 @@ import {
 } from '@tanstack/react-query'
 import { useNivaroClient } from '../../../context'
 import { del, get, patch, post } from '../../../lib/commands'
+import { useLiveRefresh } from '../../../lib/live-counts'
+import { useLiveRefetchInterval } from '../../../lib/live-queries'
 import { IMPORT_HEALTH_KEY } from '../../imports/ImportStalenessControl'
 import type {
   ActionResult,
@@ -65,8 +67,15 @@ export function useCheckReadyRecord() {
   })
 }
 
+/** The console's reads poll every minute; while its `integrations` topic is live that is only a
+ *  slow safety net (the pokes refresh them — see `useLiveIntegrations`). */
+function useConsolePoll(): number | false | undefined {
+  return useLiveRefetchInterval(60_000, { safetyMs: 5 * 60_000 })
+}
+
 export function useSignals(tab?: string) {
   const client = useNivaroClient()
+  const poll = useConsolePoll()
   return useQuery({
     queryKey: ['integration-signals', tab ?? 'all'],
     queryFn: () =>
@@ -75,7 +84,7 @@ export function useSignals(tab?: string) {
           get(`/integration-signals${tab ? `?tab=${encodeURIComponent(tab)}` : ''}`)
         )
         .then((r) => r.data),
-    refetchInterval: 60_000
+    refetchInterval: poll
   })
 }
 
@@ -193,6 +202,7 @@ export function useDismissRows() {
 
 export function usePartners() {
   const client = useNivaroClient()
+  const poll = useConsolePoll()
   return useQuery({
     queryKey: ['integration-partners'],
     queryFn: () =>
@@ -201,7 +211,7 @@ export function usePartners() {
           get('/integration-partners')
         )
         .then((r) => r.data),
-    refetchInterval: 60_000
+    refetchInterval: poll
   })
 }
 
@@ -258,6 +268,7 @@ export interface IntegrationEventFilters {
  */
 export function useIntegrationEvents(filters: IntegrationEventFilters) {
   const client = useNivaroClient()
+  const poll = useConsolePoll()
   return useInfiniteQuery({
     queryKey: [
       'integration-events',
@@ -293,7 +304,7 @@ export function useIntegrationEvents(filters: IntegrationEventFilters) {
     // A filter change keeps the old list on screen (dimmed) instead of
     // collapsing to skeletons.
     placeholderData: keepPreviousData,
-    refetchInterval: 60_000
+    refetchInterval: poll
   })
 }
 
@@ -461,5 +472,20 @@ export function useToggleSubscription() {
       }
     },
     onSettled: () => qc.invalidateQueries({ queryKey: ALERT_SUBSCRIPTIONS_KEY })
+  })
+}
+
+/**
+ * Keeps every tab of the console current: the server pokes the admin-only `integrations` topic
+ * when a signal row, a partner call, a submission or an obligation is written, and the open
+ * reads are re-read once per quiet window, in place (the lists keep their rows on screen while
+ * they refetch). Mount once, at the console root.
+ */
+export function useLiveIntegrations(): void {
+  useLiveRefresh({
+    topic: 'integrations',
+    keys: [['integration-signals'], ['integration-partners'], ['integration-events']],
+    quietMs: 3000,
+    maxWaitMs: 20_000
   })
 }

@@ -304,7 +304,7 @@ import { layoutEditor, layoutPersonalDefaults } from './sections/layout-editor.j
 import { lineSplitDocs } from './sections/line-split.js'
 import { listEditing } from './sections/list-editing'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
-import { collabLiveLists } from './sections/live-lists.js'
+import { collabLiveCounts, collabLiveLists } from './sections/live-lists.js'
 import {
   aiActionsDocs,
   flowMapReplayDocs,
@@ -915,6 +915,7 @@ export const navSections: NavGroup[] = [
       collabOfflinePopout,
       collabLiveLists,
       liveScreensDocs,
+      collabLiveCounts,
       collabLiveOps,
       collabPresence,
       collabNotificationsCenter,

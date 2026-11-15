@@ -72,7 +72,8 @@ export function useUserSync(opts: UserSyncOptions = {}): void {
       const keys = p?.kind === 'chat' ? CHAT_KEYS : NOTIFICATION_KEYS
       for (const queryKey of keys) void qc.invalidateQueries({ queryKey })
     },
-    { includeOwn: true, debounceMs: 250 }
+    // Counts: a burst of reads (mark-all) is one re-read, not one per event.
+    { includeOwn: true, debounceMs: 2000 }
   )
 
   const applyPrefs = useRef(() => {})
