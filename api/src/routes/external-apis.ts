@@ -10,6 +10,7 @@ import {
   responseLogScrubber,
   substituteBodySecrets
 } from '../services/body-secrets.js'
+import { staleConfigRefusal } from '../services/config-watch.js'
 import { endpointEnvironment } from '../services/endpoint-environment.js'
 import {
   contractTargets,
@@ -705,6 +706,9 @@ export async function externalApisRoutes(app: FastifyInstance) {
       | ExternalApiRow
       | undefined
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    // rt4 #14 — a save from an older copy never silently overwrites someone else's newer save.
+    const stale = staleConfigRefusal(req, existing.updated_at)
+    if (stale) return reply.code(409).send(stale)
 
     const body = req.body ?? {}
     const patch: Record<string, unknown> = { updated_at: new Date() }

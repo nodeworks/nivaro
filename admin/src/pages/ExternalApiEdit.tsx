@@ -1,4 +1,10 @@
-import { queryKeys } from '@nivaro/shared'
+import {
+  ConfigChangeStrip,
+  configBaseRevHeaders,
+  isConfigStale,
+  queryKeys,
+  useConfigWatch
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
@@ -15,7 +21,7 @@ import {
   Trash2,
   Workflow
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { ConfigHistoryButton } from '@/components/config-history'
@@ -51,6 +57,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { UserCombobox } from '@/components/user-combobox'
 import { PluginSlot } from '@/extensions/slots'
 import { api, type ExternalApiCallLog, type ExternalApiEndpoint } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { useGoBack } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 import type { ExternalApi } from './ExternalApis'
@@ -188,8 +195,33 @@ export function ExternalApiEditPage() {
     }
   }, [data])
 
+  // rt4 #14 — another administrator saved this API: a quiet line; a save from the older copy is
+  // refused (409) instead of overwriting theirs. The form is re-seeded from each load, so the
+  // copy it was seeded from tells whether there are unsaved edits.
+  const { user } = useAuth()
+  const { change, clear: clearChange } = useConfigWatch('external-api', isNew ? null : id, {
+    meId: user?.id
+  })
+  const [stale, setStale] = useState(false)
+  const seeded = useRef<{ pending: boolean; json: string | null }>({ pending: false, json: null })
+  // Runs before the marker below in the same commit, so it stores the form the seed produced.
+  useEffect(() => {
+    if (seeded.current.pending) {
+      seeded.current = { pending: false, json: JSON.stringify(form) }
+    }
+  }, [form])
+  // Marks the next form as the seed.
+  useEffect(() => {
+    if (data) seeded.current.pending = true
+  }, [data])
+  const apiDirty = seeded.current.json != null && JSON.stringify(form) !== seeded.current.json
+  const showTheirs = () => {
+    void queryClient.invalidateQueries({ queryKey: ['external-api', id] })
+    clearChange()
+    setStale(false)
+  }
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: (opts?: { force?: boolean }) => {
       const headersObj: Record<string, string> = {}
       for (const h of form.headers) {
         if (h.key.trim()) headersObj[h.key.trim()] = h.value
@@ -240,7 +272,11 @@ export function ExternalApiEditPage() {
       }
       return isNew
         ? api.post<{ data: ExternalApi }>('/external-apis', payload).then((r) => r.data.data)
-        : api.patch<{ data: ExternalApi }>(`/external-apis/${id}`, payload).then((r) => r.data.data)
+        : api
+            .patch<{ data: ExternalApi }>(`/external-apis/${id}`, payload, {
+              headers: opts?.force ? {} : configBaseRevHeaders(data?.updated_at)
+            })
+            .then((r) => r.data.data)
     },
     onSuccess: (saved) => {
       queryClient.invalidateQueries({ queryKey: ['external-apis'] })
@@ -248,7 +284,13 @@ export function ExternalApiEditPage() {
       toast.success(isNew ? 'API created' : 'API saved')
       navigate('/connections')
     },
-    onError: () => toast.error('Failed to save')
+    onError: (err) => {
+      if (isConfigStale(err)) {
+        setStale(true)
+        return
+      }
+      toast.error('Failed to save')
+    }
   })
 
   function setAuthField(field: string, value: string) {
@@ -293,7 +335,7 @@ export function ExternalApiEditPage() {
           {/* #12 — every recorded change to this API. */}
           {!isNew && id && <ConfigHistoryButton collection='nivaro_external_apis' item={id} />}
           <Button
-            onClick={() => save.mutate()}
+            onClick={() => save.mutate(undefined)}
             disabled={!canSave || save.isPending}
             className='gap-1.5'
           >
@@ -302,6 +344,21 @@ export function ExternalApiEditPage() {
           </Button>
         </div>
       </div>
+      {(change || stale) && (
+        <ConfigChangeStrip
+          className='mb-4 rounded-lg border'
+          change={change}
+          stale={stale}
+          dirty={apiDirty}
+          showDiscards
+          onShow={showTheirs}
+          onSaveAnyway={() => save.mutate({ force: true })}
+          onDismiss={() => {
+            clearChange()
+            setStale(false)
+          }}
+        />
+      )}
 
       <Card className='p-6 space-y-5'>
         <div className='space-y-1.5'>

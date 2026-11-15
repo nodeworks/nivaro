@@ -313,7 +313,7 @@ import { listEditing } from './sections/list-editing'
 import { collabLiveTrace, collabTabCount } from './sections/live-attention.js'
 import { collabLiveConflicts } from './sections/live-conflicts.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
-import { collabLiveCounts, collabLiveLists } from './sections/live-lists.js'
+import { collabLiveConfig, collabLiveCounts, collabLiveLists } from './sections/live-lists.js'
 import {
   aiActionsDocs,
   flowMapReplayDocs,
@@ -932,6 +932,7 @@ export const navSections: NavGroup[] = [
       collabLiveLists,
       liveScreensDocs,
       collabLiveCounts,
+      collabLiveConfig,
       collabBackAndPeek,
       collabLiveOps,
       collabPresence,

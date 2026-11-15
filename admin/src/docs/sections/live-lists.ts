@@ -151,3 +151,63 @@ export const collabLiveCounts: DocSection = {
     }
   ]
 }
+
+export const collabLiveConfig: DocSection = {
+  id: 'live-config',
+  label: 'Live Config & Admin Screens',
+  content: [
+    { type: 'h1', id: 'live-config', text: 'Live Config & Admin Screens' },
+    {
+      type: 'p',
+      text: 'Configuration editors, shared dashboards and reports, the Activity log and flow runs follow what other people do while you have them open. It happens quietly, without toasts or sounds, and nothing you are looking at moves.'
+    },
+    { type: 'h3', id: 'live-config-editors', text: 'Two admins in one editor' },
+    {
+      type: 'table',
+      head: ['When', 'What happens'],
+      rows: [
+        [
+          'Another administrator saves the pipeline, flow, rule, external API or payload template you have open',
+          'A quiet line appears under the header: "Beth changed a state 1 min ago · Show". Show re-reads the editor. Nothing re-reads by itself. Pipeline and flow editors keep what you were typing. Rule, external API and payload editors say "Show replaces your unsaved edits" when you have some.'
+        ],
+        [
+          'You save a flow, rule or external API after someone else saved it',
+          'The save is refused instead of overwriting their work: "Beth saved this since you opened it · Show their version · Save mine anyway". Payload templates already worked this way (the conflict banner).'
+        ],
+        ['Your own saves, in any tab', 'Never raise the line.']
+      ]
+    },
+    { type: 'h3', id: 'live-config-dashboards', text: 'Shared dashboards and reports' },
+    {
+      type: 'p',
+      text: "When the owner adds, moves or changes widgets on a dashboard or report you are looking at, your page re-reads it in place. Widgets keep their places and your scroll stays put. Only widgets whose definition changed reload their figures, so a move or resize does not. If you are editing a report, your draft stays as it is and the owner's change arrives when you leave edit mode. Your own copy of a report is a separate report, so the owner's edits never touch it. Only people the dashboard or report is shared with are told about it."
+    },
+    { type: 'h3', id: 'live-config-activity', text: 'Activity log and flow runs' },
+    {
+      type: 'ul',
+      items: [
+        'Activity → Log (administrators): page 1 picks up new entries as they are written, and they fade in at the top. The log re-reads at most every 2 seconds for changes and every 15 seconds for record views. If you have scrolled down or your pointer is over the list, new entries wait behind a quiet "3 newer entries" line. They arrive when you come back to the top or click it. Later pages never shift.',
+        'Flow → Run History: a run appears when it starts. Open it to watch its steps arrive one by one, each with its outcome and time, then its final status. Steps are shown for runs that happen while the page is open. The run list re-reads only when a run starts or ends.'
+      ]
+    },
+    {
+      type: 'h3',
+      id: 'live-config-coverage',
+      text: 'Readiness: "Database writes reach open screens"'
+    },
+    {
+      type: 'p',
+      text: 'The Readiness check `announce-coverage` (Realtime group) warns when a stored procedure writes a registered collection without announcing it, and when the outside-write watcher caught rows nobody announced in the last 24 hours. The procedure list comes from the SQL checks\' "Writes without announcing" findings. If the SQL checks have not run in a week, the check reads the deployed procedures itself. It never fails a deploy. Use SQL checks → Propose fix to add the announcement.'
+    },
+    { type: 'h3', id: 'live-config-dev', text: 'For developers' },
+    {
+      type: 'ul',
+      items: [
+        'Topics `cfg-<kind>:<id>`: kinds `pipeline`, `flow`, `rule`, `external-api` and `payload` admit administrators only; `dashboard` and `report` admit the people the object is visible to. A write route needs no change: one pair of hooks (api services/config-watch.ts) names the object a write is about and pokes `ops:changed {topic, part, by?}`. `by` rides the administrator topics only.',
+        'In `@nivaro/shared`: `useConfigWatch(kind, id, { meId, onChange })`, `<ConfigChangeStrip>`, `configBaseRevHeaders(updated_at)`, `isConfigStale(err)` and `changedWidgetIds(before, after)`.',
+        'Whole-object saves (PATCH flows/:id, rules/:id, external-apis/:id, pipelines/:id) accept the optional `x-nivaro-base-rev` header and answer 409 `CONFIG_STALE` when the row has moved on. Callers that do not send it are unaffected.',
+        "Flow runs: the `flows` watch room carries `flow:run {flow_id, run_id, status, ms}` and `flow:step {flow_id, run_id, op, type, status, ms}`. Step keys and outcomes only, never the flow's data."
+      ]
+    }
+  ]
+}

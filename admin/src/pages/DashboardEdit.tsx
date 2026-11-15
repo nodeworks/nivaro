@@ -3,6 +3,7 @@ import {
   BackgroundRunOffer,
   CumulativeFlowChart,
   type CumulativeFlowData,
+  changedWidgetIds,
   dashboardPretendDownOptions,
   LoadErrorNote,
   liveQueryMeta,
@@ -13,6 +14,7 @@ import {
   QueryErrorState,
   QueryWidgetBody,
   queryKeys,
+  useConfigWatch,
   useLiveRefetchInterval,
   useLiveWidget,
   usePretendDownScope,
@@ -1329,6 +1331,29 @@ export function DashboardEditPage() {
       toast.success('Widget removed')
     },
     onError: () => toast.error('Failed to remove widget')
+  })
+
+  // rt4 #18 — the owner's edits reach everyone looking at this dashboard: the definition is
+  // re-read in place (widgets keep their keys and the page its scroll), and only widgets whose
+  // definition changed read their figures again — a move or resize does not.
+  useConfigWatch('dashboard', id, {
+    onChange: () => {
+      const before = queryClient.getQueryData<Dashboard>(['dashboard', id])?.widgets
+      void queryClient
+        .fetchQuery({
+          queryKey: ['dashboard', id],
+          queryFn: () => api.get<{ data: Dashboard }>(`/dashboards/${id}`).then((r) => r.data.data),
+          staleTime: 0
+        })
+        .then((after) => {
+          for (const wid of changedWidgetIds(
+            before as unknown as Array<Record<string, unknown>>,
+            after.widgets as unknown as Array<Record<string, unknown>>
+          ))
+            void queryClient.invalidateQueries({ queryKey: ['widget-data', wid] })
+        })
+        .catch(() => undefined)
+    }
   })
 
   if (isLoading) {

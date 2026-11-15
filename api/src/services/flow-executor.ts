@@ -1541,6 +1541,9 @@ async function runRefreshPages(op: FlowOperation, data: FlowData, ctx: Execution
 
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
 
+/** The nivaro_flow_runs id of the run a context belongs to (a sub-flow has its own context). */
+const runIdOf = new WeakMap<ExecutionContext, string>()
+
 async function runOperation(
   op: FlowOperation,
   data: FlowData,
@@ -1555,9 +1558,11 @@ async function runOperation(
   })
   const started = Date.now()
   const result = await runOperationInner(op, data, ctx)
-  // Live flow runs (#287): watchers of the flows room see steps as they land.
+  // Live flow runs (#287): watchers of the flows room see steps as they land. rt4 #16: each step
+  // names its run, so the run viewer lists them under the right run as they finish.
   emitWatch('flows', 'flow:step', {
     flow_id: ctx.flowId,
+    run_id: runIdOf.get(ctx) ?? null,
     op: op.key ?? op.id,
     type: op.type,
     status: result.status,
@@ -1869,6 +1874,9 @@ async function executeFlowInner(ctx: ExecutionContext, source?: TrafficSource): 
   } catch (err) {
     ctx.log.warn({ err, flowId: ctx.flowId }, 'Failed to record flow run start')
   }
+  // rt4 #16 — the run viewer follows this run step by step (watchers of the flows room only).
+  runIdOf.set(ctx, runId)
+  emitWatch('flows', 'flow:run', { flow_id: ctx.flowId, run_id: runId, status: 'running' })
 
   let data: FlowData = { ...ctx.payload, $trigger: ctx.trigger }
   // #535 — how far the run got. A condition that rejects still ends the run
@@ -2086,6 +2094,12 @@ async function executeFlowInner(ctx: ExecutionContext, source?: TrafficSource): 
       .catch((err) =>
         ctx.log.warn({ err, flowId: ctx.flowId }, 'Failed to record flow run success')
       )
+    emitWatch('flows', 'flow:run', {
+      flow_id: ctx.flowId,
+      run_id: runId,
+      status: progress.failed ? 'error' : 'success',
+      ms: Date.now() - startMs
+    })
 
     // Resolve the obligation opened above (no-op when it is null — a flow
     // with nothing to push, or a dry run, opened nothing). `halted_at`
@@ -2161,6 +2175,12 @@ async function executeFlowInner(ctx: ExecutionContext, source?: TrafficSource): 
       .catch((updErr) =>
         ctx.log.warn({ err: updErr, flowId: ctx.flowId }, 'Failed to record flow run error')
       )
+    emitWatch('flows', 'flow:run', {
+      flow_id: ctx.flowId,
+      run_id: runId,
+      status: 'error',
+      ms: Date.now() - startMs
+    })
     // An obligation an unhandled error left open must not sit "pending"
     // forever misreporting the run as still in progress — it errored, and
     // that is known now.

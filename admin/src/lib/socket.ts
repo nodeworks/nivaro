@@ -574,6 +574,9 @@ const RELAYED_EVENTS = new Set([
   'traffic-map:frame',
   'traffic-map:batch',
   'traffic-map:viewer',
+  // Flow Run History (#287, rt4 #16): runs and their steps as they land.
+  'flow:run',
+  'flow:step',
   'lock:requested',
   'lock:response',
   'lock:available',

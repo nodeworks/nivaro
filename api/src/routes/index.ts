@@ -4,6 +4,7 @@ import { bustPortalLinkCache } from '../services/app-links.js'
 import { noteReadDuration } from '../services/background-runs.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { announceConfigChanged, collectionHint, isConfigWrite } from '../services/config-live.js'
+import { configWatchOnResponse, configWatchPreHandler } from '../services/config-watch.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
 import { bustLayoutReferences } from '../services/layout-references.js'
 import { announcePermissionChange, permissionTarget } from '../services/permission-live.js'
@@ -432,6 +433,10 @@ export async function registerRoutes(app: FastifyInstance) {
     const target = permissionTarget(req)
     if (target) void announcePermissionChange(target)
   })
+  // rt4 #14/#18 — open config editors and shared dashboards hear that their object changed
+  // (services/config-watch.ts: names the object before the write, pokes on 2xx).
+  app.addHook('preHandler', configWatchPreHandler)
+  app.addHook('onResponse', configWatchOnResponse)
   // The Online list shows each person's role, name and zones from their user row: a write that
   // may change them refreshes every open list (after each replica's short answer cache).
   app.addHook('onResponse', async (req, reply) => {

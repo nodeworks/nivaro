@@ -1,7 +1,11 @@
 import {
   AudienceConfirmPanel,
   type AudiencePreview,
-  audienceConfirmFromError
+  audienceConfirmFromError,
+  ConfigChangeStrip,
+  configBaseRevHeaders,
+  isConfigStale,
+  useConfigWatch
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, ChevronsUpDown, Plus, Search, Trash2, X } from 'lucide-react'
@@ -24,6 +28,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api, type CMSField, type Collection } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { useGoBack } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 
@@ -83,6 +88,7 @@ type Rule = {
   sort: number
   conditions: unknown
   actions: RuleAction[] | null
+  updated_at?: string | null
 }
 
 function isGroup(node: ConditionLeaf | ConditionGroup): node is ConditionGroup {
@@ -1127,17 +1133,58 @@ export function RuleEditPage() {
   // #3080 — a rule whose actions reach many people or a whole role asks first (inline panel).
   const [audienceAsk, setAudienceAsk] = useState<AudiencePreview | null>(null)
   const lastBody = useRef<Record<string, unknown> | null>(null)
+  // rt4 #14 — another administrator saved this rule: a quiet line; a save from the older copy
+  // is refused (409) instead of overwriting theirs.
+  const { user } = useAuth()
+  const { change, clear: clearChange } = useConfigWatch('rule', isNew ? null : id, {
+    meId: user?.id
+  })
+  const [stale, setStale] = useState(false)
+  const loadedBody = useMemo(
+    () =>
+      data
+        ? JSON.stringify({
+            name: data.name ?? '',
+            collection: data.collection ?? '',
+            trigger: data.trigger ?? 'before_create',
+            enabled: data.enabled ?? true,
+            sort: data.sort ?? 0,
+            conditions: serializeConditions(parseConditions(data.conditions)),
+            actions: data.actions ?? []
+          })
+        : null,
+    [data]
+  )
+  const ruleDirty =
+    loadedBody != null &&
+    loadedBody !==
+      JSON.stringify({ ...form, conditions: serializeConditions(conditionGroup), actions })
+  const showTheirs = () => {
+    void queryClient.invalidateQueries({ queryKey: ['rules', id] })
+    clearChange()
+    setStale(false)
+  }
   const save = useMutation({
-    mutationFn: (body: Record<string, unknown>) =>
-      isNew
-        ? api.post('/rules', body).then((r) => r.data)
-        : api.patch(`/rules/${id}`, body).then((r) => r.data),
+    mutationFn: (body: Record<string, unknown> & { __force?: boolean }) => {
+      const { __force, ...rest } = body
+      return isNew
+        ? api.post('/rules', rest).then((r) => r.data)
+        : api
+            .patch(`/rules/${id}`, rest, {
+              headers: __force ? {} : configBaseRevHeaders(data?.updated_at)
+            })
+            .then((r) => r.data)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['rules'] })
       toast.success(isNew ? 'Rule created' : 'Rule saved')
       navigate('/flows/rules')
     },
     onError: (err) => {
+      if (isConfigStale(err)) {
+        setStale(true)
+        return
+      }
       const ask = audienceConfirmFromError(err)
       if (ask) {
         setAudienceAsk(ask)
@@ -1237,6 +1284,23 @@ export function RuleEditPage() {
               if (lastBody.current) save.mutate({ ...lastBody.current, confirm_audience: true })
             }}
             onCancel={() => setAudienceAsk(null)}
+          />
+        )}
+        {(change || stale) && (
+          <ConfigChangeStrip
+            className='-mx-8 -mb-4 mt-3 border-b-0 border-t'
+            change={change}
+            stale={stale}
+            dirty={ruleDirty}
+            showDiscards
+            onShow={showTheirs}
+            onSaveAnyway={() => {
+              if (lastBody.current) save.mutate({ ...lastBody.current, __force: true })
+            }}
+            onDismiss={() => {
+              clearChange()
+              setStale(false)
+            }}
           />
         )}
       </div>

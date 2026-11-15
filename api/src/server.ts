@@ -2762,6 +2762,13 @@ export async function buildServer() {
         const { registerTuningReadiness } = await import('./services/db-tuning/readiness.js')
         registerTuningReadiness()
       }
+      // Realtime: procedures that write without announcing + rows the safety net caught.
+      {
+        const { registerAnnounceCoverageReadiness } = await import(
+          './services/announce-coverage-readiness.js'
+        )
+        registerAnnounceCoverageReadiness()
+      }
       // #1412 — session recording health (upload failures, nothing landing,
       // the daily cap, retention behind).
       {

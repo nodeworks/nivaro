@@ -8,6 +8,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { checkAudienceConfirm, logAudienceConfirm } from '../services/audience-gate.js'
 import { type AudiencePreview, isSendingFlowOperation } from '../services/audience-preview.js'
+import { staleConfigRefusal } from '../services/config-watch.js'
 import { executeFlow } from '../services/flow-executor.js'
 import { flowHealth } from '../services/flow-health.js'
 import { registerReadinessCheck } from '../services/readiness.js'
@@ -707,6 +708,9 @@ export async function flowsRoutes(app: FastifyInstance) {
     // (or a whole role) asks first.
     const before = await db<Flow>('nivaro_flows').where({ id }).first()
     if (!before) return reply.code(404).send({ error: 'Not found' })
+    // rt4 #14 — a save from an older copy never silently overwrites someone else's newer save.
+    const stale = staleConfigRefusal(req, before.updated_at)
+    if (stale) return reply.code(409).send(stale)
     const gate = await checkAudienceConfirm(
       req,
       reply,

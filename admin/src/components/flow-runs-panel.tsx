@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { ChevronDown, ChevronRight, History } from 'lucide-react'
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
+import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn, formatDate } from '@/lib/utils'
+import { applyRunEvent, applyStepEvent, type LiveRuns, liveSummary } from './flow-runs-live'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -66,21 +67,40 @@ export function FlowRunsPanel({ flowId }: { flowId: string }) {
     enabled: open
   })
 
-  // Live flow runs (#287): watchers see steps land as the flow executes.
-  const [liveStep, setLiveStep] = useState<string | null>(null)
+  // Live flow runs (#287; rt4 #16 step by step): each step lands under its run as it finishes.
+  // The list itself is re-read only when a run starts or ends (one read per ~1 s at most), never
+  // per step — the steps live here, in this page, for the runs watched while it was open.
+  const [live, setLive] = useState<LiveRuns>({})
+  const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: qc is stable
   useEffect(() => {
+    setLive({})
     const leave = joinWatchRoom('flows')
-    const off = adminRealtime.on('flow:step', (p: { flow_id?: string; op?: string; status?: string }) => {
+    const refetchSoon = () => {
+      if (refetchTimer.current) return
+      refetchTimer.current = setTimeout(() => {
+        refetchTimer.current = null
+        void qc.invalidateQueries({ queryKey: ['flow-runs', flowId] })
+      }, 800)
+    }
+    const offStep = adminRealtime.on('flow:step', (p: Record<string, unknown>) => {
       if (p?.flow_id !== flowId) return
-      setLiveStep(`${p.op} — ${p.status}`)
-      void qc.invalidateQueries({ queryKey: ['flow-runs', flowId] })
-      setTimeout(() => setLiveStep(null), 5000)
+      setLive((cur) => applyStepEvent(cur, p))
+    })
+    const offRun = adminRealtime.on('flow:run', (p: Record<string, unknown>) => {
+      if (p?.flow_id !== flowId) return
+      setLive((cur) => applyRunEvent(cur, p))
+      refetchSoon()
     })
     return () => {
-      off()
+      offStep()
+      offRun()
       leave()
+      if (refetchTimer.current) clearTimeout(refetchTimer.current)
+      refetchTimer.current = null
     }
   }, [flowId])
+  const liveStep = liveSummary(live)
 
   const runs: FlowRun[] = data?.data ?? []
 
@@ -93,11 +113,13 @@ export function FlowRunsPanel({ flowId }: { flowId: string }) {
       >
         <div className='flex items-center gap-2'>
           <History className='h-4 w-4 text-slate-400' />
-          <h2 className='text-[13px] font-semibold text-slate-900'>Run History</h2>
+          <h2 className='whitespace-nowrap text-[13px] font-semibold text-slate-900 dark:text-foreground'>
+            Run History
+          </h2>
           {liveStep && (
-            <span className='inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10.5px] font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'>
-              <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-violet-500' />
-              {liveStep}
+            <span className='inline-flex min-w-0 max-w-[160px] items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10.5px] font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'>
+              <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-500 motion-reduce:animate-none' />
+              <span className='truncate'>{liveStep}</span>
             </span>
           )}
           {open && data && (
@@ -148,16 +170,38 @@ export function FlowRunsPanel({ flowId }: { flowId: string }) {
                       <span className='min-w-0 flex-1 truncate font-mono text-[11px] text-slate-500'>
                         {run.trigger}
                       </span>
+                      {live[run.id]?.steps.length ? (
+                        <span className='shrink-0 text-[10.5px] tabular-nums text-slate-400'>
+                          {live[run.id].steps.length}{' '}
+                          {live[run.id].steps.length === 1 ? 'step' : 'steps'}
+                        </span>
+                      ) : null}
                       <span className='shrink-0 text-[10.5px] tabular-nums text-slate-400'>
-                        {formatDuration(run.duration_ms)}
+                        {run.status === 'running' && live[run.id]?.status !== 'running'
+                          ? formatDuration(live[run.id]?.ms ?? null)
+                          : formatDuration(run.duration_ms)}
                       </span>
-                      <StatusBadge status={run.status} />
+                      <StatusBadge
+                        status={
+                          run.status === 'running' &&
+                          live[run.id] &&
+                          live[run.id].status !== 'running'
+                            ? live[run.id].status
+                            : run.status
+                        }
+                      />
                     </button>
                     {isExpanded && (
                       <div className='min-w-0 space-y-3 bg-slate-50/70 px-4 py-3 dark:bg-slate-800/40'>
                         <p className='text-[10.5px] text-slate-400'>
                           {formatTimestamp(run.started_at)}
                         </p>
+                        {live[run.id]?.steps.length ? (
+                          <LiveSteps
+                            steps={live[run.id].steps}
+                            running={live[run.id].status === 'running'}
+                          />
+                        ) : null}
                         {run.error_message && (
                           <div>
                             <p className='mb-1 text-[11px] font-semibold text-red-600'>Error</p>
@@ -182,9 +226,12 @@ export function FlowRunsPanel({ flowId }: { flowId: string }) {
                             </pre>
                           </div>
                         )}
-                        {!run.error_message && !run.input && !run.output && (
-                          <p className='text-[12px] text-slate-400'>No details available.</p>
-                        )}
+                        {!run.error_message &&
+                          !run.input &&
+                          !run.output &&
+                          !live[run.id]?.steps.length && (
+                            <p className='text-[12px] text-slate-400'>No details available.</p>
+                          )}
                       </div>
                     )}
                   </Fragment>
@@ -194,6 +241,49 @@ export function FlowRunsPanel({ flowId }: { flowId: string }) {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+/** The steps of a run watched live, in the order they finished (rt4 #16). */
+function LiveSteps({ steps, running }: { steps: LiveRuns[string]['steps']; running: boolean }) {
+  return (
+    <div>
+      <p className='mb-1 text-[11px] font-semibold text-slate-500 dark:text-slate-400'>Steps</p>
+      <ol className='space-y-0.5' aria-live='polite'>
+        {steps.map((s, i) => (
+          <li
+            // biome-ignore lint/suspicious/noArrayIndexKey: steps only append; a step may run twice
+            key={i}
+            className='flex animate-[nvr-fade-in_240ms_ease-out_backwards] items-center gap-2 text-[11px] motion-reduce:animate-none'
+          >
+            <span
+              className={cn(
+                'h-1.5 w-1.5 shrink-0 rounded-full',
+                s.status === 'reject'
+                  ? 'bg-red-500'
+                  : s.status === 'async'
+                    ? 'bg-slate-400'
+                    : 'bg-emerald-500'
+              )}
+              aria-hidden
+            />
+            <span className='min-w-0 flex-1 truncate font-mono text-slate-700 dark:text-slate-200'>
+              {s.op}
+            </span>
+            <span className='shrink-0 text-slate-400'>{s.type}</span>
+            <span className='w-12 shrink-0 text-right tabular-nums text-slate-400'>
+              {s.ms != null ? formatDuration(s.ms) : ''}
+            </span>
+          </li>
+        ))}
+        {running && (
+          <li className='flex items-center gap-2 text-[11px] text-slate-400'>
+            <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-500 motion-reduce:animate-none' />
+            Running…
+          </li>
+        )}
+      </ol>
     </div>
   )
 }
