@@ -258,6 +258,7 @@ import { queuesRoutes } from './queues.js'
 import { readinessRoutes } from './readiness.js'
 import { readyToSendRoutes } from './ready-to-send.js'
 import { realtimeBuildRoutes, realtimeRoutes, recordViewersRoutes } from './realtime.js'
+import { realtimeOutsideWritesRoutes } from './realtime-outside-writes.js'
 import { realtimeVerifyRoutes } from './realtime-verify.js'
 import { realtimeWorkerRoutes } from './realtime-worker.js'
 import { recordGraphRoutes } from './record-graph.js'
@@ -567,6 +568,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(realtimeBuildRoutes, { prefix: '/realtime' })
   // #2463 / #2477 / #2478 / #2760 — realtime verification tooling (admin).
   await app.register(realtimeVerifyRoutes, { prefix: '/realtime' })
+  // Outside-write watcher setting + what it caught (admin).
+  await app.register(realtimeOutsideWritesRoutes, { prefix: '/realtime' })
   // #2475 — the SharedWorker script (no sign-in: code, not data); apart from the admin routes.
   await app.register(realtimeWorkerRoutes, { prefix: '/realtime' })
   await app.register(trafficMapRoutes, { prefix: '/traffic-map' })

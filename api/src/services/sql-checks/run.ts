@@ -70,8 +70,19 @@ export function buildCatalog(
     type: string
     len: number | null
   }>,
-  uniques: Array<{ sch: string; tbl: string; idx: number; col: string }>,
-  rows: Array<{ sch: string; tbl: string; n: number | string }>
+  uniques: Array<{
+    sch: string
+    tbl: string
+    idx: number
+    col: string
+    /** The index is the primary key (1 / true). */
+    pk?: number | boolean | null
+    /** The column's position in the key (1-based). */
+    ord?: number | null
+  }>,
+  rows: Array<{ sch: string; tbl: string; n: number | string }>,
+  /** Registered (non-virtual) collection names — the realtime announce check needs them. */
+  collections?: string[]
 ): LoadedCatalog {
   const tables = new Map<
     string,
@@ -101,6 +112,15 @@ export function buildCatalog(
     m.set(u.idx, set)
     uniq.set(key, m)
   }
+  const pks = new Map<string, Array<{ col: string; ord: number }>>()
+  for (const u of uniques) {
+    if (!u.pk || u.pk === 0) continue
+    const key = `${lc(u.sch)}.${lc(u.tbl)}`
+    const list = pks.get(key) ?? []
+    list.push({ col: u.col, ord: Number(u.ord ?? list.length + 1) })
+    pks.set(key, list)
+  }
+  const registered = collections ? new Map(collections.map((c) => [lc(c), c] as const)) : null
   const counts = new Map(rows.map((r) => [`${lc(r.sch)}.${lc(r.tbl)}`, Number(r.n)]))
   const find = (schema: string | null, table: string) => {
     if (schema) return tables.get(`${lc(schema)}.${lc(table)}`) ?? null
@@ -120,18 +140,45 @@ export function buildCatalog(
       const f = find(s, t)
       return f ? { schema: f.schema, name: f.name } : null
     },
+    ...(registered
+      ? {
+          collectionOf: (s: string | null, t: string) => {
+            const f = find(s, t)
+            return f ? (registered.get(lc(f.name)) ?? null) : null
+          }
+        }
+      : {}),
+    primaryKey: (s, t) => {
+      const f = find(s, t)
+      const list = f ? pks.get(`${lc(f.schema)}.${lc(f.name)}`) : undefined
+      return list ? [...list].sort((a, b) => a.ord - b.ord).map((p) => p.col) : []
+    },
     rowCount: (s, t) => counts.get(`${lc(s)}.${lc(t)}`) ?? null
   }
 }
 
+/** Registered collections backed by a real table (virtual ones are SQL views). */
+async function registeredCollections(): Promise<string[]> {
+  try {
+    const q = db('nivaro_collections').distinct('collection')
+    if (await db.schema.hasColumn('nivaro_collections', 'is_virtual'))
+      q.where((w) => w.whereNull('is_virtual').orWhere('is_virtual', false))
+    const rows = (await q) as Array<{ collection: string | null }>
+    return rows.map((r) => r.collection).filter((c): c is string => !!c)
+  } catch {
+    return []
+  }
+}
+
 export async function loadCatalog(): Promise<LoadedCatalog> {
-  const [columns, uniques, rows] = await Promise.all([
+  const [columns, uniques, rows, collections] = await Promise.all([
     db.raw(`SELECT c.TABLE_SCHEMA AS sch, c.TABLE_NAME AS tbl, c.COLUMN_NAME AS col, c.IS_NULLABLE AS nullable,
               c.DATA_TYPE AS type, c.CHARACTER_MAXIMUM_LENGTH AS len
          FROM INFORMATION_SCHEMA.COLUMNS c
          JOIN INFORMATION_SCHEMA.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
         WHERE t.TABLE_TYPE = 'BASE TABLE'`),
-    db.raw(`SELECT s.name AS sch, t.name AS tbl, i.index_id AS idx, c.name AS col
+    db.raw(`SELECT s.name AS sch, t.name AS tbl, i.index_id AS idx, c.name AS col,
+              CAST(i.is_primary_key AS INT) AS pk, ic.key_ordinal AS ord
          FROM sys.indexes i
          JOIN sys.tables t ON t.object_id = i.object_id
          JOIN sys.schemas s ON s.schema_id = t.schema_id
@@ -142,9 +189,10 @@ export async function loadCatalog(): Promise<LoadedCatalog> {
          FROM sys.tables t
          JOIN sys.schemas s ON s.schema_id = t.schema_id
          JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0, 1)
-        GROUP BY s.name, t.name`)
+        GROUP BY s.name, t.name`),
+    registeredCollections()
   ])
-  return buildCatalog(columns as never, uniques as never, rows as never)
+  return buildCatalog(columns as never, uniques as never, rows as never, collections)
 }
 
 // ─── objects ────────────────────────────────────────────────────────────────

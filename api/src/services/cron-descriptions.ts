@@ -78,6 +78,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Hourly — reminds users who have not acknowledged a must-acknowledge broadcast, and tells its author how many are outstanding.',
   'raw-write-announcements':
     'Every 5 seconds — broadcasts record changes that stored procedures and scripts reported in nivaro_raw_writes, so open pages refresh. Records only failed ticks.',
+  'outside-write-watch':
+    'Every 10 seconds (Realtime → Outside writes sets it) — looks for records changed outside the app that nobody announced (procedures, scripts) in the collections people have open, using their changed-at column and its index, and tells open screens. Never in cloud mode. Records only failed ticks.',
   'event-journal-prune':
     'Hourly — deletes durable realtime journal rows older than 24 hours (nivaro_event_journal).',
   'chat-reminders':

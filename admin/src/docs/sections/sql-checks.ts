@@ -58,6 +58,11 @@ export const sqlChecksDocs: DocSection = {
           'SQLFluff rule',
           'Info',
           'Correctness rules from SQLFluff (ambiguous references RF01/RF02, AM01–AM07, unused CTEs ST03, subqueries in joins ST05) when a SQLFluff sidecar is configured. Layout and style rules are dropped.'
+        ],
+        [
+          'Writes without announcing',
+          'Warning',
+          'A procedure (or a stored import body) that inserts, updates, deletes, merges or truncates a table registered as a collection and never announces it (no EXEC nivaro_announce_writes and no INSERT into nivaro_raw_writes naming that collection). Screens with those records open keep the old values until someone reloads. One finding per collection.'
         ]
       ]
     },
@@ -111,6 +116,22 @@ export const sqlChecksDocs: DocSection = {
     {
       type: 'warn',
       text: 'If your deployment keeps a procedure’s source elsewhere (a repository or deploy script), update it there too — otherwise the next deploy puts the old version back.'
+    },
+    { type: 'h3', id: 'sql-checks-announce', text: 'The announce fix' },
+    {
+      type: 'p',
+      text: 'For “Writes without announcing”, Propose fix makes the procedure tell open screens what it changed. Each write gets an OUTPUT clause that collects the changed ids into a table variable (the clause sits inside the statement, so the procedure’s flow is unchanged), and one block at the end of the procedure, before a trailing RETURN, calls nivaro_announce_writes per collection and action: the ids when there are up to 100, “many records changed” past that (open lists then re-read the rows they show). One fix covers every collection the procedure writes.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The block can never make the procedure fail: it is skipped when the transaction is already doomed or the announcer is missing, runs with XACT_ABORT off (set back as it was) inside TRY/CATCH, and swallows its own errors. Inside a caller’s transaction the announcement commits or rolls back with the work.',
+        'Where a statement cannot carry an OUTPUT clause (INSERT … EXEC, TRUNCATE, a statement that already has OUTPUT, a table without a one-column primary key) the collection is announced as “many records changed” on every run; the notes say which statements.',
+        'App-managed procedures are fixed in config (a new version, deployed from there). Procedures an import definition owns get the definition’s stored body rewritten; deploy it from the import definition. Any other procedure is shown with its diff but not changed from here: adopt it on the Procedures page first, or copy the change into its source.',
+        'Fix them all at once: with the check filter set to “Writes without announcing”, the list offers a review of every procedure — its path, collections and diff — and “Apply announce fix to N procedures” applies the chosen ones one at a time, each compiled and checked again exactly as a single fix.',
+        'Writes inside dynamic SQL and rows written before an early RETURN are not covered; the outside-write watcher (Realtime → Outside writes) is the safety net for those.',
+        'node scripts/announce-fix-dry-run.mjs prints the same plan for every procedure without writing anything (--diff for the changes, --compile to compile each under NOEXEC).'
+      ]
     },
     { type: 'h2', id: 'sql-checks-fixes', text: 'Logging a fix from a script' },
     {

@@ -1892,6 +1892,17 @@ export async function buildServer() {
         },
         { quiet: true }
       )
+      // Outside-write watcher: the safety net for writers that never announce. Ticks every 5 s,
+      // looks once its interval setting has passed (default 10 s); off in cloud mode.
+      app.cron.schedule(
+        'outside-write-watch',
+        '*/5 * * * * *',
+        async () => {
+          const { outsideWriteTick } = await import('./services/outside-write-watch.js')
+          await outsideWriteTick()
+        },
+        { quiet: true }
+      )
       // Durable event journal (#1673): keep 24 hours.
       app.cron.schedule('event-journal-prune', '17 */1 * * *', async () => {
         const { pruneEventJournal } = await import('./services/event-journal-store.js')

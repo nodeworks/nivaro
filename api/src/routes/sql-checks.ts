@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
+  announcePlan,
   applyFix,
   compileProposal,
   FixError,
@@ -396,6 +397,19 @@ export async function sqlChecksRoutes(app: FastifyInstance): Promise<void> {
     if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Bad id' })
     try {
       return { data: await proposalFor(id) }
+    } catch (err) {
+      return fixFailure(reply, err)
+    }
+  })
+
+  /**
+   * The announce bulk action (realtime): every procedure with an open "writes without announcing"
+   * finding, one entry each with its proposal. Reads only — the page applies the chosen entries
+   * one at a time through POST /findings/:id/apply (compile, re-check, put-back as for one).
+   */
+  app.get('/announce/plan', async (_req, reply) => {
+    try {
+      return { data: await announcePlan() }
     } catch (err) {
       return fixFailure(reply, err)
     }

@@ -456,7 +456,23 @@ await ctx.sql.announceWrites?.('forecasts', ids, { action: 'update', changed_fie
       items: [
         'More than 100 records of one collection in one go become a single event with `item: "*"` and `bulk: <count>`: lists show the "new changes" pill and open records refetch quietly.',
         'Imports run by a procedure announce the collections listed in their "Recalculate rollups" setting.',
-        'Only names and ids are broadcast. Pages read the new values through /items, where permissions apply.'
+        'Only names and ids are broadcast. Pages read the new values through /items, where permissions apply.',
+        'SQL checks reports every procedure that writes a collection without announcing it (“Writes without announcing”) and proposes the change that does.'
+      ]
+    },
+    { type: 'h2', id: 'realtime-pipeline-outside', text: 'Writes nobody announced' },
+    {
+      type: 'p',
+      text: 'The outside-write watcher is the safety net for writers that never announce. Every 10 seconds (Realtime → Outside writes sets it, 5 seconds to 5 minutes), on the server that runs scheduled jobs, it looks at the collections people have open right now (or a list you choose) for rows whose changed-at time moved since the last look, and announces them like any other raw write. Rows the app itself announced a moment earlier are skipped, so no screen re-reads them twice.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A collection is watched on its changed-at column: the field marked “date updated”, else date_updated, updated_at, modified and similar names. It needs an index that starts with that column and a one-column primary key; without them it is refused (the Outside writes tab says why), so the watcher never reads a whole table every few seconds.',
+        'Each look reads a small window by the database’s own clock, in UTC and in local time (procedures often stamp GETDATE()), reaching two minutes back for transactions that commit late, and skips rows other transactions hold locked until a later look.',
+        'More than 500 changed rows in one look become one “many records changed” announcement.',
+        'Rows caught in 24 hours are counted per collection on the tab: each is a write still made without announcing — usually a procedure that SQL checks can fix.',
+        'OUTSIDE_WRITE_WATCH=on|off overrides the setting. Collections with realtime switched off are skipped. Never runs on hosted (cloud) plans.'
       ]
     },
     { type: 'h2', id: 'realtime-pipeline-probe', text: 'Delivery probe' },
