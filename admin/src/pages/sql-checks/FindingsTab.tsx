@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { cn, formatDateTime, formatNumber, formatRelative } from '@/lib/utils'
+import { AnnounceBulk } from './AnnounceBulk'
 import { ProposeFix } from './ProposeFix'
 import {
   CHECK_LABEL,
@@ -71,6 +72,8 @@ export function FindingsTab({
   const [object, setObject] = useState(initialObject ?? '')
   const [pageNo, setPageNo] = useState(1)
   const [selected, setSelected] = useState<number | null>(null)
+  /** The announce bulk action is open in the detail pane. */
+  const [bulk, setBulk] = useState(false)
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -127,7 +130,7 @@ export function FindingsTab({
         className={cn(
           // dense rows (pill, check, object, two-line message): 320px keeps the detail the wide side
           'flex min-h-0 flex-col border-slate-200 dark:border-border lg:w-[320px] lg:shrink-0 lg:border-r',
-          selected != null && 'hidden lg:flex'
+          (selected != null || bulk) && 'hidden lg:flex'
         )}
       >
         <div className='grid gap-2 border-b border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
@@ -166,12 +169,36 @@ export function FindingsTab({
             />
             <SimpleSelect
               value={check}
-              onChange={(v) => reset(() => setCheck(v))}
+              onChange={(v) =>
+                reset(() => {
+                  setCheck(v)
+                  if (v !== 'write-unannounced') setBulk(false)
+                })
+              }
               options={CHECK_OPTIONS}
               ariaLabel='Check'
               className='h-8 text-[12px]'
             />
           </div>
+          {check === 'write-unannounced' && (
+            <button
+              type='button'
+              onClick={() => {
+                setSelected(null)
+                setBulk(true)
+              }}
+              aria-pressed={bulk}
+              className={cn(
+                'rounded-md border border-slate-200 px-2.5 py-1.5 text-left text-[12px] hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border',
+                bulk && 'bg-accent'
+              )}
+            >
+              <span className='font-medium text-foreground'>Fix them all at once…</span>
+              <span className='block text-muted-foreground'>
+                Review and apply the announce fix procedure by procedure.
+              </span>
+            </button>
+          )}
           {object && (
             <div className='flex items-center gap-2 text-[12px]'>
               <span className='shrink-0 text-muted-foreground'>Object:</span>
@@ -214,7 +241,10 @@ export function FindingsTab({
                 <li key={f.id}>
                   <button
                     type='button'
-                    onClick={() => setSelected(f.id)}
+                    onClick={() => {
+                      setBulk(false)
+                      setSelected(f.id)
+                    }}
                     aria-current={selected === f.id ? 'true' : undefined}
                     className={cn(
                       'grid w-full gap-1 px-3 py-2.5 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
@@ -280,10 +310,12 @@ export function FindingsTab({
         aria-label='Finding detail'
         className={cn(
           'min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background',
-          selected == null && 'hidden lg:block'
+          selected == null && !bulk && 'hidden lg:block'
         )}
       >
-        {selected == null ? (
+        {bulk && selected == null ? (
+          <AnnounceBulk onBack={() => setBulk(false)} />
+        ) : selected == null ? (
           <div className='p-6 text-[12.5px] text-muted-foreground'>
             Pick a finding to see the statement, why it matters and how to fix it.
           </div>

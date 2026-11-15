@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
+import { OutsideWritesTab } from './realtime/OutsideWritesTab'
 import { SocketHealthTab } from './realtime/SocketHealthTab'
 import { AutoReloadControl, MinBuildControl, RememberedRefreshes } from './realtime/StickyRefresh'
 import { VerifyTab } from './realtime/VerifyTab'
@@ -25,6 +26,7 @@ type Tab =
   | 'concurrency'
   | 'firehose'
   | 'pipeline'
+  | 'outside'
   | 'verify'
 
 const REALTIME_TABS: Array<[Tab, string]> = [
@@ -36,6 +38,7 @@ const REALTIME_TABS: Array<[Tab, string]> = [
   ['concurrency', 'Concurrency'],
   ['firehose', 'Firehose'],
   ['pipeline', 'Event pipeline'],
+  ['outside', 'Outside writes'],
   ['verify', 'Verification']
 ]
 
@@ -176,6 +179,7 @@ export default function Realtime() {
         {tab === 'concurrency' && <ConcurrencyTab />}
         {tab === 'firehose' && <FirehoseTab />}
         {tab === 'pipeline' && <PipelineTab />}
+        {tab === 'outside' && <OutsideWritesTab />}
         {tab === 'verify' && <VerifyTab />}
       </div>
     </div>
