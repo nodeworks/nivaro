@@ -17,6 +17,7 @@ import {
   type ActivityGroup,
   type ActivityLabels,
   activityLabelRefs,
+  activityPredicate,
   activityWhy,
   actorName,
   actorOf,
@@ -160,6 +161,73 @@ function WhyLines({ entry }: { entry: ActivityEntryInput }) {
   )
 }
 
+/** Children of an expanded burst shown at first; "Show N more" reveals the rest. */
+const BURST_CHILDREN_SHOWN = 5
+
+function singleActor(group: ActivityEntryInput[], labels?: ActivityLabels | null): boolean {
+  const first = actorName(group[0], labels)
+  return group.every((e) => actorName(e, labels) === first)
+}
+
+const minuteOf = (e: ActivityEntryInput) => {
+  const d = e.timestamp ? new Date(e.timestamp) : null
+  return d && !Number.isNaN(d.getTime()) ? Math.floor(d.getTime() / 60_000) : null
+}
+function sameMinute(group: ActivityEntryInput[]): boolean {
+  const m = minuteOf(group[0])
+  return m != null && group.every((e) => minuteOf(e) === m)
+}
+
+/** What one write changed, without the actor: "set X to Y" reads "X → Y". */
+export function childChangeText(
+  entry: ActivityEntryInput,
+  labels?: ActivityLabels | null,
+  omitPhrases?: readonly string[]
+): string {
+  const t = omitRecordPhrases(activityPredicate(entry, labels), omitPhrases)
+  const set = /^set (.+?) to (.+)$/s.exec(t)
+  return set ? `${set[1]} \u2192 ${set[2]}` : t
+}
+
+function BurstChild({
+  entry,
+  labels,
+  omitPhrases,
+  seconds,
+  showTime
+}: {
+  entry: ActivityEntryInput
+  labels?: ActivityLabels | null
+  omitPhrases?: readonly string[]
+  seconds: boolean
+  showTime: boolean
+}) {
+  const d = entry.timestamp ? new Date(entry.timestamp) : null
+  const valid = d && !Number.isNaN(d.getTime())
+  const time = valid
+    ? d.toLocaleTimeString([], {
+        hour: 'numeric',
+        minute: '2-digit',
+        ...(seconds ? { second: '2-digit' } : {})
+      })
+    : null
+  return (
+    <div className='flex items-start gap-2.5 px-2 py-1.5' data-activity-child={entry.id ?? ''}>
+      <span className='min-w-0 flex-1 text-[12.5px] leading-5 text-slate-600 dark:text-slate-300'>
+        {childChangeText(entry, labels, omitPhrases)}
+      </span>
+      {showTime && time && (
+        <span
+          className='shrink-0 pt-px text-[11px] tabular-nums text-slate-400'
+          data-tip={valid ? formatDateTime(d) : undefined}
+        >
+          {time}
+        </span>
+      )}
+    </div>
+  )
+}
+
 export function ActivityEntry({
   entry,
   labels,
@@ -172,6 +240,7 @@ export function ActivityEntry({
   reserveChevron
 }: ActivityEntryProps) {
   const [open, setOpen] = useState(false)
+  const [shown, setShown] = useState(BURST_CHILDREN_SHOWN)
   const burst = group && group.length > 1 ? group : null
   const sentence = omitRecordPhrases(
     burst ? renderActivityGroupSentence(burst, labels) : renderActivitySentence(entry, labels),
@@ -235,17 +304,44 @@ export function ActivityEntry({
       </div>
       {burst && open && (
         <div className='ml-[18px] border-l border-slate-200 pl-3 dark:border-border'>
-          {burst.map((e, i) => (
-            <ActivityEntry
-              key={String(e.id ?? i)}
-              entry={e}
-              labels={labels}
-              onOpen={onOpen}
-              showTime={showTime}
-              omitPhrases={omitPhrases}
-              reserveChevron={reserveChevron}
-            />
-          ))}
+          {singleActor(burst, labels) ? (
+            // One person's burst: the summary row already names them, so each child says only
+            // what that write changed (and the time, to the second when they share a minute).
+            <>
+              {burst.slice(0, shown).map((e, i) => (
+                <BurstChild
+                  key={String(e.id ?? i)}
+                  entry={e}
+                  labels={labels}
+                  omitPhrases={omitPhrases}
+                  seconds={sameMinute(burst)}
+                  showTime={showTime}
+                />
+              ))}
+              {burst.length > shown && (
+                <button
+                  type='button'
+                  data-activity-show-more
+                  onClick={() => setShown((n) => n + BURST_CHILDREN_SHOWN * 4)}
+                  className='ml-2 py-1.5 text-[12px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+                >
+                  Show {burst.length - shown} more
+                </button>
+              )}
+            </>
+          ) : (
+            burst.map((e, i) => (
+              <ActivityEntry
+                key={String(e.id ?? i)}
+                entry={e}
+                labels={labels}
+                onOpen={onOpen}
+                showTime={showTime}
+                omitPhrases={omitPhrases}
+                reserveChevron={reserveChevron}
+              />
+            ))
+          )}
         </div>
       )}
     </div>

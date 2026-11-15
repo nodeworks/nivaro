@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Activity, ChevronDown, ChevronUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useItemNavigation, useNivaroClient } from '../../context'
 import { type ActivityEntryInput, groupActivity, recordPhrase } from '../../lib/activity-sentence'
 import { post } from '../../lib/commands'
@@ -49,6 +50,25 @@ interface FeedAnswer {
 type FeedEntry = ActivityEntryInput & { id: number }
 
 const PAGE = 30
+
+/**
+ * How far down the screen the host's own sticky or fixed bars reach (a phone's project header),
+ * ignoring anything inside `card`. 0 when nothing sticks to the top.
+ */
+export function stickyTopOffset(card: Element | null): number {
+  if (typeof document === 'undefined') return 0
+  let max = 0
+  for (const el of document.body.querySelectorAll<HTMLElement>('*')) {
+    if (card?.contains(el)) continue
+    const pos = getComputedStyle(el).position
+    if (pos !== 'sticky' && pos !== 'fixed') continue
+    const r = el.getBoundingClientRect()
+    if (r.top > 200 || r.bottom <= 0 || r.width < window.innerWidth * 0.5) continue
+    if (r.height > window.innerHeight * 0.5) continue
+    max = Math.max(max, r.bottom)
+  }
+  return max
+}
 const entryKey = (e: FeedEntry) => String(e.id)
 
 export function RecordActivityStream({
@@ -194,6 +214,34 @@ export function RecordActivityStream({
   )
   // A soft fade under the header while the list is scrolled, so a cut row reads as scrolled content.
   const [scrolled, setScrolled] = useState(false)
+  const cardRef = useRef<HTMLElement | null>(null)
+  const headerRef = useRef<HTMLElement | null>(null)
+  // "N new" lives in the card header. When the header has scrolled up under the host's own sticky
+  // bar (a phone, where the page scrolls), the pill would be hidden: show it just below that bar.
+  const [floatTop, setFloatTop] = useState<number | null>(null)
+  const held = feed.held
+  useEffect(() => {
+    if (held <= 0) {
+      setFloatTop(null)
+      return
+    }
+    const update = () => {
+      const header = headerRef.current
+      const card = cardRef.current
+      if (!header || !card) return
+      const off = stickyTopOffset(card)
+      const gone = header.getBoundingClientRect().bottom < off + 2
+      const cardLeft = card.getBoundingClientRect().bottom > off + 48
+      setFloatTop(gone && cardLeft ? off : null)
+    }
+    update()
+    window.addEventListener('scroll', update, { capture: true, passive: true })
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, { capture: true })
+      window.removeEventListener('resize', update)
+    }
+  }, [held])
   const listRef = useRef<HTMLDivElement | null>(null)
   const setList = useCallback(
     (el: HTMLDivElement | null) => {
@@ -248,13 +296,17 @@ export function RecordActivityStream({
   const loading = merged === undefined && !head.isError
   return (
     <section
+      ref={cardRef}
       data-record-activity-stream
       className={cn(
         'rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card',
         className
       )}
     >
-      <header className='flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
+      <header
+        ref={headerRef}
+        className='flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-slate-100 px-4 py-2.5 dark:border-border/60'
+      >
         <Activity className='h-4 w-4 shrink-0 text-nvr-navy dark:text-nvr-cyan' aria-hidden />
         <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Activity</h3>
         {feed.held > 0 && (
@@ -269,6 +321,21 @@ export function RecordActivityStream({
             {feed.held} new
           </button>
         )}
+        {floatTop != null &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <button
+              type='button'
+              data-activity-new-pill-float={feed.held}
+              onClick={feed.reveal}
+              style={{ top: floatTop + 8 }}
+              className='fixed left-1/2 z-[60] inline-flex h-7 -translate-x-1/2 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-white px-3 text-[12px] font-medium text-nvr-navy shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:bg-card dark:text-nvr-cyan'
+            >
+              <ChevronUp className='h-3.5 w-3.5' aria-hidden />
+              {feed.held} new
+            </button>,
+            document.body
+          )}
         {types.length > 1 && (
           <fieldset
             className='m-0 ml-auto flex min-w-0 flex-wrap items-center gap-1 border-0 p-0'
@@ -316,7 +383,7 @@ export function RecordActivityStream({
             <div
               aria-hidden
               data-activity-scroll-fade
-              className='pointer-events-none sticky top-0 z-10 -mb-4 h-4 bg-gradient-to-b from-white to-transparent dark:from-card'
+              className='pointer-events-none sticky top-0 z-10 -mb-6 h-6 bg-gradient-to-b from-white via-white/80 to-transparent dark:from-card dark:via-card/80'
             />
           )}
           <div
