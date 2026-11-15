@@ -1008,7 +1008,7 @@ export function NotificationCenterView({
         )}
         {/* Lane strip — what the badge counts sits first */}
         <div className='mt-4 flex flex-wrap items-center gap-2'>
-          <div className='-mx-1 flex max-w-full items-center gap-1 overflow-x-auto px-1'>
+          <div className='flex max-w-full flex-wrap items-center gap-1'>
             {LANE_TABS.map((t) => {
               const c = laneCount(t.key)
               return (
@@ -1040,7 +1040,7 @@ export function NotificationCenterView({
             })}
           </div>
           <span className='mx-1 hidden h-5 w-px bg-slate-200 dark:bg-border sm:block' />
-          <div className='-mx-1 flex max-w-full items-center gap-1 overflow-x-auto px-1'>
+          <div className='flex max-w-full flex-wrap items-center gap-1'>
             {STATUS_TABS.map((t) => (
               <button
                 key={t.key}
