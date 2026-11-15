@@ -200,7 +200,8 @@ export function otherTabNote(state: {
   if (state.dirty)
     return {
       tone: 'both',
-      text: 'Unsaved changes in another tab too — save one first; the other then asks about any field changed in both'
+      // The second save asks about any field changed in both (the conflict path).
+      text: 'Unsaved changes in another tab too. Save one first.'
     }
   return { tone: 'quiet', text: 'Also open in another tab — editing there' }
 }

@@ -28,19 +28,33 @@ const jane = (over: Partial<CoverLine> = {}): CoverLine => ({
 
 describe('covering line — words (rt5 #15)', () => {
   it('says who, and how many of theirs need you', () => {
-    expect(coverSentence(jane())).toEqual({
+    const now = new Date(2026, 10, 14, 9, 0)
+    expect(coverSentence(jane(), now)).toEqual({
       lead: "You're covering for Jane Smith today",
+      count: 4,
       tail: "of Jane's records need you"
     })
-    expect(coverSentence(jane({ records: 1 })).tail).toBe("of Jane's record needs you")
-    expect(coverSentence(jane({ records: 0 })).tail).toBe("nothing of Jane's needs you right now")
-    expect(coverSentence(jane({ first_name: null })).tail).toBe("of Jane Smith's records need you")
+    expect(coverSentence(jane({ records: 1 }), now).tail).toBe("of Jane's record needs you")
+    expect(coverSentence(jane({ records: 0 }), now)).toMatchObject({
+      count: null,
+      tail: "none of Jane's records need you right now"
+    })
+    expect(coverSentence(jane({ first_name: null }), now).tail).toBe(
+      "of Jane Smith's records need you"
+    )
+    // Ends today: "today" alone (no "until 11:59 PM"); a later day replaces "today".
+    expect(
+      coverSentence(jane({ ends_at: new Date(2026, 10, 14, 23, 59).toISOString() }), now).lead
+    ).toBe("You're covering for Jane Smith today")
+    expect(
+      coverSentence(jane({ ends_at: new Date(2026, 10, 20, 9, 0).toISOString() }), now).lead
+    ).toMatch(/^You're covering for Jane Smith until .*20$/)
   })
 
-  it('names when the cover ends: a time today, a day otherwise, nothing open-ended', () => {
+  it('names the end only when it is a later day', () => {
     const now = new Date(2026, 10, 14, 9, 0)
     expect(coverEnds(null, now)).toBeNull()
-    expect(coverEnds(new Date(2026, 10, 14, 17, 0).toISOString(), now)).toMatch(/^until .*5/)
+    expect(coverEnds(new Date(2026, 10, 14, 17, 0).toISOString(), now)).toBeNull()
     expect(coverEnds(new Date(2026, 10, 20, 9, 0).toISOString(), now)).toMatch(/^until .*20/)
   })
 

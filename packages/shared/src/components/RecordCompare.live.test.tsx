@@ -5,11 +5,29 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NivaroProvider } from '../context'
 import { type RealtimeAdapter, RealtimeContext } from '../lib/realtime'
-import { changedCompareCells, RecordCompareDialog, stickyDiffRows } from './RecordCompare'
+import {
+  changedCompareCells,
+  compareSideHeads,
+  RecordCompareDialog,
+  stickyDiffRows
+} from './RecordCompare'
 
 // rt5 #16 — the side-by-side compare stays live: a write to either record re-reads it as the
 // viewer and the moved cells update in place.
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+describe('compare column heads', () => {
+  it('tell the sides apart: the record id leads when the names are the same', () => {
+    expect(compareSideHeads(['MM26-1', 'MM26-2'], [1, 2])).toEqual([
+      { primary: 'MM26-1', secondary: null },
+      { primary: 'MM26-2', secondary: null }
+    ])
+    expect(compareSideHeads(['No summary number', 'No summary number'], [3, 4])).toEqual([
+      { primary: '#3', secondary: 'No summary number' },
+      { primary: '#4', secondary: 'No summary number' }
+    ])
+  })
+})
 
 describe('compare stays live — pure parts', () => {
   it('changedCompareCells names the fields that moved per side', () => {

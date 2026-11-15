@@ -1,6 +1,6 @@
 import { createNivaro } from '@nivaro/sdk'
 import { DelegateCoverLine, LoadErrorNote, loadErrorText, NivaroProvider } from '@nivaro/shared'
-import { Link, useNavigate } from 'react-router'
+import { Link } from 'react-router'
 import { cn, formatDate } from '@/lib/utils'
 import { type MyWorkData, type MyWorkTask, useMyWork } from './api'
 import { Bone, EmptyNote, Section, SectionLink } from './parts'
@@ -43,7 +43,6 @@ function rowsOf(d: MyWorkData) {
 }
 
 export function YourWorkSection() {
-  const navigate = useNavigate()
   const { data, isLoading, error, refetch } = useMyWork()
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
@@ -58,13 +57,10 @@ export function YourWorkSection() {
       title='Your work'
       action={<SectionLink to='/my-work'>Open My Work</SectionLink>}
     >
-      {/* rt5 #15 — covering for someone who is out: live, nothing when covering nobody. */}
+      {/* rt5 #15 — covering for someone who is out: live, nothing when covering nobody. No
+          action of its own: the card's "Open My Work" link is right above it. */}
       <NivaroProvider client={coverClient}>
-        <DelegateCoverLine
-          className='rounded-none border-x-0 border-t-0 bg-transparent dark:bg-transparent'
-          showLabel='Open My Work'
-          onShow={() => navigate('/my-work')}
-        />
+        <DelegateCoverLine className='rounded-none border-x-0 border-t-0 bg-transparent dark:bg-transparent' />
       </NivaroProvider>
       {isLoading ? (
         <div className='space-y-3 p-4' aria-hidden>

@@ -219,6 +219,25 @@ function fadeCell(el: Element | null): void {
   )
 }
 
+/**
+ * Column heads that tell the sides apart (pure). Names come from compareSideName (business id
+ * first). When two sides read the same — a collection with no business id names every record
+ * "No … number" — the record id leads and the shared name drops to the second line; otherwise
+ * the name stands alone.
+ */
+export function compareSideHeads(
+  names: string[],
+  ids: Array<string | number>
+): Array<{ primary: string; secondary: string | null }> {
+  const counts = new Map<string, number>()
+  for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1)
+  return names.map((n, i) =>
+    (counts.get(n) ?? 0) > 1
+      ? { primary: `#${ids[i]}`, secondary: n }
+      : { primary: n, secondary: null }
+  )
+}
+
 const ABSENT_TEXT = {
   record: 'Not available',
   form: 'Not on this form',
@@ -312,8 +331,11 @@ export function RecordCompareDialog({
     labels[f.field] = f.label
     metaByField.set(f.field, f)
   }
-  const sideName = (i: number) =>
-    compareSideName(collectionMeta.data ?? null, recs[i], ids[i], collection, i)
+  const heads = compareSideHeads(
+    ids.map((id, i) => compareSideName(collectionMeta.data ?? null, recs[i], id, collection, i)),
+    ids
+  )
+  const sideName = (i: number) => heads[i].primary
   const sections = loading
     ? []
     : buildCompare({
@@ -399,7 +421,9 @@ export function RecordCompareDialog({
             <span className='text-[12px] text-muted-foreground' data-compare-diff-count={diffCount}>
               {diffCount === 0
                 ? 'No differences'
-                : `${diffCount} field${diffCount === 1 ? '' : 's'} differ`}
+                : diffCount === 1
+                  ? '1 field differs'
+                  : `${diffCount} fields differ`}
               {sameForm && formNames[0] ? ` · ${formNames[0]} form` : ''}
             </span>
           )}
@@ -454,6 +478,11 @@ export function RecordCompareDialog({
                 >
                   {sideName(i)}
                 </span>
+                {heads[i].secondary && (
+                  <span className='block truncate text-[11px] text-muted-foreground'>
+                    {heads[i].secondary}
+                  </span>
+                )}
                 {!sameForm && (
                   <span className='block truncate text-[11px] text-muted-foreground'>
                     {formNames[i] ? `${formNames[i]} form` : 'No form'}

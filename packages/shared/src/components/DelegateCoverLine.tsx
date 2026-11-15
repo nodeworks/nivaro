@@ -33,29 +33,35 @@ export const COVERING_QUERY_KEY = ['my-work-covering'] as const
 /** Live re-reads at least this far apart (each one resolves owners on the server). */
 const MIN_GAP_MS = 5000
 
-/** The sentence, in words (pure). */
-export function coverSentence(line: Pick<CoverLine, 'name' | 'first_name' | 'records'>): {
-  lead: string
-  tail: string
-} {
+/**
+ * The sentence, in words (pure): "You're covering for Jane Smith today — 3 of Jane's records
+ * need you", or "… until Fri, Nov 20 — none of Jane's records need you right now" when the cover
+ * runs past today. `count` is the number shown before `tail` (null when there is none).
+ */
+export function coverSentence(
+  line: Pick<CoverLine, 'name' | 'first_name' | 'records' | 'ends_at'>,
+  now: Date = new Date()
+): { lead: string; count: number | null; tail: string } {
   const who = line.first_name || line.name
-  const lead = `You're covering for ${line.name} today`
-  if (line.records === 0) return { lead, tail: `nothing of ${who}'s needs you right now` }
+  const until = coverEnds(line.ends_at, now)
+  const lead = `You're covering for ${line.name} ${until ?? 'today'}`
+  if (line.records === 0)
+    return { lead, count: null, tail: `none of ${who}'s records need you right now` }
   return {
     lead,
+    count: line.records,
     tail: `of ${who}'s record${line.records === 1 ? '' : 's'} need${line.records === 1 ? 's' : ''} you`
   }
 }
 
-/** "until Fri, Nov 20" / "until 5:00 PM" when it ends today; null when it has no end (pure). */
+/** "until Fri, Nov 20" when the cover ends on a later day; null when it ends today or has no
+ *  end ("today" says it already). Pure. */
 export function coverEnds(endsAt: string | null, now: Date = new Date()): string | null {
   if (!endsAt) return null
   const end = new Date(endsAt)
   if (!Number.isFinite(end.getTime())) return null
-  const sameDay = end.toDateString() === now.toDateString()
-  return sameDay
-    ? `until ${end.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
-    : `until ${end.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}`
+  if (end.toDateString() === now.toDateString()) return null
+  return `until ${end.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}`
 }
 
 /** The earliest moment a listed cover runs out (ms from now), or null (pure). */
@@ -186,27 +192,31 @@ export function DelegateCoverLine({
       <ul className='divide-y divide-slate-100 dark:divide-border/60'>
         {lines.map((l) => {
           const s = coverSentence(l)
-          const ends = coverEnds(l.ends_at)
           const active = showing != null && showing === l.user_id
           return (
+            // Wraps instead of squeezing: in a narrow column (phone, the home side card) the
+            // action drops under the sentence; the icon sits in the first line, not a gutter.
             <li
               key={l.user_id}
               data-delegate-cover-line={l.user_id}
-              className='flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5'
+              className='flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5'
             >
-              <UserCheck className='h-4 w-4 shrink-0 text-nvr-cyan' strokeWidth={2} aria-hidden />
-              <p className='min-w-0 flex-1 text-[12.5px] text-foreground'>
+              <p className='min-w-[min(100%,18rem)] flex-1 text-[12.5px] leading-5 text-foreground'>
+                <UserCheck
+                  className='-mt-0.5 mr-2 inline-block h-4 w-4 text-nvr-cyan'
+                  strokeWidth={2}
+                  aria-hidden
+                />
                 <span>{s.lead}</span>
                 <span className='text-muted-foreground'> — </span>
-                {l.records > 0 && (
+                {s.count != null && (
                   <span className='font-semibold tabular-nums' data-delegate-cover-count>
-                    <TickerNumber value={l.records} />{' '}
+                    <TickerNumber value={s.count} />{' '}
                   </span>
                 )}
-                <span className={l.records === 0 ? 'text-muted-foreground' : undefined}>
+                <span className={s.count == null ? 'text-muted-foreground' : undefined}>
                   {s.tail}
                 </span>
-                {ends && <span className='text-[11.5px] text-muted-foreground'> · {ends}</span>}
               </p>
               {onShow && l.records > 0 && (
                 <button
@@ -214,7 +224,7 @@ export function DelegateCoverLine({
                   onClick={() => onShow(l)}
                   aria-pressed={showing !== undefined ? active : undefined}
                   className={cn(
-                    'shrink-0 rounded-md border px-2.5 py-1 text-[11.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+                    'max-w-full shrink-0 rounded-md border px-2.5 py-1 text-[11.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
                     active
                       ? 'border-nvr-cyan/50 bg-nvr-cyan/10 text-[#0e7490] dark:text-[#67e8f9]'
                       : 'border-slate-200 text-foreground hover:bg-muted dark:border-border'

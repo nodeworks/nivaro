@@ -171,23 +171,27 @@ export function RecordChatActions({
           data-record-chat
           data-record-chat-unread={unread || undefined}
         >
-          <MessageSquare className={compact ? 'h-4 w-4' : 'h-3.5 w-3.5'} strokeWidth={2} />
+          {/* Unread uses the sidebar chat badge's own token (bg-nvr-cyan, not the error
+              red) and sits on the glyph's top-right corner so the icon stays readable. */}
+          <span className='relative flex'>
+            <MessageSquare className={compact ? 'h-4 w-4' : 'h-3.5 w-3.5'} strokeWidth={2} />
+            {unread > 0 && compact && (
+              <span className='absolute -right-2 -top-2 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-nvr-cyan px-1 text-[9px] font-bold leading-none text-white ring-2 ring-card'>
+                {unread > 9 ? '9+' : unread}
+              </span>
+            )}
+          </span>
           {!compact && 'Chat'}
           {/* #2851 — a huddle is running in this record's room. */}
           <HuddleLiveBadge
             count={huddleCount}
             className={compact ? 'absolute -bottom-0.5 -right-0.5 bg-card px-1 py-0' : undefined}
           />
-          {unread > 0 &&
-            (compact ? (
-              <span className='absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-[9px] font-bold leading-none text-white'>
-                {unread > 9 ? '9+' : unread}
-              </span>
-            ) : (
-              <span className='flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white'>
-                {unread > 99 ? '99+' : unread}
-              </span>
-            ))}
+          {unread > 0 && !compact && (
+            <span className='flex h-4 min-w-4 items-center justify-center rounded-full bg-nvr-cyan px-1 text-[10px] font-bold text-white'>
+              {unread > 99 ? '99+' : unread}
+            </span>
+          )}
         </button>
         {discussable && (
           <button
