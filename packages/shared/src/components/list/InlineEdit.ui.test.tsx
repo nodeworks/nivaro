@@ -108,7 +108,7 @@ describe('InlineEditCell with others', () => {
     await flush()
     const held = host.querySelector('[data-inline-held-by]')
     expect(held?.getAttribute('data-inline-held-by')).toBe('Beth Lee')
-    expect(held?.textContent).toContain('Beth editing')
+    expect(held?.textContent).toContain('Beth Lee is editing')
     expect(host.querySelector('[data-inline-editable]')).toBeNull()
   })
 
@@ -175,6 +175,7 @@ describe('InlineEditCell with others', () => {
     const bar = host.querySelector('[data-inline-conflict]')
     expect(bar?.textContent).toContain('Beth Lee changed this to')
     expect(bar?.textContent).toContain('“5”')
+    expect(bar?.querySelector('[data-inline-conflict-mine]')?.textContent).toBe('“9”')
     expect(calls.some((c) => c._method === 'PATCH')).toBe(false)
     const keep = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Keep mine')
     act(() => keep?.dispatchEvent(new MouseEvent('click', { bubbles: true })))

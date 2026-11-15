@@ -725,6 +725,10 @@ function ConflictBar({
           ) : (
             ' while you were editing'
           )}
+          . <span className='whitespace-nowrap'>Yours:</span>{' '}
+          <span className='font-medium' data-inline-conflict-mine=''>
+            <ConflictValue kind={kind} value={conflict.mine} choices={choices} target={target} />
+          </span>
         </span>
       </span>
       <span className='ml-auto flex shrink-0 items-center gap-1'>
@@ -871,10 +875,11 @@ export function InlineEditCell({
         </span>
         <span
           aria-hidden='true'
-          className='inline-flex max-w-[110px] shrink-0 items-center gap-1 text-[10.5px] font-medium leading-none text-slate-600 dark:text-slate-300'
+          className='inline-flex max-w-[180px] shrink-0 items-center gap-1 text-[10.5px] leading-4 text-slate-600 dark:text-slate-300'
         >
           <span className='h-1.5 w-1.5 shrink-0 rounded-full' style={{ backgroundColor: color }} />
-          <span className='truncate'>{holder.name.split(/\s+/)[0]} editing</span>
+          <span className='min-w-0 truncate font-medium'>{holder.name}</span>{' '}
+          <span className='shrink-0'>is editing</span>
         </span>
       </span>
     )
