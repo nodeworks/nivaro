@@ -34,6 +34,7 @@ import { SimpleSelect } from '../ui/SimpleSelect'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { type CatalogModeConfig, CatalogPickerField } from './CatalogPickerField'
+import { useCoeditTarget } from './coedit/context'
 import { columnMaxLength } from './column-length'
 import { useFieldAffordances } from './FieldAffordances'
 import {
@@ -260,6 +261,8 @@ export const FieldRenderer = memo(function FieldRenderer({
   pinnedOption?: { id: unknown; tag?: string } | null
 }) {
   const drill = useDrilldown()
+  // Realtime round 3 item 8: long text co-edits live inside the record form (null elsewhere).
+  const coeditTarget = useCoeditTarget(collection, itemId, field.field)
   // #2726: a record-form picker counts searches that find nothing on its placement.
   const affordances = useFieldAffordances()
   const parentDraftForFilters = useParentDraft()
@@ -805,6 +808,7 @@ export const FieldRenderer = memo(function FieldRenderer({
         placeholder={field.placeholder ?? undefined}
         disabled={field.readonly}
         pastePlain={parseJson<{ paste_plain?: boolean }>(field.options)?.paste_plain === true}
+        coedit={coeditTarget}
       />
     )
   }

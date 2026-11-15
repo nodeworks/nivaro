@@ -28,6 +28,10 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation } from '../../context'
 import { cn } from '../../lib/utils'
 import { SimpleSelect } from '../ui/SimpleSelect'
+import { COEDIT_REMOTE } from './coedit/collab'
+import type { CoeditFieldTarget } from './coedit/context'
+import { COEDIT_CURSOR_CSS, CoeditCursors } from './coedit/cursors'
+import { useCoedit } from './coedit/useCoedit'
 
 // ─── EditorJS JSON → HTML ──────────────────────────────────────────────────────
 
@@ -69,6 +73,13 @@ export function editorJsToHtml(raw: string): string {
   } catch {
     return `<p>${esc(raw)}</p>`
   }
+}
+
+/** A stored value as the editor's HTML (EditorJS JSON from the legacy store converts). */
+function toEditorHtml(value: string): string {
+  if (!value) return ''
+  const isEditorJs = value.trimStart().startsWith('{"time":') && value.includes('"blocks":')
+  return isEditorJs ? editorJsToHtml(value) : value
 }
 
 // ─── Tiptap toolbar primitives ─────────────────────────────────────────────────
@@ -113,7 +124,8 @@ export function RichTextEditor({
   onChange,
   placeholder,
   disabled,
-  pastePlain
+  pastePlain,
+  coedit
 }: {
   value: string
   onChange: (v: unknown) => void
@@ -121,6 +133,8 @@ export function RichTextEditor({
   disabled?: boolean
   /** Paste control (#189): strip formatting from pasted content. */
   pastePlain?: boolean
+  /** Co-editing (realtime round 3, item 8): the record form's field this editor shows. */
+  coedit?: CoeditFieldTarget | null
 }) {
   const [linkInputOpen, setLinkInputOpen] = useState(false)
   const [linkUrl, setLinkUrl] = useState('')
@@ -129,11 +143,9 @@ export function RichTextEditor({
   const apiCfg = useApiFetchConfig()
   const itemNav = useItemNavigation()
 
-  const initialHtml = useMemo(() => {
-    if (!value) return ''
-    const isEditorJs = value.trimStart().startsWith('{"time":') && value.includes('"blocks":')
-    return isEditorJs ? editorJsToHtml(value) : value
-  }, [value]) // eslint-disable-line react-hooks/exhaustive-deps — initialHtml is init-only
+  const initialHtml = useMemo(() => toEditorHtml(value), [value]) // eslint-disable-line react-hooks/exhaustive-deps — initialHtml is init-only
+  // The writing session's binding (set below, once the editor exists): read inside onUpdate.
+  const coeditRef = useRef<ReturnType<typeof useCoedit>['session']>(null)
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -153,7 +165,9 @@ export function RichTextEditor({
       // No autolink while typing: EFP site codes read like domains (byron.il,
       // oswego.il) and every one became a bogus http:// link in notes that go
       // to suppliers. Links are explicit — the toolbar, or pasting a URL.
-      Link.configure({ openOnClick: false, autolink: false, protocols: ['record'] })
+      Link.configure({ openOnClick: false, autolink: false, protocols: ['record'] }),
+      // Others' cursors while people write here together (inert otherwise).
+      CoeditCursors
     ],
     content: initialHtml,
     editable: !disabled,
@@ -172,17 +186,26 @@ export function RichTextEditor({
           }
         }
       : {},
-    onUpdate({ editor }) {
+    onUpdate({ editor, transaction }) {
+      // Someone else's typing in a shared session reaches the form only when the person has
+      // changed this field too (their draft is the shared text); a watcher's form stays clean.
+      if (transaction.getMeta(COEDIT_REMOTE) && !coeditRef.current?.tracking()) return
       onChange(editor.getHTML())
     }
   })
+
+  const binding = useCoedit(editor, coedit ?? null, value, toEditorHtml)
+  coeditRef.current = binding.session
 
   const prevValue = useRef(value)
   useEffect(() => {
     if (!editor || prevValue.current === value) return
     prevValue.current = value
-    const isEditorJs = value.trimStart().startsWith('{"time":') && value.includes('"blocks":')
-    const html = isEditorJs ? editorJsToHtml(value) : value || ''
+    // While a writing session is open the editor shows the shared document; the form's value
+    // only matters here when the person has changed the field (Take theirs, Merge…).
+    const s = coeditRef.current
+    if (s?.isLive() && !s.tracking()) return
+    const html = toEditorHtml(value)
     if (editor.getHTML() !== html) {
       editor.commands.setContent(html, { emitUpdate: false })
     }
@@ -407,6 +430,11 @@ export function RichTextEditor({
           border-radius: 9999px; padding: 0 8px; font-weight: 500; font-size: 0.92em;
         }
         .nivaro-rich-text a[href^="record://"]::before { content: '↗ '; opacity: 0.55; }
+        .nivaro-rich-text .tiptap ::selection { background: rgb(var(--nvr-cyan-rgb, 0 206 255) / 0.26); }
+        ${COEDIT_CURSOR_CSS}
+        .nivaro-rich-text .tiptap > :first-child .nvr-coedit-flag {
+          bottom: auto; top: 100%; margin: 1px 0 0; border-radius: 0 3px 3px 3px;
+        }
       `}</style>
       <EditorContent
         onClick={(e) => {
@@ -421,6 +449,54 @@ export function RichTextEditor({
         editor={editor}
         className='nivaro-rich-text min-h-[120px] px-3 py-2 text-[13px] [&_.tiptap]:outline-none [&_.tiptap]:min-h-[100px] [&_.tiptap_p]:my-1 [&_.tiptap_h1]:text-xl [&_.tiptap_h2]:text-lg [&_.tiptap_h3]:text-base [&_.tiptap_h1,&_.tiptap_h2,&_.tiptap_h3]:font-semibold [&_.tiptap_ul]:list-disc [&_.tiptap_ol]:list-decimal [&_.tiptap_ul]:!pl-6 [&_.tiptap_ol]:!pl-6 [&_.tiptap_ul]:list-outside [&_.tiptap_ol]:list-outside [&_.tiptap_li]:my-0.5 [&_.tiptap_blockquote]:border-l-2 [&_.tiptap_blockquote]:border-slate-300 [&_.tiptap_blockquote]:pl-3 [&_.tiptap_blockquote]:text-slate-500 dark:[&_.tiptap_blockquote]:border-slate-600 dark:[&_.tiptap_blockquote]:text-slate-400 [&_.tiptap_code]:bg-slate-100 dark:[&_.tiptap_code]:bg-[#1e293b] [&_.tiptap_code]:rounded [&_.tiptap_code]:px-1 [&_.tiptap_pre]:bg-slate-100 dark:[&_.tiptap_pre]:bg-[#1e293b] [&_.tiptap_pre]:rounded [&_.tiptap_pre]:p-2 [&_.tiptap_pre]:font-mono [&_.tiptap_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.tiptap_p.is-editor-empty:first-child::before]:text-slate-400 dark:[&_.tiptap_p.is-editor-empty:first-child::before]:text-slate-500 [&_.tiptap_p.is-editor-empty:first-child::before]:pointer-events-none [&_.tiptap_p.is-editor-empty:first-child::before]:float-left [&_.tiptap_p.is-editor-empty:first-child::before]:h-0'
       />
+      <CoeditNote peers={binding.peers} diverged={binding.diverged} />
+    </div>
+  )
+}
+
+// ─── Co-editing note (realtime round 3, item 8) ────────────────────────────────
+// One quiet line under the text: who else is writing here, or that the person's own unsaved
+// edits stay apart from a session others started. Nothing at all otherwise.
+
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  return `${names[0]}, ${names[1]} and ${names.length - 2} more`
+}
+
+function CoeditNote({
+  peers,
+  diverged
+}: {
+  peers: Array<{ name: string; color: string }>
+  diverged: boolean
+}) {
+  if (!diverged && peers.length === 0) return null
+  return (
+    <div
+      className='flex min-h-[26px] items-center gap-1.5 border-t border-slate-100 px-3 py-1 text-[11px] text-slate-500 dark:border-border dark:text-slate-400'
+      aria-live='polite'
+    >
+      {diverged ? (
+        <span>
+          Someone else is writing here too. Your unsaved changes stay separate until you save.
+        </span>
+      ) : (
+        <>
+          <span className='flex -space-x-0.5' aria-hidden='true'>
+            {peers.slice(0, 4).map((p) => (
+              <span
+                key={p.name}
+                className='h-2 w-2 rounded-full ring-2 ring-background'
+                style={{ backgroundColor: p.color }}
+              />
+            ))}
+          </span>
+          <span className='truncate'>
+            Writing together with {joinNames(peers.map((p) => p.name.split(/\s+/)[0] || p.name))}
+          </span>
+        </>
+      )}
     </div>
   )
 }

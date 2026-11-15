@@ -460,6 +460,17 @@ export async function roomStillAllowed(
       return await canSeeRecordRoom(user, m[1], m[2], await isAdmin())
     }
     if (room.startsWith('chat:')) return await canSeeRoom(user, room.slice(5))
+    // Co-editing long text (coedit-socket.ts): the record read gate, then the field's read
+    // permission (and its write permission for the cursor room).
+    if (room.startsWith('coedit:')) {
+      const { parseCoeditRoom, coeditGates } = await import('./coedit-socket.js')
+      const t = parseCoeditRoom(room)
+      if (!t) return false
+      if (!(await canSeeRecordRoom(user, t.collection, t.item, await isAdmin()))) return false
+      const deps = coeditGates()
+      if (!(await deps.mayRead(user, t.collection, t.field))) return false
+      return !t.write || (await deps.mayWrite(user, t.collection, t.item, t.field))
+    }
     if (ADMIN_ROOMS.test(room)) return await isAdmin()
     // Page presence (who is on which page): any signed-in person, as the join allows.
     if (room.startsWith('presence:')) return true

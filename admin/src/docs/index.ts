@@ -54,6 +54,7 @@ export * from './sections/integrations-console.js'
 export * from './sections/layout-editor.js'
 export * from './sections/line-split.js'
 export * from './sections/live-attention.js'
+export * from './sections/live-coedit.js'
 export * from './sections/live-conflicts.js'
 export * from './sections/live-feeds.js'
 export * from './sections/live-lists.js'
@@ -310,6 +311,7 @@ import { layoutEditor, layoutPersonalDefaults } from './sections/layout-editor.j
 import { lineSplitDocs } from './sections/line-split.js'
 import { listEditing } from './sections/list-editing'
 import { collabLiveTrace, collabTabCount } from './sections/live-attention.js'
+import { collabLiveCoedit } from './sections/live-coedit.js'
 import { collabLiveConflicts } from './sections/live-conflicts.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { collabLiveCounts, collabLiveLists } from './sections/live-lists.js'
@@ -922,6 +924,7 @@ export const navSections: NavGroup[] = [
       collabLiveRecords,
       collabReloadTrust,
       collabLiveConflicts,
+      collabLiveCoedit,
       liveWidgetsDocs,
       liveOutsideDocs,
       collabLiveProgress,

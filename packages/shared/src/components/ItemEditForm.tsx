@@ -57,6 +57,7 @@ import {
 } from '../context'
 import { useSlowReason } from '../hooks/useSlowReason'
 import { formatApiPayload } from '../lib/api-payload'
+import { coeditCovers } from '../lib/coedit-registry'
 import { del, get, getActiveLayout, patch, post, put } from '../lib/commands'
 import type { FieldSource } from '../lib/config-sentences'
 import {
@@ -206,6 +207,7 @@ import {
   settleTouchedAfterSave,
   useCascadeClearNotices
 } from './item-edit/cascade-clear-notice'
+import { CoeditFormContext, type CoeditFormInfo } from './item-edit/coedit/context'
 import { columnLengthError } from './item-edit/column-length'
 import { configUpdateReaction } from './item-edit/config-update'
 import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
@@ -271,6 +273,7 @@ import {
 import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
 import { ListNeighborNav } from './item-edit/ListNeighborNav'
+import { LiveTraceSheet } from './item-edit/LiveTraceSheet'
 import { deferredSections } from './item-edit/lazy-sections'
 import { type LineRevision, mergeEditOf, restoredLineConflicts } from './item-edit/line-merge'
 import {
@@ -327,7 +330,6 @@ import {
 import { QueueReturnChip } from './item-edit/QueueReturnChip'
 import { endQuickCreateFollows } from './item-edit/QuickCreateButton'
 import { QuickPicker } from './item-edit/QuickPicker'
-import { LiveTraceSheet } from './item-edit/LiveTraceSheet'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
 import { PickerExclusionToggle, ScheduleChangeButton } from './item-edit/RecordGrantTools'
@@ -1921,6 +1923,7 @@ function FieldContexts({
   fieldComments,
   partnerNeeds,
   lineLocks = false,
+  coedit = null,
   children
 }: {
   affordances: FieldAffordances | null
@@ -1930,6 +1933,8 @@ function FieldContexts({
   partnerNeeds?: PartnerNeedsCtx | null
   /** The record's lines lock one at a time (realtime item 7) — line grids read it. */
   lineLocks?: boolean
+  /** The record long-text fields co-edit on (realtime round 3 item 8); null = none. */
+  coedit?: CoeditFormInfo | null
   children: ReactNode
 }) {
   return (
@@ -1938,7 +1943,9 @@ function FieldContexts({
         <FieldSourcesContext.Provider value={sources ?? null}>
           <FieldCommentsContext.Provider value={fieldComments}>
             <PartnerNeedsContext.Provider value={partnerNeeds ?? null}>
-              <LineLockContext.Provider value={lineLocks}>{children}</LineLockContext.Provider>
+              <LineLockContext.Provider value={lineLocks}>
+                <CoeditFormContext.Provider value={coedit}>{children}</CoeditFormContext.Provider>
+              </LineLockContext.Provider>
             </PartnerNeedsContext.Provider>
           </FieldCommentsContext.Provider>
         </FieldSourcesContext.Provider>
@@ -2919,6 +2926,15 @@ function ItemEditFormView({
   }
   const initialDataRef = useRef<Record<string, unknown>>({})
   const touchedFields = useRef<Set<string>>(new Set())
+  // Co-editing long text (realtime round 3 item 8): the record its rich-text fields write
+  // together on, and each field's saved value (a watcher's clean form is never touched).
+  const coeditForm = useMemo<CoeditFormInfo | null>(
+    () =>
+      isNew || designOn
+        ? null
+        : { collection, item: String(itemId), saved: (f) => initialDataRef.current[f] },
+    [collection, itemId, isNew, designOn]
+  )
 
   const [copiedHeaderField, setCopiedHeaderField] = useState<string | null>(null)
 
@@ -3954,6 +3970,14 @@ function ItemEditFormView({
       // "2 changes" and resend the old values against an old revision.
       const ownEdits = ownEditFields(changed, userTouchedRef.current, draftRef.current, prev)
       const isOwnEdit = (k: string) => ownEdits.has(k)
+      // A save from the writing session this person is in (realtime round 3 item 8): their
+      // draft already holds that text — never a conflict with itself, never a "changed" note.
+      // Decided here, so Save's mid-air check does not ask about it either.
+      const coeditedNow = new Set(
+        changed.filter((k) => coeditCovers(collection, String(itemId), k, record[k]))
+      )
+      for (const k of coeditedNow) if (isOwnEdit(k)) decideRemoteConflict(k, record[k])
+      const coedited = (k: string) => coeditedNow.has(k)
       // Notes only for a refetch that follows someone else's live write, and
       // only for the fields it named (live-record-marks.ts) — any other refetch
       // (Edit taking the lock, focus, Summary → Edit after a reload) is not a
@@ -3975,8 +3999,9 @@ function ItemEditFormView({
             // the remote value waits behind "Take theirs / Keep mine" (#6).
             // Conflicts always show (they protect the person's edit, socket
             // or not); plain notes only for a live write that named the field.
-            const conflict = isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k])
-            if (!conflict && !noted.includes(k)) continue
+            const conflict =
+              isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k]) && !coedited(k)
+            if (!conflict && (!noted.includes(k) || coedited(k))) continue
             next[k] = conflict
               ? { was: prev[k], by, at, theirs: record[k], conflict: true }
               : { was: prev[k], by, at }
@@ -3984,7 +4009,9 @@ function ItemEditFormView({
           return next
         })
         const logged = changed.filter(
-          (k) => noted.includes(k) || (isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k]))
+          (k) =>
+            !coedited(k) &&
+            (noted.includes(k) || (isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k])))
         )
         if (logged.length > 0)
           setRemoteLog((cur) =>
@@ -13519,6 +13546,7 @@ function ItemEditFormView({
                                 fieldComments={fieldComments}
                                 partnerNeeds={partnerNeeds}
                                 lineLocks={lineLocksOn}
+                                coedit={coeditForm}
                               >
                                 {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a

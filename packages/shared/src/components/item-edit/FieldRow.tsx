@@ -19,6 +19,7 @@ import { useNivaroClient, useParentDraft } from '../../context'
 import { AUTOFILL_CHECK_KEY, readAiFill, showsAiButton } from '../../lib/ai-fill'
 import { del, get, post } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
+import { useOptionalRealtime } from '../../lib/realtime'
 import { cn, formatDateTime, titleCase, toLocalDateString } from '../../lib/utils'
 import { requiredByRules } from '../../lib/validation-rules'
 import { GlossaryLabel } from '../ai/GlossaryText'
@@ -28,6 +29,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { useAddendumFields } from './AddendumFieldContext'
 import { AutoIdPreviewField } from './AutoIdPreviewField'
 import { useCascadeClearNotifier } from './cascade-clear-notice'
+import { isCoeditInterface, useCoeditTarget } from './coedit/context'
 import { DuplicateNotice } from './DuplicateNotice'
 import { FOCUSABLE } from './entry/entry-keys'
 import {
@@ -751,7 +753,12 @@ export const FieldRow = memo(function FieldRow({
     openRelated: affordances?.openRelated,
     editable: editableHere
   })
-  const softLock = usePresenceSoftLock(wrapperRef)
+  // Rich text written together (realtime round 3 item 8) needs no "edit anyway?" ask.
+  const realtimeHost = useOptionalRealtime()
+  const coeditTarget = useCoeditTarget(collection, itemId, field.field)
+  const softLock = usePresenceSoftLock(wrapperRef, {
+    off: !!realtimeHost && !!coeditTarget && isCoeditInterface(field)
+  })
   // #2703: labels and help that change with the record's state or the viewer's role.
   const textCtx = usePlacementTextContext()
   const remoteChange = affordances?.remoteChanges[field.field]

@@ -27,6 +27,7 @@ import {
   type VersionGroup
 } from '../services/client-versions-cluster.js'
 import { ownUserRoom, scopeUserRoomsPerTenant } from '../services/cloud-user-rooms.js'
+import { defaultCoeditDeps, registerCoedit } from '../services/coedit-socket.js'
 import { fieldValueAudience } from '../services/field-change-relay.js'
 import { fieldFocusTracker } from '../services/field-focus.js'
 import {
@@ -911,6 +912,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       /* table may not exist mid-migration — skip silently */
     }
   }
+
+  // One co-edit store for every socket of this process (Redis-backed: every replica shares it).
+  const coeditDeps = defaultCoeditDeps(app)
 
   io.on('connection', (socket) => {
     app.log.debug({ socketId: socket.id }, 'Socket connected')
@@ -1797,6 +1801,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       { scopedRoom, scopedRoomNow, tenantNow },
       defaultHuddleCollabDeps(app)
     )
+    // Realtime round 3 item 8 — co-editing long text: live merged typing + cursors per field,
+    // gated by the record read gate and the field's read / write permission.
+    registerCoedit(io, socket, () => authenticatedUser, { scopedRoom, tenantNow }, coeditDeps)
     // #1399 — watch a session replay together (admin-only replay:<key> rooms).
     registerReplayWatch(io, socket, () => authenticatedUser)
     // #1675 — pushed dashboard/report widgets, computed as this socket's sign-in, sent to it alone.
