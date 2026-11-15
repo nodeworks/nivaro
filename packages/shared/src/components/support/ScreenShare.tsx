@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Eye, Loader2, Maximize2, Minimize2, MonitorUp, ShieldCheck } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Eye, Loader2, Maximize2, Minimize2, Minus, MonitorUp, ShieldCheck } from 'lucide-react'
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useApiFetchConfig, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
@@ -106,99 +106,103 @@ function shareTargetName(share: ScreenShareInfo): string {
   return share.to.kind === 'team' ? `the ${share.to.name} team` : share.to.name
 }
 
-/** The first solid background from `el` up to `stop`; null for a translucent layer. */
-function solidBackground(
-  start: HTMLElement | null,
-  stop: HTMLElement
-): { color: string; el: HTMLElement } | null {
-  let el = start
-  while (el) {
-    const bg = getComputedStyle(el).backgroundColor
-    const m = /rgba?\(([^)]+)\)/.exec(bg)
-    if (m) {
-      const parts = m[1].split(',').map((p) => Number.parseFloat(p))
-      if (parts.length < 4 || parts[3] >= 0.99) return { color: bg, el }
-      if (parts[3] > 0) return null
-    }
-    if (el === stop) return null
-    el = el.parentElement
-  }
-  return null
-}
+/** Where the pill goes so it never covers an open sheet or dialog (its footer, its actions). */
+export type PillPlacement =
+  | { kind: 'free' }
+  | { kind: 'beside'; left: number; width: number }
+  | { kind: 'above'; bottom: number }
+  | { kind: 'covered' }
+
+/** Room the expanded pill needs beside a sheet before it moves above it instead. */
+const PILL_ROOM = 340
 
 /**
- * What the page area shows just above the room kept for the bar, column by column (a list
- * beside a detail pane has two surfaces): sampled across #main-content's width and turned into
- * a hard-stop gradient for #main-content, so the room continues each column's own colour.
- * Null when that row is not the page (an overlay, a sheet, a translucent layer) — the last
- * value stays.
+ * The open dialogs / sheets that reach the bottom of the screen decide: room to one side → the
+ * pill centres there; a dialog that starts lower down → the pill sits just above it; a dialog
+ * that fills the screen (a phone sheet) → `covered`, and the pill folds to its dot.
  */
-export function pageSurfaceBackground(doc: Document, samples = 32): string | null {
-  const main = doc.getElementById('main-content')
-  if (!main) return null
-  const r = main.getBoundingClientRect()
-  if (r.width < 10 || r.height < 120) return null
-  // The room is the page root's bottom padding (the rule beside the bar).
-  const page = doc.querySelector('[data-page-scroll] > *')
-  const bar = page ? Number.parseFloat(getComputedStyle(page).paddingBottom) || 0 : 0
-  const y = r.bottom - bar - 8
-  const stops: Array<{ from: number; to: number; color: string }> = []
-  for (let i = 0; i < samples; i++) {
-    const x = r.left + ((i + 0.5) * r.width) / samples
-    const hit = doc.elementFromPoint(x, y) as HTMLElement | null
-    if (!hit || !main.contains(hit)) return null
-    const solid = solidBackground(hit, main)
-    if (!solid) return null
-    const b = solid.el.getBoundingClientRect()
-    const to = Math.min(Math.round(r.width), Math.round(b.right - r.left))
-    const last = stops[stops.length - 1]
-    if (last && last.color === solid.color) last.to = Math.max(last.to, to)
-    else {
-      const from = last ? Math.max(Math.round(b.left - r.left), last.to) : 0
-      if (last) last.to = from
-      stops.push({ from, to, color: solid.color })
-    }
-  }
-  if (stops.length === 0) return null
-  stops[stops.length - 1].to = Math.round(r.width)
-  if (stops.length === 1) return stops[0].color
-  const parts = stops.flatMap((st) => [`${st.color} ${st.from}px`, `${st.color} ${st.to}px`])
-  return `linear-gradient(to right, ${parts.join(', ')})`
+export function pillPlacement(
+  rects: Array<{ left: number; right: number; top: number; bottom: number }>,
+  vw: number,
+  vh: number
+): PillPlacement {
+  const low = rects.filter(
+    (r) => r.right - r.left > 0 && r.bottom - r.top > 0 && r.bottom > vh - 120
+  )
+  if (low.length === 0) return { kind: 'free' }
+  const left = Math.min(...low.map((r) => r.left))
+  const right = Math.max(...low.map((r) => r.right))
+  const top = Math.min(...low.map((r) => r.top))
+  if (left >= PILL_ROOM) return { kind: 'beside', left: 0, width: left }
+  if (vw - right >= PILL_ROOM) return { kind: 'beside', left: right, width: vw - right }
+  if (top >= 96) return { kind: 'above', bottom: vh - top + 12 }
+  return { kind: 'covered' }
 }
 
-/** Room scrolling content keeps under the bar: its height + 16 px + the phone's safe area. */
-const SHARE_BAR_SPACE = 'calc(2.5rem + 1rem + 1rem + env(safe-area-inset-bottom))'
+/** Watches open dialogs (Radix portals them to body) only while the pill shows. */
+function usePillPlacement(active: boolean): PillPlacement {
+  const [placement, setPlacement] = useState<PillPlacement>({ kind: 'free' })
+  useEffect(() => {
+    if (!active || typeof document === 'undefined') return
+    let frame = 0
+    const sized = new ResizeObserver(() => measure())
+    function measure() {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        sized.disconnect()
+        const dialogs = [
+          ...document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]')
+        ].filter((d) => d.isConnected && getComputedStyle(d).visibility !== 'hidden')
+        for (const d of dialogs) sized.observe(d)
+        const next = pillPlacement(
+          dialogs.map((d) => d.getBoundingClientRect()),
+          window.innerWidth,
+          window.innerHeight
+        )
+        setPlacement((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next))
+      })
+    }
+    // A sheet slides in: measure as it mounts and again once it has settled.
+    let settle: ReturnType<typeof setTimeout> | undefined
+    const changed = () => {
+      measure()
+      clearTimeout(settle)
+      settle = setTimeout(measure, 400)
+    }
+    const watcher = new MutationObserver(changed)
+    watcher.observe(document.body, { childList: true })
+    window.addEventListener('resize', changed)
+    changed()
+    return () => {
+      watcher.disconnect()
+      sized.disconnect()
+      cancelAnimationFrame(frame)
+      clearTimeout(settle)
+      window.removeEventListener('resize', changed)
+    }
+  }, [active])
+  return placement
+}
 
 /**
- * The bar the sharing person sees on every screen. Always-dark so it reads as "this is not the
- * page" in light and dark mode; never recorded itself (`data-replay-block`).
+ * The pill the sharing person sees on every screen while sharing: always-dark so it reads as
+ * "this is not the page" in light and dark mode; floats and reserves no layout space; never
+ * recorded itself (`data-replay-block`). Minimise folds it to a small red-dot pill in the corner
+ * (click to bring it back). It moves beside or above an open sheet or dialog so it never covers
+ * that sheet's actions, and folds to its dot when a sheet fills the screen.
  */
 export function ScreenShareBar() {
   const status = useScreenShareStatus()
-  const left = useCountdown(status && !status.ended ? status.share.expires_at : null)
-  // While the bar shows, scrolling content reserves room under it (`--nvr-share-bar`).
-  const showing = !!status
+  const live = !!status && !status.ended
+  const left = useCountdown(live ? (status?.share.expires_at ?? null) : null)
+  const placement = usePillPlacement(!!status)
+  /** null = follow the screen (folded only while a sheet fills it); true/false = their choice. */
+  const [chosenMin, setChosenMin] = useState<boolean | null>(null)
+  const shareId = status?.share.id
   useEffect(() => {
-    if (!showing || typeof document === 'undefined') return
-    const root = document.documentElement
-    root.style.setProperty('--nvr-share-bar', SHARE_BAR_SPACE)
-    root.setAttribute('data-screen-sharing', '')
-    // The reserved room shows #main-content behind the page. Page roots are mostly transparent
-    // and paint their body further in, so the room takes the colour the page shows just above
-    // it (sampled once a second: a navigation or a theme switch changes it).
-    const paint = () => {
-      const surface = pageSurfaceBackground(document)
-      if (surface) root.style.setProperty('--nvr-share-surface', surface)
-    }
-    paint()
-    const timer = setInterval(paint, 1_000)
-    return () => {
-      clearInterval(timer)
-      root.style.removeProperty('--nvr-share-bar')
-      root.style.removeProperty('--nvr-share-surface')
-      root.removeAttribute('data-screen-sharing')
-    }
-  }, [showing])
+    // A new share starts expanded.
+    if (shareId) setChosenMin(null)
+  }, [shareId])
   if (!status || typeof document === 'undefined') return null
   const { share, watching, ended } = status
   const who = shareTargetName(share)
@@ -208,58 +212,93 @@ export function ScreenShareBar() {
       : share.to.kind === 'user'
         ? 'watching now'
         : `${watching.length === 1 ? watching[0] : `${watching.length} people`} watching`
+  const minimised = !ended && (chosenMin ?? placement.kind === 'covered')
+  const timeTip = left ? `Sharing stops by itself in ${left}` : undefined
+
+  if (minimised)
+    return createPortal(
+      <button
+        type='button'
+        data-replay-block
+        data-screen-share-bar='minimised'
+        onClick={() => setChosenMin(false)}
+        aria-label={`Sharing this app with ${who}, ${watchText}. Show the sharing controls`}
+        data-tip={timeTip}
+        className={`nvr-no-record fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-[160] flex h-8 items-center gap-2 rounded-full border border-white/10 bg-[#111827] pl-2.5 pr-3 text-[12px] font-medium text-slate-100 shadow-[0_6px_18px_-6px_rgba(15,23,42,0.5)] transition-colors hover:bg-[#1f2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 ${placement.kind === 'covered' ? 'left-3' : 'right-3 sm:right-20'}`}
+      >
+        <LiveDot />
+        Sharing
+      </button>,
+      document.body
+    )
+
+  const style: CSSProperties =
+    placement.kind === 'beside'
+      ? { left: placement.left, width: placement.width }
+      : placement.kind === 'above'
+        ? { bottom: placement.bottom }
+        : {}
   return createPortal(
     <div
       role='status'
       aria-live='polite'
       data-replay-block
       data-screen-share-bar={ended ? 'ended' : 'live'}
-      className='nvr-no-record pointer-events-none fixed inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] z-[160] flex justify-center px-4'
+      data-placement={placement.kind}
+      style={style}
+      className={`nvr-no-record pointer-events-none fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-[160] flex justify-center px-3 sm:px-4 ${placement.kind === 'beside' ? '' : 'inset-x-0'}`}
     >
-      {/* The app's page area (both hosts use #main-content) keeps clear of the bar too. */}
-      <style>
-        {'html[data-screen-sharing] [data-page-scroll]>*{padding-bottom:var(--nvr-share-bar)}' +
-          'html[data-screen-sharing] #main-content{background:var(--nvr-share-surface)}'}
-      </style>
-      <div className='pointer-events-auto flex max-w-full items-center gap-3 rounded-full border border-white/10 bg-[#111827] py-1.5 pl-3.5 pr-1.5 text-[12.5px] text-slate-100 shadow-[0_8px_24px_-6px_rgba(15,23,42,0.45)]'>
+      <div className='pointer-events-auto flex w-full items-center gap-2.5 rounded-full border border-white/10 bg-[#111827] py-1 pl-3.5 pr-1 text-[12.5px] text-slate-100 shadow-[0_8px_24px_-6px_rgba(15,23,42,0.45)] sm:w-auto sm:max-w-full sm:gap-3 sm:py-1.5 sm:pr-1.5'>
         {ended ? (
           <span className='px-1 py-1 text-slate-300'>{ended}</span>
         ) : (
           <>
-            <span className='relative flex h-2.5 w-2.5 shrink-0' aria-hidden>
-              <span className='absolute inset-0 rounded-full bg-red-500 motion-safe:animate-ping motion-safe:opacity-60' />
-              <span className='relative h-2.5 w-2.5 rounded-full bg-red-500' />
+            <span data-tip={timeTip} className='flex shrink-0'>
+              <LiveDot />
             </span>
             {/* Narrow screens drop the name before the watching state: "Sharing · watching now". */}
-            <span className='min-w-0 truncate'>
+            <span className='min-w-0 flex-1 truncate sm:flex-none'>
               <span className='sm:hidden'>Sharing</span>
               <span className='hidden sm:inline'>
-                Sharing this app with <b className='font-semibold text-white'>{who}</b>
+                Sharing with <b className='font-semibold text-white'>{who}</b>
               </span>
               <span className='text-slate-400' data-screen-share-watching>
                 {' · '}
                 {watchText}
               </span>
             </span>
-            <span
-              className='hidden shrink-0 tabular-nums text-slate-400 sm:inline'
-              data-tip='Sharing stops by itself when this reaches 0:00'
-            >
-              {left}
-            </span>
             <button
               type='button'
               data-screen-share-stop
               onClick={() => stopScreenShare()}
-              className='h-7 shrink-0 rounded-full bg-red-600 px-3.5 text-[12px] font-semibold text-white transition-colors hover:bg-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#111827]'
+              className='h-7 shrink-0 rounded-full bg-red-600 px-3 text-[12px] font-semibold text-white transition-colors hover:bg-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#111827] sm:px-3.5'
             >
-              Stop
+              Stop sharing
+            </button>
+            <button
+              type='button'
+              data-screen-share-minimise
+              onClick={() => setChosenMin(true)}
+              aria-label='Minimise the sharing controls'
+              data-tip='Minimise'
+              className='flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400'
+            >
+              <Minus className='h-3.5 w-3.5' />
             </button>
           </>
         )}
       </div>
     </div>,
     document.body
+  )
+}
+
+function LiveDot() {
+  return (
+    <span className='relative flex h-2.5 w-2.5 shrink-0' aria-hidden>
+      <span className='absolute inset-0 rounded-full bg-red-500 motion-safe:animate-ping motion-safe:opacity-60' />
+      <span className='relative h-2.5 w-2.5 rounded-full bg-red-500' />
+    </span>
   )
 }
 

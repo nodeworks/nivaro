@@ -216,8 +216,7 @@ export function TicketDetailSheet({
               )}
             </SheetHeader>
 
-            {/* While this person shares their screen, the last rows scroll clear of the sharing bar. */}
-            <div className='flex-1 space-y-6 overflow-y-auto px-5 pb-[calc(1.25rem+var(--nvr-share-bar,0px))] pt-5'>
+            <div className='flex-1 space-y-6 overflow-y-auto px-5 py-5'>
               {t.can.work && (
                 <div
                   data-ticket-controls
