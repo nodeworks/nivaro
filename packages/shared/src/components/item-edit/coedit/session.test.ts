@@ -233,6 +233,46 @@ describe('co-editing a long text field', () => {
     expect(ana.editor.getText()).toBe('Ben Base one two!')
   })
 
+  it('a summary answer (repeat watch / sync cap) catches up by steps or asks once', () => {
+    const hub = new Hub()
+    const ana = person(hub, 'ana', '<p>Base</p>')
+    const cy = person(hub, 'cy', '<p>Base</p>', { write: false })
+    hub.flush()
+    ana.focus()
+    hub.flush()
+    typeAt(ana, endOf(ana), ' one')
+    hub.flush()
+    const sid = hub.session?.sid as string
+    const state = (who: string, session: unknown) => {
+      for (const cb of hub.listeners.get(who)?.get('coedit:state') ?? [])
+        cb({ ...target, write: who === 'ana', session })
+    }
+    // Live and current: nothing happens, nothing breaks.
+    const text = ana.editor.getText()
+    state('ana', { sid, version: 1, summary: true })
+    expect(hub.queue.filter((m) => m.event === 'coedit:sync')).toHaveLength(0)
+    expect(ana.editor.getText()).toBe(text)
+    expect(ana.session.isLive()).toBe(true)
+    // Live but behind: asks for the steps since its version (not the whole session).
+    state('ana', { sid, version: 5, summary: true })
+    const sync = hub.queue.filter((m) => m.event === 'coedit:sync')
+    expect(sync).toHaveLength(1)
+    expect(sync[0].payload).toMatchObject({ sid, version: 1 })
+    hub.queue.length = 0
+    // Not in the session (a fresh tab): asks for the whole session once, not on every summary
+    // (no loop with a server that keeps answering summaries past its cap).
+    const dee = person(hub, 'dee', '<p>Base</p>', { write: false })
+    hub.queue.length = 0
+    state('dee', { sid, version: 1, summary: true })
+    state('dee', { sid, version: 1, summary: true })
+    state('dee', { sid, version: 1, summary: true })
+    const asks = hub.queue.filter((m) => m.event === 'coedit:sync' && m.from === 'dee')
+    expect(asks).toHaveLength(1)
+    expect(asks[0].payload.version).toBeUndefined()
+    expect(dee.editor.getText()).toBe('Base')
+    expect(cy.editor.getText()).toBe('Base one')
+  })
+
   it('shows the other writer’s cursor with their name, and keeps it in place as text arrives', () => {
     const hub = new Hub()
     const ana = person(hub, 'ana', '<p>abc</p>')

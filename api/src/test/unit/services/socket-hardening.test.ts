@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { Server } from 'socket.io'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runWithTenantDb } from '../../../db/tenant-context.js'
+import { bumpAccessStamp } from '../../../services/access-stamp.js'
 import {
   cloudUserRoom,
   ownUserRoom,
@@ -10,6 +11,9 @@ import {
 import {
   __resetFieldChangeRelay,
   fieldChangeDelivery,
+  fieldNameDelivery,
+  isMachineViewer,
+  presenceNameTarget,
   type RelayDeps,
   relayableValue,
   relayViewers
@@ -102,6 +106,7 @@ describe('per-socket rate limit (M10)', () => {
 })
 
 describe('field:change values go only to sockets whose person may read the field', () => {
+  afterEach(() => __resetFieldChangeRelay())
   // `cost` and `qty` are plain fields of orders; `card_no` is encrypted (left out of the
   // value-field set, as loadValueFields does for is_encrypted / credential / concealed fields).
   const ORDER_VALUE_FIELDS = new Set(['cost', 'qty'])
@@ -121,7 +126,7 @@ describe('field:change values go only to sockets whose person may read the field
     kind
   })
 
-  it('a field reader gets the value; a non-reader gets the name only', async () => {
+  it('a field reader gets the value; a non-reader gets nothing, not even the name (L4)', async () => {
     const out = await fieldChangeDelivery(
       [v('s1', 'admin'), v('s2', 'narrow'), v('s3', 'wide'), v('s4', 'gone')],
       'orders',
@@ -129,7 +134,7 @@ describe('field:change values go only to sockets whose person may read the field
       deps({ admin: null, narrow: ['qty'], wide: ['*'] })
     )
     expect(out.valueTo.sort()).toEqual(['s1', 's3'])
-    expect(out.nameTo.sort()).toEqual(['s2', 's4'])
+    expect(out.nameTo).toEqual([])
   })
 
   it('an encrypted field never carries its value, even to someone who may read it', async () => {
@@ -200,20 +205,20 @@ describe('field:change values go only to sockets whose person may read the field
       deps({ rob: null, beth: ['qty'] })
     )
     expect(out.valueTo).toEqual(['rob-own-tab'])
-    expect(out.nameTo).toEqual(['rob-as-beth'])
+    expect(out.nameTo).toEqual([])
   })
 
-  it('an API-key socket gets the name only', async () => {
+  it('an API-key socket gets nothing (its key may narrow the field list)', async () => {
     const out = await fieldChangeDelivery(
       [v('k', 'admin', 'apikey')],
       'orders',
       'cost',
       deps({ admin: null })
     )
-    expect(out).toEqual({ valueTo: [], nameTo: ['k'] })
+    expect(out).toEqual({ valueTo: [], nameTo: [] })
   })
 
-  it('a socket whose sign-in kind is missing or unknown gets the name only', async () => {
+  it('a socket whose sign-in kind is missing or unknown gets nothing', async () => {
     const out = await fieldChangeDelivery(
       [
         v('known', 'admin'),
@@ -225,7 +230,7 @@ describe('field:change values go only to sockets whose person may read the field
       deps({ admin: null })
     )
     expect(out.valueTo).toEqual(['known'])
-    expect(out.nameTo.sort()).toEqual(['missing', 'odd'])
+    expect(out.nameTo).toEqual([])
   })
 
   it('the board publishes the bind kind, and a peer viewer is judged by it (fail closed)', async () => {
@@ -274,7 +279,7 @@ describe('field:change values go only to sockets whose person may read the field
       ])
       const out = await fieldChangeDelivery(viewers, 'orders', 'cost', deps({ admin: null }))
       expect(out.valueTo.sort()).toEqual(['local-tab', 'peer-session'])
-      expect(out.nameTo.sort()).toEqual(['peer-key', 'peer-old'])
+      expect(out.nameTo).toEqual([])
     } finally {
       resetBoard()
     }
@@ -287,7 +292,7 @@ describe('field:change values go only to sockets whose person may read the field
         throw new Error('db away')
       }
     })
-    expect(out).toEqual({ valueTo: [], nameTo: ['s'] })
+    expect(out).toEqual({ valueTo: [], nameTo: [] })
   })
 
   it('caches the answers per viewer + collection and per collection', async () => {
@@ -303,6 +308,117 @@ describe('field:change values go only to sockets whose person may read the field
     await fieldChangeDelivery([v('s', 'a')], 'orders', 'qty', d)
     expect(allowed).toHaveBeenCalledTimes(1)
     expect(valueFields).toHaveBeenCalledTimes(1)
+  })
+
+  it('M1: a field list is keyed on role + access stamp — a re-check or role change asks again', async () => {
+    let role = 'R1'
+    let list: string[] = ['cost']
+    let clock = 0
+    const allowed = vi.fn(async () => list)
+    const d: RelayDeps = {
+      loadUser: async (id) => ({ id, role }) as never,
+      allowedFields: allowed,
+      valueFields: async () => ORDER_VALUE_FIELDS,
+      now: () => clock
+    }
+    expect((await fieldChangeDelivery([v('s', 'a')], 'orders', 'cost', d)).valueTo).toEqual(['s'])
+    // Access taken away: an access re-check (forgetJoinVerdicts → bumpAccessStamp, also a
+    // config write / epoch move) makes the very next keystroke judged on the new list — not
+    // after the 30 s TTL.
+    list = ['qty']
+    bumpAccessStamp()
+    expect(await fieldChangeDelivery([v('s', 'a')], 'orders', 'cost', d)).toEqual({
+      valueTo: [],
+      nameTo: []
+    })
+    expect(allowed).toHaveBeenCalledTimes(2)
+    // A role change is its own key: once the person row is read again (5 s), the list is too,
+    // though the 30 s list TTL has not run out.
+    list = ['cost']
+    role = 'R2'
+    clock += 6_000
+    expect((await fieldChangeDelivery([v('s', 'a')], 'orders', 'cost', d)).valueTo).toEqual(['s'])
+    expect(allowed).toHaveBeenCalledTimes(3)
+  })
+
+  it('M1: `fresh` (the co-edit room re-check) never answers from the cache', async () => {
+    const allowed = vi.fn(async () => ['cost'])
+    const d: RelayDeps = {
+      loadUser: async (id) => ({ id, role: 'R' }) as never,
+      allowedFields: allowed,
+      valueFields: async () => ORDER_VALUE_FIELDS,
+      now: () => 0
+    }
+    await fieldChangeDelivery([v('s', 'a')], 'orders', 'cost', d)
+    await fieldChangeDelivery([v('s', 'a')], 'orders', 'cost', d, { fresh: true })
+    await fieldChangeDelivery([v('s', 'a')], 'orders', 'cost', d, { fresh: true })
+    expect(allowed).toHaveBeenCalledTimes(3)
+  })
+
+  it('L6: a machine account (not a placeholder) is never sent a value or a name', async () => {
+    const d: RelayDeps = {
+      loadUser: async (id) =>
+        ({
+          id,
+          role: 'R',
+          account_kind: id === 'bot' ? 'integration' : id === 'ph' ? 'placeholder' : null
+        }) as never,
+      allowedFields: async () => null,
+      valueFields: async () => ORDER_VALUE_FIELDS,
+      now: () => 0
+    }
+    const out = await fieldChangeDelivery(
+      [v('s-bot', 'bot'), v('s-ph', 'ph'), v('s-person', 'person')],
+      'orders',
+      'cost',
+      d
+    )
+    expect(out.valueTo.sort()).toEqual(['s-person', 's-ph'])
+    expect(await fieldNameDelivery([v('s-bot', 'bot')], 'orders', 'cost', d)).toEqual([])
+    expect(isMachineViewer({ account_kind: 'bot' })).toBe(true)
+    expect(isMachineViewer({ account_kind: 'placeholder' })).toBe(false)
+    expect(isMachineViewer({ account_kind: null })).toBe(false)
+  })
+
+  it('L4: presence field names reach the field readers only (fields, row and cell marks)', async () => {
+    const d: RelayDeps = {
+      loadUser: async (id) => ({ id, role: 'R' }) as never,
+      allowedFields: async (u, c) => {
+        const id = (u as { id: string }).id
+        if (id === 'admin') return null
+        if (c === 'order_lines') return id === 'lines' ? ['price'] : []
+        return id === 'narrow' ? ['qty'] : ['cost', 'qty']
+      },
+      valueFields: async () => ORDER_VALUE_FIELDS,
+      now: () => 0
+    }
+    const all = [
+      v('s-admin', 'admin'),
+      v('s-narrow', 'narrow'),
+      v('s-lines', 'lines'),
+      v('s-key', 'admin', 'apikey')
+    ]
+    expect((await fieldNameDelivery(all, 'orders', 'cost', d)).sort()).toEqual([
+      's-admin',
+      's-lines'
+    ])
+    // row:<child collection>:<id> — readers of the child collection at all.
+    expect((await fieldNameDelivery(all, 'orders', 'row:order_lines:9', d)).sort()).toEqual([
+      's-admin',
+      's-lines'
+    ])
+    // cell:<child collection>:<row>:<field> — readers of that child field.
+    expect((await fieldNameDelivery(all, 'orders', 'cell:order_lines:9:price', d)).sort()).toEqual([
+      's-admin',
+      's-lines'
+    ])
+    expect(await fieldNameDelivery(all, 'orders', 'cell:order_lines:9:cost', d)).toEqual([
+      's-admin'
+    ])
+    // Made-up shapes name nothing to anyone.
+    expect(await fieldNameDelivery(all, 'orders', 'a:b', d)).toEqual([])
+    expect(presenceNameTarget('orders', 'cost')).toEqual({ collection: 'orders', field: 'cost' })
+    expect(presenceNameTarget('orders', 'row:x:1')).toEqual({ collection: 'x', field: null })
   })
 
   it('only scalar values travel', () => {

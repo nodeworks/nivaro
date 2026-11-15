@@ -4,6 +4,7 @@ import type { Socket, Server as SocketIOServer } from 'socket.io'
 import { REVOKED_PREFIX } from '../auth/session.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { bumpAccessStamp } from './access-stamp.js'
 import { canSeeRoom } from './chat.js'
 import { getIo } from './io-holder.js'
 import { grantKey } from './oauth-store.js'
@@ -440,6 +441,17 @@ export async function roomStillAllowed(
       if (!spec) return await isAdmin()
       if (spec.gate === 'ticket')
         return await canJoinTicketTopic(user, Number(spec.topic.split(':')[1]), await isAdmin())
+      // A shared dashboard / report a person follows (rt4 #18): the join's own gate (owner,
+      // shared — optionally to one role — or admin), never admin-only (review 2026-11-14 F8).
+      if (spec.gate === 'dashboard' || spec.gate === 'report') {
+        const { canFollowSharedView } = await import('./config-watch.js')
+        return await canFollowSharedView(
+          spec.gate,
+          spec.topic.slice(spec.topic.indexOf(':') + 1),
+          { id: String(user.id), role: user.role ?? null },
+          await isAdmin()
+        )
+      }
       return spec.gate === 'auth' ? true : await isAdmin()
     }
     if (room.startsWith('user:'))
@@ -474,7 +486,8 @@ export async function roomStillAllowed(
       if (!t) return false
       if (!(await canSeeRecordRoom(user, t.collection, t.item, await isAdmin()))) return false
       const deps = coeditGates()
-      if (!(await deps.mayRead(user, t.collection, t.field, ctx.bind?.kind))) return false
+      // Asked fresh: the relay's cached field list may predate the change being re-checked.
+      if (!(await deps.mayRead(user, t.collection, t.field, ctx.bind?.kind, true))) return false
       if (!t.write) return true
       // The cursor room is for people who may type there now (field + record update gates, no
       // lock refusing them); coedit-socket demotes them on their next step.
@@ -564,6 +577,9 @@ const joinVerdicts = new Map<string, { at: number; ok: Promise<boolean> }>()
 
 /** Drop cached join verdicts — everyone's, or one person's. */
 export function forgetJoinVerdicts(userId?: string): void {
+  // Every short-lived realtime verdict (keystroke relay field lists, grid presence, cell-lock
+  // visibility, drag) is keyed on the access stamp: this makes them all stale (review 2026-11-14).
+  bumpAccessStamp()
   if (!userId) {
     joinVerdicts.clear()
     return

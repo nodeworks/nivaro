@@ -111,10 +111,78 @@ export function isStepShape(s: unknown): boolean {
   return shape.ok(s)
 }
 
+// ── URL attributes (review 2026-11-14 L7) ──────────────────────────────────────
+// The server never renders co-edited content, but it relays it to every reader's editor: a link
+// mark (or any node/mark attribute) whose URL runs script or embeds a document is emptied here,
+// so no one's editor is handed one. The editors block them at render too (isSafeLinkHref).
+
+const URL_ATTRS = new Set(['href', 'src', 'action', 'formaction', 'xlink:href', 'background'])
+const SCRIPT_SCHEME = /^(?:javascript|data|vbscript|file):/i
+
+/** Characters a browser skips inside a URL scheme ("java\tscript:"): controls, whitespace, the
+ *  invisible separators. */
+function ignoredInScheme(c: number): boolean {
+  return (
+    c <= 0x20 ||
+    (c >= 0x7f && c <= 0xa0) ||
+    c === 0x1680 ||
+    c === 0x180e ||
+    (c >= 0x2000 && c <= 0x200f) ||
+    c === 0x2028 ||
+    c === 0x2029 ||
+    c === 0x205f ||
+    c === 0x3000 ||
+    c === 0xfeff
+  )
+}
+
+function withoutIgnored(v: string): string {
+  let out = ''
+  for (const ch of v) if (!ignoredInScheme(ch.codePointAt(0) ?? 0)) out += ch
+  return out
+}
+
+const RASTER_DATA = /^data:image\/(?:png|jpe?g|gif|webp|avif);/i
+
+/** Does this attribute value run script / embed a document when used as a URL? (`attr` =
+ *  the attribute: an image `src` may still be a raster data: URL.) */
+export function unsafeUrlValue(v: unknown, attr = 'href'): boolean {
+  if (typeof v !== 'string') return false
+  const flat = withoutIgnored(v)
+  if (!SCRIPT_SCHEME.test(flat)) return false
+  return !(attr.toLowerCase() === 'src' && RASTER_DATA.test(flat))
+}
+
+const SCRUB_MAX_DEPTH = 200
+
+/** Empty every unsafe URL attribute in a step / document (in place); returns the value. Throws
+ *  on nesting deeper than any editor makes (the caller refuses the step). */
+export function scrubUnsafeUrls<T>(v: T, depth = 0): T {
+  if (!v || typeof v !== 'object') return v
+  if (depth > SCRUB_MAX_DEPTH) throw new Error('too deep')
+  if (Array.isArray(v)) {
+    for (const x of v) scrubUnsafeUrls(x, depth + 1)
+    return v
+  }
+  const o = v as Record<string, unknown>
+  // An attr / docAttr step that sets a URL attribute.
+  if (typeof o.stepType === 'string' && typeof o.attr === 'string') {
+    if (URL_ATTRS.has(o.attr.toLowerCase()) && unsafeUrlValue(o.value, o.attr)) o.value = ''
+  }
+  const attrs = o.attrs
+  if (attrs && typeof attrs === 'object' && !Array.isArray(attrs)) {
+    const a = attrs as Record<string, unknown>
+    for (const k of Object.keys(a))
+      if (URL_ATTRS.has(k.toLowerCase()) && unsafeUrlValue(a[k], k)) a[k] = ''
+  }
+  for (const k of Object.keys(o)) scrubUnsafeUrls(o[k], depth + 1)
+  return v
+}
+
 /**
  * A batch of steps as the store keeps it, or null when it is not one: 1..COEDIT_MAX_BATCH steps
  * of a ProseMirror shape (isStepShape), each at most COEDIT_MAX_STEP_BYTES and together at most
- * COEDIT_MAX_BATCH_BYTES of JSON.
+ * COEDIT_MAX_BATCH_BYTES of JSON. Unsafe URL attributes are emptied (scrubUnsafeUrls).
  */
 export function cleanSteps(v: unknown): string[] | null {
   if (!Array.isArray(v) || v.length === 0 || v.length > COEDIT_MAX_BATCH) return null
@@ -122,7 +190,12 @@ export function cleanSteps(v: unknown): string[] | null {
   let bytes = 0
   for (const s of v) {
     if (!isStepShape(s)) return null
-    const json = JSON.stringify(s)
+    let json: string
+    try {
+      json = JSON.stringify(scrubUnsafeUrls(s))
+    } catch {
+      return null
+    }
     if (json.length > COEDIT_MAX_STEP_BYTES) return null
     bytes += json.length
     if (bytes > COEDIT_MAX_BATCH_BYTES) return null
@@ -135,7 +208,12 @@ export function cleanSteps(v: unknown): string[] | null {
 export function cleanDoc(v: unknown): string | null {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null
   if (typeof (v as { type?: unknown }).type !== 'string') return null
-  const json = JSON.stringify(v)
+  let json: string
+  try {
+    json = JSON.stringify(scrubUnsafeUrls(v))
+  } catch {
+    return null
+  }
   return json.length <= COEDIT_MAX_DOC_BYTES ? json : null
 }
 

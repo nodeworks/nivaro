@@ -31,6 +31,7 @@ import { SimpleSelect } from '../ui/SimpleSelect'
 import { COEDIT_REMOTE } from './coedit/collab'
 import type { CoeditFieldTarget } from './coedit/context'
 import { COEDIT_CURSOR_CSS, CoeditCursors } from './coedit/cursors'
+import { isSafeLinkHref } from './coedit/safe-link'
 import { useCoedit } from './coedit/useCoedit'
 
 // ─── EditorJS JSON → HTML ──────────────────────────────────────────────────────
@@ -169,7 +170,13 @@ export function RichTextEditor({
       // No autolink while typing: EFP site codes read like domains (byron.il,
       // oswego.il) and every one became a bogus http:// link in notes that go
       // to suppliers. Links are explicit — the toolbar, or pasting a URL.
-      Link.configure({ openOnClick: false, autolink: false, protocols: ['record'] }),
+      // Never a script / data / file href, whoever typed it (co-edited text included, L7).
+      Link.configure({
+        openOnClick: false,
+        autolink: false,
+        protocols: ['record'],
+        isAllowedUri: (url, ctx) => isSafeLinkHref(url) && ctx.defaultValidate(url)
+      }),
       // Others' cursors while people write here together (inert otherwise).
       CoeditCursors
     ],

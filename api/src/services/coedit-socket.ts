@@ -38,7 +38,8 @@ import { inSocketTenant } from './socket-tenant.js'
  *   coedit:cursor  {…, clientID, version, anchor, head} | {…, clientID, clear: true}
  *   coedit:close   {…, clientID}                            this editor left the session
  * Server → client:
- *   coedit:state   {…, write, session}                      to the asking socket
+ *   coedit:state   {…, write, session}                      to the asking socket; `session` is
+ *                  {sid, version, summary: true} for a repeated watch or past the sync cap
  *   coedit:active  {…, session}                             a session started (room)
  *   coedit:steps   {…, version, steps, clientIDs}           accepted steps (room) / catch-up
  *   coedit:cursor  {…, clientID, version, anchor, head, user} | {…, clientID, clear}
@@ -55,10 +56,16 @@ export interface CoeditDeps {
   fieldMayTravel(collection: string, field: string): Promise<boolean>
   /** The record read gate (role, row filter, user scopes). */
   canSeeRecord(user: User, collection: string, item: string): Promise<boolean>
-  /** May this person read the field? */
   /** Would the typed-value relay (field-change-relay fieldChangeDelivery) send this socket the
-   *  field's value? `kind` = what signed the socket in. Co-edit text is never looser. */
-  mayRead(user: User, collection: string, field: string, kind?: string): Promise<boolean>
+   *  field's value? `kind` = what signed the socket in. Co-edit text is never looser.
+   *  `fresh` = the field list is read again, uncached (the room re-check after a change). */
+  mayRead(
+    user: User,
+    collection: string,
+    field: string,
+    kind?: string,
+    fresh?: boolean
+  ): Promise<boolean>
   /** May this person change the field on this record (field + record update gates)? */
   mayWrite(user: User, collection: string, item: string, field: string): Promise<boolean>
   /** A write of this field on this record is refused right now: someone else's live edit lock
@@ -83,6 +90,16 @@ export const COEDIT_WATCH_MAX = 60
 export const COEDIT_WRITE_RECHECK_MS = 5_000
 /** A heartbeat is written at most this often per editor. */
 const SEEN_EVERY_MS = 10_000
+/** A repeated coedit:watch of a field this socket already watches, within this long, re-runs no
+ *  gate and is answered with the session's id + version only (review 2026-11-14 M2). */
+export const COEDIT_WATCH_REPEAT_MS = 5_000
+/** Whole-session answers (document + every step, up to 2 MB) one socket may ask for by
+ *  coedit:sync per window; past it the answer is the session's id + version only. */
+export const COEDIT_FULL_SYNC_MAX = 6
+/** Watch gate runs one socket may make per window (a record page mounts ≤ COEDIT_WATCH_MAX). */
+export const COEDIT_GATE_RUNS_MAX = COEDIT_WATCH_MAX * 2
+export const COEDIT_GATE_WINDOW_MS = 10_000
+export const COEDIT_FULL_SYNC_WINDOW_MS = 10_000
 
 export function coeditRoomNames(t: CoeditTarget) {
   const tail = `${t.field}:${t.collection}:${t.item}`
@@ -117,6 +134,10 @@ export function registerCoedit(
   deps: CoeditDeps
 ): void {
   const watches = new Map<string, Watch>()
+  /** Field → when this socket's watch gates last ran for it (refused ones too). */
+  const gateRuns = new Map<string, number>()
+  let gateWindow = 0
+  let gatesInWindow = 0
   const userName = (u: User) =>
     ([u.first_name, u.last_name].filter(Boolean).join(' ').trim() || u.email || 'Someone').slice(
       0,
@@ -130,6 +151,22 @@ export function registerCoedit(
     s
       ? { sid: s.sid, version: s.version, baseVersion: s.baseVersion, doc: s.doc, steps: s.steps }
       : null
+  /** Which session and where it stands, without the document or steps (a repeat / over cap). */
+  const sessionSummary = (s: SessionState | null) =>
+    s ? { sid: s.sid, version: s.version, summary: true as const } : null
+  let fullSyncWindow = 0
+  let fullSyncs = 0
+  /** May this socket be sent one more whole session by coedit:sync now? */
+  const takeFullSync = (): boolean => {
+    const now = deps.now()
+    if (now - fullSyncWindow >= COEDIT_FULL_SYNC_WINDOW_MS) {
+      fullSyncWindow = now
+      fullSyncs = 0
+    }
+    if (fullSyncs >= COEDIT_FULL_SYNC_MAX) return false
+    fullSyncs++
+    return true
+  }
   /** The socket's watch of a field — while it is still in the field's read room (a room
    *  recheck after a permission change takes it out). */
   const watchOf = (p: unknown): Watch | null => {
@@ -163,7 +200,27 @@ export function registerCoedit(
     const t = cleanTarget(p)
     if (!user || !t) return
     const id = tkey(t)
-    if (!watches.has(id) && watches.size >= COEDIT_WATCH_MAX) return
+    const known = watches.get(id)
+    const now = deps.now()
+    const gatedAt = gateRuns.get(id)
+    if (gatedAt != null && now - gatedAt < COEDIT_WATCH_REPEAT_MS) {
+      // A repeat: no gate runs again, no document goes out — the session's id + version only,
+      // and nothing at all for a field this socket was refused (or taken out of) just now.
+      if (!known || !socket.rooms.has(known.readRoom)) return
+      const key = storeKey(t)
+      const session = key ? await deps.store.read(key).catch(() => null) : null
+      socket.emit('coedit:state', { ...t, write: canType(known), session: sessionSummary(session) })
+      return
+    }
+    if (!known && watches.size >= COEDIT_WATCH_MAX) return
+    // Every gate run counts against one per-socket budget (watch / unwatch cycles too).
+    if (now - gateWindow >= COEDIT_GATE_WINDOW_MS) {
+      gateWindow = now
+      gatesInWindow = 0
+    }
+    if (++gatesInWindow > COEDIT_GATE_RUNS_MAX) return
+    if (gateRuns.size >= COEDIT_WATCH_MAX * 4) gateRuns.clear()
+    gateRuns.set(id, now)
     // A person at a screen only (session, View-as, static token, phone): an API key may narrow
     // what its person reads, so integrations never receive typed text (the field:change rule).
     const kind = (socket.data?.nvrBind as { kind?: string } | undefined)?.kind
@@ -198,6 +255,8 @@ export function registerCoedit(
     const w = watchOf(p)
     if (!w) return
     watches.delete(tkey(w.target))
+    // Watching it again (an editor remounted) runs the gates again, within the socket's budget.
+    gateRuns.delete(tkey(w.target))
     for (const clientID of [...w.members.keys()]) await leaveMember(w, clientID)
     socket.leave(w.readRoom)
     if (w.writeRoom) socket.leave(w.writeRoom)
@@ -305,15 +364,18 @@ export function registerCoedit(
     await sendState(w)
   }
 
-  const sendState = async (w: Watch) => {
+  /** The session to this socket. `capped` = asked for by coedit:sync: past the per-socket
+   *  whole-session cap only its id + version go out. */
+  const sendState = async (w: Watch, capped = false) => {
     const key = storeKey(w.target)
     const state = key ? await deps.store.read(key).catch(() => null) : null
-    socket.emit('coedit:state', { ...w.target, write: canType(w), session: sessionOut(state) })
+    const session = capped && !takeFullSync() ? sessionSummary(state) : sessionOut(state)
+    socket.emit('coedit:state', { ...w.target, write: canType(w), session })
   }
 
   /** The steps after `version` of session `sid` to this socket, or the whole session when the
    *  socket holds another one (or a version it no longer has). */
-  const sendSince = async (w: Watch, sid: string, version: number) => {
+  const sendSince = async (w: Watch, sid: string, version: number, capped = false) => {
     const key = storeKey(w.target)
     if (!key) return
     const since = await deps.store.since(key, version).catch(() => null)
@@ -328,7 +390,7 @@ export function registerCoedit(
       return
     }
     if (since && since.sid === sid) return
-    await sendState(w)
+    await sendState(w, capped)
   }
 
   /** `{sid, version}` = the steps since it; nothing = the whole session (a second tab). */
@@ -337,12 +399,12 @@ export function registerCoedit(
     if (!getUser() || !w) return
     const o = (p ?? {}) as { version?: unknown; sid?: unknown }
     if (o.version == null || typeof o.sid !== 'string') {
-      await sendState(w)
+      await sendState(w, true)
       return
     }
     const version = Number(o.version)
-    if (!Number.isInteger(version) || version < 0) return
-    await sendSince(w, o.sid, version)
+    if (!Number.isInteger(version) || version < 0 || o.sid.length > 40) return
+    await sendSince(w, o.sid, version, true)
   }
 
   const onCursor = async (p: unknown) => {
@@ -424,14 +486,16 @@ export function coeditGates(): Omit<CoeditDeps, 'store' | 'now'> {
       const { canSeeRecordRoom } = await import('./socket-access.js')
       return canSeeRecordRoom(user, collection, item)
     },
-    async mayRead(user, collection, field, kind) {
+    async mayRead(user, collection, field, kind, fresh) {
       // The same answer the keystroke relay gives this socket (fix-keystroke): a value field of
       // the collection, the person's read list, and a sign-in kind that is exactly the person.
       const { fieldChangeDelivery } = await import('./field-change-relay.js')
       const { valueTo } = await fieldChangeDelivery(
         [{ socket: 'coedit', id: String(user.id), kind }],
         collection,
-        field
+        field,
+        undefined,
+        { fresh: !!fresh }
       )
       return valueTo.length === 1
     },

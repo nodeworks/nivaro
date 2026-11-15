@@ -232,7 +232,7 @@ describe('upload presence (rt9 #9)', () => {
     expect(JSON.stringify(hidden)).not.toContain('salary')
   })
 
-  it('names go only to sockets whose person may read the field', async () => {
+  it('names go only to sockets whose person may read the field; others hear nothing (L4)', async () => {
     __resetFieldChangeRelay()
     const deps: RelayDeps = {
       loadUser: async (id) => ({ id }) as never,
@@ -247,8 +247,11 @@ describe('upload presence (rt9 #9)', () => {
     ]
     const d = await uploadNameDelivery(viewers, 'workflows', 'quote', deps)
     expect(d.valueTo).toEqual(['s1'])
-    expect(d.nameTo.sort()).toEqual(['s2', 's3'])
+    // The event names the field: a non-reader (B) and an API-key socket (C) get nothing.
+    expect(d.nameTo).toEqual([])
+    // No field named: everyone hears "uploading a file".
     const none = await uploadNameDelivery(viewers, 'workflows', null, deps)
     expect(none.valueTo).toEqual([])
+    expect(none.nameTo.sort()).toEqual(['s1', 's2', 's3'])
   })
 })

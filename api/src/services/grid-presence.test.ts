@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { User } from '../types.js'
+import { bumpAccessStamp } from './access-stamp.js'
 import {
   cleanGridField,
   cleanGridPage,
@@ -15,9 +16,21 @@ vi.mock('./socket-access.js', () => ({
 }))
 vi.mock('./socket-tenant.js', () => ({ inSocketTenant: vi.fn(), socketTenant: vi.fn() }))
 
-type Emit = { to: string; via: 'socket' | 'io'; event: string; payload: Record<string, unknown> }
+type Emit = {
+  to: string
+  via: 'socket' | 'io'
+  event: string
+  payload: Record<string, unknown>
+  except?: string[]
+}
 
-function harness(opts: { canSee?: (item: string) => boolean; visible?: string[] } = {}) {
+function harness(
+  opts: {
+    canSee?: (item: string) => boolean
+    visible?: string[]
+    readers?: (field: string) => string[] | 'all'
+  } = {}
+) {
   const handlers = new Map<string, (...a: unknown[]) => unknown>()
   const joined = new Set<string>()
   const emits: Emit[] = []
@@ -29,15 +42,26 @@ function harness(opts: { canSee?: (item: string) => boolean; visible?: string[] 
     leave: (r: string) => joined.delete(r),
     to: (room: string) => ({
       emit: (event: string, payload: Record<string, unknown>) =>
-        emits.push({ to: room, via: 'socket', event, payload })
+        emits.push({ to: room, via: 'socket', event, payload }),
+      except: (ids: string[]) => ({
+        emit: (event: string, payload: Record<string, unknown>) =>
+          emits.push({ to: room, via: 'socket', event, payload, except: ids })
+      })
     })
   }
   const io = {
-    to: (room: string) => ({
+    to: (room: string | string[]) => ({
       emit: (event: string, payload: Record<string, unknown>) =>
-        emits.push({ to: room, via: 'io', event, payload })
+        emits.push({ to: String(room), via: 'io', event, payload }),
+      except: (ids: string[]) => ({
+        emit: (event: string, payload: Record<string, unknown>) =>
+          emits.push({ to: String(room), via: 'io', event, payload, except: ids })
+      })
     })
   }
+  const markReaders = vi.fn(async (_r: string, _self: string, _c: string, field: string) =>
+    opts.readers ? opts.readers(field) : ('all' as const)
+  )
   const canSee = vi.fn(async (_u: User, _c: string, item: string) =>
     opts.canSee ? opts.canSee(item) : true
   )
@@ -47,6 +71,7 @@ function harness(opts: { canSee?: (item: string) => boolean; visible?: string[] 
   let clock = 1_000_000
   const deps: GridPresenceDeps = {
     canSee,
+    markReaders,
     visible,
     tenant: async () => '',
     wrap: (_s, fn) => fn,
@@ -167,11 +192,52 @@ describe('grid presence', () => {
       ['grid:workflows:8', 'start']
     ])
     await h.call('disconnect')
+    await new Promise((r) => setTimeout(r, 0))
     expect(h.emits.at(-1)).toMatchObject({
       to: 'grid:workflows:8',
       via: 'io',
       payload: { state: 'end' }
     })
+  })
+
+  it('L4: a real field goes to its readers only; the rest of the room gets the row mark', async () => {
+    const h = harness({ readers: (f) => (f === 'amount' ? ['s-reader'] : 'all') })
+    await h.call('grid:here', { collection: 'workflows', item: '7', field: 'amount', page: 'p' })
+    expect(h.emits).toEqual([
+      expect.objectContaining({
+        to: 's-reader',
+        via: 'io',
+        payload: expect.objectContaining({ field: 'amount' })
+      }),
+      expect.objectContaining({
+        to: 'grid:workflows:7',
+        via: 'socket',
+        except: ['s-reader'],
+        payload: expect.objectContaining({ field: null, state: 'start' })
+      })
+    ])
+    // A worksheet cell key that is not a field name goes to the room as before.
+    h.tick(1000)
+    await h.call('grid:here', { collection: 'workflows', item: '7', field: '2.11', page: 'q' })
+    expect(h.emits.at(-1)).toMatchObject({ to: 'grid:workflows:7', payload: { field: '2.11' } })
+    // Nobody may read it (or the lookup failed): only the row mark, never the field.
+    const n = harness({ readers: () => [] })
+    await n.call('grid:here', { collection: 'workflows', item: '7', field: 'amount', page: 'p' })
+    expect(n.emits).toHaveLength(1)
+    expect(n.emits[0].payload.field).toBeNull()
+  })
+
+  it('L5: the sender verdict is dropped by an access re-check (access stamp)', async () => {
+    const h = harness()
+    const here = { collection: 'workflows', item: '7', field: 'a', page: 'p' }
+    await h.call('grid:here', here)
+    h.tick(1000)
+    await h.call('grid:here', here)
+    expect(h.canSee).toHaveBeenCalledTimes(1)
+    bumpAccessStamp()
+    h.tick(1000)
+    await h.call('grid:here', here)
+    expect(h.canSee).toHaveBeenCalledTimes(2)
   })
 
   it('caps announcements per second', async () => {
