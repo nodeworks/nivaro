@@ -644,7 +644,14 @@ async function readRecordFiles(
     if (!row) continue
     const name = String(row.filename_download || row.title || 'document')
     try {
-      const doc = await extractForAsk(await readFileBuffer(row), name, row.type ?? null)
+      // Text the upload processor already read (rt3 #17) — same bounded reader; a replaced
+      // file dropped it with its renditions.
+      const { cachedExtract } = await import('./file-processing.js')
+      const kept = await cachedExtract<Awaited<ReturnType<typeof extractForAsk>>>(id)
+      const doc =
+        kept && typeof kept.text === 'string'
+          ? kept
+          : await extractForAsk(await readFileBuffer(row), name, row.type ?? null)
       if (doc.text.trim().length < 40) continue
       out.push({ name, text: doc.text, truncated: doc.truncated, pages: doc.pages })
     } catch {

@@ -5,6 +5,7 @@ import { get } from '../lib/commands'
 import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../lib/live'
 import { peekDecision, useRecordPeek } from '../lib/record-peek'
 import { chatRoomTypesQuery } from './chat/chat-core'
+import { RecordHoverCard } from './RecordHoverCard'
 
 /**
  * Renders plain text with entity-registry-shaped record ids (e.g. AB26-12345,
@@ -110,25 +111,27 @@ function RecordToken({ token, plain }: { token: string; plain?: boolean }) {
     nav.navigate((nav.itemUrl ?? defaultItemUrl)(target))
   }
   return (
-    <button
-      type='button'
-      onClick={open}
-      className='inline-flex max-w-full items-center gap-1 align-baseline font-medium text-nvr-navy underline decoration-nvr-cyan/50 decoration-[1.5px] underline-offset-2 hover:decoration-nvr-cyan dark:text-nvr-cyan'
-      data-record-token={token}
-    >
-      {token}
-      {card.state && (
-        <span
-          className='inline-flex items-center rounded-full px-1.5 py-px text-[9px] font-semibold leading-tight'
-          style={{
-            backgroundColor: card.color ? `${card.color}26` : 'rgba(100,116,139,.15)',
-            color: card.color ?? undefined
-          }}
-        >
-          {card.state}
-        </span>
-      )}
-    </button>
+    <RecordHoverCard collection={card.collection} id={card.id}>
+      <button
+        type='button'
+        onClick={open}
+        className='inline-flex max-w-full items-center gap-1 align-baseline font-medium text-nvr-navy underline decoration-nvr-cyan/50 decoration-[1.5px] underline-offset-2 hover:decoration-nvr-cyan dark:text-nvr-cyan'
+        data-record-token={token}
+      >
+        {token}
+        {card.state && (
+          <span
+            className='inline-flex items-center rounded-full px-1.5 py-px text-[9px] font-semibold leading-tight'
+            style={{
+              backgroundColor: card.color ? `${card.color}26` : 'rgba(100,116,139,.15)',
+              color: card.color ?? undefined
+            }}
+          >
+            {card.state}
+          </span>
+        )}
+      </button>
+    </RecordHoverCard>
   )
 }
 
@@ -207,15 +210,16 @@ function RecordPathToken({
     nav.navigate((nav.itemUrl ?? defaultItemUrl)(target))
   }
   return (
-    <button
-      type='button'
-      onClick={open}
-      className='inline-flex max-w-full items-center align-baseline font-medium text-nvr-navy underline decoration-nvr-cyan/50 decoration-[1.5px] underline-offset-2 hover:decoration-nvr-cyan dark:text-nvr-cyan'
-      data-record-path={raw}
-      data-tip={raw}
-    >
-      {data.label}
-    </button>
+    <RecordHoverCard collection={collection} id={id}>
+      <button
+        type='button'
+        onClick={open}
+        className='inline-flex max-w-full items-center align-baseline font-medium text-nvr-navy underline decoration-nvr-cyan/50 decoration-[1.5px] underline-offset-2 hover:decoration-nvr-cyan dark:text-nvr-cyan'
+        data-record-path={raw}
+      >
+        {data.label}
+      </button>
+    </RecordHoverCard>
   )
 }
 

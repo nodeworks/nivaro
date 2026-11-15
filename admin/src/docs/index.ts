@@ -79,6 +79,7 @@ export * from './sections/quality-checks.js'
 export * from './sections/queues.js'
 export * from './sections/ready-to-send.js'
 export * from './sections/realtime-tier.js'
+export * from './sections/record-glance.js'
 export * from './sections/record-insights.js'
 export * from './sections/record-integrations.js'
 export * from './sections/release-image.js'
@@ -437,6 +438,7 @@ import { realtimeLoadTest } from './sections/realtime-load-test.js'
 import { realtimePresenceLoad } from './sections/realtime-presence-load.js'
 import { realtimeTierDocs } from './sections/realtime-tier.js'
 import { realtimeTransport } from './sections/realtime-transport.js'
+import { collabRecordGlance } from './sections/record-glance.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
 import { recordIntegrations } from './sections/record-integrations.js'
 import { releaseImageDocs } from './sections/release-image.js'
@@ -922,6 +924,7 @@ export const navSections: NavGroup[] = [
       collabLiveRecords,
       collabReloadTrust,
       collabLiveConflicts,
+      collabRecordGlance,
       liveWidgetsDocs,
       liveOutsideDocs,
       collabLiveProgress,

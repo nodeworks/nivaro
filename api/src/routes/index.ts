@@ -262,6 +262,7 @@ import { realtimeOutsideWritesRoutes } from './realtime-outside-writes.js'
 import { realtimeTrustRoutes } from './realtime-trust.js'
 import { realtimeVerifyRoutes } from './realtime-verify.js'
 import { realtimeWorkerRoutes } from './realtime-worker.js'
+import { recordGlanceRoutes } from './record-glance.js'
 import { recordGraphRoutes } from './record-graph.js'
 import { recordIntegrationsRoutes } from './record-integrations.js'
 import { recordLinkRoutes } from './record-links.js'
@@ -496,6 +497,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // Idea 37: Integrations console → Ready to send (nightly partner-send preflight board).
   await app.register(readyToSendRoutes)
   await app.register(recordViewRoutes)
+  // rt3 #14/#16/#17 — unseen changes before a move, record hover cards, file processing status.
+  await app.register(recordGlanceRoutes)
   // #3227 — role starter sidebar layouts (a person's own rides preferences.nav_layout)
   await app.register(navLayoutRoutes, { prefix: '/nav-layout' })
   // Collections page: collections an admin pins to the top for everyone
