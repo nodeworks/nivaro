@@ -61,7 +61,7 @@ export function ConfigTheirsPanel({
               <tr>
                 <th className='w-[22%] px-4 py-1.5 font-medium'>Field</th>
                 <th className='px-4 py-1.5 font-medium'>Theirs (saved)</th>
-                <th className='px-4 py-1.5 font-medium'>Yours (unsaved)</th>
+                <th className='px-4 py-1.5 font-medium'>Your form</th>
               </tr>
             </thead>
             <tbody className='divide-y divide-slate-100 dark:divide-border'>
