@@ -215,8 +215,8 @@ export function TeamBoardTab() {
   const c = data.counts
   return (
     <div className='space-y-5' data-team-board='ready'>
-      <div className='flex flex-wrap items-end justify-between gap-x-6 gap-y-3'>
-        <div className='min-w-0'>
+      <div className='flex items-start justify-between gap-3'>
+        <div className='min-w-0 flex-1'>
           <p className='text-[13px] text-slate-700 dark:text-foreground'>
             <span className='font-semibold tabular-nums'>{c.online}</span> online
             <Sep />
@@ -238,7 +238,7 @@ export function TeamBoardTab() {
             Who is working on which record right now, from live presence. Nothing here is kept.
           </p>
         </div>
-        <div className='flex flex-wrap items-center gap-2'>
+        <div className='flex shrink-0 flex-wrap items-center justify-end gap-2'>
           {live.off && <LiveOffNote variant='header' />}
           <button
             type='button'
@@ -314,11 +314,23 @@ export function TeamBoardTab() {
           </p>
         </div>
       ) : groups.length === 0 ? (
-        <p className='rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center text-[12.5px] text-slate-500 dark:border-border dark:text-muted-foreground'>
-          {onRecordOnly && !search
-            ? 'Nobody has a record open right now.'
-            : 'Nobody online matches that.'}
-        </p>
+        <div className='rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center dark:border-border'>
+          <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+            {onRecordOnly && !search
+              ? 'Nobody has a record open right now.'
+              : 'Nobody online matches that.'}
+          </p>
+          <button
+            type='button'
+            onClick={() => {
+              setSearch('')
+              setOnRecordOnly(false)
+            }}
+            className='mt-2 text-[12px] font-medium text-[#0e7490] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-[#67e8f9]'
+          >
+            Clear filters
+          </button>
+        </div>
       ) : (
         <div className='space-y-5'>
           {groups.map(([name, list]) => (
@@ -489,10 +501,12 @@ function PersonRow({ p, now, pulse }: { p: BoardPerson; now: number; pulse: numb
 function RecordChip({ r, now }: { r: BoardRecord; now: number }) {
   const open = openFor(r.since, now)
   const label = r.label ?? `#${r.item}`
+  const sinceText =
+    r.since != null
+      ? new Date(r.since).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+      : null
   const tip = [
-    r.editing ? 'Editing' : 'Viewing',
-    titleCase(r.collection.replace(/_/g, ' ')),
-    open && open !== 'just now' ? `for ${open}` : null,
+    `${r.editing ? 'Editing' : 'Viewing'}${sinceText ? ` since ${sinceText}` : ''}`,
     r.tabs > 1 ? `${r.tabs} tabs` : null
   ]
     .filter(Boolean)

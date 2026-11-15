@@ -117,6 +117,21 @@ describe('assembleTeamBoard', () => {
     expect(JSON.stringify(board)).not.toContain('u-admin')
   })
 
+  it("uses the Online row's page as a record only for someone without page pings", () => {
+    const board = assembleTeamBoard({
+      ...base,
+      presence: [
+        { user_id: 'u-a', display_name: 'A', current_path: '/collections/workflows/1' },
+        { user_id: 'u-b', display_name: 'B', current_path: '/collections/workflows/2' }
+      ],
+      pages: [
+        { user: { id: 'u-a', name: 'A' }, path: '/collections/invoices/9', since: NOW, socket: 's' }
+      ]
+    })
+    expect(board.people[0].records.map((r) => r.item)).toEqual(['9'])
+    expect(board.people[1].records.map((r) => r.item)).toEqual(['2'])
+  })
+
   it('a lock alone does not put someone on the board', () => {
     const board = assembleTeamBoard({
       ...base,

@@ -1,3 +1,4 @@
+import { queryKeys } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import {
@@ -11,7 +12,7 @@ import {
 } from 'recharts'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, titleCase } from '@/lib/utils'
 
 /**
  * Write to screen (realtime round 5, item 25): from the moment someone saves a change to the
@@ -44,6 +45,28 @@ export function seconds(ms: number | null): string {
   return `${(ms / 1000).toFixed(1)} s`
 }
 
+/** Below this many hours with timed changes the hourly chart says too little to draw. */
+const MIN_CHART_HOURS = 3
+
+const SCREEN_NAMES: Array<[RegExp, string]> = [
+  [/^\/$/, 'Home'],
+  [/^\/(?:admin\/)?(?:collections|records)\/[^/]+\/(?::id|new)$/, 'Record page'],
+  [/^\/(?:admin\/)?(?:collections|records)\/[^/]+$/, 'List'],
+  [/^\/(?:admin\/)?queues\/:id$/, 'Queue'],
+  [/^\/(?:admin\/)?queues$/, 'Queues'],
+  [/^\/(?:admin\/)?dashboards?\/:id$/, 'Dashboard'],
+  [/^\/my-work/, 'My Work'],
+  [/^\/search/, 'Search'],
+  [/^\/command/, 'Command Center']
+]
+
+/** A screen pattern ("/collections/:c/:id") in plain words ("Record page"). */
+export function screenName(pattern: string): string {
+  for (const [re, name] of SCREEN_NAMES) if (re.test(pattern)) return name
+  const parts = pattern.split('/').filter((p) => p && !p.startsWith(':'))
+  return parts.length ? titleCase(parts.join(' › ').replace(/[-_]/g, ' ')) : 'Home'
+}
+
 const WINDOWS: Array<[number, string]> = [
   [24, 'Last 24 hours'],
   [168, 'Last 7 days']
@@ -60,6 +83,20 @@ export function WriteToScreenTab() {
     refetchInterval: 60_000
   })
 
+  const { data: collections } = useQuery<
+    Array<{ collection: string; display_name?: string | null; plural?: string | null }>
+  >({
+    queryKey: queryKeys.collections(),
+    queryFn: () => api.get('/collections').then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const labelOf = useMemo(() => {
+    const map = new Map(
+      (collections ?? []).map((c) => [c.collection, c.display_name || c.plural || null])
+    )
+    return (name: string) => map.get(name) || titleCase(name.replace(/_/g, ' '))
+  }, [collections])
+
   const points = useMemo(
     () =>
       (data?.hours ?? []).map((h) => {
@@ -67,7 +104,7 @@ export function WriteToScreenTab() {
         return {
           label:
             hours > 48
-              ? d.toLocaleDateString(undefined, { weekday: 'short', hour: 'numeric' })
+              ? d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })
               : d.toLocaleTimeString(undefined, { hour: 'numeric' }),
           p50: h.p50_ms != null ? h.p50_ms / 1000 : null,
           p95: h.p95_ms != null ? h.p95_ms / 1000 : null,
@@ -77,15 +114,27 @@ export function WriteToScreenTab() {
     [data, hours]
   )
 
+  const hoursWithData = (data?.hours ?? []).filter((h) => h.samples > 0).length
+
   return (
     <div className='space-y-6' data-write-to-screen={data ? 'ready' : 'loading'}>
       <div className='flex flex-wrap items-end justify-between gap-3'>
-        <p className='max-w-3xl text-[12px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
-          How long a change someone saves takes to show on other people's open screens: from the
-          save to the moment their page has re-drawn it. Screens time a small sample of changes
-          (about 1 in 50, and at least one every 30 s per server); tabs set to Calm or Off live
-          updates, hidden tabs and the person's own saves are not timed.
-        </p>
+        <div className='max-w-3xl text-[12px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
+          <p>
+            How long a change someone saves takes to show on other people's open screens: from the
+            save to the moment their page has re-drawn it.
+          </p>
+          <details className='group mt-1'>
+            <summary className='cursor-pointer select-none font-medium text-slate-600 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:text-foreground'>
+              How this is measured
+            </summary>
+            <p className='mt-1'>
+              Screens time a small sample of changes: about 1 in 50, and at least one every 30
+              seconds per server. Tabs set to Calm or Off live updates, hidden tabs and the tab that
+              made the save are not timed. Amber marks a p95 over the {seconds(SLOW_MS)} target.
+            </p>
+          </details>
+        </div>
         <fieldset
           aria-label='Window'
           className='m-0 inline-flex h-8 min-w-0 items-center rounded-md border border-slate-200 p-0.5 dark:border-border'
@@ -131,7 +180,11 @@ export function WriteToScreenTab() {
             <Cell
               label='On other screens (p95)'
               value={seconds(data.overall.p95_ms)}
-              note={`median ${seconds(data.overall.p50_ms)}`}
+              note={
+                data.overall.p95_ms != null && data.overall.p95_ms > SLOW_MS
+                  ? `over the ${seconds(SLOW_MS)} target · median ${seconds(data.overall.p50_ms)}`
+                  : `median ${seconds(data.overall.p50_ms)}`
+              }
               tone={
                 data.overall.p95_ms != null && data.overall.p95_ms > SLOW_MS
                   ? 'text-amber-700 dark:text-amber-300'
@@ -163,6 +216,15 @@ export function WriteToScreenTab() {
               <p className='py-10 text-center text-[12.5px] text-slate-500 dark:text-muted-foreground'>
                 No timed changes yet. They arrive as people's open screens show others' saves.
               </p>
+            ) : hoursWithData < MIN_CHART_HOURS ? (
+              <p
+                className='py-10 text-center text-[12.5px] text-slate-500 dark:text-muted-foreground'
+                data-chart='sparse'
+              >
+                {data.overall.samples.toLocaleString()} timed{' '}
+                {data.overall.samples === 1 ? 'change' : 'changes'} so far, too few to chart by
+                hour. The chart appears once changes are timed in {MIN_CHART_HOURS} different hours.
+              </p>
             ) : (
               <div className='text-slate-500 dark:text-muted-foreground'>
                 <ResponsiveContainer width='100%' height={220}>
@@ -173,7 +235,7 @@ export function WriteToScreenTab() {
                       tick={{ fontSize: 10, fill: 'currentColor' }}
                       tickLine={false}
                       axisLine={{ stroke: 'currentColor', strokeOpacity: 0.2 }}
-                      minTickGap={28}
+                      interval={hours > 48 ? 23 : 1}
                     />
                     <YAxis
                       tick={{ fontSize: 10, fill: 'currentColor' }}
@@ -255,20 +317,27 @@ export function WriteToScreenTab() {
                       <th className='px-3 py-2'>App</th>
                       <th className='px-3 py-2 text-right'>Timed</th>
                       <th className='px-3 py-2 text-right'>Median</th>
-                      <th className='px-3 py-2 text-right'>p95</th>
+                      <th className='px-3 py-2 text-right'>
+                        <span data-tip={`Amber: over the ${seconds(SLOW_MS)} target`}>p95</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody className='divide-y divide-slate-100 bg-white dark:divide-border/60 dark:bg-card'>
                     {data.screens.map((s) => (
                       <tr key={`${s.app}|${s.screen}|${s.collection}`}>
-                        <td className='max-w-[320px] truncate px-3 py-1.5 font-mono text-[11.5px] text-slate-800 dark:text-foreground'>
-                          {s.screen}
+                        <td className='px-3 py-1.5 text-slate-800 dark:text-foreground'>
+                          <span data-tip={s.screen}>{screenName(s.screen)}</span>
                         </td>
-                        <td className='px-3 py-1.5 text-slate-700 dark:text-foreground'>
-                          {s.collection}
+                        <td className='px-3 py-1.5'>
+                          <span className='text-slate-800 dark:text-foreground'>
+                            {labelOf(s.collection)}
+                          </span>
+                          <span className='ml-2 font-mono text-[11px] text-slate-400 dark:text-muted-foreground'>
+                            {s.collection}
+                          </span>
                         </td>
                         <td className='px-3 py-1.5 text-slate-500 dark:text-muted-foreground'>
-                          {s.app}
+                          {titleCase(s.app)}
                         </td>
                         <td className='px-3 py-1.5 text-right text-slate-600 dark:text-muted-foreground'>
                           {s.samples.toLocaleString()}
@@ -291,6 +360,12 @@ export function WriteToScreenTab() {
                   </tbody>
                 </table>
               </div>
+            )}
+            {data.screens.some((x) => x.p95_ms != null && x.p95_ms > SLOW_MS) && (
+              <p className='mt-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                <span className='font-medium text-amber-700 dark:text-amber-300'>Amber</span>: p95
+                over the {seconds(SLOW_MS)} target.
+              </p>
             )}
           </section>
         </>

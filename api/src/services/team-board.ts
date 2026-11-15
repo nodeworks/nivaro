@@ -216,8 +216,6 @@ export function assembleTeamBoard(input: {
       : null
     p.in_huddle = !!row.in_huddle
     p.scopes = scopesOf(row.scopes_by_dimension)
-    const rec = recordOfPath(str(row.current_path))
-    if (rec) noteRecord(p, rec.collection, rec.item, {})
   }
 
   // Every open tab's page: one record per tab, how long it has been open.
@@ -228,6 +226,17 @@ export function assembleTeamBoard(input: {
     if (!p.app && pg.app) p.app = pg.app
     const rec = recordOfPath(pg.path)
     if (rec) noteRecord(p, rec.collection, rec.item, { since: num(pg.since), tab: true })
+  }
+
+  // The Online row's page names a record only for someone with no page pings (a host that
+  // does not send them): with live tabs it is just the last page any of them reported, often
+  // one that is already closed.
+  for (const row of input.presence) {
+    const id = str(row.user_id)
+    const p = id ? people.get(up(id)) : undefined
+    if (!p || p.tabs > 0) continue
+    const rec = recordOfPath(str(row.current_path))
+    if (rec) noteRecord(p, rec.collection, rec.item, {})
   }
 
   // Record rooms (portal tabs that join without a page ping, other processes).
