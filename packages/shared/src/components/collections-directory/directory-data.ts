@@ -3,6 +3,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, patch } from '../../lib/commands'
+import { useLiveRefresh } from '../../lib/live-counts'
 import type {
   CollectionFavorites,
   CollectionSummary,
@@ -45,6 +46,22 @@ export function useOverviewStats(enabled: boolean) {
     enabled,
     staleTime: 60_000,
     retry: false
+  })
+}
+
+/**
+ * Keeps the directory's counts and last-change times current (administrators): the server pokes
+ * the `collections` topic when a data write lands, and the stats are re-read once per quiet window, in place. Nothing is
+ * announced; a read that fails just leaves the numbers as they were.
+ */
+export function useLiveDirectory(enabled: boolean): void {
+  useLiveRefresh({
+    topic: 'collections',
+    // Stats only: re-reading the registry list under an Arrange in progress would undo it.
+    keys: [DIRECTORY_KEYS.stats],
+    quietMs: 5000,
+    maxWaitMs: 30_000,
+    enabled
   })
 }
 

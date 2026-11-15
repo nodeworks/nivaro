@@ -18,6 +18,7 @@ import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from '
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
 import { get, post } from '../lib/commands'
+import { createCoalescer } from '../lib/live-counts'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import {
   type NotificationActionSpec,
@@ -32,6 +33,7 @@ import {
 } from '../lib/notification-target'
 import { useTabAttention } from '../lib/tab-attention'
 import { cn, formatRelative } from '../lib/utils'
+import { LiveCount } from './LiveCount'
 import { AsItWasSheet } from './notifications/AsItWasSheet'
 import {
   bundleAsNotification,
@@ -290,7 +292,18 @@ export function NotificationBell({
   const [asItWas, setAsItWas] = useState<BellNotification | null>(null)
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: invalidate is stable per client/qc; re-subscribing on every render would leak listeners
-  useEffect(() => subscribe?.(invalidate), [subscribe])
+  // A burst of new notifications is one re-read of the count and list (2 s quiet window).
+  const invalidateRef = useRef(invalidate)
+  invalidateRef.current = invalidate
+  useEffect(() => {
+    if (!subscribe) return
+    const co = createCoalescer(() => invalidateRef.current())
+    const off = subscribe(() => co.poke())
+    return () => {
+      off()
+      co.cancel()
+    }
+  }, [subscribe])
 
   useEffect(() => {
     if (!open) return
@@ -723,7 +736,7 @@ export function NotificationBell({
                 lanes.critical > 0 ? 'bg-red-500 text-white' : 'bg-nvr-cyan text-nvr-navy'
               }`}
             >
-              {badge > 99 ? '99+' : badge}
+              <LiveCount value={badge > 99 ? '99+' : badge} />
             </span>
           )}
         </button>
@@ -766,7 +779,7 @@ export function NotificationBell({
                             : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
                         }`}
                       >
-                        {t.count}
+                        <LiveCount value={t.count} />
                       </span>
                     )}
                   </button>

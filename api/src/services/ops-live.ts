@@ -27,6 +27,9 @@ export type OpsTopic =
   | 'delegation'
   | 'broadcasts'
   | 'my-work'
+  | 'collections'
+  | 'integrations'
+  | 'access-requests'
 
 /** 'ticket' — the person must be able to see that support ticket (canSeeTicket). */
 export type OpsGate = 'admin' | 'auth' | 'ticket'
@@ -38,7 +41,13 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   team: 'auth',
   delegation: 'auth',
   broadcasts: 'admin',
-  'my-work': 'auth'
+  'my-work': 'auth',
+  // Admin screens (2026-11-14): the Collections directory's counts / last change, the
+  // Integrations console, the access-request badge on the bell. Pokes only — each page re-reads
+  // through its own admin-only route.
+  collections: 'admin',
+  integrations: 'admin',
+  'access-requests': 'admin'
 }
 
 /**

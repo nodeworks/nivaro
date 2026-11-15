@@ -7,7 +7,15 @@
  * never names the row, the user or a value. Leaf module.
  */
 
-export type OpsWriteTopic = 'issues' | 'support' | 'team' | 'my-work' | 'delegation' | 'broadcasts'
+export type OpsWriteTopic =
+  | 'issues'
+  | 'support'
+  | 'team'
+  | 'my-work'
+  | 'delegation'
+  | 'broadcasts'
+  | 'integrations'
+  | 'access-requests'
 
 const RULES: Array<{ re: RegExp; topics: OpsWriteTopic[]; updateOnly?: boolean }> = [
   { re: /\bnivaro_issues\b/i, topics: ['issues'] },
@@ -18,7 +26,13 @@ const RULES: Array<{ re: RegExp; topics: OpsWriteTopic[]; updateOnly?: boolean }
   { re: /\bnivaro_sla_(?:acks|escalations|overrides)\b/i, topics: ['team', 'my-work'] },
   { re: /\bnivaro_announcement_(?:acks|deliveries)\b/i, topics: ['broadcasts'] },
   // A broadcast is "opened" when its inbox row is read — an UPDATE.
-  { re: /\bnivaro_notifications\b/i, topics: ['broadcasts'], updateOnly: true }
+  { re: /\bnivaro_notifications\b/i, topics: ['broadcasts'], updateOnly: true },
+  // The Integrations console (signal rows, partner calls, submissions, obligations).
+  {
+    re: /\bnivaro_(?:integration_signal_(?:rows|runs|snoozes|settings)|outbound_log|external_api_logs|erp_submissions|integration_obligations)\b/i,
+    topics: ['integrations']
+  },
+  { re: /\bnivaro_access_requests\b/i, topics: ['access-requests'] }
 ]
 
 const WRITE_RE = /^\s*(insert|update|delete|merge)\b/i

@@ -235,6 +235,7 @@ export {
   connectionAllowsPrefetch,
   copyErrorDetails,
   crashKey,
+  createCoalescer,
   createCrashReporter,
   createGatedClient,
   createGetBatcher,
@@ -455,6 +456,7 @@ export {
   listLoadErrorText,
   listQueryKeys,
   listTrailDetail,
+  LiveCount,
   liveQueryMeta,
   liveRefetchInterval,
   liveWidgetInterval,
@@ -816,7 +818,11 @@ export {
   useLiveQueriesOn,
   useLiveQueryBridge,
   useLiveRefetchInterval,
+<<<<<<< .merge_file_mbmKdb
   useLiveWidget,
+=======
+  useLiveRefresh,
+>>>>>>> .merge_file_jl2J3y
   useMarkRoomRead,
   useMyScopes,
   useNavFavoriteCollections,

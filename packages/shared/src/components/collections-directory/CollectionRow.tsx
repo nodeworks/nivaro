@@ -22,6 +22,7 @@ import {
 } from 'react'
 import { useNavigation } from '../../context'
 import { cn, formatDateTime, formatNumber, resolveCollectionIcon, titleCase } from '../../lib/utils'
+import { LiveCount } from '../LiveCount'
 import { Checkbox } from '../ui/checkbox'
 import { CollectionHoverCard, useHoverIntent } from './CollectionHoverCard'
 import { CollectionRowMenu } from './CollectionRowMenu'
@@ -270,7 +271,9 @@ function Stats({ stat }: { stat: CollectionStat }) {
     ) : stat.rows === 0 ? (
       <span className='text-slate-400 dark:text-slate-500'>Empty</span>
     ) : (
-      <span data-tip='Approximate record count'>{formatNumber(stat.rows)}</span>
+      <span data-tip='Approximate record count'>
+        <LiveCount value={stat.rows} format={(v) => formatNumber(Number(v))} />
+      </span>
     )
   return (
     <span className='flex shrink-0 items-center gap-3 text-[11px] tabular-nums text-slate-500 dark:text-slate-400'>
@@ -278,7 +281,7 @@ function Stats({ stat }: { stat: CollectionStat }) {
       <span data-cdr='' className='hidden w-16 whitespace-nowrap text-right md:[&[data-cdr]]:block'>
         {stat.changed_at ? (
           <span data-tip={`Last change ${formatDateTime(stat.changed_at)}`}>
-            {shortWhen(stat.changed_at)}
+            <LiveCount value={shortWhen(stat.changed_at)} />
           </span>
         ) : (
           <span
