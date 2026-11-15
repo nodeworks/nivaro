@@ -301,6 +301,14 @@ tr.nvr-row-flash > td {
   .nvr-saved-glow, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in, .nvr-section-enter, .nvr-tab-enter, .nvr-expand-in, .nvr-shake, .nvr-fade-in, .nvr-autofill-glow, .nvr-pop-in, .nvr-value-pulse, .nvr-value-pulse-bg, .nvr-idle-breathe, .nvr-row-enter, .nvr-slide-up, .nvr-slide-up-centered { animation: none; }
 }
 
+/* Someone else's cursor in a grid cell (grid cursors, round-8 budget grid presence): an inset
+   ring in that person's colour (--nvr-cursor, set by markRemoteCell) — inset, so it never
+   spills over a neighbouring cell or an input's own border. Their name rides data-tip. */
+[data-grid-cell].nvr-remote-editing {
+  box-shadow: inset 0 0 0 2px var(--nvr-cursor, rgb(14 165 233 / 0.6));
+  border-radius: 4px;
+}
+
 /* Live updates Calm / Off (Profile → Display, packages/shared lib/live-preference.ts sets
    html[data-live-mode]): changes land without fades, flashes or marks, and no one else's
    editing outline. Twin: admin/src/globals.css + packages/react/styles.css. */

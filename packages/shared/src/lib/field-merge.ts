@@ -20,7 +20,14 @@
 export type FieldMergeKind = 'text' | 'rich' | 'set' | 'none'
 
 const TEXT_IFACES = new Set(['textarea', 'markdown', 'code', 'input-multiline'])
-const RICH_IFACES = new Set(['wysiwyg', 'input-rich-text-html', 'input-rich-text-md'])
+// `rich_text` / `rich-text-html` are the names the record form also treats as rich text.
+const RICH_IFACES = new Set([
+  'wysiwyg',
+  'rich_text',
+  'rich-text-html',
+  'input-rich-text-html',
+  'input-rich-text-md'
+])
 const SET_IFACES = new Set([
   'tags',
   'select-multiple-dropdown',
