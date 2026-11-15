@@ -2510,7 +2510,7 @@ export async function globalSearchRoutes(app: FastifyInstance) {
   // a prefix scope (`wf: …`, `@…`), field filters (`status:open`), amounts and
   // dates (services/search-query.ts); `data.query` says how it was read.
   app.get('/', async (req, reply) => {
-    const { q: rawQ, labels } = req.query as { q?: string; labels?: string }
+    const { q: rawQ, labels, fresh } = req.query as { q?: string; labels?: string; fresh?: string }
     const raw = (rawQ ?? '').trim().slice(0, 300)
     // labels=1: match only what each record's label shows (the EFP palette).
     const labelsOnly = labels === '1' || labels === 'true'
@@ -2519,17 +2519,21 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     // (services/search-fts.ts searchAnswerCache, single-flight, per tenant).
     const ws = req.headers['x-workspace']
     const run = () => runGlobalSearch(req, raw, labelsOnly)
-    const data = raw
-      ? await searchAnswerCache.get(
-          {
-            user: req.user!,
-            q: raw,
-            variant: labelsOnly ? 'labels' : '',
-            workspace: typeof ws === 'string' ? ws : null
-          },
-          run
-        )
-      : await run()
+    // fresh=1: the open results page re-asking after someone else's write (live search results)
+    // must not be handed the 20 s answer computed before that write. Still the caller's own run,
+    // so access applies exactly as for any search; the page asks at most every few seconds.
+    const data =
+      raw && fresh !== '1'
+        ? await searchAnswerCache.get(
+            {
+              user: req.user!,
+              q: raw,
+              variant: labelsOnly ? 'labels' : '',
+              workspace: typeof ws === 'string' ? ws : null
+            },
+            run
+          )
+        : await run()
     return reply.send({ data })
   })
 

@@ -26,7 +26,13 @@ import {
   saveReportFilterPreset,
   toggleReportAlert
 } from '@nivaro/sdk'
-import { isCancelledError, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  isCancelledError,
+  skipToken,
+  useMutation,
+  useQuery,
+  useQueryClient
+} from '@tanstack/react-query'
 import {
   Bell,
   Camera,
@@ -45,7 +51,18 @@ import {
   TrendingUp,
   X
 } from 'lucide-react'
-import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  createContext,
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { toast } from 'sonner'
 
 // Copy chart as image (#203): recharts renders SVG — serialize it, paint onto
@@ -141,6 +158,7 @@ const compactYTick = (v: unknown): string => {
 
 import { type DrilldownTarget, useDrilldown, useNivaroClient, useOverlayState } from '../context'
 import { del, get, post, put } from '../lib/commands'
+import { type RunEnvelope, useAutoRefreshPref, useLiveStamp } from '../lib/live-data-changed'
 import { liveWidgetInterval, useLiveWidget } from '../lib/live-widgets'
 import { loadErrorText, serverErrorText } from '../lib/load-error'
 import {
@@ -793,9 +811,98 @@ function queryWidgetRows(
   // not with the SDK's withSignal: @nivaro/react takes the SDK as a peer, and a host on an
   // older SDK must load this module and simply ignore the field.
   const command = executeCustomQuery(slug, params)
-  return client
-    .request(signal ? { ...command, _signal: signal } : command)
-    .then((r) => ((r as { data: unknown[] }).data ?? []) as Array<Record<string, unknown>>)
+  return client.request(signal ? { ...command, _signal: signal } : command).then((r) => {
+    rememberQueryEnvelope(slug, params, r)
+    return ((r as { data: unknown[] }).data ?? []) as Array<Record<string, unknown>>
+  })
+}
+
+/**
+ * What the last run of a query widget said about itself (cached_at, the tables it reads) —
+ * kept beside the rows because the rows' cache entry is shared with other hosts and stays
+ * a plain row list. QueryDataChangedChip reads it.
+ */
+const queryEnvelopes = new Map<string, RunEnvelope>()
+const queryEnvelopeKey = (slug: string, params: Record<string, unknown>) =>
+  `${slug}\u0000${JSON.stringify(params)}`
+function rememberQueryEnvelope(slug: string, params: Record<string, unknown>, r: unknown) {
+  const e = r as RunEnvelope | null
+  if (!e || typeof e !== 'object') return
+  if (queryEnvelopes.size > 200) queryEnvelopes.clear()
+  queryEnvelopes.set(queryEnvelopeKey(slug, params), {
+    cached_at: e.cached_at ?? null,
+    executed_at: e.executed_at ?? null,
+    freshness_sources: e.freshness_sources ?? null
+  })
+}
+
+/** Set by ReportView: the viewer's report-wide "refresh by itself when data changes" choice. */
+const ReportAutoRefreshContext = createContext<boolean | undefined>(undefined)
+
+/**
+ * "Data changed since run · Refresh" under a report's query widget (realtime item 16). Quiet:
+ * nothing shows until a table the query reads changes after its run. Refresh re-runs the
+ * query past the server cache; with the report's auto-refresh on, that happens by itself
+ * (live-data-changed.ts keeps it to one per figure per 15 s and a handful a minute per tab).
+ */
+function QueryDataChangedChip({
+  slug,
+  params,
+  scope
+}: {
+  slug: string
+  params: Record<string, unknown>
+  scope: string
+}) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const auto = useContext(ReportAutoRefreshContext)
+  const key = ['nivaro-report-query', slug, params]
+  // Observe the rows' entry (no fetch of its own): a new run re-renders this chip.
+  const { dataUpdatedAt } = useQuery({ queryKey: key, queryFn: skipToken })
+  const [busy, setBusy] = useState(false)
+  const keyJson = JSON.stringify(key)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dataUpdatedAt marks a new run
+  const envelope = useMemo(
+    () => queryEnvelopes.get(queryEnvelopeKey(slug, params)),
+    [slug, keyJson, dataUpdatedAt]
+  )
+  const refresh = useCallback(() => {
+    setBusy(true)
+    void client
+      .request(post(`/custom-queries/${slug}/execute`, { params, refresh: true }))
+      .then((r) => {
+        rememberQueryEnvelope(slug, params, r)
+        qc.setQueryData(key, ((r as { data?: unknown[] }).data ?? []) as unknown[])
+      })
+      .catch(() => {})
+      .finally(() => setBusy(false))
+    // biome-ignore lint/correctness/useExhaustiveDependencies: key is built from slug + params
+  }, [client, qc, slug, keyJson])
+  const live = useLiveStamp({ envelope, scope, refresh, autoOverride: auto })
+  if (!live.changed) return null
+  return (
+    <div
+      className='mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground'
+      data-report-data-changed
+    >
+      <span
+        role='status'
+        className='rounded bg-[#fef3c7] px-1 py-px text-[10.5px] font-medium text-amber-800 dark:bg-[#4a3a10] dark:text-amber-200'
+      >
+        Data changed since run
+      </span>
+      <button
+        type='button'
+        onClick={refresh}
+        disabled={busy}
+        className='inline-flex items-center gap-1 rounded px-1 py-0.5 hover:bg-muted disabled:opacity-50'
+      >
+        <RefreshCw className={cn('h-3 w-3', busy && 'animate-spin')} />
+        {busy ? 'Refreshing' : 'Refresh'}
+      </button>
+    </div>
+  )
 }
 
 export function QueryWidgetBody({
@@ -3924,6 +4031,13 @@ const WidgetCard = memo(function WidgetCard({
           body
         )}
       </div>
+      {queryCfg?.slug && nearView && (
+        <QueryDataChangedChip
+          slug={queryCfg.slug}
+          params={resolveQueryParams(queryCfg, dateRange, entityFilters)}
+          scope={`report:${reportId}`}
+        />
+      )}
       {(widget.config as { footnote?: string })?.footnote && (
         <p className='mt-1 border-t border-slate-100 pt-1 text-[10.5px] leading-snug text-slate-400 dark:border-border/50'>
           {(widget.config as { footnote?: string }).footnote}
@@ -4181,6 +4295,8 @@ export function ReportView({
     [...ws].sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
   // Freshness: stamped at mount and on Refresh-all.
   const [dataAsOf, setDataAsOf] = useState(() => new Date())
+  // Opt-in (this browser): query widgets re-run by themselves when the data they read changes.
+  const [autoRefresh, setAutoRefresh] = useAutoRefreshPref(`report:${reportId}`)
   const refreshAll = () => {
     void qc.invalidateQueries({ queryKey: ['nivaro-report-widget', reportId] })
     void qc.invalidateQueries({ queryKey: ['nivaro-report-query'] })
@@ -4391,461 +4507,485 @@ export function ReportView({
   const accessScopeNote = adminAccessScopeNote(myScopes)
 
   return (
-    <div className={cn('flex flex-col gap-3', className)}>
-      {accessScopeNote && (!showFilterBar || (widgets.length === 0 && filterBar.length === 0)) && (
-        <p className='text-[11.5px] text-amber-700 dark:text-amber-300'>{accessScopeNote}</p>
-      )}
-      {showFilterBar && (widgets.length > 0 || filterBar.length > 0) && (
-        <div className='space-y-1.5'>
-          <div className='flex flex-wrap items-center gap-1.5'>
-            <span className='flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-500 dark:text-slate-300'>
-              Filters
-              {accessScopeNote && (
-                <span className='font-normal text-amber-700 dark:text-amber-300'>
-                  {accessScopeNote}
-                </span>
-              )}
-              {appliedCount > 0 && (
-                <span className='rounded-full bg-emerald-50 px-1.5 py-px text-[10px] font-semibold text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'>
-                  Active · {appliedCount}
-                </span>
-              )}
-            </span>
-            <SimpleSelect
-              value={draftEffectiveRange?.preset ?? ''}
-              onChange={(v) => setDraftRange(v ? { preset: v as never } : null)}
-              options={DATE_PRESETS.map((p) => ({ value: p.id, label: p.label }))}
-              ariaLabel='Date range'
-              className='h-7 w-auto rounded-md px-1.5 py-0 text-[12px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
-            />
-            {filterBar.map((f) => (
-              <FilterChip
-                key={f.field}
-                reportId={reportId}
-                field={f.field}
-                label={f.label}
-                optionSource={f.options}
-                allowedValues={scopeAllowed[f.field]}
-                selected={draftFilters.find((e) => e.field === f.field)?.values ?? []}
-                onChange={(values, labels) =>
-                  setDraftFilters((prev) => [
-                    ...prev.filter((e) => e.field !== f.field),
-                    ...(values.length > 0 ? [{ field: f.field, values, labels }] : [])
-                  ])
-                }
+    <ReportAutoRefreshContext.Provider value={autoRefresh}>
+      <div className={cn('flex flex-col gap-3', className)}>
+        {accessScopeNote &&
+          (!showFilterBar || (widgets.length === 0 && filterBar.length === 0)) && (
+            <p className='text-[11.5px] text-amber-700 dark:text-amber-300'>{accessScopeNote}</p>
+          )}
+        {showFilterBar && (widgets.length > 0 || filterBar.length > 0) && (
+          <div className='space-y-1.5'>
+            <div className='flex flex-wrap items-center gap-1.5'>
+              <span className='flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-500 dark:text-slate-300'>
+                Filters
+                {accessScopeNote && (
+                  <span className='font-normal text-amber-700 dark:text-amber-300'>
+                    {accessScopeNote}
+                  </span>
+                )}
+                {appliedCount > 0 && (
+                  <span className='rounded-full bg-emerald-50 px-1.5 py-px text-[10px] font-semibold text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'>
+                    Active · {appliedCount}
+                  </span>
+                )}
+              </span>
+              <SimpleSelect
+                value={draftEffectiveRange?.preset ?? ''}
+                onChange={(v) => setDraftRange(v ? { preset: v as never } : null)}
+                options={DATE_PRESETS.map((p) => ({ value: p.id, label: p.label }))}
+                ariaLabel='Date range'
+                className='h-7 w-auto rounded-md px-1.5 py-0 text-[12px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
               />
-            ))}
-            <button
-              type='button'
-              disabled={!dirty}
-              onClick={applyDraft}
-              className={cn(
-                'inline-flex h-7 items-center gap-1 rounded-md px-2.5 text-[11.5px] font-semibold',
-                dirty
-                  ? 'bg-nvr-cyan text-white'
-                  : 'bg-slate-100 text-slate-400 dark:bg-muted dark:text-slate-500'
-              )}
-            >
-              <Check className='h-3 w-3' /> Apply
-            </button>
-            {(appliedCount > 0 || dirty) && (
+              {filterBar.map((f) => (
+                <FilterChip
+                  key={f.field}
+                  reportId={reportId}
+                  field={f.field}
+                  label={f.label}
+                  optionSource={f.options}
+                  allowedValues={scopeAllowed[f.field]}
+                  selected={draftFilters.find((e) => e.field === f.field)?.values ?? []}
+                  onChange={(values, labels) =>
+                    setDraftFilters((prev) => [
+                      ...prev.filter((e) => e.field !== f.field),
+                      ...(values.length > 0 ? [{ field: f.field, values, labels }] : [])
+                    ])
+                  }
+                />
+              ))}
               <button
                 type='button'
-                className='flex items-center gap-1 text-[11.5px] text-slate-400 hover:text-red-500'
-                onClick={clearAll}
+                disabled={!dirty}
+                onClick={applyDraft}
+                className={cn(
+                  'inline-flex h-7 items-center gap-1 rounded-md px-2.5 text-[11.5px] font-semibold',
+                  dirty
+                    ? 'bg-nvr-cyan text-white'
+                    : 'bg-slate-100 text-slate-400 dark:bg-muted dark:text-slate-500'
+                )}
               >
-                <X className='h-3 w-3' /> Clear
+                <Check className='h-3 w-3' /> Apply
               </button>
-            )}
-          </div>
+              {(appliedCount > 0 || dirty) && (
+                <button
+                  type='button'
+                  className='flex items-center gap-1 text-[11.5px] text-slate-400 hover:text-red-500'
+                  onClick={clearAll}
+                >
+                  <X className='h-3 w-3' /> Clear
+                </button>
+              )}
+            </div>
 
-          <div className='flex flex-wrap items-center gap-1.5'>
-            {presets.map((p) => (
-              <span
-                key={p.name}
-                className='group/preset inline-flex h-6 items-center gap-1 rounded-full border border-slate-200 pl-2 pr-1 text-[11px] text-slate-500 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:hover:text-nvr-cyan'
+            <div className='flex flex-wrap items-center gap-1.5'>
+              {presets.map((p) => (
+                <span
+                  key={p.name}
+                  className='group/preset inline-flex h-6 items-center gap-1 rounded-full border border-slate-200 pl-2 pr-1 text-[11px] text-slate-500 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:hover:text-nvr-cyan'
+                >
+                  <button type='button' onClick={() => applyPreset(p)}>
+                    {p.name}
+                  </button>
+                  <button
+                    type='button'
+                    title='Delete preset'
+                    className='rounded-full p-0.5 text-slate-300 opacity-0 hover:text-red-500 group-hover/preset:opacity-100'
+                    onClick={() => removePreset.mutate(p.id)}
+                  >
+                    <X className='h-2.5 w-2.5' />
+                  </button>
+                </span>
+              ))}
+              {savingPreset ? (
+                <span className='inline-flex items-center gap-1'>
+                  <input
+                    value={presetName}
+                    onChange={(e) => setPresetName(e.target.value)}
+                    placeholder='Preset name'
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && presetName.trim()) {
+                        savePreset.mutate(presetName.trim())
+                        setPresetName('')
+                        setSavingPreset(false)
+                      }
+                      if (e.key === 'Escape') setSavingPreset(false)
+                    }}
+                    className='h-6 w-[130px] rounded-md border border-slate-200 bg-white px-2 text-[11px] dark:border-border dark:bg-card'
+                  />
+                </span>
+              ) : (
+                <button
+                  type='button'
+                  className='inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-slate-200 px-2 text-[11px] text-slate-400 hover:border-slate-300 hover:text-slate-600 dark:border-border'
+                  onClick={() => setSavingPreset(true)}
+                >
+                  <Plus className='h-2.5 w-2.5' /> Save preset
+                </button>
+              )}
+              <span className='mx-1 h-4 w-px bg-slate-200 dark:bg-border' />
+              <button
+                type='button'
+                title='Save the current numbers as a snapshot to compare against later'
+                disabled={takeSnapshot.isPending}
+                onClick={() => takeSnapshot.mutate()}
+                className='inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-slate-200 px-2 text-[11px] text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 dark:border-border'
               >
-                <button type='button' onClick={() => applyPreset(p)}>
-                  {p.name}
+                <Camera className='h-2.5 w-2.5' /> {takeSnapshot.isPending ? 'Saving…' : 'Snapshot'}
+              </button>
+              {snapshots.map((sn) => (
+                <button
+                  key={sn.id}
+                  type='button'
+                  title={`Compare against ${sn.name} (${toLocalDateString(sn.taken_at)})`}
+                  onClick={() => setSnapId((cur) => (cur === sn.id ? null : sn.id))}
+                  className={cn(
+                    'inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px]',
+                    snapId === sn.id
+                      ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] font-medium text-[#007a99] dark:text-nvr-cyan'
+                      : 'border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
+                  )}
+                >
+                  <Camera className='h-2.5 w-2.5' /> {sn.name}
+                  {snapId === sn.id && <X className='h-2.5 w-2.5' />}
+                </button>
+              ))}
+              {snapId != null && (
+                <button
+                  type='button'
+                  title='Time machine (#404): show the snapshot values AS the numbers, not as delta badges'
+                  onClick={() => setAsOf((v) => !v)}
+                  className={cn(
+                    'inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px]',
+                    asOf
+                      ? 'border-amber-400 bg-amber-50 font-medium text-amber-700 dark:bg-amber-400/10 dark:text-amber-400'
+                      : 'border-dashed border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
+                  )}
+                >
+                  As of
+                </button>
+              )}
+
+              <span className='mx-1 h-4 w-px bg-slate-200 dark:bg-border' />
+              <span className='inline-flex h-7 min-w-[240px] flex-1 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 dark:border-border dark:bg-card sm:max-w-[420px]'>
+                <span className='text-[11px] text-nvr-navy dark:text-nvr-cyan'>✦</span>
+                <input
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void runAiFilters()
+                  }}
+                  placeholder='Describe filters… e.g. "Zone 1 CRAN this year"'
+                  className='h-full min-w-0 flex-1 bg-transparent text-[11.5px] outline-none placeholder:text-slate-300 dark:text-slate-200'
+                />
+                <button
+                  type='button'
+                  disabled={aiBusy || !aiPrompt.trim()}
+                  onClick={() => void runAiFilters()}
+                  className='text-[11px] font-semibold text-nvr-navy disabled:opacity-40 dark:text-nvr-cyan'
+                >
+                  {aiBusy ? '…' : 'Set'}
+                </button>
+              </span>
+              {aiError && <span className='text-[10.5px] text-red-400'>{aiError}</span>}
+            </div>
+          </div>
+        )}
+
+        {firing.length > 0 && (
+          <div className='mb-2 flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 dark:border-red-500/40 dark:bg-red-500/10'>
+            <Bell className='h-3.5 w-3.5 shrink-0 text-red-500' />
+            <p className='min-w-0 flex-1 truncate text-[12px] text-red-700 dark:text-red-300'>
+              {firing.length === 1
+                ? `Alert firing: ${firing[0].name}`
+                : `${firing.length} alerts firing: ${firing.map((f) => f.name).join(' · ')}`}
+            </p>
+          </div>
+        )}
+        <div className='mb-2 flex flex-wrap items-center gap-2'>
+          <span className='text-[10.5px] text-slate-400'>
+            Data as of {dataAsOf.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+          <button
+            type='button'
+            onClick={refreshAll}
+            className='inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400'
+          >
+            <RefreshCw className='h-2.5 w-2.5' /> Refresh all
+          </button>
+          {widgets.some((w) => w.type === 'query') && (
+            <button
+              type='button'
+              onClick={() => setAutoRefresh(!autoRefresh)}
+              aria-pressed={autoRefresh}
+              data-report-auto-refresh
+              data-tip={
+                autoRefresh
+                  ? 'Query widgets re-run on their own when the data they read changes. Click to stop.'
+                  : 'Re-run query widgets on their own when the data they read changes'
+              }
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px]',
+                autoRefresh
+                  ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] font-medium text-[#007a99] dark:text-nvr-cyan'
+                  : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400'
+              )}
+            >
+              Auto-refresh{autoRefresh ? ' on' : ''}
+            </button>
+          )}
+          <span className='relative'>
+            <button
+              type='button'
+              onClick={() => setCompareOpen((o) => !o)}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px]',
+                compare
+                  ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] font-medium text-[#007a99] dark:text-nvr-cyan'
+                  : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400'
+              )}
+            >
+              {compare ? `Comparing ${compare.a} vs ${compare.b}` : 'Compare A/B'}
+              {compare && (
+                <X
+                  className='h-2.5 w-2.5'
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setCompare(null)
+                  }}
+                />
+              )}
+            </button>
+            {compareOpen && (
+              <span className='absolute left-0 top-full z-50 mt-1 flex w-72 flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-2.5 shadow-lg dark:border-border dark:bg-card'>
+                <input
+                  value={cmpField}
+                  onChange={(e) => setCmpField(e.target.value)}
+                  placeholder='Filter field (e.g. division)'
+                  className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+                />
+                <span className='flex gap-1.5'>
+                  <input
+                    value={cmpA}
+                    onChange={(e) => setCmpA(e.target.value)}
+                    placeholder='Value A'
+                    className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+                  />
+                  <input
+                    value={cmpB}
+                    onChange={(e) => setCmpB(e.target.value)}
+                    placeholder='Value B'
+                    className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+                  />
+                </span>
+                <button
+                  type='button'
+                  disabled={!cmpField.trim() || !cmpA.trim() || !cmpB.trim()}
+                  onClick={() => {
+                    setCompare({ field: cmpField.trim(), a: cmpA.trim(), b: cmpB.trim() })
+                    setCompareOpen(false)
+                  }}
+                  className='h-7 rounded-md bg-nvr-cyan text-[11.5px] font-semibold text-white hover:brightness-110 disabled:opacity-40'
+                >
+                  Compare
+                </button>
+              </span>
+            )}
+          </span>
+        </div>
+        {entityFilters.filter((f) => !filterBar.some((b) => b.field === f.field)).length > 0 && (
+          <div className='flex flex-wrap items-center gap-1.5 px-1 pb-2'>
+            {entityFilters
+              .filter((f) => !filterBar.some((b) => b.field === f.field))
+              .map((f) => (
+                <span
+                  key={f.field}
+                  className='inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] py-0.5 pl-2.5 pr-1 text-[11.5px] text-[#007a99] dark:text-nvr-cyan'
+                >
+                  {f.field.replace(/_/g, ' ')}: {(f.labels ?? f.values.map(String)).join(', ')}
+                  <button
+                    type='button'
+                    aria-label='Remove filter'
+                    onClick={() => {
+                      setEntityFilters((prev) => prev.filter((x) => x.field !== f.field))
+                      setDraftFilters((prev) => prev.filter((x) => x.field !== f.field))
+                    }}
+                    className='rounded-full p-0.5 hover:bg-nvr-cyan/[0.16]'
+                  >
+                    <X className='h-2.5 w-2.5' />
+                  </button>
+                </span>
+              ))}
+          </div>
+        )}
+        {report?.editable && (
+          <div className='mb-2 flex items-center gap-1.5'>
+            {editMode ? (
+              <>
+                <button
+                  type='button'
+                  disabled={saveWidgets.isPending}
+                  onClick={() => draftWidgets && saveWidgets.mutate(draftWidgets)}
+                  className='rounded-md bg-nvr-cyan px-3 py-1 text-[12px] font-semibold text-white hover:brightness-110 disabled:opacity-40'
+                >
+                  {saveWidgets.isPending ? 'Saving…' : 'Save layout'}
                 </button>
                 <button
                   type='button'
-                  title='Delete preset'
-                  className='rounded-full p-0.5 text-slate-300 opacity-0 hover:text-red-500 group-hover/preset:opacity-100'
-                  onClick={() => removePreset.mutate(p.id)}
-                >
-                  <X className='h-2.5 w-2.5' />
-                </button>
-              </span>
-            ))}
-            {savingPreset ? (
-              <span className='inline-flex items-center gap-1'>
-                <input
-                  value={presetName}
-                  onChange={(e) => setPresetName(e.target.value)}
-                  placeholder='Preset name'
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && presetName.trim()) {
-                      savePreset.mutate(presetName.trim())
-                      setPresetName('')
-                      setSavingPreset(false)
-                    }
-                    if (e.key === 'Escape') setSavingPreset(false)
+                  onClick={() => {
+                    setEditMode(false)
+                    setDraftWidgets(null)
+                    setConfiguring(null)
                   }}
-                  className='h-6 w-[130px] rounded-md border border-slate-200 bg-white px-2 text-[11px] dark:border-border dark:bg-card'
-                />
-              </span>
+                  className='rounded-md border border-slate-200 px-3 py-1 text-[12px] text-slate-500 dark:border-border'
+                >
+                  Cancel
+                </button>
+                <span className='text-[11px] text-slate-400'>
+                  Changes apply when you save — a version is captured automatically.
+                </span>
+              </>
             ) : (
               <button
                 type='button'
-                className='inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-slate-200 px-2 text-[11px] text-slate-400 hover:border-slate-300 hover:text-slate-600 dark:border-border'
-                onClick={() => setSavingPreset(true)}
+                onClick={startEdit}
+                className='rounded-md border border-slate-200 px-3 py-1 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400'
               >
-                <Plus className='h-2.5 w-2.5' /> Save preset
+                Edit report
               </button>
             )}
-            <span className='mx-1 h-4 w-px bg-slate-200 dark:bg-border' />
-            <button
-              type='button'
-              title='Save the current numbers as a snapshot to compare against later'
-              disabled={takeSnapshot.isPending}
-              onClick={() => takeSnapshot.mutate()}
-              className='inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-slate-200 px-2 text-[11px] text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 dark:border-border'
-            >
-              <Camera className='h-2.5 w-2.5' /> {takeSnapshot.isPending ? 'Saving…' : 'Snapshot'}
-            </button>
-            {snapshots.map((sn) => (
-              <button
-                key={sn.id}
-                type='button'
-                title={`Compare against ${sn.name} (${toLocalDateString(sn.taken_at)})`}
-                onClick={() => setSnapId((cur) => (cur === sn.id ? null : sn.id))}
-                className={cn(
-                  'inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px]',
-                  snapId === sn.id
-                    ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] font-medium text-[#007a99] dark:text-nvr-cyan'
-                    : 'border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
-                )}
-              >
-                <Camera className='h-2.5 w-2.5' /> {sn.name}
-                {snapId === sn.id && <X className='h-2.5 w-2.5' />}
-              </button>
-            ))}
-            {snapId != null && (
-              <button
-                type='button'
-                title='Time machine (#404): show the snapshot values AS the numbers, not as delta badges'
-                onClick={() => setAsOf((v) => !v)}
-                className={cn(
-                  'inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px]',
-                  asOf
-                    ? 'border-amber-400 bg-amber-50 font-medium text-amber-700 dark:bg-amber-400/10 dark:text-amber-400'
-                    : 'border-dashed border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
-                )}
-              >
-                As of
-              </button>
-            )}
-
-            <span className='mx-1 h-4 w-px bg-slate-200 dark:bg-border' />
-            <span className='inline-flex h-7 min-w-[240px] flex-1 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 dark:border-border dark:bg-card sm:max-w-[420px]'>
-              <span className='text-[11px] text-nvr-navy dark:text-nvr-cyan'>✦</span>
-              <input
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void runAiFilters()
-                }}
-                placeholder='Describe filters… e.g. "Zone 1 CRAN this year"'
-                className='h-full min-w-0 flex-1 bg-transparent text-[11.5px] outline-none placeholder:text-slate-300 dark:text-slate-200'
-              />
-              <button
-                type='button'
-                disabled={aiBusy || !aiPrompt.trim()}
-                onClick={() => void runAiFilters()}
-                className='text-[11px] font-semibold text-nvr-navy disabled:opacity-40 dark:text-nvr-cyan'
-              >
-                {aiBusy ? '…' : 'Set'}
-              </button>
-            </span>
-            {aiError && <span className='text-[10.5px] text-red-400'>{aiError}</span>}
           </div>
-        </div>
-      )}
-
-      {firing.length > 0 && (
-        <div className='mb-2 flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 dark:border-red-500/40 dark:bg-red-500/10'>
-          <Bell className='h-3.5 w-3.5 shrink-0 text-red-500' />
-          <p className='min-w-0 flex-1 truncate text-[12px] text-red-700 dark:text-red-300'>
-            {firing.length === 1
-              ? `Alert firing: ${firing[0].name}`
-              : `${firing.length} alerts firing: ${firing.map((f) => f.name).join(' · ')}`}
-          </p>
-        </div>
-      )}
-      <div className='mb-2 flex flex-wrap items-center gap-2'>
-        <span className='text-[10.5px] text-slate-400'>
-          Data as of {dataAsOf.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </span>
-        <button
-          type='button'
-          onClick={refreshAll}
-          className='inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400'
-        >
-          <RefreshCw className='h-2.5 w-2.5' /> Refresh all
-        </button>
-        <span className='relative'>
-          <button
-            type='button'
-            onClick={() => setCompareOpen((o) => !o)}
-            className={cn(
-              'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px]',
-              compare
-                ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] font-medium text-[#007a99] dark:text-nvr-cyan'
-                : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400'
-            )}
+        )}
+        {editMode && draftWidgets && (
+          <div className='mb-3'>
+            <Suspense fallback={null}>
+              <AddWidgetBar
+                maxY={Math.max(0, ...draftWidgets.map((w) => (w.y ?? 0) + (w.h ?? 1)))}
+                onAdd={(w) => setDraftWidgets((prev) => [...(prev ?? []), w])}
+              />
+            </Suspense>
+          </div>
+        )}
+        {widgets.length === 0 && !editMode ? (
+          <div className='p-6 text-[13px] text-slate-400'>
+            {emptyState ?? 'This report has no widgets yet.'}
+          </div>
+        ) : (
+          <div
+            className='grid gap-3'
+            style={{
+              gridTemplateColumns: 'repeat(12, minmax(0, 1fr))',
+              gridAutoRows: editMode ? undefined : '72px'
+            }}
           >
-            {compare ? `Comparing ${compare.a} vs ${compare.b}` : 'Compare A/B'}
-            {compare && (
-              <X
-                className='h-2.5 w-2.5'
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setCompare(null)
+            {orderedForEdit(editMode && draftWidgets ? draftWidgets : widgets).map((w) => (
+              <div
+                key={w.id}
+                style={{
+                  gridColumn: compare
+                    ? `1 / -1`
+                    : `${Math.max(1, (w.x ?? 0) + 1)} / span ${Math.min(12, Math.max(2, w.w || 4))}`,
+                  gridRow: editMode ? undefined : undefined
                 }}
-              />
-            )}
-          </button>
-          {compareOpen && (
-            <span className='absolute left-0 top-full z-50 mt-1 flex w-72 flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-2.5 shadow-lg dark:border-border dark:bg-card'>
-              <input
-                value={cmpField}
-                onChange={(e) => setCmpField(e.target.value)}
-                placeholder='Filter field (e.g. division)'
-                className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
-              />
-              <span className='flex gap-1.5'>
-                <input
-                  value={cmpA}
-                  onChange={(e) => setCmpA(e.target.value)}
-                  placeholder='Value A'
-                  className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
-                />
-                <input
-                  value={cmpB}
-                  onChange={(e) => setCmpB(e.target.value)}
-                  placeholder='Value B'
-                  className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
-                />
-              </span>
-              <button
-                type='button'
-                disabled={!cmpField.trim() || !cmpA.trim() || !cmpB.trim()}
-                onClick={() => {
-                  setCompare({ field: cmpField.trim(), a: cmpA.trim(), b: cmpB.trim() })
-                  setCompareOpen(false)
-                }}
-                className='h-7 rounded-md bg-nvr-cyan text-[11.5px] font-semibold text-white hover:brightness-110 disabled:opacity-40'
+                className={editMode || compare ? '' : 'contents'}
               >
-                Compare
-              </button>
-            </span>
-          )}
-        </span>
-      </div>
-      {entityFilters.filter((f) => !filterBar.some((b) => b.field === f.field)).length > 0 && (
-        <div className='flex flex-wrap items-center gap-1.5 px-1 pb-2'>
-          {entityFilters
-            .filter((f) => !filterBar.some((b) => b.field === f.field))
-            .map((f) => (
-              <span
-                key={f.field}
-                className='inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] py-0.5 pl-2.5 pr-1 text-[11.5px] text-[#007a99] dark:text-nvr-cyan'
-              >
-                {f.field.replace(/_/g, ' ')}: {(f.labels ?? f.values.map(String)).join(', ')}
-                <button
-                  type='button'
-                  aria-label='Remove filter'
-                  onClick={() => {
-                    setEntityFilters((prev) => prev.filter((x) => x.field !== f.field))
-                    setDraftFilters((prev) => prev.filter((x) => x.field !== f.field))
-                  }}
-                  className='rounded-full p-0.5 hover:bg-nvr-cyan/[0.16]'
-                >
-                  <X className='h-2.5 w-2.5' />
-                </button>
-              </span>
+                {compare && !editMode && w.type !== 'divider' ? (
+                  <div className='grid grid-cols-2 gap-3'>
+                    {[compare.a, compare.b].map((val, side) => (
+                      <div key={side} className='flex min-h-[160px] flex-col'>
+                        <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-[#007a99] dark:text-nvr-cyan'>
+                          {compare.field.replace(/_/g, ' ')}: {val}
+                        </p>
+                        <WidgetCard
+                          reportId={reportId}
+                          widget={w}
+                          dateRange={effectiveRange}
+                          entityFilters={[
+                            ...entityFilters.filter((f) => f.field !== compare.field),
+                            { field: compare.field, values: [val], labels: [val] }
+                          ]}
+                          refetchInterval={refetchInterval}
+                          filterBar={filterBar}
+                          onDrill={openDrill}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <>
+                    {editMode && (
+                      <Suspense fallback={null}>
+                        <WidgetEditBar
+                          widget={w}
+                          onConfigure={() => setConfiguring(w.id)}
+                          onDelete={() =>
+                            setDraftWidgets((prev) => (prev ?? []).filter((x) => x.id !== w.id))
+                          }
+                          onResize={(dw, dh) =>
+                            patchWidget({
+                              ...w,
+                              w: Math.min(12, Math.max(2, (w.w || 4) + dw)),
+                              h: Math.min(8, Math.max(1, (w.h || 2) + dh))
+                            })
+                          }
+                          onMove={(dir) => moveWidget(w.id, dir)}
+                        />
+                      </Suspense>
+                    )}
+                    <WidgetCard
+                      reportId={reportId}
+                      widget={w}
+                      dateRange={effectiveRange}
+                      entityFilters={entityFilters}
+                      refetchInterval={refetchInterval}
+                      filterBar={filterBar}
+                      onDrill={openDrill}
+                      snapshot={
+                        snapDetail && snapDetail.data[w.id] !== undefined
+                          ? { name: snapDetail.name, value: snapDetail.data[w.id]?.value ?? null }
+                          : null
+                      }
+                      asOf={asOf}
+                      annotations={allAnnotations.filter((a) => a.widget === w.id)}
+                      onAddAnnotation={(widgetId, note, anchorDate) =>
+                        addNote.mutate({ widget: widgetId, note, anchor_date: anchorDate })
+                      }
+                      onDeleteAnnotation={(annId) => deleteNote.mutate(annId)}
+                      onCrossFilter={applyCrossFilter}
+                      reportUrl={reportUrl}
+                      currentFilters={entityFilters}
+                    />
+                  </>
+                )}
+              </div>
             ))}
-        </div>
-      )}
-      {report?.editable && (
-        <div className='mb-2 flex items-center gap-1.5'>
-          {editMode ? (
-            <>
-              <button
-                type='button'
-                disabled={saveWidgets.isPending}
-                onClick={() => draftWidgets && saveWidgets.mutate(draftWidgets)}
-                className='rounded-md bg-nvr-cyan px-3 py-1 text-[12px] font-semibold text-white hover:brightness-110 disabled:opacity-40'
-              >
-                {saveWidgets.isPending ? 'Saving…' : 'Save layout'}
-              </button>
-              <button
-                type='button'
-                onClick={() => {
-                  setEditMode(false)
-                  setDraftWidgets(null)
-                  setConfiguring(null)
-                }}
-                className='rounded-md border border-slate-200 px-3 py-1 text-[12px] text-slate-500 dark:border-border'
-              >
-                Cancel
-              </button>
-              <span className='text-[11px] text-slate-400'>
-                Changes apply when you save — a version is captured automatically.
-              </span>
-            </>
-          ) : (
-            <button
-              type='button'
-              onClick={startEdit}
-              className='rounded-md border border-slate-200 px-3 py-1 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400'
-            >
-              Edit report
-            </button>
-          )}
-        </div>
-      )}
-      {editMode && draftWidgets && (
-        <div className='mb-3'>
+          </div>
+        )}
+        {editMode && configuring && draftWidgets?.some((w) => w.id === configuring) && (
           <Suspense fallback={null}>
-            <AddWidgetBar
-              maxY={Math.max(0, ...draftWidgets.map((w) => (w.y ?? 0) + (w.h ?? 1)))}
-              onAdd={(w) => setDraftWidgets((prev) => [...(prev ?? []), w])}
+            <WidgetConfigSheet
+              widget={draftWidgets.find((w) => w.id === configuring) as ReportWidget}
+              allWidgets={draftWidgets}
+              onChange={patchWidget}
+              onClose={() => setConfiguring(null)}
             />
           </Suspense>
-        </div>
-      )}
-      {widgets.length === 0 && !editMode ? (
-        <div className='p-6 text-[13px] text-slate-400'>
-          {emptyState ?? 'This report has no widgets yet.'}
-        </div>
-      ) : (
-        <div
-          className='grid gap-3'
-          style={{
-            gridTemplateColumns: 'repeat(12, minmax(0, 1fr))',
-            gridAutoRows: editMode ? undefined : '72px'
-          }}
-        >
-          {orderedForEdit(editMode && draftWidgets ? draftWidgets : widgets).map((w) => (
-            <div
-              key={w.id}
-              style={{
-                gridColumn: compare
-                  ? `1 / -1`
-                  : `${Math.max(1, (w.x ?? 0) + 1)} / span ${Math.min(12, Math.max(2, w.w || 4))}`,
-                gridRow: editMode ? undefined : undefined
-              }}
-              className={editMode || compare ? '' : 'contents'}
-            >
-              {compare && !editMode && w.type !== 'divider' ? (
-                <div className='grid grid-cols-2 gap-3'>
-                  {[compare.a, compare.b].map((val, side) => (
-                    <div key={side} className='flex min-h-[160px] flex-col'>
-                      <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-[#007a99] dark:text-nvr-cyan'>
-                        {compare.field.replace(/_/g, ' ')}: {val}
-                      </p>
-                      <WidgetCard
-                        reportId={reportId}
-                        widget={w}
-                        dateRange={effectiveRange}
-                        entityFilters={[
-                          ...entityFilters.filter((f) => f.field !== compare.field),
-                          { field: compare.field, values: [val], labels: [val] }
-                        ]}
-                        refetchInterval={refetchInterval}
-                        filterBar={filterBar}
-                        onDrill={openDrill}
-                      />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <>
-                  {editMode && (
-                    <Suspense fallback={null}>
-                      <WidgetEditBar
-                        widget={w}
-                        onConfigure={() => setConfiguring(w.id)}
-                        onDelete={() =>
-                          setDraftWidgets((prev) => (prev ?? []).filter((x) => x.id !== w.id))
-                        }
-                        onResize={(dw, dh) =>
-                          patchWidget({
-                            ...w,
-                            w: Math.min(12, Math.max(2, (w.w || 4) + dw)),
-                            h: Math.min(8, Math.max(1, (w.h || 2) + dh))
-                          })
-                        }
-                        onMove={(dir) => moveWidget(w.id, dir)}
-                      />
-                    </Suspense>
-                  )}
-                  <WidgetCard
-                    reportId={reportId}
-                    widget={w}
-                    dateRange={effectiveRange}
-                    entityFilters={entityFilters}
-                    refetchInterval={refetchInterval}
-                    filterBar={filterBar}
-                    onDrill={openDrill}
-                    snapshot={
-                      snapDetail && snapDetail.data[w.id] !== undefined
-                        ? { name: snapDetail.name, value: snapDetail.data[w.id]?.value ?? null }
-                        : null
-                    }
-                    asOf={asOf}
-                    annotations={allAnnotations.filter((a) => a.widget === w.id)}
-                    onAddAnnotation={(widgetId, note, anchorDate) =>
-                      addNote.mutate({ widget: widgetId, note, anchor_date: anchorDate })
-                    }
-                    onDeleteAnnotation={(annId) => deleteNote.mutate(annId)}
-                    onCrossFilter={applyCrossFilter}
-                    reportUrl={reportUrl}
-                    currentFilters={entityFilters}
-                  />
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-      {editMode && configuring && draftWidgets?.some((w) => w.id === configuring) && (
-        <Suspense fallback={null}>
-          <WidgetConfigSheet
-            widget={draftWidgets.find((w) => w.id === configuring) as ReportWidget}
-            allWidgets={draftWidgets}
-            onChange={patchWidget}
-            onClose={() => setConfiguring(null)}
+        )}
+        <TipLayer />
+        {!outerDrill && drillStack?.length ? (
+          <RecordDrilldownSheet
+            collection={drillStack[0].collection}
+            itemId={drillStack[0].itemId}
+            title={drillStack[0].title}
+            width='72%'
+            stack={drillStack}
+            onPush={(target) => drill.push([...drillStack, target])}
+            onPop={() => drill.back()}
+            // Explicit dismissal unwinds every level in one go.
+            onClose={() => drill.back(drillStack.length)}
           />
-        </Suspense>
-      )}
-      <TipLayer />
-      {!outerDrill && drillStack?.length ? (
-        <RecordDrilldownSheet
-          collection={drillStack[0].collection}
-          itemId={drillStack[0].itemId}
-          title={drillStack[0].title}
-          width='72%'
-          stack={drillStack}
-          onPush={(target) => drill.push([...drillStack, target])}
-          onPop={() => drill.back()}
-          // Explicit dismissal unwinds every level in one go.
-          onClose={() => drill.back(drillStack.length)}
-        />
-      ) : null}
-    </div>
+        ) : null}
+      </div>
+    </ReportAutoRefreshContext.Provider>
   )
 }

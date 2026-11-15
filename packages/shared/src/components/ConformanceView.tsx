@@ -3,8 +3,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemNavigation, useNavigation, useNivaroClient } from '../context'
 import { get, post, put } from '../lib/commands'
 import { useLiveEvent, useLiveWatchRoom } from '../lib/live'
+import { type FindingRef, type ResolvedMark, useResolvedFindings } from '../lib/live-findings'
 import { userErrorMessage } from '../lib/safe-error'
 import { cn, titleCase, toLocalDateString } from '../lib/utils'
+import { FindingFixedMark } from './FindingFixedMark'
 import { PickList } from './imports/ServiceConfigBuilder'
 import { useOverviewFields } from './layout-editor/overview/overview-api'
 import { TipLayer } from './TipLayer'
@@ -672,6 +674,50 @@ interface FindingGroup {
   findings: Finding[]
 }
 
+/**
+ * Of the findings on screen, the keys whose record no longer has THAT finding (same field and
+ * rule) — asked of the live per-record check, as the viewer. A record that is gone counts as
+ * fixed; a check that fails counts as nothing (the row keeps showing). At most 4 checks at once.
+ */
+export async function fixedConformanceFindings(
+  client: ReturnType<typeof useNivaroClient>,
+  collection: string,
+  refs: FindingRef[],
+  byKey: Map<string, { field: string; rule: string }>
+): Promise<string[]> {
+  const byItem = new Map<string, FindingRef[]>()
+  for (const r of refs) byItem.set(r.itemId, [...(byItem.get(r.itemId) ?? []), r])
+  const fixed: string[] = []
+  const items = [...byItem.entries()]
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const [itemId, rows] = items[next++]
+      try {
+        const res = await client.request<{
+          data: { enabled?: boolean; findings?: Array<{ field: string | null; rule: string }> }
+        }>(
+          post(
+            `/config-conformance/record/${encodeURIComponent(collection)}/${encodeURIComponent(itemId)}/check`
+          )
+        )
+        if (res.data?.enabled === false) continue
+        const still = new Set(
+          (res.data?.findings ?? []).map((f) => `${f.field ?? ''}\u0000${f.rule}`)
+        )
+        for (const r of rows) {
+          const f = byKey.get(r.key)
+          if (f && !still.has(`${f.field}\u0000${f.rule}`)) fixed.push(r.key)
+        }
+      } catch (err) {
+        if ((err as { status?: number })?.status === 404) for (const r of rows) fixed.push(r.key)
+      }
+    }
+  }
+  await Promise.all([worker(), worker(), worker(), worker()])
+  return fixed
+}
+
 function RunDetail({
   run,
   onOpenItem,
@@ -728,6 +774,37 @@ function RunDetail({
     }),
     [data]
   )
+
+  // Findings fixed while this page is open turn to "Fixed by Beth" in place (live-findings.ts);
+  // the next refresh of the run drops them (the per-record check reconciles the run's rows).
+  const shownFindings = useMemo(() => {
+    const flat: Finding[] = []
+    for (const f of data?.findings ?? []) {
+      if ('findings' in f) flat.push(...f.findings.map((x) => ({ ...x, item_id: f.item_id })))
+      else flat.push(f)
+    }
+    return flat
+  }, [data])
+  const findingRefs = useMemo<FindingRef[]>(
+    () =>
+      shownFindings.map((f) => ({
+        key: String(f.id),
+        collection: run.collection,
+        itemId: f.item_id
+      })),
+    [shownFindings, run.collection]
+  )
+  const { resolved } = useResolvedFindings({
+    findings: findingRefs,
+    enabled: run.status === 'completed',
+    recheck: (refs) =>
+      fixedConformanceFindings(
+        client,
+        run.collection,
+        refs,
+        new Map(shownFindings.map((f) => [String(f.id), { field: f.field, rule: f.rule }]))
+      )
+  })
 
   return (
     <div className='flex min-h-0 flex-1 flex-col rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
@@ -868,7 +945,14 @@ function RunDetail({
                 </div>
                 <div className='mt-1 space-y-0.5'>
                   {g.findings.map((f) => (
-                    <div key={f.id} className='flex items-baseline gap-2 text-[12px]'>
+                    <div
+                      key={f.id}
+                      data-finding-resolved={resolved.has(String(f.id)) ? '' : undefined}
+                      className={cn(
+                        'flex items-baseline gap-2 text-[12px] transition-opacity',
+                        resolved.has(String(f.id)) && 'opacity-60'
+                      )}
+                    >
                       <button
                         type='button'
                         onClick={() => onOpenItem(g.item_id, f.field)}
@@ -888,6 +972,9 @@ function RunDetail({
                       <span className='min-w-0 text-slate-600 dark:text-muted-foreground'>
                         {f.message}
                       </span>
+                      {resolved.get(String(f.id)) && (
+                        <FindingFixedMark mark={resolved.get(String(f.id)) as ResolvedMark} />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -900,7 +987,11 @@ function RunDetail({
               {((data?.findings ?? []) as Finding[]).map((f) => (
                 <tr
                   key={f.id}
-                  className='border-b border-slate-50 transition-colors hover:bg-slate-50 dark:border-border/50 dark:hover:bg-background/40'
+                  data-finding-resolved={resolved.has(String(f.id)) ? '' : undefined}
+                  className={cn(
+                    'border-b border-slate-50 transition-colors hover:bg-slate-50 dark:border-border/50 dark:hover:bg-background/40',
+                    resolved.has(String(f.id)) && 'opacity-60'
+                  )}
                 >
                   <td className='w-[190px] px-4 py-1.5'>
                     <button
@@ -935,7 +1026,11 @@ function RunDetail({
                     {f.message}
                   </td>
                   <td className='w-[120px] px-2 py-1.5 text-right'>
-                    <AssignFinding findingId={f.id} />
+                    {resolved.get(String(f.id)) ? (
+                      <FindingFixedMark mark={resolved.get(String(f.id)) as ResolvedMark} />
+                    ) : (
+                      <AssignFinding findingId={f.id} />
+                    )}
                   </td>
                 </tr>
               ))}

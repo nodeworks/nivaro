@@ -39,7 +39,7 @@ import {
   useMyScopes
 } from '../lib/use-my-scopes'
 import { formatNumber, formatRelative, titleCase } from '../lib/utils'
-import { CacheStamp, type CustomQueryEnvelope } from './CacheStamp'
+import { type CustomQueryEnvelope, LiveCacheStamp } from './CacheStamp'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { MatrixEditor, type MatrixEditorConfig } from './MatrixEditor'
 import { QueryStatStrip, type QueryWidgetStat } from './QueryStatStrip'
@@ -1487,7 +1487,8 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
     }
   }
   const cacheStamp = (
-    <CacheStamp
+    <LiveCacheStamp
+      scope={`query:${cfg.query_slug}`}
       envelope={envelope}
       onRefresh={refreshNow}
       refreshing={isFetching && !isPending}

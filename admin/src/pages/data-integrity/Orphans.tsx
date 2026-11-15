@@ -1,4 +1,11 @@
-import { ErrorNotice, toastError } from '@nivaro/shared'
+import {
+  ErrorNotice,
+  FindingFixedMark,
+  type FindingRef,
+  type ResolvedMark,
+  toastError,
+  useResolvedFindings
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ExternalLink, Loader2, Play, RefreshCw, Search, Square, Unlink } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
@@ -486,6 +493,30 @@ function CheckDetail({ check, stored }: { check: OrphanCheckRow; stored: CheckRe
   })
 
   const samples = result?.samples ?? []
+  // Rows someone fixes while this is open turn to "Fixed by Beth" in place (live-findings.ts);
+  // a refresh of the check drops them. "Fixed" = the link no longer dangles, asked of the same
+  // preview route the repair uses (it re-tests the ids, writes nothing) with an action the
+  // link allows. A link with neither repair cannot be re-tested here, so it stays as it was.
+  const retestAction = check.can_clear ? 'clear' : check.can_delete ? 'delete' : null
+  const sampleRefs = useMemo<FindingRef[]>(
+    () => samples.map((s) => ({ key: s.id, collection: check.child, itemId: s.id })),
+    [samples, check.child]
+  )
+  const { resolved } = useResolvedFindings({
+    findings: sampleRefs,
+    enabled: retestAction != null,
+    recheck: (refs) =>
+      api
+        .post<{ data: { ids: string[] } }>('/orphans/preview', {
+          key: check.key,
+          action: retestAction,
+          ids: refs.map((r) => r.itemId)
+        })
+        .then((r) => {
+          const still = new Set((r.data.data.ids ?? []).map(String))
+          return refs.filter((x) => !still.has(String(x.itemId))).map((x) => x.key)
+        })
+  })
   const toggle = (id: string) =>
     setPicked((s) => {
       const n = new Set(s)
@@ -659,8 +690,12 @@ function CheckDetail({ check, stored }: { check: OrphanCheckRow; stored: CheckRe
                 {samples.map((s) => (
                   <tr
                     key={s.id}
-                    className='border-b border-slate-100 last:border-0 dark:border-border/60'
+                    className={cn(
+                      'border-b border-slate-100 transition-opacity last:border-0 dark:border-border/60',
+                      resolved.has(s.id) && 'opacity-60'
+                    )}
                     data-orphans-row={s.id}
+                    data-finding-resolved={resolved.has(s.id) ? '' : undefined}
                   >
                     <td className='px-4 py-1.5'>
                       <input
@@ -676,9 +711,16 @@ function CheckDetail({ check, stored }: { check: OrphanCheckRow; stored: CheckRe
                     </td>
                     <td className='px-2 py-1.5 font-mono text-[11.5px] text-slate-500 dark:text-muted-foreground'>
                       {s.fk_value}{' '}
-                      <span className='font-sans text-[10.5px] text-amber-700 dark:text-amber-400'>
-                        missing
-                      </span>
+                      {resolved.get(s.id) ? (
+                        <FindingFixedMark
+                          mark={resolved.get(s.id) as ResolvedMark}
+                          className='font-sans'
+                        />
+                      ) : (
+                        <span className='font-sans text-[10.5px] text-amber-700 dark:text-amber-400'>
+                          missing
+                        </span>
+                      )}
                     </td>
                     <td className='px-4 py-1.5 text-right'>
                       <Link

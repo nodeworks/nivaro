@@ -81,7 +81,12 @@ import { loadErrorText } from '../lib/load-error'
 import { useStartsOpen } from '../lib/use-starts-open'
 import { affixesFor, formatWidgetValue } from '../lib/widget-value-format'
 import { BackgroundRunOffer } from './BackgroundRunOffer'
-import { type CacheInfo, CacheStamp, type CustomQueryEnvelope, cacheStampTip } from './CacheStamp'
+import {
+  type CacheInfo,
+  type CustomQueryEnvelope,
+  cacheStampTip,
+  LiveCacheStamp
+} from './CacheStamp'
 import { useStagedRelations } from './item-edit/O2MStagingContext'
 import { LoadErrorNote } from './LoadErrorNote'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
@@ -1902,7 +1907,8 @@ export function WidgetSlot({
           </pre>
         )}
         {renderData.cache ? (
-          <CacheStamp
+          <LiveCacheStamp
+            scope={`widget:${widgetId}`}
             envelope={renderData.cache as unknown as CustomQueryEnvelope}
             onRefresh={refreshWidget}
             refreshing={renderLoading}
