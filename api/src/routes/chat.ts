@@ -2044,6 +2044,19 @@ export async function chatRoutes(app: FastifyInstance) {
     return { data: { room: target.room, unread: m ? unread : 0, messages: total, joined: !!m } }
   })
 
+  /**
+   * Where else this record is being talked about (rt7 #18): rooms the caller is in and can see
+   * whose recent messages name the record. Counts and room names only; nothing when the caller
+   * cannot read the record.
+   */
+  app.get('/record-discussion', async (req, reply) => {
+    const q = req.query as { collection?: string; item?: string }
+    if (!q.collection || !q.item)
+      return reply.code(400).send({ error: 'collection and item are required' })
+    const { recordMentionsFor } = await import('../services/record-chat-mentions.js')
+    return { data: await recordMentionsFor(req.user!, q.collection, q.item) }
+  })
+
   /** Unread record rooms for records I own or follow (#969 — My Work). */
   app.get('/my-record-rooms', async (req) => {
     const rooms = (await listRooms(req.user!)).filter((r) => r.kind === 'entity' && r.unread > 0)

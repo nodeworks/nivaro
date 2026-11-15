@@ -337,6 +337,7 @@ import { endQuickCreateFollows } from './item-edit/QuickCreateButton'
 import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
+import { RecordChatMentionsChip } from './item-edit/RecordChatMentionsChip'
 import { PickerExclusionToggle, ScheduleChangeButton } from './item-edit/RecordGrantTools'
 import {
   RecordHeaderActionButtons,
@@ -13989,6 +13990,12 @@ function ItemEditFormView({
                                                 userName={provenance.user_name}
                                                 timestamp={provenance.timestamp}
                                                 api={provenance.api}
+                                              />
+                                            )}
+                                            {!isNew && itemId && !designOn && (
+                                              <RecordChatMentionsChip
+                                                collection={collection}
+                                                itemId={String(itemId)}
                                               />
                                             )}
                                             {/* Admin-only: the route 403s everyone else anyway. */}

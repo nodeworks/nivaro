@@ -547,6 +547,11 @@ async function postInner(
     void import('./record-chat-live.js').then((m) => m.announceRecordChat(room)).catch(() => {})
   }
 
+  // rt7 #18: a message naming a record by its token pings that record's open pages (ids only).
+  if (!system) {
+    void import('./record-chat-mentions.js').then((m) => m.announceRecordMentions(message))
+  }
+
   // Search by meaning (#2354): index the words, never blocking the send.
   if (!system) {
     void import('./chat-semantic.js').then((m) => m.indexChatMessage(id, room, message, system))
