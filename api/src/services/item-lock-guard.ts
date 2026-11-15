@@ -10,7 +10,11 @@ export async function isLockingEnabled(collection: string): Promise<boolean> {
       .select('item_locking_enabled')
       .first()) as { item_locking_enabled: number | boolean } | undefined
     if (!row) return true
-    return row.item_locking_enabled === 1 || row.item_locking_enabled === true
+    if (row.item_locking_enabled === 1 || row.item_locking_enabled === true) return true
+    // Lines of a parent whose lines lock one at a time take their own lock even
+    // when the line collection's own record locking is off (realtime item 7).
+    const { isLineLockChild } = await import('./edit-lock.js')
+    return await isLineLockChild(collection).catch(() => false)
   } catch {
     return true // column missing (migration pending) — default enabled
   }

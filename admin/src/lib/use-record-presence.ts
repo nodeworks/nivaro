@@ -1,3 +1,4 @@
+import { markRemoteCell } from '@nivaro/shared'
 import { useEffect, useRef, useState } from 'react'
 import type { Socket } from 'socket.io-client'
 import { useAuth } from '@/lib/auth'
@@ -213,7 +214,16 @@ export function useRecordPresence(collection: string | undefined, item: string |
   // Imperative outline on remotely-edited fields
   useEffect(() => {
     const marked: HTMLElement[] = []
+    const undo: Array<() => void> = []
     for (const field of Object.keys(editing)) {
+      // A grid cell: the person's own colour, their name on hover (realtime item 25).
+      if (field.startsWith('cell:')) {
+        const cell = document.querySelector<HTMLElement>(
+          `[data-grid-cell="${CSS.escape(field.slice(5))}"]`
+        )
+        if (cell) undo.push(markRemoteCell(cell, editing[field]))
+        continue
+      }
       // `row:<collection>:<id>` marks a grid row; anything else a field wrapper.
       const el = field.startsWith('row:')
         ? document.querySelector<HTMLElement>(`[data-o2m-row="${CSS.escape(field.slice(4))}"]`)
@@ -235,6 +245,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
         el.classList.remove('nvr-remote-editing')
         delete el.dataset.remoteEditor
       }
+      for (const u of undo) u()
     }
   }, [editing])
 

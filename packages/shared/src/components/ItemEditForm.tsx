@@ -109,6 +109,7 @@ import { formLocale, translateFieldRow, translateGroup } from '../lib/layout-i18
 import { currentViewport, quietHiddenSectionsOf } from '../lib/layout-resolve'
 import { extSlotKey } from '../lib/layout-slots'
 import { useLeaveLinkGuard } from '../lib/leave-guard'
+import { LineLockContext } from '../lib/line-locks'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { requestMoveState } from '../lib/move-state'
 import { lockedAfterMoveText, movedNoticeId, namedMovedNoticeRecent } from '../lib/moved-notice'
@@ -335,6 +336,7 @@ import { RecordAccessLostPanel, type RecordGone, RecordLiveSync } from './item-e
 import { RecordOutboxBanner, useRecordOutboxEntry } from './item-edit/RecordOutbox'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
+import { type RemoteChangeLogEntry, RemoteChangesButton } from './item-edit/RemoteChangeUi'
 import { RuleHiddenNotes } from './item-edit/RuleHiddenNotes'
 import { isNarrowRecordWidth } from './item-edit/rail-width'
 import { recordLookupsFor, rememberRecordLookups } from './item-edit/record-lookups'
@@ -1225,6 +1227,9 @@ export function ownEditFields(
   return new Set(changed.filter((k) => touched.has(k) && !valuesEqual(draft[k], baseline[k])))
 }
 
+/** Interfaces that show a record's own lines (line locks keep these open under a record lock). */
+const LINE_GRID_IFACES = new Set(['inline-table', 'inline-grid', 'list-o2m', 'relation-list'])
+
 /** A field the layout / field config marks "do not duplicate". */
 export function isNoDuplicate(field: { options?: unknown }): boolean {
   const o = field.options
@@ -1904,12 +1909,15 @@ function FieldContexts({
   personalDefaults,
   sources,
   fieldComments,
+  lineLocks = false,
   children
 }: {
   affordances: FieldAffordances | null
   personalDefaults: PersonalDefaultsApi
   sources?: Record<string, FieldSource> | null
   fieldComments: FieldCommentsApi | null
+  /** The record's lines lock one at a time (realtime item 7) — line grids read it. */
+  lineLocks?: boolean
   children: ReactNode
 }) {
   return (
@@ -1917,7 +1925,7 @@ function FieldContexts({
       <PersonalDefaultsContext.Provider value={personalDefaults}>
         <FieldSourcesContext.Provider value={sources ?? null}>
           <FieldCommentsContext.Provider value={fieldComments}>
-            {children}
+            <LineLockContext.Provider value={lineLocks}>{children}</LineLockContext.Provider>
           </FieldCommentsContext.Provider>
         </FieldSourcesContext.Provider>
       </PersonalDefaultsContext.Provider>
@@ -2318,6 +2326,12 @@ function ItemEditFormView({
     if (!restoreGuardRef.current.delete(field)) return
     decidedConflictsRef.current.set(field, theirs)
   }
+  // A live conflict decided in place (Keep mine, Merge): asked once, never again at Save
+  // while the record still holds the other person's value (conflictsNeedingPerson).
+  const decideRemoteConflict = (field: string, theirs: unknown) => {
+    restoreGuardRef.current.delete(field)
+    decidedConflictsRef.current.set(field, theirs)
+  }
   // A create an older server answered with no row and no id: the record
   // exists, so the form is replaced by a plain note — never a second Save.
   const [createdOutOfView, setCreatedOutOfView] = useState<{ reason: string | null } | null>(null)
@@ -2622,6 +2636,11 @@ function ItemEditFormView({
   // Remote-change ghosts (#2): field → what it was before someone else's
   // write landed, until dismissed or the next save.
   const [remoteChanges, setRemoteChanges] = useState<Record<string, RemoteFieldChange>>({})
+  // "See changes" (realtime item 1): every field others changed since the record was
+  // opened — kept past dismissals and saves; another record starts empty.
+  const [remoteLog, setRemoteLog] = useState<RemoteChangeLogEntry[]>([])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on identity only
+  useEffect(() => setRemoteLog([]), [collection, itemId])
   const ownSaveAtRef = useRef(0)
   const lastTouchRef = useRef<{
     user_id: string | null
@@ -3934,6 +3953,16 @@ function ItemEditFormView({
           }
           return next
         })
+        const logged = changed.filter(
+          (k) => noted.includes(k) || (isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k]))
+        )
+        if (logged.length > 0)
+          setRemoteLog((cur) =>
+            [
+              ...cur,
+              ...logged.map((k) => ({ field: k, by, at, was: prev[k], now: record[k] }))
+            ].slice(-200)
+          )
         // The collision baseline moves with the adopted values — but not past
         // a conflict: with the person's own edit of a field still standing
         // against the newer value, the save must meet the mid-air check.
@@ -6032,6 +6061,14 @@ function ItemEditFormView({
     (!editLockMessage || editLockPartial)
   // A background workspace tab (efp-new RecordSurfaceContext) counts as off screen.
   const surfaceActive = useRecordSurface().active
+  // Line locks (realtime item 7, summary_mode_rules.line_locks): the record lock covers
+  // the record's own fields; each line locks on its own while someone edits it, so line
+  // work never takes (or keeps) the record lock.
+  const lineLocksOn =
+    !isNew && !designOn && !!normalizeSummaryModeRules(colMeta?.summary_mode_rules).line_locks
+  const recordLockDirty = lineLocksOn
+    ? unsavedSummary.fields.length + unsavedSummary.links + unsavedSummary.unlinks > 0
+    : hasUnsaved || lineDrafts.size > 0
   const {
     lockHolder,
     acquired: lockAcquired,
@@ -6056,11 +6093,30 @@ function ItemEditFormView({
     lazy: true,
     active: active && surfaceActive,
     // a10-4: a clean form (saved, or edits undone) lets the lock go. A line
-    // editor still holding a typed change is not clean (army 11 f4 L1).
-    dirty: hasUnsaved || lineDrafts.size > 0
+    // editor still holding a typed change is not clean (army 11 f4 L1) — unless
+    // lines lock on their own (line locks).
+    dirty: recordLockDirty
   })
   const isReadOnly = lockReadOnly || !!recordGone || (!!editLockMessage && !editLockPartial)
   readOnlyRef.current = isReadOnly && !isNew
+  // Someone else holds the RECORD lock, and lines lock on their own: the record's fields
+  // are read-only, its line grids stay open (each line judged by its own lock).
+  const linesOpenUnderLock =
+    lineLocksOn && lockReadOnly && !recordGone && !(editLockMessage && !editLockPartial)
+  const lineGridFields = useMemo(
+    () =>
+      new Set(
+        (fieldConfig ?? [])
+          .filter((f) => LINE_GRID_IFACES.has(String(f.interface ?? '')))
+          .map((f) => f.field)
+      ),
+    [fieldConfig]
+  )
+  /** The form-wide read-only, for one field (line grids stay open under line locks). */
+  const formLocks = (field: string) =>
+    isReadOnly && !(linesOpenUnderLock && lineGridFields.has(field))
+  /** Save stays possible when only lines (which lock on their own) can change. */
+  const saveBlockedByLock = isReadOnly && !linesOpenUnderLock
   // The step moved (this form's own transition, a live state change, another
   // tab): who may edit now is the server's call — re-read the edit-lock
   // verdict, so a record that just went into approval turns read-only (and
@@ -6093,8 +6149,8 @@ function ItemEditFormView({
   // unsaved work of any kind is edit intent too.
   // biome-ignore lint/correctness/useExhaustiveDependencies: lockEnabled re-fires the intent once the lock turns on
   useEffect(() => {
-    if (hasUnsaved) relockOnEditRef.current?.()
-  }, [hasUnsaved, lockEnabled])
+    if (recordLockDirty) relockOnEditRef.current?.()
+  }, [recordLockDirty, lockEnabled])
 
   // ── Layout / groups ────────────────────────────────────────────────────────
   const assignments: SlotAssignment[] = activeLayoutData?.assignments ?? []
@@ -9215,7 +9271,7 @@ function ItemEditFormView({
     if (recordGone) return
     // The header Save is disabled on a read-only record; the host's triggers
     // (workspace "Save all", the entry keyboard) are not — they land here.
-    if (isReadOnly && !isNew) {
+    if (isReadOnly && !isNew && (saveBlockedByLock || unsavedSummary.fields.length > 0)) {
       toast.info(
         editLockMessage ??
           `${lockHolder?.locked_by_name ?? 'Someone else'} is editing this record — nothing was saved`
@@ -11045,7 +11101,7 @@ function ItemEditFormView({
   // over a form that was still fully editable. Locking at the source means any
   // future render path inherits it instead of having to remember.
   if (isReadOnly) {
-    for (const f of fieldConfig ?? []) lockedFields.add(f.field)
+    for (const f of fieldConfig ?? []) if (formLocks(f.field)) lockedFields.add(f.field)
   }
   // A post-approval state with open fields: everything else is locked at the
   // source for the same reason (every render path reads this set).
@@ -11177,7 +11233,7 @@ function ItemEditFormView({
         lockReasons[key] = editLockMessage
         continue
       }
-      if (isReadOnly) {
+      if (formLocks(key)) {
         lockReasons[key] =
           `${lockHolder?.locked_by_name ?? 'Someone else'} is editing this record — read-only until the lock is released`
         continue
@@ -11492,7 +11548,9 @@ function ItemEditFormView({
   const fieldAffordancesRaw = {
     remoteChanges,
     dismissRemoteChange: (field: string) => {
-      if (remoteChanges[field]?.conflict) settleRestoreGuard(field, remoteChanges[field]?.theirs)
+      // Keep mine on a conflict is a decision: the save's mid-air check does not ask
+      // about this field again while the record still holds the value decided against.
+      if (remoteChanges[field]?.conflict) decideRemoteConflict(field, remoteChanges[field]?.theirs)
       setRemoteChanges((cur) => {
         if (!(field in cur)) return cur
         const next = { ...cur }
@@ -11514,6 +11572,18 @@ function ItemEditFormView({
       // so the collision baseline may move up to it.
       if (!Object.entries(remoteChanges).some(([k, c]) => k !== field && c.conflict))
         void qc.invalidateQueries({ queryKey: ['collision-base', collection, itemId] })
+    },
+    mergeRemoteChange: (field: string, value: unknown) => {
+      const ch = remoteChanges[field]
+      if (!ch?.conflict) return
+      decideRemoteConflict(field, ch.theirs)
+      // The merged value is the person's own edit (it differs from both sides as a rule).
+      handleFieldChange(field, value)
+      setRemoteChanges((cur) => {
+        const next = { ...cur }
+        delete next[field]
+        return next
+      })
     },
     lockReasons: exactLockReasons,
     onLockHover: lockWhy.want,
@@ -11853,7 +11923,9 @@ function ItemEditFormView({
                       visible={true}
                       forceVisible={designHidden(f) || undefined}
                       locked={
-                        isReadOnly || lockedFields.has(f.field) || addendumViewId !== 'original'
+                        formLocks(f.field) ||
+                        lockedFields.has(f.field) ||
+                        addendumViewId !== 'original'
                       }
                       layoutAiEnabled={layoutAiEnabled}
                       renderField={renderField}
@@ -12582,7 +12654,9 @@ function ItemEditFormView({
                   forceVisible={
                     designHidden(f, visibleFields.has(f.field) || !visibleFields.size) || undefined
                   }
-                  locked={lockedFields.has(f.field) || isReadOnly || addendumViewId !== 'original'}
+                  locked={
+                    lockedFields.has(f.field) || formLocks(f.field) || addendumViewId !== 'original'
+                  }
                   layoutAiEnabled={layoutAiEnabled}
                   renderField={renderField}
                   onCountChange={handleM2MCountChange}
@@ -12790,7 +12864,9 @@ function ItemEditFormView({
                     visible={true}
                     forceVisible={designHidden(f) || undefined}
                     locked={
-                      isReadOnly || lockedFields.has(f.field) || addendumViewId !== 'original'
+                      formLocks(f.field) ||
+                      lockedFields.has(f.field) ||
+                      addendumViewId !== 'original'
                     }
                     layoutAiEnabled={layoutAiEnabled}
                     renderField={renderField}
@@ -13020,7 +13096,7 @@ function ItemEditFormView({
               <button
                 type='button'
                 onClick={() => handleSave()}
-                disabled={saveMut.isPending || isReadOnly || viewAs.active}
+                disabled={saveMut.isPending || saveBlockedByLock || viewAs.active}
                 className='inline-flex h-9 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12px] font-medium text-white transition-colors hover:bg-nvr-cyan-dark disabled:opacity-50'
               >
                 <Save className='h-3.5 w-3.5' />
@@ -13399,6 +13475,7 @@ function ItemEditFormView({
                                 personalDefaults={personalDefaults.context}
                                 sources={fieldSources}
                                 fieldComments={fieldComments}
+                                lineLocks={lineLocksOn}
                               >
                                 {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a
@@ -14909,6 +14986,30 @@ function ItemEditFormView({
                                             draft={draft}
                                           />
                                         )}
+                                        {!isNew && !readMode && remoteLog.length > 0 && (
+                                          <RemoteChangesButton
+                                            entries={remoteLog}
+                                            conflicts={remoteChanges}
+                                            labelOf={(f) => {
+                                              const fc = (fieldConfig ?? []).find(
+                                                (x) => x.field === f
+                                              )
+                                              return (
+                                                (fc &&
+                                                  placementFieldText(fc, placementTextCtx).label) ||
+                                                fc?.label ||
+                                                titleCase(f)
+                                              )
+                                            }}
+                                            onKeepMine={(f) =>
+                                              fieldAffordances.dismissRemoteChange(f)
+                                            }
+                                            onTakeTheirs={(f) =>
+                                              fieldAffordances.takeRemoteChange?.(f)
+                                            }
+                                            onJump={(f) => void jumpToField(f)}
+                                          />
+                                        )}
                                         {!!activeLayoutData?.layout?.changes_tray && !readMode && (
                                           <ChangesTray
                                             items={changeItems}
@@ -14964,7 +15065,7 @@ function ItemEditFormView({
                                               onClick={() => handleSave()}
                                               disabled={
                                                 saveMut.isPending ||
-                                                isReadOnly ||
+                                                saveBlockedByLock ||
                                                 viewAs.active ||
                                                 everyFieldLocked
                                               }

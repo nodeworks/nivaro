@@ -64,12 +64,12 @@ describe('validateSummaryModeRules', () => {
     expect(validateSummaryModeRules({ rules: [{ mode: 'summary', roles: ['x'] }] }).error).toMatch(
       /uuid/
     )
-    expect(validateSummaryModeRules({ rules: [{ mode: 'summary', states: ['a b'] }] }).error).toMatch(
-      /state keys/
-    )
-    expect(validateSummaryModeRules({ rules: [{ mode: 'summary', states_op: 'x' }] }).error).toMatch(
-      /states_op/
-    )
+    expect(
+      validateSummaryModeRules({ rules: [{ mode: 'summary', states: ['a b'] }] }).error
+    ).toMatch(/state keys/)
+    expect(
+      validateSummaryModeRules({ rules: [{ mode: 'summary', states_op: 'x' }] }).error
+    ).toMatch(/states_op/)
     expect(validateSummaryModeRules({ rules: new Array(21).fill({ mode: 'edit' }) }).error).toMatch(
       /at most 20/
     )
@@ -79,18 +79,18 @@ describe('validateSummaryModeRules', () => {
 describe('record conditions (#737)', () => {
   it('keeps valid conditions and refuses bad ones', () => {
     const v = validateSummaryModeRules({
-      rules: [
-        { mode: 'summary', conditions: [{ field: 'is_on_hold', op: 'eq', value: true }] }
-      ]
+      rules: [{ mode: 'summary', conditions: [{ field: 'is_on_hold', op: 'eq', value: true }] }]
     })
     expect(v.value?.rules[0].conditions).toEqual([{ field: 'is_on_hold', op: 'eq', value: true }])
     expect(
-      validateSummaryModeRules({ rules: [{ mode: 'summary', conditions: [{ field: 'a b', op: 'eq' }] }] })
-        .error
+      validateSummaryModeRules({
+        rules: [{ mode: 'summary', conditions: [{ field: 'a b', op: 'eq' }] }]
+      }).error
     ).toMatch(/field name/)
     expect(
-      validateSummaryModeRules({ rules: [{ mode: 'summary', conditions: [{ field: 'a', op: 'like' }] }] })
-        .error
+      validateSummaryModeRules({
+        rules: [{ mode: 'summary', conditions: [{ field: 'a', op: 'like' }] }]
+      }).error
     ).toMatch(/op must be/)
     expect(
       validateSummaryModeRules({
@@ -100,3 +100,20 @@ describe('record conditions (#737)', () => {
   })
 })
 
+describe('line_locks (realtime item 7)', () => {
+  it('survives the lenient read and the strict write, off by default', () => {
+    expect(
+      parseSummaryModeRules(JSON.stringify({ default: 'edit', rules: [], line_locks: true }))
+    ).toMatchObject({ line_locks: true })
+    expect(parseSummaryModeRules(JSON.stringify({ default: 'edit', rules: [] })).line_locks).toBe(
+      undefined
+    )
+    expect(
+      validateSummaryModeRules({ default: 'edit', rules: [], line_locks: true }).value
+    ).toEqual({ default: 'edit', rules: [], line_locks: true })
+    // Only a real true turns it on; the empty default still stores nothing.
+    expect(validateSummaryModeRules({ default: 'edit', rules: [], line_locks: 'yes' }).value).toBe(
+      null
+    )
+  })
+})

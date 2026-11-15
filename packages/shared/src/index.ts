@@ -373,6 +373,12 @@ export {
 export { RecordRecapStrip } from './components/item-edit/RecordRecapStrip'
 export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeButton'
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
+export {
+  FieldMergePanel,
+  RemoteChangeMark,
+  RemoteChangesButton,
+  RemoteConflictNotice
+} from './components/item-edit/RemoteChangeUi'
 export { type RelatedMissing, relatedMissing } from './components/item-edit/related-missing'
 export { UserChip, UserRosterCluster } from './components/item-edit/UserChip'
 export {
@@ -895,6 +901,15 @@ export * from './lib/expression'
 export { formulaConstant, networkdaysBetween, setFormulaConstants } from './lib/expression'
 export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'
 export * from './lib/field-interfaces'
+export {
+  autoMerge,
+  diffTextBlocks,
+  type FieldMergeKind,
+  fieldMergeKind,
+  mergedSet,
+  mergedText,
+  mergeSetValues
+} from './lib/field-merge'
 export * from './lib/filter-sentence'
 export {
   fiscalPeriodOf,
@@ -913,6 +928,13 @@ export {
   useGlossary,
   withCoreGlossary
 } from './lib/glossary'
+export {
+  CURSOR_LEAVE_MS,
+  CURSOR_SETTLE_MS,
+  createCellAnnouncer,
+  cursorColor,
+  markRemoteCell
+} from './lib/grid-cursors'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
 export {
   type BuildStatus,
@@ -928,6 +950,7 @@ export { type LayoutGrantFlags, layoutGrantedTools } from './lib/layout-grants'
 export { currentViewport } from './lib/layout-resolve'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
+export { LineLockContext, lineLockView, useLineLocks } from './lib/line-locks'
 export * from './lib/list-inline-edit'
 export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'

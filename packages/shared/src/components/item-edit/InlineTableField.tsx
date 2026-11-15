@@ -21,6 +21,7 @@ import {
   Fragment,
   type ReactNode,
   useCallback,
+  useContext,
   useDeferredValue,
   useEffect,
   useId,
@@ -145,6 +146,8 @@ import { del, get, patch, post } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
 import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
+import { createCellAnnouncer } from '../../lib/grid-cursors'
+import { LineLockContext, lineLockMoves, useLineLocks } from '../../lib/line-locks'
 import { isOwnWrite } from '../../lib/own-writes'
 import { fetchCollectionRelations, queryKeys } from '../../lib/query-keys'
 import { useOptionalRealtime } from '../../lib/realtime'
@@ -2192,33 +2195,21 @@ export function InlineTableField({
     rowId && rowId !== 'new' && !rowId.startsWith('pending:')
       ? `${relatedCollection}:${rowId}:${field}`
       : undefined
-  const cellFocusRef = useRef<string | null>(null)
-  const emitCell = (cell: string | null, state: 'start' | 'end') => {
-    if (!cell || typeof window === 'undefined') return
-    window.dispatchEvent(new CustomEvent('nvr:cell-editing', { detail: { cell, state } }))
-  }
+  // Throttled (realtime item 25): one start for the cell the person stops on.
+  const cellAnnouncer = useMemo(() => createCellAnnouncer(), [])
   const onCellFocusCapture = (e: React.FocusEvent) => {
-    const cell =
+    cellAnnouncer.focus(
       (e.target as HTMLElement | null)
         ?.closest?.('[data-grid-cell]')
         ?.getAttribute('data-grid-cell') ?? null
-    if (cell === cellFocusRef.current) return
-    if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
-    cellFocusRef.current = cell
-    if (cell) emitCell(cell, 'start')
+    )
   }
   const onCellBlurCapture = (e: React.FocusEvent) => {
     const next = (e.relatedTarget as HTMLElement | null)?.closest?.('[data-grid-cell]')
     if (next) return
-    if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
-    cellFocusRef.current = null
+    cellAnnouncer.blur()
   }
-  useEffect(
-    () => () => {
-      if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
-    },
-    []
-  )
+  useEffect(() => () => cellAnnouncer.flush(), [cellAnnouncer])
   const lastEditingRowRef = useRef<string | null>(null)
   useEffect(() => {
     const id = editState?.rowId
@@ -2551,6 +2542,36 @@ export function InlineTableField({
   useEffect(() => {
     if (!isNew && !readOnly) rowBases.noteRows(rawRows)
   }, [rawRows, rowBases, isNew, readOnly])
+  // Line locks (realtime item 7): with the parent's line locks on, each saved line
+  // is locked while one person edits it — someone else's line is read-only here
+  // until they leave it, and two people can edit different lines at once.
+  const lineLocksWanted = useContext(LineLockContext) && !readOnly && !isNew
+  const savedLineIds = useMemo(
+    () => (lineLocksWanted ? rawRows.map((r) => String(r.id ?? '')).filter(Boolean) : []),
+    [rawRows, lineLocksWanted]
+  )
+  const lineLocks = useLineLocks({
+    collection: relatedCollection,
+    rowIds: savedLineIds,
+    enabled: lineLocksWanted
+  })
+  const lineLocksRef = useRef(lineLocks)
+  lineLocksRef.current = lineLocks
+  // Take the line's lock when its editor opens, let it go (after a short pause) when
+  // the editor closes or moves to another line. A refused claim closes the editor.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: follows the open line only
+  useEffect(() => {
+    const ll = lineLocksRef.current
+    if (!ll.enabled) return
+    const editing = editState?.rowId ?? null
+    const move = lineLockMoves(ll.held, editing)
+    if (move.claim) {
+      const id = move.claim
+      void ll.claim(id).then((ok) => {
+        if (!ok && editStateRef.current?.rowId === id) setEditState(null)
+      })
+    } else if (move.release) ll.release()
+  }, [editState?.rowId, lineLocks.enabled])
   /** Extra keys a staged edit of a saved row carries: the base from the read
    *  that showed it, which the form sends on the record Save. */
   const stagedBase = (rowId: string): Record<string, unknown> => {
@@ -5556,6 +5577,8 @@ export function InlineTableField({
     if (readOnly) return
     const id = String(row.id)
     if (editState?.rowId === id) return
+    // Someone else is editing this line (line locks): it stays read-only here.
+    if (lineLocks.view(id).readOnly) return
     // Row soft lock: someone else has this line's editor open right now —
     // ask before opening ours, once per (row, editor) presence.
     readRemoteRowEditorsRef.current()
@@ -9006,6 +9029,7 @@ export function InlineTableField({
                 const isEditing = editState?.rowId === id
                 // Split mode edits in the docked panel: the row only highlights.
                 const inlineEdit = isEditing && !splitMode
+                const lineLock = lineLocks.view(id)
                 const isDragging = dragIdx === ri
                 const isDropTarget = dropIdx === ri && dragIdx !== ri
                 const isPendingEdit = pendingEdits.has(id)
@@ -9022,6 +9046,13 @@ export function InlineTableField({
                     <tr
                       data-o2m-row={`${relatedCollection}:${id}`}
                       data-o2m-editing={isEditing ? '' : undefined}
+                      data-line-locked={lineLock.readOnly ? (lineLock.by ?? '') : undefined}
+                      data-tip={
+                        lineLock.readOnly
+                          ? `${lineLock.by ?? 'Someone'} is editing this line — it opens for you when they leave it`
+                          : undefined
+                      }
+                      aria-readonly={lineLock.readOnly || undefined}
                       tabIndex={splitMode ? -1 : undefined}
                       draggable={
                         enableReorder &&
@@ -9070,11 +9101,13 @@ export function InlineTableField({
                             : 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
                           : '',
                         !isPendingDelete && !isEditing
-                          ? lineError
-                            ? 'bg-red-50/70 hover:bg-red-50 cursor-pointer dark:bg-red-900/15 dark:hover:bg-red-900/25'
-                            : ri % 2 === 0
-                              ? 'bg-white hover:bg-slate-50/80 dark:bg-card dark:hover:bg-muted cursor-pointer'
-                              : 'bg-slate-50/50 hover:bg-slate-100/60 dark:bg-white/[0.03] dark:hover:bg-muted cursor-pointer'
+                          ? lineLock.readOnly
+                            ? 'cursor-not-allowed bg-amber-50/50 text-slate-500 dark:bg-amber-400/[0.05] dark:text-slate-400'
+                            : lineError
+                              ? 'bg-red-50/70 hover:bg-red-50 cursor-pointer dark:bg-red-900/15 dark:hover:bg-red-900/25'
+                              : ri % 2 === 0
+                                ? 'bg-white hover:bg-slate-50/80 dark:bg-card dark:hover:bg-muted cursor-pointer'
+                                : 'bg-slate-50/50 hover:bg-slate-100/60 dark:bg-white/[0.03] dark:hover:bg-muted cursor-pointer'
                           : ''
                       )}
                     >

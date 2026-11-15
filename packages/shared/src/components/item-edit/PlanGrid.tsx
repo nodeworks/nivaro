@@ -17,6 +17,7 @@ import { useItemEditAuth, useNivaroClient, useParentDraft } from '../../context'
 import { get, post } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
 import { evaluateNumeric } from '../../lib/expression'
+import { createCellAnnouncer } from '../../lib/grid-cursors'
 import { parseMoneyInput } from '../../lib/money-input'
 import { userErrorMessage } from '../../lib/safe-error'
 import { registerStagedRowLabel } from '../../lib/staged-row-labels'
@@ -389,33 +390,20 @@ export function PlanGridField(props: {
   // #729 — shared cursors, the InlineTableField contract: a saved figure's
   // cell is tagged `<collection>:<row>:<field>`, and focus moving between
   // cells rides window `nvr:cell-editing` for the presence host to relay.
-  const cellFocusRef = useRef<string | null>(null)
-  const emitCell = (cell: string | null, state: 'start' | 'end') => {
-    if (!cell || typeof window === 'undefined') return
-    window.dispatchEvent(new CustomEvent('nvr:cell-editing', { detail: { cell, state } }))
-  }
+  // Throttled (realtime item 25): one start for the cell the person stops on.
+  const cellAnnouncer = useMemo(() => createCellAnnouncer(), [])
   const onCellFocusCapture = (e: React.FocusEvent) => {
-    const cell =
+    cellAnnouncer.focus(
       (e.target as HTMLElement | null)
         ?.closest?.('[data-grid-cell]')
         ?.getAttribute('data-grid-cell') ?? null
-    if (cell === cellFocusRef.current) return
-    if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
-    cellFocusRef.current = cell
-    if (cell) emitCell(cell, 'start')
+    )
   }
   const onCellBlurCapture = (e: React.FocusEvent) => {
     if ((e.relatedTarget as HTMLElement | null)?.closest?.('[data-grid-cell]')) return
-    if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
-    cellFocusRef.current = null
+    cellAnnouncer.blur()
   }
-  // biome-ignore lint/correctness/useExhaustiveDependencies: unmount-only release of the cursor
-  useEffect(
-    () => () => {
-      if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
-    },
-    []
-  )
+  useEffect(() => () => cellAnnouncer.flush(), [cellAnnouncer])
 
   const compareEndpoint = useMemo(
     () =>

@@ -51,6 +51,7 @@ export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
 export * from './sections/layout-editor.js'
+export * from './sections/live-conflicts.js'
 export * from './sections/live-feeds.js'
 export * from './sections/live-lists.js'
 export * from './sections/live-ops.js'
@@ -296,6 +297,7 @@ import {
 import { integrationsConsole } from './sections/integrations-console.js'
 import { layoutEditor, layoutPersonalDefaults } from './sections/layout-editor.js'
 import { listEditing } from './sections/list-editing'
+import { collabLiveConflicts } from './sections/live-conflicts.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { collabLiveLists } from './sections/live-lists.js'
 import {
@@ -896,6 +898,7 @@ export const navSections: NavGroup[] = [
       collabChat,
       collabItemLocking,
       collabLiveRecords,
+      collabLiveConflicts,
       liveWidgetsDocs,
       collabLiveProgress,
       collabOfflinePopout,
