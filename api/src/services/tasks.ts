@@ -569,6 +569,16 @@ export async function completeTask(
   if (cols.autoClosed) patch.auto_closed = opts.auto ?? null
   await db('nivaro_tasks').where({ id: task.id }).update(patch)
   announceRecordAspect(task.collection, task.item, '$tasks')
+  // The task's notifications read "Done by <who>" and count as read.
+  const { resolveNotifications } = await import('./notification-resolve.js')
+  await resolveNotifications({
+    on: 'task',
+    id: task.id,
+    at: now,
+    actorId,
+    collection: task.collection,
+    item: task.item != null ? String(task.item) : null
+  })
   const updated = (await db('nivaro_tasks').where({ id: task.id }).first()) as TaskRow
 
   let sentence = opts.reason

@@ -1124,15 +1124,38 @@ async function retirePingsFor(payload: Record<string, unknown>, movedAt: Date): 
     const requester = payload.creator_acts
       ? await recordRequester(collection, item).catch(() => null)
       : null
+    const stillOwnerIds = [...payloadOwnerIds(payload), ...(requester ? [requester.id] : [])]
+    const stateChanged = !!from && !!to && from.key !== to.key
+    const actorId = typeof payload.user_id === 'string' ? payload.user_id : null
+    // Asks about the step the record left read "Moved to <step> by <who>" and
+    // count as read (notification-resolve.ts). The actor who still owns the
+    // new step keeps theirs open — the flow does not ping them again.
+    let settled: number[] = []
+    if (stateChanged) {
+      const { resolveNotifications } = await import('./notification-resolve.js')
+      const actorStays =
+        !!actorId && stillOwnerIds.some((id) => String(id).toUpperCase() === actorId.toUpperCase())
+      settled = await resolveNotifications({
+        on: 'step',
+        collection,
+        item,
+        at: movedAt,
+        actorId,
+        stateLabel: to?.label ?? null,
+        keepOpenFor: actorStays && actorId ? [actorId] : []
+      })
+    }
     await retireWaitingPings({
       collection,
       item,
       friendlyId,
-      stillOwnerIds: [...payloadOwnerIds(payload), ...(requester ? [requester.id] : [])],
+      stillOwnerIds,
       movedAt,
-      stateChanged: !!from && !!to && from.key !== to.key,
-      actorId: typeof payload.user_id === 'string' ? payload.user_id : null,
-      stateLabel: to?.label ?? null
+      stateChanged,
+      actorId,
+      stateLabel: to?.label ?? null,
+      // A settled ask stays in the inbox with its "done" line instead of vanishing.
+      skipIds: settled
     })
   } catch {
     /* best effort */

@@ -17,6 +17,7 @@ import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { invalidateRecordTasks, OPEN_TASK_STATUSES } from '../../lib/record-tasks'
+import { type SeenEntry, useNewSince } from '../../lib/seen-since'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import { cn, formatDate, formatDateTime, formatRelative } from '../../lib/utils'
 import { TaskDoButton } from '../ai/TaskDo'
@@ -35,6 +36,7 @@ import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Textarea } from '../ui/textarea'
+import { NewSinceChip } from './NewSinceChip'
 
 type Priority = 'low' | 'normal' | 'urgent'
 
@@ -852,13 +854,33 @@ export function TaskPanel({
   const [showCompleted, setShowCompleted] = useState(false)
 
   const isNew = !item || item === 'new'
-  const { data: tasks = [] } = useQuery({
+  const { data: tasks = [], isSuccess: tasksLoaded } = useQuery({
     queryKey: ['tasks', collection, item],
     queryFn: () =>
       client.request<{ data: Task[] }>(get('/tasks', { collection, item })).then((r) => r.data),
     enabled: !!collection && !isNew
   })
   const { labels } = useFieldLabels(collection)
+  // "2 new" while folded shut: tasks others added or finished since you last had it open.
+  const tasksSeen = useMemo<SeenEntry[]>(
+    () =>
+      tasks.flatMap((t) => {
+        const row = t as Task & { created_at?: string | null }
+        const out: SeenEntry[] = [{ at: row.created_at, by: row.created_by }]
+        if (row.completed_at) out.push({ at: row.completed_at, by: row.completed_by ?? null })
+        return out
+      }),
+    [tasks]
+  )
+  const newTasks = useNewSince({
+    userId,
+    collection,
+    item,
+    tab: 'tasks',
+    open: expanded,
+    entries: tasksSeen,
+    ready: !isNew && tasksLoaded
+  })
 
   const invalidate = () => {
     invalidateRecordTasks(qc, collection, item)
@@ -1069,6 +1091,7 @@ export function TaskPanel({
               {isNew ? `${(queuedTasks ?? []).length} queued` : `${openTasks.length} open`}
             </span>
           )}
+          <NewSinceChip count={newTasks} tab='tasks' />
           <ChevronDown
             className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
           />

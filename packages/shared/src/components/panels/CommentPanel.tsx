@@ -23,6 +23,7 @@ import {
   useRecordSignalSender
 } from '../../lib/presence-signals'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
+import { type SeenEntry, useNewSince } from '../../lib/seen-since'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import { formatDateTime, formatRelative, titleCase } from '../../lib/utils'
 import { AgentBadge } from '../AgentBadge'
@@ -35,6 +36,7 @@ import { Button } from '../ui/button'
 import { Separator } from '../ui/separator'
 import { Textarea } from '../ui/textarea'
 import { RecordEventPathSheet } from './IntegrationActivitySection'
+import { NewSinceChip } from './NewSinceChip'
 
 interface Comment {
   id: string
@@ -920,6 +922,20 @@ export function CommentPanel({
     return c
   }, [threadEntries])
   const badgeCount = isNew ? (queuedComments ?? []).length : kindCounts.people
+  // "2 new" while folded shut: comments others wrote since you last had it open.
+  const commentsSeen = useMemo<SeenEntry[]>(
+    () => (data ?? []).map((c) => ({ at: c.created_at, by: c.user?.id ?? null })),
+    [data]
+  )
+  const newComments = useNewSince({
+    userId,
+    collection,
+    item,
+    tab: 'comments',
+    open: expanded,
+    entries: commentsSeen,
+    ready: !isNew && !!data
+  })
   const visibleEntries = useMemo(() => {
     const q = noteQuery.trim().toLowerCase()
     return threadEntries.filter((e) => {
@@ -1038,6 +1054,7 @@ export function CommentPanel({
               {badgeCount}
             </span>
           )}
+          <NewSinceChip count={newComments} tab='comments' />
           <ChevronDown
             className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
           />

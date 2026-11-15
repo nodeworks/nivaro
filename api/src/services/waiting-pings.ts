@@ -109,6 +109,8 @@ export async function retireWaitingPings(opts: {
   actorId?: string | null
   /** Label of the state the record is in now. */
   stateLabel?: string | null
+  /** Rows already settled with a "done" line (notification-resolve.ts): kept. */
+  skipIds?: number[]
 }): Promise<number> {
   try {
     const rows = (await db('nivaro_notifications')
@@ -117,8 +119,9 @@ export async function retireWaitingPings(opts: {
       .where('timestamp', '<', opts.movedAt)
       .select('id', 'recipient', 'subject', 'status', 'timestamp')
       .limit(500)) as PingRow[]
+    const skip = new Set((opts.skipIds ?? []).map(Number))
     const { retire, relabel } = planPingRefresh(
-      rows,
+      skip.size ? rows.filter((r) => !skip.has(Number(r.id))) : rows,
       opts.friendlyId,
       opts.stillOwnerIds,
       opts.movedAt,

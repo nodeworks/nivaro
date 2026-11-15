@@ -618,6 +618,47 @@ POST /api/notifications/test-my-rules  { "category": "workflow", "email": true, 
       type: 'p',
       text: 'Unread rows that name the same record fold into one bell entry — "3 things on REQ-1042" — with the categories as chips and the most urgent lane colouring the row. The chevron expands the rows (each keeps its own actions), clicking the bundle opens the record, and the check marks the whole bundle read in one call. The Notifications page does the same behind "Group by record" (on by default). `GET /api/notifications?bundle=record` returns `bundles` ([{collection, item, label, count, unread, lane, categories, newest, url, ids, rows}]) beside `data`, which then holds only the rows that stayed single; a lone row about a record is never bundled. `total`, `/count` and `/unread-count` are unchanged — a bundle presents rows, it does not reduce them. The label is never a bare id: the friendly id, else the display label, else — for a record deleted since — its trash snapshot\'s label with a "deleted" chip (`deleted: true`, no Open link), else "<Singular> #<id>"; `collection_label` carries the singular name for the chip beside it. Collection-wide subscription rows name the record the same way ("updated PRB1 (regions)").'
     },
+    {
+      type: 'h3',
+      id: 'notification-done-by-itself',
+      text: 'Done by itself when someone handles it'
+    },
+    {
+      type: 'p',
+      text: 'A notification that asked you to do something turns done on its own once it is handled, by you or by anyone else. It keeps its place, counts as read (the bell number drops), and shows one quiet line with a tick: "Approved by Beth · 10:42 AM", "Moved to Review by Beth", "Done by you". Its action buttons go away. Your open tabs update at once.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A request to act on a record step (you own the step, or a workflow or SLA ask) is done when the record moves to another step. If you made the move and still own the new step, yours stays open.',
+        'A task notification (assigned, team, reminder, overdue) is done when the task is completed.',
+        'An approval request is done when someone decides that step: "Approved by …" or "Rejected by …".',
+        'A support request notification is done when the request is closed or cancelled.',
+        'A notification that asks you to acknowledge it is never closed for you, and FYIs, mentions and messages are never touched.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'The daily summary email checks again just before it goes out: anything handled since it was queued is left out, and a summary with nothing left in it is not sent.'
+    },
+    { type: 'h3', id: 'notification-fold', text: 'Several updates, one notification' },
+    {
+      type: 'p',
+      text: 'When updates about one record arrive close together, they fold into one notification instead of stacking up: "3 updates on CM26-79704: moved to Review, 2 comments". While the newest unread update about a record is less than 10 minutes old, the next one rewrites it: it moves to the top, the bell still counts one, and no second phone alert goes out. "3 updates" under the row lists each of them, newest first. Only FYI updates fold; anything that asks you to act, a mention, or an acknowledgement always stays its own notification. Once you have read it, the next update starts a new one.'
+    },
+    { type: 'h3', id: 'record-panel-new-count', text: '"2 new" on Comments and Tasks' },
+    {
+      type: 'p',
+      text: 'On a record, a folded Comments or Tasks panel shows "2 new" beside its name when other people added comments, or added or finished tasks, since you last had that panel open on that record. It updates live and clears when you open the panel. The mark is kept in your browser per record; the first time you see a record it starts from that moment, so an old record never opens on a pile of "new".'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/notifications → each row carries
+  resolved:   { on: step|task|approval|ticket, by, by_name, at, text } | null
+  fold_count: number | null          (detail.fold.items = the folded updates, newest first)
+Socket (your own room only, ids, never text):
+  notification:retired { ids, resolved: true, collection?, item? }  +  read:changed { kind: 'notifications' }`
+    },
     { type: 'h3', text: 'As it was — what they saw when notified' },
     {
       type: 'p',
