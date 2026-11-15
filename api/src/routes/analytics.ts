@@ -2,6 +2,13 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 
+/** A beacon string trimmed to what is stored (never refuse the beacon for a long value). */
+function clip(v: string | null | undefined, max: number): string | null {
+  if (v == null) return null
+  const s = String(v)
+  return s.length > max ? s.slice(0, max) : s
+}
+
 function periodStart(period: string): Date {
   const ms = period === '1d' ? 86_400_000 : period === '30d' ? 30 * 86_400_000 : 7 * 86_400_000
   return new Date(Date.now() - ms)
@@ -36,9 +43,11 @@ export async function analyticsRoutes(app: FastifyInstance) {
             userId: { type: ['string', 'null'], maxLength: 128 },
             userEmail: { type: ['string', 'null'], maxLength: 254 },
             userName: { type: ['string', 'null'], maxLength: 128 },
-            pageUrl: { type: 'string', maxLength: 2048 },
-            pageTitle: { type: ['string', 'null'], maxLength: 256 },
-            referrer: { type: ['string', 'null'], maxLength: 2048 },
+            // Accepted long and clipped below: a beacon is never refused for a long URL (list
+            // filters live in the query string).
+            pageUrl: { type: 'string', maxLength: 32768 },
+            pageTitle: { type: ['string', 'null'], maxLength: 4096 },
+            referrer: { type: ['string', 'null'], maxLength: 32768 },
             deviceType: { type: ['string', 'null'], maxLength: 16 },
             previousViewId: { type: ['number', 'null'] },
             previousDuration: { type: ['number', 'null'] }
@@ -67,9 +76,9 @@ export async function analyticsRoutes(app: FastifyInstance) {
           user_id: b.userId ?? null,
           user_email: b.userEmail ?? null,
           user_name: b.userName ?? null,
-          page_url: b.pageUrl,
+          page_url: clip(b.pageUrl, 2048) ?? '',
           page_title: b.pageTitle ?? null,
-          referrer: b.referrer ?? null,
+          referrer: clip(b.referrer, 2048),
           device_type: b.deviceType ?? null,
           ip: req.ip ?? null,
           user_agent: ((req.headers['user-agent'] as string) ?? '').slice(0, 500) || null,
