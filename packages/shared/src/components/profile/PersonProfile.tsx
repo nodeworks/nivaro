@@ -134,7 +134,11 @@ export function PersonProfile({
       <PersonHeader profile={profile} isAdmin={isAdmin} />
       {isAdmin && <SuspensionBanner profile={profile} />}
       {!isAdmin ? (
-        overview
+        <>
+          {/* Idea 32 — the support desk sees why someone cannot sign in (no network details). */}
+          {profile.sign_in_help && <SignInTroubleshooterCard profile={profile} />}
+          {overview}
+        </>
       ) : (
         <Tabs value={tab} onValueChange={(v) => setTab(v as PersonProfileTab)}>
           <TabsList

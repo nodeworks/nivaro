@@ -19,7 +19,8 @@ import { EmptyLine, SectionCard } from './primitives'
 import type { PersonProfile } from './types'
 
 /**
- * Admin tools → Sign-in troubleshooter (idea 32). Reads GET /users/:id/sign-in-troubleshooter:
+ * Sign-in troubleshooter (idea 32): Admin tools tab for administrators; the people page itself
+ * for support-desk members (`profile.sign_in_help`), whose answer carries no IP addresses. Reads GET /users/:id/sign-in-troubleshooter:
  * the account's standing now, the failure to act on (newest one since their last sign-in) with
  * what to do and who can fix it, then 30 days of attempts — failed, signed in, phone ended — each
  * with a plain reason. "Refused requests" asks the request log on demand (slower).
@@ -177,7 +178,12 @@ function Body({
         ))}
       </ul>
 
-      <dl className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-4 dark:border-border dark:bg-border'>
+      <dl
+        className={cn(
+          'grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border',
+          sessions == null ? 'sm:grid-cols-3' : 'sm:grid-cols-4'
+        )}
+      >
         <Stat
           label='Last sign-in'
           value={t.last_success ? formatRelative(t.last_success.at) : 'None in 30 days'}
@@ -190,11 +196,10 @@ function Body({
               : null
           }
         />
-        <Stat
-          label='Live sessions'
-          value={sessions == null ? '—' : String(sessions)}
-          sub='Browser tabs signed in'
-        />
+        {/* Administrators only: the profile carries the count for them alone. */}
+        {sessions != null && (
+          <Stat label='Live sessions' value={String(sessions)} sub='Browser tabs signed in' />
+        )}
         <Stat
           label='Phones'
           value={String(t.phones.length)}
