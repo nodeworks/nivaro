@@ -300,6 +300,7 @@ import { sessionReplaySpecRoutes } from './session-replay-spec.js'
 import { settingsRoutes } from './settings.js'
 import { setupRoutes } from './setup.js'
 import { shareLinksRoutes } from './share-links.js'
+import { signInTroubleshooterRoutes } from './sign-in-troubleshooter.js'
 import { slaRoutes } from './sla.js'
 import { slowScreensRoutes } from './slow-screens.js'
 import { sqlChecksRoutes } from './sql-checks.js'
@@ -814,6 +815,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(oauthConnectionRoutes)
   // Signed-in phones (device grants): list + sign out, own and admin.
   await app.register(deviceRoutes)
+  await app.register(signInTroubleshooterRoutes)
   await app.register(mcpConnectionRoutes, { prefix: '/mcp-connections' })
   // #3205 / #3214 connection limits + tool kits, #3206 composite tool suggestions,
   // #3215 tool contract tests.

@@ -48,45 +48,6 @@ import {
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
-// Copy chart as image (#203): recharts renders SVG — serialize it, paint onto
-// a canvas over a white ground, and hand the PNG to the clipboard. Fails to a
-// silent no-op where the Clipboard API (or the SVG) is unavailable.
-async function copyChartImage(container: HTMLElement | null, title: string): Promise<void> {
-  const svg = container?.querySelector('svg')
-  if (!svg || typeof ClipboardItem === 'undefined') return
-  try {
-    const rect = svg.getBoundingClientRect()
-    const clone = svg.cloneNode(true) as SVGElement
-    clone.setAttribute('width', String(rect.width))
-    clone.setAttribute('height', String(rect.height))
-    const xml = new XMLSerializer().serializeToString(clone)
-    const blobUrl = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml;charset=utf-8' }))
-    const img = new Image()
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve()
-      img.onerror = () => reject(new Error('svg load failed'))
-      img.src = blobUrl
-    })
-    const scale = 2
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(rect.width * scale))
-    canvas.height = Math.max(1, Math.round(rect.height * scale) + 28 * scale)
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    ctx.fillStyle = '#172940'
-    ctx.font = `${12 * scale}px system-ui, sans-serif`
-    ctx.fillText(title || 'Chart', 8 * scale, 18 * scale)
-    ctx.drawImage(img, 0, 28 * scale, rect.width * scale, rect.height * scale)
-    URL.revokeObjectURL(blobUrl)
-    const png: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
-    if (png) await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
-  } catch {
-    /* clipboard image copy is best-effort */
-  }
-}
-
 // Compact axis ticks — 8-digit dollar values overflow the tight chart margins.
 const compactTick = (v: number) =>
   Math.abs(v) >= 1e9
@@ -167,6 +128,7 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '.
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { SimpleSelect } from './ui/SimpleSelect'
 import { Skeleton } from './ui/skeleton'
+import { WidgetImageMenu } from './WidgetImageMenu'
 
 // The layout editor loads when someone first edits a report, not with every
 // screen that shows one.
@@ -2097,6 +2059,7 @@ const WidgetCard = memo(function WidgetCard({
   const [asTable, setAsTable] = useState(false)
   const [drillPath, setDrillPath] = useState<Array<{ field: string; value: string }>>([])
   const cardRef = useRef<HTMLDivElement>(null)
+  const frameRef = useRef<HTMLDivElement>(null)
   const nearView = useNearViewport(cardRef)
   const [explainOpen, setExplainOpen] = useState(false)
   const [explainText, setExplainText] = useState<string | null>(null)
@@ -2161,7 +2124,8 @@ const WidgetCard = memo(function WidgetCard({
     isLoading,
     error,
     refetch,
-    isFetching
+    isFetching,
+    dataUpdatedAt
   } = useQuery<ReportWidgetData>({
     queryKey: ['nivaro-report-widget', reportId, widget.id, dateRange, entityFilters],
     queryFn: () =>
@@ -3502,10 +3466,11 @@ const WidgetCard = memo(function WidgetCard({
   }
   return (
     <div
+      ref={frameRef}
       className='flex min-h-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'
       style={gridStyle}
     >
-      <div className='mb-1.5 flex items-center gap-1.5'>
+      <div className='mb-1.5 flex items-center gap-1.5' data-widget-image-ignore=''>
         {(() => {
           const link = (widget.config as { link_report?: { report_id?: string } } | null)
             ?.link_report
@@ -3543,6 +3508,17 @@ const WidgetCard = memo(function WidgetCard({
           <Info className='h-3 w-3' />
         </span>
         <span className='ml-auto flex items-center gap-0.5'>
+          <WidgetImageMenu
+            getTarget={() => frameRef.current}
+            label={() => ({
+              title: widget.title || widget.collection || 'Report widget',
+              asOf: dataUpdatedAt || Date.now(),
+              dateRange,
+              entityFilters,
+              widgetRules: widget.config?.filters
+            })}
+            className='h-5 w-5 text-slate-300 hover:text-[#00a5cc]'
+          />
           {['bar', 'line', 'donut', 'pareto'].includes(widget.type) && (
             <button
               type='button'
@@ -3554,18 +3530,6 @@ const WidgetCard = memo(function WidgetCard({
               onClick={() => setAsTable((v) => !v)}
             >
               <TableIcon className='h-3 w-3' />
-            </button>
-          )}
-          {['bar', 'line', 'donut', 'pareto', 'scatter', 'heatmap', 'waterfall'].includes(
-            widget.type
-          ) && (
-            <button
-              type='button'
-              title='Copy chart as image'
-              className='rounded p-0.5 text-slate-300 hover:text-[#00a5cc]'
-              onClick={() => void copyChartImage(cardRef.current, widget.title)}
-            >
-              <Camera className='h-3 w-3' />
             </button>
           )}
           {

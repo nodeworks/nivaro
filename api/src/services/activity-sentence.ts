@@ -1078,6 +1078,11 @@ export function activityPredicate(
       return 'signed out'
     case 'login-refused':
       return 'was refused sign-in'
+    case 'sign-in-failed':
+      // Idea 32: comment JSON {reason, method, app, code}; the record is the account it named.
+      return record && record !== HIDDEN_RECORD
+        ? `had a sign-in as ${record} fail`
+        : 'had a sign-in fail'
     case 'export': {
       const ex = exportSummary(comment)
       const what =

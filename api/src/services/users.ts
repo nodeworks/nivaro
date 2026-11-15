@@ -42,6 +42,12 @@ export function withoutCredentials<T extends Record<string, unknown>>(
 /** A sign-in whose identity may not be linked to the account its email names (H7). */
 export class AccountLinkRefusedError extends Error {
   readonly code = 'ACCOUNT_LINK_REFUSED'
+  /** The account the refused sign-in's email names (the sign-in troubleshooter files it there). */
+  readonly userId: string | null
+  constructor(message: string, userId?: string | null) {
+    super(message)
+    this.userId = userId ?? null
+  }
 }
 
 function sameEmail(a: unknown, b: unknown): boolean {
@@ -202,7 +208,8 @@ export async function findOrCreateFromOIDC(profile: {
             `[oidc] refused (${decision.reason}): email matches user ${byEmail.id}, which is linked to another sign-in identity`
           )
           throw new AccountLinkRefusedError(
-            'This email belongs to an account linked to a different sign-in. Ask an administrator.'
+            'This email belongs to an account linked to a different sign-in. Ask an administrator.',
+            String(byEmail.id)
           )
         }
         console.info(`[oidc] linked by email to user ${byEmail.id} (${decision.reason})`)

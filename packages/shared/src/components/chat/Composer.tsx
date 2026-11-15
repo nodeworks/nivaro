@@ -4,6 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { toast } from 'sonner'
 import { useApiFetchConfig, useItemEditAuth, useNivaroClient } from '../../context'
 import { get, patch, post } from '../../lib/commands'
+import { startFileUpload } from '../../lib/upload-file'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
@@ -324,53 +325,25 @@ export const ChatComposer = forwardRef<
   const startUploads = (list: File[], after?: (id: string) => Promise<void>) => {
     for (const f of list.slice(0, 10)) {
       const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
-      const xhr = new XMLHttpRequest()
-      const entry: PendingFile = {
-        key,
-        name: f.name,
-        type: f.type || null,
-        progress: 0,
-        id: null,
-        xhr,
-        error: null
-      }
-      setFiles((prev) => [...prev, entry])
       const update = (patch: Partial<PendingFile>) =>
         setFiles((prev) => prev.map((p) => (p.key === key ? { ...p, ...patch } : p)))
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) update({ progress: e.loaded / e.total })
-      }
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const id = (JSON.parse(xhr.responseText) as { data: { id: string } }).data.id
-            if (after) {
-              after(id)
-                .catch(() => null)
-                .then(() => update({ id, progress: 1, xhr: null }))
-            } else {
-              update({ id, progress: 1, xhr: null })
-            }
-          } catch {
-            update({ error: 'Upload failed', xhr: null })
+      const { xhr } = startFileUpload(fetchCfg, f, {
+        onProgress: (progress) => update({ progress }),
+        onDone: (id) => {
+          if (after) {
+            after(id)
+              .catch(() => null)
+              .then(() => update({ id, progress: 1, xhr: null }))
+          } else {
+            update({ id, progress: 1, xhr: null })
           }
-        } else {
-          let msg = 'Upload failed'
-          try {
-            msg = (JSON.parse(xhr.responseText) as { error?: string }).error ?? msg
-          } catch {
-            /* keep the generic message */
-          }
-          update({ error: msg, xhr: null })
-        }
-      }
-      xhr.onerror = () => update({ error: 'Upload failed', xhr: null })
-      xhr.open('POST', `${fetchCfg.apiBase}/files/upload`)
-      for (const [k, v] of Object.entries(fetchCfg.authHeaders)) xhr.setRequestHeader(k, v)
-      xhr.withCredentials = fetchCfg.credentials === 'include'
-      const fd = new FormData()
-      fd.append('file', f)
-      xhr.send(fd)
+        },
+        onError: (error) => update({ error, xhr: null })
+      })
+      setFiles((prev) => [
+        ...prev,
+        { key, name: f.name, type: f.type || null, progress: 0, id: null, xhr, error: null }
+      ])
     }
   }
   // A screen clip (#2458): the poster goes up first as its own file, then the

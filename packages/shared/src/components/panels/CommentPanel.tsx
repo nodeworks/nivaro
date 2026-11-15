@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post } from '../../lib/commands'
+import { stripCommentImages } from '../../lib/comment-images'
 import { usePresenceOnlinePoll } from '../../lib/presence-live'
 import {
   signalSentence,
@@ -34,6 +35,7 @@ import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Button } from '../ui/button'
 import { Separator } from '../ui/separator'
 import { Textarea } from '../ui/textarea'
+import { CommentBody, CommentImageStrip, imageDropProps, useCommentImages } from './CommentImages'
 import { RecordEventPathSheet } from './IntegrationActivitySection'
 
 interface Comment {
@@ -182,10 +184,13 @@ function mentionHandle(u: MentionUser): string {
 export function MentionTextarea({
   value,
   onChange,
+  onImages,
   ...textareaProps
 }: {
   value: string
   onChange: (v: string) => void
+  /** Pasted or dropped images (a screenshot); omit and the box takes text only. */
+  onImages?: (files: File[]) => void
 } & Omit<React.ComponentProps<typeof Textarea>, 'value' | 'onChange'>) {
   const client = useNivaroClient()
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -333,6 +338,7 @@ export function MentionTextarea({
     <div className='relative'>
       <Textarea
         {...textareaProps}
+        {...(onImages ? imageDropProps(onImages) : {})}
         ref={ref}
         value={value}
         onChange={(e) => {
@@ -536,7 +542,7 @@ export function notePreviewText(
     | { kind: 'related' | 'note'; note: { text: string } }
 ): string {
   const raw = e.kind === 'comment' ? e.comment.text : e.note.text
-  const flat = e.kind === 'comment' ? raw.replace(/<[^>]*>/g, ' ') : raw
+  const flat = e.kind === 'comment' ? stripCommentImages(raw).replace(/<[^>]*>/g, ' ') : raw
   return flat
     .replace(/@\[([^\]]+)\]/g, '@$1')
     .replace(/\s+/g, ' ')
@@ -823,6 +829,7 @@ export function CommentPanel({
   // Follows the layout's "Starts open" whenever it changes (the editor's toggle, live).
   const [expanded, setExpanded] = useStartsOpen(defaultExpanded, false)
   const [draft, setDraft] = useState('')
+  const images = useCommentImages()
   const onUnsentDraftRef = useRef(onUnsentDraft)
   onUnsentDraftRef.current = onUnsentDraft
   useEffect(() => {
@@ -946,6 +953,7 @@ export function CommentPanel({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey })
       setDraft('')
+      images.reset()
     },
     onError: () => toast.error('Failed to post comment')
   })
@@ -999,12 +1007,15 @@ export function CommentPanel({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!draft.trim()) return
     if (isNew && onQueueComment) {
+      if (!draft.trim()) return
       onQueueComment(draft.trim())
       setDraft('')
     } else {
-      create.mutate(draft.trim())
+      if (images.uploading) return
+      const text = images.compose(draft)
+      if (!text) return
+      create.mutate(text)
     }
   }
 
@@ -1114,10 +1125,12 @@ export function CommentPanel({
                 <MentionTextarea
                   value={draft}
                   onChange={setDraft}
-                  placeholder='Write a comment…'
+                  onImages={images.addFiles}
+                  placeholder='Write a comment… paste or drop a screenshot to attach it'
                   rows={3}
                   className='text-[13px]'
                 />
+                <CommentImageStrip images={images} />
                 <div className='flex items-center justify-between'>
                   <p className='text-[11px] text-slate-400'>
                     Type @ plus two letters to mention a teammate, or @owners to notify everyone
@@ -1133,8 +1146,14 @@ export function CommentPanel({
                     >
                       {cleaning ? '…' : '✨ Polish'}
                     </button>
-                    <Button type='submit' size='sm' disabled={!draft.trim() || create.isPending}>
-                      {create.isPending ? 'Posting…' : 'Comment'}
+                    <Button
+                      type='submit'
+                      size='sm'
+                      disabled={
+                        (!draft.trim() && !images.hasReady) || images.uploading || create.isPending
+                      }
+                    >
+                      {create.isPending ? 'Posting…' : images.uploading ? 'Uploading…' : 'Comment'}
                     </Button>
                   </span>
                 </div>
@@ -1375,9 +1394,10 @@ export function CommentPanel({
                               </div>
                             </div>
                           ) : (
-                            <p className='mt-0.5 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-600'>
-                              <AutolinkedText text={c.text} />
-                            </p>
+                            <CommentBody
+                              text={c.text}
+                              className='mt-0.5 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-600'
+                            />
                           )}
                           {!isEditing && <MentionReceipts comment={c} />}
                           {/* Reactions: aggregated chips + hover palette */}

@@ -216,6 +216,34 @@ export const peoplePageGuide: DocSection = {
                               "devices": [...], "calls": [{ "method", "path", "n", "visits", "median_ms", "worst_ms", "errors" }],
                               "slow_visits": [{ "at", "ms", "kind", "browser", "screen", "replay": { "recording_id", "offset_ms" } | null }] }] } }`
     },
+    { type: 'h2', id: 'people-sign-in', text: 'Sign-in troubleshooter' },
+    {
+      type: 'p',
+      text: 'Admin tools tab (administrators): why this person’s sign-ins failed over the last 30 days, so support can stop guessing. At the top, the failure to act on — the newest one since their last good sign-in — with a plain reason, what to do, and who can fix it (them, an administrator here, or their IT team). Below: their account checks right now (active here, role may sign in, active in the Microsoft directory, linked to a sign-in identity or still waiting to link by email), the last sign-in and which app it was for, live sessions, signed-in phones, and every attempt with its reason. Read-only.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Reasons include: account suspended here, sign-in off for the role, disabled in Microsoft, another organisation’s account (wrong tenant), not in the directory, not assigned to the app, second check not finished, blocked by an access policy, locked or expired password at Microsoft, the app’s Microsoft setup is wrong, provider did not answer, sign-in page went stale (“Invalid session state”), browser dropped the cookie, code expired, email linked to another sign-in, wrong password or two-factor code, too many attempts, phone signed out.',
+        'Microsoft’s own error number (for example AADSTS50057) is kept as a short code; its message text is never stored (it can contain the email). Passwords, codes and tokens are never recorded.',
+        'Every failed sign-in leaves one `sign-in-failed` activity row on `nivaro_users` (item = the account when the attempt named it by subject, Microsoft id or email; at most one a minute per place and reason). A failure that named nobody shows as “Probably them” only when it came from the same address AND browser as one of their sign-ins in the last 90 days.',
+        'Older `login-refused` and phone `device-revoked` rows show too. Failures from before this was added were not recorded, so the list starts empty.',
+        '“Check refused requests” reads the request log (last 7 days) for requests made as them that were refused, by code — slower, so only on demand.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET /api/users/:id/sign-in-troubleshooter              (admin)
+→ 200 { "data": { "window_days": 30, "checks": [{ "key", "ok", "label", "detail" }],
+                  "last_success": { "at", "method", "browser", "ip", "app" } | null,
+                  "apps": [{ "app", "at" }], "phones": [{ "name", "platform", "last_used_at" }],
+                  "attempts": [{ "at", "outcome": "failed" | "signed_in" | "ended", "reason", "label",
+                                 "explain", "todo", "owner", "method", "app", "code",
+                                 "match": "named" | "browser", "browser", "ip" }],
+                  "by_reason": [...], "current": { …attempt } | null } }
+GET /api/users/:id/sign-in-troubleshooter/refusals?days=7   (admin; 1–14)
+→ 200 { "data": [{ "code", "status", "message", "n", "last_at" }], "days": 7 }`
+    },
     { type: 'h2', id: 'people-bulk', text: 'Users list bulk actions' },
     {
       type: 'p',
