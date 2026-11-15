@@ -4794,74 +4794,7 @@ export function QueueWorklist({
                 ))}
             </div>
           )}
-          <button
-            type='button'
-            aria-pressed={filterValues.unseen === 'yes'}
-            data-queue-unseen-filter
-            title='Only records someone else changed since you last opened them'
-            onClick={() =>
-              setFilterValues((prev) => {
-                const next = { ...prev }
-                if (next.unseen === 'yes') delete next.unseen
-                else next.unseen = 'yes'
-                return next
-              })
-            }
-            className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
-              filterValues.unseen === 'yes'
-                ? 'border-nvr-cyan/40 bg-[#f2fdff] text-nvr-navy dark:border-nvr-cyan/40 dark:bg-[#20303a] dark:text-nvr-cyan'
-                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
-            }`}
-          >
-            <span className='h-2 w-2 rounded-full bg-nvr-cyan' />
-            Unseen changes
-          </button>
-          {addendumsEnabled && (
-            <button
-              type='button'
-              aria-pressed={filterValues.addendums === 'active'}
-              title='Only records with an addendum still in review'
-              onClick={() =>
-                setFilterValues((prev) => {
-                  const next = { ...prev }
-                  if (next.addendums === 'active') delete next.addendums
-                  else next.addendums = 'active'
-                  return next
-                })
-              }
-              className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
-                filterValues.addendums === 'active'
-                  ? 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
-              }`}
-            >
-              <FileDiff className='h-3.5 w-3.5' />
-              Active addendums
-            </button>
-          )}
-          {integrationsEnabled && (
-            <IntegrationsFilterPill
-              label={aliasFor('integrations', 'Integrations')}
-              value={filterValues.integrations}
-              onChange={(v) =>
-                setFilterValues((prev) => {
-                  const next = { ...prev }
-                  if (v) next.integrations = v
-                  else delete next.integrations
-                  return next
-                })
-              }
-            />
-          )}
           <RealtimeStaleMark className='h-8' />
-          <FocusModeToggle />
-          {(ctxRealtime || realtime) && queueId && (
-            <LivePauseButton
-              paused={livePause.paused}
-              held={livePause.held}
-              onToggle={livePause.toggle}
-            />
-          )}
           {pendingUpdates > 0 && !liveBurst.label && (
             <button
               type='button'
@@ -4885,6 +4818,103 @@ export function QueueWorklist({
               ) : undefined
             }
             items={[
+              {
+                key: 'unseen',
+                priority: filterValues.unseen === 'yes' ? 90 : 48,
+                node: (
+                  <button
+                    type='button'
+                    aria-pressed={filterValues.unseen === 'yes'}
+                    data-queue-unseen-filter
+                    title='Only records someone else changed since you last opened them'
+                    onClick={() =>
+                      setFilterValues((prev) => {
+                        const next = { ...prev }
+                        if (next.unseen === 'yes') delete next.unseen
+                        else next.unseen = 'yes'
+                        return next
+                      })
+                    }
+                    className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
+                      filterValues.unseen === 'yes'
+                        ? 'border-nvr-cyan/40 bg-[#f2fdff] text-nvr-navy dark:border-nvr-cyan/40 dark:bg-[#20303a] dark:text-nvr-cyan'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
+                    }`}
+                  >
+                    <span className='h-2 w-2 rounded-full bg-nvr-cyan' />
+                    Unseen changes
+                  </button>
+                )
+              },
+              ...(addendumsEnabled
+                ? [
+                    {
+                      key: 'addendums',
+                      priority: filterValues.addendums === 'active' ? 90 : 40,
+                      node: (
+                        <button
+                          type='button'
+                          aria-pressed={filterValues.addendums === 'active'}
+                          title='Only records with an addendum still in review'
+                          onClick={() =>
+                            setFilterValues((prev) => {
+                              const next = { ...prev }
+                              if (next.addendums === 'active') delete next.addendums
+                              else next.addendums = 'active'
+                              return next
+                            })
+                          }
+                          className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
+                            filterValues.addendums === 'active'
+                              ? 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300'
+                              : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
+                          }`}
+                        >
+                          <FileDiff className='h-3.5 w-3.5' />
+                          Active addendums
+                        </button>
+                      )
+                    }
+                  ]
+                : []),
+              ...(integrationsEnabled
+                ? [
+                    {
+                      key: 'integrations',
+                      priority: filterValues.integrations ? 90 : 38,
+                      node: (
+                        <IntegrationsFilterPill
+                          label={aliasFor('integrations', 'Integrations')}
+                          value={filterValues.integrations}
+                          onChange={(v) =>
+                            setFilterValues((prev) => {
+                              const next = { ...prev }
+                              if (v) next.integrations = v
+                              else delete next.integrations
+                              return next
+                            })
+                          }
+                        />
+                      )
+                    }
+                  ]
+                : []),
+              { key: 'focus', priority: 30, node: <FocusModeToggle /> },
+              ...((ctxRealtime || realtime) && queueId
+                ? [
+                    {
+                      key: 'live-pause',
+                      priority: livePause.paused ? 90 : 45,
+                      node: (
+                        <LivePauseButton
+                          paused={livePause.paused}
+                          held={livePause.held}
+                          onToggle={livePause.toggle}
+                        />
+                      )
+                    }
+                  ]
+                : []),
               ...(view === 'table'
                 ? [
                     {

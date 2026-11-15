@@ -167,6 +167,13 @@ const announcementsClient = createNivaro(window.location.origin, { timeoutMs: 90
 
 const SIDEBAR_KEY = 'nivaro-sidebar-collapsed'
 
+/** An open Radix popover/menu (anything but a tooltip) or another open dialog. */
+function otherLayerOpen(): boolean {
+  const layers = document.querySelectorAll('[data-radix-popper-content-wrapper]')
+  for (const w of layers) if (!w.querySelector('[role="tooltip"]')) return true
+  return !!document.querySelector('[role="dialog"][data-state="open"]:not(#app-nav-drawer)')
+}
+
 /** Below Tailwind's `md` (768 px) the sidebar is an off-canvas drawer (phone shell). */
 const PHONE_QUERY = '(max-width: 767px)'
 function useIsPhone(): boolean {
@@ -419,13 +426,19 @@ export function AppLayout() {
   useEffect(() => {
     if (!drawerShown) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) setDrawerOpen(false)
+      if (e.key !== 'Escape') return
+      // Focus moving in opens the focused rail button's tooltip, which takes Esc first and
+      // marks it handled; that alone must not keep the drawer open. Any other open layer (a
+      // menu or popover inside the drawer) closes first and keeps the drawer.
+      if (e.defaultPrevented && otherLayerOpen()) return
+      setDrawerOpen(false)
     }
     window.addEventListener('keydown', onKey)
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    const first = asideRef.current?.querySelector<HTMLElement>('button[aria-pressed="true"]')
-    ;(first ?? asideRef.current?.querySelector<HTMLElement>(FOCUSABLE))?.focus()
+    // Focus the drawer itself, not its first button: a focused rail button opens its tooltip,
+    // which covered the panel's first links on phones. Tab then walks into the drawer.
+    asideRef.current?.focus({ preventScroll: true })
     const menuBtn = menuButtonRef.current
     return () => {
       window.removeEventListener('keydown', onKey)
@@ -442,7 +455,10 @@ export function AppLayout() {
     if (list.length === 0) return
     const first = list[0]
     const last = list[list.length - 1]
-    if (e.shiftKey && document.activeElement === first) {
+    if (e.shiftKey && document.activeElement === asideRef.current) {
+      e.preventDefault()
+      last.focus()
+    } else if (e.shiftKey && document.activeElement === first) {
       e.preventDefault()
       last.focus()
     } else if (!e.shiftKey && document.activeElement === last) {
@@ -753,10 +769,11 @@ export function AppLayout() {
               data-nav-drawer={isPhone ? (drawerOpen ? 'open' : 'closed') : undefined}
               aria-label={isPhone ? 'Navigation' : undefined}
               role={isPhone ? 'dialog' : undefined}
+              tabIndex={isPhone ? -1 : undefined}
               inert={isPhone && !drawerOpen ? true : undefined}
               onKeyDown={trapDrawerFocus}
               className={cn(
-                'flex h-screen shrink-0 overflow-hidden bg-nvr-navy dark:bg-[#090c10]',
+                'flex h-screen shrink-0 overflow-hidden bg-nvr-navy outline-none dark:bg-[#090c10]',
                 // Below md: off-canvas drawer over the page, closed unless opened.
                 'max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:h-[100dvh] max-md:max-w-[88vw] max-md:shadow-2xl max-md:transition-transform max-md:duration-200 max-md:ease-out motion-reduce:max-md:transition-none',
                 isPhone && !drawerOpen && 'max-md:invisible max-md:-translate-x-full',
