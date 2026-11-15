@@ -26,7 +26,13 @@ import {
   searchGroupOf,
   searchInternalFieldsOf
 } from '../services/search-fields.js'
-import { ftsColumns, ftsCondition, searchAnswerCache } from '../services/search-fts.js'
+import {
+  ftsColumns,
+  ftsCondition,
+  searchAnswerCache,
+  searchStamp,
+  stampSearchAnswer
+} from '../services/search-fts.js'
 import {
   fastLike,
   onMssql,
@@ -207,6 +213,17 @@ interface PlanEntry {
   /** `browser_config.search_internal_fields`: another system's ids — equality only,
    *  never shown (army 11 a3 G). */
   internal?: string[]
+  /** rt4 #9: an integer `id` leading an index — the newest rows are one short backward
+   *  read, so a full-text search also contains-matches them (the index catches up later). */
+  freshById?: boolean
+}
+
+/** Rows a full-text search also reads by plain LIKE, newest first (rt4 #9). */
+export const FTS_FRESH_ROWS = 200
+
+/** An integer column type (information_schema data_type). Exported for tests. */
+export function isIntegerType(t: string | null | undefined): boolean {
+  return /^(int|bigint|smallint|tinyint|integer)$/i.test(String(t ?? ''))
 }
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -362,8 +379,8 @@ async function loadSearchPlan(): Promise<PlanEntry[]> {
       // Registry junk exists (sysdiagrams made it into nivaro_collections) —
       // every union arm selects `id`, so a table without one breaks the batch.
       db.raw(
-        `select table_name from information_schema.columns where column_name = 'id'`
-      ) as Promise<Array<{ table_name: string }>>,
+        `select table_name, data_type from information_schema.columns where column_name = 'id'`
+      ) as Promise<Array<{ table_name: string; data_type?: string }>>,
       // Row counts from partition stats — one query for every table (the
       // config-diff inventory precedent; serial COUNT(*)s took seconds).
       db.raw(`
@@ -377,6 +394,8 @@ async function loadSearchPlan(): Promise<PlanEntry[]> {
 
   const junctions = new Set(relations.map((r) => r.many_collection))
   const hasId = new Set(idTables.map((t) => t.table_name))
+  // rt4 #9: tables numbered by an integer id — their newest rows are a short backward read.
+  const intId = new Set(idTables.filter((t) => isIntegerType(t.data_type)).map((t) => t.table_name))
   const rowsByTable = new Map(rowCounts.map((r) => [r.table_name, Number(r.row_count)]))
   const group = (rows: Array<{ table_name: string; column_name: string }>) => {
     const by = new Map<string, Set<string>>()
@@ -459,7 +478,10 @@ async function loadSearchPlan(): Promise<PlanEntry[]> {
       rows,
       textSearchable,
       kinds,
-      indexed: [...(leads.get(col.collection) ?? [])]
+      indexed: [...(leads.get(col.collection) ?? [])],
+      ...(intId.has(col.collection) && leads.get(col.collection)?.has('id')
+        ? { freshById: true }
+        : {})
     })
   }
   return plan
@@ -740,7 +762,7 @@ const kindOfCol = (p: Pick<PlanEntry, 'kinds'>, c: string): TextKind => p.kinds?
  * bind each column's LIKE in its cheap form (services/search-like.ts). Exported for tests.
  */
 export function textArm(
-  p: Pick<PlanEntry, 'collection' | 'kinds'>,
+  p: Pick<PlanEntry, 'collection' | 'kinds'> & Partial<Pick<PlanEntry, 'freshById'>>,
   cols: string[],
   q: string,
   likes: string[],
@@ -761,6 +783,20 @@ export function textArm(
     if (ft) {
       parts.push(ft.cond.sql)
       bindings.push(...ft.cond.bindings)
+      // rt4 #9: the full-text index is filled in the background, so a record saved a moment
+      // ago is not in it yet. The newest rows (a short backward read of the id index) are
+      // also matched by LIKE on the indexed columns until the index catches up.
+      if (p.freshById && ft.cols.length) {
+        const recent: string[] = []
+        for (const c of ft.cols) {
+          const l = fastLike(`[${c}]`, likes[0], kindOfCol(p, c), { escape: '\\', mssql })
+          recent.push(l.sql)
+          bindings.push(...l.bindings)
+        }
+        parts.push(
+          `([id] IN (SELECT TOP ${FTS_FRESH_ROWS} [id] FROM [${p.collection}] ORDER BY [id] DESC) AND (${recent.join(' OR ')}))`
+        )
+      }
     }
     for (const c of likeCols) {
       const l = fastLike(`[${c}]`, likes[0], kindOfCol(p, c), { escape: '\\', mssql })
@@ -2750,6 +2786,9 @@ async function runGlobalSearch(
     readableCollections(user as User),
     buildSearchPlan().catch(() => [] as PlanEntry[])
   ])
+  // rt4 #9: taken before any record is read — a write to one of these collections from now on
+  // makes the cached answer stale (services/search-fts.ts), so a new record is found at once.
+  const stamp = searchStamp([...readable, 'nivaro_users'])
   // Field metadata — filters, matched-field labels, and the semantic block's labels
   const fieldRows = readable.length
     ? ((await db('nivaro_fields')
@@ -2824,7 +2863,7 @@ async function runGlobalSearch(
       // Parts skipped after an exact id hit — "See all" runs them in full.
       ...(trimmed.length ? { trimmed } : {})
     }
-    return data
+    return stampSearchAnswer(data, stamp)
   } finally {
     budget.finish()
   }

@@ -232,8 +232,8 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
         .orderBy('id', 'asc')
         .first('id')
         .then((s) => (s ? liftMaintenance(s.id) : null))
-      const { bustMaintenanceCache } = await import('../services/security.js')
-      bustMaintenanceCache()
+      const { maintenanceWritten } = await import('../services/security.js')
+      maintenanceWritten()
     }
     await logActivity({
       action: 'maintenance-window-cancel',

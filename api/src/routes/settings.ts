@@ -471,9 +471,15 @@ export async function settingsRoutes(app: FastifyInstance) {
         patch.maintenance_until = d
       }
     }
-    if ('maintenance_display' in patch || 'maintenance_until' in patch) {
-      const { bustMaintenanceCache } = await import('../services/security.js')
-      reply.raw.once('finish', () => bustMaintenanceCache())
+    if (
+      'maintenance_display' in patch ||
+      'maintenance_until' in patch ||
+      'maintenance_mode' in patch ||
+      'maintenance_message' in patch
+    ) {
+      // rt4 #13: once saved, open tabs hear it (the full page hands the app back by itself).
+      const { maintenanceWritten } = await import('../services/security.js')
+      reply.raw.once('finish', () => maintenanceWritten())
     }
     // "End maintenance" must end it whatever set it: a rebuild job's Redis
     // flag outranks the row, so switching the row off alone would change

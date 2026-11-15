@@ -439,7 +439,9 @@ export function CommandPalette() {
         })
     },
     enabled: open && debouncedQuery.length >= 2,
-    staleTime: 15_000
+    // rt4 #9: the server's answer cache drops an answer once a collection it searched is
+    // written; a short client cache lets the next look find a record saved a moment ago.
+    staleTime: 5_000
   })
 
   // Extension palette entries (#260): server extensions declare navigation

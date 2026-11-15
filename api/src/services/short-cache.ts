@@ -22,6 +22,8 @@ import { singleFlight } from './single-flight.js'
 export interface ShortCache<T> {
   /** The cached answer for `key`, or one shared run of `load`. */
   get(key: string, load: () => Promise<T>): Promise<T>
+  /** The cached answer for `key` while it is fresh, without loading anything. */
+  peek(key: string): T | undefined
   /** Drop one key, or everything. */
   forget(key?: string): void
   size(): number
@@ -55,6 +57,10 @@ export function createShortCache<T>(
         prune()
         return value
       }).promise
+    },
+    peek(key) {
+      const hit = values.get(key)
+      return hit && now() - hit.at < ttlMs ? hit.value : undefined
     },
     forget(key) {
       if (key == null) values.clear()

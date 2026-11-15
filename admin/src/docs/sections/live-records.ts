@@ -219,6 +219,16 @@ useQuery({
       type: 'note',
       text: 'New notices on `collection:update`: `$sla` (an SLA clock passed its warning or breach line) and `$related` (a child row of the record changed; one per parent per 0.8 s). List pages ignore both for their rows. SLA answers (`GET /sla/status/:collection/:item`, `POST /sla/status/batch`, queue rows, My Work) now carry `warning_at` and `due_at` (queue rows: `sla_warning_at`, `sla_due_at`). A `record:signal` of kind `note` may carry `field`.'
     },
+    { type: 'h3', id: 'live-records-access', text: 'Access, maintenance and search' },
+    {
+      type: 'ul',
+      items: [
+        'A record or list that said "You can\'t view this" opens by itself when an administrator grants the access request while it is still on screen. The content appears with one quiet line, "Access granted by Beth" (who decided comes from `GET /api/access-requests/mine`, the person\'s own request only). Nothing pops up.',
+        'The Request access page a new person waits on (efp-new) opens the portal by itself the moment an administrator approves them. The approval reaches their own socket as `access:changed`; the page still checks every minute while the connection is down.',
+        'The full maintenance page returns to the app by itself when maintenance ends — switched off by an administrator, a scheduled window closing, or a rebuild job deleting its Redis flag. The server notices the change (within a few seconds for the Redis flag) and sends `announcements:changed`; each tab re-reads `/announcements/active` as itself. The 30-second check stays as the fallback. The maintenance strip administrators see goes away the same way.',
+        'A record saved a moment ago is found by search on the next look. The server keeps a search answer for 20 seconds only until any collection it searched is written, here or on another server; where SQL Server full-text indexes are in use, the newest 200 rows of a collection are also matched by plain text until the index catches up.'
+      ]
+    },
     { type: 'h3', id: 'live-ops-pages', text: 'Live operations pages' },
     {
       type: 'p',

@@ -53,6 +53,24 @@ export function readEpoch(collection: string, tenant = currentTenantKey()): stri
   return `${globalEpoch}:${epochs.get(scopeKey(tenant, collection)) ?? 0}`
 }
 
+/**
+ * One snapshot over several collections (rt4 #9: the global search answer cache). Changes when
+ * any of them is written (here or, relayed, on another replica) or everything is busted. Epochs
+ * only grow, so equal snapshots mean no write in between.
+ */
+export function epochsOf(collections: readonly string[], tenant = currentTenantKey()): string {
+  if (!wired) wireReadCaches()
+  let sum = 0
+  for (const c of collections) sum += epochs.get(scopeKey(tenant, c)) ?? 0
+  return `${globalEpoch}:${sum}`
+}
+
+/** Other per-process caches busted by record events (they keep remote touches flowing). */
+const externalActivity: Array<() => boolean> = []
+export function registerReadCacheActivity(active: () => boolean): void {
+  externalActivity.push(active)
+}
+
 /** A record in `collection` changed (this process, or relayed from another replica). */
 export function noteCollectionWrite(collection: string, tenant = currentTenantKey()): void {
   // Counted even while both caches are empty: a read in flight took its epoch before the write.
@@ -70,7 +88,7 @@ export function bustAllReadCaches(): void {
 
 /** True while either cache holds something (other replicas must hear raw writes then). */
 export function readCachesActive(): boolean {
-  return totals.size > 0 || rows.size > 0
+  return totals.size > 0 || rows.size > 0 || externalActivity.some((active) => active())
 }
 
 /**
