@@ -634,6 +634,22 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       })
       // Answer under the ids as asked (the database may spell a GUID differently).
       const byUpper = new Map(Object.entries(found).map(([k, v]) => [k.toUpperCase(), v]))
+      // One record (its page): may the viewer send a failed request again? The same gate
+      // as POST /:id/retry (may update the record; the post-approval admin tier does not hold).
+      if (ids.length === 1) {
+        const facts = byUpper.get(ids[0].toUpperCase()) ?? []
+        const resendable = facts.filter(
+          (f) =>
+            (f.status === 'failed' || f.status === 'rejected') &&
+            f.no_retry !== 'there is nothing stored to send'
+        )
+        if (resendable.length > 0) {
+          const refusal = await recordRefusal(req, collection, ids[0], 'update', {
+            adminOnlyTier: false
+          }).catch(() => ({ code: 403 }))
+          for (const f of resendable) f.can_resend = !refusal
+        }
+      }
       const data: Record<string, unknown> = {}
       for (const id of ids) {
         const facts = byUpper.get(id.toUpperCase())

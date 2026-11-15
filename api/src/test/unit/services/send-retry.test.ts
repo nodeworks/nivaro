@@ -70,7 +70,7 @@ describe('planRetry (rt6 #18)', () => {
       no_retry: 'all 3 attempts were made'
     })
     expect(planRetry(row(), ctx({ policy, apiHasPolicy: true, tick: () => null }))?.no_retry).toBe(
-      'automatic retries are paused'
+      'retries are paused'
     )
     expect(
       planRetry(row({ error_class: 'validation' }), ctx({ policy, apiHasPolicy: true }))?.no_retry
@@ -88,13 +88,13 @@ describe('planRetry (rt6 #18)', () => {
   it('nothing stored to send: never retried', () => {
     expect(
       planRetry(row({ has_body: false }), ctx({ policy: { max_attempts: 3, backoff_minutes: 1 } }))
-    ).toEqual({ retry: null, no_retry: 'there is nothing stored to send again' })
+    ).toEqual({ retry: null, no_retry: 'there is nothing stored to send' })
   })
 
   it('remediation ladder: only with the switch on and an open obligation', () => {
-    expect(planRetry(row(), ctx())?.no_retry).toBe('automatic retries are not set up for Ledger')
+    expect(planRetry(row(), ctx())?.no_retry).toBe('retries are not set up for Ledger')
     expect(planRetry(row(), ctx({ remediationOn: true }))?.no_retry).toBe(
-      'automatic retries are not set up for Ledger'
+      'retries are not set up for Ledger'
     )
     const last = NOW - 60_000
     const p = planRetry(
@@ -112,7 +112,7 @@ describe('planRetry (rt6 #18)', () => {
     expect(
       planRetry(row(), ctx({ remediationOn: true, obligation: 'failed', apiHasPolicy: true }))
         ?.no_retry
-    ).toBe('automatic retries are not set up for Ledger')
+    ).toBe('retries are not set up for Ledger')
   })
 
   it('remediation ladder: gave up, used up, or a class it does not retry', () => {

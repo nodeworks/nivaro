@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../../db/index.js', () => ({ db: {} }))
 
 import {
+  impactBody,
   impactFingerprint,
   impactSubject,
   newSinceLastLook,
@@ -120,15 +121,21 @@ describe('impact words', () => {
     expect(priceDiffers(398, null)).toBe(false)
   })
 
-  it('one subject per owner', () => {
-    expect(impactSubject({ priceLines: 14, shortLines: 0, records: 6 })).toBe(
-      'Catalog update changed prices on 14 lines in 6 of your open records'
+  it('a short title that survives truncation', () => {
+    expect(impactSubject({ records: 3 })).toBe('Catalog update affects 3 of your records')
+    expect(impactSubject({ records: 1 })).toBe('Catalog update affects 1 of your records')
+  })
+
+  it('the body: one plain line per kind of change', () => {
+    expect(impactBody({ priceLines: 14, shortLines: 3, placeField: 'supporting_warehouse' })).toBe(
+      '14 lines have a new price. Each keeps its old price until you choose the new one on the record.\n' +
+        '3 lines ask for more than is in stock at the supporting warehouse.'
     )
-    expect(impactSubject({ priceLines: 1, shortLines: 3, records: 1 })).toBe(
-      'Catalog update changed prices on 1 line and left 3 lines short of stock in 1 of your open records'
+    expect(impactBody({ priceLines: 1, shortLines: 0 })).toBe(
+      '1 line has a new price. It keeps its old price until you choose the new one on the record.'
     )
-    expect(impactSubject({ priceLines: 0, shortLines: 2, records: 2 })).toBe(
-      'Catalog update left 2 lines short of stock in 2 of your open records'
+    expect(impactBody({ priceLines: 0, shortLines: 1, placeField: 'site_id' })).toBe(
+      '1 line asks for more than is in stock at the site.'
     )
   })
 

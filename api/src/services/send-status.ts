@@ -42,8 +42,10 @@ export interface SendStatusFact {
   ref_label: string | null
   /** rt6 #18 — a failed send a sweep will try again by itself: when, and which attempt. */
   retry: { at: string; attempt: number; of: number } | null
-  /** rt6 #18 — a failed send nothing will repeat: why (reads after "Will not retry — "). */
+  /** rt6 #18 — a failed send nothing will repeat: why ("It won't be sent again automatically — …"). */
   no_retry: string | null
+  /** The viewer may send this stored request again (the route fills it for one record). */
+  can_resend?: boolean
 }
 
 interface Row {

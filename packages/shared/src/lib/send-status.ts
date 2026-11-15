@@ -13,17 +13,17 @@ import { getDisplayTimezone } from './utils'
  *              (+ " · usually answers within 4 minutes" only from real history)
  *   accepted   "Ledger accepted it at 10:43 AM — PO 12345" (the API's reference label;
  *              "reference" when none is set)
- *   refused    "Ledger refused it at 10:43 AM: The project is closed. Fix what it names,
- *              then send it again."
+ *   refused    "Ledger refused it at 10:43 AM: “The project is closed.” Change that on
+ *              the record, then send it again." (the partner's own words quoted, ours not)
  *   not_taken  "Couldn't reach Ledger — nothing was sent. Retrying at 10:45 AM (attempt 2
- *              of 5)" when a sweep will try again (rt6 #18), else "… Try again or ask an
- *              admin." (the call did not get through, or the partner was down: nothing was
- *              refused); "Ledger was too busy to take it at 10:43 AM — nothing was sent. …"
+ *              of 5)" when a sweep will try again (rt6 #18); else a Send again button when
+ *              the viewer may (`can_resend`), or "… Ask an admin to send it again."
+ *              "Ledger was too busy to take it at 10:43 AM — nothing was sent. …"
  *   no_answer  "No answer from Ledger after 25 minutes — the send is held and will not be
  *              repeated automatically"
  *
  * A failed send nothing will repeat says why on a quieter line (`detail`):
- * "Will not retry — automatic retries are not set up for Ledger".
+ * "It won't be sent again automatically — retries are not set up for Ledger".
  *
  * There is no "queued" state: a send runs as part of its move, in parallel across
  * records, never behind other records' sends — so no position is ever shown.
@@ -48,6 +48,8 @@ export interface SendStatusFact {
   retry?: { at: string; attempt: number; of: number } | null
   /** rt6 #18 — nothing will repeat this failed send: why. */
   no_retry?: string | null
+  /** The viewer may send this stored request again (record page reads only). */
+  can_resend?: boolean
 }
 
 export type SendState = 'sending' | 'waiting' | 'accepted' | 'refused' | 'not_taken' | 'no_answer'
@@ -61,6 +63,8 @@ export interface SendStatusWords {
   detail?: string
   /** When the automatic retry is due (ISO) — the record line counts down to it. */
   retry_at?: string
+  /** The person may send this same request again now (a Send again button). */
+  resend?: boolean
 }
 
 /** "10:42 AM" today, "Nov 12, 10:42 AM" another day (the viewer's display time zone). */
@@ -97,6 +101,19 @@ export function plainDuration(ms: number): string {
   if (hours < 48) return `${hours} hour${hours === 1 ? '' : 's'}`
   const days = Math.round(ms / 86_400_000)
   return `${days} day${days === 1 ? '' : 's'}`
+}
+
+/**
+ * The reason, and whether it is the partner's own sentence (quoted on screen) or our
+ * reading of what happened (never quoted as if the partner said it).
+ */
+export function sendReason(reason: string | null | undefined): { text: string; quoted: boolean } {
+  const text = (reason ?? '').trim()
+  if (!text) return { text: '', quoted: false }
+  const mark = /\bHTTP \d{3}: /.exec(text)
+  const own = partnerWords(mark ? text.slice(mark.index) : text)
+  if (own) return { text: own.replace(/[\s.,;:]+$/, ''), quoted: true }
+  return { text: plainSendReason(text), quoted: false }
 }
 
 /** The partner's reason in plain words: its own sentence when it gave one, else what it means. */
@@ -168,33 +185,34 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
   }
   // failed / rejected
   const cls = (f.error_class ?? '').toLowerCase()
-  const why = readReason(f.reason)
+  const why = opts.reason ? { text: opts.reason(f.reason), quoted: false } : sendReason(f.reason)
   const retry = f.retry && f.retry.at ? f.retry : null
   const retryAt = retry ? new Date(retry.at).getTime() : Number.NaN
   const retryText = retry
     ? `${Number.isFinite(retryAt) && retryAt > now ? `Retrying at ${time(retry.at)}` : 'Retrying now'} (attempt ${retry.attempt} of ${retry.of})`
     : ''
-  const extra = (): Pick<SendStatusWords, 'detail' | 'retry_at'> =>
+  const noRetry = f.no_retry?.trim()
+  const extra = (withReason: boolean): Pick<SendStatusWords, 'detail' | 'retry_at'> =>
     retry
       ? { retry_at: retry.at }
-      : f.no_retry?.trim()
-        ? { detail: `Will not retry — ${f.no_retry.trim()}` }
+      : withReason && noRetry
+        ? { detail: `It won't be sent again automatically — ${noRetry}.` }
         : {}
   if (NOT_TAKEN.has(cls)) {
     const busy = cls === 'rate_limited'
     const lead = busy
       ? `${p} was too busy to take it at ${time(doneAt)} — nothing was sent.`
       : `Couldn't reach ${p} — nothing was sent.`
-    const next = retry
-      ? retryText
-      : busy
-        ? 'Try again in a few minutes.'
-        : 'Try again or ask an admin.'
+    // The same request again can work: the person sends it (Send again) when they may,
+    // otherwise an administrator does.
+    const resend = !retry && f.can_resend === true
+    const next = retry ? ` ${retryText}` : resend ? '' : ' Ask an admin to send it again.'
     return {
       state: 'not_taken',
       tone: retry ? 'waiting' : 'problem',
-      text: `${lead} ${next}`,
-      ...extra()
+      text: `${lead}${next}`,
+      ...(resend ? { resend: true } : {}),
+      ...extra(true)
     }
   }
   const refused = `${p} refused it at ${time(doneAt)}`
@@ -205,13 +223,23 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
       text: `${refused}: it did not accept this app's sign-in. ${
         retry ? retryText : `An administrator needs to check the connection to ${p}.`
       }`,
-      ...extra()
+      ...extra(true)
     }
+  // The partner's own words are quoted; our reading of a failure is not.
+  const said = why.text ? (why.quoted ? `: “${why.text}.”` : `: ${why.text}.`) : '.'
+  const fixable = status === 'rejected' || ['validation', 'not_found'].includes(cls)
   return {
     state: 'refused',
     tone: retry ? 'waiting' : 'problem',
-    text: `${refused}${why ? `: ${why}` : ''}. ${retry ? retryText : 'Fix what it names, then send it again.'}`,
-    ...extra()
+    text: `${refused}${said} ${
+      retry
+        ? retryText
+        : why.text
+          ? 'Change that on the record, then send it again.'
+          : 'Check the record, then send it again.'
+    }`,
+    // "Repeating it cannot fix it" is already what the next step says.
+    ...extra(!fixable)
   }
 }
 

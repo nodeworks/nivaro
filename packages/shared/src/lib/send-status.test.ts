@@ -95,7 +95,7 @@ describe('sendStatusWords', () => {
     )
   })
 
-  it('refused: the reason in plain words and what to do', () => {
+  it("refused: the partner's own words quoted, then one plain next step", () => {
     const w = words({
       status: 'failed',
       finished_at: '2026-11-14T15:43:00.000Z',
@@ -104,9 +104,18 @@ describe('sendStatusWords', () => {
       no_retry: 'sending the same thing again cannot fix it'
     })
     expect(w.text).toBe(
-      'Ledger refused it at 10:43 AM: The project is closed. Fix what it names, then send it again.'
+      'Ledger refused it at 10:43 AM: \u201cThe project is closed.\u201d Change that on the record, then send it again.'
     )
-    expect(w.detail).toBe('Will not retry — sending the same thing again cannot fix it')
+    // The next step already says repeating it will not do: no second line.
+    expect(w.detail).toBeUndefined()
+    expect(w.resend).toBeUndefined()
+    expect(
+      words({
+        status: 'failed',
+        finished_at: '2026-11-14T15:43:00.000Z',
+        error_class: 'validation'
+      }).text
+    ).toBe('Ledger refused it at 10:43 AM. Check the record, then send it again.')
   })
 
   it('refused sign-in: an administrator checks the connection', () => {
@@ -117,18 +126,27 @@ describe('sendStatusWords', () => {
     )
   })
 
-  it("couldn't reach: nothing was sent, never called a refusal", () => {
-    const w = words({
+  it("couldn't reach: nothing was sent; Send again when the person may, else ask an admin", () => {
+    const base = {
       status: 'failed',
       finished_at: '2026-11-14T15:43:00.000Z',
       error_class: 'transient',
       reason: 'Submission failed — Timed out after 120000ms',
-      no_retry: 'automatic retries are not set up for Ledger'
-    })
-    expect(w.state).toBe('not_taken')
-    expect(w.tone).toBe('problem')
-    expect(w.text).toBe("Couldn't reach Ledger — nothing was sent. Try again or ask an admin.")
-    expect(w.detail).toBe('Will not retry — automatic retries are not set up for Ledger')
+      no_retry: 'retries are not set up for Ledger'
+    }
+    const mine = words({ ...base, can_resend: true })
+    expect(mine.state).toBe('not_taken')
+    expect(mine.tone).toBe('problem')
+    expect(mine.text).toBe("Couldn't reach Ledger — nothing was sent.")
+    expect(mine.resend).toBe(true)
+    expect(mine.detail).toBe(
+      "It won't be sent again automatically — retries are not set up for Ledger."
+    )
+    const theirs = words(base)
+    expect(theirs.text).toBe(
+      "Couldn't reach Ledger — nothing was sent. Ask an admin to send it again."
+    )
+    expect(theirs.resend).toBeUndefined()
     expect(
       words({
         status: 'failed',
@@ -136,7 +154,7 @@ describe('sendStatusWords', () => {
         error_class: 'rate_limited'
       }).text
     ).toBe(
-      'Ledger was too busy to take it at 10:43 AM — nothing was sent. Try again in a few minutes.'
+      'Ledger was too busy to take it at 10:43 AM — nothing was sent. Ask an admin to send it again.'
     )
   })
 
@@ -145,6 +163,7 @@ describe('sendStatusWords', () => {
       status: 'failed',
       finished_at: '2026-11-14T15:43:00.000Z',
       error_class: 'transient',
+      can_resend: true,
       retry: { at: '2026-11-14T16:00:00.000Z', attempt: 2, of: 5 }
     })
     expect(w).toEqual({
@@ -172,7 +191,9 @@ describe('sendStatusWords', () => {
         reason: 'Submission failed — HTTP 409: {"message":"Try later"}',
         retry: { at: '2026-11-14T16:00:00.000Z', attempt: 2, of: 4 }
       }).text
-    ).toBe('Ledger refused it at 10:43 AM: Try later. Retrying at 11:00 AM (attempt 2 of 4)')
+    ).toBe(
+      'Ledger refused it at 10:43 AM: \u201cTry later.\u201d Retrying at 11:00 AM (attempt 2 of 4)'
+    )
   })
 
   it('never says queued: there is no queue in front of a send', () => {

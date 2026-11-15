@@ -7892,7 +7892,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
             </p>
             <p className='text-[11.5px] text-slate-500'>
               When a catalog, price or stock import changes lines on open records, each record owner
-              gets one notice listing them. For records with a catalog lines field
+              gets one notice listing them. Only for collections with a catalog lines field.
             </p>
           </div>
           <Switch

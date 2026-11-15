@@ -47,16 +47,16 @@ export const liveFormsDocs: DocSection = {
           'Done. The number is the one Ledger gave back, under the word Ledger uses for it (the API\u2019s Reference label; "reference" when none is set).'
         ],
         [
-          'Ledger refused it at 10:43 AM: <reason>. Fix what it names, then send it again.',
-          'Ledger answered no. Its own words are shown when it gave any.'
+          'Ledger refused it at 10:43 AM: \u201cThe project is closed.\u201d Change that on the record, then send it again.',
+          'Ledger answered no. Its own words are in quotes; when it gave none, the line says what went wrong in plain words.'
         ],
         [
           "Couldn't reach Ledger — nothing was sent. Retrying at 10:45 AM (attempt 2 of 5)",
-          'The call did not get through (network, time-out, or Ledger was down). Nothing was refused, and it will be tried again by itself at that time; the line counts down to it.'
+          'The call did not get through (network, time-out, or Ledger was down). Nothing was refused, and it will be tried again by itself at that time; the line counts down to it, and the header chip shows Ledger in amber, not red.'
         ],
         [
-          "Couldn't reach Ledger — nothing was sent. Try again or ask an admin.",
-          'The same, with nothing set up to try again. A quieter line under it says why: "Will not retry — automatic retries are not set up for Ledger".'
+          "Couldn't reach Ledger — nothing was sent.  [Send again]",
+          'The same, with nothing set up to try again. If you may change the record, Send again sends the same request now; otherwise the line says "Ask an admin to send it again." A quieter line says why it is not retried: "It won\u2019t be sent again automatically — retries are not set up for Ledger."'
         ],
         [
           'No answer from Ledger after 25 minutes — the send is held and will not be repeated automatically',
@@ -67,7 +67,7 @@ export const liveFormsDocs: DocSection = {
     { type: 'h3', id: 'live-forms-retries', text: 'Sends that retry by themselves' },
     {
       type: 'p',
-      text: 'A failed send is tried again with nobody pressing anything only in two cases, and the record says which: the external API has a retry policy (External APIs → the API → Automatic retry for failed pushes: how many times and how long to wait), or Settings → Integrations → automatic remediation is on and the send was one the integration ledger tracks (it waits 1, 5, 30, 120 and 120 minutes, five attempts in all, and only for a call that did not get through). The time shown is the next run of the job that does it, so it matches what will happen. Anything else says "Will not retry —" and why: the partner refused it (sending the same thing again cannot fix it), every attempt was made, retries are paused, or there is nothing stored to send. Dead letters and failed flow runs are always retried by a person.'
+      text: 'A failed send is tried again with nobody pressing anything only in two cases, and the record says which: the external API has a retry policy (External APIs → the API → Automatic retry for failed pushes: how many times and how long to wait), or Settings → Integrations → automatic remediation is on and the send was one the integration ledger tracks (it waits 1, 5, 30, 120 and 120 minutes, five attempts in all, and only for a call that did not get through). The time shown is the next run of the job that does it, so it matches what will happen. Anything else says "It won\u2019t be sent again automatically —" and why: the partner refused it (sending the same thing again cannot fix it), every attempt was made, retries are paused, or there is nothing stored to send. Dead letters and failed flow runs are always retried by a person.'
     },
     { type: 'h3', id: 'live-forms-reference-label', text: 'Reference label' },
     {
@@ -77,7 +77,7 @@ export const liveFormsDocs: DocSection = {
     { type: 'h3', id: 'live-forms-catalog-notice', text: 'Catalog updates tell record owners' },
     {
       type: 'p',
-      text: 'When a catalog, price or stock import changes the catalog under open records, the owners of those records hear it once — not once per line: "Catalog update changed prices on 14 lines in 6 of your open records". Opening it shows the list filtered to exactly those records; each line then says what changed (above). Only records you can read are counted, only records that can still be changed (an open step that does not lock the record), and the same findings are never sent twice. A newer notice replaces an unread older one.'
+      text: 'When a catalog, price or stock import changes the catalog under open records, the owners of those records hear it once — not once per line: "Catalog update affects 6 of your records", with one line per kind of change ("14 lines have a new price. Each keeps its old price until you choose the new one on the record." / "3 lines ask for more than is in stock at the supporting warehouse."). Opening it shows the list filtered to exactly those records; each line then says what changed (above). Only records you can read are counted, only records that can still be changed (an open step that does not lock the record), and the same findings are never sent twice. A newer notice replaces an unread older one.'
     },
     {
       type: 'p',

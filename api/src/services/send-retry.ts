@@ -89,7 +89,7 @@ export function planRetry(row: RetryRowFacts, ctx: RetryContext): RetryPlan | nu
   if (status !== 'failed' && status !== 'rejected') return null
   const cls = (row.error_class ?? '').toLowerCase()
   const no = (why: string): RetryPlan => ({ retry: null, no_retry: why })
-  if (!row.has_body) return no('there is nothing stored to send again')
+  if (!row.has_body) return no('there is nothing stored to send')
   if (status === 'rejected' || POLICY_SKIP_CLASSES.has(cls))
     return no('sending the same thing again cannot fix it')
 
@@ -99,7 +99,7 @@ export function planRetry(row: RetryRowFacts, ctx: RetryContext): RetryPlan | nu
     if (done >= max) return no(`all ${max + 1} attempts were made`)
     const due = Math.max(ms(row.next_retry_at) ?? ctx.now, ctx.now)
     const at = ctx.tick('erp-auto-retry', new Date(due))
-    if (!at) return no('automatic retries are paused')
+    if (!at) return no('retries are paused')
     return { retry: { at: at.toISOString(), attempt: done + 2, of: max + 1 }, no_retry: null }
   }
 
@@ -112,11 +112,11 @@ export function planRetry(row: RetryRowFacts, ctx: RetryContext): RetryPlan | nu
     const last = ms(row.updated_at) ?? ctx.now
     const due = Math.max(last + REMEDIATION_LADDER[made] * 60_000, ctx.now)
     const at = ctx.tick('integration-reconcile', new Date(due))
-    if (!at) return no('automatic retries are paused')
+    if (!at) return no('retries are paused')
     return { retry: { at: at.toISOString(), attempt: made + 1, of }, no_retry: null }
   }
 
-  return no(`automatic retries are not set up for ${ctx.api}`)
+  return no(`retries are not set up for ${ctx.api}`)
 }
 
 /** The scheduled half of a stored retry_policy, or null (runErpAutoRetries' own parse). */

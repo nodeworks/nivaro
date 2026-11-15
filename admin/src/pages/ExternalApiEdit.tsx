@@ -533,7 +533,7 @@ export function ExternalApiEditPage() {
             placeholder='reference'
             className='max-w-[240px]'
           />
-          <p className='text-[12px] text-slate-400 dark:text-muted-foreground'>
+          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
             What {form.name.trim() || 'this partner'} calls the number it gives back. Records say “
             {form.name.trim() || 'Partner'} accepted it at 10:43 AM —{' '}
             {form.reference_label.trim() || 'reference'} 12345”.

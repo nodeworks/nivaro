@@ -376,6 +376,8 @@ export interface RecordImpact {
   shortLines: Set<string>
   /** What was found: "<record>|<line>|p<i>=<catalog price>" / "<record>|<line>|s=<available>". */
   marks: string[]
+  /** The record field naming where stock is counted (for the notice's words). */
+  placeField?: string | null
 }
 
 async function openEditableRecords(parent: string): Promise<string[] | null> {
@@ -436,7 +438,14 @@ export async function impactsFor(src: CatalogSource): Promise<RecordImpact[]> {
   const get = (record: string) => {
     let r = out.get(record)
     if (!r) {
-      r = { parent: src.parent, record, priceLines: new Set(), shortLines: new Set(), marks: [] }
+      r = {
+        parent: src.parent,
+        record,
+        priceLines: new Set(),
+        shortLines: new Set(),
+        marks: [],
+        placeField: src.stock?.parentField ?? null
+      }
       out.set(record, r)
     }
     return r
@@ -519,7 +528,8 @@ export function newSinceLastLook(
       record: r.record,
       priceLines: new Set(marks.filter((m) => /\|p\d+$/.test(splitMark(m)[0])).map(line)),
       shortLines: new Set(marks.filter((m) => splitMark(m)[0].endsWith('|s')).map(line)),
-      marks
+      marks,
+      placeField: r.placeField ?? null
     })
   }
   return out
@@ -577,18 +587,35 @@ async function saveBaseline(src: CatalogSource, impacts: RecordImpact[]): Promis
 }
 
 /** Pure: the subject of one owner's notice. */
-export function impactSubject(t: {
+export function impactSubject(t: { records: number }): string {
+  return `Catalog update affects ${t.records} of your records`
+}
+
+/** Pure: the notice body — one plain line per kind of change. */
+export function impactBody(t: {
   priceLines: number
   shortLines: number
-  records: number
+  /** The record field that names where stock is counted ("supporting_warehouse"). */
+  placeField?: string | null
 }): string {
-  const lines = (n: number) => `${n} line${n === 1 ? '' : 's'}`
-  const parts: string[] = []
-  if (t.priceLines > 0) parts.push(`changed prices on ${lines(t.priceLines)}`)
-  if (t.shortLines > 0) parts.push(`left ${lines(t.shortLines)} short of stock`)
-  const where =
-    t.records === 1 ? 'in 1 of your open records' : `in ${t.records} of your open records`
-  return `Catalog update ${parts.join(' and ')} ${where}`
+  const out: string[] = []
+  if (t.priceLines === 1)
+    out.push(
+      '1 line has a new price. It keeps its old price until you choose the new one on the record.'
+    )
+  else if (t.priceLines > 1)
+    out.push(
+      `${t.priceLines} lines have a new price. Each keeps its old price until you choose the new one on the record.`
+    )
+  if (t.shortLines > 0) {
+    const place = t.placeField
+      ? `the ${t.placeField.replace(/_id$/i, '').replace(/_/g, ' ').toLowerCase()}`
+      : 'the record\u2019s location'
+    out.push(
+      `${t.shortLines} line${t.shortLines === 1 ? ' asks' : 's ask'} for more than is in stock at ${place}.`
+    )
+  }
+  return out.join('\n')
 }
 
 /** Pure: a short, stable fingerprint of what one notice reports. */
@@ -651,15 +678,6 @@ export async function runCatalogImpact(
   return { records: impacts.length, notified }
 }
 
-async function collectionLabel(collection: string): Promise<string> {
-  const row = (await db('nivaro_collections')
-    .where({ collection })
-    .first('display_name')
-    .catch(() => null)) as { display_name?: string | null } | null
-  const name = row?.display_name?.trim()
-  return name || collection.replace(/_/g, ' ')
-}
-
 /** Tell one owner about what is new on records they own (only those they can read). */
 export async function tellOwner(ownerId: string, impacts: RecordImpact[]): Promise<boolean> {
   const { getUser } = await import('./users.js')
@@ -699,20 +717,12 @@ export async function tellOwner(ownerId: string, impacts: RecordImpact[]): Promi
   const counts = new Map<string, RecordImpact[]>()
   for (const r of seen) counts.set(r.parent, [...(counts.get(r.parent) ?? []), r])
   const [topParent, topList] = [...counts.entries()].sort((a, b) => b[1].length - a[1].length)[0]
-  const label = await collectionLabel(topParent)
-  const others = seen.length - topList.length
-  const subject = impactSubject({ priceLines, shortLines, records: seen.length })
-  const message = [
-    `See which: ${topList.length} ${label} record${topList.length === 1 ? '' : 's'}${
-      others > 0 ? ` (and ${others} more elsewhere)` : ''
-    }.`,
-    priceLines > 0
-      ? 'Each line keeps the price it was added with — open a record to see the new price and use it if it should change.'
-      : null,
-    shortLines > 0 ? 'Some lines now ask for more than the stock at the record’s place.' : null
-  ]
-    .filter(Boolean)
-    .join(' ')
+  const subject = impactSubject({ records: seen.length })
+  const message = impactBody({
+    priceLines,
+    shortLines,
+    placeField: seen.find((r) => r.shortLines.size > 0)?.placeField ?? null
+  })
 
   const app = getApp()
   if (!app) return false

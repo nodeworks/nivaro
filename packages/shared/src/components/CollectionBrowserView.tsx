@@ -10481,39 +10481,47 @@ export function CollectionBrowserView({
                                   }}
                                   className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
                                 >
-                                  {state ? (
-                                    <span
-                                      className='inline-flex items-center gap-1.5 rounded-full py-0.5 pl-2 pr-2.5 text-[11px] font-semibold text-slate-700 dark:text-slate-200'
-                                      style={{
-                                        backgroundColor: `${state.state_color ?? '#6b7280'}1f`
-                                      }}
-                                    >
+                                  {/* rt6 — the pill gives way (truncates) before the send marks
+                                      do: the marks never run under the next column. */}
+                                  <div className='flex min-w-0 items-center'>
+                                    {state ? (
                                       <span
-                                        aria-hidden
-                                        className='h-1.5 w-1.5 shrink-0 rounded-full'
-                                        style={{ backgroundColor: state.state_color ?? '#6b7280' }}
-                                      />
-                                      {state.state_label ?? state.state_key ?? '?'}
-                                      {state.via_addendum && (
+                                        className='inline-flex min-w-0 items-center gap-1.5 rounded-full py-0.5 pl-2 pr-2.5 text-[11px] font-semibold text-slate-700 dark:text-slate-200'
+                                        style={{
+                                          backgroundColor: `${state.state_color ?? '#6b7280'}1f`
+                                        }}
+                                      >
                                         <span
-                                          data-tip={`Addendum "${state.via_addendum.title ?? ''}" in approval — record itself is ${state.record_state_label ?? 'unchanged'}`}
-                                          className='ml-0.5 rounded-sm bg-amber-500/15 px-1 text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300'
-                                        >
-                                          Addendum
+                                          aria-hidden
+                                          className='h-1.5 w-1.5 shrink-0 rounded-full'
+                                          style={{
+                                            backgroundColor: state.state_color ?? '#6b7280'
+                                          }}
+                                        />
+                                        <span className='truncate'>
+                                          {state.state_label ?? state.state_key ?? '?'}
                                         </span>
-                                      )}
-                                    </span>
-                                  ) : (
-                                    <span className='text-[12px] text-slate-300'>—</span>
-                                  )}
-                                  {/* rt4 #10 — the row's sends, beside its state when the list has
+                                        {state.via_addendum && (
+                                          <span
+                                            data-tip={`Addendum "${state.via_addendum.title ?? ''}" in approval — record itself is ${state.record_state_label ?? 'unchanged'}`}
+                                            className='ml-0.5 rounded-sm bg-amber-500/15 px-1 text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300'
+                                          >
+                                            Addendum
+                                          </span>
+                                        )}
+                                      </span>
+                                    ) : (
+                                      <span className='text-[12px] text-slate-300'>—</span>
+                                    )}
+                                    {/* rt4 #10 — the row's sends, beside its state when the list has
                                       no integrations column to carry them. */}
-                                  {!integrationsEnabled && (
-                                    <SendStatusMarks
-                                      facts={sendStatus?.[String(id)]}
-                                      className='ml-1.5 align-middle'
-                                    />
-                                  )}
+                                    {!integrationsEnabled && (
+                                      <SendStatusMarks
+                                        facts={sendStatus?.[String(id)]}
+                                        className='ml-1.5'
+                                      />
+                                    )}
+                                  </div>
                                 </td>
                               )
                             }
