@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { requireAuth } from '../middleware/authenticate.js'
 import {
@@ -11,12 +12,13 @@ import {
   releaseCellLock,
   takeCellLock
 } from '../services/cell-locks.js'
-import { can } from '../services/permissions.js'
+import { recordWriteRefusal } from '../services/edit-lock.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { announceRecordAspect } from '../services/record-events.js'
-import { recordVisibleTo } from '../services/revision-access.js'
 import { isSystemCollection } from '../services/system-collections.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
+import { viewAsAdminOf } from '../services/view-as-attribution.js'
 
 /**
  * Soft locks on list cells (services/cell-locks.ts).
@@ -25,8 +27,11 @@ import { currentTenantKey } from '../services/tenant-rooms.js'
  *   POST /api/cell-locks/release {collection, id, field}        → {ok}
  *   POST /api/cell-locks/read    {collection, ids, fields}      → {data: [{id, field, name, since, mine}]}
  *
- * take: the caller must be able to open the record and update the collection. read: only rows
- * the caller can see answer (role policy, row filter, User Scopes). A take (not a beat) and a
+ * take: judged like a write to that record and field by the caller — the field must be one
+ * their role may update, and the record must pass recordWriteRefusal (read as them, update row
+ * filter / tree permission, nobody else's edit lock, the approval lock). read: the caller must
+ * be able to read the collection; fields they cannot read are dropped and only rows they can see
+ * answer (role policy, row filter, User Scopes — admins included). A take (not a beat) and a
  * release announce `$cells` on the record — ids and the aspect name only; lists re-read here.
  */
 
@@ -36,19 +41,75 @@ const ID = /^[A-Za-z0-9_.:-]{1,64}$/
 const VISIBLE_TTL_MS = 30_000
 const visibleCache = new Map<string, { at: number; ids: Set<string> }>()
 
+/** For tests. */
+export function resetCellLockCaches() {
+  visibleCache.clear()
+}
+
+/**
+ * Who exactly is asking, for the visibility cache: the person, how they signed in, the API key
+ * and its scopes / scope restrictions, and the administrator behind a View-as. Two callers that
+ * could see different rows never share an entry.
+ */
+export function callerIdentity(req: FastifyRequest): string {
+  const r = req as FastifyRequest & {
+    authMethod?: string
+    apiKeyId?: number | string | null
+    apiKeySimulatedId?: number | string | null
+  }
+  const u = req.user as
+    | (Record<string, unknown> & {
+        id?: string
+        api_key_scopes?: unknown
+        api_key_scope_restrictions?: unknown
+      })
+    | undefined
+  const scope = createHash('sha1')
+    .update(
+      JSON.stringify([
+        u?.api_key_scopes ?? null,
+        u?.api_key_scope_restrictions ?? null,
+        u?.role ?? null,
+        req.isAdmin === true
+      ])
+    )
+    .digest('hex')
+  return [
+    currentTenantKey(),
+    u?.id ?? '',
+    r.authMethod ?? '',
+    r.apiKeyId ?? '',
+    r.apiKeySimulatedId ?? '',
+    viewAsAdminOf(req) ?? '',
+    scope
+  ].join('\u0001')
+}
+
 async function visibleRowIds(req: FastifyRequest, collection: string, ids: string[]) {
-  if (req.isAdmin) return new Set(ids.map((i) => i.toUpperCase()))
-  const key = [currentTenantKey(), req.user?.id, collection, [...ids].sort().join(',')].join(
-    '\u0001'
-  )
+  const key = [callerIdentity(req), collection, [...ids].sort().join(',')].join('\u0002')
   const hit = visibleCache.get(key)
   if (hit && Date.now() - hit.at < VISIBLE_TTL_MS) return hit.ids
-  const gates = await compileAccessGates(req.user!, collection)
+  // Restrict User Scopes bind administrators too: never "admin = every row".
+  const gates = await compileAccessGates(req.user!, collection, {
+    actingAdmin: req.isAdmin === true
+  })
   const seen = await visibleIds(gates, ids)
   const out = new Set([...seen].map((i) => String(i).toUpperCase()))
   if (visibleCache.size > 2000) visibleCache.clear()
   visibleCache.set(key, { at: Date.now(), ids: out })
   return out
+}
+
+/** The fields of `wanted` the caller's role may `action` (null policy list = every field). */
+async function allowedOf(
+  req: FastifyRequest,
+  action: 'read' | 'update',
+  collection: string,
+  wanted: string[]
+): Promise<string[]> {
+  const allowed = await getAllowedFields(req.user!, action, collection)
+  if (allowed === null || allowed.includes('*')) return wanted
+  return wanted.filter((f) => allowed.includes(f))
 }
 
 function displayName(req: FastifyRequest): string {
@@ -76,10 +137,16 @@ export async function cellLockRoutes(app: FastifyInstance, opts: { store?: CellL
     const beat = (req.body as { beat?: unknown }).beat === true
     if (isSystemCollection(cell.collection) && !req.isAdmin)
       return reply.code(403).send({ error: 'Forbidden' })
-    if (!(await recordVisibleTo(req, cell.collection, cell.id)))
-      return reply.code(404).send({ error: 'Not found' })
     if (!(await can(req.user!, 'update', cell.collection)))
       return reply.code(403).send({ error: 'You cannot change these records' })
+    if ((await allowedOf(req, 'update', cell.collection, [cell.field])).length === 0)
+      return reply.code(403).send({ error: 'You cannot change this field' })
+    // The record itself, as the caller: readable, updatable, not locked against them.
+    const refusal = await recordWriteRefusal(req, cell.collection, cell.id, {
+      fields: [cell.field]
+    })
+    if (refusal) return reply.code(refusal.status).send(refusal.body)
+
     const key = cellLockKey(cell.collection, cell.id, cell.field)
     try {
       const r = await takeCellLock(store, key, { id: String(req.user!.id), name: displayName(req) })
@@ -128,13 +195,18 @@ export async function cellLockRoutes(app: FastifyInstance, opts: { store?: CellL
           .filter((i) => ID.test(i))
       )
     ]
-    const fields = [
+    const asked = [
       ...new Set(b.fields.filter((f): f is string => typeof f === 'string' && IDENT.test(f)))
     ]
-    if (ids.length * fields.length > MAX_CELL_READ)
+    if (ids.length * asked.length > MAX_CELL_READ)
       return reply.code(400).send({ error: `At most ${MAX_CELL_READ} cells per request` })
-    if (ids.length === 0 || fields.length === 0) return reply.send({ data: [] })
+    if (ids.length === 0 || asked.length === 0) return reply.send({ data: [] })
     if (isSystemCollection(collection) && !req.isAdmin) return reply.send({ data: [] })
+    // Judged on every request (only the per-id visibility is cached): the collection is
+    // readable, and only fields the caller may read are looked up at all.
+    if (!(await can(req.user!, 'read', collection))) return reply.send({ data: [] })
+    const fields = await allowedOf(req, 'read', collection, asked)
+    if (fields.length === 0) return reply.send({ data: [] })
     const visible = await visibleRowIds(req, collection, ids)
     const shown = ids.filter((i) => visible.has(i.toUpperCase()))
     try {
