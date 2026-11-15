@@ -879,36 +879,36 @@ function EntityRoomCard({ room }: { room: string }) {
                 : 'On time')}
         </span>
       )}
-      {facts && facts.owners.length > 0 && (
-        <span
-          className='ml-auto flex shrink-0 -space-x-1.5'
-          data-tip={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
-          aria-label={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
-          role='img'
-          data-chat-room-owners={facts.owners.length}
-        >
-          {facts.owners.slice(0, 4).map((o) => (
-            <Avatar key={o.id} id={o.id} name={o.name} size={18} presence={false} />
-          ))}
-          {facts.owners.length > 4 && (
-            <span className='flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-slate-200 px-1 text-[9px] font-semibold text-slate-600 dark:bg-muted dark:text-slate-300'>
-              +{facts.owners.length - 4}
-            </span>
-          )}
-        </span>
-      )}
-      {href && (
-        <button
-          type='button'
-          onClick={() => cfg.navigate?.(href)}
-          className={cn(
-            'shrink-0 text-[11px] font-semibold text-[#007a99] underline-offset-2 hover:underline dark:text-nvr-cyan',
-            facts?.owners.length ? 'ml-1.5' : 'ml-auto'
-          )}
-        >
-          Open
-        </button>
-      )}
+      {/* Owners and Open stay together at the end, whichever line they land on. */}
+      <span className='ml-auto flex shrink-0 items-center gap-2'>
+        {facts && facts.owners.length > 0 && (
+          <span
+            className='flex shrink-0 -space-x-1.5'
+            data-tip={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
+            aria-label={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
+            role='img'
+            data-chat-room-owners={facts.owners.length}
+          >
+            {facts.owners.slice(0, 4).map((o) => (
+              <Avatar key={o.id} id={o.id} name={o.name} size={18} presence={false} />
+            ))}
+            {facts.owners.length > 4 && (
+              <span className='flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-slate-200 px-1 text-[9px] font-semibold text-slate-600 dark:bg-muted dark:text-slate-300'>
+                +{facts.owners.length - 4}
+              </span>
+            )}
+          </span>
+        )}
+        {href && (
+          <button
+            type='button'
+            onClick={() => cfg.navigate?.(href)}
+            className='shrink-0 text-[11px] font-semibold text-[#007a99] underline-offset-2 hover:underline dark:text-nvr-cyan'
+          >
+            Open
+          </button>
+        )}
+      </span>
     </div>
   )
 }
