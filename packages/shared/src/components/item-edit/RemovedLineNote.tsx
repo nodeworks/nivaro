@@ -1,7 +1,12 @@
 import { X } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatRelative } from '../../lib/utils'
-import { type LineRemovedBy, removedLineText, unsavedLineText } from './removed-line'
+import {
+  cleanLineLabel,
+  type LineRemovedBy,
+  removedLineText,
+  unsavedLineText
+} from './removed-line'
 
 export interface RemovedLineState {
   rowId: string
@@ -44,8 +49,11 @@ export function RemovedLineNote({
       <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400 dark:bg-slate-500' />
       <span className='min-w-0'>
         <span className='font-medium'>{removedLineText(state.by, selfId)}</span>
-        {state.label ? (
-          <span className='text-slate-500 dark:text-slate-400'> · {state.label}</span>
+        {cleanLineLabel(state.label) ? (
+          <span className='text-slate-500 dark:text-slate-400'>
+            {' '}
+            · {cleanLineLabel(state.label)}
+          </span>
         ) : null}
         {state.by?.at ? (
           <span className='text-slate-500 dark:text-slate-400'>
