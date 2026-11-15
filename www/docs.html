@@ -16947,7 +16947,7 @@ GET   /api/tasks/requested               // tasks I asked others to do</code></p
           <p class="doc-p">Data Model → the collection → Form UX → **Propose a change on locked records** (administrators, off by default). It only offers anything on a collection with a post-approval lock (<code class="doc-code">summary_mode_rules.edit_lock.admin_only</code>); the switch is stored as <code class="doc-code">summary_mode_rules.change_proposals: true</code>. Where it is off, Request help works as before.</p>
           <h2 class="doc-h2" id="change-proposals-propose">Proposing</h2>
           <ul class="doc-ul">
-            <li>**Which fields**: only the ones you could change if the record were open — your role’s update and read field lists, never read-only, administrator-only, computed or audit fields, never link lists or files. Fields the lock leaves open (for example On hold) you change directly.</li>
+            <li>**Which fields**: only the ones you could change if the record were open — your role’s update and read field lists, never read-only, administrator-only, encrypted, computed or audit fields, never link lists, files or formatted text. Fields the lock leaves open (for example On hold) you change directly.</li>
             <li>**Checked when you send it**: the values are tried against the record’s validation and rules as if you saved them, so a value the record would refuse is refused now, with the reason.</li>
             <li>**One at a time**: you can have one waiting proposal per record; Withdraw it to send a different one.</li>
           </ul>
@@ -16955,6 +16955,7 @@ GET   /api/tasks/requested               // tasks I asked others to do</code></p
           <ul class="doc-ul">
             <li>**Who decides**: the owners of the record’s current step and administrators — never the person who proposed it. Waiting proposals appear on the record (old → new per field) and under **Changes to review** in their My Work.</li>
             <li>**Accept and apply** writes the new values as the person accepting: their permissions, row access and the record’s validation all apply; only the post-approval lock is set aside for that one save. If they could not change one of the fields, or a field changed since the proposal was made, nothing is written and they are told why.</li>
+            <li>**When it expires**: a proposal can no longer be accepted once the record has moved to another step, is no longer locked (then it is simply edited), or proposals have been turned off for the collection — decline it or ask for a new one.</li>
             <li>**Decline** needs a short note, which the proposer sees.</li>
             <li>The proposer is notified either way (Workflow notifications — mute or route them in Profile → Notification rules).</li>
           </ul>

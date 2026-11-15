@@ -40,7 +40,13 @@ import {
   storableValue
 } from './change-proposal-values.js'
 import { getCollection, getFields, getRelations } from './collections.js'
-import { adminOnlyLockOf, editLockVerdictFor, latestRecordRun } from './edit-lock.js'
+import {
+  adminOnlyLockOf,
+  adminOnlyStateOf,
+  editLockVerdictFor,
+  latestRecordRun
+} from './edit-lock.js'
+import { getEncryptedFields } from './encryption.js'
 import { getAllowedFields, isAdminRole } from './permissions.js'
 import { parseSummaryModeRules } from './summary-mode.js'
 
@@ -156,6 +162,8 @@ export async function proposableFields(
   ])
   const labels = await fieldLabels(collection)
   const open = new Set(opts.openFields ?? [])
+  // Encrypted fields are never proposed: a proposal stores its values as plain JSON.
+  const encrypted = new Set(await getEncryptedFields(collection).catch(() => [] as string[]))
   const out: ProposableField[] = []
   for (const f of fields as unknown as ProposalFieldMeta[] & Array<{ required?: boolean }>) {
     const m2o = rels.find(
@@ -176,7 +184,7 @@ export async function proposableFields(
       openFields: open,
       isAdmin: opts.isAdmin
     })
-    if (!kind) continue
+    if (!kind || encrypted.has(f.field)) continue
     out.push({
       field: f.field,
       label: labels.get(f.field) ?? f.field,
@@ -572,6 +580,37 @@ async function proposalForDecision(
 }
 
 /**
+ * What made the proposal acceptable must still hold when it is accepted: the
+ * collection still takes proposals (turned off = every waiting one has
+ * expired), the record still sits under the post-approval lock (unlocked =
+ * the accepter edits it directly, nothing is bypassed) and still in the step
+ * it was proposed in (moved on = the proposal described another moment).
+ */
+export async function assertStillApplies(
+  p: Pick<ProposalRow, 'collection' | 'item' | 'state_key'>
+): Promise<void> {
+  if (!(await proposalsEnabledFor(p.collection)))
+    throw new ProposalError(
+      409,
+      'Change proposals are turned off for this kind of record, so this proposal has expired.',
+      'PROPOSALS_OFF'
+    )
+  if (!(await adminOnlyStateOf(p.collection, String(p.item))))
+    throw new ProposalError(
+      409,
+      'This record is no longer locked — change it directly instead of accepting the proposal.',
+      'NOT_LOCKED'
+    )
+  const run = await latestRecordRun(p.collection, String(p.item))
+  if (!run || !p.state_key || run.key !== p.state_key)
+    throw new ProposalError(
+      409,
+      'The record moved on since this was proposed; ask for a new proposal.',
+      'PROPOSAL_STEP_CHANGED'
+    )
+}
+
+/**
  * Accept: re-check the accepter's right to every field, refuse when a field
  * changed since the proposal, then write through the items service as the
  * accepter (admin-only tier skipped for this write only).
@@ -586,6 +625,7 @@ export async function acceptProposal(
   const { p, isAdmin } = await proposalForDecision(req, id)
   const who = await deciderVerdict(user, isAdmin, p)
   if (!who.may) throw new ProposalError(403, who.reason ?? 'You cannot decide this proposal.')
+  await assertStillApplies(p)
 
   const changes = parseProposalChanges(p.changes)
   if (changes.length === 0) throw new ProposalError(409, 'This proposal holds no changes.')
@@ -775,6 +815,7 @@ export async function proposalsForRecord(
   const done = rows.filter((r) => !open.includes(r)).slice(0, opts.decidedCap ?? 10)
   const list = [...open, ...done]
   const readable = isAdmin ? null : asSet(await getAllowedFields(user, 'read', collection))
+  const encryptedFields = new Set(await getEncryptedFields(collection).catch(() => [] as string[]))
   const [labels, fields, rels, names] = await Promise.all([
     fieldLabels(collection),
     getFields(collection).catch(() => []),
@@ -819,7 +860,9 @@ export async function proposalsForRecord(
   const out: ProposalView[] = []
   for (const r of list) {
     const all = parseProposalChanges(r.changes)
-    const visible = all.filter((c) => !readable || readable.has(c.field))
+    const visible = all.filter(
+      (c) => (!readable || readable.has(c.field)) && !encryptedFields.has(c.field)
+    )
     if (visible.length === 0 && !sameId(r.created_by, user.id)) continue
     const pending = isPending(r)
     let decide: DeciderVerdict = { may: false }
@@ -890,10 +933,16 @@ export async function decidableProposalsFor(
     .limit(200)
     .select('*')) as ProposalRow[]
   if (rows.length === 0) return []
+  // Turned off for a collection = its waiting proposals have expired.
+  const on = new Map<string, boolean>()
+  for (const c of new Set(rows.map((r) => r.collection)))
+    on.set(c, await proposalsEnabledFor(c).catch(() => false))
+  const live = rows.filter((r) => on.get(r.collection))
+  if (live.length === 0) return []
   const keep: ProposalRow[] = []
-  if (isAdmin) keep.push(...rows)
+  if (isAdmin) keep.push(...live)
   else {
-    const candidates = rows.filter((r) => !sameId(r.created_by, user.id))
+    const candidates = live.filter((r) => !sameId(r.created_by, user.id))
     const { resolveStateOwnersBatch } = await import('./pipeline-engine.js')
     const { ownsStep } = await import('./record-access.js')
     const runs = await Promise.all(

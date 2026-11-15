@@ -19,7 +19,10 @@ const state = vi.hoisted(() => ({
   canUpdateItem: true,
   updates: [] as Array<{ user: string; payload: Row; opts: Row }>,
   updateError: null as null | Error,
-  notified: [] as Array<{ to: string; subject: string; category?: string }>
+  notified: [] as Array<{ to: string; subject: string; category?: string }>,
+  runKey: 'approved',
+  adminOnlyState: true,
+  encrypted: [] as string[]
 }))
 
 // ── a tiny in-memory knex: enough for where/orWhere/whereIn/update/insert ──
@@ -140,6 +143,8 @@ vi.mock('../../../services/permissions.js', () => ({
 }))
 vi.mock('../../../services/edit-lock.js', () => ({
   parseEditLock: () => null,
+  adminOnlyStateOf: async () =>
+    state.adminOnlyState ? { key: state.runKey, label: 'Approved' } : null,
   adminOnlyLockOf: async () => ({
     states: ['approved'],
     transitions: [],
@@ -153,10 +158,13 @@ vi.mock('../../../services/edit-lock.js', () => ({
   latestRecordRun: async () => ({
     id: 'I1',
     current_state: 'S-APPROVED',
-    key: 'approved',
+    key: state.runKey,
     label: 'Approved',
     completed_at: null
   })
+}))
+vi.mock('../../../services/encryption.js', () => ({
+  getEncryptedFields: async () => state.encrypted
 }))
 vi.mock('../../../services/pipeline-engine.js', () => ({
   resolveStateOwnersBatch: async (reqs: Array<{ key: string }>) =>
@@ -224,6 +232,9 @@ beforeEach(() => {
   state.updates = []
   state.updateError = null
   state.notified = []
+  state.runKey = 'approved'
+  state.adminOnlyState = true
+  state.encrypted = []
 })
 
 const propose = (values: Row, who = 'U-PROP') =>
@@ -433,5 +444,67 @@ describe('decidableProposalsFor (My Work)', () => {
     expect(
       await svc.decidableProposalsFor({ id: 'U-ADMIN', role: 'R' } as never, true)
     ).toHaveLength(1)
+  })
+})
+
+describe('security review: accept re-checks, encrypted fields', () => {
+  beforeEach(async () => {
+    await propose({ title: 'New title' })
+    state.updates = []
+  })
+
+  it('turning the switch off expires waiting proposals: no accept, not in My Work', async () => {
+    state.switchOn = false
+    await expect(svc.acceptProposal(app, reqAs('U-OWNER'), 1)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'PROPOSALS_OFF'
+    })
+    expect(await svc.decidableProposalsFor({ id: 'U-ADMIN', role: 'R' } as never, true)).toEqual([])
+    expect(state.updates).toHaveLength(0)
+    expect(state.proposals[0].status).toBe('pending')
+  })
+
+  it('a record no longer under the post-approval lock is edited directly, not accepted', async () => {
+    state.adminOnlyState = false
+    await expect(svc.acceptProposal(app, reqAs('U-ADMIN'), 1)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'NOT_LOCKED'
+    })
+    expect(state.updates).toHaveLength(0)
+  })
+
+  it('a record that moved to another step refuses the proposal', async () => {
+    state.runKey = 'closed'
+    await expect(svc.acceptProposal(app, reqAs('U-OWNER'), 1)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'PROPOSAL_STEP_CHANGED',
+      message: 'The record moved on since this was proposed; ask for a new proposal.'
+    })
+    expect(state.updates).toHaveLength(0)
+    expect(state.proposals[0].status).toBe('pending')
+  })
+
+  it('encrypted fields are never proposable, so never stored in a proposal', async () => {
+    state.encrypted = ['amount']
+    const fields = await svc.proposableFields({ id: 'U-PROP', role: 'R' } as never, 'orders', {
+      isAdmin: false
+    })
+    expect(fields.map((f) => f.field)).not.toContain('amount')
+    state.proposals = []
+    await expect(propose({ amount: 5 })).rejects.toMatchObject({ code: 'FIELD_NOT_PROPOSABLE' })
+    expect(state.proposals).toHaveLength(0)
+  })
+
+  it('an encrypted field in an older proposal is never shown', async () => {
+    state.proposals = []
+    await propose({ title: 'T2', amount: 130 })
+    state.encrypted = ['amount']
+    const [p] = await svc.proposalsForRecord(
+      { id: 'U-OWNER', role: 'R' } as never,
+      false,
+      'orders',
+      'R1'
+    )
+    expect(p.changes.map((c) => c.field)).toEqual(['title'])
   })
 })
