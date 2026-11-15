@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ExternalLink, GitMerge } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../context'
 import { type FieldMergeKind, fieldMergeKind } from '../../lib/field-merge'
@@ -8,6 +8,7 @@ import { fetchCollectionMeta, queryKeys } from '../../lib/query-keys'
 import {
   isRecordOutboxHeld,
   type OutboxPick,
+  onOutboxReviewNudge,
   type RecordConflict,
   type RecordOutboxEntry,
   resolveRecordOutboxField
@@ -26,8 +27,9 @@ import { useRecordLabels } from './useRecordLabels'
  * form offers, lib/field-merge.ts). A record whose form is open in this tab reviews in that
  * form's own merge dialog instead.
  *
- * A quiet card in the corner: collapsed to one line after the first look, never over the
- * middle of the page, no sound, no motion beyond the shared expand-in.
+ * A quiet card in the corner: a one-line pill until the person opens it (or presses Save /
+ * leaves a record while a clash waits), never over the middle of the page, no sound, no
+ * motion beyond the shared expand-in.
  */
 
 export function conflictEntriesToReview(entries: RecordOutboxEntry[]): RecordOutboxEntry[] {
@@ -45,16 +47,10 @@ export function OutboxReviewTray({
 }) {
   const waiting = conflictEntriesToReview(entries)
   const fields = waiting.reduce((n, e) => n + (e.conflicts?.length ?? 0), 0)
-  const [open, setOpen] = useState(true)
-  // A clash that was not here before opens the card once; after that it stays as the person left it.
-  const seen = useRef<Set<string>>(new Set())
-  const mark = waiting.map((e) => `${e.id}@${e.latest_revision ?? ''}`).join('|')
-  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the clash marks
-  useEffect(() => {
-    const fresh = waiting.some((e) => !seen.current.has(`${e.id}@${e.latest_revision ?? ''}`))
-    for (const e of waiting) seen.current.add(`${e.id}@${e.latest_revision ?? ''}`)
-    if (fresh) setOpen(true)
-  }, [mark])
+  // Folded to its one-line pill by default (unobtrusive); it opens on a click, or by itself
+  // only when the person presses Save or leaves a record while a clash still waits.
+  const [open, setOpen] = useState(false)
+  useEffect(() => onOutboxReviewNudge(() => setOpen(true)), [])
   if (waiting.length === 0 || typeof document === 'undefined') return null
   const summary = `${fields} offline change${fields === 1 ? '' : 's'} need${fields === 1 ? 's' : ''} a look`
   return createPortal(

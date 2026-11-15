@@ -182,6 +182,17 @@ export function useGridPresence(opts: GridPresenceOptions): GridPresence {
     }
   }, [status?.state, enabled, send, realtime, collection, page])
 
+  // Permissions moved (a role, policy, scope or grant changed — rt2 permission-live): the server
+  // dropped grid rooms this person may no longer read; ask again so rows they regained show
+  // again without a reload (the server re-judges every row as them; it skips rooms still held).
+  useLiveEvent(
+    'access:changed',
+    () => {
+      if (held.current.size) send('grid:watch', [...held.current])
+    },
+    { enabled, includeOwn: true, debounceMs: 800 }
+  )
+
   // ── Announce our own cell ───────────────────────────────────────────────
   useEffect(() => {
     const el = containerRef?.current

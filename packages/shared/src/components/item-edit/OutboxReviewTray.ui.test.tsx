@@ -98,16 +98,18 @@ describe('offline clash review', () => {
     expect(host.textContent).not.toContain('Theirs')
   })
 
-  it('the tray lists waiting clashes and says what was already saved', () => {
+  it('stays a one-line pill until clicked, then lists what waits', () => {
     render(<OutboxReviewTray entries={[entry(), entry({ id: 'x', status: 'queued' })]} />)
+    expect(document.querySelector('[data-outbox-review-open]')?.textContent).toContain(
+      '1 offline change needs a look'
+    )
+    expect(document.querySelector('[data-outbox-entry]')).toBeNull()
+    act(() => (document.querySelector('[data-outbox-review-open]') as HTMLElement).click())
     const tray = document.querySelector('[data-outbox-review]')
     expect(tray?.textContent).toContain('Changed while you were offline')
     expect(tray?.textContent).toContain('1 other change was saved.')
     expect(document.querySelectorAll('[data-outbox-entry]')).toHaveLength(1)
-    // Folded away it stays as one line.
     act(() => (tray?.querySelector('[aria-label="Fold this away"]') as HTMLElement).click())
-    expect(document.querySelector('[data-outbox-review-open]')?.textContent).toContain(
-      '1 offline change needs a look'
-    )
+    expect(document.querySelector('[data-outbox-entry]')).toBeNull()
   })
 })

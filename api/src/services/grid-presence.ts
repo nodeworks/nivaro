@@ -165,13 +165,16 @@ export function registerGridPresence(
       const collection = cleanGridCollection(payload?.collection)
       if (!user || !collection) return
       const asked = parseWatchItems(payload?.items)
-      if (asked.length === 0 || watched.size + asked.length > GRID_WATCH_MAX) return
+      if (asked.length === 0) return
       const tenant = await deps.tenant(socket)
       if (tenant == null) return
+      const fresh = asked.filter((i) => !watched.has(gridRoomName(collection, i, tenant)))
+      if (watched.size + fresh.length > GRID_WATCH_MAX) return
       // Judged as the WATCHER: a record they may not open is never a room they sit in.
       for (const item of await deps.visible(user, collection, asked)) {
         const room = gridRoomName(collection, item, tenant)
-        if (watched.has(room)) continue
+        // A room an access re-check took away is asked for again (access:changed) — rejoin it.
+        if (watched.has(room) && socket.rooms?.has(room)) continue
         watched.add(room)
         socket.join(room)
       }

@@ -23,6 +23,7 @@ function harness(opts: { canSee?: (item: string) => boolean; visible?: string[] 
   const emits: Emit[] = []
   const socket = {
     data: {},
+    rooms: joined,
     on: (ev: string, fn: (...a: unknown[]) => unknown) => handlers.set(ev, fn),
     join: (r: string) => joined.add(r),
     leave: (r: string) => joined.delete(r),
@@ -81,6 +82,24 @@ describe('grid presence', () => {
     await h.call('grid:watch', { collection: 'workflows', items: ['1', '2', '3'] })
     expect(h.visible).toHaveBeenCalledTimes(1)
     expect([...h.joined]).toEqual(['grid:workflows:1', 'grid:workflows:3'])
+  })
+
+  it('watching again re-joins a room an access re-check took away, and only if still readable', async () => {
+    let readable = ['1', '2']
+    const h = harness()
+    h.visible.mockImplementation(async (_u, _c, items: string[]) =>
+      items.filter((i) => readable.includes(i))
+    )
+    await h.call('grid:watch', { collection: 'workflows', items: ['1', '2'] })
+    // The access sweep drops room 2 (socket.leave), then access comes back for it only.
+    h.joined.delete('grid:workflows:2')
+    readable = ['1', '2']
+    await h.call('grid:watch', { collection: 'workflows', items: ['1', '2'] })
+    expect([...h.joined].sort()).toEqual(['grid:workflows:1', 'grid:workflows:2'])
+    h.joined.delete('grid:workflows:2')
+    readable = ['1']
+    await h.call('grid:watch', { collection: 'workflows', items: ['1', '2'] })
+    expect([...h.joined]).toEqual(['grid:workflows:1'])
   })
 
   it('refuses system tables', async () => {

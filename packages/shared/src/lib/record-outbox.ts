@@ -594,6 +594,23 @@ export function claimRecordOutbox(collection: string, item: string | number): ()
   }
 }
 
+const reviewNudges = new Set<() => void>()
+
+/**
+ * The person is about to move on — pressed Save, or left a record — while a clash may still
+ * wait: the review card (folded to its one-line pill by default) opens. Does nothing when no
+ * clash waits.
+ */
+export function nudgeOutboxReview(): void {
+  if (!entries.some((e) => e.status === 'conflict')) return
+  for (const n of reviewNudges) n()
+}
+
+export function onOutboxReviewNudge(cb: () => void): () => void {
+  reviewNudges.add(cb)
+  return () => reviewNudges.delete(cb)
+}
+
 /** A record form in this tab holds the entry (it reviews the clash in its own merge dialog). */
 export function isRecordOutboxHeld(entryId: string): boolean {
   return localClaims.has(entryId)
@@ -1045,6 +1062,7 @@ export function __resetRecordOutboxForTests(
   listeners.clear()
   eventListeners.clear()
   retryListeners.clear()
+  reviewNudges.clear()
   if (retryTimer) clearTimeout(retryTimer)
   retryTimer = null
   replaying = false

@@ -108,6 +108,17 @@ describe('useGridPresence', () => {
     ])
   })
 
+  it('asks for its rows again when access changes (a regained row shows again)', () => {
+    const rt = fakeRealtime()
+    render(rt)
+    const before = rt.sent.filter(([e]) => e === 'grid:watch').length
+    act(() => rt.fire('access:changed', { perms: true }))
+    act(() => vi.advanceTimersByTime(900))
+    const watches = rt.sent.filter(([e]) => e === 'grid:watch')
+    expect(watches.length).toBe(before + 1)
+    expect(watches.at(-1)?.[1]).toEqual({ collection: 'workflows', items: ['4471', '4472'] })
+  })
+
   it('shows who is editing where and outlines their cell', () => {
     const rt = fakeRealtime()
     render(rt)

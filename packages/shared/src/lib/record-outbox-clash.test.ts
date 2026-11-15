@@ -4,6 +4,8 @@ import {
   bindRecordOutbox,
   enqueueRecordSave,
   getRecordOutbox,
+  nudgeOutboxReview,
+  onOutboxReviewNudge,
   onRecordOutboxEvent,
   type RecordOutboxEvent,
   replayRecordOutbox,
@@ -205,6 +207,16 @@ describe('deciding the clashes', () => {
       payload: { name: 'Merged name' },
       conflicts: [{ field: 'name', current_value: 'Cara name' }]
     })
+  })
+
+  it('Save / leaving a record opens the review only while a clash waits', async () => {
+    const opened: number[] = []
+    onOutboxReviewNudge(() => opened.push(1))
+    nudgeOutboxReview()
+    expect(opened).toHaveLength(0)
+    await clashed()
+    nudgeOutboxReview()
+    expect(opened).toHaveLength(1)
   })
 
   it('Take theirs on every field drops the save and says so', async () => {
