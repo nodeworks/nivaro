@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DIGEST_WINDOW_MS, dayOf, digestDue, digestItems, windowList } from './digest.js'
+import { DIGEST_WINDOW_MS, digestDue, digestItems, localClock, windowList } from './digest.js'
 import type { WatchRow } from './rows.js'
 import { normalizeWatchList } from './store.js'
 
@@ -72,11 +72,29 @@ describe('daily watch-list email', () => {
     expect(items[1]).toMatchObject({ text: 'Moved to Approved', by: 'Beth', step: 'Review' })
   })
 
-  it('is due once a day, only when turned on and something is pinned', () => {
+  it('is due at the person’s own hour in their zone, else 7 AM Eastern, once a day', () => {
     const on = normalizeWatchList({ settings: { digest: true }, pins: [{ c: 'orders', id: '1' }] })
-    expect(digestDue(on, NOW)).toBe(true)
-    expect(digestDue({ ...on, digest_sent_on: dayOf(NOW) }, NOW)).toBe(false)
-    expect(digestDue(normalizeWatchList({ settings: { digest: true } }), NOW)).toBe(false)
-    expect(digestDue(normalizeWatchList({ pins: [{ c: 'orders', id: '1' }] }), NOW)).toBe(false)
+    // 12:00 UTC = 7 AM in New York (EST) = 4 AM in Los Angeles.
+    const noonUtc = new Date('2026-11-14T12:00:00Z')
+    expect(digestDue(on, {}, noonUtc)).toEqual({ due: true, day: '2026-11-14' })
+    expect(digestDue(on, { timezone: 'America/Los_Angeles' }, noonUtc).due).toBe(false)
+    expect(digestDue(on, { timezone: 'America/Los_Angeles', digest_hour: 4 }, noonUtc).due).toBe(
+      true
+    )
+    expect(digestDue(on, { timezone: 'Not/AZone' }, noonUtc).due).toBe(true)
+    expect(digestDue({ ...on, digest_sent_on: '2026-11-14' }, {}, noonUtc).due).toBe(false)
+    expect(digestDue(normalizeWatchList({ settings: { digest: true } }), {}, noonUtc).due).toBe(
+      false
+    )
+    expect(
+      digestDue(normalizeWatchList({ pins: [{ c: 'orders', id: '1' }] }), {}, noonUtc).due
+    ).toBe(false)
+  })
+
+  it('reads the local day across midnight', () => {
+    expect(localClock(new Date('2026-11-15T03:30:00Z'), 'America/New_York')).toEqual({
+      day: '2026-11-14',
+      hour: 22
+    })
   })
 })

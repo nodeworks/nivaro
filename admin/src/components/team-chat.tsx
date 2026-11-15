@@ -194,7 +194,8 @@ function DockInner() {
                 </span>
               )}
               {othersOnline > 0 && (
-                <span className='absolute -bottom-1.5 -right-1.5 flex h-[13px] min-w-[13px] items-center justify-center rounded-full bg-emerald-500 px-0.5 text-[8px] font-bold leading-none text-white'>
+                // Bottom-left: the unread count owns the top-right corner, never stacked on it.
+                <span className='absolute -bottom-1.5 -left-2 flex h-[13px] min-w-[13px] items-center justify-center rounded-full bg-emerald-500 px-0.5 text-[8px] font-bold leading-none text-white'>
                   {othersOnline > 99 ? '99+' : othersOnline}
                 </span>
               )}

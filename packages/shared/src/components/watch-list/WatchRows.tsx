@@ -70,14 +70,15 @@ export function OwnerStack({
   const extra = owners.length - shown.length
   const names = owners.map(ownerText).join(', ')
   return (
-    <span className='flex shrink-0 items-center' data-tip={`With ${names}`}>
+    // No tooltip: the row's hover card names the owners (one overlay at a time).
+    <span className='flex shrink-0 items-center pl-1'>
       <span className='sr-only'>With {names}</span>
       {shown.map((o, i) => (
         <span
           key={o.id}
           aria-hidden
-          className={`relative inline-flex h-[18px] w-[18px] items-center justify-center overflow-hidden rounded-full bg-slate-200 text-[8.5px] font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-200 ${
-            i > 0 ? 'ml-0.5' : ''
+          className={`relative inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-200 text-[8.5px] font-semibold text-slate-600 ring-2 ring-card dark:bg-slate-700 dark:text-slate-200 ${
+            i > 0 ? '-ml-1' : ''
           } ${o.inactive ? 'opacity-50 grayscale' : ''}`}
           style={{ zIndex: shown.length - i }}
         >
@@ -92,7 +93,7 @@ export function OwnerStack({
       {extra > 0 && (
         <span
           aria-hidden
-          className='ml-0.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-slate-100 px-1 text-[9px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-300'
+          className='relative -ml-1 inline-flex h-[18px] min-w-[22px] shrink-0 items-center justify-center rounded-full bg-slate-100 px-1 text-[9px] font-semibold tabular-nums text-slate-600 ring-2 ring-card dark:bg-slate-800 dark:text-slate-300'
         >
           +{extra}
         </span>
@@ -101,7 +102,12 @@ export function OwnerStack({
   )
 }
 
-/** Time in the step against the usual stay: a hairline track with the usual stay marked. */
+/**
+ * Time in the step against the usual stay, as words that carry the numbers: "20 d / 17 m" —
+ * amber once it has been there longer than usual. (No bar: a bar pinned at full for every late
+ * record said nothing.) The whole sentence is read out; no tooltip, so it never stacks on the
+ * row's hover card.
+ */
 function StepTimeline({
   timing,
   stepLabel
@@ -110,34 +116,29 @@ function StepTimeline({
   stepLabel: string | null
 }) {
   const over = timing.ratio != null && timing.ratio > 1
-  const fill = timing.ratio == null ? null : Math.min(1, timing.ratio)
   const words = `${spanText(timing.in_step_s)} in ${stepLabel ?? 'this step'}${
-    timing.usual_s ? ` · usually ${spanText(timing.usual_s)}` : ''
+    timing.usual_s ? `, usually ${spanText(timing.usual_s)}` : ''
   }`
   return (
-    <span className='flex min-w-0 items-center gap-1.5' data-tip={words} data-step-timeline>
+    <span className='flex min-w-0 shrink-0 items-baseline' data-step-timeline>
       <span className='sr-only'>{words}</span>
-      {fill != null && (
-        <span
-          aria-hidden
-          className='relative h-[3px] w-9 shrink-0 overflow-hidden rounded-full bg-slate-200 dark:bg-white/[0.08]'
-        >
-          <span
-            className={`absolute inset-y-0 left-0 rounded-full ${
-              over ? 'bg-amber-500 dark:bg-amber-400' : 'bg-slate-400 dark:bg-slate-500'
-            }`}
-            style={{ width: `${Math.round(fill * 100)}%` }}
-          />
-        </span>
-      )}
       <span
         aria-hidden
-        className={`shrink-0 text-[10.5px] tabular-nums ${
-          over ? 'text-amber-700 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'
+        className={`text-[10.5px] font-medium tabular-nums ${
+          over ? 'text-amber-700 dark:text-amber-300' : 'text-slate-600 dark:text-slate-300'
         }`}
       >
         {spanText(timing.in_step_s)}
       </span>
+      {timing.usual_s != null && (
+        <span
+          aria-hidden
+          className='whitespace-pre text-[10.5px] tabular-nums text-slate-500 dark:text-slate-400'
+        >
+          {' / usually '}
+          {spanText(timing.usual_s)}
+        </span>
+      )}
     </span>
   )
 }
@@ -205,7 +206,8 @@ export function WatchRow({
   onUnpin,
   onSeen,
   rowActions,
-  unpinLabel = 'Unpin'
+  unpinLabel = 'Unpin',
+  canRemove = true
 }: {
   row: WatchRowData
   list: PeekTarget[]
@@ -216,6 +218,8 @@ export function WatchRow({
   rowActions?: (row: WatchRowData) => ReactNode
   /** What the cross says: "Unpin", "Remove from this list". */
   unpinLabel?: string
+  /** False = read-only (a shared list whose maker is gone): no cross. */
+  canRemove?: boolean
 }) {
   const open = usePeekOrOpen()
   useDeadlineNow(true) // the "2 m" on the change line moves with the page clock
@@ -233,15 +237,18 @@ export function WatchRow({
           >
             {handle}
             <div className='min-w-0 flex-1'>
-              <p className='truncate text-[12px] text-slate-500 dark:text-slate-400'>
-                {row.collection_label}
+              {/* What it was, as the person pinned it: the kind of record and its number. */}
+              <p className='truncate text-[12.5px] font-medium text-slate-600 dark:text-slate-300'>
+                {row.collection_label} {row.id}
               </p>
-              <p className='text-[11px] text-slate-400 dark:text-slate-500'>No longer available</p>
+              <p className='text-[11px] text-slate-500 dark:text-slate-400'>
+                No longer available to you
+              </p>
             </div>
             <button
               type='button'
               onClick={() => onUnpin(row)}
-              className='shrink-0 rounded-md px-2 py-1 text-[11.5px] font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/[0.06]'
+              className='shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[11.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-white/[0.12] dark:text-slate-200 dark:hover:bg-white/[0.05]'
             >
               Remove
             </button>
@@ -276,7 +283,13 @@ export function WatchRow({
           }`}
         >
           {handle}
-          <RecordHoverCard collection={row.collection} id={row.id} side='left' block>
+          <RecordHoverCard
+            collection={row.collection}
+            id={row.id}
+            side='bottom'
+            block
+            delayMs={800}
+          >
             {/* biome-ignore lint/a11y/useSemanticElements: the row holds its own buttons */}
             <div
               role='button'
@@ -300,10 +313,7 @@ export function WatchRow({
                   {title}
                 </span>
                 {figure && (
-                  <span
-                    className='shrink-0 text-[12px] font-medium tabular-nums text-slate-700 dark:text-slate-200'
-                    data-tip={figure.label}
-                  >
+                  <span className='shrink-0 text-[12px] font-medium tabular-nums text-slate-700 dark:text-slate-200'>
                     {cardAmountText(figure)}
                   </span>
                 )}
@@ -332,9 +342,12 @@ export function WatchRow({
                           className='h-1.5 w-1.5 shrink-0 rounded-full bg-nvr-cyan'
                         />
                       )}
-                      <span className='truncate'>{changeWords}</span>
-                      <span className='shrink-0 tabular-nums text-slate-500 dark:text-slate-400'>
-                        · {agoText(change?.at)}
+                      <span className='flex min-w-0'>
+                        <span className='truncate'>{changeWords}</span>
+                        <span className='shrink-0 whitespace-pre tabular-nums text-slate-500 dark:text-slate-400'>
+                          {' · '}
+                          {agoText(change?.at)}
+                        </span>
                       </span>
                     </span>
                   ) : (
@@ -347,18 +360,20 @@ export function WatchRow({
           </RecordHoverCard>
           <div className='absolute right-1.5 top-2 flex items-center gap-0.5'>
             {rowActions?.(row)}
-            <button
-              type='button'
-              aria-label={`${unpinLabel}: ${title}`}
-              data-tip={unpinLabel}
-              onClick={(e) => {
-                e.stopPropagation()
-                onUnpin(row)
-              }}
-              className='invisible flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 focus-visible:visible group-hover/row:visible dark:text-slate-500 dark:hover:bg-white/[0.08] dark:hover:text-slate-200'
-            >
-              <X className='h-3.5 w-3.5' />
-            </button>
+            {canRemove && (
+              <button
+                type='button'
+                aria-label={`${unpinLabel}: ${title}`}
+                data-tip={unpinLabel}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onUnpin(row)
+                }}
+                className='invisible flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 focus-visible:visible group-hover/row:visible dark:text-slate-500 dark:hover:bg-white/[0.08] dark:hover:text-slate-200'
+              >
+                <X className='h-3.5 w-3.5' />
+              </button>
+            )}
           </div>
         </li>
       )}
@@ -374,6 +389,7 @@ export function WatchRowList({
   onSeen,
   rowActions,
   unpinLabel,
+  canRemove,
   label = 'Watched records'
 }: {
   rows: WatchRowData[]
@@ -383,6 +399,7 @@ export function WatchRowList({
   onSeen: (key: string) => void
   rowActions?: (row: WatchRowData) => ReactNode
   unpinLabel?: string
+  canRemove?: boolean
   label?: string
 }) {
   const sensors = useSensors(
@@ -416,6 +433,7 @@ export function WatchRowList({
               onSeen={onSeen}
               rowActions={rowActions}
               unpinLabel={unpinLabel}
+              canRemove={canRemove}
             />
           ))}
         </ul>

@@ -29,9 +29,13 @@ import {
   mayManage,
   maySee,
   memberIds,
+  moveTeam,
   newTeam,
-  peopleNames,
+  ownerGone,
+  peopleInfo,
+  readablePins,
   saveTeam,
+  takenOver,
   teamAddPin,
   teamAsWatchList,
   teamName,
@@ -41,6 +45,7 @@ import {
 } from '../services/watch-list/teams.js'
 import { loadWatchList, saveWatchList } from '../services/watch-list/user-store.js'
 import { readWaiting } from '../services/watch-list/waiting.js'
+import type { User } from '../types.js'
 
 /**
  * The watch list dock (rt5 #1 / #2, rt6) — the person's own pinned records, read and written for
@@ -78,31 +83,40 @@ interface PublicTeam {
   pins: Array<{ key: string; collection: string; id: string; pinned_at: string; by: string }>
   can_manage: boolean
   is_member: boolean
+  /** The person who made it can no longer sign in: read-only until an administrator takes it. */
+  owner_gone: boolean
+  can_take_over: boolean
 }
 
-async function publicTeams(
-  teams: TeamList[],
-  userId: string,
-  isAdmin: boolean
-): Promise<PublicTeam[]> {
+async function publicTeams(teams: TeamList[], user: User, isAdmin: boolean): Promise<PublicTeam[]> {
   if (teams.length === 0) return []
-  const names = await peopleNames(teams.flatMap((t) => [t.owner, ...t.members.map((m) => m.u)]))
-  const nameOf = (id: string) => names[id.toLowerCase()] ?? 'Someone'
-  return teams.map((t) => ({
-    id: t.id,
-    name: t.name,
-    owner: { id: t.owner, name: nameOf(t.owner) },
-    members: t.members.map((m) => ({ id: m.u, name: nameOf(m.u) })),
-    pins: t.pins.map((p) => ({
-      key: pinKey(p.c, p.id),
-      collection: p.c,
-      id: p.id,
-      pinned_at: p.at,
-      by: p.by
-    })),
-    can_manage: mayManage(t, userId, isAdmin),
-    is_member: isMember(t, userId)
-  }))
+  const userId = String(user.id)
+  const info = await peopleInfo(teams.flatMap((t) => [t.owner, ...t.members.map((m) => m.u)]))
+  const nameOf = (id: string) => info[id.toLowerCase()]?.name ?? 'Someone'
+  return Promise.all(
+    teams.map(async (t) => {
+      const gone = info[t.owner.toLowerCase()]?.gone ?? true
+      // Only the records this viewer may open: never a key, a count or a name of another.
+      const pins = await readablePins(t, user, isAdmin).catch(() => [])
+      return {
+        id: t.id,
+        name: t.name,
+        owner: { id: t.owner, name: nameOf(t.owner) },
+        members: t.members.map((m) => ({ id: m.u, name: nameOf(m.u) })),
+        pins: pins.map((p) => ({
+          key: pinKey(p.c, p.id),
+          collection: p.c,
+          id: p.id,
+          pinned_at: p.at,
+          by: p.by
+        })),
+        can_manage: mayManage(t, userId, isAdmin) && !gone,
+        is_member: isMember(t, userId),
+        owner_gone: gone,
+        can_take_over: gone && isAdmin
+      }
+    })
+  )
 }
 
 async function answer(req: FastifyRequest, list: WatchListPrefs) {
@@ -131,7 +145,7 @@ async function answer(req: FastifyRequest, list: WatchListPrefs) {
       repeat: a.repeat,
       fired_at: a.fired ?? null
     })),
-    teams: await publicTeams(teams, userId, isAdmin).catch(() => [])
+    teams: await publicTeams(teams, req.user!, isAdmin).catch(() => [])
   }
 }
 
@@ -163,6 +177,14 @@ async function teamFor(
     void reply.code(403).send({
       error: 'Only the person who made this list (or an administrator) can change it',
       code: 'NOT_LIST_OWNER'
+    })
+    return null
+  }
+  if ((need === 'member' || need === 'manage') && (await ownerGone(team))) {
+    void reply.code(409).send({
+      error:
+        'The person who made this list can no longer sign in. It is read-only until an administrator takes it over.',
+      code: 'LIST_OWNER_GONE'
     })
     return null
   }
@@ -415,11 +437,35 @@ export async function watchListRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { id: string } }>('/teams/:id', async (req, reply) => {
     if (refusedWrite(req, reply)) return
-    const team = await teamFor(req, reply, req.params.id, 'manage')
+    // An administrator may delete a list whose owner is gone; otherwise owner or admin.
+    const team = await teamFor(req, reply, req.params.id, 'see')
     if (!team) return
+    if (!mayManage(team, String(req.user!.id), !!req.isAdmin))
+      return reply.code(403).send({
+        error: 'Only the person who made this list (or an administrator) can delete it',
+        code: 'NOT_LIST_OWNER'
+      })
     await saveTeam(team, null)
     const { list } = await loadWatchList(String(req.user!.id))
     return reply.send({ data: await answer(req, list) })
+  })
+
+  // An administrator takes over a list whose owner can no longer sign in (it moves to their row).
+  app.post<{ Params: { id: string } }>('/teams/:id/take-over', async (req, reply) => {
+    if (refusedWrite(req, reply)) return
+    if (!req.isAdmin)
+      return reply.code(403).send({ error: 'Only an administrator can take over a shared list' })
+    const team = await teamFor(req, reply, req.params.id, 'see')
+    if (!team) return
+    if (!(await ownerGone(team)))
+      return reply.code(409).send({
+        error: 'The person who made this list can still sign in; they own it',
+        code: 'LIST_OWNER_ACTIVE'
+      })
+    const next = takenOver(team, String(req.user!.id))
+    await moveTeam(team, next)
+    const { list } = await loadWatchList(String(req.user!.id))
+    return reply.send({ data: { ...(await answer(req, list)), moved: next.id } })
   })
 
   app.post<{ Params: { id: string } }>('/teams/:id/leave', async (req, reply) => {

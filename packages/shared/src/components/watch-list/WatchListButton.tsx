@@ -26,7 +26,9 @@ export function WatchListButton({
   const docked = ui.wide && state === 'open'
   const attention = ui.changed + ui.unreadMentions
   // The dot only matters while the list is out of sight.
-  const showDot = attention > 0 && !(docked || (!ui.wide && ui.sheet))
+  // The minimized rail shows its own counts: no second signal for the same thing.
+  const railShowing = ui.wide && state === 'minimized'
+  const showDot = attention > 0 && !(docked || railShowing || (!ui.wide && ui.sheet))
   const label = docked ? 'Close watch list' : 'Open watch list'
   const detail = showDot
     ? [

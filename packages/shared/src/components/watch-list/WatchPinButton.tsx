@@ -114,7 +114,7 @@ export function WatchPinButton({
     </button>
   )
   // People on a shared list also get "put it on a shared list" beside the pin (rt6 #1).
-  const shared = actions.prefs.teams.some((t) => t.is_member || t.can_manage)
+  const shared = actions.prefs.teams.some((t) => (t.is_member || t.can_manage) && !t.owner_gone)
   if (!shared) return pinButton
   return (
     <span className='inline-flex shrink-0 items-center'>

@@ -10,7 +10,8 @@ import { updateWatchList } from './user-store.js'
  * day, read AS THEM (the same rows reader as the dock: their record gate, their field list, a
  * change on a field they cannot read is no change). Opt-in (settings.digest), one email a day
  * (`digest_sent_on`), nothing on a day with no change by someone else, never to a machine
- * account or someone who cannot sign in. Cron `watch-list-digest`, 07:00 server time.
+ * account or someone who cannot sign in. Cron `watch-list-digest` runs hourly; each person gets it at their own digest hour
+ * (preferences.digest_hour, in preferences.timezone), else 7 AM America/New_York.
  */
 
 export const DIGEST_WINDOW_MS = 24 * 3600_000
@@ -50,17 +51,62 @@ export function digestItems(rows: WatchRow[]): DigestItem[] {
     .sort((a, z) => (a.at < z.at ? 1 : a.at > z.at ? -1 : 0))
 }
 
-/** "YYYY-MM-DD" in the server's own day. Pure. */
-export function dayOf(now: Date): string {
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, '0')
-  const d = String(now.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
+export const DIGEST_DEFAULT_HOUR = 7
+export const DIGEST_DEFAULT_TZ = 'America/New_York'
+
+/** The day ("YYYY-MM-DD") and hour (0-23) it is for someone in `tz`. Pure. */
+export function localClock(
+  now: Date,
+  tz: string | null | undefined
+): { day: string; hour: number } {
+  const read = (zone: string) => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      hourCycle: 'h23'
+    }).formatToParts(now)
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? ''
+    return { day: `${get('year')}-${get('month')}-${get('day')}`, hour: Number(get('hour')) % 24 }
+  }
+  try {
+    return read(tz || DIGEST_DEFAULT_TZ)
+  } catch {
+    // An unknown zone name reads as the default zone.
+    return read(DIGEST_DEFAULT_TZ)
+  }
 }
 
-/** Should this person get today's email at all (before any read)? Pure. */
-export function digestDue(list: WatchListPrefs, now: Date): boolean {
-  return list.settings.digest && list.pins.length > 0 && list.digest_sent_on !== dayOf(now)
+/** The person's own digest hour and zone (preferences.digest_hour / timezone). Pure. */
+export function digestClock(prefs: Record<string, unknown>): { hour: number; tz: string } {
+  const h = Number(prefs.digest_hour)
+  return {
+    hour: Number.isInteger(h) && h >= 0 && h <= 23 ? h : DIGEST_DEFAULT_HOUR,
+    tz: typeof prefs.timezone === 'string' && prefs.timezone ? prefs.timezone : DIGEST_DEFAULT_TZ
+  }
+}
+
+/**
+ * Is it this person's moment for today's email? Their digest hour in their zone (else 7 AM
+ * Eastern), turned on, something pinned, not sent yet on their local day. Pure.
+ */
+export function digestDue(
+  list: WatchListPrefs,
+  prefs: Record<string, unknown>,
+  now: Date
+): { due: boolean; day: string } {
+  const { hour, tz } = digestClock(prefs)
+  const clock = localClock(now, tz)
+  return {
+    due:
+      list.settings.digest &&
+      list.pins.length > 0 &&
+      clock.hour === hour &&
+      list.digest_sent_on !== clock.day,
+    day: clock.day
+  }
 }
 
 async function sendOne(
@@ -75,6 +121,9 @@ async function sendOne(
   if (!user?.email) return 'skipped'
   if ((user.status && String(user.status) !== 'active') || user.is_redacted || user.account_kind)
     return 'skipped'
+  const { parsePreferences } = await import('./store.js')
+  const when = digestDue(list, parsePreferences(user.preferences), now)
+  if (!when.due) return 'skipped'
   const { isAdminRole } = await import('../user-scopes.js')
   const isAdmin = await isAdminRole(user.role as string | null).catch(() => false)
   const { readWatchRows } = await import('./rows.js')
@@ -83,7 +132,7 @@ async function sendOne(
   // Mark the day either way: an empty day is "done" too, never re-read.
   await updateWatchList(
     userId,
-    (l) => (l.digest_sent_on === dayOf(now) ? null : { ...l, digest_sent_on: dayOf(now) }),
+    (l) => (l.digest_sent_on === when.day ? null : { ...l, digest_sent_on: when.day }),
     { announce: false }
   ).catch(() => null)
   if (items.length === 0) return 'empty'
@@ -129,7 +178,8 @@ export async function runWatchDigest(
   let sent = 0
   let empty = 0
   for (const [userId, list] of people) {
-    if (!digestDue(list, now)) continue
+    // Cheap filter before any read; the person's own hour and zone are judged in sendOne.
+    if (!list.settings.digest || list.pins.length === 0) continue
     try {
       const r = await sendOne(userId, list, now)
       if (r === 'sent') sent++

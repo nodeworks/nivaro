@@ -1,4 +1,5 @@
 import { db } from '../../db/index.js'
+import type { User } from '../../types.js'
 import { announcePrefsChanged } from '../user-sync.js'
 import {
   pinKey,
@@ -289,28 +290,6 @@ export async function teamsFor(userId: string, own: WatchListPrefs): Promise<Tea
   return out
 }
 
-/** People's names for member lists (a redacted account reads "Former user"). */
-export async function peopleNames(ids: string[]): Promise<Record<string, string>> {
-  const out: Record<string, string> = {}
-  const uniq = [...new Set(ids.map((i) => i.toLowerCase()))]
-  if (uniq.length === 0) return out
-  const rows = (await db('nivaro_users')
-    .whereIn('id', uniq.slice(0, 500))
-    .select('id', 'first_name', 'last_name', 'email', 'is_redacted')
-    .catch(() => [])) as Array<{
-    id: string
-    first_name: string | null
-    last_name: string | null
-    email: string | null
-    is_redacted: unknown
-  }>
-  for (const r of rows)
-    out[String(r.id).toLowerCase()] = r.is_redacted
-      ? 'Former user'
-      : `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || r.email || 'Someone'
-  return out
-}
-
 /** Which of these ids are people who may be on a list: active, not machine accounts. */
 export async function listablePeople(ids: string[]): Promise<string[]> {
   if (ids.length === 0) return []
@@ -340,4 +319,105 @@ export async function directReports(userId: string): Promise<string[]> {
     .select('id', 'status')
     .catch(() => [])) as Array<{ id: string; status: string | null }>
   return rows.filter((r) => !r.status || r.status === 'active').map((r) => String(r.id))
+}
+
+// ── Owner gone (suspended, redacted, a machine account, or no longer there) ─────────────
+
+export interface PersonInfo {
+  name: string
+  /** Cannot sign in any more: suspended, redacted, a machine account or gone. */
+  gone: boolean
+}
+
+/** Names + "gone" for the people named on lists. A missing row reads as gone. */
+export async function peopleInfo(ids: string[]): Promise<Record<string, PersonInfo>> {
+  const out: Record<string, PersonInfo> = {}
+  const uniq = [...new Set(ids.map((i) => i.toLowerCase()))]
+  if (uniq.length === 0) return out
+  for (const id of uniq) out[id] = { name: 'Someone', gone: true }
+  const rows = (await db('nivaro_users')
+    .whereIn('id', uniq.slice(0, 500))
+    .select('id', 'first_name', 'last_name', 'email', 'is_redacted', 'status', 'account_kind')
+    .catch(() => [])) as Array<{
+    id: string
+    first_name: string | null
+    last_name: string | null
+    email: string | null
+    is_redacted: unknown
+    status: string | null
+    account_kind?: string | null
+  }>
+  for (const r of rows)
+    out[String(r.id).toLowerCase()] = {
+      name: r.is_redacted
+        ? 'Former user'
+        : `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || r.email || 'Someone',
+      gone: !!r.is_redacted || (!!r.status && r.status !== 'active') || !!r.account_kind
+    }
+  return out
+}
+
+export async function ownerGone(team: TeamList): Promise<boolean> {
+  const info = await peopleInfo([team.owner]).catch(() => ({}) as Record<string, PersonInfo>)
+  return info[team.owner.toLowerCase()]?.gone ?? true
+}
+
+/** The same list, now owned by `newOwner` (a new id: the id names its owner). Pure. */
+export function takenOver(team: TeamList, newOwner: string): TeamList {
+  return { ...team, id: `${newOwner}~${shortId(8)}`, owner: newOwner }
+}
+
+/** A member's list after a move: reference, seen marks and open tab follow the new id. Pure. */
+export function followMove(l: WatchListPrefs, fromId: string, toId: string): WatchListPrefs {
+  const refs = l.team_refs.filter((r) => r !== fromId)
+  if (!refs.includes(toId) && refs.length < TEAM_REFS_MAX) refs.push(toId)
+  const team_seen = Object.fromEntries(
+    Object.entries(l.team_seen).map(([k, v]) =>
+      k.startsWith(`${fromId}|`) ? [`${toId}|${k.slice(fromId.length + 1)}`, v] : [k, v]
+    )
+  )
+  const tab = l.dock.tab === `team:${fromId}` ? (`team:${toId}` as const) : l.dock.tab
+  return { ...l, team_refs: refs, team_seen, dock: { ...l.dock, tab } }
+}
+
+/**
+ * Move a list to its new owner's row: write it there, take it off the old owner's row, and
+ * point every member's reference (and their seen marks and open tab) at the new id.
+ */
+export async function moveTeam(before: TeamList, after: TeamList): Promise<void> {
+  await storeTeam(after.id, after)
+  await storeTeam(before.id, null)
+  for (const m of after.members) {
+    if (sameId(m.u, after.owner)) continue
+    await updateWatchList(m.u, (l) => followMove(l, before.id, after.id), {
+      announce: false
+    }).catch(() => null)
+  }
+  announceTeam([before.owner, after.owner, ...after.members.map((m) => m.u)])
+}
+
+/** The records on a list this viewer may open (every gate), in list order. */
+export async function readablePins(
+  team: TeamList,
+  user: User,
+  isAdmin: boolean
+): Promise<TeamPin[]> {
+  if (team.pins.length === 0) return []
+  const byCollection = new Map<string, string[]>()
+  for (const p of team.pins) {
+    const arr = byCollection.get(p.c)
+    if (arr) arr.push(p.id)
+    else byCollection.set(p.c, [p.id])
+  }
+  const ok = new Set<string>()
+  const { compileAccessGates, visibleIds } = await import('../record-access.js')
+  for (const [c, ids] of byCollection) {
+    try {
+      const gates = await compileAccessGates(user, c, { actingAdmin: isAdmin })
+      for (const id of await visibleIds(gates, ids)) ok.add(pinKey(c, String(id)))
+    } catch {
+      /* no read access to that collection: none of its records */
+    }
+  }
+  return team.pins.filter((p) => ok.has(pinKey(p.c, p.id)))
 }

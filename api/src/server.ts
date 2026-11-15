@@ -1175,7 +1175,7 @@ export async function buildServer() {
       )
       app.cron.schedule(
         'watch-list-digest',
-        '0 7 * * *',
+        '0 * * * *',
         async () => {
           const { runWatchDigest } = await import('./services/watch-list/digest.js')
           await runWatchDigest()
@@ -1183,7 +1183,7 @@ export async function buildServer() {
         {
           idempotent: 'safe',
           description:
-            'Emails each person who turned it on what changed on their pinned records in the last day, read as them. Days with no change send nothing; one email per person per day.'
+            'Emails each person who turned it on what changed on their pinned records in the last day, read as them, at their own digest hour (else 7 AM Eastern). Days with no change send nothing; one email per person per day.'
         }
       )
 

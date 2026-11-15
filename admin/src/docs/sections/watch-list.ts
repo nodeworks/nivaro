@@ -24,7 +24,7 @@ export const collabWatchList: DocSection = {
       type: 'ul',
       items: [
         'The record’s name and its main figure (an amount, when the record has one).',
-        'Its current step, how long it has been there, and a thin line comparing that with the usual time records spend on that step (amber once it has been there longer than usual). Hover it for the words.',
+        'Its current step and how long it has been there next to the usual time records spend on that step, for example “20 d / usually 17 m” (amber once it has been there longer than usual).',
         'Who owns the current step.',
         'What changed last, who did it and when, for example “Moved to Approved · Beth Lee · 2 m”.',
         'A countdown when the step has a deadline, turning amber and red at the deadline’s own lines.',
@@ -90,7 +90,7 @@ export const collabWatchList: DocSection = {
       type: 'ul',
       items: [
         'Desktop alerts: a notice from your computer when someone else changes a pinned record while the page is in the background. Your browser asks for permission the first time you turn it on (never before). One notice per burst of changes, never for your own changes, and only one even with several tabs open.',
-        'Daily email: one email each morning listing what changed on your pinned records in the last day, by someone other than you. Nothing is sent on a quiet day.',
+        'Daily email: one email a day listing what changed on your pinned records in the last day, by someone other than you. It comes at your own daily-summary hour (Profile → Notifications) in your time zone, or at 7 AM Eastern when you have not set one. Nothing is sent on a quiet day.',
         'Records that land on my step: when a record moves to a step you own, it is pinned for you.',
         'Unpin them when they leave my step: a record pinned that way goes again when it moves on. A record you pinned yourself always stays.'
       ]
@@ -103,7 +103,8 @@ export const collabWatchList: DocSection = {
         'Everyone on the list sees it as its own tab in the watch list, and can add records to it from a record page: the people icon beside the pin.',
         'Each person only sees the records on it they are allowed to open. A record someone else cannot open is simply not in their tab.',
         'Changes by others light rows the same way as your own list; your “seen” marks are yours alone.',
-        'The person who made it (or an administrator) can rename it, change its people or delete it. Anyone else can leave it.'
+        'The person who made it (or an administrator) can rename it, change its people or delete it from the list’s ⋯ menu. Anyone else can leave it there.',
+        'If the person who made it can no longer sign in (suspended, removed, or an integration account), the list stays visible but read-only. An administrator can choose Take ownership from its ⋯ menu to keep it going, or delete it.'
       ]
     },
     {

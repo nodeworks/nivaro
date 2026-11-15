@@ -827,7 +827,8 @@ export function WatchShareMenu({
   itemId: string
   size?: 'sm' | 'md'
 }) {
-  const teams = actions.prefs.teams.filter((t) => t.is_member || t.can_manage)
+  // A list whose maker is gone is read-only until an administrator takes it over.
+  const teams = actions.prefs.teams.filter((t) => (t.is_member || t.can_manage) && !t.owner_gone)
   const key = `${collection}:${itemId}`
   const onCount = teams.filter((t) => t.pins.some((p) => p.key === key)).length
   if (teams.length === 0) return null

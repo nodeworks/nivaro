@@ -172,7 +172,8 @@ export function RecordHoverCard({
   children,
   disabled,
   side = 'bottom',
-  block = false
+  block = false,
+  delayMs = 500
 }: {
   collection: string | null | undefined
   id: unknown
@@ -182,9 +183,11 @@ export function RecordHoverCard({
   side?: 'bottom' | 'left' | 'right' | 'top'
   /** Wrap a block (a whole row) rather than an inline link. */
   block?: boolean
+  /** How long the pointer rests before the card opens. */
+  delayMs?: number
 }) {
   const eligible = !disabled && hoverCardEligible(collection, id)
-  const card = useHoverIntent(eligible, 500)
+  const card = useHoverIntent(eligible, delayMs)
   const qc = useQueryClient()
   // A record already answered 404 for this viewer: no card, not even a skeleton.
   const show = () => {

@@ -53,6 +53,9 @@ export interface WatchTeam {
   pins: Array<{ key: string; collection: string; id: string; pinned_at: string; by: string }>
   can_manage: boolean
   is_member: boolean
+  /** Its maker can no longer sign in: read-only until an administrator takes it over. */
+  owner_gone?: boolean
+  can_take_over?: boolean
 }
 
 export interface WatchAlertOptions {
@@ -345,6 +348,8 @@ export interface WatchActions {
   editTeam: (id: string, patch: { name?: string; members?: string[] }) => Promise<void>
   deleteTeam: (id: string) => Promise<void>
   leaveTeam: (id: string) => Promise<void>
+  /** An administrator takes over a list whose maker is gone; answers the list's new id. */
+  takeOverTeam: (id: string) => Promise<string | null>
   teamPin: (teamId: string, collection: string, id: string) => Promise<void>
   teamUnpin: (teamId: string, collection: string, id: string) => Promise<void>
   teamSeen: (teamId: string, keys?: string[]) => void
@@ -548,6 +553,22 @@ export function useWatchActions(): WatchActions & { prefs: WatchPrefs } {
     },
     [apply, run]
   )
+  const takeOverTeam = useCallback(
+    async (id: string) => {
+      if (!client) return null
+      try {
+        const r = await (client as Client).request<{ data: WatchPrefs & { moved?: string } }>(
+          post(`${teamPath(id)}/take-over`, {})
+        )
+        settle(r)
+        return r.data.moved ?? null
+      } catch (err) {
+        toastError(err, 'Could not take over the shared list')
+        throw err
+      }
+    },
+    [client, settle]
+  )
   const teamPin = useCallback(
     async (teamId: string, collection: string, id: string) => {
       const key = pinKeyOf(collection, id)
@@ -620,6 +641,7 @@ export function useWatchActions(): WatchActions & { prefs: WatchPrefs } {
     editTeam,
     deleteTeam,
     leaveTeam,
+    takeOverTeam,
     teamPin,
     teamUnpin,
     teamSeen,

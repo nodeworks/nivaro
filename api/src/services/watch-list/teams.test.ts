@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { normalizeWatchList, WATCH_PINS_MAX } from './store.js'
 import {
+  followMove,
   isMember,
   markTeamSeen,
   mayManage,
   maySee,
   memberIds,
   newTeam,
+  takenOver,
   teamAddPin,
   teamAsWatchList,
   teamName,
@@ -102,5 +104,28 @@ describe('shared watch lists', () => {
     const seenNow = markTeamSeen(viewer, t, null, new Date('2026-11-14T13:00:00Z'))
     expect(seenNow.team_seen[`${t.id}|orders:5`]).toBe('2026-11-14T13:00:00.000Z')
     expect(teamAsWatchList(t, ME, seenNow).seen['orders:5']).toBe('2026-11-14T13:00:00.000Z')
+  })
+
+  it('an administrator taking over a list gets a new id; members follow it', () => {
+    const t = newTeam({
+      owner: 'gone-1',
+      name: 'Ops',
+      members: ['bbbb'],
+      creatorMayStayOff: true,
+      now: T0
+    })
+    const next = takenOver(t, 'admin-1')
+    expect(next.owner).toBe('admin-1')
+    expect(next.id.startsWith('admin-1~')).toBe(true)
+    expect(next.members).toEqual(t.members)
+    const member = normalizeWatchList({
+      team_refs: [t.id],
+      team_seen: { [`${t.id}|orders:5`]: T1.toISOString() },
+      dock: { tab: `team:${t.id}` }
+    })
+    const moved = followMove(member, t.id, next.id)
+    expect(moved.team_refs).toEqual([next.id])
+    expect(moved.team_seen).toEqual({ [`${next.id}|orders:5`]: T1.toISOString() })
+    expect(moved.dock.tab).toBe(`team:${next.id}`)
   })
 })

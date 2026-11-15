@@ -6,8 +6,13 @@ import {
   Check,
   CheckCheck,
   Hourglass,
+  LogOut,
   Minus,
+  MoreHorizontal,
+  Pencil,
   Pin,
+  Trash2,
+  UserCheck,
   Users,
   X
 } from 'lucide-react'
@@ -46,6 +51,7 @@ import {
   withLocalSeen
 } from '../../lib/watch-list'
 import { ConfirmButton } from '../profile/primitives'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
 import { AlertButton, TeamEditor, WatchSettingsMenu } from './WatchExtras'
@@ -369,24 +375,43 @@ function MinimizedRail({
         className='group flex flex-1 flex-col items-center gap-2 pt-3 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan/60 dark:text-slate-400 dark:hover:bg-white/[0.03] dark:hover:text-slate-100'
       >
         <Binoculars className='h-4 w-4' />
-        <span className='text-[11px] font-semibold tabular-nums text-slate-700 dark:text-slate-200'>
-          {count}
+        <span
+          className='flex flex-col items-center leading-none'
+          data-tip={`${count} pinned`}
+          data-rail-count
+        >
+          <span className='text-[12px] font-semibold tabular-nums text-slate-700 dark:text-slate-200'>
+            {count}
+          </span>
+          <span className='mt-0.5 text-[9.5px] font-medium text-slate-500 dark:text-slate-400'>
+            pinned
+          </span>
         </span>
         {changed > 0 && (
-          <span className='flex items-center gap-1 rounded-full bg-sky-100 px-1.5 py-px text-[10.5px] font-semibold tabular-nums text-sky-800 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
-            <span aria-hidden className='h-1.5 w-1.5 rounded-full bg-nvr-cyan' />
-            {changed}
+          <span
+            className='flex flex-col items-center gap-0.5 leading-none'
+            data-tip={`${changed} changed since you looked`}
+            data-rail-changed
+          >
+            <span className='flex items-center gap-1 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums text-sky-800 dark:bg-nvr-cyan/20 dark:text-nvr-cyan'>
+              <span aria-hidden className='h-1.5 w-1.5 rounded-full bg-nvr-cyan' />
+              {changed}
+            </span>
+            <span className='text-[9.5px] font-medium text-slate-500 dark:text-slate-400'>new</span>
           </span>
         )}
         {mentions > 0 && (
-          <span className='flex items-center gap-0.5 text-[10.5px] font-semibold tabular-nums text-slate-600 dark:text-slate-300'>
+          <span
+            className='flex items-center gap-0.5 text-[10.5px] font-semibold tabular-nums text-slate-600 dark:text-slate-300'
+            data-tip={`${mentions} new mention${mentions === 1 ? '' : 's'}`}
+          >
             <AtSign aria-hidden className='h-3 w-3' />
             {mentions}
           </span>
         )}
         <span
           aria-hidden
-          className='mt-2 rotate-180 text-[11px] font-medium text-slate-400 [writing-mode:vertical-rl] group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300'
+          className='mt-2 rotate-180 text-[11px] font-medium text-slate-600 [writing-mode:vertical-rl] group-hover:text-slate-800 dark:text-slate-300 dark:group-hover:text-slate-100'
         >
           Watch list
         </span>
@@ -621,10 +646,16 @@ function DockPanel({
         {tab === 'watching' && prefs.pins.length > 1 && (
           <SortMenu sort={sort} onSort={(s) => actions.setDock({ sort: s })} />
         )}
-        {tab === 'watching' && changed.length > 0 && (
-          <IconButton label='Mark all as seen' onClick={() => actions.markSeen()}>
-            <CheckCheck className='h-3.5 w-3.5' />
-          </IconButton>
+        {/* The slot is kept while nothing changed, so the header never jumps when it appears. */}
+        {tab === 'watching' && prefs.pins.length > 0 && (
+          <span
+            className={changed.length > 0 ? 'contents' : 'invisible'}
+            aria-hidden={changed.length === 0 || undefined}
+          >
+            <IconButton label='Mark all as seen' onClick={() => actions.markSeen()}>
+              <CheckCheck className='h-3.5 w-3.5' />
+            </IconButton>
+          </span>
         )}
         <WatchSettingsMenu
           actions={actions}
@@ -855,6 +886,104 @@ function WatchingTab({
   )
 }
 
+/** The shared list's ⋯ menu: change, take over (owner gone), delete, leave. */
+function TeamMenu({
+  actions,
+  team,
+  isOwner,
+  onEdit
+}: {
+  actions: ReturnType<typeof useWatchActions>
+  team: WatchTeam
+  isOwner: boolean
+  onEdit: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const item =
+    'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-slate-200'
+  const mayDelete = team.can_manage || !!team.can_take_over
+  const mayLeave = team.is_member && !isOwner
+  if (!team.can_manage && !team.can_take_over && !mayDelete && !mayLeave) return null
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          aria-label={`More for ${team.name}`}
+          data-tip='More'
+          data-watch-team-menu
+          className='flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-200'
+        >
+          <MoreHorizontal className='h-4 w-4' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' className='w-52 p-1'>
+        {team.can_take_over && (
+          <button
+            type='button'
+            className={item}
+            onClick={() => {
+              setOpen(false)
+              void actions
+                .takeOverTeam(team.id)
+                .then((id) => id && actions.setDock({ tab: `team:${id}` }))
+                .catch(() => {})
+            }}
+          >
+            <UserCheck aria-hidden className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+            Take ownership
+          </button>
+        )}
+        {team.can_manage && (
+          <button
+            type='button'
+            className={item}
+            onClick={() => {
+              setOpen(false)
+              onEdit()
+            }}
+          >
+            <Pencil aria-hidden className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+            Rename or change people
+          </button>
+        )}
+        {mayLeave && (
+          <ConfirmButton
+            onConfirm={() => {
+              setOpen(false)
+              actions.setDock({ tab: 'watching' })
+              void actions.leaveTeam(team.id).catch(() => {})
+            }}
+            title='Leave this shared list'
+            confirmLabel='Leave the list?'
+            className={item}
+            armedClassName={`${item} bg-amber-50 font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-200`}
+          >
+            <LogOut aria-hidden className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+            Leave
+          </ConfirmButton>
+        )}
+        {mayDelete && (
+          <ConfirmButton
+            onConfirm={() => {
+              setOpen(false)
+              actions.setDock({ tab: 'watching' })
+              void actions.deleteTeam(team.id).catch(() => {})
+            }}
+            title='Delete this shared list'
+            confirmLabel='Delete it for everyone?'
+            className={item}
+            armedClassName={`${item} bg-red-50 font-semibold text-red-700 dark:bg-red-500/15 dark:text-red-300`}
+          >
+            <Trash2 aria-hidden className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+            Delete
+          </ConfirmButton>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function membersText(team: WatchTeam, meId: string | null): string {
   const me = meId?.toLowerCase()
   const names = team.members.map((m) => (m.id.toLowerCase() === me ? 'you' : m.name))
@@ -914,46 +1043,20 @@ function TeamTab({
               <CheckCheck className='h-3.5 w-3.5' />
             </IconButton>
           )}
-          {team.can_manage && (
-            <button
-              type='button'
-              onClick={onEdit}
-              className='rounded-md px-2 py-1 text-[11.5px] font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
-            >
-              Change
-            </button>
-          )}
-          {team.can_manage ? (
-            <ConfirmButton
-              onConfirm={() => {
-                actions.setDock({ tab: 'watching' })
-                void actions.deleteTeam(team.id).catch(() => {})
-              }}
-              title='Delete this shared list'
-              confirmLabel='Delete?'
-              className='rounded-md px-2 py-1 text-[11.5px] font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
-              armedClassName='rounded-md bg-red-50 px-2 py-1 text-[11.5px] font-semibold text-red-700 dark:bg-red-500/15 dark:text-red-300'
-            >
-              Delete
-            </ConfirmButton>
-          ) : (
-            team.is_member && (
-              <ConfirmButton
-                onConfirm={() => {
-                  actions.setDock({ tab: 'watching' })
-                  void actions.leaveTeam(team.id).catch(() => {})
-                }}
-                title='Leave this shared list'
-                confirmLabel='Leave?'
-                className='rounded-md px-2 py-1 text-[11.5px] font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
-                armedClassName='rounded-md bg-amber-50 px-2 py-1 text-[11.5px] font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-200'
-              >
-                Leave
-              </ConfirmButton>
-            )
-          )}
+          <TeamMenu actions={actions} team={team} isOwner={isOwner} onEdit={onEdit} />
         </div>
       </div>
+      {team.owner_gone && (
+        <p
+          className='mx-4 mt-2.5 rounded-md bg-amber-50 px-2.5 py-2 text-[11.5px] leading-snug text-amber-900 dark:bg-amber-500/10 dark:text-amber-200'
+          data-watch-team-gone
+        >
+          {team.owner.name} can no longer sign in, so this list is read-only.{' '}
+          {team.can_take_over
+            ? 'Take it over from the ⋯ menu to keep it going.'
+            : 'An administrator can take it over.'}
+        </p>
+      )}
       {team.pins.length === 0 ? (
         <Empty icon={<Users className='h-4 w-4' />} title='No records on this list yet'>
           <p>
@@ -976,6 +1079,7 @@ function TeamTab({
           label={`Records on ${team.name}`}
           onReorder={() => {}}
           unpinLabel='Take off this list'
+          canRemove={mayChangeRecords && !team.owner_gone}
           onUnpin={(r) =>
             mayChangeRecords && void actions.teamUnpin(team.id, r.collection, r.id).catch(() => {})
           }
@@ -1083,8 +1187,9 @@ function MentionsTab({ data }: { data: ReturnType<typeof useDockData> }) {
           <button
             type='button'
             onClick={() => markRead(unread)}
-            className='rounded-md px-2 py-1 text-[11.5px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+            className='inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11.5px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-white/[0.12] dark:text-slate-300 dark:hover:bg-white/[0.05] dark:hover:text-slate-100'
           >
+            <CheckCheck aria-hidden className='h-3 w-3' />
             Mark all read
           </button>
         </div>
