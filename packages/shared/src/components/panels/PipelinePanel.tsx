@@ -103,6 +103,7 @@ import {
   useRecordFixAction
 } from './MoveAdvisory'
 import { MoveToStatePanel } from './MoveToStatePanel'
+import { OWNER_OPENED_HEAD, OwnerOpenedLine } from './OwnerOpenedLine'
 import {
   firstTouchText,
   type SignOffSummary,
@@ -991,7 +992,8 @@ function invalidateOwnerReads(
   for (const head of [
     'pipeline-owners-resolved',
     'pipeline-instance-owners',
-    'pipeline-all-owners'
+    'pipeline-all-owners',
+    OWNER_OPENED_HEAD
   ])
     void queryClient.invalidateQueries({ queryKey: [head, collection, item] })
 }
@@ -1896,7 +1898,7 @@ function OwnersSection({
 }) {
   const client = useNivaroClient()
   const queryClient = useQueryClient()
-  const { isAdmin } = useItemEditAuth()
+  const { isAdmin, userId: viewerId } = useItemEditAuth()
   const [adding, setAdding] = useState(false)
   const [userId, setUserId] = useState('')
   const [stateScope, setStateScope] = useState('')
@@ -1999,6 +2001,23 @@ function OwnersSection({
       ? standInReason
       : null
   const standInSet = standInIds(reasonForStep)
+  // "Opened by the owner" (idea 21) is for people who are not an owner of the current step:
+  // a viewer in the roster never asks (the server says `owner` for them anyway).
+  const viewerOwnsStep =
+    !!viewerId &&
+    [
+      ...(currentStateId ? (allOwners?.[currentStateId]?.owners ?? []).map((o) => o.id) : []),
+      ...(owners ?? [])
+        .filter((o) => !o.state || o.state === currentStateId || o.state === currentStep?.key)
+        .map((o) => o.user)
+    ].some((id) => String(id).toUpperCase() === viewerId.toUpperCase())
+  const showOpened =
+    !!currentStateId &&
+    ownersSettled &&
+    resolvedCount > 0 &&
+    !withCreator &&
+    !currentStep?.is_terminal &&
+    !viewerOwnsStep
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ownersKey })
@@ -2222,6 +2241,14 @@ function OwnersSection({
             Shown as a stand-in — no one is assigned to {currentStep?.label}.
           </p>
         ))}
+      {showOpened && currentStateId && (
+        <OwnerOpenedLine
+          collection={collection}
+          item={String(item)}
+          stateId={currentStateId}
+          className='mt-2'
+        />
+      )}
       {adding && (
         <div className='mt-3 space-y-2 rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-border p-3'>
           <p className='text-[11px] font-semibold text-slate-500'>Add owner</p>

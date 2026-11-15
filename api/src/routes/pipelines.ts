@@ -4496,6 +4496,22 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     }
   )
 
+  // Has an owner of the current step opened the record since it arrived there?
+  // (services/owner-opened.ts) — the Owners panel's "Jane Smith (Finance) opened
+  // this 2h ago" line for people who are not owners of the step. Asked only by
+  // the panel, never on a plain record open.
+  app.get(
+    '/instance/:collection/:item/owner-opened',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, item } = req.params as { collection: string; item: string }
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
+      const { loadOwnerOpened } = await import('../services/owner-opened.js')
+      const data = await loadOwnerOpened(collection, String(item), String(req.user!.id))
+      return reply.send({ data })
+    }
+  )
+
   // Who created the record (its user-created column) — the Owners panel names
   // them when the record sits in its first step with nobody resolved ("Back
   // with Mark Lee" after a send-back). Display only: it grants nothing.
