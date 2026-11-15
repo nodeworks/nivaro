@@ -291,16 +291,65 @@ export const defaultDuplicateDeps: DuplicateDeps = {
 const readableBy = (allowed: string[] | null) => (f: string) =>
   allowed == null || allowed.includes('*') || allowed.includes(f)
 
-/** The sets `user` gets checked: running ones whose every field they may read. */
-export function groupsFor(cfg: DuplicatePlan, allowed: string[] | null): PlannedGroup[] {
+/** Line collections the plan's shared-lines rules read. */
+export const lineCollections = (cfg: DuplicatePlan): string[] => [
+  ...new Set(
+    cfg.groups.flatMap((g) =>
+      liveRules(g)
+        .filter((r) => r.kind === 'lines' && r.child)
+        .map((r) => r.child as string)
+    )
+  )
+]
+
+/** The caller's read fields on each line collection (null = every field). */
+export async function lineReads(
+  user: User,
+  cfg: DuplicatePlan,
+  allowed: DuplicateDeps['allowed'] = defaultDuplicateDeps.allowed
+): Promise<Map<string, string[] | null>> {
+  const out = new Map<string, string[] | null>()
+  await Promise.all(
+    lineCollections(cfg).map(async (c) => {
+      out.set(c, await allowed(user, c).catch(() => []))
+    })
+  )
+  return out
+}
+
+/**
+ * The sets `user` gets checked: running ones whose every field they may read. A set with
+ * a shared-lines rule also needs the line collection readable — its link back and the
+ * compared line field (security review 2026-11-14); no line facts given = dropped.
+ */
+export function groupsFor(
+  cfg: DuplicatePlan,
+  allowed: string[] | null,
+  lines?: ReadonlyMap<string, string[] | null>
+): PlannedGroup[] {
   if (!cfg.enabled) return []
   const can = readableBy(allowed)
-  return cfg.groups.filter((g) => g.runs && liveRules(g).every((r) => can(r.field)))
+  const canLines = (r: PlannedRule) => {
+    if (!r.child || !r.fk || !r.line_field || !lines?.has(r.child)) return false
+    const childAllowed = lines.get(r.child) ?? null
+    if (childAllowed && childAllowed.length === 0) return false
+    const canChild = readableBy(childAllowed)
+    return canChild(r.fk) && canChild(r.line_field)
+  }
+  return cfg.groups.filter(
+    (g) => g.runs && liveRules(g).every((r) => can(r.field) && (r.kind !== 'lines' || canLines(r)))
+  )
 }
 
 /** The fields `user` gets compared (every live rule field of their sets). */
-export function fieldsFor(cfg: DuplicatePlan, allowed: string[] | null): string[] {
-  return [...new Set(groupsFor(cfg, allowed).flatMap((g) => liveRules(g).map((r) => r.field)))]
+export function fieldsFor(
+  cfg: DuplicatePlan,
+  allowed: string[] | null,
+  lines?: ReadonlyMap<string, string[] | null>
+): string[] {
+  return [
+    ...new Set(groupsFor(cfg, allowed, lines).flatMap((g) => liveRules(g).map((r) => r.field)))
+  ]
 }
 
 /** What the form watches, per field (the config answer). */
@@ -332,10 +381,12 @@ export function groupStatements(
   group: PlannedGroup,
   values: Record<string, unknown>,
   access: AccessClause | null,
-  mssql: boolean
+  mssql: boolean,
+  /** The caller's read gate per line collection (shared-lines rules). */
+  childAccess?: ReadonlyMap<string, AccessClause | null>
 ): Array<[string, Stmt]> {
   const filters = filtersOf(cfg)
-  const opts = { mssql, kinds: cfg.kinds, filters, access }
+  const opts = { mssql, kinds: cfg.kinds, filters, access, childAccess }
   const main = groupStatement(cfg.collection, group, values, { ...opts, top: CANDIDATES })
   if (!main) return []
   const out: Array<[string, Stmt]> = [['dup-set', main]]
@@ -387,10 +438,11 @@ export async function findDuplicates(
   }
   if (!cfg?.enabled) return none
   const allowed = await deps.allowed(user, collection)
-  const groups = groupsFor(cfg, allowed)
+  const lines = await lineReads(user, cfg, deps.allowed)
+  const groups = groupsFor(cfg, allowed, lines)
   const answer: DuplicateAnswer = {
     enabled: groups.length > 0,
-    fields: fieldsFor(cfg, allowed),
+    fields: fieldsFor(cfg, allowed, lines),
     watch: watchFor(groups),
     sets: groups.map((g) => ({ anchor: g.anchor, fields: liveRules(g).map((r) => r.field) })),
     block_exact: cfg.block_exact,
@@ -401,9 +453,25 @@ export async function findDuplicates(
   if (groups.length === 0) return answer
 
   const access = await deps.access(user, collection)
+  // Each line collection's read gate: only lines the caller may read are counted.
+  const childAccess = new Map<string, AccessClause | null>()
+  const children = [
+    ...new Set(
+      groups.flatMap((g) =>
+        liveRules(g)
+          .filter((r) => r.kind === 'lines' && r.child)
+          .map((r) => r.child as string)
+      )
+    )
+  ]
+  await Promise.all(
+    children.map(async (c) => {
+      childAccess.set(c, await deps.access(user, c))
+    })
+  )
   const mssql = deps.mssql()
   const planned = groups
-    .map((g) => ({ g, stmts: groupStatements(cfg, g, values, access, mssql) }))
+    .map((g) => ({ g, stmts: groupStatements(cfg, g, values, access, mssql, childAccess) }))
     .filter((x) => x.stmts.length > 0)
   if (planned.length === 0) return answer
   const runner = deps.runner()

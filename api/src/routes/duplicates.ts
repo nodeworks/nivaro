@@ -7,6 +7,7 @@ import {
   fieldsFor,
   findDuplicates,
   groupsFor,
+  lineReads,
   watchFor
 } from '../services/duplicate-check.js'
 import { liveRules, parseDuplicateCheck } from '../services/duplicate-rules.js'
@@ -92,11 +93,12 @@ export async function duplicateRoutes(app: FastifyInstance) {
         data: { enabled: false, fields: [], watch: [], sets: [], block_exact: false }
       })
     const allowed = await getAllowedFields(user, 'read', collection).catch(() => [] as string[])
-    const groups = groupsFor(cfg, allowed)
+    const lines = await lineReads(user, cfg)
+    const groups = groupsFor(cfg, allowed, lines)
     return reply.send({
       data: {
         enabled: groups.length > 0,
-        fields: fieldsFor(cfg, allowed),
+        fields: fieldsFor(cfg, allowed, lines),
         watch: watchFor(groups),
         sets: groups.map((g) => ({ anchor: g.anchor, fields: liveRules(g).map((r) => r.field) })),
         block_exact: cfg.block_exact,
