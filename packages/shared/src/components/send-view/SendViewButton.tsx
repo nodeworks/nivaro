@@ -119,8 +119,7 @@ export function SendViewButton({
             className='block w-full resize-none rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[12.5px] text-slate-700 placeholder-slate-400 focus:border-nvr-cyan/60 focus:outline-none focus:ring-1 focus:ring-nvr-cyan/40 dark:border-border dark:bg-background dark:text-slate-200'
           />
           <p className='text-[11px] leading-snug text-slate-500 dark:text-slate-400'>
-            They open the same screen with their own access — nothing you can see that they cannot
-            is sent.
+            They’ll see this screen with their own access. Nothing they can’t already see is shared.
           </p>
           <div className='flex justify-end gap-2'>
             <button
@@ -134,7 +133,7 @@ export function SendViewButton({
               type='submit'
               disabled={!to || self || send.isPending}
               data-send-view-submit=''
-              className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 disabled:cursor-not-allowed disabled:opacity-50'
+              className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400'
             >
               <Send className='h-3.5 w-3.5' />
               {send.isPending ? 'Sending…' : 'Send'}

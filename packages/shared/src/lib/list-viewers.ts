@@ -43,10 +43,13 @@ export function othersFrom(viewers: unknown, selfId: string): ListViewer[] {
 export function useListViewers(
   kind: 'list' | 'queue',
   id: string | number | null | undefined,
-  enabled = true
+  enabled = true,
+  /** Who "me" is, for hosts outside an ItemEditAuthContext (a page header). */
+  selfId?: string
 ): ListViewer[] {
   const realtime = useOptionalRealtime()
-  const { userId } = useContext(ItemEditAuthContext)
+  const auth = useContext(ItemEditAuthContext)
+  const userId = selfId ?? auth.userId
   const [viewers, setViewers] = useState<ListViewer[]>([])
   const topic = id == null || id === '' ? null : listViewTopic(kind, id)
 

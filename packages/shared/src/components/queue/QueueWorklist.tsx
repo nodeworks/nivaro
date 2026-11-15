@@ -237,6 +237,9 @@ export interface QueueWorklistProps {
    *  everywhere; a list hides them only when every collection the queue can
    *  create in is on it (the header covers those, not the rest). */
   hideCreateActions?: boolean | string[]
+  /** The host's header row shows who else has this queue open (admin queue page), so the
+   *  toolbar keeps no slot for it. */
+  viewersInHeader?: boolean
   /** Hosts with an Ask AI page pass this: the toolbar gains "Ask about this
    *  queue" (#1276), which hands the queue over so the host can open Ask AI
    *  with the question seeded. Absent = no button. */
@@ -796,6 +799,7 @@ export function QueueWorklist({
   realtime,
   renderError,
   hideCreateActions = false,
+  viewersInHeader = false,
   onAsk
 }: QueueWorklistProps) {
   const qc = useQueryClient()
@@ -4776,7 +4780,7 @@ export function QueueWorklist({
                 return s ? `${name} — ${s}` : name
               }}
             />
-            <ListViewers kind='queue' id={queueId} />
+            {!viewersInHeader && <ListViewers kind='queue' id={queueId} />}
             {view === 'table' && (
               <button
                 type='button'

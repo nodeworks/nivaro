@@ -612,6 +612,9 @@ export interface CollectionBrowserViewProps {
     render: () => React.ReactNode
   }>
   showCreate?: boolean
+  /** The host's header row shows who else has this list open (admin list page), so the
+   *  toolbar keeps no slot for it. */
+  viewersInHeader?: boolean
   className?: string
 }
 
@@ -4560,6 +4563,7 @@ export function CollectionBrowserView({
   initialAiPrompt,
   extraViews,
   showCreate = true,
+  viewersInHeader = false,
   className
 }: CollectionBrowserViewProps) {
   const client = useNivaroClient()
@@ -8539,7 +8543,7 @@ export function CollectionBrowserView({
             return s ? `${name} — ${s}` : name
           }}
         />
-        <ListViewers kind='list' id={collection} />
+        {!viewersInHeader && <ListViewers kind='list' id={collection} />}
         {isAdmin && bc.copy_as !== false && (
           <CopyAsButton
             collection={collection}

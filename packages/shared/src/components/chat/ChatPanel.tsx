@@ -816,17 +816,23 @@ function EntityRoomCard({ room }: { room: string }) {
       className={cn('flex shrink-0 items-center gap-2 border-b px-3 py-1.5', th.divider)}
       data-chat-room-card
     >
-      <span className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+      <span className='shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
         {card.type_label}
       </span>
-      <span className='truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+      {/* The record's own name keeps its room (~12 characters) — the step pill shrinks
+          first, so the chip always says WHICH record it is. */}
+      <span
+        className='min-w-[12ch] max-w-[18ch] shrink-0 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'
+        data-tip={token ?? undefined}
+      >
         {token}
       </span>
       {stepLabel && (
         <span
           key={stepLabel}
           data-chat-room-state={stepLabel}
-          className='nvr-fade-in shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold'
+          data-tip={stepLabel}
+          className='nvr-fade-in min-w-0 truncate rounded-full px-2 py-0.5 text-[10px] font-semibold'
           style={{
             backgroundColor: stepColor ? `${stepColor}26` : 'rgba(100,116,139,.15)',
             color: stepColor ?? undefined
@@ -859,8 +865,10 @@ function EntityRoomCard({ room }: { room: string }) {
       )}
       {facts && facts.owners.length > 0 && (
         <span
-          className='ml-auto flex -space-x-1.5'
-          title={`Owners: ${facts.owners.map((o) => o.name).join(', ')}`}
+          className='ml-auto flex shrink-0 -space-x-1.5'
+          data-tip={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
+          aria-label={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
+          role='img'
           data-chat-room-owners={facts.owners.length}
         >
           {facts.owners.slice(0, 4).map((o) => (
@@ -878,9 +886,8 @@ function EntityRoomCard({ room }: { room: string }) {
           type='button'
           onClick={() => cfg.navigate?.(href)}
           className={cn(
-            'text-[11px] font-medium hover:underline',
-            facts?.owners.length ? 'ml-1.5' : 'ml-auto',
-            th.accentText
+            'shrink-0 text-[11px] font-semibold text-[#007a99] underline-offset-2 hover:underline dark:text-nvr-cyan',
+            facts?.owners.length ? 'ml-1.5' : 'ml-auto'
           )}
         >
           Open

@@ -118,7 +118,6 @@ export function AsyncUserPicker({
           ) : (
             users.map((u) => {
               const name = nameOf(u)
-              const label = name ? `${name} (${u.email})` : u.email
               const selected = u.id === value
               return (
                 <button
@@ -128,12 +127,22 @@ export function AsyncUserPicker({
                     onChange(u.id)
                     setOpen(false)
                   }}
-                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-slate-50 dark:hover:bg-muted ${selected ? 'font-medium text-slate-800 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300'}`}
+                  className='flex w-full items-start gap-2 px-3 py-1.5 text-left hover:bg-slate-50 dark:hover:bg-muted'
                 >
                   <Check
-                    className={`h-3.5 w-3.5 shrink-0 ${selected ? 'text-nvr-cyan' : 'opacity-0'}`}
+                    className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${selected ? 'text-nvr-cyan' : 'opacity-0'}`}
                   />
-                  {label}
+                  {/* Name on its own line, the email under it — every row the same height. */}
+                  <span className='min-w-0 flex-1'>
+                    <span
+                      className={`block truncate text-[12.5px] ${selected ? 'font-semibold text-slate-900 dark:text-slate-50' : 'font-medium text-slate-700 dark:text-slate-200'}`}
+                    >
+                      {name || u.email}
+                    </span>
+                    <span className='block truncate text-[11px] text-slate-500 dark:text-slate-400'>
+                      {name ? u.email : '\u00a0'}
+                    </span>
+                  </span>
                 </button>
               )
             })

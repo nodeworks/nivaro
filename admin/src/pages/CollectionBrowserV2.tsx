@@ -3,6 +3,7 @@ import {
   CollectionBrowserView,
   defaultItemUrl,
   ItemEditAuthContext,
+  ListViewers,
   NavigationContext,
   NivaroProvider
 } from '@nivaro/shared'
@@ -123,10 +124,22 @@ export function CollectionBrowserV2Page() {
         </button>
         {/* #3225 — how you got here (a record, a queue, search); Collections on a cold load. */}
         <PageTrail currentLabel={title} currentAs='h1' className='text-[13px]' />
+        {/* Who else has this list open — administrators only (the server sends nobody
+            else the names); in the header so it never reflows the list toolbar. */}
+        <span className='flex-1' />
+        <NivaroProvider client={client}>
+          <ListViewers
+            kind='list'
+            id={collection}
+            variant='header'
+            selfId={String(user?.id ?? '')}
+            className='mr-1'
+          />
+        </NivaroProvider>
         {isAdmin && (
           <Link
             to={`/data-model/${encodeURIComponent(collection)}`}
-            className='ml-auto inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/[0.1] dark:text-slate-300 dark:hover:bg-white/[0.05] dark:hover:text-slate-100'
+            className='inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/[0.1] dark:text-slate-300 dark:hover:bg-white/[0.05] dark:hover:text-slate-100'
           >
             <Pencil className='h-3.5 w-3.5' />
             Edit collection
@@ -169,6 +182,7 @@ export function CollectionBrowserV2Page() {
               initialAiPrompt={aiPrompt}
               extraViews={extraViews}
               onOpenItem={(id) => navigate(`/collections/${collection}/${id}`)}
+              viewersInHeader
             />
           </ItemEditAuthContext.Provider>
         </NavigationContext.Provider>
