@@ -412,19 +412,96 @@ function useRevealer(
   }, [scrollerRef, setAtTop, bump])
 }
 
-/** Slide rows `keys` (matched by `data-live-key`) in under `root`. Reduced motion: nothing. */
+/** How long a new row's highlight holds, then how long it takes to fade away. */
+export const NEW_ROW_HOLD_MS = 2000
+export const NEW_ROW_FADE_MS = 1500
+
+/** The accent a new row is marked with: amber on a dark page, the cyan accent otherwise. */
+function newRowTint(): { fill: string; dot: string } {
+  const dark =
+    typeof document !== 'undefined' &&
+    (document.documentElement.classList.contains('dark') ||
+      document.documentElement.getAttribute('data-theme') === 'dark')
+  return dark
+    ? { fill: 'rgba(245, 158, 11, 0.10)', dot: '#f59e0b' }
+    : { fill: 'rgba(0, 206, 255, 0.08)', dot: '#00b8e6' }
+}
+
+/** Is anyone looking? A hidden tab (or a window without focus) cannot see a highlight come and go. */
+function viewerAway(): boolean {
+  if (typeof document === 'undefined') return false
+  return document.visibilityState === 'hidden' || document.hasFocus?.() === false
+}
+
+/** A small accent dot in a row's gutter, until the row has been in view. */
+function markUnseen(row: HTMLElement, dot: string): void {
+  if (row.querySelector('[data-live-new-dot]')) return
+  if (typeof getComputedStyle === 'function' && getComputedStyle(row).position === 'static')
+    row.style.position = 'relative'
+  const el = document.createElement('span')
+  el.setAttribute('data-live-new-dot', '')
+  el.setAttribute('aria-hidden', 'true')
+  el.style.cssText = `position:absolute;left:3px;top:6px;width:6px;height:6px;border-radius:9999px;background:${dot};pointer-events:none;z-index:1`
+  row.appendChild(el)
+  const clear = () => {
+    el.remove()
+    io?.disconnect()
+    document.removeEventListener('visibilitychange', check)
+  }
+  let io: IntersectionObserver | null = null
+  const check = () => {
+    if (document.visibilityState !== 'visible') return
+    if (typeof IntersectionObserver === 'undefined') return clear()
+    io?.disconnect()
+    io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting && e.intersectionRatio >= 0.5)) clear()
+      },
+      { threshold: [0.5] }
+    )
+    io.observe(row)
+  }
+  document.addEventListener('visibilitychange', check)
+  check()
+}
+
+/**
+ * Mark rows `keys` (matched by `data-live-key`) under `root` as just arrived. Text is never faded.
+ * The row slides in 6 px (and is already readable); it carries an accent background that holds
+ * ~2 s and then fades over ~1.5 s. The highlight and the dot carry state, so they show even with
+ * reduced motion or Calm updates — only the slide is skipped there. A row that arrived while
+ * nobody was looking gets a small dot in its gutter instead, cleared the first time it is in view.
+ */
 export function slideIn(root: ParentNode | null | undefined, keys: Iterable<string>): void {
-  if (!root || typeof window === 'undefined' || reducedMotion()) return
+  if (!root || typeof window === 'undefined') return
+  const tint = newRowTint()
+  const away = viewerAway()
   for (const k of keys) {
     const esc = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(k) : k.replace(/"/g, '\\"')
     const row = root.querySelector(`[data-live-key="${esc}"]`) as HTMLElement | null
-    if (!row || typeof row.animate !== 'function') continue
+    if (!row) continue
+    if (away) {
+      markUnseen(row, tint.dot)
+      continue
+    }
+    if (typeof row.animate !== 'function') continue
+    if (!reducedMotion()) {
+      row.animate(
+        [
+          { opacity: 0.7, transform: 'translateY(-6px)' },
+          { opacity: 1, transform: 'none' }
+        ],
+        { duration: 160, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' }
+      )
+    }
+    const total = NEW_ROW_HOLD_MS + NEW_ROW_FADE_MS
     row.animate(
       [
-        { opacity: 0, transform: 'translateY(-6px)' },
-        { opacity: 1, transform: 'none' }
+        { backgroundColor: tint.fill },
+        { backgroundColor: tint.fill, offset: NEW_ROW_HOLD_MS / total },
+        { backgroundColor: 'rgba(0, 0, 0, 0)' }
       ],
-      { duration: 280, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' }
+      { duration: total, easing: 'linear' }
     )
   }
 }

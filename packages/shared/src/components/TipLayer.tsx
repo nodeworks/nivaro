@@ -26,6 +26,8 @@ interface Tip {
   text: string
   /** A menu row's tip goes beside the menu (left of it, else right), level with the row. */
   beside?: { left: number; right: number; rowTop: number; rowHeight: number }
+  /** `data-tip-side="right"`: level with the element, to its right (left when there is no room). */
+  rightOf?: { left: number; right: number; top: number; height: number }
 }
 
 export function TipLayer() {
@@ -67,6 +69,15 @@ export function TipLayer() {
         })
         return
       }
+      if (el.getAttribute('data-tip-side') === 'right') {
+        setTip({
+          x: r.right + GAP,
+          y: r.top,
+          text,
+          rightOf: { left: r.left, right: r.right, top: r.top, height: r.height }
+        })
+        return
+      }
       setTip({ x: r.left, y: r.bottom + 4, text })
     }
     const over = (e: MouseEvent) => show(e.target)
@@ -103,7 +114,14 @@ export function TipLayer() {
     if (!el) return
     const r = el.getBoundingClientRect()
     let { x, y } = tip
-    if (tip.beside) {
+    if (tip.rightOf) {
+      // Level with the element and to its right, so it never covers what sits below it.
+      const o = tip.rightOf
+      const right = o.right + GAP
+      x = right + r.width <= window.innerWidth - 8 ? right : Math.max(8, o.left - GAP - r.width)
+      y = Math.round(o.top + (o.height - r.height) / 2)
+      y = Math.max(8, Math.min(y, window.innerHeight - r.height - 8))
+    } else if (tip.beside) {
       // Beside the menu, never over its rows: left of it when the tip fits there, else right.
       const b = tip.beside
       const left = b.left - GAP - r.width
