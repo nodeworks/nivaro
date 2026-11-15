@@ -15,6 +15,61 @@ interface RequestClient {
   request<T>(cmd: unknown): Promise<T>
 }
 
+/** Why a field never copies, in plain words, in the order people care about. */
+export const COPY_REASON_WORDS: ReadonlyArray<readonly [string, string]> = [
+  ['pipeline-state', 'Workflow step'],
+  ['never-copy', 'On this collection’s list'],
+  ['do-not-duplicate', 'Marked “do not duplicate”'],
+  ['read-only', 'Read-only'],
+  ['generated', 'Generated ids'],
+  ['calculated', 'Calculated'],
+  ['rollup', 'Totals from lines'],
+  ['rollup-switch', 'Totals from lines'],
+  ['hidden', 'Hidden'],
+  ['audit', 'Stamps']
+]
+
+/** A field name as a label: `workflow_state` → Workflow State, `markComplete` → Mark Complete. */
+export function fieldTitle(name: string): string {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+export interface NeverCopiedGroup {
+  reason: string
+  label: string
+  fields: Array<{ field: string; label: string }>
+}
+
+/**
+ * The fields of this collection a copy never carries, grouped by reason (the
+ * Clone dialog's "N fields are never copied" and the never-copy settings card).
+ * Only fields the collection really has; link lists are not counted (they copy
+ * under their own rule).
+ */
+export function groupNeverCopied(
+  skip: CopySkip | null | undefined,
+  fields: ReadonlyArray<{ field: string; label?: string | null }>
+): NeverCopiedGroup[] {
+  const byName = new Map(fields.map((f) => [f.field, f]))
+  const groups = new Map<string, NeverCopiedGroup>()
+  for (const [reason, label] of COPY_REASON_WORDS) {
+    if (!groups.has(label)) groups.set(label, { reason, label, fields: [] })
+  }
+  for (const [field, why] of Object.entries(skip ?? {})) {
+    const f = byName.get(field)
+    if (!f || why === 'list') continue
+    const label = COPY_REASON_WORDS.find(([r]) => r === why)?.[1]
+    if (!label) continue
+    groups.get(label)?.fields.push({ field, label: f.label?.trim() || fieldTitle(field) })
+  }
+  return [...groups.values()].filter((g) => g.fields.length > 0)
+}
+
 /** Fields a copied CHILD row (a grid line) leaves out: hidden columns still copy there. */
 export function childCopySkip(skip: CopySkip | null | undefined): Set<string> {
   return new Set(

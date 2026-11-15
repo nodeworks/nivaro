@@ -819,6 +819,13 @@ export {
 } from './lib/config-sentences'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
 export {
+  COPY_REASON_WORDS,
+  type CopySkip,
+  fieldTitle,
+  groupNeverCopied,
+  type NeverCopiedGroup
+} from './lib/copy-rules'
+export {
   CORE_GLOSSARY,
   findGlossaryTerm,
   mergeGlossary,

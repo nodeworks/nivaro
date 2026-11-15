@@ -91,7 +91,10 @@ export function RecentNav() {
                         aria-hidden
                       />
                       {r.changed && <span className='sr-only'>Changed since you looked: </span>}
-                      <span className='min-w-0 flex-1 truncate'>{r.label}</span>
+                      {/* A record whose label is empty (or gone) still names itself. */}
+                      <span className='min-w-0 flex-1 truncate'>
+                        {r.label?.trim() || `#${r.item_id}`}
+                      </span>
                       {r.state && (
                         <span
                           className='max-w-[64px] shrink-0 truncate rounded-full px-1.5 py-px text-[9.5px] font-semibold'

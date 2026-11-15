@@ -1218,6 +1218,15 @@ function RefusalFixPanel({
 
 // ─── State badge ──────────────────────────────────────────────────────────────
 
+/** True when a step has no colour of its own, or only a grey one (no hue to show). */
+export function muted(color: string | null | undefined): boolean {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(color ?? '').trim())
+  if (!m) return true
+  const n = Number.parseInt(m[1], 16)
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+  return Math.max(r, g, b) - Math.min(r, g, b) < 48
+}
+
 function StateBadge({
   label,
   color,
@@ -1228,15 +1237,28 @@ function StateBadge({
   small?: boolean
 }) {
   const size = small ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-1 text-[12px]'
+  // A step with no colour of its own (often the first one) uses the theme's muted
+  // pair — fixed slate hex read faint grey-on-grey on a dark card.
+  const tone = muted(color)
   return (
     <span
       key={label}
-      className={`nvr-state-pulse inline-flex items-center gap-1.5 rounded-full font-medium transition-colors duration-300 ${size}`}
-      style={{
-        backgroundColor: color ? `${color}22` : '#f1f5f9',
-        color: color ?? '#475569',
-        border: `1px solid ${color ? `${color}44` : '#e2e8f0'}`
-      }}
+      className={cn(
+        'nvr-state-pulse inline-flex items-center gap-1.5 rounded-full border font-medium transition-colors duration-300',
+        size,
+        tone &&
+          'border-slate-300 bg-slate-100 text-slate-700 dark:border-slate-500 dark:bg-slate-700/60 dark:text-slate-100'
+      )}
+      style={
+        tone
+          ? undefined
+          : {
+              backgroundColor: `${color}22`,
+              color: color as string,
+              borderColor: `${color}44`
+            }
+      }
+      data-state-badge-tone={tone ? 'muted' : 'colour'}
     >
       {label}
     </span>
