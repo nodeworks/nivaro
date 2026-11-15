@@ -523,17 +523,36 @@ export async function readMcpSettings(): Promise<McpSettings> {
 }
 
 /** Store a validated patch on the shared row. False when the column is not there yet. */
+/** Attempts at the compare-and-swap before a write gives up (another writer kept winning). */
+const WRITE_ATTEMPTS = 3
+
+/**
+ * Store a validated patch on the shared row. False when the column is not there yet.
+ *
+ * A compare-and-swap (rt8 #21): the UPDATE only lands while the column still holds exactly what
+ * this write read, and re-reads + re-merges on a miss (up to 3 tries). Two people renaming two
+ * agents at the same moment both keep their name — a plain read-modify-write let the second
+ * write put back the first one's stale copy.
+ */
 export async function writeMcpSettings(patch: unknown): Promise<McpSettings | false> {
   if (!(await hasColumn('nivaro_settings', 'mcp_settings'))) return false
-  const row = (await db('nivaro_settings').where('id', 1).first('mcp_settings')) as
-    | { mcp_settings?: unknown }
-    | undefined
-  const next = mergeMcpSettings(lenient(row?.mcp_settings), patch)
-  await db('nivaro_settings')
-    .where('id', 1)
-    .update({ mcp_settings: JSON.stringify(next) })
-  cache.clear()
-  return next
+  for (let attempt = 1; ; attempt++) {
+    const row = (await db('nivaro_settings').where('id', 1).first('mcp_settings')) as
+      | { mcp_settings?: unknown }
+      | undefined
+    const prev = row?.mcp_settings ?? null
+    const next = mergeMcpSettings(lenient(prev), patch)
+    const q = db('nivaro_settings').where('id', 1)
+    if (prev == null) q.whereNull('mcp_settings')
+    else q.where('mcp_settings', typeof prev === 'string' ? prev : JSON.stringify(prev))
+    const changed = Number(await q.update({ mcp_settings: JSON.stringify(next) })) || 0
+    if (changed > 0) {
+      cache.clear()
+      return next
+    }
+    if (attempt >= WRITE_ATTEMPTS)
+      throw new Error('The MCP settings were being changed by someone else. Try again.')
+  }
 }
 
 export function bustMcpSettings(): void {

@@ -101,7 +101,12 @@ async function setConnectionName(
   // Not found and not theirs answer alike: a person cannot probe other people's connections.
   if (!owner || (!admin && owner.toLowerCase() !== me))
     return reply.code(404).send({ error: 'Connection not found' })
-  const next = await writeMcpSettings({ connection_names: { [conn]: name } })
+  let next: Awaited<ReturnType<typeof writeMcpSettings>>
+  try {
+    next = await writeMcpSettings({ connection_names: { [conn]: name } })
+  } catch (err) {
+    return reply.code(409).send({ error: (err as Error).message })
+  }
   if (next === false)
     return reply.code(409).send({ error: 'MCP settings need migration 480 on this database' })
   await logActivity({
