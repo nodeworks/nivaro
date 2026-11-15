@@ -2194,7 +2194,7 @@ Reading: "approve a 25k budget from the South division"
           <!-- /SYNC:pipeline-dimensions -->
         </div>
 
-        <div class="doc-section" id="s-pipeline-owners" data-toc='[{"id":"pipeline-owner-matrix","label":"Owner Matrix UI"},{"id":"pipeline-owner-matrix-versions","label":"Owner matrix versions"},{"id":"pipeline-owner-matrix-try","label":"Draft changes and Try a record"}]'>
+        <div class="doc-section" id="s-pipeline-owners" data-toc='[{"id":"pipeline-owner-matrix","label":"Owner Matrix UI"},{"id":"pipeline-owner-matrix-sheet","label":"Edit the matrix in Excel"},{"id":"pipeline-owner-matrix-versions","label":"Owner matrix versions"},{"id":"pipeline-owner-matrix-try","label":"Draft changes and Try a record"}]'>
           <!-- SYNC:pipeline-owners -->
           <h1 class="doc-h1" id="pipeline-owner-matrix">Owner Matrix UI</h1>
           <p class="doc-p">The Owner Matrix is an interactive table where you assign users to states. Rows are values of the row-axis dimension; columns are workflow states.</p>
@@ -2224,6 +2224,20 @@ Reading: "approve a 25k budget from the South division"
           <h3 class="doc-h3">Adding rows</h3>
           <p class="doc-p">Click "+ Add Row" below the matrix. If row axis is a relation field, a searchable picker appears. Otherwise, enter a text value. Once created, the row appears and cells can be populated.</p>
           <div class="doc-note">Column filters (optional dimensions) can be left unset — the matrix shows "base-level" owners (groups with only required filter values). Set optional filters to see context-specific overrides.</div>
+          <h3 class="doc-h3" id="pipeline-owner-matrix-sheet">Edit the matrix in Excel</h3>
+          <p class="doc-p">Big owner changes do not have to be made cell by cell. On the Owner Matrix card, "Download as Excel" gives you the whole matrix as a spreadsheet; edit it, then "Upload" it back. Nothing changes when you upload: you see every change first, grouped by step, and press Apply.</p>
+          <ul class="doc-ul">
+            <li>The Owners sheet has one row per owner group: Step, Group name, one column per dimension (the values as you see them in the app), Default group, Priority, People, Teams and Other filters. Step and dimension cells have dropdown lists. A README sheet explains the columns.</li>
+            <li>People: separate them with ; (semicolon). Write "Name &lt;email&gt;" or just the email. A name alone works only when exactly one person has it — when two people share a name, the email is required.</li>
+            <li>Add a group by adding a row (leave the hidden Group ID empty). Remove a group by deleting its row. Move a group to another step by changing its Step.</li>
+            <li>The review lists people added and removed per group, groups added, removed or changed (values, step, default, priority), and every problem by row: an unknown person, a name two people share, a value that is not in the list, a step that does not exist, two rows for the same step and values, a copied row that kept its Group ID. Apply stays off until the file has no problems.</li>
+            <li>"Try a record with these changes" shows who would own each step of a real record if you applied the file — the same answer as Try a record on the matrix.</li>
+            <li>Apply saves the matrix as a version first (Owner matrix versions can restore it) and writes everything in one go. If someone changed the matrix after you uploaded, Apply refuses and shows the changes again against the matrix as it is now.</li>
+          </ul>
+          <pre class="doc-pre"><code>GET  /api/pipelines/:id/owner-matrix/sheet                  → .xlsx (Owners, README, hidden Lists)
+POST /api/pipelines/:id/owner-matrix/sheet/preview          multipart file → { steps, problems, counts, draft_groups, plan_hash }
+POST /api/pipelines/:id/owner-matrix/sheet/apply?hash=&lt;plan_hash&gt;   the same file
+     → 409 OWNER_SHEET_STALE (matrix changed; data = fresh preview) · 422 OWNER_SHEET_PROBLEMS</code></pre>
           <h3 class="doc-h3" id="pipeline-owner-matrix-versions">Owner matrix versions</h3>
           <p class="doc-p">The pipeline editor's "Owner matrix versions" card keeps the matrix recoverable. Before every owner change — a cell's filters, priority or WIP limit, a member or team added or removed, a dimension edited, a bulk add or an owner cleanup — the whole matrix is captured: dimensions, owner groups, members and team links. "Config versions" covers states, transitions and bindings; this card covers who owns them.</p>
           <ul class="doc-ul">

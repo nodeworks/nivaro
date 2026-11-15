@@ -335,6 +335,29 @@ export const pipelineOwnerMatrix: DocSection = {
       type: 'note',
       text: 'Column filters (optional dimensions) can be left unset — the matrix shows "base-level" owners (groups with only required filter values). Set optional filters to see context-specific overrides.'
     },
+    { type: 'h3', id: 'pipeline-owner-matrix-sheet', text: 'Edit the matrix in Excel' },
+    {
+      type: 'p',
+      text: 'Big owner changes do not have to be made cell by cell. On the Owner Matrix card, "Download as Excel" gives you the whole matrix as a spreadsheet; edit it, then "Upload" it back. Nothing changes when you upload: you see every change first, grouped by step, and press Apply.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The Owners sheet has one row per owner group: Step, Group name, one column per dimension (the values as you see them in the app), Default group, Priority, People, Teams and Other filters. Step and dimension cells have dropdown lists. A README sheet explains the columns.',
+        'People: separate them with ; (semicolon). Write "Name <email>" or just the email. A name alone works only when exactly one person has it — when two people share a name, the email is required.',
+        'Add a group by adding a row (leave the hidden Group ID empty). Remove a group by deleting its row. Move a group to another step by changing its Step.',
+        'The review lists people added and removed per group, groups added, removed or changed (values, step, default, priority), and every problem by row: an unknown person, a name two people share, a value that is not in the list, a step that does not exist, two rows for the same step and values, a copied row that kept its Group ID. Apply stays off until the file has no problems.',
+        '"Try a record with these changes" shows who would own each step of a real record if you applied the file — the same answer as Try a record on the matrix.',
+        'Apply saves the matrix as a version first (Owner matrix versions can restore it) and writes everything in one go. If someone changed the matrix after you uploaded, Apply refuses and shows the changes again against the matrix as it is now.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/pipelines/:id/owner-matrix/sheet                  → .xlsx (Owners, README, hidden Lists)
+POST /api/pipelines/:id/owner-matrix/sheet/preview          multipart file → { steps, problems, counts, draft_groups, plan_hash }
+POST /api/pipelines/:id/owner-matrix/sheet/apply?hash=<plan_hash>   the same file
+     → 409 OWNER_SHEET_STALE (matrix changed; data = fresh preview) · 422 OWNER_SHEET_PROBLEMS`
+    },
     { type: 'h3', id: 'pipeline-owner-matrix-versions', text: 'Owner matrix versions' },
     {
       type: 'p',

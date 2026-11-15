@@ -11,7 +11,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **RBAC** — roles, policies, per-field permissions, workspace isolation
 - **Microsoft OIDC** — PKCE login, AD group sync
 - **Workflow Engine** — state machine with role-gated transitions, history
-- **Pipeline / Owner Matrix** — multi-dimensional ownership per workflow state
+- **Pipeline / Owner Matrix** — multi-dimensional ownership per workflow state; edit the whole matrix in Excel (download, upload, review the changes per step, apply)
 - **Queues** — cross-collection worklists unioning pipeline ownership, Tasks, and Approvals; stat strip, scope tabs, Table/Kanban/Workload views, transition-on-drop, claim/release, SLA-filtered sources, per-owner WIP limits, Socket.io live-refresh, digest subscriptions, embeddable widget
 - **GraphQL API + Subscriptions** — auto-built from metadata registry; subscriptions over WebSocket or Server-Sent Events (with Last-Event-ID resume), and `@live` queries that re-run as the subscriber when a write touches what they read
 - **Real-time** — Socket.io + Redis adapter (notifications, item events)
