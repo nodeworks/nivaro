@@ -1,10 +1,1202 @@
 {
-  "generated_at": "2026-11-14T19:53:16.914Z",
+  "generated_at": "2026-11-15T20:50:15.078Z",
   "releases": [
+    {
+      "version": "0.3.161",
+      "tag": "v0.3.161",
+      "date": "2026-11-15T15:49:41-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "queue",
+              "text": "who is viewing sits on the Owners row, at the right",
+              "hash": "9541f1d02"
+            },
+            {
+              "section": "Added",
+              "scope": "scheduled-changes",
+              "text": "keep apply bookkeeping in its own column",
+              "hash": "80b01eb3f"
+            },
+            {
+              "section": "Added",
+              "scope": "watch-list",
+              "text": "remove records when they're completed",
+              "hash": "b2586756d"
+            },
+            {
+              "section": "Added",
+              "scope": "extensions",
+              "text": "AI allowance checks + live usage reader for hosting layers",
+              "hash": "d96e721f8"
+            },
+            {
+              "section": "Added",
+              "scope": "scheduled-changes",
+              "text": "apply on time as the scheduler, with undo",
+              "hash": "6ad590b66"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "live linked names, upload progress, why derived values moved, help chip",
+              "hash": "a7954ed36"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "grouped lists glide, live calendar/Gantt drags, urgent chime",
+              "hash": "102e5fdad"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "live sessions list for admins + live usage signals",
+              "hash": "99cfcced9"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "live decision links, submission status pages, threshold banners",
+              "hash": "c91c14c9d"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "agent names and presence, live Cmd-K results, config reach",
+              "hash": "2fe0158e1"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "offline review folds to its pill; grid presence follows regained access",
+              "hash": "e29e93849"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "records that move while open (rt8-record)",
+              "hash": "e17fdd6de"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "bulk selection watch and time in step (rt8 lists)",
+              "hash": "2faff1190"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "offline saves reviewed on reconnect, who is editing budget grids",
+              "hash": "30e77f2de"
+            },
+            {
+              "section": "Added",
+              "scope": "approvals",
+              "text": "\"Changed after approval\" badge, approver notice and list filter",
+              "hash": "6abe766f7"
+            },
+            {
+              "section": "Added",
+              "scope": "comments",
+              "text": "replies while typing, seen by, mention delivery",
+              "hash": "b59c02a22"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "queue team availability strip and \"being discussed in chat\" record chip",
+              "hash": "30f946dd6"
+            },
+            {
+              "section": "Added",
+              "scope": "records",
+              "text": "Clone copies many-to-many lists like Duplicate",
+              "hash": "be00964ec"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "editing together - section presence, nudges, removed lines, value sources",
+              "hash": "caa9536b7"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "status badges in pickers, list cells edited together",
+              "hash": "c6a8d4e78"
+            },
+            {
+              "section": "Added",
+              "scope": "partners",
+              "text": "retry countdown on sends, reference labels, catalog notices to owners",
+              "hash": "5113b08d5"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "save progress, \"Updating…\" totals, scheduled-change countdown",
+              "hash": "50b7fdb47"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "shared rich text on locked records; co-edit design fixes",
+              "hash": "38248cd3d"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "lighter activity feed - event-driven refetch, per-viewer id cache, read gate",
+              "hash": "44edd40da"
+            },
+            {
+              "section": "Added",
+              "scope": "support",
+              "text": "share my screen with support, live and view only",
+              "hash": "01c1ea29d"
+            },
+            {
+              "section": "Added",
+              "scope": "records",
+              "text": "merge records — pick each value, keep one, discard the rest",
+              "hash": "49d4d976a"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "watchers fold into the bulk notice, cloud-safe collector, design fixes",
+              "hash": "86013536f"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "per-record sequence numbers and silent connection self-repair",
+              "hash": "b2dc27fbe"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "tile change chips, project activity stream, pipeline step counts",
+              "hash": "9463cbc3f"
+            },
+            {
+              "section": "Added",
+              "scope": "watch-list",
+              "text": "shared team lists, alerts, desktop notices, auto-pin, daily email",
+              "hash": "de4149d10"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "admin team board and write-to-screen time",
+              "hash": "a57ebc658"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "two tabs in step, live record chat count, covering line, live compare",
+              "hash": "5713ee447"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "one notice for bulk changes, live broadcast reads, synced dismissals, live delivery lists",
+              "hash": "264d24464"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "rule and external API editors keep unsaved edits on Show",
+              "hash": "e957cac49"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "watch list dock — pinned records, waiting on others, mentions",
+              "hash": "0823fe17c"
+            },
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "changed by others filter and saved-view changed counts",
+              "hash": "2390e04ab"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "outside writes to system and child tables reach their records",
+              "hash": "f642c73e0"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "write long text together with live cursors",
+              "hash": "34d8f58bb"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "config editors, shared reports, activity log and flow runs follow live",
+              "hash": "cfc52a389"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "live forms, line prices, approval progress and send status",
+              "hash": "23c2d18da"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "outside-write watcher reads SQL Server change tracking",
+              "hash": "cc08550ba"
+            },
+            {
+              "section": "Added",
+              "scope": "cache-warm",
+              "text": "recompute cached queries and widgets when their data changes",
+              "hash": "c7f0414c5"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "access grants, maintenance end and new records reach open pages",
+              "hash": "ea048d976"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "list viewers for admins, Send my view, live room state chip",
+              "hash": "bb94ca5f5"
+            },
+            {
+              "section": "Added",
+              "scope": "sync",
+              "text": "theme, density, lists, drafts and relative times follow you live",
+              "hash": "9ec1f1ca5"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "Live updates setting (Normal/Calm/Off) and realtime test bot",
+              "hash": "58dc459d7"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "settle handled asks, fold record updates, digest re-check, \"N new\" on panels",
+              "hash": "8c0c364c0"
+            },
+            {
+              "section": "Added",
+              "scope": "duplicates",
+              "text": "per-collection duplicate criteria, on by default",
+              "hash": "c77f4b2ff"
+            },
+            {
+              "section": "Added",
+              "scope": "record",
+              "text": "unseen-change confirm, live title, hover cards, file processing chips",
+              "hash": "871c6a8bc"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "support desk, calendars and jobs pages follow the data quietly",
+              "hash": "60aceef10"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "merge others' saves in the open form, line locks, grid cursors",
+              "hash": "616417612"
+            },
+            {
+              "section": "Added",
+              "scope": "people",
+              "text": "sign-in troubleshooter for the support desk, without IPs",
+              "hash": "f21ff0bfd"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "count a covering delegate as the owner opening the record",
+              "hash": "43f5dc40f"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "since-this-email strip, live share pages, outside-write fan-out",
+              "hash": "9540a6c93"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "Change proposals category",
+              "hash": "c7f2c400b"
+            },
+            {
+              "section": "Added",
+              "scope": "record",
+              "text": "unseen changes, record cards and file processing status (server)",
+              "hash": "0ffa2664b"
+            },
+            {
+              "section": "Added",
+              "scope": "live-lists",
+              "text": "burst pill, pause, steady rows, live totals",
+              "hash": "f8bb0760e"
+            },
+            {
+              "section": "Added",
+              "scope": "partner-needs",
+              "text": "count automatic steps too",
+              "hash": "cfe26df25"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "live owner changes, permission pushes, people directory",
+              "hash": "420085b4f"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "back to the list keeps your place; peek at records from anywhere",
+              "hash": "43aed37ef"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "live moves, ticking SLA deadlines, flip pass, field typing, live record widgets",
+              "hash": "7dee76f00"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "uncached custom queries name the collections they read",
+              "hash": "44d3a8be1"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "ready-to-send checks every open record",
+              "hash": "c2d596f80"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "refresh data not the page, missed-update detector, reload tracking",
+              "hash": "9713f33ec"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "live search results, fixed findings, data-changed chip",
+              "hash": "a3a5816c4"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "admin screens and counts follow the data quietly",
+              "hash": "89ccfef19"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "screens that update in place without moving",
+              "hash": "5768c9829"
+            },
+            {
+              "section": "Added",
+              "scope": "live",
+              "text": "files panel, dropdown options and related records go live",
+              "hash": "3c4576592"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "owner matrix as a spreadsheet",
+              "hash": "64646162f"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "announce-fix bulk action and Outside writes tab (admin)",
+              "hash": "e061d957a"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "ready-to-send board (nightly partner-send preflight)",
+              "hash": "1abd49e63"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "procedures announce their writes + outside-write watcher (API)",
+              "hash": "2507ffda2"
+            },
+            {
+              "section": "Added",
+              "scope": "forms",
+              "text": "\"Needed by <partner>\" badges on the record form",
+              "hash": "4cd3d502e"
+            },
+            {
+              "section": "Added",
+              "scope": "records",
+              "text": "move ticked lines to a new record, per collection",
+              "hash": "fec468113"
+            },
+            {
+              "section": "Added",
+              "scope": "records",
+              "text": "propose a change on a record locked after approval",
+              "hash": "1b4506468"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "tell the requester whether a step owner opened the record",
+              "hash": "019c716dd"
+            },
+            {
+              "section": "Added",
+              "scope": "people",
+              "text": "sign-in troubleshooter on the person page",
+              "hash": "d4967d203"
+            },
+            {
+              "section": "Added",
+              "scope": "widgets",
+              "text": "copy a dashboard or report widget as a picture",
+              "hash": "3c870648f"
+            },
+            {
+              "section": "Added",
+              "scope": "comments",
+              "text": "paste or drop a screenshot into a comment",
+              "hash": "59f7e584f"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "toolbar buttons sit together (viewer slot no longer opens a gap)",
+              "hash": "2a568f184"
+            },
+            {
+              "section": "Fixed",
+              "scope": "queue",
+              "text": "call the strip \"Owners\", even avatar spacing",
+              "hash": "418af3ad9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "watch-list",
+              "text": "the dock no longer flashes open on every page load",
+              "hash": "2f1315898"
+            },
+            {
+              "section": "Fixed",
+              "scope": "watch-list",
+              "text": "a new pin shows at once instead of loading for a minute",
+              "hash": "3b15f94d2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "attention",
+              "text": "open tasks no longer count in the tab title",
+              "hash": "c224d18ea"
+            },
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "never refuse a ping or page view for a long URL",
+              "hash": "aa0bf3627"
+            },
+            {
+              "section": "Fixed",
+              "scope": "int",
+              "text": "close scope-restricted admin describe after merge",
+              "hash": "1b529da51"
+            },
+            {
+              "section": "Fixed",
+              "scope": "int",
+              "text": "repair merge of scheduled-apply cron, catalog switch JSX, steady-rows pointer anchor",
+              "hash": "1c3f3d4ae"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "threshold banner renders and names the record",
+              "hash": "c22925c6b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "comments",
+              "text": "design review — receipts agree with Delivery, contrast, layout",
+              "hash": "5660c7c26"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "design review round 2 - new-row mark, burst children, chip tooltip, phone pill",
+              "hash": "263715cc7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "merge — singular noun, picker checkbox contrast, aligned rows",
+              "hash": "eb47c1b32"
+            },
+            {
+              "section": "Fixed",
+              "scope": "live-lists",
+              "text": "scope the pinned-cell repaint; never hide the rows",
+              "hash": "109e3681e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "removed-line note drops empty template separators",
+              "hash": "bdd3702e8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "screen share round 4 — phone placement, per-reader history, Larger fits",
+              "hash": "507513440"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "status-page token fits a URL path segment",
+              "hash": "d2167a21a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "grid cursor ring as a shadow, never an outline",
+              "hash": "817370c0f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ui",
+              "text": "team strip face ring uses the card surface the dark strip actually renders, so no halo",
+              "hash": "13ae5661b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "never-copied list leaves out ids and stamps",
+              "hash": "8eab25cc7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "merge — stale callout while reading again, picker title by number, dark disabled buttons",
+              "hash": "4f8109cbc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ui",
+              "text": "team strip surface matches the filter row, readable as-of text, stronger out-of-office faces, Hide control for Not online",
+              "hash": "d2491ca6b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "collab",
+              "text": "round-3 polish — room chip lines, record name, viewer tooltip",
+              "hash": "df7ea642a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "Clone dialog says what a copy is; readable never-copy list",
+              "hash": "bfdbddbac"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "design review round 1 for offline review and grid presence",
+              "hash": "c1f116e40"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "sharing indicator is a floating pill that reserves no space",
+              "hash": "91254df7d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ui",
+              "text": "team strip faces ringed and stacked so dots stay visible, grouped roster with out of office first, Calm snapshot cue; chat chip stays on one line, row shows latest time and open cue",
+              "hash": "4882a91f7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "live-lists",
+              "text": "pinned cells stay in step after a row leaves; \"records\"",
+              "hash": "25e10ab83"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "design review round 1 for stream and pipeline counts",
+              "hash": "ff5e74e9a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chat",
+              "text": "keep the room chip's owners and Open together",
+              "hash": "42ff2c54f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "comments",
+              "text": "name the rule that silenced a mention, not the always-inbox note",
+              "hash": "4eb14c5a6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "queues",
+              "text": "team strip lists up to 200 people so online ones are not cut off; roster shows the full cover line",
+              "hash": "ed08c154a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "scheduled-changes",
+              "text": "stop writing a column the table does not have",
+              "hash": "2cfdd8a2a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chat",
+              "text": "record room chip wraps instead of cutting the step short",
+              "hash": "6eeabc1ae"
+            },
+            {
+              "section": "Fixed",
+              "scope": "notifications",
+              "text": "shorter \"See changes\" pill, full text kept as aria-label and tooltip",
+              "hash": "107901e65"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "grid cursor outline ships in full.css; rich_text fields offer Merge",
+              "hash": "3b775105a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "screen share round 3 — room under the bar matches the page, history copy",
+              "hash": "f268bc2d8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "N new pill sits in the stream header, never over the rows",
+              "hash": "1d296e7be"
+            },
+            {
+              "section": "Fixed",
+              "scope": "collab",
+              "text": "design review round 2 — picked name, banner-matching due time",
+              "hash": "4959756fb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "rt6-pickers",
+              "text": "design review — selected segment, both values, full holder name",
+              "hash": "5df36c9bd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "merge screen re-review — stale callout, left-out records, contrast",
+              "hash": "d1ac6f80d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "notifications",
+              "text": "lane and status tabs wrap on phones instead of clipping",
+              "hash": "b32523eb6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "notifications",
+              "text": "receipt-line contrast, field list said once, tidy phone header",
+              "hash": "72fb4a3ce"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "screen share re-review — no page strip, exact first frame, live history",
+              "hash": "8f44fd47b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "merge screen on phones labels each value by record number",
+              "hash": "99be2c4f6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "inline-edit",
+              "text": "keep the conflict line's time on one line",
+              "hash": "94f818b79"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "shared-text save under a lock checks only the fields it sends",
+              "hash": "6b226cf6b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "hold staged link changes on a form switch",
+              "hash": "c887ff991"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "close socket-layer gaps from the 2026-11-14 security review",
+              "hash": "dbd07237a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "add a cross-form per-domain cap on receipt mail",
+              "hash": "c9dbbde9b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "per-tenant own-domain cache, per-form domain cap",
+              "hash": "f2943e7a8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "close review findings on record, merge, MCP and heavy-read paths",
+              "hash": "f8438effe"
+            },
+            {
+              "section": "Fixed",
+              "scope": "int",
+              "text": "unit tests green after the Nov-14 merges",
+              "hash": "219cd89e3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "tighter receipt-mail mailbox key and domain/instance caps",
+              "hash": "1e1ff9ba9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "public links, receipts and shared lists review fixes",
+              "hash": "ea6b68432"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "queue selection watch matches the collection list",
+              "hash": "d4dba4447"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "keyboard and touch moves on calendar/Gantt; clash baseline at read time",
+              "hash": "86786423f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "help chip only for people who may see the request; all ticket moves refresh it",
+              "hash": "da2eb9231"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "urgent sound row reads on two lines; calendar ends on a whole week",
+              "hash": "7609c26d0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "help chip reads just \"Help requested\" at phone width",
+              "hash": "76f88781c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "decision link page names deciders only to record readers",
+              "hash": "29f5df610"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "no 'updates while open' line on a final status page",
+              "hash": "8e6ba48e4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "o2m-removed fails closed",
+              "hash": "8b5f56065"
+            },
+            {
+              "section": "Fixed",
+              "scope": "comments",
+              "text": "hold the comment box still; no read_at on View-as acknowledge",
+              "hash": "a9d14fff9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "approvals",
+              "text": "one approver notice per burst across API replicas",
+              "hash": "3f6c015ce"
+            },
+            {
+              "section": "Fixed",
+              "scope": "mcp",
+              "text": "write MCP settings as a compare-and-swap",
+              "hash": "7850ff73f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "design pass on rt8-record surfaces",
+              "hash": "81d18ea8c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "name a shared row once on the grid presence line; numbers with separators in the offline review",
+              "hash": "b62df3933"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "bulk notices wrap cleanly at phone width",
+              "hash": "9b79ddcf8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "comments",
+              "text": "replies-while-typing falls back to the signed-in id",
+              "hash": "7e52ac8da"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "recalc options from JSON strings, scheduler line contrast",
+              "hash": "8274f71b2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chat",
+              "text": "record-mentions list reads the record as the caller and gates every message by canSeeRoom; chip counts pasted record links",
+              "hash": "11dcf2822"
+            },
+            {
+              "section": "Fixed",
+              "scope": "queues",
+              "text": "team strip names a delegate only when the viewer may see them in presence",
+              "hash": "639f03cba"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "Clone reads link sets as the caller and fails closed",
+              "hash": "d1f4dc03f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "partners",
+              "text": "design review — plain notice copy, Send again, quoted refusals, amber retrying chip",
+              "hash": "a70752e50"
+            },
+            {
+              "section": "Fixed",
+              "scope": "cell-locks",
+              "text": "a take needs the record in the caller's view first",
+              "hash": "31c24bd3d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "cell-locks",
+              "text": "judge takes as a write, reads by readable fields",
+              "hash": "e17c636a9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "keep team board counts with their labels; steady window toggle",
+              "hash": "ed5edfe9d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "merge — gate attached rows, stale guard, default on, design review",
+              "hash": "90ed13b3d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "pointer chip Go is a quiet link, not a solid fill",
+              "hash": "2960bffd2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "design review for team board and write-to-screen",
+              "hash": "86f91e7c6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "live-lists",
+              "text": "burst pill clears the totals row; visible held mark",
+              "hash": "a1114fbd9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "watch-list",
+              "text": "owner-gone shared lists, digest hour, design review fixes",
+              "hash": "c37add1a6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "screen share design review — fill Larger, clear the bar, calmer banner",
+              "hash": "72cf3bc9f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "collab",
+              "text": "design review — viewer chip placement, room chip, picker rows",
+              "hash": "2fe9199c0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "compare",
+              "text": "a record with no display value heads its column with just #id",
+              "hash": "6d11d1c6e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "their-version panel column reads \"Your form\"",
+              "hash": "341f39e78"
+            },
+            {
+              "section": "Fixed",
+              "scope": "notifications",
+              "text": "phone-friendly notice rows, \"See what changed in <Collection>\", \"Admin role\" recipients",
+              "hash": "7ab2af15f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "log each screen share's first look, not each ticket's",
+              "hash": "48bade348"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "design review on the live config strips and run history",
+              "hash": "a7e532133"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "wrap the filter sentence, clearer digest bell and range hint",
+              "hash": "d158a676d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "live-lists",
+              "text": "design review — steady toolbar, explained held rows",
+              "hash": "b9ab8dd97"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "design review round for rt5-record",
+              "hash": "67c4213a7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "changed-by-others chip fits the toolbar and phone",
+              "hash": "ba82509b0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "a copy starts fresh — one never-copy rule, Clone opens the copy",
+              "hash": "24102fd7f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "co-edit re-checks write rights, caps session size",
+              "hash": "86176bbcb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "watch-list",
+              "text": "\"usually N\" counts only real waits",
+              "hash": "e3903721a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "admin report page follows owner edits; waiting line stays in view",
+              "hash": "1e92f1e8c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tab-title",
+              "text": "one owner composes \"(count) Label · page\", no freeze",
+              "hash": "72b2adfe6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "drop duplicate LiveAnnouncer/TabCountHost exports from the branch merges",
+              "hash": "d64464b27"
+            },
+            {
+              "section": "Fixed",
+              "scope": "live-lists",
+              "text": "steady rows under StrictMode, faded rows, pill width",
+              "hash": "f566a71e6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "live",
+              "text": "reconcile the record SLA clock after a reconnect",
+              "hash": "74fba4b25"
+            },
+            {
+              "section": "Fixed",
+              "scope": "duplicates",
+              "text": "judge shared-lines rules as the caller",
+              "hash": "29ba15ba6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record-card",
+              "text": "take step, owners and SLA from the record page's sources",
+              "hash": "fba91e278"
+            },
+            {
+              "section": "Fixed",
+              "scope": "socket",
+              "text": "peer viewers carry their sign-in kind; unknown kind gets no value",
+              "hash": "b5a6bc1c2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "socket",
+              "text": "judge every live keystroke value per recipient socket",
+              "hash": "e948c1829"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "one refresh button per screen",
+              "hash": "64ec1abf5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "files",
+              "text": "an image in a field comment reads only for readers of that field",
+              "hash": "39f4c8b7c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "partner-needs",
+              "text": "judge badges as the caller",
+              "hash": "f2b3cc9d8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "change-proposals",
+              "text": "re-check at accept time, never store encrypted fields",
+              "hash": "46421ffb4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "judge a split's copy and line moves as the caller's own write",
+              "hash": "a097d05a9"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync docs for the November realtime + ideas program",
+              "hash": "5525cba83"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "fix merge markers",
+              "hash": "5e5ba57e9"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "scripts to apply the announce fix and watcher indexes on dev",
+              "hash": "daf968cb8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "realtime round 2: tab count + icon, live announcer, \"why didn't it update\" trace",
+              "hash": "cac334e36"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "raw-write fan-out skeleton",
+              "hash": "de01cda61"
+            }
+          ]
+        }
+      ],
+      "count": 194
+    },
     {
       "version": "0.3.160",
       "tag": "v0.3.160",
-      "date": "2026-11-14T14:52:59-05:00",
+      "date": "2026-11-14T14:53:16-05:00",
       "sections": [
         {
           "label": "Added",
