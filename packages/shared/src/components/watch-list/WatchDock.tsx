@@ -42,6 +42,7 @@ import {
   sortWatchRows,
   typingTarget,
   useWatchActions,
+  useWatchPrefs,
   useWatchUi,
   WATCH_WIDTH_MAX,
   WATCH_WIDTH_MIN,
@@ -152,15 +153,41 @@ function useDockData(prefs: WatchPrefs, visible: boolean, tab: DockTab) {
   return { rows, summary, waiting, mentions, tab }
 }
 
+const DOCK_STATE_KEY = 'nvr-watch-dock-state'
+/** The dock state this browser last saw (per-viewer convenience; 'closed' when unknown). */
+function rememberedDockState(): 'open' | 'minimized' | 'closed' {
+  try {
+    const v = localStorage.getItem(DOCK_STATE_KEY)
+    return v === 'open' || v === 'minimized' ? v : 'closed'
+  } catch {
+    return 'closed'
+  }
+}
+function rememberDockState(state: string) {
+  try {
+    localStorage.setItem(DOCK_STATE_KEY, state)
+  } catch {
+    /* private window / blocked storage: the default applies */
+  }
+}
+
 export function WatchDock() {
   const ui = useWatchUi()
   const qc = useQueryClient()
   const client = useOptionalNivaroClient()
   const actions = useWatchActions()
   const { prefs } = actions
+  const { ready } = useWatchPrefs()
   const dock = prefs.dock
+  // Until the saved list arrives the dock does not know its state: the default ("open")
+  // flashed the panel on every page load for people who keep it closed. Use the state this
+  // browser last saw, and draw nothing when there is none.
+  useEffect(() => {
+    if (ready) rememberDockState(dock.state)
+  }, [ready, dock.state])
+  const dockState = ready ? dock.state : rememberedDockState()
   const mode: 'open' | 'minimized' | 'closed' | 'sheet' | 'hidden' = ui.wide
-    ? dock.state
+    ? dockState
     : ui.sheet
       ? 'sheet'
       : 'hidden'
