@@ -542,6 +542,10 @@ async function postInner(
   if (parsedRoom.kind === 'dm') {
     for (const p of parsedRoom.participants ?? []) app.io?.to(`user:${p}`).emit('chat:message', row)
   }
+  // rt5 #9: a record's room — its open record pages re-read their unread count (ids only).
+  if (parsedRoom.kind === 'entity') {
+    void import('./record-chat-live.js').then((m) => m.announceRecordChat(room)).catch(() => {})
+  }
 
   // Search by meaning (#2354): index the words, never blocking the send.
   if (!system) {

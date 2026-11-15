@@ -128,7 +128,8 @@ function jitter(fn: () => void, maxMs = 1200): void {
 
 /** Query keys the unread state lives under. */
 const NOTIFICATION_KEYS = [['notification-count'], ['notifications'], ['my-work']]
-const CHAT_KEYS = [['nvr-chat-rooms']]
+// rt5 #9: the record header's unread count for its room (RecordChatActions) follows too.
+const CHAT_KEYS = [['nvr-chat-rooms'], ['nvr-chat-record-room']]
 
 /** Query keys behind each `mine:changed` kind (a prefix refetches every collection's copy). */
 export const MINE_KEYS: Record<string, readonly (readonly string[])[]> = {

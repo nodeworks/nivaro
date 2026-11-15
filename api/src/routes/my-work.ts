@@ -24,6 +24,25 @@ import { approvalStepsFor, ownedWithSla } from '../services/waiting-on-me.js'
  */
 
 export async function myWorkRoutes(app: FastifyInstance) {
+  /**
+   * rt5 #15 — who the caller is covering for right now (they named the caller their delegate and
+   * are out) and how many records wait on the caller only because of it. One indexed read when
+   * the caller covers nobody; otherwise the owner resolution runs inside the read gate.
+   */
+  app.get('/my-work/covering', { preHandler: requireAuth }, async (req) => {
+    const userId = String(req.user?.id)
+    const { coverFor } = await import('../services/delegate-cover.js')
+    const { withReadGate } = await import('../services/read-gate.js')
+    const lines = await withReadGate(
+      userId,
+      () => span('my-work:covering', () => coverFor(userId)),
+      {
+        label: 'my-work:covering'
+      }
+    ).catch(() => [])
+    return { data: { covering: lines } }
+  })
+
   app.get('/my-work', { preHandler: requireAuth }, async (req, reply) => {
     const userId = String(req.user?.id)
 

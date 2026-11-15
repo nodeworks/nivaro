@@ -251,6 +251,7 @@ export {
   DEMO_USER,
   DeclareIncidentButton,
   DefinitionsPanel,
+  DelegateCoverLine,
   DelegationCard,
   DelegationConsoleView,
   type DelegationConsoleViewProps,

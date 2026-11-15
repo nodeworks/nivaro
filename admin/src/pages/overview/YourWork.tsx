@@ -1,4 +1,5 @@
-import { LoadErrorNote, loadErrorText } from '@nivaro/shared'
+import { createNivaro } from '@nivaro/sdk'
+import { DelegateCoverLine, LoadErrorNote, loadErrorText, NivaroProvider } from '@nivaro/shared'
 import { Link } from 'react-router'
 import { cn, formatDate } from '@/lib/utils'
 import { type MyWorkData, type MyWorkTask, useMyWork } from './api'
@@ -11,6 +12,9 @@ import { fmt } from './text'
  */
 
 const DAY_MS = 86_400_000
+
+/** The shared covering line reads through a Nivaro client (session cookie, same origin). */
+const coverClient = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 function dueOf(task: MyWorkTask, today: number): { text: string; late: boolean } | null {
   if (!task.due_date) return null
@@ -53,6 +57,11 @@ export function YourWorkSection() {
       title='Your work'
       action={<SectionLink to='/my-work'>Open My Work</SectionLink>}
     >
+      {/* rt5 #15 — covering for someone who is out: live, nothing when covering nobody. No
+          action of its own: the card's "Open My Work" link is right above it. */}
+      <NivaroProvider client={coverClient}>
+        <DelegateCoverLine className='rounded-none border-x-0 border-t-0 bg-transparent dark:bg-transparent' />
+      </NivaroProvider>
       {isLoading ? (
         <div className='space-y-3 p-4' aria-hidden>
           {[0, 1, 2].map((i) => (

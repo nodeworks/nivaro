@@ -10711,8 +10711,15 @@ function ItemEditFormView({
         void settleRecordOutbox(collection, id, settled)
         releaseOutboxClaim()
         // A popped-out window (or another tab) showing this record refreshes:
-        // the socket skips writes by the viewer themselves (#2131).
-        announceRecordTabs(authUserId, 'saved', collection, id)
+        // the socket skips writes by the viewer themselves (#2131). rt5 #6: the field
+        // names this save carried, so that window fades exactly those.
+        announceRecordTabs(
+          authUserId,
+          'saved',
+          collection,
+          id,
+          Object.keys(lastSavePayloadRef.current)
+        )
       }
       void qc.invalidateQueries({ queryKey: ['collision-base', collection] })
       // A refused line keeps its staged edit: the form stays dirty (and its

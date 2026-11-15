@@ -21,6 +21,7 @@ import { FirstWeekCard } from './ai/FirstWeekCard'
 import { TaskDoButton } from './ai/TaskDo'
 import { canOpenChatRoom, openChatRoom } from './chat/chat-core'
 import { useMyRecordRooms } from './chat/chat-hooks'
+import { DelegateCoverLine, useCoveringQuery } from './DelegateCoverLine'
 import { LearningPathCard } from './help-videos/viewer/LearningPathCard'
 import { RequiredVideosCard } from './help-videos/viewer/RequiredVideosCard'
 import { ListSkeleton, SkeletonBar } from './Skeletons'
@@ -348,6 +349,14 @@ export function MyWorkView({
   const debounceRef = useRef(0)
   // #853 — which owned rows show, by their SLA reading; client-side only.
   const [slaFilter, setSlaFilter] = useState<'all' | 'soon' | 'breached'>('all')
+  // rt5 #15 — "Show them" on the covering line: only the covered person's records.
+  // The keys follow the live answer: a record handled under the filter leaves it.
+  const [coverUser, setCoverUser] = useState<string | null>(null)
+  const { data: covering } = useCoveringQuery()
+  const coverFilter = useMemo(() => {
+    const l = coverUser ? covering?.find((c) => c.user_id === coverUser) : null
+    return l ? { userId: l.user_id, name: l.first_name || l.name, keys: new Set(l.keys) } : null
+  }, [coverUser, covering])
 
   const { data, isLoading, refetch, isFetching } = useQuery<MyWorkData>({
     queryKey: ['my-work'],
@@ -630,6 +639,12 @@ export function MyWorkView({
       {/* #3220 — an assistant is blocked until these are answered: always first. */}
       <AgentQuestionsCard questions={data.questions ?? []} />
 
+      {/* rt5 #15 — covering for someone who is out: whose records reach me, live. */}
+      <DelegateCoverLine
+        showing={coverFilter?.userId ?? null}
+        onShow={(l) => setCoverUser((cur) => (cur === l.user_id ? null : l.user_id))}
+      />
+
       <RequiredVideosCard className='mb-4' />
       {/* Learning paths (#1508) sit beside the required list; empty = nothing shown. */}
       <LearningPathCard className='mb-4' />
@@ -642,12 +657,15 @@ export function MyWorkView({
           records: () => {
             const soonCount = data.owned.filter((o) => withinDay(o.sla)).length
             const breachedCount = data.owned.filter((o) => o.sla?.status === 'breached').length
-            const filteredOwned =
+            const bySla =
               slaFilter === 'soon'
                 ? data.owned.filter((o) => withinDay(o.sla))
                 : slaFilter === 'breached'
                   ? data.owned.filter((o) => o.sla?.status === 'breached')
                   : data.owned
+            const filteredOwned = coverFilter
+              ? bySla.filter((o) => coverFilter.keys.has(`${o.collection}:${o.item}`))
+              : bySla
             const slaFilters = [
               { key: 'all' as const, label: `All (${data.owned.length})` },
               { key: 'soon' as const, label: `Warning within 24h (${soonCount})` },
@@ -682,6 +700,20 @@ export function MyWorkView({
                         </button>
                       ))}
                     </div>
+                    {coverFilter && (
+                      <button
+                        type='button'
+                        data-my-work-cover-filter
+                        onClick={() => setCoverUser(null)}
+                        aria-label={`Show all records, not only ${coverFilter.name}'s`}
+                        className='ml-1 inline-flex items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-2.5 py-1 text-[11px] font-medium text-[#0e7490] hover:bg-nvr-cyan/20 dark:text-[#67e8f9]'
+                      >
+                        {coverFilter.name}'s records
+                        <span aria-hidden className='text-[12px] leading-none'>
+                          ×
+                        </span>
+                      </button>
+                    )}
                   </div>
                 )}
                 {filteredOwned.length === 0 ? (

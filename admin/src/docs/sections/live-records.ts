@@ -229,6 +229,20 @@ useQuery({
         'A record saved a moment ago is found by search on the next look. The server keeps a search answer for 20 seconds only until any collection it searched is written, here or on another server; where SQL Server full-text indexes are in use, the newest 200 rows of a collection are also matched by plain text until the index catches up.'
       ]
     },
+    { type: 'h3', id: 'live-records-round5', text: 'Two tabs, record chat, covering and compare' },
+    {
+      type: 'ul',
+      items: [
+        'The same record open in two of your tabs stays in step. When you save in one, the other shows the saved values at once (a short fade on the fields that save changed). While the other tab holds unsaved changes, this one says so in one quiet line — "Also open in another tab — editing there" — with a link to switch to it. If both tabs hold unsaved changes, both say so; save one first, and the other then asks about any field changed in both, the same way it does for someone else’s save.',
+        'The chat button in a record’s header shows how many messages in the record’s room you have not read, and the count moves as messages arrive or as you read the room anywhere — no reload. Only people who may see the room get a count.',
+        'When someone who named you their delegate is out, My Work (and Your work on the home page) says "You’re covering for Jane Smith today — 4 of Jane’s records need you". Show them narrows the waiting list to those records. The count drops as records are handled, and the line goes away when the cover ends or Jane is back. Records you own yourself are not counted — they would need you anyway.',
+        'Compare (two or three records side by side, from a list’s selection) stays live: a save to either record re-reads it as you, the changed values fade in place, and the difference count follows. With Differences only on, a row already shown stays put even when the values become the same, so nothing jumps under you.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Socket notice `record:chat {collection, item}` goes to the record room when a message lands in that record’s chat room (ids only); pages re-read `GET /api/chat/record-room` as the viewer. `GET /api/my-work/covering` answers `{covering: [{user_id, name, first_name, ends_at, records, keys}]}` for the signed-in person — one quick read when they cover nobody. The tab channel’s `saved` note carries field names only, never values.'
+    },
     { type: 'h3', id: 'live-ops-pages', text: 'Live operations pages' },
     {
       type: 'p',

@@ -432,6 +432,15 @@ export {
   McpConnectionsAdminView
 } from './components/McpConnectionsAdminView'
 export { MyWorkView } from './components/MyWorkView'
+// rt5 #15 — "You're covering for Jane today — 4 of Jane's records need you".
+export {
+  type CoverLine,
+  coverEnds,
+  coverSentence,
+  DelegateCoverLine,
+  useCovering,
+  useCoveringQuery
+} from './components/DelegateCoverLine'
 export {
   type ApiCaller,
   type ApiLogRow,

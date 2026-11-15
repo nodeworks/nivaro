@@ -1,9 +1,10 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, MessageSquare, Send, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { useLiveAvailable, useLiveRecordEvent } from '../../lib/live'
 import { canOpenChatRoom, openChatRoom, useRecordRoomTypes } from '../chat/chat-core'
 import { HuddleLiveBadge } from '../chat/huddle/HuddleLiveBadge'
 import { useHuddleLive } from '../chat/huddle/huddle-live'
@@ -50,6 +51,18 @@ export function RecordChatActions({
 
   // Unread in this record's room (#986) — the button says there is something
   // to read before anyone opens it.
+  // rt5 #9: live — a message in the room (`record:chat` to this record's room, ids only) or
+  // reading it anywhere (`read:changed`, lib/user-sync.ts) re-reads the count as the viewer.
+  // A burst of messages is one re-read; the slow poll stays as the fallback without a socket.
+  const qc = useQueryClient()
+  const live = useLiveAvailable()
+  useLiveRecordEvent(
+    'record:chat',
+    collection,
+    itemId || null,
+    () => void qc.invalidateQueries({ queryKey: ['nvr-chat-record-room', collection, itemId] }),
+    { debounceMs: 1000, includeOwn: true, enabled: !!type && !!token }
+  )
   const { data: roomState } = useQuery({
     queryKey: ['nvr-chat-record-room', collection, itemId],
     queryFn: async () => {
@@ -63,7 +76,7 @@ export function RecordChatActions({
     },
     enabled: !!type && !!token && !!itemId,
     staleTime: 30_000,
-    refetchInterval: 60_000
+    refetchInterval: live ? 5 * 60_000 : 60_000
   })
   const unread = roomState?.unread ?? 0
   const huddleLive = useHuddleLive()
@@ -158,23 +171,27 @@ export function RecordChatActions({
           data-record-chat
           data-record-chat-unread={unread || undefined}
         >
-          <MessageSquare className={compact ? 'h-4 w-4' : 'h-3.5 w-3.5'} strokeWidth={2} />
+          {/* Unread uses the sidebar chat badge's own token (bg-nvr-cyan, not the error
+              red) and sits on the glyph's top-right corner so the icon stays readable. */}
+          <span className='relative flex'>
+            <MessageSquare className={compact ? 'h-4 w-4' : 'h-3.5 w-3.5'} strokeWidth={2} />
+            {unread > 0 && compact && (
+              <span className='absolute -right-2 -top-2 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-nvr-cyan px-1 text-[9px] font-bold leading-none text-white ring-2 ring-card'>
+                {unread > 9 ? '9+' : unread}
+              </span>
+            )}
+          </span>
           {!compact && 'Chat'}
           {/* #2851 — a huddle is running in this record's room. */}
           <HuddleLiveBadge
             count={huddleCount}
             className={compact ? 'absolute -bottom-0.5 -right-0.5 bg-card px-1 py-0' : undefined}
           />
-          {unread > 0 &&
-            (compact ? (
-              <span className='absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-[9px] font-bold leading-none text-white'>
-                {unread > 9 ? '9+' : unread}
-              </span>
-            ) : (
-              <span className='flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white'>
-                {unread > 99 ? '99+' : unread}
-              </span>
-            ))}
+          {unread > 0 && !compact && (
+            <span className='flex h-4 min-w-4 items-center justify-center rounded-full bg-nvr-cyan px-1 text-[10px] font-bold text-white'>
+              {unread > 99 ? '99+' : unread}
+            </span>
+          )}
         </button>
         {discussable && (
           <button
