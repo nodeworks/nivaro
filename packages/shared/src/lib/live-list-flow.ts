@@ -435,8 +435,11 @@ export function planRowOrder(
 export const ROW_HOLD_MAX_MS = 10_000
 
 export const GONE_ROW_TITLE = 'No longer in this list'
-/** Faded look of a row kept only until the hold ends (light + dark). */
-export const GONE_ROW_CLASS = 'opacity-50'
+/** Faded look of a row kept only until the hold ends (light + dark). On the cells, not the row:
+ *  the row's enter animation fills `both`, so its last frame (opacity 1) wins over a row class.
+ *  A pinned (sticky) cell fades its content only: its opaque background must keep covering what
+ *  scrolls under it. */
+export const GONE_ROW_CLASS = '[&>td:not(.sticky)]:opacity-50 [&>td.sticky>*]:opacity-50'
 
 export interface SteadyRows<T> {
   rows: T[]
@@ -517,7 +520,16 @@ export function useSteadyRows<T>(
       el.removeEventListener('focusout', onFocusOut)
     }
   })
-  useEffect(() => () => detachRef.current?.(), [])
+  // Forget the element too: StrictMode runs this cleanup and the effects again on mount, and
+  // the attach effect must then attach afresh (it skips an element it thinks it holds).
+  useEffect(
+    () => () => {
+      detachRef.current?.()
+      detachRef.current = null
+      attachedRef.current = null
+    },
+    []
+  )
 
   const nextKeys = rows.map(keyOf)
   const shown = shownRef.current

@@ -32,14 +32,14 @@ export function LivePauseButton({
         <span className='sr-only'>Pause live updates</span>
       </button>
     )
-  const waiting = held > 0 ? `${held.toLocaleString('en-US')} waiting` : 'nothing waiting yet'
   return (
     <button
       type='button'
       onClick={onToggle}
       aria-pressed
       data-live-pause='paused'
-      data-tip={`Live updates paused — ${waiting}. Click to resume and apply them.`}
+      // The tip is read when the pointer arrives; the badge carries the live count.
+      data-tip='Live updates paused — changes wait here (the number on the button). Click to resume and apply them.'
       className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 text-[12px] font-medium text-amber-800 transition-colors hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20 ${className ?? ''}`}
     >
       <Play className='h-3.5 w-3.5' aria-hidden />
@@ -64,7 +64,7 @@ export function LiveBurstPill({ label, onShow }: { label: string; onShow: () => 
       type='button'
       onClick={onShow}
       data-live-burst
-      className='nvr-pop-in inline-flex h-8 max-w-[22rem] shrink-0 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2.5 text-[12px] font-medium text-nvr-navy transition-colors hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
+      className='nvr-pop-in inline-flex h-8 min-w-0 max-w-full items-center sm:max-w-[22rem] gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2.5 text-[12px] font-medium text-nvr-navy transition-colors hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
     >
       <RefreshCw className='h-3 w-3 shrink-0' aria-hidden />
       <span className='truncate'>{label}</span>

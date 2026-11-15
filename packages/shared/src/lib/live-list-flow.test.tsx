@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, StrictMode, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -15,7 +15,8 @@ import {
   resumeAsRefetch,
   setListPaused,
   totalsMayMove,
-  useLivePause
+  useLivePause,
+  useSteadyRows
 } from './live-list-flow'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -291,5 +292,104 @@ describe('totals follow the rows', () => {
     vi.advanceTimersByTime(5000)
     expect(run).toHaveBeenCalledTimes(1)
     vi.useRealTimers()
+  })
+})
+
+describe('useSteadyRows', () => {
+  type R = { id: string; v: number }
+  function List({ rows, resetKey }: { rows: R[]; resetKey?: string }) {
+    const ref = useRef<HTMLDivElement | null>(null)
+    const s = useSteadyRows(rows, (r) => r.id, ref, { resetKey })
+    return (
+      <div ref={ref}>
+        {s.rows.map((r) => (
+          <p key={r.id} data-row-key={r.id} data-gone={s.isGone(r.id) ? '1' : '0'}>
+            {r.id}:{r.v}
+          </p>
+        ))}
+      </div>
+    )
+  }
+  const text = (host: HTMLElement) =>
+    [...host.querySelectorAll('p')].map(
+      (p) => `${p.textContent}${p.dataset.gone === '1' ? '!' : ''}`
+    )
+  const over = (host: HTMLElement, key: string) =>
+    act(() => {
+      host
+        .querySelector(`[data-row-key="${key}"]`)
+        ?.dispatchEvent(new Event('pointerover', { bubbles: true }))
+    })
+
+  it('keeps rows at and above the pointer still, updates values, releases on leave', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const rows = ['a', 'b', 'c', 'd'].map((id) => ({ id, v: 1 }))
+    act(() => root.render(<List rows={rows} />))
+    act(() => root.render(<List rows={[...rows]} />))
+    over(host, 'c')
+    // b leaves, a's value changes, x arrives at the top.
+    act(() =>
+      root.render(
+        <List
+          rows={[
+            { id: 'x', v: 1 },
+            { id: 'a', v: 2 },
+            { id: 'c', v: 1 },
+            { id: 'd', v: 1 }
+          ]}
+        />
+      )
+    )
+    expect(text(host)).toEqual(['a:2', 'b:1!', 'c:1', 'd:1'])
+    act(() => {
+      host.firstElementChild?.dispatchEvent(new Event('pointerleave'))
+    })
+    expect(text(host)).toEqual(['x:1', 'a:2', 'c:1', 'd:1'])
+    act(() => root.unmount())
+    host.remove()
+  })
+
+  it('still listens under StrictMode (effects run twice on mount)', () => {
+    const host = document.createElement('div')
+    const root = createRoot(host)
+    const rows = ['a', 'b', 'c'].map((id) => ({ id, v: 1 }))
+    act(() =>
+      root.render(
+        <StrictMode>
+          <List rows={rows} />
+        </StrictMode>
+      )
+    )
+    act(() =>
+      root.render(
+        <StrictMode>
+          <List rows={[...rows]} />
+        </StrictMode>
+      )
+    )
+    over(host, 'c')
+    act(() =>
+      root.render(
+        <StrictMode>
+          <List rows={[rows[1], rows[2]]} />
+        </StrictMode>
+      )
+    )
+    expect(text(host)).toEqual(['a:1!', 'b:1', 'c:1'])
+    act(() => root.unmount())
+  })
+
+  it('draws the person’s own page / sort change at once', () => {
+    const host = document.createElement('div')
+    const root = createRoot(host)
+    const rows = ['a', 'b', 'c'].map((id) => ({ id, v: 1 }))
+    act(() => root.render(<List rows={rows} resetKey='p1' />))
+    act(() => root.render(<List rows={[...rows]} resetKey='p1' />))
+    over(host, 'c')
+    act(() => root.render(<List rows={[{ id: 'z', v: 1 }]} resetKey='p2' />))
+    expect(text(host)).toEqual(['z:1'])
+    act(() => root.unmount())
   })
 })
