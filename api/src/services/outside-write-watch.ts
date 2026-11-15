@@ -31,6 +31,14 @@ import { runLongSql } from './run-long.js'
  * pairs it already looked at so no row is announced twice. A row whose id the app itself
  * announced in the last moments (the event journal) is skipped: screens already re-read it.
  *
+ * Where SQL Server change tracking is on for the table (sys.change_tracking_tables), the watcher
+ * reads CHANGETABLE(CHANGES …) from the last version it saw instead — no changed-at column or index
+ * needed, and deletes are seen too (announced as removals). It lags one look behind the current
+ * version, so a procedure's own announcement (drained every 5 s) lands in the journal first and the
+ * row is skipped as already told. When the retained history no longer reaches the last version
+ * (CHANGE_TRACKING_MIN_VALID_VERSION past it), one "many records changed" goes out and the version
+ * resyncs. The timestamp poll stays the path for tables without change tracking.
+ *
  * What it caught is counted per collection per hour (Redis, 25 hours) — the realtime page shows
  * "rows caught in 24 h": writes still made without announcing.
  */
@@ -179,11 +187,15 @@ export interface Watchable {
   /** Why not (watchable = false), in plain words. */
   reason?: string
   reason_code?: 'not-table' | 'no-timestamp' | 'no-index' | 'no-key'
+  /** How it is watched: SQL Server change tracking, or the changed-at column poll. */
+  method?: WatchMethod | null
   schema?: string
   table?: string
   ts?: string
   pk?: string
 }
+
+export type WatchMethod = 'change-tracking' | 'timestamp'
 
 /** Changed-at columns by name, when no field is marked date-updated. */
 export const TS_NAMES = [
@@ -208,6 +220,8 @@ export interface TableFacts {
   leading: Set<string>
   /** Primary key columns as written. */
   pk: string[]
+  /** SQL Server change tracking is on for the table. */
+  tracked?: boolean
 }
 
 /** Can this collection be watched, and on what (pure)? */
@@ -224,6 +238,9 @@ export function judgeWatchable(
       reason: 'Not a table in this database (a virtual collection, or the table is missing).'
     }
   const base = { collection, schema: facts.schema, table: facts.table }
+  // change tracking needs neither a changed-at column nor an index — only a one-column key
+  if (facts.tracked && facts.pk.length === 1)
+    return { ...base, pk: facts.pk[0], watchable: true, method: 'change-tracking' }
   const marked = dateUpdatedFields
     .map((f) => facts.dateColumns.get(f.toLowerCase()))
     .find((c): c is string => !!c)
@@ -256,7 +273,7 @@ export function judgeWatchable(
       reason_code: 'no-index',
       reason: `No index starts with ${ts}: watching it would read the whole table every few seconds. Add an index on ${ts} to watch it.`
     }
-  return { ...base, ts, pk: facts.pk[0], watchable: true }
+  return { ...base, ts, pk: facts.pk[0], watchable: true, method: 'timestamp' }
 }
 
 let catalogCache: { at: number; map: Map<string, Watchable> } | null = null
@@ -270,7 +287,7 @@ export async function watchCatalog(fresh = false): Promise<Map<string, Watchable
   const q = db('nivaro_collections').distinct('collection')
   if (await db.schema.hasColumn('nivaro_collections', 'is_virtual').catch(() => false))
     q.where((w) => w.whereNull('is_virtual').orWhere('is_virtual', false))
-  const [collections, columns, keys, fields] = await Promise.all([
+  const [collections, columns, keys, fields, tracked] = await Promise.all([
     q as unknown as Promise<Array<{ collection: string | null }>>,
     db.raw(`SELECT s.name AS sch, t.name AS tbl, c.name AS col
          FROM sys.columns c
@@ -296,7 +313,13 @@ export async function watchCatalog(fresh = false): Promise<Map<string, Watchable
       .select('collection', 'field', 'db_column')
       .catch(() => []) as Promise<
       Array<{ collection: string; field: string; db_column: string | null }>
-    >
+    >,
+    db
+      .raw(`SELECT s.name AS sch, t.name AS tbl
+         FROM sys.change_tracking_tables ct
+         JOIN sys.tables t ON t.object_id = ct.object_id
+         JOIN sys.schemas s ON s.schema_id = t.schema_id`)
+      .catch(() => []) as Promise<Array<{ sch: string; tbl: string }>>
   ])
   const lc = (s: string) => s.toLowerCase()
   const tables = new Map<string, TableFacts>()
@@ -321,6 +344,7 @@ export async function watchCatalog(fresh = false): Promise<Map<string, Watchable
       pkParts.set(key, list)
     }
   }
+  for (const t of tracked) factsOf(t.sch, t.tbl).tracked = true
   for (const [key, list] of pkParts) {
     const f = tables.get(key)
     if (f) f.pk = list.sort((a, b) => a.ord - b.ord).map((p) => p.col)
@@ -365,7 +389,7 @@ export function journalAnnounced(
   return out
 }
 
-interface Recent {
+export interface Recent {
   ids: Map<string, number>
   wholeAt: number
 }
@@ -439,6 +463,85 @@ export function watchQuery(
     OR (${ts} > '${w.lowL}' AND ${ts} <= '${w.highL}')`
 }
 
+// ── Change tracking ──────────────────────────────────────────────────────────
+
+const VERSION_RE = /^\d{1,20}$/
+
+/** CHANGETABLE read for one table between two versions (pure; versions validated). */
+export function changeTableQuery(
+  t: { schema: string; table: string; pk: string },
+  last: string,
+  upTo: string,
+  cap = ROW_CAP
+): string {
+  if (!VERSION_RE.test(last) || !VERSION_RE.test(upTo)) throw new Error('bad version')
+  return `SELECT TOP (${cap + 1}) CAST(ct.${qid(t.pk)} AS NVARCHAR(255)) AS id, ct.SYS_CHANGE_OPERATION AS op
+  FROM CHANGETABLE(CHANGES ${qid(t.schema)}.${qid(t.table)}, ${last}) AS ct
+ WHERE ct.SYS_CHANGE_VERSION <= ${upTo}`
+}
+
+export type CtStep =
+  | { kind: 'start'; next: { ctLast: string; ctPending: string } }
+  | { kind: 'resync'; next: { ctLast: string; ctPending: string } }
+  | { kind: 'idle'; next: { ctLast: string; ctPending: string } }
+  | { kind: 'read'; from: string; to: string; next: { ctLast: string; ctPending: string } }
+
+/**
+ * What one change-tracking look does (pure). Each look reads (last, pending] — `pending` being the
+ * version the PREVIOUS look saw as current — so a change is always one look old before it is
+ * judged (a procedure's own announcement has been drained into the journal by then). A history
+ * that no longer reaches `last` (min valid version past it) resyncs with one "many changed".
+ */
+export function changeTrackingStep(
+  st: { ctLast?: string; ctPending?: string } | null | undefined,
+  current: string,
+  minValid: string | null
+): CtStep {
+  const last = st?.ctLast
+  const pending = st?.ctPending
+  if (!last || !pending || !VERSION_RE.test(last) || !VERSION_RE.test(pending))
+    return { kind: 'start', next: { ctLast: current, ctPending: current } }
+  if (minValid != null && VERSION_RE.test(minValid) && BigInt(minValid) > BigInt(last))
+    return { kind: 'resync', next: { ctLast: current, ctPending: current } }
+  if (BigInt(pending) <= BigInt(last))
+    return { kind: 'idle', next: { ctLast: last, ctPending: current } }
+  return { kind: 'read', from: last, to: pending, next: { ctLast: pending, ctPending: current } }
+}
+
+/**
+ * Change-tracking rows → what to announce per action (pure): I = added, U = changed, D = removed.
+ * Ids the app announced a moment ago are skipped (`deduped`).
+ */
+export function changeTrackingAnnouncements(
+  rows: Array<{ id: unknown; op: unknown }>,
+  recentEntry: Recent | undefined,
+  now: number,
+  recentMs: number
+): { create: string[]; update: string[]; delete: string[]; deduped: number } {
+  const out = { create: new Set<string>(), update: new Set<string>(), delete: new Set<string>() }
+  let deduped = 0
+  for (const r of rows) {
+    if (r.id == null) continue
+    const id = String(r.id).trim()
+    const told =
+      !!recentEntry &&
+      (now - recentEntry.wholeAt <= recentMs ||
+        now - (recentEntry.ids.get(id) ?? -Infinity) <= recentMs)
+    if (told) {
+      deduped++
+      continue
+    }
+    const op = String(r.op ?? 'U').toUpperCase()
+    ;(op === 'I' ? out.create : op === 'D' ? out.delete : out.update).add(id)
+  }
+  return {
+    create: [...out.create],
+    update: [...out.update],
+    delete: [...out.delete],
+    deduped
+  }
+}
+
 // ── State ────────────────────────────────────────────────────────────────────
 
 interface CollState {
@@ -448,11 +551,16 @@ interface CollState {
   /** After a "many rows" look: nothing at or below this is read again. */
   floorU?: string
   floorL?: string
+  /** Change tracking: the last version announced up to, and the one the next look reads to. */
+  ctLast?: string
+  ctPending?: string
 }
 
 export interface CollectionStatus {
   collection: string
   state: 'watching' | 'starting' | 'refused' | 'live-off' | 'error'
+  /** How it was looked at (null when it was not). */
+  method?: WatchMethod | null
   reason?: string
   at: number
   last_caught_at?: number | null
@@ -575,6 +683,15 @@ async function readClock(): Promise<{ u: string; l: string } | null> {
     : null
 }
 
+/** CHANGE_TRACKING_CURRENT_VERSION() as text (null when change tracking is off). */
+async function readChangeTrackingVersion(): Promise<string | null> {
+  const [r] = (await db.raw(
+    'SELECT CAST(CHANGE_TRACKING_CURRENT_VERSION() AS VARCHAR(20)) AS v'
+  )) as Array<{ v: string | null }>
+  const v = r?.v == null ? null : String(r.v).trim()
+  return v && VERSION_RE.test(v) ? v : null
+}
+
 async function resumeState(collection: string): Promise<CollState | null> {
   const redis = redisOf()
   if (!redis) return null
@@ -628,6 +745,7 @@ export async function outsideWriteTick(now = Date.now()): Promise<TickReport | n
   pruneSeen(now)
   const seenTtl = (OVERLAP_S + SETTLE_S + settings.interval_seconds * 2) * 1000
   const wm: Record<string, string> = {}
+  let ctCurrent: string | null = null
   const statuses: CollectionStatus[] = []
   const caughtBy = new Map<string, { caught: number; deduped: number }>()
 
@@ -642,7 +760,14 @@ export async function outsideWriteTick(now = Date.now()): Promise<TickReport | n
     }
     statuses.push(status)
     const j = catalog.get(key)
-    if (!j?.watchable || !j.schema || !j.table || !j.ts || !j.pk) {
+    status.method = j?.watchable ? (j.method ?? 'timestamp') : null
+    if (
+      !j?.watchable ||
+      !j.schema ||
+      !j.table ||
+      !j.pk ||
+      (j.method !== 'change-tracking' && !j.ts)
+    ) {
       status.state = 'refused'
       status.reason = j?.reason ?? 'Not a registered collection.'
       continue
@@ -653,6 +778,64 @@ export async function outsideWriteTick(now = Date.now()): Promise<TickReport | n
       continue
     }
     let st = states.get(key) ?? (await resumeState(key))
+    if (j.method === 'change-tracking') {
+      try {
+        report.watched++
+        ctCurrent ??= await readChangeTrackingVersion()
+        if (!ctCurrent) throw new Error('change tracking version unreadable')
+        const qualified = `${qid(j.schema)}.${qid(j.table)}`
+        const [mv] = (await db.raw(
+          `SELECT CAST(CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID(N'${qualified.replace(/'/g, "''")}')) AS VARCHAR(20)) AS v`
+        )) as Array<{ v: string | null }>
+        const step = changeTrackingStep(st, ctCurrent, mv?.v ?? null)
+        const counts = { caught: 0, deduped: 0 }
+        if (step.kind === 'start') status.state = 'starting'
+        else if (step.kind === 'resync') {
+          // the kept history no longer reaches our version: tell screens once, start again
+          await announceRawWrites(j.collection, null, { source: 'outside-write-watch' })
+          mine.set(key, { ids: new Set(), whole: true })
+          counts.caught = 1
+        } else if (step.kind === 'read') {
+          const rows = await runLongSql<{ id: unknown; op: unknown }>(
+            changeTableQuery({ schema: j.schema, table: j.table, pk: j.pk }, step.from, step.to),
+            { timeoutMs: 5000 }
+          )
+          if (rows.length > ROW_CAP) {
+            await announceRawWrites(j.collection, null, { source: 'outside-write-watch' })
+            mine.set(key, { ids: new Set(), whole: true })
+            counts.caught = rows.length
+          } else {
+            const a = changeTrackingAnnouncements(rows, recent.get(key), now, recentMs)
+            const own = new Set<string>()
+            for (const [action, ids] of [
+              ['create', a.create],
+              ['update', a.update],
+              ['delete', a.delete]
+            ] as const) {
+              if (!ids.length) continue
+              await announceRawWrites(j.collection, ids, { action, source: 'outside-write-watch' })
+              for (const id of ids) own.add(id)
+            }
+            if (own.size) mine.set(key, { ids: own, whole: own.size > BULK_CAP })
+            counts.caught = own.size
+            counts.deduped = a.deduped
+          }
+        }
+        st = { ...(st ?? {}), u: clock.u, l: clock.l, ...step.next }
+        states.set(key, st)
+        wm[key] = JSON.stringify({ ...st, at: now })
+        if (counts.caught) status.last_caught_at = now
+        report.caught += counts.caught
+        report.deduped += counts.deduped
+        if (counts.caught || counts.deduped) caughtBy.set(key, counts)
+      } catch (err) {
+        status.state = 'error'
+        status.reason = /timeout/i.test(err instanceof Error ? err.message : '')
+          ? 'The look took longer than 5 seconds and was stopped.'
+          : 'The change-tracking read failed; it is tried again next time.'
+      }
+      continue
+    }
     if (!st) {
       // first sight: start from now (nothing before this moment is announced)
       states.set(key, { u: clock.u, l: clock.l })
@@ -670,7 +853,7 @@ export async function outsideWriteTick(now = Date.now()): Promise<TickReport | n
     try {
       report.watched++
       const rows = await runLongSql<{ id: unknown; ts: unknown }>(
-        watchQuery({ schema: j.schema, table: j.table, ts: j.ts, pk: j.pk }, w),
+        watchQuery({ schema: j.schema, table: j.table, ts: j.ts ?? '', pk: j.pk }, w),
         { timeoutMs: 5000 }
       )
       const counts = { caught: 0, deduped: 0 }

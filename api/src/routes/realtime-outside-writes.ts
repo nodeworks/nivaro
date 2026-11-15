@@ -50,6 +50,7 @@ export async function realtimeOutsideWritesRoutes(app: FastifyInstance): Promise
         reason: w.reason ?? null,
         reason_code: w.reason_code ?? null,
         ts_column: w.ts ?? null,
+        method: w.watchable ? (w.method ?? 'timestamp') : null,
         viewers: viewers.get(key) ?? 0,
         chosen: chosen.has(key),
         state: s?.state ?? null,
