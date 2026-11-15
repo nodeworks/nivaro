@@ -236,6 +236,7 @@ export function __resetScreenRefreshForTests(): void {
   restTimer = null
   state = { phase: 'idle', at: 0, reason: null }
   listeners.clear()
+  pageButtons = 0
 }
 
 const PALETTE_WORDS = ['refresh', 'reload', 'update', 'data', 'fresh', 'stale']
@@ -246,4 +247,41 @@ export function screenRefreshMatches(query: string): boolean {
   if (q.length < 2) return false
   const words = q.split(/\s+/)
   return words.every((w) => PALETTE_WORDS.some((p) => p.startsWith(w)) || 'this page'.includes(w))
+}
+
+// ─── One ↻ per screen ────────────────────────────────────────────────────────
+// A page that shows its own refresh button (the record header's) registers it; the app-wide
+// one (admin sidebar footer, portal top bar) renders nothing meanwhile, so a screen never shows
+// two.
+
+let pageButtons = 0
+const pageButtonListeners = new Set<() => void>()
+
+/** A page-level ↻ is on screen. Returns the unregister function. */
+export function registerPageRefreshButton(): () => void {
+  pageButtons++
+  for (const l of [...pageButtonListeners]) l()
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    pageButtons = Math.max(0, pageButtons - 1)
+    for (const l of [...pageButtonListeners]) l()
+  }
+}
+
+export function pageRefreshButtonShown(): boolean {
+  return pageButtons > 0
+}
+
+function subscribePageButtons(cb: () => void): () => void {
+  pageButtonListeners.add(cb)
+  return () => {
+    pageButtonListeners.delete(cb)
+  }
+}
+
+/** True while some page shows its own ↻ (the app-wide one hides). */
+export function usePageRefreshButtonShown(): boolean {
+  return useSyncExternalStore(subscribePageButtons, pageRefreshButtonShown, () => false)
 }

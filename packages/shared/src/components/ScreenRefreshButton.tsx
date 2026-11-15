@@ -3,8 +3,10 @@ import { Check, RotateCw } from 'lucide-react'
 import { useContext, useEffect } from 'react'
 import {
   refreshScreenData,
+  registerPageRefreshButton,
   screenRefreshClient,
   setScreenRefreshClient,
+  usePageRefreshButtonShown,
   useScreenRefreshState
 } from '../lib/screen-refresh'
 import { cn } from '../lib/utils'
@@ -18,6 +20,9 @@ import { cn } from '../lib/utils'
  * - `header` (default): beside a page or record header's actions, a 32 px ghost button.
  * - `rail`: the admin sidebar's always-dark footer strip.
  * - `bar`: a portal top bar (inherits the bar's text colour).
+ *
+ * One ↻ per screen: a `header` button (a page's own) registers while mounted, and the app-wide
+ * `rail` / `bar` button renders nothing meanwhile.
  */
 export function ScreenRefreshButton({
   variant = 'header',
@@ -32,6 +37,9 @@ export function ScreenRefreshButton({
   useEffect(() => {
     if (qc && !screenRefreshClient()) setScreenRefreshClient(qc)
   }, [qc])
+  const pageOwn = variant === 'header'
+  useEffect(() => (pageOwn ? registerPageRefreshButton() : undefined), [pageOwn])
+  const pageHasOne = usePageRefreshButtonShown()
   const { phase } = useScreenRefreshState()
   const running = phase === 'running'
   const label =
@@ -40,6 +48,7 @@ export function ScreenRefreshButton({
       : phase === 'partial'
         ? 'Some parts of this page did not refresh. Refresh again'
         : 'Refresh this page’s data (keeps your edits and place)'
+  if (!pageOwn && pageHasOne) return null
   return (
     <button
       type='button'
