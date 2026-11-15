@@ -462,6 +462,11 @@ socket  ops:join {topic: "usage"}   → ops:changed {topic: "usage", at}   (≤ 
     {
       type: 'note',
       text: 'Extension UI bundles get `useLiveOps(topic, onEvent, {debounceMs, match})` on `window.__NIVARO__`, and the Account page has an `account-usage` slot: a bundle that fills it replaces the built-in Usage details card.'
+    },
+    { type: 'h2', id: 'live-admin-allowance', text: 'AI allowance (for hosting layers)' },
+    {
+      type: 'p',
+      text: 'Nivaro sets no AI allowance of its own: a self-hosted instance is never limited by it. A hosting layer can register one from an extension with `ctx.ai.registerAllowance(check)`. Before every AI provider call the check runs in the caller’s context and answers `null` (go ahead) or `{message, action_url?, resets_at?}`; a refusal stops the call with 429 `AI_ALLOWANCE_USED` and that message. A check that throws or takes over 1.5 seconds lets the call through. Extensions can read the same figures as the route with `ctx.usage.read({maxAgeMs})` — `maxAgeMs` reuses an older answer for checks that run on every write (a record limit).'
     }
   ]
 }

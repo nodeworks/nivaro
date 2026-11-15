@@ -119,6 +119,8 @@ export const ERROR_HINTS: Readonly<Record<string, string>> = {
   AI_RATE_LIMITED: 'Too many AI requests in a short time. Wait a minute, then try again.',
   AI_DAILY_TOKENS:
     "You have used today's AI allowance. Try again tomorrow, or ask an administrator to raise it.",
+  AI_ALLOWANCE_USED:
+    'The AI allowance for this period is used up. An administrator can raise it on the Account page.',
   BATCH_LIMIT: 'Select fewer records, then run it again in smaller batches.',
   BULK_ROWS_LIMIT: 'Select fewer records, then run it again in smaller batches.',
   BATCH_READ_LIMIT: 'Ask for fewer records at once.',

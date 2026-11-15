@@ -142,14 +142,19 @@ function entry(key: string): Entry {
   return e
 }
 
-/** The figures for the caller's tenant: cached a few seconds, one read at a time. */
+/** The figures for the caller's tenant: cached a few seconds, one read at a time.
+ *  `maxAgeMs` (a per-write limit check, ctx.usage.read) takes the last answer while it is
+ *  younger than that, writes since or not — so a busy tenant's every create costs no read. */
 export async function readLiveUsage(
   measure: () => Promise<LiveUsage>,
-  opts: { fresh?: boolean } = {}
+  opts: { fresh?: boolean; maxAgeMs?: number } = {}
 ): Promise<LiveUsage> {
   const key = currentTenantKey() || '-'
   const e = entry(key)
-  const young = e.value && e.readGen === e.gen && Date.now() - e.at < CACHE_MS
+  const age = Date.now() - e.at
+  const maxAge = opts.maxAgeMs
+  if (!opts.fresh && e.value && maxAge != null && maxAge > 0 && age < maxAge) return e.value
+  const young = e.value && e.readGen === e.gen && age < CACHE_MS
   if (young && !opts.fresh && e.value) return e.value
   if (e.flight) return e.flight
   const startGen = e.gen
