@@ -818,11 +818,8 @@ export {
   useLiveQueriesOn,
   useLiveQueryBridge,
   useLiveRefetchInterval,
-<<<<<<< .merge_file_mbmKdb
   useLiveWidget,
-=======
   useLiveRefresh,
->>>>>>> .merge_file_jl2J3y
   useMarkRoomRead,
   useMyScopes,
   useNavFavoriteCollections,

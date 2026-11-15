@@ -902,11 +902,8 @@ export const navSections: NavGroup[] = [
       collabLiveProgress,
       collabOfflinePopout,
       collabLiveLists,
-<<<<<<< .merge_file_kVO9iP
       liveScreensDocs,
-=======
       collabLiveCounts,
->>>>>>> .merge_file_BN7Yt5
       collabLiveOps,
       collabPresence,
       collabNotificationsCenter,
