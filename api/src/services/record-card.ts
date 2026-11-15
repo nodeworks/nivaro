@@ -23,7 +23,7 @@ export interface RecordCard {
   title: string
   state: { key: string; label: string; color: string | null } | null
   sla: 'ok' | 'warning' | 'breached' | null
-  owners: Array<{ id: string; name: string }>
+  owners: Array<{ id: string; name: string; inactive?: 'suspended' | 'former' }>
   amounts: RecordCardAmount[]
   /** ISO time the record last changed, when the row carries one. */
   updated_at: string | null
@@ -88,6 +88,66 @@ export function pickCardAmounts(
   }))
 }
 
+export interface CardDecorations {
+  state: RecordCard['state']
+  sla: RecordCard['sla']
+  owners: RecordCard['owners']
+}
+
+/**
+ * Step, SLA and owners exactly as the record page shows them to anyone who may open the
+ * record (security review 2026-11-14). None of the three is a field read: the record page
+ * gates the pipeline read (`GET /pipelines/instance/:c/:id`, recordReadGate), the SLA read
+ * (`GET /sla/status/:c/:id`, canSeeRecord) and the header Owners tile
+ * (`POST /pipelines/instance/:c/owners/batch`, readable ids) on record visibility alone, and
+ * the caller of this has already judged the record with readOne. So the card takes the SAME
+ * sources — never a looser or a different one:
+ * - state: the instance the pipeline panel shows (findRecordInstance: open first, never a
+ *   parallel branch child) and its current step;
+ * - owners: `resolvedOwnerNames`, the function behind the header Owners tile (addendum in
+ *   flight → its owners, redacted people "Former user", inactive people marked);
+ * - SLA: the same status computation the SLA chip reads.
+ * A failed decoration is left out (null / empty), never guessed.
+ */
+export async function cardDecorations(collection: string, id: string): Promise<CardDecorations> {
+  const out: CardDecorations = { state: null, sla: null, owners: [] }
+  try {
+    const { findRecordInstance } = await import('./branch-instances.js')
+    const inst = (await findRecordInstance(collection, id)) as
+      | { current_state?: string | null }
+      | undefined
+    if (inst?.current_state) {
+      const { db } = await import('../db/index.js')
+      const st = (await db('nivaro_workflow_states')
+        .where({ id: inst.current_state })
+        .first('key', 'label', 'color')) as
+        | { key: string; label: string; color: string | null }
+        | undefined
+      if (st) out.state = { key: st.key, label: st.label, color: st.color ?? null }
+    }
+  } catch {
+    /* no step shown */
+  }
+  try {
+    const { resolvedOwnerNames } = await import('../routes/pipelines.js')
+    out.owners = ((await resolvedOwnerNames(collection, [id]))[id] ?? []).slice(0, 5).map((o) => ({
+      id: String(o.id),
+      name: String(o.name ?? '') || 'Someone',
+      ...(o.inactive ? { inactive: o.inactive } : {})
+    }))
+  } catch {
+    /* no owners shown */
+  }
+  try {
+    const { computeStatusBatch } = await import('../routes/sla.js')
+    const s = (await computeStatusBatch(collection, [id]))[id]?.status
+    out.sla = s === 'breached' ? 'breached' : s === 'warning' ? 'warning' : s ? 'ok' : null
+  } catch {
+    /* no SLA shown */
+  }
+  return out
+}
+
 export async function recordCard(
   user: User,
   collection: string,
@@ -126,8 +186,7 @@ export async function recordCard(
     const { resolveDisplayValue } = await import('./display-value.js')
     title = resolveDisplayValue(row, meta?.display_template ?? null) || `${collectionLabel} ${rid}`
   }
-  const { decorateRecords } = await import('./command-center/geo.js')
-  const deco = (await decorateRecords(collection, [rid]).catch(() => new Map())).get(rid)
+  const deco = await cardDecorations(collection, rid)
   const updated = row.date_updated ?? row.updated_at ?? row.date_created ?? row.created_at ?? null
   const updatedIso =
     updated && Number.isFinite(new Date(String(updated)).getTime())
@@ -138,9 +197,9 @@ export async function recordCard(
     collection_label: collectionLabel,
     id: rid,
     title,
-    state: deco?.state ?? null,
-    sla: deco?.sla ?? null,
-    owners: deco?.owners ?? [],
+    state: deco.state,
+    sla: deco.sla,
+    owners: deco.owners,
     amounts: pickCardAmounts(
       row,
       fields as Array<{

@@ -25,7 +25,7 @@ export interface RecordCardData {
   title: string
   state: { key: string; label: string; color: string | null } | null
   sla: 'ok' | 'warning' | 'breached' | null
-  owners: Array<{ id: string; name: string }>
+  owners: Array<{ id: string; name: string; inactive?: 'suspended' | 'former' }>
   amounts: Array<{ field: string; label: string; value: number; money: boolean }>
   updated_at: string | null
 }
@@ -40,6 +40,11 @@ export function hoverCardEligible(collection: string | null | undefined, id: unk
   return (
     !!collection && !SYSTEM.test(collection) && id != null && id !== '' && typeof id !== 'object'
   )
+}
+
+/** An owner as the header Owners tile names them ("Kim Lee (suspended)", "Former user"). */
+export function ownerText(o: { name: string; inactive?: 'suspended' | 'former' }): string {
+  return o.inactive === 'suspended' ? `${o.name} (suspended)` : o.name
 }
 
 export function cardAmountText(a: { value: number; money: boolean }): string {
@@ -132,8 +137,8 @@ function CardBody({
         <p className='mt-2 truncate text-[11.5px] text-slate-600 dark:text-slate-300'>
           <span className='text-slate-400 dark:text-slate-500'>With </span>
           {data.owners.length <= 2
-            ? data.owners.map((o) => o.name).join(' and ')
-            : `${data.owners[0].name} and ${data.owners.length - 1} others`}
+            ? data.owners.map(ownerText).join(' and ')
+            : `${ownerText(data.owners[0])} and ${data.owners.length - 1} others`}
         </p>
       )}
       {data.amounts.length > 0 && (
