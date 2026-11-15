@@ -80,7 +80,11 @@ export function AlertBanners({
             }`
           )
         )
-        .then((r) => (Array.isArray(r) ? r : []))
+        // The client hands back the JSON envelope ({ data: [...] }).
+        .then((r) => {
+          const d = (r as unknown as { data?: unknown } | null)?.data ?? r
+          return Array.isArray(d) ? (d as AlertBannerData[]) : []
+        })
         .catch(() => []),
     staleTime: 30_000,
     enabled: !!collection && itemId !== 'new'
