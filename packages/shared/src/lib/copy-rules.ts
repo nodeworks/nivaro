@@ -62,7 +62,8 @@ export function groupNeverCopied(
   }
   for (const [field, why] of Object.entries(skip ?? {})) {
     const f = byName.get(field)
-    if (!f || why === 'list') continue
+    // Ids and created/changed stamps never copy anywhere; listing them only adds noise.
+    if (!f || why === 'list' || why === 'audit') continue
     const label = COPY_REASON_WORDS.find(([r]) => r === why)?.[1]
     if (!label) continue
     groups.get(label)?.fields.push({ field, label: f.label?.trim() || fieldTitle(field) })

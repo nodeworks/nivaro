@@ -64,6 +64,7 @@ describe('groupNeverCopied / fieldTitle', () => {
         { field: 'order_number' },
         { field: 'triggerMdsi' },
         { field: 'lines' },
+        { field: 'created_at' },
         { field: 'mdsi_units_shipped' }
       ]
     )
