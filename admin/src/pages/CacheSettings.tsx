@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatRelative } from '@/lib/utils'
 
 // ─── Cache switches (Database → Caches) ──────────────────────────────────────
 // Every cache switch with its effective value and where it comes from. Values saved
@@ -36,11 +36,31 @@ interface CacheSettingRow {
   stored: Value | null
 }
 
+interface ChangeWarmStats {
+  window_hours: number
+  changes: number
+  flushes: number
+  marked: number
+  recomputes: number
+  warmed: number
+  cached: number
+  joined: number
+  skipped: number
+  failed: number
+  deferred: number
+  last_at: string | null
+  by_query: Array<{ slug: string; warmed: number }>
+  enabled: boolean
+  cloud: boolean
+}
+
 interface CacheConfigResponse {
   data: CacheSettingRow[]
   instance: string
   cloud: boolean
   stats: Record<string, Record<string, number | boolean>>
+  /** Warms triggered by data changes (services/cache-warm-on-change.ts); absent on older servers. */
+  change_warm?: ChangeWarmStats | null
 }
 
 const QUERY_KEY = ['admin', 'cache-config']
@@ -149,6 +169,7 @@ export default function CacheSettings() {
           <p className='text-[12px] text-destructive'>Could not load cache settings.</p>
         )}
         <div className='space-y-4'>
+          {q.data?.change_warm && <ChangeWarmCard stats={q.data.change_warm} />}
           {groups.map(([group, rows]) => (
             <section
               key={group}
@@ -289,5 +310,97 @@ function SettingRow({
         </div>
       </td>
     </tr>
+  )
+}
+
+// Warms triggered by data changes, last 24 hours, across every replica.
+function ChangeWarmCard({ stats }: { stats: ChangeWarmStats }) {
+  const cells: Array<{ label: string; value: number; hint: string }> = [
+    {
+      label: 'Changes heard',
+      value: stats.changes,
+      hint: `Record writes, moves, imports and announced procedure writes, in ${stats.flushes.toLocaleString()} burst(s).`
+    },
+    {
+      label: 'Queries marked stale',
+      value: stats.marked,
+      hint: 'Cached queries that read a changed collection. Older cached answers say what changed.'
+    },
+    {
+      label: 'Warms',
+      value: stats.recomputes,
+      hint: `A widget's (or a query's) most-viewed entries recomputed together. ${stats.deferred.toLocaleString()} waited for the 2-minute gap first.`
+    },
+    {
+      label: 'Entries recomputed',
+      value: stats.warmed,
+      hint: `${stats.joined.toLocaleString()} shared with a viewer already running the same query.`
+    },
+    {
+      label: 'Left alone',
+      value: stats.skipped,
+      hint: 'Already newer than the change, not cached, or out of time.'
+    },
+    {
+      label: 'Failed',
+      value: stats.failed,
+      hint: 'The query did not finish; the old entry stays until its TTL.'
+    }
+  ]
+  return (
+    <section
+      className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      data-change-warm
+    >
+      <div className='flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-slate-200 px-4 py-2 dark:border-border'>
+        <h2 className='text-[13px] font-semibold'>
+          Warms after data changes
+          <span className='ml-1.5 font-normal text-muted-foreground'>
+            last {stats.window_hours} hours, every replica
+          </span>
+        </h2>
+        <span className='text-[11px] text-muted-foreground'>
+          {stats.cloud
+            ? 'Not used in cloud mode.'
+            : !stats.enabled
+              ? 'Off on this instance — see Warm after data changes below.'
+              : stats.last_at
+                ? `Last warm ${formatRelative(stats.last_at)}`
+                : 'On — nothing warmed yet.'}
+        </span>
+      </div>
+      <div className='grid grid-cols-2 gap-px bg-slate-200 sm:grid-cols-3 lg:grid-cols-6 dark:bg-border'>
+        {cells.map((c) => (
+          <div key={c.label} className='bg-white px-4 py-2.5 dark:bg-card' data-tip={c.hint}>
+            <div className='text-[11px] text-muted-foreground'>{c.label}</div>
+            <div
+              className={cn(
+                'text-[18px] font-semibold tabular-nums',
+                c.label === 'Failed' && c.value > 0 && 'text-amber-700 dark:text-amber-300'
+              )}
+            >
+              {c.value.toLocaleString()}
+            </div>
+          </div>
+        ))}
+      </div>
+      {stats.by_query.length > 0 && (
+        <div className='border-t border-slate-200 px-4 py-2 dark:border-border'>
+          <div className='mb-1 text-[11px] uppercase tracking-wide text-muted-foreground'>
+            Most recomputed
+          </div>
+          <ul className='flex flex-wrap gap-x-4 gap-y-1 text-[12px]'>
+            {stats.by_query.map((r) => (
+              <li key={r.slug} className='flex min-w-0 items-baseline gap-1.5'>
+                <span className='truncate font-mono text-[11.5px]'>{r.slug}</span>
+                <span className='tabular-nums text-muted-foreground'>
+                  {r.warmed.toLocaleString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
   )
 }
