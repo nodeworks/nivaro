@@ -8003,6 +8003,8 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           <Switch
             checked={cfg.catalog_notice === true}
             onCheckedChange={(v) => void patch({ catalog_notice: v })}
+          />
+        </div>
         <div className='flex items-center justify-between gap-4'>
           <div>
             <p className='text-[12.5px] font-medium text-slate-700'>

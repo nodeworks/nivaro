@@ -636,7 +636,7 @@ export function useSteadyRows<T>(
     if (!enabled || before.length === 0) return
     const now = new Set(order)
     if (!before.some((k) => !now.has(k))) return
-    if (released || pointerRef.current != null) relayoutRows(rootRef.current)
+    if (released || anchors.current()[0] != null) relayoutRows(rootRef.current)
   })
   // What is on screen now: the next render plans against it.
   useEffect(() => {
