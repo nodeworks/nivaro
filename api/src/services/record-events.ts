@@ -43,6 +43,8 @@ export type RecordAspect =
   | '$approvals'
   /** rt4 #6 — the record was hidden from or shown in pickers again (routes/picker-exclusions.ts). */
   | '$picker'
+  /** rt9 #20 — a banner-enabled threshold alert fired on the record (hooks/alerts.ts). */
+  | '$alerts'
 
 export function announceRecordAspect(
   collection: string | null | undefined,

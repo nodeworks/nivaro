@@ -62,6 +62,7 @@ interface AlertDefinition {
   filters: Record<string, unknown> | null
   detection_type: 'threshold' | 'anomaly' | 'activity_pattern'
   sensitivity: number | null
+  show_banner?: boolean
 }
 
 interface FilterRow {
@@ -130,6 +131,7 @@ export function AlertEditPage() {
   const [sensitivity, setSensitivity] = useState<number>(2.0)
   const [cooldownMinutes, setCooldownMinutes] = useState<number>(60)
   const [isActive, setIsActive] = useState(true)
+  const [showBanner, setShowBanner] = useState(false)
   const [filterRows, setFilterRows] = useState<FilterRow[]>([])
   const [initialized, setInitialized] = useState(false)
 
@@ -211,6 +213,7 @@ export function AlertEditPage() {
       setUnit(existing.unit)
       setCooldownMinutes(existing.cooldown_minutes)
       setIsActive(existing.is_active)
+      setShowBanner(existing.show_banner === true)
       setDetectionType(existing.detection_type ?? 'threshold')
       setSensitivity(existing.sensitivity ?? 2.0)
 
@@ -351,7 +354,8 @@ export function AlertEditPage() {
       is_active: isActive,
       filters,
       detection_type: detectionType,
-      sensitivity: detectionType === 'anomaly' ? Number(sensitivity) || 2.0 : null
+      sensitivity: detectionType === 'anomaly' ? Number(sensitivity) || 2.0 : null,
+      show_banner: showBanner
     }
     lastBody.current = body
     setAudienceAsk(null)
@@ -712,6 +716,26 @@ export function AlertEditPage() {
           <span className='text-xs text-muted-foreground'>
             {isActive ? 'Alert will be evaluated' : 'Alert is paused'}
           </span>
+        </div>
+
+        {/* rt9 #20 — threshold banner on the record page (and pages that host the collection's banners) */}
+        <div className={cn('flex items-start gap-3', isPattern && 'hidden')}>
+          <Switch
+            id='alert-banner'
+            checked={showBanner}
+            onCheckedChange={setShowBanner}
+            className='mt-0.5'
+          />
+          <div className='min-w-0'>
+            <Label htmlFor='alert-banner' className='cursor-pointer'>
+              Show as a banner
+            </Label>
+            <p className='text-xs text-muted-foreground'>
+              People who open the record see “… just crossed {threshold}
+              {unit === '%' ? '%' : ''}” for up to 7 days while the value still holds. Each person
+              can hide it for themselves, and sees it only for records and fields they can read.
+            </p>
+          </div>
         </div>
 
         {/* Scope filters */}

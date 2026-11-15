@@ -166,6 +166,18 @@ async function fireAlert(
     triggered_at: new Date()
   })
 
+  // rt9 #20 — a banner-enabled rule tells open record pages and banner hosts (ids + aspect only;
+  // each viewer re-reads the banner as themselves).
+  try {
+    const { bannerDefinitionIds } = await import('../services/alert-banners.js')
+    if ((await bannerDefinitionIds()).has(Number(def.id))) {
+      const { announceRecordAspect } = await import('../services/record-events.js')
+      announceRecordAspect(collection, itemId, '$alerts')
+    }
+  } catch {
+    /* best-effort */
+  }
+
   await notifyAlertSubscribers(def, itemId, String(fieldValue), detail)
   return true
 }

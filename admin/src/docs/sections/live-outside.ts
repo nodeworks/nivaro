@@ -23,6 +23,48 @@ export const liveOutsideDocs: DocSection = {
         'Both listen on a stream that carries only “something changed” — no ids, field names or values — and only when the page itself would now read differently. The page then re-reads through its usual link, as its creator, exactly as a reload would. Streams are limited per address, and the checks share the pushed-widget budget (`WIDGET_LIVE_MAX_PER_MIN`).'
       ]
     },
+    { type: 'h2', id: 'approval-links-live', text: 'Approve and Reject from email' },
+    {
+      type: 'p',
+      text: 'Turn on “Approve / Reject in emails” at the top of the Approvals page and each approval request email carries an Approve and a Reject button, signed for that approver alone and good for 7 days. Teams cards use the same page.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The button opens a page that says where the approval stands now and keeps saying it while open: “Already approved by Beth Lee at 10:42 AM”, “Waiting on Finance review”, “This approval was withdrawn”.',
+        'Deciding still needs the approver named in the link, signed in to Nivaro in that browser, and a press of the button on the page (a link scanner that opens the email decides nothing). A link decides once.',
+        'A second press, a second tab, or a colleague who decided first never shows an error: the page shows the decision that stands and nothing to press.',
+        'The page names the approval, the step and the people who decided — never values from the record. “Open in Nivaro” opens the record as you.'
+      ]
+    },
+    { type: 'h2', id: 'submission-status-page', text: 'Status page for public form submissions' },
+    {
+      type: 'p',
+      text: 'On a public form, turn on “Status page” (form editor, right column). After sending, the person gets a “Follow your request” link — and an email with it, when you pick which form field holds their email address. The page shows Received → In review → Decided and updates while it is open.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Pick where the status comes from: the record’s pipeline step, or one field. Then list the steps (or values) people may see, with the stage and the words they read (for example “Approved”). Anything you did not list reads “In review” — internal step names never show.',
+        'Nothing else from the record is on the page: no values, no names, no ids.',
+        'Each link belongs to one submission. It is signed, works for the days you set (90 by default) and stops working when you turn the status page off. Only a fingerprint of it is stored, and it never appears in the request log.',
+        'Page loads and live connections are limited per address.'
+      ]
+    },
+    { type: 'h2', id: 'threshold-banners', text: 'Threshold banners' },
+    {
+      type: 'p',
+      text: 'An alert definition can also show as a banner: open it under Alerts and turn on “Show as a banner”. People who open the record then see, for example, “Project US201979 just crossed 90%” with the value now, for up to 7 days while the value still holds.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The banner appears without a reload when the alert fires, and goes when the value drops back.',
+        'Each person can hide a banner for themselves (×). A later crossing shows again.',
+        'Everyone sees banners only for records and fields they can read.',
+        'Pages that list a collection’s newest crossings (a budget console, for example) show the first three and “N more”.'
+      ]
+    },
     { type: 'h2', id: 'outside-changes', text: 'Changes made outside the app' },
     {
       type: 'p',

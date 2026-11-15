@@ -1,4 +1,4 @@
-import { useLiveRefresh } from '@nivaro/shared'
+import { toastError, useLiveRefresh } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, GripVertical, Plus, ThumbsUp, Trash2, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api } from '@/lib/api'
@@ -569,6 +570,42 @@ function ActiveInstances() {
   )
 }
 
+// ─── Email decision links (rt9 #21) ──────────────────────────────────────────
+
+/** Instance-wide: approval request emails carry Approve / Reject links (default off). */
+function EmailLinksSwitch() {
+  const qc = useQueryClient()
+  const { data } = useQuery<{ email_links: boolean }>({
+    queryKey: ['approval-settings'],
+    queryFn: () =>
+      api.get<{ data: { email_links: boolean } }>('/approvals/settings').then((r) => r.data.data)
+  })
+  const save = useMutation({
+    mutationFn: (on: boolean) => api.put('/approvals/settings', { email_links: on }),
+    onSuccess: (_r, on) => {
+      qc.setQueryData(['approval-settings'], { email_links: on })
+      toast.success(on ? 'Approval emails now carry Approve and Reject' : 'Decision links off')
+    },
+    onError: (err) => toastError(err, 'Could not change the setting')
+  })
+  return (
+    <div
+      className='flex items-center gap-2'
+      data-tip='Each approver gets links signed for them alone. The page they open shows where the approval stands, updates live, and decides only once they are signed in.'
+    >
+      <Switch
+        id='approval-email-links'
+        checked={!!data?.email_links}
+        disabled={!data || save.isPending}
+        onCheckedChange={(on) => save.mutate(on)}
+      />
+      <Label htmlFor='approval-email-links' className='cursor-pointer text-[13px] font-normal'>
+        Approve / Reject in emails
+      </Label>
+    </div>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function ApprovalsPage() {
@@ -623,31 +660,34 @@ export function ApprovalsPage() {
           <ThumbsUp className='h-5 w-5 text-muted-foreground' />
           <h1 className='text-lg font-semibold'>Approvals</h1>
         </div>
-        <div className='flex items-center rounded-md border border-border p-0.5'>
-          <button
-            type='button'
-            onClick={() => setTab('chains')}
-            className={cn(
-              'rounded px-3 py-1 text-[13px] font-medium transition-colors',
-              tab === 'chains'
-                ? 'bg-nvr-cyan/10 text-nvr-cyan'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
-            Chains
-          </button>
-          <button
-            type='button'
-            onClick={() => setTab('instances')}
-            className={cn(
-              'rounded px-3 py-1 text-[13px] font-medium transition-colors',
-              tab === 'instances'
-                ? 'bg-nvr-cyan/10 text-nvr-cyan'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
-            Active Instances
-          </button>
+        <div className='flex flex-wrap items-center gap-4'>
+          <EmailLinksSwitch />
+          <div className='flex items-center rounded-md border border-border p-0.5'>
+            <button
+              type='button'
+              onClick={() => setTab('chains')}
+              className={cn(
+                'rounded px-3 py-1 text-[13px] font-medium transition-colors',
+                tab === 'chains'
+                  ? 'bg-nvr-cyan/10 text-nvr-cyan'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              Chains
+            </button>
+            <button
+              type='button'
+              onClick={() => setTab('instances')}
+              className={cn(
+                'rounded px-3 py-1 text-[13px] font-medium transition-colors',
+                tab === 'instances'
+                  ? 'bg-nvr-cyan/10 text-nvr-cyan'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              Active Instances
+            </button>
+          </div>
         </div>
       </header>
 

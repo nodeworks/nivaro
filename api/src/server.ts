@@ -49,6 +49,7 @@ import { adminProvisionRoutes } from './routes/admin/provision.js'
 import { adminTrafficTenantRoutes } from './routes/admin/traffic-tenants.js'
 import { loadScheduledFlows } from './routes/flows.js'
 import { formRendererRoutes } from './routes/form-renderer.js'
+import { formStatusPublicRoutes } from './routes/form-status.js'
 import { registerRoutes } from './routes/index.js'
 import { oauthPublicRoutes } from './routes/oauth.js'
 import { presencePublicRoutes } from './routes/presence.js'
@@ -784,6 +785,7 @@ export async function buildServer() {
   await app.register(legacyCompatRoutes)
   await app.register(formRendererRoutes)
   await app.register(sharePublicRoutes)
+  await app.register(formStatusPublicRoutes)
   // OAuth for remote MCP clients — well-known documents must sit at the origin root.
   await app.register(oauthPublicRoutes)
   await app.register(statusPublicRoutes)

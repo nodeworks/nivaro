@@ -158,9 +158,11 @@ export function maskQueryString(raw: string | null | undefined): string | null {
  * ever receives). The segment after /command/kiosk/ is masked wherever a path is logged.
  */
 const KIOSK_PATH_RE = /(\/command\/kiosk\/)[^/?#]+/gi
+/** A public form submitter's status-page link (realtime round 9, #22): `/form-status/<token>`. */
+const FORM_STATUS_PATH_RE = /(\/form-status\/)[^/?#]+/gi
 
 export function maskUrlPath(path: string): string {
-  return path.replace(KIOSK_PATH_RE, `$1${MASK}`)
+  return path.replace(KIOSK_PATH_RE, `$1${MASK}`).replace(FORM_STATUS_PATH_RE, `$1${MASK}`)
 }
 
 /** A URL (path + query) with its path credential and query string masked — for logs and traces. */

@@ -16,6 +16,25 @@ vi.mock('../../../config.js', () => ({
   }
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
+// Realtime round 9 (#21): the landing page reads where the approval stands now.
+const PENDING = {
+  status: 'pending',
+  chain_name: 'Capital spend',
+  step_label: 'Finance review',
+  step_number: 1,
+  step_count: 1,
+  last: null,
+  mine: null,
+  waiting_on_holder: true
+}
+const linkState = { current: { ...PENDING } as Record<string, unknown> }
+vi.mock('../../../services/approval-link-state.js', async (orig) => ({
+  ...(await orig<object>()),
+  loadApprovalLinkState: vi.fn(async () => linkState.current)
+}))
+vi.mock('../../../db/index.js', () => ({
+  db: () => ({ where: () => ({ first: async () => undefined }) })
+}))
 vi.mock('../../../routes/approvals.js', () => ({
   applyApprovalDecision: vi.fn(async () => ({ ok: true }))
 }))
@@ -86,7 +105,118 @@ const post = (token: string, session?: string) => ({
   payload: `token=${encodeURIComponent(token)}`
 })
 
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  vi.clearAllMocks()
+  linkState.current = { ...PENDING }
+})
+
+describe('live landing page (rt9 #21)', () => {
+  const decided = {
+    ...PENDING,
+    status: 'approved',
+    step_label: null,
+    waiting_on_holder: false,
+    last: {
+      decision: 'approved',
+      by: 'Beth Lee',
+      at: '2026-11-14T15:42:00.000Z',
+      step_label: 'Finance review',
+      mine: false
+    }
+  }
+
+  it('shows an already-decided approval to anyone holding the link, with nothing to press', async () => {
+    linkState.current = decided
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: `/callback?token=${encodeURIComponent(mint())}`
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('Already approved')
+    expect(res.body).toContain('Beth Lee')
+    expect(res.body).not.toContain('<form')
+    // Final answer: no live stream.
+    expect(res.body).toContain('var STREAM=null')
+  })
+
+  it('a pending page listens on its own token-scoped stream', async () => {
+    const token = mint()
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: `/callback?token=${encodeURIComponent(token)}`,
+      headers: { 'x-test-session': 'u-1' }
+    })
+    expect(res.body).toContain(`stream?token=${encodeURIComponent(token)}`)
+    expect(String(res.headers['content-security-policy'])).toMatch(/script-src 'nonce-/)
+  })
+
+  it('refuses a double decision gracefully: the page says who decided, nothing is applied', async () => {
+    linkState.current = decided
+    const res = await (await app()).inject(post(mint(), 'u-1'))
+    expect(res.statusCode).toBe(409)
+    expect(res.body).toContain('Already approved')
+    expect(res.body).toContain('Beth Lee')
+    expect(applyApprovalDecision).not.toHaveBeenCalled()
+  })
+
+  it('a decision raced by someone else answers with the new state, not an error', async () => {
+    vi.mocked(applyApprovalDecision).mockImplementationOnce(async () => {
+      linkState.current = decided
+      return { ok: false, status: 409, error: 'Instance is already approved' } as never
+    })
+    const res = await (await app()).inject(post(mint(), 'u-1'))
+    expect(res.statusCode).toBe(409)
+    expect(res.body).toContain('Already approved')
+  })
+
+  it('the stream refuses tampered and expired tokens', async () => {
+    const a = await app()
+    const token = mint()
+    const forged = `${token.split('.')[0]}.AAAA`
+    expect(
+      (await a.inject({ method: 'GET', url: `/stream?token=${encodeURIComponent(forged)}` }))
+        .statusCode
+    ).toBe(404)
+    const expired = signActionToken({
+      action_id: 'approve',
+      kind: 'approval',
+      ref_id: '42',
+      user: 'u-1',
+      exp: Math.floor(Date.now() / 1000) - 10
+    })
+    expect(
+      (await a.inject({ method: 'GET', url: `/stream?token=${encodeURIComponent(expired)}` }))
+        .statusCode
+    ).toBe(404)
+    expect(
+      (
+        await a.inject({
+          method: 'GET',
+          url: `/callback?token=${encodeURIComponent(expired)}`,
+          headers: { 'x-test-session': 'u-1' }
+        })
+      ).statusCode
+    ).toBe(401)
+  })
+
+  it('email links live a week and name one approver', async () => {
+    const { emailDecisionLinks, EMAIL_TOKEN_TTL_SECONDS } = await import(
+      '../../../routes/message-actions.js'
+    )
+    const links = emailDecisionLinks({
+      instance: { id: 42, collection: 'workflows', item: '9' },
+      userId: 'u-1'
+    })
+    const t = decodeURIComponent(links.approve_url.split('token=')[1])
+    const p = verifyActionToken(t)
+    expect(p).toMatchObject({ action_id: 'approve', user: 'u-1', ref_id: '42' })
+    const ttl = (p?.exp ?? 0) - Math.floor(Date.now() / 1000)
+    expect(ttl).toBeGreaterThan(EMAIL_TOKEN_TTL_SECONDS - 5)
+    expect(
+      verifyActionToken(decodeURIComponent(links.reject_url.split('token=')[1]))?.action_id
+    ).toBe('reject')
+  })
+})
 
 describe('decision tokens', () => {
   it('live 24 hours and carry a one-time id', () => {

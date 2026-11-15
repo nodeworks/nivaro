@@ -105,9 +105,18 @@ async function notifyStepApprovers(
   const built = await buildApprovalMail(instance.id, 'requested', { stepLabel, actorId }).catch(
     () => null
   )
+  // Realtime round 9 (#21): Approve / Reject links in the email, signed for each approver, when
+  // the instance has it switched on. The link opens a page that shows where the approval stands
+  // (live while open) and decides only for that approver, signed in, once.
+  const { coreSwitchOn } = await import('../services/core-switches.js')
+  const withLinks = !!built && (await coreSwitchOn('approval_email_links'))
+  const { emailDecisionLinks } = withLinks
+    ? await import('./message-actions.js')
+    : { emailDecisionLinks: null }
   for (const userId of approvers) {
     // The record by its readable id, read as this approver (#776).
     const ref = await recordDisplayRef(instance.collection, instance.item, { recipient: userId })
+    const decision = emailDecisionLinks ? emailDecisionLinks({ instance, userId }) : null
     await notifyUser(app, userId, {
       subject: `Approval requested: ${chain.name}`,
       message: `Your approval (${stepLabel}) is requested for ${instance.collection} ${ref}.`,
@@ -122,7 +131,12 @@ async function notifyStepApprovers(
       },
       sender: actorId,
       channels: { inapp: true, email: true },
-      ...(built ? { template: built.template, template_data: built.data } : {})
+      ...(built
+        ? {
+            template: built.template,
+            template_data: decision ? { ...built.data, decision } : built.data
+          }
+        : {})
     })
   }
 
@@ -290,6 +304,30 @@ export async function applyApprovalDecision(opts: {
 
 export async function approvalsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
+
+  // ── Settings (admin) — realtime round 9 (#21) ──────────────────────────────
+  // email_links: approval request emails carry Approve / Reject decision links (default off).
+  app.get('/settings', async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
+    const { coreSwitchOn } = await import('../services/core-switches.js')
+    return reply.send({ data: { email_links: await coreSwitchOn('approval_email_links') } })
+  })
+  app.put<{ Body: { email_links?: unknown } }>('/settings', async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
+    if (typeof req.body?.email_links !== 'boolean')
+      return reply.code(400).send({ error: 'email_links must be true or false' })
+    const { setCoreSwitch } = await import('../services/core-switches.js')
+    await setCoreSwitch('approval_email_links', req.body.email_links)
+    await logActivity({
+      action: 'update',
+      user: req.user!.id,
+      collection: 'nivaro_extension_settings',
+      item: 'approval_email_links',
+      comment: `Approval email decision links ${req.body.email_links ? 'on' : 'off'}`,
+      req
+    })
+    return reply.send({ data: { email_links: req.body.email_links } })
+  })
 
   // ── Chains CRUD (admin) ────────────────────────────────────────────────────
 
