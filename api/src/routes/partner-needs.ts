@@ -12,7 +12,7 @@ const MAX_ROWS = 500
 /**
  * POST /api/partner-needs/:collection  {item?, values?, lines?}  (idea 43)
  *
- * Which fields a partner push at a later manual move will need, for the values the record
+ * Which fields a partner push at a later step will need, for the values the record
  * form holds now (unsaved edits and lines included) — services/partner-needs. A POST only
  * because it carries the form's values; it reads, never writes (exempt from the maintenance
  * freeze and allowed for sandbox keys). The record must be readable by the caller (a new

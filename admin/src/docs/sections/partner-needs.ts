@@ -24,7 +24,7 @@ export const partnerNeedsDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Partner pushes on **manual** steps out of the record’s current step and out of every step it can reach by moving forward (to a step with a higher order). A new record starts at its pipeline’s first step. When the pipeline’s steps have no order, only the next steps count. Automatic steps do not count.',
+        'Partner pushes on steps out of the record’s current step and out of every step it can reach by moving forward (to a step with a higher order). A new record starts at its pipeline’s first step. When the pipeline’s steps have no order, only the next steps count. Steps a person presses and automatic steps both count.',
         'A push counts only when its own conditions pass for the current values: the lookup that must find a row (`skip_when_empty`), the any-of check (`skip_unless_any`) and the guard rules. These are the same checks the push itself runs.',
         'What a push needs is read from its payload template: a value it always sends with no fallback. A value with a fallback, one sent only when it is not empty, or one inside an `if` in Liquid is not badged.'
       ]
