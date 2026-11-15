@@ -3,6 +3,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { publicLinkBase } from './instance-links.js'
+import { currentTenantKey } from './tenant-rooms.js'
 import { overWindowLimit } from './windowed-limit.js'
 
 /**
@@ -332,7 +333,8 @@ export function statusPageUrl(token: string): string {
 export const RECEIPT_MAILS_PER_ADDRESS_DAY = 3
 /** Receipt emails one form sends per hour, whoever submits. */
 export const RECEIPT_MAILS_PER_FORM_HOUR = 60
-/** Receipt emails one recipient domain gets per hour, across every form (not our own domains). */
+/** Receipt emails one recipient domain gets per hour from one form (not our own domains, not
+ *  free-mail providers). */
 export const RECEIPT_MAILS_PER_DOMAIN_HOUR = 30
 /** Receipt emails this instance sends per hour, all forms together. */
 export const RECEIPT_MAILS_PER_INSTANCE_HOUR = 300
@@ -378,32 +380,58 @@ const domainOf = (from: string | null | undefined): string | null => {
   return m ? m[1].replace(/\.+$/, '') : null
 }
 
-let ownDomainsCache: { at: number; value: Set<string> } | null = null
-/** The mail domains this instance sends from (MAIL_FROM, Settings → Email "from"). */
-async function ownMailDomains(): Promise<Set<string>> {
-  if (ownDomainsCache && Date.now() - ownDomainsCache.at < 60_000) return ownDomainsCache.value
+/**
+ * Free-mail providers: never "our own" domain (even when Settings names one as the sender) and
+ * never domain-capped — a flood of gmail.com addresses on one form must not stop receipts to
+ * every Gmail user. Their mailboxes still have the per-address, per-form and instance caps.
+ */
+export const FREE_MAIL_DOMAINS = new Set([
+  'gmail.com',
+  'googlemail.com',
+  'outlook.com',
+  'hotmail.com',
+  'live.com',
+  'yahoo.com',
+  'icloud.com',
+  'aol.com',
+  'proton.me',
+  'protonmail.com'
+])
+
+/** Per tenant ('' = self-hosted): every cloud tenant has its own sending domains. */
+const ownDomainsCache = new Map<string, { at: number; value: Set<string> }>()
+
+/** The mail domains this instance (tenant) sends from (MAIL_FROM, Settings → Email "from"),
+ *  free-mail providers left out. */
+export async function ownMailDomains(): Promise<Set<string>> {
+  const tenant = currentTenantKey()
+  const hit = ownDomainsCache.get(tenant)
+  if (hit && Date.now() - hit.at < 60_000) return hit.value
   const out = new Set<string>()
-  const env = domainOf(config.MAIL_FROM)
-  if (env) out.add(env)
+  const add = (d: string | null) => {
+    if (d && !FREE_MAIL_DOMAINS.has(d)) out.add(d)
+  }
+  add(domainOf(config.MAIL_FROM))
   try {
     const row = (await db('nivaro_settings').where({ id: 1 }).first('smtp_from')) as
       | { smtp_from?: string | null }
       | undefined
-    const d = domainOf(row?.smtp_from)
-    if (d) out.add(d)
+    add(domainOf(row?.smtp_from))
   } catch {
     /* no settings row: the env address only */
   }
-  ownDomainsCache = { at: Date.now(), value: out }
+  if (ownDomainsCache.size > 2_000) ownDomainsCache.clear()
+  ownDomainsCache.set(tenant, { at: Date.now(), value: out })
   return out
 }
 
 type LimitRedis = Parameters<typeof overWindowLimit>[0]
 
 /**
- * May the receipt go to this address now? Caps, in order (each takes a unit only once the ones
- * before it passed): the mailbox (a day), the recipient domain (an hour, our own sending domains
- * exempt), the form (an hour) and the whole instance (an hour).
+ * May the receipt go to this address now? Caps, in order: the mailbox (a day), the form (an
+ * hour), the whole instance (an hour), then the recipient domain on this form (an hour) — the
+ * domain unit is taken last, so a send refused by an earlier cap never spends one. Our own
+ * sending domains and free-mail providers have no domain cap.
  */
 export async function mayMailReceipt(
   redis: LimitRedis,
@@ -421,21 +449,20 @@ export async function mayMailReceipt(
     )
   )
     return false
-  const own = opts.ownDomains ?? (await ownMailDomains())
-  if (
-    domain &&
-    !own.has(domain) &&
-    (await overWindowLimit(
-      redis,
-      `subform-rcpt-dom:${hashKey(domain)}`,
-      RECEIPT_MAILS_PER_DOMAIN_HOUR,
-      3600
-    ))
-  )
-    return false
   if (
     await overWindowLimit(redis, `subform-rcpt-form:${formId}`, RECEIPT_MAILS_PER_FORM_HOUR, 3600)
   )
     return false
-  return !(await overWindowLimit(redis, 'subform-rcpt-all', RECEIPT_MAILS_PER_INSTANCE_HOUR, 3600))
+  if (await overWindowLimit(redis, 'subform-rcpt-all', RECEIPT_MAILS_PER_INSTANCE_HOUR, 3600))
+    return false
+  if (!domain || FREE_MAIL_DOMAINS.has(domain)) return true
+  const own = opts.ownDomains ?? (await ownMailDomains())
+  if (own.has(domain)) return true
+  // Keys are tenant-qualified by windowed-limit; per form, so one form's flood stays there.
+  return !(await overWindowLimit(
+    redis,
+    `subform-rcpt-dom:${formId}:${hashKey(domain)}`,
+    RECEIPT_MAILS_PER_DOMAIN_HOUR,
+    3600
+  ))
 }

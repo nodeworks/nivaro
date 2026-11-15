@@ -287,7 +287,7 @@ describe('receipt mailbox normalization + domain / instance caps (review follow-
     expect(got).toEqual([true, true, true, false])
   })
 
-  it('30 an hour per recipient domain across forms; our own sending domain is exempt', async () => {
+  it('30 an hour per recipient domain PER FORM; our own sending domain is exempt', async () => {
     const { mayMailReceipt, RECEIPT_MAILS_PER_DOMAIN_HOUR } = await import(
       '../../../services/submission-status.js'
     )
@@ -296,16 +296,69 @@ describe('receipt mailbox normalization + domain / instance caps (review follow-
     const own = new Set(['ourco.example'])
     let sent = 0
     for (let i = 0; i < RECEIPT_MAILS_PER_DOMAIN_HOUR + 5; i++)
-      if (await mayMailReceipt(null, `f-${i % 3}`, `v${i}@victim.example`, { ownDomains: own }))
-        sent++
+      if (await mayMailReceipt(null, 'f-a', `v${i}@victim.example`, { ownDomains: own })) sent++
     expect(sent).toBe(RECEIPT_MAILS_PER_DOMAIN_HOUR)
-    // Googlemail counts as gmail for the domain cap too; another domain is unaffected.
-    expect(await mayMailReceipt(null, 'f-9', 'x@other.example', { ownDomains: own })).toBe(true)
+    // Another form still reaches that domain; another domain is unaffected.
+    expect(await mayMailReceipt(null, 'f-b', 'w@victim.example', { ownDomains: own })).toBe(true)
+    expect(await mayMailReceipt(null, 'f-a', 'x@other.example', { ownDomains: own })).toBe(true)
     let ours = 0
     for (let i = 0; i < 40; i++)
-      if (await mayMailReceipt(null, `f-own-${i}`, `staff${i}@ourco.example`, { ownDomains: own }))
+      if (await mayMailReceipt(null, 'f-own', `staff${i}@ourco.example`, { ownDomains: own }))
         ours++
     expect(ours).toBe(40)
+  })
+
+  it('a Gmail flood on form A never blocks Gmail receipts on form B (no free-mail domain cap)', async () => {
+    const { mayMailReceipt, RECEIPT_MAILS_PER_FORM_HOUR } = await import(
+      '../../../services/submission-status.js'
+    )
+    const { resetWindowedMemory } = await import('../../../services/windowed-limit.js')
+    resetWindowedMemory()
+    let a = 0
+    for (let i = 0; i < RECEIPT_MAILS_PER_FORM_HOUR + 5; i++)
+      if (await mayMailReceipt(null, 'form-a', `flood${i}@gmail.com`, { ownDomains: new Set() }))
+        a++
+    // Only the form's own cap stopped it (no 30-a-domain cap on gmail.com).
+    expect(a).toBe(RECEIPT_MAILS_PER_FORM_HOUR)
+    expect(await mayMailReceipt(null, 'form-b', 'pat@gmail.com', { ownDomains: new Set() })).toBe(
+      true
+    )
+    expect(
+      await mayMailReceipt(null, 'form-b', 'sam@googlemail.com', { ownDomains: new Set() })
+    ).toBe(true)
+  })
+
+  it('a send refused by an earlier cap spends no domain unit', async () => {
+    const { mayMailReceipt, RECEIPT_MAILS_PER_ADDRESS_DAY, RECEIPT_MAILS_PER_DOMAIN_HOUR } =
+      await import('../../../services/submission-status.js')
+    const { resetWindowedMemory } = await import('../../../services/windowed-limit.js')
+    resetWindowedMemory()
+    const own = new Set<string>()
+    // One mailbox: its 3 sends take 3 domain units; the 20 refused ones take none.
+    for (let i = 0; i < RECEIPT_MAILS_PER_ADDRESS_DAY + 20; i++)
+      await mayMailReceipt(null, 'f-d', 'same@corp.example', { ownDomains: own })
+    let more = 0
+    for (let i = 0; i < RECEIPT_MAILS_PER_DOMAIN_HOUR; i++)
+      if (await mayMailReceipt(null, 'f-d', `p${i}@corp.example`, { ownDomains: own })) more++
+    expect(more).toBe(RECEIPT_MAILS_PER_DOMAIN_HOUR - RECEIPT_MAILS_PER_ADDRESS_DAY)
+  })
+
+  it('own sending domains are cached per tenant and never a free-mail provider', async () => {
+    const { ownMailDomains } = await import('../../../services/submission-status.js')
+    const { runWithTenantDb } = await import('../../../db/tenant-context.js')
+    const inTenant = <T>(id: string, fn: () => Promise<T>) =>
+      new Promise<T>((resolve, reject) =>
+        runWithTenantDb({} as never, id, () => void fn().then(resolve, reject), id)
+      )
+    tables.nivaro_settings = [{ id: 1, smtp_from: 'Ops <ops@alpha.example>' }]
+    expect([...(await inTenant('t-alpha', ownMailDomains))]).toEqual(['alpha.example'])
+    tables.nivaro_settings = [{ id: 1, smtp_from: 'help@beta.example' }]
+    expect([...(await inTenant('t-beta', ownMailDomains))]).toEqual(['beta.example'])
+    // Tenant alpha keeps its own (cached) answer; beta's never leaks into it.
+    expect([...(await inTenant('t-alpha', ownMailDomains))]).toEqual(['alpha.example'])
+    tables.nivaro_settings = [{ id: 1, smtp_from: 'us@gmail.com' }]
+    expect((await inTenant('t-gmail', ownMailDomains)).has('gmail.com')).toBe(false)
+    tables.nivaro_settings = []
   })
 
   it('300 an hour for the whole instance', async () => {
