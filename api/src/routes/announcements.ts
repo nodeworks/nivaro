@@ -326,7 +326,7 @@ async function buildAudienceSummaries(
     }
     if (p.roles.length > 0) {
       parts.push(
-        `roles: ${p.roles.map((rid) => roleNames.get(String(rid).toLowerCase()) ?? rid).join(', ')}`
+        p.roles.map((rid) => `${roleNames.get(String(rid).toLowerCase()) ?? rid} role`).join(', ')
       )
     }
     const uids = p.aud.user_ids ?? []

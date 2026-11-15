@@ -102,8 +102,12 @@ describe('pure helpers', () => {
       word: 'workflow',
       fieldLabels: ['Amount', 'Status']
     })
-    expect(t.subject).toBe('Beth updated 12 of your records (Amount, Status)')
-    expect(t.message).toContain('12 of your workflow records')
+    // The title says who and how many; the field list is said once, in the body.
+    expect(t.subject).toBe('Beth updated 12 of your records')
+    expect(t.message).toBe('Fields changed: Amount, Status.')
+    expect(
+      bulkNoticeText({ actor: 'Beth', count: 12, word: 'workflow', fieldLabels: [] }).message
+    ).toBe('Beth changed 12 of your workflow records.')
     expect(t.message).not.toContain('See what changed')
     expect(bulkNoticeText({ actor: null, count: 1, word: '', fieldLabels: [] }).subject).toBe(
       'Someone updated 1 of your record'
@@ -160,7 +164,8 @@ describe('one notice per person per burst', () => {
     expect(n).toBe(1)
     expect(sent).toHaveLength(1)
     expect(sent[0]).toMatchObject({ userId: ANN, collection: 'workflows', senderId: BETH })
-    expect(sent[0].subject).toBe('Beth Jones updated 12 of your records (Amount, Status)')
+    expect(sent[0].subject).toBe('Beth Jones updated 12 of your records')
+    expect(sent[0].message).toBe('Fields changed: Amount, Status.')
     expect(sent[0].query).toMatch(/^ids=1,2,3/)
     expect(sent[0].why).toMatch(/created/)
   })
@@ -188,7 +193,8 @@ describe('one notice per person per burst', () => {
       view: async (_u, _c, ids) => ({ ids: ids.filter((i) => Number(i) <= 7), fields: ['amount'] })
     })
     await flushBulkNotices(GROUP, deps)
-    expect(sent[0].subject).toBe('Beth Jones updated 7 of your records (Amount)')
+    expect(sent[0].subject).toBe('Beth Jones updated 7 of your records')
+    expect(sent[0].message).toBe('Fields changed: Amount.')
     expect(sent[0].query).not.toContain('10')
     // Too few readable records: silence rather than a notice about nothing they can open.
     touch(10, ['amount'], 'bulk:req-2')
@@ -214,7 +220,8 @@ describe('one notice per person per burst', () => {
     await flushBulkNotices('bulk:req-3', deps)
     expect(sent).toHaveLength(1)
     expect(sent[0].userId).toBe(ROB)
-    expect(sent[0].subject).toBe('Beth Jones updated 6 of your records (Step)')
+    expect(sent[0].subject).toBe('Beth Jones updated 6 of your records')
+    expect(sent[0].message).toBe('Fields changed: Step.')
     expect(sent[0].why).toMatch(/own/)
   })
 
@@ -323,7 +330,8 @@ describe('watchers fold into the one notice (rt5 decision)', () => {
     expect(delivered).toEqual([])
     expect(sent).toHaveLength(1)
     expect(sent[0]).toMatchObject({ userId: ROB, why: 'You watch these records.' })
-    expect(sent[0].subject).toBe('Beth Jones updated 12 records you watch (Amount, Status)')
+    expect(sent[0].subject).toBe('Beth Jones updated 12 records you watch')
+    expect(sent[0].message).toBe('Fields changed: Amount, Status.')
   })
 
   it('below the threshold the parked per-record deliveries run as they always did', async () => {

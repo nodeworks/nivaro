@@ -106,13 +106,16 @@ export function bulkNoticeText(opts: {
   const what = fieldPhrase(opts.fieldLabels)
   const recs = opts.count === 1 ? 'record' : 'records'
   const watch = opts.kind === 'watch'
+  // The field list is said ONCE, in the body: the title stays short enough to read whole.
   const subject = watch
-    ? `${who} updated ${opts.count} ${recs} you watch${what ? ` (${what})` : ''}`
-    : `${who} updated ${opts.count} of your ${recs}${what ? ` (${what})` : ''}`
+    ? `${who} updated ${opts.count} ${recs} you watch`
+    : `${who} updated ${opts.count} of your ${recs}`
   const kind = opts.word ? ` ${opts.word}` : ''
-  const message = watch
-    ? `${who} changed ${opts.count}${kind} ${recs} you watch${what ? `: ${what}` : ''}.`
-    : `${who} changed ${opts.count} of your${kind} ${recs}${what ? `: ${what}` : ''}.`
+  const message = what
+    ? `Fields changed: ${what}.`
+    : watch
+      ? `${who} changed ${opts.count}${kind} ${recs} you watch.`
+      : `${who} changed ${opts.count} of your${kind} ${recs}.`
   return { subject: subject.slice(0, 255), message: message.slice(0, 500) }
 }
 
