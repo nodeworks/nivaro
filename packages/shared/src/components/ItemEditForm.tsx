@@ -110,6 +110,11 @@ import { currentViewport, quietHiddenSectionsOf } from '../lib/layout-resolve'
 import { extSlotKey } from '../lib/layout-slots'
 import { useLeaveLinkGuard } from '../lib/leave-guard'
 import { LineLockContext } from '../lib/line-locks'
+import {
+  type LinkedTarget,
+  linkedChangeSentence,
+  useLinkedRecordWatch
+} from '../lib/linked-changes'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useShownRecords } from '../lib/missed-updates'
 import { requestMoveState } from '../lib/move-state'
@@ -271,6 +276,7 @@ import {
 import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
 import { ListNeighborNav } from './item-edit/ListNeighborNav'
+import { LiveTraceSheet } from './item-edit/LiveTraceSheet'
 import { deferredSections } from './item-edit/lazy-sections'
 import { type LineRevision, mergeEditOf, restoredLineConflicts } from './item-edit/line-merge'
 import {
@@ -327,7 +333,6 @@ import {
 import { QueueReturnChip } from './item-edit/QueueReturnChip'
 import { endQuickCreateFollows } from './item-edit/QuickCreateButton'
 import { QuickPicker } from './item-edit/QuickPicker'
-import { LiveTraceSheet } from './item-edit/LiveTraceSheet'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
 import { PickerExclusionToggle, ScheduleChangeButton } from './item-edit/RecordGrantTools'
@@ -11587,7 +11592,42 @@ function ItemEditFormView({
     enabled: colMeta?.browser_config?.partner_badges === true && !designOn,
     draft
   })
+  // rt4 #6 — the records this form links to (its pickers' values). A change to one while the
+  // form is open re-asks the picker's "still an available option" read and the fill-when-empty
+  // field rules, as the viewer; where the value is now flagged, the line under it says why.
+  const linkedTargetsRaw: LinkedTarget[] = []
+  {
+    const m2o = new Map<string, string>()
+    for (const r of relations)
+      if (r.many_collection === collection && !r.junction_field && r.many_field && r.one_collection)
+        m2o.set(r.many_field, r.one_collection)
+    for (const f of fieldConfig ?? []) {
+      const target = m2o.get(f.field)
+      const v = draft[f.field]
+      if (target && v != null && v !== '' && typeof v !== 'object')
+        linkedTargetsRaw.push({ field: f.field, collection: target, id: String(v) })
+    }
+  }
+  const linkedSig = linkedTargetsRaw.map((t) => `${t.field}=${t.collection}:${t.id}`).join('|')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: linkedSig is the content key
+  const linkedTargets = useMemo(() => linkedTargetsRaw, [linkedSig])
+  const linkedWatch = useLinkedRecordWatch({
+    targets: linkedTargets,
+    enabled: !designOn && linkedTargets.length > 0,
+    labels: (f) => {
+      const fc = (fieldConfig ?? []).find((x) => x.field === f)
+      return (fc && placementFieldText(fc, placementTextCtx).label) || fc?.label || titleCase(f)
+    },
+    onRecheck: (fields) => {
+      for (const f of fields) rederiveRef.current(f, draftRef.current[f])
+    }
+  })
+  const linkedChanges: Record<string, string> = {}
+  for (const [f, entry] of Object.entries(linkedWatch))
+    if (staleFields.has(f))
+      linkedChanges[f] = linkedChangeSentence(entry.label, entry.change, Date.now(), entry.shown)
   const fieldAffordancesRaw = {
+    linkedChanges,
     remoteChanges,
     dismissRemoteChange: (field: string) => {
       // Keep mine on a conflict is a decision: the save's mid-air check does not ask

@@ -28,9 +28,11 @@ import {
 } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
+import { chainStepText } from '../../lib/approval-progress'
 import { del, get, post } from '../../lib/commands'
 import { errorToastOptions, toastError } from '../../lib/error-toast'
 import { useLiveMoves } from '../../lib/live-moves'
+import { useLiveFade } from '../../lib/live-screen'
 import { partnerMoveFailure, partnerMoveReading } from '../../lib/move-failure'
 import { OPEN_MOVE_STATE_EVENT, type OpenMoveStateRequest } from '../../lib/move-state'
 import {
@@ -51,6 +53,7 @@ import {
   toLocalDateString
 } from '../../lib/utils'
 import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
+import { SendStatusLines } from '../integrations/SendStatus'
 import { useHeaderFold } from '../item-edit/HeaderTools'
 import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
 import { UserChip } from '../item-edit/UserChip'
@@ -2436,16 +2439,28 @@ function ApprovalChainView({
   collection,
   item,
   states,
-  currentStateId
+  currentStateId,
+  history
 }: {
   collection: string
   item: string
   states: PipelineState[]
   currentStateId?: string | null
+  /** The record's moves: a step it has left says who moved it on and when (rt4 #8). */
+  history?: PipelineHistoryEntry[]
 }) {
   const client = useNivaroClient()
+  const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
-  const { data, isLoading } = useQuery<Record<string, AllOwnersEntry> | null>({
+  // The pipeline read re-reads on the live `$state` notice; when it says the record moved,
+  // who owns which step moved with it — the open chain re-reads its owners too.
+  const lastState = useRef(currentStateId)
+  useEffect(() => {
+    if (lastState.current === currentStateId) return
+    lastState.current = currentStateId
+    void queryClient.invalidateQueries({ queryKey: ['pipeline-all-owners', collection, item] })
+  }, [currentStateId, collection, item, queryClient])
+  const { data, isLoading, dataUpdatedAt } = useQuery<Record<string, AllOwnersEntry> | null>({
     queryKey: ['pipeline-all-owners', collection, item],
     queryFn: () =>
       client
@@ -2462,6 +2477,8 @@ function ApprovalChainView({
   const sorted = [...states]
     .filter((s) => !data || data[s.id]?.on_path !== false)
     .sort((a, b) => a.sort - b.sort)
+  // Steps that changed while the chain is open fade in where they changed.
+  const fadeRef = useLiveFade(`${currentStateId ?? ''}:${history?.length ?? 0}:${dataUpdatedAt}`)
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -2490,12 +2507,21 @@ function ApprovalChainView({
           ) : !data ? (
             <p className='px-4 py-3 text-[12px] text-slate-400'>No pipeline configured.</p>
           ) : (
-            <div className='divide-y divide-slate-100 dark:divide-border/60'>
+            <div ref={fadeRef} className='divide-y divide-slate-100 dark:divide-border/60'>
               {sorted.map((s) => {
                 const owners = (data[s.id]?.owners ?? []).map((o) => ({
                   id: o.id,
                   name: [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
                 }))
+                const progress = chainStepText({
+                  stateId: s.id,
+                  currentStateId,
+                  history: history ?? [],
+                  // Only people who can act on the step (a queue-only name cannot approve).
+                  owners: (data[s.id]?.owners ?? [])
+                    .filter((o) => !o.queue_only)
+                    .map((o) => [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email)
+                })
                 const isCurrent = s.id === currentStateId
                 const isSkipped = data[s.id]?.skipped === true && !isCurrent
                 const skipReasons = (data[s.id]?.skip_reasons ?? []).filter(Boolean)
@@ -2515,8 +2541,33 @@ function ApprovalChainView({
                       blocked && 'bg-red-50 dark:bg-red-500/10'
                     )}
                     data-chain-blocked={blocked ? '' : undefined}
+                    data-chain-step={progress?.kind}
                   >
-                    <StateBadge label={s.label} color={s.color} small />
+                    <span className='flex w-3.5 shrink-0 justify-center'>
+                      {progress?.kind === 'done' && (
+                        <Check
+                          aria-label='Done'
+                          className='h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400'
+                          strokeWidth={2.5}
+                        />
+                      )}
+                    </span>
+                    <div className='flex shrink-0 flex-col gap-0.5'>
+                      <StateBadge label={s.label} color={s.color} small />
+                      {progress && !isSkipped && (
+                        <span
+                          data-chain-step-progress
+                          className={cn(
+                            'max-w-[220px] text-[11px] leading-snug',
+                            progress.kind === 'waiting'
+                              ? 'text-sky-700 dark:text-sky-300'
+                              : 'text-slate-500 dark:text-slate-400'
+                          )}
+                        >
+                          {progress.text}
+                        </span>
+                      )}
+                    </div>
                     <div className='flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5'>
                       {isSkipped ? (
                         // Radix tooltip with zero delay — native `title` waits on
@@ -3516,6 +3567,19 @@ function PipelinePanelInner({
           }
         />
       )}
+      {/* rt4 #10 — where the record's latest send to each partner stands. */}
+      {instance && (
+        <SendStatusLines
+          collection={collection}
+          item={item}
+          skipIds={
+            moveProblem?.unanswered?.submission_id != null
+              ? [moveProblem.unanswered.submission_id]
+              : undefined
+          }
+          className={withActions ? 'rounded-lg border px-3' : undefined}
+        />
+      )}
     </>
   )
   const sendBack = latestSendBack(history ?? [], instance?.current_state, states ?? [])
@@ -3680,6 +3744,7 @@ function PipelinePanelInner({
                 item={item}
                 states={states ?? []}
                 currentStateId={data?.instance?.current_state ?? null}
+                history={data?.history ?? []}
               />
             )}
           </div>

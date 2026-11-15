@@ -96,7 +96,11 @@ export const LIVE_ASPECTS = {
   /** A child or linked record changed — a line, a PO made from it, an invoice matched to it
    *  (line grids, related lists and record widgets refetch; coalesced server-side, `'*'` when a
    *  burst named more records than the cap). */
-  related: '$related'
+  related: '$related',
+  /** An approval chain on the record was started or a step decided (rt4 #8). */
+  approvals: '$approvals',
+  /** The record was hidden from pickers or shown again (rt4 #6): forms that link to it re-check. */
+  picker: '$picker'
 } as const
 
 export { isOwnWrite, noteOwnWrite, noteOwnWriteFromCommand } from './own-writes'

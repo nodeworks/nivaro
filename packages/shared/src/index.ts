@@ -329,6 +329,7 @@ export {
   type PreflightResult,
   PushReadinessChip
 } from './components/integrations/RecordIntegrationPreview'
+export { SendStatusLines, SendStatusMarks } from './components/integrations/SendStatus'
 export type { ChangeReasonChallenge } from './components/item-edit/ChangeReasonDialog'
 export {
   ChangeReasonDialog,
@@ -399,6 +400,7 @@ export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
 export { ListLoadError } from './components/ListLoadError'
+export { LiveAnnouncer } from './components/LiveAnnouncer'
 export { LiveCount, type LiveCountProps } from './components/LiveCount'
 export { LiveNewMatchesPill } from './components/LiveNewMatchesPill'
 export { LiveRowMark } from './components/LiveRowMark'
@@ -666,6 +668,7 @@ export type {
   SupportTicket,
   SupportTicketDetail
 } from './components/support/types'
+export { TabCountHost } from './components/TabCountHost'
 export { Term } from './components/Term'
 export { TickerNumber } from './components/TickerNumber'
 export { TipLayer, useOverflowTip } from './components/TipLayer'
@@ -755,6 +758,8 @@ export {
   startApiVersionWatch,
   useApiUpdate
 } from './lib/api-version'
+export * from './lib/approval-progress'
+export * from './lib/attention-prefs'
 export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
 export {
@@ -969,21 +974,23 @@ export { currentViewport } from './lib/layout-resolve'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export { LineLockContext, lineLockView, useLineLocks } from './lib/line-locks'
+export { linkedChangeSentence, useLinkedRecordWatch } from './lib/linked-changes'
 export * from './lib/list-inline-edit'
 export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
 export * from './lib/list-return'
 export * from './lib/live'
+export * from './lib/live-announcer'
 export * from './lib/live-counts'
+export * from './lib/live-data-changed'
+export * from './lib/live-findings'
 export * from './lib/live-list'
 export * from './lib/live-moves'
 export * from './lib/live-ops'
 export * from './lib/live-queries'
 export * from './lib/live-screen'
-export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
-export * from './lib/live-data-changed'
-export * from './lib/live-findings'
 export * from './lib/live-search'
+export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
 export * from './lib/live-widgets'
 export {
   isListTimeout,
@@ -1304,6 +1311,7 @@ export {
   searchRankWords,
   tokenize
 } from './lib/search-text'
+export * from './lib/send-status'
 export {
   type ClockSample,
   measureClockOffset,
@@ -1355,11 +1363,6 @@ export { registerStagedRowLabel, stagedRowLabel } from './lib/staged-row-labels'
 export * from './lib/stale-chunk'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
-export * from './lib/attention-prefs'
-export * from './lib/waiting-count'
-export * from './lib/live-announcer'
-export { LiveAnnouncer } from './components/LiveAnnouncer'
-export { TabCountHost } from './components/TabCountHost'
 export { configureTabSound, pickSoundTab, shouldPlayHere } from './lib/tab-sound'
 export {
   BRAND_ACCENT,
@@ -1411,6 +1414,7 @@ export {
   viewAs,
   viewAsPath
 } from './lib/view-as'
+export * from './lib/waiting-count'
 export {
   buildWidgetImageLabel,
   describeDateRangeFilter,

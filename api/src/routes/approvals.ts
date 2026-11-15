@@ -6,6 +6,7 @@ import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { recordDisplayRef } from '../services/record-display-ref.js'
+import { announceRecordAspect } from '../services/record-events.js'
 import type { User } from '../types.js'
 
 interface ApprovalChain {
@@ -225,6 +226,8 @@ export async function applyApprovalDecision(opts: {
     const updated = (await db('nivaro_approval_instances')
       .where({ id: instance.id })
       .first()) as ApprovalInstance
+    // rt4 #8 — everyone with the record open sees the step change (ids + aspect only).
+    announceRecordAspect(instance.collection, instance.item, '$approvals')
     return { ok: true, instance: updated }
   }
 
@@ -267,6 +270,7 @@ export async function applyApprovalDecision(opts: {
   const updated = (await db('nivaro_approval_instances')
     .where({ id: instance.id })
     .first()) as ApprovalInstance
+  announceRecordAspect(instance.collection, instance.item, '$approvals')
   return { ok: true, instance: updated }
 }
 
@@ -501,6 +505,7 @@ export async function approvalsRoutes(app: FastifyInstance) {
 
       // Only the first step's approver(s) are notified — strictly sequential
       await notifyStepApprovers(app, instance, chain, steps[0], req.user!.id)
+      announceRecordAspect(collection, String(item), '$approvals')
 
       return reply.code(201).send({ data: instance })
     }

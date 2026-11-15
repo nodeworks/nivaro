@@ -33,8 +33,11 @@ import { callExternalApi } from '../services/external-apis.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { explainSubmissions } from '../services/integration-error-context.js'
 import { maintenanceExemptCaller } from '../services/maintenance-freeze.js'
+import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { maskBodySecrets, sameLoggedBody } from '../services/secret-mask.js'
+import { readSendStatuses, SEND_STATUS_MAX_IDS } from '../services/send-status.js'
 import { buildSubmissionDetail, gatherSubmissionFacts } from '../services/submission-detail.js'
+import { isSystemCollection } from '../services/system-collections.js'
 import {
   detectBodyAcceptance,
   detectDefaultBodyRejection,
@@ -580,6 +583,47 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
     }
     return { data: { submission, ...detail } }
   })
+
+  // rt4 #10 — where each record's latest send to every partner stands (the record page's
+  // pipeline row and the list row word it: services/send-status.ts). A GET so a list page
+  // reads it with no write semantics; only records the caller can see answer.
+  app.get<{ Querystring: { collection?: string; ids?: string } }>(
+    '/send-status',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const collection = String(req.query.collection ?? '').trim()
+      const asked = [
+        ...new Set(
+          String(req.query.ids ?? '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        )
+      ]
+      if (!collection) return reply.code(400).send({ error: 'collection is required' })
+      if (asked.length > SEND_STATUS_MAX_IDS)
+        return reply.code(400).send({ error: `At most ${SEND_STATUS_MAX_IDS} ids per request` })
+      if (asked.length === 0) return { data: {} }
+      let ids = asked
+      if (!req.isAdmin) {
+        if (isSystemCollection(collection)) return { data: {} }
+        const seen = await visibleIds(await compileAccessGates(req.user!, collection), asked)
+        // GUID keys come back in the database's spelling — compare case-blind.
+        const upper = new Set([...seen].map((i) => i.toUpperCase()))
+        ids = asked.filter((i) => upper.has(i.toUpperCase()))
+        if (ids.length === 0) return { data: {} }
+      }
+      const found = await readSendStatuses(collection, ids)
+      // Answer under the ids as asked (the database may spell a GUID differently).
+      const byUpper = new Map(Object.entries(found).map(([k, v]) => [k.toUpperCase(), v]))
+      const data: Record<string, unknown> = {}
+      for (const id of ids) {
+        const facts = byUpper.get(id.toUpperCase())
+        if (facts) data[id] = facts
+      }
+      return { data }
+    }
+  )
 
   app.get<{ Params: { collection: string; item: string } }>(
     '/:collection/:item',

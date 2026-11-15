@@ -174,6 +174,7 @@ import {
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import { userErrorMessage } from '../lib/safe-error'
 import { logSearch, logSearchOpen } from '../lib/search-log'
+import type { SendStatusFact } from '../lib/send-status'
 import { type CellShape, type SkeletonColumn, shapeForField } from '../lib/skeleton-shapes'
 import { knownTotalFrom } from '../lib/slow-reason'
 import { nextSortValue } from '../lib/sort-cycle'
@@ -257,6 +258,7 @@ import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill, fulfilmentFigures } from './
 import { HScrollProxy } from './HScrollProxy'
 import { startDocumentExtraction, useDocumentAutofillConfig } from './import/DocumentAutofillButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from './integrations/IntegrationDots'
+import { SendStatusMarks } from './integrations/SendStatus'
 import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerDialog'
 import { usePickerExclusion } from './item-edit/RecordGrantTools'
 import { invalidateRecordQueries } from './item-edit/RecordLiveSync'
@@ -5955,7 +5957,10 @@ export function CollectionBrowserView({
       const add = (k: unknown[]) => aspectKeys.set(JSON.stringify(k), k)
       if (fields.includes(LIVE_ASPECTS.tasks)) add(['cbv-task-counts', collection])
       if (fields.includes(LIVE_ASPECTS.addendums)) add(['cbv-addendum-summary', collection])
-      if (fields.includes(LIVE_ASPECTS.integrations)) add(['cbv-integrations-summary', collection])
+      if (fields.includes(LIVE_ASPECTS.integrations)) {
+        add(['cbv-integrations-summary', collection])
+        add(['cbv-send-status', collection])
+      }
       if (fields.includes(LIVE_ASPECTS.comments)) add(['row-comment-counts', collection])
       if (fields.includes(LIVE_ASPECTS.state)) {
         add(['cbv-pipeline-instances', collection])
@@ -6412,6 +6417,26 @@ export function CollectionBrowserView({
 
   // ── Owners column (pipeline-bound collections): one batched engine pass ───
   const hasPipelineBinding = !!pipelineData?.binding
+  // rt4 #10 — each row's latest send per partner ("Sending to … now", "… accepted it").
+  const { data: sendStatus } = useQuery({
+    queryKey: ['cbv-send-status', collection, pageIdsKey],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, SendStatusFact[]> }>(
+          get('/erp-submissions/send-status', { collection, ids: pageIdsKey })
+        )
+        .then((r) => r.data ?? {})
+        .catch(() => ({}) as Record<string, SendStatusFact[]>),
+    enabled:
+      !!collection &&
+      // Lists with partner sends: the integrations column, or a pipeline (moves send).
+      (integrationsEnabled || hasPipelineBinding) &&
+      pageIdsKey.length > 0 &&
+      pageIdsKey.split(',').length <= 100,
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+    retry: false
+  })
   const { data: ownersByItem } = useQuery({
     queryKey: ['cbv-owners', collection, pageIdsKey],
     queryFn: () =>
@@ -10468,6 +10493,14 @@ export function CollectionBrowserView({
                                   ) : (
                                     <span className='text-[12px] text-slate-300'>—</span>
                                   )}
+                                  {/* rt4 #10 — the row's sends, beside its state when the list has
+                                      no integrations column to carry them. */}
+                                  {!integrationsEnabled && (
+                                    <SendStatusMarks
+                                      facts={sendStatus?.[String(id)]}
+                                      className='ml-1.5 align-middle'
+                                    />
+                                  )}
                                 </td>
                               )
                             }
@@ -10572,7 +10605,10 @@ export function CollectionBrowserView({
                                   style={pinStyle(key)}
                                   className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
                                 >
-                                  <IntegrationDots rows={integrationsSummary?.[String(id)]} />
+                                  <span className='inline-flex items-center gap-2'>
+                                    <IntegrationDots rows={integrationsSummary?.[String(id)]} />
+                                    <SendStatusMarks facts={sendStatus?.[String(id)]} />
+                                  </span>
                                 </td>
                               )
                             }

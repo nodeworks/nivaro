@@ -1,4 +1,7 @@
 import { Check, GitBranch, GitMerge } from 'lucide-react'
+import { namesList } from '../../lib/approval-progress'
+import { useLiveFade } from '../../lib/live-screen'
+import { atClock } from '../../lib/send-status'
 import { serverNow } from '../../lib/server-clock'
 import { formatDateTime, formatRelative, humanHours } from '../../lib/utils'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
@@ -71,17 +74,44 @@ function Node({
 }
 
 /**
+ * The line a lane says about where it stands (rt4 #8): "Waiting on Jane Doe, Mark Li"
+ * while it is open, "Approved by Beth Lee at 10:42 AM" once it finished. Null when there
+ * is nothing true to say (an open lane nobody owns already reads "No owners").
+ */
+export function laneProgressText(
+  lane: Pick<BranchLaneData, 'terminal' | 'current' | 'steps' | 'finished_at' | 'owners'>,
+  now: number = Date.now()
+): string | null {
+  if (!lane.terminal) {
+    const names = (lane.owners ?? []).map((o) => o.name)
+    return names.length > 0 ? `Waiting on ${namesList(names)}` : null
+  }
+  const last = lane.steps[lane.steps.length - 1]
+  const at = lane.finished_at ?? last?.entered_at ?? null
+  const label = lane.current?.label?.trim() || 'Finished'
+  const by = last?.by?.trim()
+  const when = at ? atClock(at, now) : ''
+  return `${label}${by ? ` by ${by}` : ''}${when ? ` at ${when}` : ''}`
+}
+
+/**
  * Parallel branches drawn as lanes from the split state to the join: each
  * branch's path so far, where it sits now, for how long and with whom; the
  * join says which branch it is still waiting on.
  */
 export function BranchLanes({ data }: { data: BranchLanesData }) {
+  // A lane that moved while the record is open (the pipeline read re-reads on the live
+  // `$state` notice) fades in where it changed — nothing else moves.
+  const fadeRef = useLiveFade(
+    data.lanes.map((l) => `${l.instance_id}:${l.current?.id ?? ''}:${l.terminal}`).join('|')
+  )
   if (data.lanes.length === 0) return null
   const splitColor = data.split_state?.color ?? '#94a3b8'
   const joinColor = data.join_state?.color ?? '#94a3b8'
   const waiting = data.lanes.filter((l) => data.waiting_on.includes(l.instance_id))
   return (
     <div
+      ref={fadeRef}
       className='rounded-lg border border-slate-200 bg-slate-50/60 p-3 dark:border-border dark:bg-white/[0.02]'
       data-branch-lanes={data.open ? 'open' : 'joined'}
     >
@@ -171,12 +201,21 @@ export function BranchLanes({ data }: { data: BranchLanesData }) {
                 >
                   {lane.current?.label ?? '—'}
                 </span>
+                {laneProgressText(lane) && (
+                  <span
+                    className='min-w-0 text-[11.5px] text-slate-600 dark:text-slate-300'
+                    data-branch-lane-progress
+                  >
+                    {laneProgressText(lane)}
+                  </span>
+                )}
                 {inState && (
                   <span className='text-[11px] tabular-nums text-slate-500 dark:text-slate-400'>
                     {lane.terminal ? `done in ${inState}` : `${inState} in this state`}
                   </span>
                 )}
-                {!lane.terminal && (
+                {/* One owner is already named by "Waiting on …"; several show as faces too. */}
+                {!lane.terminal && (lane.owners?.length ?? 0) !== 1 && (
                   <span className='ml-auto'>
                     <OwnerAvatars owners={lane.owners ?? []} max={3} emptyLabel='No owners' />
                   </span>
