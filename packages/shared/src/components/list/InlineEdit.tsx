@@ -717,7 +717,14 @@ function ConflictBar({
           <span className='font-medium'>
             <ConflictValue kind={kind} value={conflict.theirs} choices={choices} target={target} />
           </span>
-          {when ? ` at ${when}` : ' while you were editing'}
+          {when ? (
+            <>
+              {' '}
+              <span className='whitespace-nowrap'>at {when}</span>
+            </>
+          ) : (
+            ' while you were editing'
+          )}
         </span>
       </span>
       <span className='ml-auto flex shrink-0 items-center gap-1'>
