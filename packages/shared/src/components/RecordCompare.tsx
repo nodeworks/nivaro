@@ -231,11 +231,12 @@ export function compareSideHeads(
 ): Array<{ primary: string; secondary: string | null }> {
   const counts = new Map<string, number>()
   for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1)
-  return names.map((n, i) =>
-    (counts.get(n) ?? 0) > 1
-      ? { primary: `#${ids[i]}`, secondary: n }
-      : { primary: n, secondary: null }
-  )
+  return names.map((n, i) => {
+    if ((counts.get(n) ?? 0) <= 1) return { primary: n, secondary: null }
+    // The "No … number" placeholder (lib/record-ref.ts) says nothing: keep only the record's own text.
+    const own = n.replace(/^No .+? number(?: · )?/, '').trim()
+    return { primary: `#${ids[i]}`, secondary: own || null }
+  })
 }
 
 const ABSENT_TEXT = {

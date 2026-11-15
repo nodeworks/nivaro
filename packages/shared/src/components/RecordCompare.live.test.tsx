@@ -22,9 +22,17 @@ describe('compare column heads', () => {
       { primary: 'MM26-1', secondary: null },
       { primary: 'MM26-2', secondary: null }
     ])
+    // No display value: just the id, never the placeholder sentence.
     expect(compareSideHeads(['No summary number', 'No summary number'], [3, 4])).toEqual([
-      { primary: '#3', secondary: 'No summary number' },
-      { primary: '#4', secondary: 'No summary number' }
+      { primary: '#3', secondary: null },
+      { primary: '#4', secondary: null }
+    ])
+    // A shared own text stays as the second line.
+    expect(
+      compareSideHeads(['No summary number · Pump A', 'No summary number · Pump A'], [5, 6])
+    ).toEqual([
+      { primary: '#5', secondary: 'Pump A' },
+      { primary: '#6', secondary: 'Pump A' }
     ])
   })
 })
