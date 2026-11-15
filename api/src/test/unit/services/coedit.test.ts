@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  COEDIT_MAX_SESSION_BYTES,
+  COEDIT_MAX_STEP_BYTES,
   COEDIT_MAX_STEPS,
   cleanDoc,
   cleanSteps,
   cleanTarget,
+  isStepShape,
   memoryCoeditStore
 } from '../../../services/coedit.js'
 import {
@@ -85,11 +88,22 @@ describe('coedit payload checks', () => {
     expect(cleanTarget({ ...target, field: 'a:b' })).toBeNull()
     expect(cleanTarget({ ...target, item: 'x:y' })).toBeNull()
   })
-  it('steps must be step objects; docs must name a type', () => {
+  it('steps must be ProseMirror step shapes; docs must name a type', () => {
     expect(cleanSteps([insert(1, 'a')])).toHaveLength(1)
     expect(cleanSteps([])).toBeNull()
     expect(cleanSteps(['nope'])).toBeNull()
     expect(cleanSteps([{ from: 1 }])).toBeNull()
+    expect(isStepShape({ stepType: 'addMark', from: 1, to: 3, mark: { type: 'bold' } })).toBe(true)
+    expect(isStepShape({ stepType: 'docAttr', attr: 'x', value: 1 })).toBe(true)
+    // Unknown types, keys a step never has, odd positions, a mark without a type.
+    expect(isStepShape({ stepType: 'evil', from: 1 })).toBe(false)
+    expect(isStepShape({ ...insert(1, 'a'), extra: 'x'.repeat(10) })).toBe(false)
+    expect(isStepShape({ ...insert(1, 'a'), from: -1 })).toBe(false)
+    expect(isStepShape({ ...insert(1, 'a'), from: 1.5 })).toBe(false)
+    expect(isStepShape({ ...insert(1, 'a'), slice: 'x' })).toBe(false)
+    expect(isStepShape({ stepType: 'addMark', from: 1, to: 2, mark: {} })).toBe(false)
+    // One step past the step cap.
+    expect(cleanSteps([insert(1, 'x'.repeat(COEDIT_MAX_STEP_BYTES))])).toBeNull()
     expect(cleanDoc(doc)).toBe(JSON.stringify(doc))
     expect(cleanDoc({ content: [] })).toBeNull()
   })
@@ -150,6 +164,29 @@ describe('memory store — the authority', () => {
     expect(await store.read('k')).toBeNull()
     expect(store.size()).toBe(0)
   })
+  it('a session holds at most COEDIT_MAX_SESSION_BYTES in all', async () => {
+    const store = memoryCoeditStore()
+    const { state } = await store.open('k', JSON.stringify(doc), 'a', T + 1)
+    const big = JSON.stringify(insert(1, 'x'.repeat(60_000)))
+    let v = 0
+    let r: Awaited<ReturnType<typeof store.append>> = { ok: true, version: 0 }
+    for (let i = 0; i < 100 && r.ok; i++) {
+      r = await store.append('k', state.sid, v, [big], 'A', 'a', T + 2)
+      if (r.ok) v = r.version
+    }
+    expect(r).toEqual({ ok: false, reason: 'full' })
+    expect(v * big.length).toBeLessThanOrEqual(COEDIT_MAX_SESSION_BYTES)
+    expect(v).toBeGreaterThan(20)
+  })
+  it('a session whose writers all went quiet is gone (nobody adopts a dead session)', async () => {
+    const store = memoryCoeditStore()
+    const old = Date.now() - 60_000
+    const first = await store.open('k', JSON.stringify(doc), 'a', old)
+    expect(await store.read('k')).toBeNull()
+    const again = await store.open('k', '{"type":"doc","content":[]}', 'b', Date.now())
+    expect(again.created).toBe(true)
+    expect(again.state.sid).not.toBe(first.state.sid)
+  })
   it('a full session refuses more steps', async () => {
     const store = memoryCoeditStore()
     const { state } = await store.open('k', JSON.stringify(doc), 'a', T + 1)
@@ -169,6 +206,7 @@ describe('memory store — the authority', () => {
 
 describe('coedit socket — who may join and type', () => {
   let deps: CoeditDeps
+  let clock = Date.now()
   const readers = new Set(['ana', 'ben', 'cy'])
   const writers = new Set(['ana', 'ben'])
   beforeEach(() => {
@@ -178,8 +216,8 @@ describe('coedit socket — who may join and type', () => {
       canSeeRecord: async (u) => String(u.id) !== 'out',
       mayRead: async (u) => readers.has(String(u.id)),
       mayWrite: async (u) => writers.has(String(u.id)),
-      lockedByOther: async () => false,
-      now: () => Date.now()
+      writeRefused: async () => false,
+      now: () => clock
     }
   })
   const scope = { scopedRoom: async (r: string) => r, tenantNow: () => '' }
@@ -320,12 +358,53 @@ describe('coedit socket — who may join and type', () => {
     await ana.call('coedit:watch', target)
     await ben.call('coedit:watch', target)
     await ana.call('coedit:open', { ...target, clientID: 'ana-ed-1', doc })
-    deps.lockedByOther = async (u) => String(u.id) === 'ben'
+    deps.writeRefused = async (u) => String(u.id) === 'ben'
     await ben.call('coedit:open', { ...target, clientID: 'ben-ed-1', doc })
     expect(ben.got.at(-1)).toMatchObject({ event: 'coedit:state', payload: { write: false } })
     await ana.call('coedit:close', { ...target, clientID: 'ana-ed-1' })
     expect(ben.got.at(-1)).toMatchObject({ event: 'coedit:ended', payload: { reason: 'left' } })
     expect(await deps.store.read('nvr:coedit:{-|orders|7|notes}')).toBeNull()
+  })
+
+  it('a lock taken while typing stops the writer within seconds; they keep watching', async () => {
+    const io = fakeIo()
+    const ana = connect(io, 's-ana', user('ana', 'Ana'))
+    const ben = connect(io, 's-ben', user('ben', 'Ben'))
+    await ana.call('coedit:watch', target)
+    await ben.call('coedit:watch', target)
+    await ana.call('coedit:open', { ...target, clientID: 'ana-ed-1', doc })
+    await ben.call('coedit:open', { ...target, clientID: 'ben-ed-1', doc })
+    const sid = ana.got.find((g) => g.event === 'coedit:active')?.payload.session.sid
+    const step = (v: number, t: string) => ({
+      ...target,
+      clientID: 'ben-ed-1',
+      sid,
+      version: v,
+      steps: [insert(1, t)]
+    })
+    await ben.call('coedit:steps', step(0, 'a'))
+    // Ana's form takes the record lock (or the record moves into a locked step).
+    deps.writeRefused = async (u) => String(u.id) === 'ben'
+    // Inside the recheck window the earlier answer still holds…
+    await ben.call('coedit:steps', step(1, 'b'))
+    expect((await deps.store.read('nvr:coedit:{-|orders|7|notes}'))?.version).toBe(2)
+    // …past it, Ben is out of the session and the cursor room, told so, still reading.
+    clock += 6_000
+    ben.got.length = 0
+    await ben.call('coedit:steps', step(2, 'c'))
+    expect((await deps.store.read('nvr:coedit:{-|orders|7|notes}'))?.version).toBe(2)
+    expect(ben.rooms.has('coedit:w:notes:orders:7')).toBe(false)
+    expect(ben.rooms.has('coedit:r:notes:orders:7')).toBe(true)
+    expect(ben.got.at(-1)).toMatchObject({ event: 'coedit:state', payload: { write: false } })
+    // Ana's later steps still reach him, read-only.
+    await ana.call('coedit:steps', {
+      ...target,
+      clientID: 'ana-ed-1',
+      sid,
+      version: 2,
+      steps: [insert(1, 'A')]
+    })
+    expect(ben.got.at(-1)).toMatchObject({ event: 'coedit:steps', payload: { version: 2 } })
   })
 
   it('losing the field (room recheck) stops typing', async () => {
@@ -342,6 +421,8 @@ describe('coedit socket — who may join and type', () => {
       version: 0,
       steps: [insert(1, 'A')]
     })
-    expect((await deps.store.read('nvr:coedit:{-|orders|7|notes}'))?.version).toBe(0)
+    // Nothing stored; as the only writer, leaving ends the session; told it may no longer type.
+    expect((await deps.store.read('nvr:coedit:{-|orders|7|notes}'))?.version ?? 0).toBe(0)
+    expect(ana.got.at(-1)).toMatchObject({ event: 'coedit:state', payload: { write: false } })
   })
 })

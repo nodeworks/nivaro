@@ -28,7 +28,8 @@ vi.mock('../../../services/coedit-socket.js', async (orig) => ({
     canSeeRecord: async () => true,
     mayRead: coeditGate.mayRead,
     mayWrite: coeditGate.mayWrite,
-    lockedByOther: async () => false
+    writeRefused: async () => false,
+    fieldMayTravel: async () => true
   })
 }))
 vi.mock('../../../services/socket-tenant.js', () => ({

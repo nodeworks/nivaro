@@ -59,8 +59,9 @@ export interface CoeditDeps {
   mayRead(user: User, collection: string, field: string): Promise<boolean>
   /** May this person change the field on this record (field + record update gates)? */
   mayWrite(user: User, collection: string, item: string, field: string): Promise<boolean>
-  /** Someone else holds a live edit lock on the record (their form owns it right now). */
-  lockedByOther(user: User, collection: string, item: string): Promise<boolean>
+  /** A write of this field on this record is refused right now: someone else's live edit lock
+   *  (their form owns the record) or the step's own edit lock (post-approval, admin-only). */
+  writeRefused(user: User, collection: string, item: string, field: string): Promise<boolean>
   now(): number
 }
 
@@ -80,6 +81,8 @@ const CONCEALED = /password|hash|secret|conceal/i
 
 /** Fields one socket may watch at once (a record page shows a handful of long-text fields). */
 export const COEDIT_WATCH_MAX = 60
+/** How long a "may still type here" answer is reused while someone types (per field watch). */
+export const COEDIT_WRITE_RECHECK_MS = 5_000
 /** A heartbeat is written at most this often per editor. */
 const SEEN_EVERY_MS = 10_000
 
@@ -98,6 +101,8 @@ export function parseCoeditRoom(room: string): (CoeditTarget & { write: boolean 
 interface Watch {
   target: CoeditTarget
   write: boolean
+  /** The last "may this person still type here" answer and when it was asked. */
+  verdict: { ok: boolean; at: number } | null
   readRoom: string
   writeRoom: string | null
   /** This socket's editors in the session → when their heartbeat was last written. */
@@ -178,7 +183,14 @@ export function registerCoedit(
     if (prev?.writeRoom && !writeRoom) socket.leave(prev.writeRoom)
     socket.join(readRoom)
     if (writeRoom) socket.join(writeRoom)
-    watches.set(id, { target: t, write, readRoom, writeRoom, members: prev?.members ?? new Map() })
+    watches.set(id, {
+      target: t,
+      write,
+      verdict: null,
+      readRoom,
+      writeRoom,
+      members: prev?.members ?? new Map()
+    })
     const key = storeKey(t)
     const session = key ? await deps.store.read(key).catch(() => null) : null
     socket.emit('coedit:state', { ...t, write, session: sessionOut(session) })
@@ -204,7 +216,11 @@ export function registerCoedit(
     if (!key) return
     // A writer while nobody else holds the record: someone else's live edit lock means their
     // form owns the record, and everyone else watches the text read-only.
-    if (!canType(w) || (await deps.lockedByOther(user, w.target.collection, w.target.item))) {
+    // Take the editor in at once: its first steps can arrive while the lock check below runs.
+    const typing = canType(w)
+    if (typing && !w.members.has(clientID)) w.members.set(clientID, 0)
+    if (!typing || (await writeRefusedNow(user, w))) {
+      w.members.delete(clientID)
       socket.emit('coedit:state', {
         ...w.target,
         write: false,
@@ -220,6 +236,30 @@ export function registerCoedit(
     else socket.emit('coedit:state', { ...out, write: true })
   }
 
+  /** Refused now? Asked fresh (an open), and at most every few seconds while typing. */
+  const writeRefusedNow = async (user: User, w: Watch, cached = false): Promise<boolean> => {
+    const now = deps.now()
+    if (cached && w.verdict && now - w.verdict.at < COEDIT_WRITE_RECHECK_MS) return !w.verdict.ok
+    const t = w.target
+    const ok =
+      (await deps.mayWrite(user, t.collection, t.item, t.field).catch(() => false)) &&
+      !(await deps.writeRefused(user, t.collection, t.item, t.field).catch(() => true))
+    w.verdict = { ok, at: now }
+    return !ok
+  }
+
+  /**
+   * This person may no longer type in the field (a lock taken since, the record moved into a
+   * locked step, the field's write permission gone): out of the session and the cursor room,
+   * told so — they stay a read-only watcher while they may still read the field.
+   */
+  const demote = async (w: Watch) => {
+    for (const clientID of [...w.members.keys()]) await leaveMember(w, clientID)
+    if (w.writeRoom) socket.leave(w.writeRoom)
+    w.write = false
+    await sendState(w)
+  }
+
   const onSteps = async (p: unknown) => {
     const user = getUser()
     const w = watchOf(p)
@@ -228,10 +268,14 @@ export function registerCoedit(
     const steps = cleanSteps(o.steps)
     const version = Number(o.version)
     const sid = typeof o.sid === 'string' && o.sid.length <= 40 ? o.sid : null
-    if (!user || !canType(w) || !clientID || !sid || !steps) return
+    if (!user || !w || !clientID || !sid || !steps) return
     if (!Number.isInteger(version) || version < 0) return
     // Only an editor that opened (or rejoined) the session types into it.
     if (!w.members.has(clientID)) return
+    if (!canType(w) || (await writeRefusedNow(user, w, true))) {
+      await demote(w)
+      return
+    }
     const key = storeKey(w.target)
     if (!key) return
     const now = deps.now()
@@ -308,7 +352,11 @@ export function registerCoedit(
     const w = watchOf(p)
     const o = (p ?? {}) as Record<string, unknown>
     const clientID = cleanClientId(o.clientID)
-    if (!user || !canType(w) || !clientID || !w.members.has(clientID)) return
+    if (!user || !w || !clientID || !w.members.has(clientID)) return
+    if (!canType(w)) {
+      await demote(w)
+      return
+    }
     if (o.clear === true) {
       socket.to(w.writeRoom).emit('coedit:cursor', { ...w.target, clientID, clear: true })
       return
@@ -396,14 +444,17 @@ export function coeditGates(): Omit<CoeditDeps, 'store' | 'now'> {
       const { canUpdateItem } = await import('./items.js')
       return canUpdateItem(user, collection, item)
     },
-    async lockedByOther(user, collection, item) {
-      const { editLockRefusal } = await import('./item-lock-guard.js')
-      const refusal = await editLockRefusal(
-        { user, authMethod: 'session' } as Parameters<typeof editLockRefusal>[0],
-        collection,
-        item
-      ).catch(() => null)
-      return !!refusal
+    async writeRefused(user, collection, item, field) {
+      // The PATCH route's own gate (held lock, the record as the caller, the step's edit lock).
+      const { recordWriteRefusal } = await import('./edit-lock.js')
+      const { isAdminRole } = await import('./permissions.js')
+      const req = {
+        user,
+        isAdmin: await isAdminRole(user),
+        authMethod: 'session',
+        headers: {}
+      } as unknown as Parameters<typeof recordWriteRefusal>[0]
+      return !!(await recordWriteRefusal(req, collection, item, { fields: [field] }))
     }
   }
 }

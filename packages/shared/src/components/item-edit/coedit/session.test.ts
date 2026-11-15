@@ -207,6 +207,32 @@ describe('co-editing a long text field', () => {
     expect(coeditLive(target.collection, target.item, target.field)).toBe(true)
   })
 
+  it('a reply that crossed newer steps changes nothing (no rewind of what was typed)', () => {
+    const hub = new Hub()
+    const ana = person(hub, 'ana', '<p>Base</p>')
+    const ben = person(hub, 'ben', '<p>Base</p>')
+    hub.flush()
+    ana.focus()
+    hub.flush()
+    typeAt(ana, endOf(ana), ' one')
+    hub.flush()
+    const old = (hub as any).out()
+    ben.focus()
+    hub.flush()
+    typeAt(ana, endOf(ana), ' two')
+    typeAt(ben, 1, 'Ben ')
+    hub.flush()
+    const before = ben.editor.getText()
+    // The open's answer, computed before the newer steps, arrives late.
+    for (const cb of hub.listeners.get('ben')?.get('coedit:state') ?? [])
+      cb({ ...target, write: true, session: old })
+    expect(ben.editor.getText()).toBe(before)
+    expect(ben.session.isLive()).toBe(true)
+    typeAt(ben, endOf(ben), '!')
+    hub.flush()
+    expect(ana.editor.getText()).toBe('Ben Base one two!')
+  })
+
   it('shows the other writer’s cursor with their name, and keeps it in place as text arrives', () => {
     const hub = new Hub()
     const ana = person(hub, 'ana', '<p>abc</p>')

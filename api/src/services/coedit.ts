@@ -31,6 +31,11 @@ export const COEDIT_MAX_BATCH = 200
 export const COEDIT_MAX_BATCH_BYTES = 128 * 1024
 /** Bytes of the document a session starts from (its JSON). */
 export const COEDIT_MAX_DOC_BYTES = 512 * 1024
+/** Bytes of one step (its JSON): a paste of a long passage fits, a flood does not. */
+export const COEDIT_MAX_STEP_BYTES = 64 * 1024
+/** Bytes a session may hold in all (its document plus every step): past it the session is full
+ *  and ends; the browsers fall back to plain editing and the merge at save. */
+export const COEDIT_MAX_SESSION_BYTES = 2 * 1024 * 1024
 
 const NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,99}$/
 const FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
@@ -59,18 +64,66 @@ export function cleanClientId(v: unknown): string | null {
   return typeof v === 'string' && CLIENT_RE.test(v) ? v : null
 }
 
+// The ProseMirror step shapes (prosemirror-transform's toJSON), and nothing else: the server
+// never applies a step, but it only stores and relays ones that are well-formed.
+const POS_MAX = 10_000_000
+const isPos = (v: unknown) => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= POS_MAX
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === 'object' && !Array.isArray(v)
+const isMark = (v: unknown) => isObj(v) && typeof v.type === 'string'
+const isSlice = (v: unknown) =>
+  v === undefined ||
+  (isObj(v) &&
+    (v.content === undefined || Array.isArray(v.content)) &&
+    (v.openStart === undefined || isPos(v.openStart)) &&
+    (v.openEnd === undefined || isPos(v.openEnd)))
+const STEP_SHAPES: Record<string, { keys: string[]; ok: (s: Record<string, unknown>) => boolean }> =
+  {
+    replace: {
+      keys: ['from', 'to', 'slice', 'structure'],
+      ok: (s) => isPos(s.from) && isPos(s.to) && isSlice(s.slice)
+    },
+    replaceAround: {
+      keys: ['from', 'to', 'gapFrom', 'gapTo', 'insert', 'slice', 'structure'],
+      ok: (s) => [s.from, s.to, s.gapFrom, s.gapTo, s.insert].every(isPos) && isSlice(s.slice)
+    },
+    addMark: {
+      keys: ['from', 'to', 'mark'],
+      ok: (s) => isPos(s.from) && isPos(s.to) && isMark(s.mark)
+    },
+    removeMark: {
+      keys: ['from', 'to', 'mark'],
+      ok: (s) => isPos(s.from) && isPos(s.to) && isMark(s.mark)
+    },
+    addNodeMark: { keys: ['pos', 'mark'], ok: (s) => isPos(s.pos) && isMark(s.mark) },
+    removeNodeMark: { keys: ['pos', 'mark'], ok: (s) => isPos(s.pos) && isMark(s.mark) },
+    attr: { keys: ['pos', 'attr', 'value'], ok: (s) => isPos(s.pos) && typeof s.attr === 'string' },
+    docAttr: { keys: ['attr', 'value'], ok: (s) => typeof s.attr === 'string' }
+  }
+
+/** One step in a shape ProseMirror makes (known type, only its own keys, sane positions). */
+export function isStepShape(s: unknown): boolean {
+  if (!isObj(s) || typeof s.stepType !== 'string') return false
+  const shape = STEP_SHAPES[s.stepType]
+  if (!shape) return false
+  for (const k of Object.keys(s)) if (k !== 'stepType' && !shape.keys.includes(k)) return false
+  if (s.structure !== undefined && typeof s.structure !== 'boolean') return false
+  return shape.ok(s)
+}
+
 /**
- * A batch of steps as the store keeps it, or null when it is not one: 1..COEDIT_MAX_BATCH plain
- * objects each naming a `stepType`, at most COEDIT_MAX_BATCH_BYTES of JSON.
+ * A batch of steps as the store keeps it, or null when it is not one: 1..COEDIT_MAX_BATCH steps
+ * of a ProseMirror shape (isStepShape), each at most COEDIT_MAX_STEP_BYTES and together at most
+ * COEDIT_MAX_BATCH_BYTES of JSON.
  */
 export function cleanSteps(v: unknown): string[] | null {
   if (!Array.isArray(v) || v.length === 0 || v.length > COEDIT_MAX_BATCH) return null
   const out: string[] = []
   let bytes = 0
   for (const s of v) {
-    if (!s || typeof s !== 'object' || Array.isArray(s)) return null
-    if (typeof (s as { stepType?: unknown }).stepType !== 'string') return null
+    if (!isStepShape(s)) return null
     const json = JSON.stringify(s)
+    if (json.length > COEDIT_MAX_STEP_BYTES) return null
     bytes += json.length
     if (bytes > COEDIT_MAX_BATCH_BYTES) return null
     out.push(json)
@@ -174,6 +227,7 @@ function entryOf(step: string, clientId: string): string {
 
 interface MemSession {
   sid: string
+  bytes: number
   baseVersion: number
   doc: string
   steps: string[]
@@ -186,7 +240,9 @@ export function memoryCoeditStore(): CoeditStore & { size(): number } {
   const live = (key: string, now: number): MemSession | null => {
     const s = sessions.get(key)
     if (!s) return null
-    if (s.expires <= now) {
+    for (const [m, at] of s.members) if (at < now - COEDIT_MEMBER_STALE_MS) s.members.delete(m)
+    // Lapsed, or every writer in it went quiet (a browser that died without saying so): gone.
+    if (s.expires <= now || s.members.size === 0) {
       sessions.delete(key)
       return null
     }
@@ -205,10 +261,19 @@ export function memoryCoeditStore(): CoeditStore & { size(): number } {
   return {
     size: () => sessions.size,
     async open(key, doc, member, now, sid = newSessionId()) {
+      // A session nobody is still in (live() drops it) starts over from this document.
       let s = live(key, now)
       const created = !s
       if (!s) {
-        s = { sid, baseVersion: 0, doc, steps: [], members: new Map(), expires: 0 }
+        s = {
+          sid,
+          bytes: doc.length,
+          baseVersion: 0,
+          doc,
+          steps: [],
+          members: new Map(),
+          expires: 0
+        }
         sessions.set(key, s)
       }
       s.members.set(member, now)
@@ -239,7 +304,11 @@ export function memoryCoeditStore(): CoeditStore & { size(): number } {
       const cur = s.baseVersion + s.steps.length
       if (version !== cur) return { ok: false, reason: 'behind', version: cur }
       if (s.steps.length + steps.length > COEDIT_MAX_STEPS) return { ok: false, reason: 'full' }
-      for (const step of steps) s.steps.push(entryOf(step, clientId))
+      const entries = steps.map((step) => entryOf(step, clientId))
+      const add = entries.reduce((n, e) => n + e.length, 0)
+      if (s.bytes + add > COEDIT_MAX_SESSION_BYTES) return { ok: false, reason: 'full' }
+      s.bytes += add
+      for (const e of entries) s.steps.push(e)
       s.members.set(member, now)
       touch(s, now)
       return { ok: true, version: cur + steps.length }
@@ -277,12 +346,17 @@ export interface CoeditRedis {
 
 const keysOf = (key: string) => ({ meta: `${key}:m`, steps: `${key}:s`, members: `${key}:p` })
 
-// KEYS meta steps members · ARGV doc member now ttl sid → {created, bv, doc, sid, ...steps}
+// KEYS meta steps members · ARGV doc member now ttl sid staleBefore → {created, bv, doc, sid, ...steps}
+// A session whose writers all went quiet (a browser that died without saying so) starts over.
 const OPEN_SCRIPT = `
 local created = 0
+redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', '(' .. ARGV[6])
+if redis.call('EXISTS', KEYS[1]) == 1 and redis.call('ZCARD', KEYS[3]) == 0 then
+  redis.call('DEL', KEYS[1], KEYS[2])
+end
 if redis.call('EXISTS', KEYS[1]) == 0 then
   redis.call('DEL', KEYS[2], KEYS[3])
-  redis.call('HSET', KEYS[1], 'bv', 0, 'doc', ARGV[1], 'sid', ARGV[5])
+  redis.call('HSET', KEYS[1], 'bv', 0, 'doc', ARGV[1], 'sid', ARGV[5], 'bytes', string.len(ARGV[1]))
   created = 1
 end
 redis.call('ZADD', KEYS[3], ARGV[3], ARGV[2])
@@ -292,16 +366,21 @@ local out = { created, m[1], m[2], m[3] }
 for _, s in ipairs(redis.call('LRANGE', KEYS[2], 0, -1)) do out[#out + 1] = s end
 return out`
 
-// KEYS meta steps members · ARGV version member now ttl max sid entry... → {code, version}
+// KEYS meta steps members · ARGV version member now ttl max sid maxBytes entry... → {code, version}
 const APPEND_SCRIPT = `
 if redis.call('HGET', KEYS[1], 'sid') ~= ARGV[6] then return { -1, 0 } end
 local bv = tonumber(redis.call('HGET', KEYS[1], 'bv')) or 0
 local len = redis.call('LLEN', KEYS[2])
 local cur = bv + len
 if tonumber(ARGV[1]) ~= cur then return { -2, cur } end
-local n = #ARGV - 6
+local n = #ARGV - 7
 if len + n > tonumber(ARGV[5]) then return { -3, cur } end
-for i = 7, #ARGV do redis.call('RPUSH', KEYS[2], ARGV[i]) end
+local add = 0
+for i = 8, #ARGV do add = add + string.len(ARGV[i]) end
+local bytes = tonumber(redis.call('HGET', KEYS[1], 'bytes')) or 0
+if bytes + add > tonumber(ARGV[7]) then return { -3, cur } end
+redis.call('HINCRBY', KEYS[1], 'bytes', add)
+for i = 8, #ARGV do redis.call('RPUSH', KEYS[2], ARGV[i]) end
 redis.call('ZADD', KEYS[3], ARGV[3], ARGV[2])
 for i = 1, 3 do redis.call('EXPIRE', KEYS[i], ARGV[4]) end
 return { 0, cur + n }`
@@ -312,6 +391,15 @@ if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
 redis.call('ZADD', KEYS[3], ARGV[2], ARGV[1])
 for i = 1, 3 do redis.call('EXPIRE', KEYS[i], ARGV[3]) end
 return 1`
+
+// KEYS meta steps members · ARGV staleBefore → 1 = a session with someone still in it; a
+// session whose writers all went quiet is deleted (watchers never adopt a dead session's text).
+const ALIVE_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', '(' .. ARGV[1])
+if redis.call('ZCARD', KEYS[3]) > 0 then return 1 end
+redis.call('DEL', KEYS[1], KEYS[2], KEYS[3])
+return 0`
 
 // KEYS meta steps members · ARGV member staleBefore → 1 = ended
 const LEAVE_SCRIPT = `
@@ -329,7 +417,16 @@ export function redisCoeditStore(redis: CoeditRedis): CoeditStore {
   const entries = (raw: string[]) => raw.map(parseEntry).filter((e): e is StoredStep => !!e)
   return {
     async open(key, doc, member, now, sid = newSessionId()) {
-      const out = (await run(OPEN_SCRIPT, key, doc, member, now, COEDIT_TTL_S, sid)) as unknown[]
+      const out = (await run(
+        OPEN_SCRIPT,
+        key,
+        doc,
+        member,
+        now,
+        COEDIT_TTL_S,
+        sid,
+        now - COEDIT_MEMBER_STALE_MS
+      )) as unknown[]
       const baseVersion = Number(out[1]) || 0
       const steps = entries((out.slice(4) as unknown[]).map(String))
       return {
@@ -345,6 +442,8 @@ export function redisCoeditStore(redis: CoeditRedis): CoeditStore {
     },
     async read(key) {
       const k = keysOf(key)
+      if (Number(await run(ALIVE_SCRIPT, key, Date.now() - COEDIT_MEMBER_STALE_MS)) !== 1)
+        return null
       const [bv, doc, sid] = await redis.hmget(k.meta, 'bv', 'doc', 'sid')
       if (doc == null) return null
       const baseVersion = Number(bv) || 0
@@ -378,6 +477,7 @@ export function redisCoeditStore(redis: CoeditRedis): CoeditStore {
         COEDIT_TTL_S,
         COEDIT_MAX_STEPS,
         sid,
+        COEDIT_MAX_SESSION_BYTES,
         ...steps.map((s) => entryOf(s, clientId))
       )) as unknown[]
       const code = Number(out?.[0])

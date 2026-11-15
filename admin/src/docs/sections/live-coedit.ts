@@ -49,7 +49,7 @@ export const collabLiveCoedit: DocSection = {
     { type: 'h3', id: 'live-coedit-tech', text: 'For developers' },
     {
       type: 'p',
-      text: 'The writing session is temporary: the starting text, the edits since and who is in it live in Redis for as long as someone is writing (10 minutes after the last activity at most), never in the database. Socket events `coedit:watch|open|steps|sync|cursor|close` ride the app’s socket; the rooms are gated by the record read check and the field’s read permission (write permission to type). Headless apps get it through the shared record form — no extra wiring.'
+      text: 'The writing session is temporary: the starting text, the edits since and who is in it live in Redis for as long as someone is writing (10 minutes after the last activity at most), never in the database. Socket events `coedit:watch|open|steps|sync|cursor|close` ride the app’s socket; the rooms are gated by the record read check and the field’s read permission (write permission to type). A session holds at most about 2 MB of edits; past that it ends and the field saves the ordinary way. Someone whose right to change the field ends while they type (a lock, the record moving on) drops out within seconds and keeps watching. Headless apps get it through the shared record form — no extra wiring.'
     }
   ]
 }

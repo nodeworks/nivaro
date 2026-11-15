@@ -110,6 +110,9 @@ export class CoeditSession {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private resetTimer: ReturnType<typeof setTimeout> | null = null
   private closeWhenIdle = false
+  /** Typed outside any session (and outside an open waiting for its answer): never replaced,
+   *  even before the form has caught up with the keystrokes. */
+  private typedApart = false
   private lastCursorAt = 0
   /** Opened while not live: the document the open was sent with, and steps typed since. */
   private pending: { doc: PMNode; steps: Rebaseable[] } | null = null
@@ -202,6 +205,13 @@ export class CoeditSession {
 
   private onState(p: { write?: boolean; session: SessionPayload | null }) {
     this.write = !!p.write
+    if (!this.write && this.member) {
+      // We may no longer type here (a lock, the record moved on, permission): a plain editor
+      // again — what we typed stays in the form and meets the merge at save.
+      this.member = false
+      this.pending = null
+      this.leaveLive()
+    }
     if (!p.session) {
       // No session (or it lapsed while we thought we were in it).
       if (this.live) this.onEnded()
@@ -209,7 +219,8 @@ export class CoeditSession {
       return
     }
     const same = this.live && p.session.sid === this.sid
-    if (same && p.session.version === this.version) return
+    // Our session, at our version or older (a reply that crossed newer steps): nothing to do.
+    if (same && p.session.version <= this.version) return
     if (same && p.session.version > this.version && p.session.baseVersion <= this.version) {
       // A catch-up (reconnect, second tab): the steps we missed are in the session.
       const from = this.version - p.session.baseVersion
@@ -333,7 +344,7 @@ export class CoeditSession {
       // We opened from this very document: what we typed since goes out on top of it.
       carry = this.pending.steps
     } else if (!mine.eq(doc)) {
-      if (this.host.fieldDirty()) {
+      if (this.typedApart || this.host.fieldDirty()) {
         // Unsaved edits of our own that are not this document: they stay ours (merge at save).
         this.setDiverged(true)
         this.pending = null
@@ -455,6 +466,9 @@ export class CoeditSession {
     } else if (this.pending) {
       for (let i = 0; i < tr.steps.length; i++)
         this.pending.steps.push(rebaseable(tr.steps[i], tr.docs[i]))
+    } else if (!tr.getMeta('preventUpdate')) {
+      // (A value put in by the form itself — setContent without an update — is not typing.)
+      this.typedApart = true
     }
   }
 

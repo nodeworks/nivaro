@@ -75,6 +75,9 @@ export function editorJsToHtml(raw: string): string {
   }
 }
 
+/** How long a value this editor sent the form counts as its own echo when it comes back. */
+const ECHO_WINDOW_MS = 2_000
+
 /** A stored value as the editor's HTML (EditorJS JSON from the legacy store converts). */
 function toEditorHtml(value: string): string {
   if (!value) return ''
@@ -146,6 +149,7 @@ export function RichTextEditor({
   const initialHtml = useMemo(() => toEditorHtml(value), [value]) // eslint-disable-line react-hooks/exhaustive-deps — initialHtml is init-only
   // The writing session's binding (set below, once the editor exists): read inside onUpdate.
   const coeditRef = useRef<ReturnType<typeof useCoedit>['session']>(null)
+  const emittedRef = useRef<Array<{ html: string; at: number }>>([])
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -190,7 +194,13 @@ export function RichTextEditor({
       // Someone else's typing in a shared session reaches the form only when the person has
       // changed this field too (their draft is the shared text); a watcher's form stays clean.
       if (transaction.getMeta(COEDIT_REMOTE) && !coeditRef.current?.tracking()) return
-      onChange(editor.getHTML())
+      const html = editor.getHTML()
+      // Remember what this editor told the form: the same value coming back (possibly a few
+      // keystrokes late) is our own echo, never a reason to set the content again.
+      const sent = emittedRef.current
+      sent.push({ html, at: Date.now() })
+      if (sent.length > 64) sent.shift()
+      onChange(html)
     }
   })
 
@@ -201,10 +211,15 @@ export function RichTextEditor({
   useEffect(() => {
     if (!editor || prevValue.current === value) return
     prevValue.current = value
-    // While a writing session is open the editor shows the shared document; the form's value
-    // only matters here when the person has changed the field (Take theirs, Merge…).
+    // Our own value coming back (a late echo while typing goes on) changes nothing: setting
+    // it would take back the keystrokes typed since — and, written together, send that to all.
+    // Only a recent echo: an older value of ours coming back (Discard, Take theirs) is real.
+    const now = Date.now()
+    if (emittedRef.current.some((e) => e.html === value && now - e.at < ECHO_WINDOW_MS)) return
     const s = coeditRef.current
-    if (s?.isLive() && !s.tracking()) return
+    // Written together: the shared document is the truth while the person types in it, and
+    // for a watcher (their form only matters again once the session ends).
+    if (s?.isLive() && (editor.isFocused || !s.tracking())) return
     const html = toEditorHtml(value)
     if (editor.getHTML() !== html) {
       editor.commands.setContent(html, { emitUpdate: false })
