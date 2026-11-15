@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context.js'
 import { get, post } from '../../lib/commands.js'
+import { useLiveJobs } from '../../lib/live-views.js'
 import { formatRelative } from '../../lib/utils.js'
 
 /**
@@ -309,10 +310,14 @@ function TaskCard({ task, onNotice }: { task: OpsTaskRow; onNotice?: (m: string)
 
 export function OpsTasksView({ onNotice }: { onNotice?: (message: string) => void }) {
   const client = useNivaroClient()
+  // A run started or finished anywhere (another admin, a schedule) refreshes the list once per
+  // quiet window; the 3 s poll while a run is going stays as the net when events cannot arrive.
+  const liveRuns = useLiveJobs({ keys: [['ops-tasks']] })
   const q = useQuery({
     queryKey: ['ops-tasks'],
     queryFn: () => client.request(get<{ data: OpsTaskRow[] }>('/ops-tasks')).then((r) => r.data),
-    refetchInterval: (query) => (query.state.data?.some((t) => t.running) ? 3000 : false)
+    refetchInterval: (query) =>
+      query.state.data?.some((t) => t.running) ? (liveRuns ? 15_000 : 3000) : false
   })
   const groups = useMemo(() => {
     const m = new Map<string, OpsTaskRow[]>()

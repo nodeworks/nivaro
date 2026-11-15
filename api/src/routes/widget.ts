@@ -3,10 +3,11 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { SignalStreamRoute, sharedSignature } from '../services/public-signal-stream.js'
 import type { QueueRow } from '../services/queues.js'
 import { fetchQueueItems } from '../services/queues.js'
-import { type SseEvent, sseEventForTenant, subscribeSse } from '../services/sse-hub.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
+import { takeBudget } from '../services/widget-live.js'
 import type { User } from '../types.js'
 import { canReadQueue } from './queues.js'
 
@@ -475,21 +476,23 @@ const FEED_STREAM_COALESCE_MS = 2_000
 
 /**
  * The fingerprint of what a feed serves right now, shared by every open stream of one token for
- * a moment (one read per token per burst, however many pages listen). A stream signals only when
- * this changes, so it never says more than a reload of the public feed would.
+ * a moment (one read per token per burst, however many pages listen), and drawn from the pushed
+ * widget recompute budget (WIDGET_LIVE_MAX_PER_MIN). A stream signals only when this changes, so
+ * it never says more than a reload of the public feed would.
  */
 const feedSigs = new Map<string, { at: number; sig: Promise<string | null> }>()
 function feedSignature(token: string, feed: Record<string, unknown>): Promise<string | null> {
-  const hit = feedSigs.get(token)
-  if (hit && Date.now() - hit.at < 1_500) return hit.sig
-  const sig = (async () => {
-    const creator = await activeFeedCreator(feed.created_by)
-    const answer = await readFeedAnswer(feed, creator)
-    return answer ? createHash('sha256').update(JSON.stringify(answer.data)).digest('hex') : null
-  })().catch(() => null)
-  feedSigs.set(token, { at: Date.now(), sig })
-  if (feedSigs.size > 2_000) feedSigs.delete(feedSigs.keys().next().value as string)
-  return sig
+  const tenant = currentTenantKey()
+  return sharedSignature(
+    feedSigs,
+    `${tenant}|${token}`,
+    async () => {
+      const creator = await activeFeedCreator(feed.created_by)
+      const answer = await readFeedAnswer(feed, creator)
+      return answer ? createHash('sha256').update(JSON.stringify(answer.data)).digest('hex') : null
+    },
+    { budget: () => takeBudget(tenant) }
+  )
 }
 
 /** Collections whose writes can change what a feed shows. */
@@ -526,13 +529,13 @@ export async function widgetRoutes(app: FastifyInstance) {
 
   // ── GET /public/feed/:token/stream — push "changed" signals (no auth) ──────
   // Server-sent events for embeds with data-live: one bare `changed` event (no ids, no fields,
-  // no values — the data still comes only from the feed route) whenever a write lands on a
-  // collection the feed reads, coalesced to one per 2 s. The feed is re-checked every heartbeat
-  // (deactivated / creator gone → `gone`, then closed). Capped per IP; closed in preClose.
-  const feedStreams = new Set<() => void>()
-  const streamsByIp = new Map<string, number>()
+  // no values — the data still comes only from the feed route) when what the feed serves
+  // changed after a write on a collection it reads, coalesced to one per 2 s. The feed is
+  // re-checked every heartbeat (deactivated / creator gone → `gone`, then closed). Capped per IP;
+  // closed in preClose. Mechanics shared with share links: services/public-signal-stream.ts.
+  const feedStreams = new SignalStreamRoute()
   app.addHook('preClose', async () => {
-    for (const end of [...feedStreams]) end()
+    feedStreams.closeAll()
   })
   app.get<{ Params: { token: string } }>(
     '/public/feed/:token/stream',
@@ -542,118 +545,24 @@ export async function widgetRoutes(app: FastifyInstance) {
       if (!token || !/^[a-f0-9]{32}$/i.test(token)) {
         return reply.code(404).send({ error: 'Feed not found' })
       }
-      const ip = req.ip || 'unknown'
-      // Reserve the slot before any await, so concurrent opens can't overrun the cap; every
-      // exit below gives it back exactly once.
-      if ((streamsByIp.get(ip) ?? 0) >= FEED_STREAM_PER_IP) {
-        return reply
-          .code(429)
-          .header('Retry-After', '60')
-          .send({ error: 'Too many live feeds from this address' })
-      }
-      streamsByIp.set(ip, (streamsByIp.get(ip) ?? 0) + 1)
-      let released = false
-      const release = () => {
-        if (released) return
-        released = true
-        const n = (streamsByIp.get(ip) ?? 1) - 1
-        if (n > 0) streamsByIp.set(ip, n)
-        else streamsByIp.delete(ip)
-      }
-      let gone = false
-      req.raw.once('close', () => {
-        gone = true
-        release()
-      })
-
-      let feed: Record<string, unknown> | null
-      let watch: Set<string>
-      let lastSig: string | null
-      try {
-        feed = await feedStillServes(token)
-        if (!feed) {
-          release()
-          return reply.code(404).send({ error: 'Feed not found' })
-        }
-        watch = await feedWatchCollections(feed)
-        lastSig = await feedSignature(token, feed)
-      } catch {
-        release()
-        return reply.code(503).send({ error: 'Feed unavailable' })
-      }
-      if (gone || req.raw.destroyed) {
-        release()
-        return
-      }
-      const tenant = currentTenantKey()
-
-      reply.hijack()
-      const raw = reply.raw
-      raw.writeHead(200, {
-        'content-type': 'text/event-stream',
-        'cache-control': 'no-cache, no-transform',
-        connection: 'keep-alive',
-        'x-accel-buffering': 'no',
-        'access-control-allow-origin': '*'
-      })
-      raw.write('retry: 5000\n: connected\n\n')
-
-      let closed = false
-      let pending: ReturnType<typeof setTimeout> | null = null
-      const send = (frame: string) => {
-        if (closed) return
-        // A slow reader past 64 KB unwritten just misses signals; the next one refetches anyway.
-        if ((raw.writableLength ?? 0) > 64 * 1024) return
-        try {
-          raw.write(frame)
-        } catch {
-          end()
-        }
-      }
-      // A write on a watched collection only PROMPTS a check: the stream signals when what the
-      // feed serves actually changed, so it reveals nothing a reload of the feed wouldn't.
-      const unsubscribe = subscribeSse((ev: SseEvent) => {
-        if (closed || pending) return
-        if (!sseEventForTenant(ev, tenant) || !watch.has(ev.collection)) return
-        pending = setTimeout(() => {
-          pending = null
-          void feedSignature(token, feed!).then((sig) => {
-            if (closed || sig === null || sig === lastSig) return
-            lastSig = sig
-            send('event: changed\ndata: {}\n\n')
-          })
-        }, FEED_STREAM_COALESCE_MS)
-      })
-      const heartbeat = setInterval(() => {
-        void feedStillServes(token)
-          .then((still) => {
-            if (closed) return
-            if (still) send(': hb\n\n')
-            else {
-              send('event: gone\ndata: {}\n\n')
-              end()
+      await feedStreams.serve(req, reply, {
+        perIp: FEED_STREAM_PER_IP,
+        heartbeatMs: FEED_STREAM_HEARTBEAT_MS,
+        coalesceMs: FEED_STREAM_COALESCE_MS,
+        async open() {
+          const feed = await feedStillServes(token)
+          if (!feed) return { ok: false, code: 404, body: { error: 'Feed not found' } }
+          const watch = await feedWatchCollections(feed)
+          return {
+            ok: true,
+            subject: {
+              watches: (ev) => watch.has(ev.collection),
+              signature: () => feedSignature(token, feed),
+              stillServes: async () => !!(await feedStillServes(token))
             }
-          })
-          .catch(() => send(': hb\n\n'))
-      }, FEED_STREAM_HEARTBEAT_MS)
-      heartbeat.unref()
-
-      function end(): void {
-        if (closed) return
-        closed = true
-        clearInterval(heartbeat)
-        if (pending) clearTimeout(pending)
-        unsubscribe()
-        feedStreams.delete(end)
-        release()
-        try {
-          raw.end()
-        } catch {
-          /* already gone */
+          }
         }
-      }
-      feedStreams.add(end)
-      req.raw.on('close', end)
+      })
     }
   )
 

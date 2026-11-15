@@ -44,6 +44,7 @@ import {
 } from './metadata-l2.js'
 import { opsTopicsOfWrite, raiseOpsWrite } from './ops-signal.js'
 import { ownersChanged, ownerWriteKind } from './owner-signal.js'
+import { peopleWriteKind, raisePeopleWrite } from './people-signal.js'
 
 const TABLES = new Set([
   'nivaro_relations',
@@ -241,6 +242,8 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
     const ownerWrite = ownerWriteKind(sql)
     // Live operations pages (issues, support, my work…) hear about writes the same way.
     const opsTopics = opsTopicsOfWrite(sql)
+    // The people directory (pickers, mentions, avatars) too — directory columns only.
+    const peopleWrite = peopleWriteKind(sql)
 
     if (isInvalidatingWrite(sql)) {
       // Clear before AND after: before, so nothing reads the old rows while
@@ -250,12 +253,14 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
         clearMetadataQueryCache()
         if (ownerWrite) ownersChanged(ownerWrite)
         if (opsTopics.length) raiseOpsWrite(opsTopics)
+        if (peopleWrite) raisePeopleWrite(peopleWrite)
       })
     }
-    if (ownerWrite || opsTopics.length) {
+    if (ownerWrite || opsTopics.length || peopleWrite) {
       return original.call(this, connection, query).finally(() => {
         if (ownerWrite) ownersChanged(ownerWrite)
         if (opsTopics.length) raiseOpsWrite(opsTopics)
+        if (peopleWrite) raisePeopleWrite(peopleWrite)
       })
     }
 

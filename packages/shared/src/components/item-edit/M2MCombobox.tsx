@@ -4,6 +4,7 @@ import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { parseAllowedCollections } from '../../lib/allowed-collections'
 import { get } from '../../lib/commands'
+import { pickerOptionsMeta } from '../../lib/live-pickers'
 import { compareByMatch } from '../../lib/picker-rank'
 import { useRecordReader } from '../../lib/record-loader'
 import { useOnlineUsers } from '../../lib/use-online-users'
@@ -752,18 +753,22 @@ function useM2MOptions(args: {
     templateNestedFields ?? ''
   ]
   const staleTime = filterParam ? 0 : 30_000
+  // Someone else's new / changed / removed record: re-read on the next open (live-pickers.ts).
+  const meta = pickerOptionsMeta(relatedCollection)
   const { data: base, isFetching: baseFetching } = useQuery<Record<string, unknown>[]>({
     queryKey: keyFor(''),
     queryFn: () => fetchOptions(''),
     enabled: args.enabled,
-    staleTime
+    staleTime,
+    meta
   })
   const askServer = m2mAsksServer(base, search, args.labelOf)
   const { data: searched, isFetching: searching } = useQuery<Record<string, unknown>[]>({
     queryKey: keyFor(search),
     queryFn: () => fetchOptions(search),
     enabled: args.enabled && askServer,
-    staleTime
+    staleTime,
+    meta
   })
   if (!askServer)
     return { options: base ?? [], isLoading: !base && baseFetching, localSearch: !!search }

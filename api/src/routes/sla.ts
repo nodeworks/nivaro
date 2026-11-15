@@ -47,6 +47,7 @@ function formatRule(row: SlaRule): SlaRule & { escalation_ladder?: unknown } {
 // Schedule-aware business hours — settings-driven (days/hours/holidays).
 // Re-exported for queue-materialization-read's sync per-row math.
 import { businessHoursElapsed, getSlaSchedule } from '../services/business-hours.js'
+import { deadlinesJson, slaDeadlines } from '../services/sla-deadline.js'
 import {
   hoursText,
   loadActiveOverrides,
@@ -132,10 +133,11 @@ async function computeStatus(collection: string, item: string) {
   // instance-wide schedule zone for the business-hours walk.
   let recordZone: string | null = null
   let elapsedHours: number
+  let schedule: Awaited<ReturnType<typeof getSlaSchedule>> | undefined
   if (rule.business_hours_only) {
     const base = await getSlaSchedule()
     recordZone = (await resolveRecordZones(collection, [String(item)])).get(String(item)) ?? null
-    const schedule = recordZone ? { ...base, timeZone: recordZone } : base
+    schedule = recordZone ? { ...base, timeZone: recordZone } : base
     elapsedHours = businessHoursElapsed(enteredAt, now, schedule)
   } else {
     elapsedHours = (now.getTime() - enteredAt.getTime()) / (1000 * 60 * 60)
@@ -153,11 +155,24 @@ async function computeStatus(collection: string, item: string) {
   const status =
     pctUsed >= 100 ? 'breached' : pctUsed >= rule.warning_threshold_pct ? 'warning' : 'on_track'
 
+  // When it turns amber and red, so the page counts down without asking again.
+  const deadlines = deadlinesJson(
+    slaDeadlines({
+      enteredAt,
+      durationHours: totalHours,
+      warningPct: rule.warning_threshold_pct,
+      businessHoursOnly: !!rule.business_hours_only,
+      schedule
+    })
+  )
+
   return {
     status,
     state_key: stateKey,
     sla_rule: formatRule(rule),
     entered_at: enteredAt,
+    warning_at: deadlines.warning_at,
+    due_at: deadlines.due_at,
     elapsed_hours: elapsedHours,
     total_hours: totalHours,
     pct_used: pctUsed,
@@ -214,6 +229,9 @@ export interface SlaBatchEntry {
    * the rule's own. Absent when no override applies. */
   overridden?: boolean
   rule_duration_hours?: number | null
+  /** When the clock turns amber / red (ISO; services/sla-deadline.ts) — null without a rule. */
+  warning_at?: string | null
+  due_at?: string | null
 }
 
 function round1(n: number): number {
@@ -342,12 +360,9 @@ export async function computeStatusBatch(
     if (!entered) continue
 
     const recordZone = zoneMap.get(String(inst.item)) ?? null
+    const clockSchedule = recordZone ? { ...schedule, timeZone: recordZone } : schedule
     const elapsedHours = rule?.business_hours_only
-      ? businessHoursElapsed(
-          entered,
-          now,
-          recordZone ? { ...schedule, timeZone: recordZone } : schedule
-        )
+      ? businessHoursElapsed(entered, now, clockSchedule)
       : (now.getTime() - entered.getTime()) / (1000 * 60 * 60)
 
     const override = rule
@@ -382,7 +397,18 @@ export async function computeStatusBatch(
       remaining_hours: durationHours != null ? round1(durationHours - elapsedHours) : null,
       entered_at: entered,
       timezone: rule?.business_hours_only ? recordZone : null,
-      ...(override ? { overridden: true, rule_duration_hours: rule?.duration_hours ?? null } : {})
+      ...(override ? { overridden: true, rule_duration_hours: rule?.duration_hours ?? null } : {}),
+      ...(rule
+        ? deadlinesJson(
+            slaDeadlines({
+              enteredAt: entered,
+              durationHours: durationHours,
+              warningPct: rule.warning_threshold_pct,
+              businessHoursOnly: !!rule.business_hours_only,
+              schedule: clockSchedule
+            })
+          )
+        : {})
     }
   }
 

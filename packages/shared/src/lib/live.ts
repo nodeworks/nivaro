@@ -1,6 +1,7 @@
 import { useContext, useEffect, useRef } from 'react'
 import { ItemEditAuthContext } from '../context'
 import { deliverLive, releaseLiveOwner } from './focus-mode'
+import { liveEventQuiet } from './live-preference'
 import { isOwnWrite } from './own-writes'
 import { type CollectionUpdateEvent, useOptionalRealtime } from './realtime'
 
@@ -43,7 +44,7 @@ import { type CollectionUpdateEvent, useOptionalRealtime } from './realtime'
  *   with `relayLiveEvent(event, payload)`.
  *
  * Virtual "aspect" fields: an event whose changed_fields are all `$`-names
- * (`$state`, `$addendums`, `$comments`, `$tasks`, `$integrations`) says a
+ * (`$state`, `$addendums`, `$comments`, `$tasks`, `$integrations`, `$files`, `$related`) says a
  * related surface moved, not the record's own columns — skip the row
  * refetch and refresh only that surface (`batch.aspectsOnly`).
  */
@@ -87,9 +88,27 @@ export const LIVE_ASPECTS = {
   integrations: '$integrations',
   owners: '$owners',
   /** An edit lock was taken or released (list rows show the lock icon). */
-  lock: '$lock'
+  lock: '$lock',
+  /** The files the record carries changed: a file field or file link, a file renamed, replaced
+   *  or deleted (Files panels and file fields refetch as the viewer). */
+  files: '$files',
+  /** The SLA clock crossed its warning / breach line with no write (server flip pass). */
+  sla: '$sla',
+  /** A child or linked record changed — a line, a PO made from it, an invoice matched to it
+   *  (line grids, related lists and record widgets refetch; coalesced server-side, `'*'` when a
+   *  burst named more records than the cap). */
+  related: '$related'
 } as const
 
+// The person's live-updates setting (Normal / Calm / Off): the transport tap and the hooks
+// below read it, so every live surface follows it (realtime round 3, item 24).
+export {
+  getLiveMode,
+  type LiveMode,
+  liveMotionAllowed,
+  useLiveBusy,
+  useLivePreference
+} from './live-preference'
 export { isOwnWrite, noteOwnWrite, noteOwnWriteFromCommand } from './own-writes'
 
 /** The actor id an event names, when a server includes one (`by` / `user` / `user_id`). */
@@ -103,7 +122,7 @@ function actorOf(ev: Record<string, unknown>): string | null {
   return null
 }
 
-function isOwnEvent(ev: Record<string, unknown>, selfId: string): boolean {
+export function isOwnEvent(ev: Record<string, unknown>, selfId: string): boolean {
   const actor = actorOf(ev)
   if (actor && selfId && actor.toUpperCase() === selfId.toUpperCase()) return true
   const collection = typeof ev.collection === 'string' ? ev.collection : ''
@@ -324,6 +343,8 @@ export function useLiveEvent(
     let latest: { payload: any; event: string } | null = null
     const deliver = (event: string, payload: any) => {
       if (!list.includes(event)) return
+      // Calm/Off quiet presence; Off quiets data notices (also those relayed via the window).
+      if (liveEventQuiet(event)) return
       const o = optsRef.current
       const p = payload ?? {}
       if (!o.includeOwn && typeof p === 'object') {

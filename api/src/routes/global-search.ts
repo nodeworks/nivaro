@@ -77,6 +77,7 @@ import {
 import { searchPhrases } from '../services/search-synonyms.js'
 import { systemReadableColumns } from '../services/system-collections.js'
 import { applyDirectoryListingRules } from '../services/user-directory-cols.js'
+import { announceMineChanged } from '../services/user-sync.js'
 import type { CMSField, Policy, Role, User } from '../types.js'
 
 // ─── Static admin page registry ───────────────────────────────────────────────
@@ -2510,7 +2511,7 @@ export async function globalSearchRoutes(app: FastifyInstance) {
   // a prefix scope (`wf: …`, `@…`), field filters (`status:open`), amounts and
   // dates (services/search-query.ts); `data.query` says how it was read.
   app.get('/', async (req, reply) => {
-    const { q: rawQ, labels } = req.query as { q?: string; labels?: string }
+    const { q: rawQ, labels, fresh } = req.query as { q?: string; labels?: string; fresh?: string }
     const raw = (rawQ ?? '').trim().slice(0, 300)
     // labels=1: match only what each record's label shows (the EFP palette).
     const labelsOnly = labels === '1' || labels === 'true'
@@ -2519,17 +2520,21 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     // (services/search-fts.ts searchAnswerCache, single-flight, per tenant).
     const ws = req.headers['x-workspace']
     const run = () => runGlobalSearch(req, raw, labelsOnly)
-    const data = raw
-      ? await searchAnswerCache.get(
-          {
-            user: req.user!,
-            q: raw,
-            variant: labelsOnly ? 'labels' : '',
-            workspace: typeof ws === 'string' ? ws : null
-          },
-          run
-        )
-      : await run()
+    // fresh=1: the open results page re-asking after someone else's write (live search results)
+    // must not be handed the 20 s answer computed before that write. Still the caller's own run,
+    // so access applies exactly as for any search; the page asks at most every few seconds.
+    const data =
+      raw && fresh !== '1'
+        ? await searchAnswerCache.get(
+            {
+              user: req.user!,
+              q: raw,
+              variant: labelsOnly ? 'labels' : '',
+              workspace: typeof ws === 'string' ? ws : null
+            },
+            run
+          )
+        : await run()
     return reply.send({ data })
   })
 
@@ -2605,6 +2610,7 @@ export async function globalSearchRoutes(app: FastifyInstance) {
         String(req.user!.id),
         (req.body ?? {}) as Record<string, unknown>
       )
+      announceMineChanged(String(req.user!.id), 'saved-searches')
       return reply.code(201).send({ data: entry })
     } catch (e) {
       if (e instanceof SavedSearchError) return reply.code(e.status).send({ error: e.message })
@@ -2616,6 +2622,7 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     if (!id) return reply.code(400).send({ error: 'id is required' })
     const ok = await deleteSavedSearch(userId, id.slice(0, 64))
     if (!ok) return reply.code(404).send({ error: 'Not found' })
+    announceMineChanged(userId, 'saved-searches')
     return reply.send({ data: { ok: true } })
   }
   app.delete('/saved/:id', async (req, reply) =>

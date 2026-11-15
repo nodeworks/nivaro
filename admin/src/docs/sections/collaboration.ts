@@ -618,6 +618,47 @@ POST /api/notifications/test-my-rules  { "category": "workflow", "email": true, 
       type: 'p',
       text: 'Unread rows that name the same record fold into one bell entry — "3 things on REQ-1042" — with the categories as chips and the most urgent lane colouring the row. The chevron expands the rows (each keeps its own actions), clicking the bundle opens the record, and the check marks the whole bundle read in one call. The Notifications page does the same behind "Group by record" (on by default). `GET /api/notifications?bundle=record` returns `bundles` ([{collection, item, label, count, unread, lane, categories, newest, url, ids, rows}]) beside `data`, which then holds only the rows that stayed single; a lone row about a record is never bundled. `total`, `/count` and `/unread-count` are unchanged — a bundle presents rows, it does not reduce them. The label is never a bare id: the friendly id, else the display label, else — for a record deleted since — its trash snapshot\'s label with a "deleted" chip (`deleted: true`, no Open link), else "<Singular> #<id>"; `collection_label` carries the singular name for the chip beside it. Collection-wide subscription rows name the record the same way ("updated PRB1 (regions)").'
     },
+    {
+      type: 'h3',
+      id: 'notification-done-by-itself',
+      text: 'Done by itself when someone handles it'
+    },
+    {
+      type: 'p',
+      text: 'A notification that asked you to do something turns done on its own once it is handled, by you or by anyone else. It keeps its place, counts as read (the bell number drops), and shows one quiet line with a tick: "Approved by Beth · 10:42 AM", "Moved to Review by Beth", "Done by you". Its action buttons go away. Your open tabs update at once.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A request to act on a record step (you own the step, or a workflow or SLA ask) is done when the record moves to another step. If you made the move and still own the new step, yours stays open.',
+        'A task notification (assigned, team, reminder, overdue) is done when the task is completed.',
+        'An approval request is done when someone decides that step: "Approved by …" or "Rejected by …".',
+        'A support request notification is done when the request is closed or cancelled.',
+        'A notification that asks you to acknowledge it is never closed for you, and FYIs, mentions and messages are never touched.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'The daily summary email checks again just before it goes out: anything handled since it was queued is left out, and a summary with nothing left in it is not sent.'
+    },
+    { type: 'h3', id: 'notification-fold', text: 'Several updates, one notification' },
+    {
+      type: 'p',
+      text: 'When updates about one record arrive close together, they fold into one notification instead of stacking up: "3 updates on CM26-79704: moved to Review, 2 comments". While the newest unread update about a record is less than 10 minutes old, the next one rewrites it: it moves to the top, the bell still counts one, and no second phone alert goes out. "3 updates" under the row lists each of them, newest first. Only FYI updates fold; anything that asks you to act, a mention, or an acknowledgement always stays its own notification. Once you have read it, the next update starts a new one.'
+    },
+    { type: 'h3', id: 'record-panel-new-count', text: '"2 new" on Comments and Tasks' },
+    {
+      type: 'p',
+      text: 'On a record, a folded Comments or Tasks panel shows "2 new" beside its name when other people added comments, or added or finished tasks, since you last had that panel open on that record. It updates live and clears when you open the panel. The mark is kept in your browser per record; the first time you see a record it starts from that moment, so an old record never opens on a pile of "new".'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/notifications → each row carries
+  resolved:   { on: step|task|approval|ticket, by, by_name, at, text } | null
+  fold_count: number | null          (detail.fold.items = the folded updates, newest first)
+Socket (your own room only, ids, never text):
+  notification:retired { ids, resolved: true, collection?, item? }  +  read:changed { kind: 'notifications' }`
+    },
     { type: 'h3', text: 'As it was — what they saw when notified' },
     {
       type: 'p',
@@ -1186,6 +1227,56 @@ export const collabChat: DocSection = {
     {
       type: 'p',
       text: 'A screen clip is a short recording — up to 60 seconds of your screen and microphone — made from the clapperboard button in the composer and sent like any other attachment. The button becomes the clock while it records; Stop, the 60 s mark or the browser’s "Stop sharing" ends it. The clip arrives with a poster frame and plays inline in the message. It is an ordinary file in the file manager (tagged `chat-clip`), not a help video.'
+    }
+  ]
+}
+
+export const collabChangeProposals: DocSection = {
+  id: 'change-proposals',
+  label: 'Propose a Change',
+  content: [
+    { type: 'h1', id: 'change-proposals', text: 'Propose a Change on a Locked Record' },
+    {
+      type: 'p',
+      text: 'Once a record is locked after approval, only administrators can change its fields. With proposals turned on for the collection, a person who could otherwise edit the record gets a **Propose change** button beside Request help: they enter the new values and say why, and the owners of the step the record is at (or an administrator) accept or decline. Nobody re-keys a change from a ticket.'
+    },
+    { type: 'h2', id: 'change-proposals-turn-on', text: 'Turning it on' },
+    {
+      type: 'p',
+      text: 'Data Model → the collection → Form UX → **Propose a change on locked records** (administrators, off by default). It only offers anything on a collection with a post-approval lock (`summary_mode_rules.edit_lock.admin_only`); the switch is stored as `summary_mode_rules.change_proposals: true`. Where it is off, Request help works as before.'
+    },
+    { type: 'h2', id: 'change-proposals-propose', text: 'Proposing' },
+    {
+      type: 'ul',
+      items: [
+        '**Which fields**: only the ones you could change if the record were open — your role’s update and read field lists, never read-only, administrator-only, encrypted, computed or audit fields, never link lists, files or formatted text. Fields the lock leaves open (for example On hold) you change directly.',
+        '**Checked when you send it**: the values are tried against the record’s validation and rules as if you saved them, so a value the record would refuse is refused now, with the reason.',
+        '**One at a time**: you can have one waiting proposal per record; Withdraw it to send a different one.'
+      ]
+    },
+    { type: 'h2', id: 'change-proposals-decide', text: 'Accepting or declining' },
+    {
+      type: 'ul',
+      items: [
+        '**Who decides**: the owners of the record’s current step and administrators — never the person who proposed it. Waiting proposals appear on the record (old → new per field) and under **Changes to review** in their My Work.',
+        '**Accept and apply** writes the new values as the person accepting: their permissions, row access and the record’s validation all apply; only the post-approval lock is set aside for that one save. If they could not change one of the fields, or a field changed since the proposal was made, nothing is written and they are told why.',
+        '**When it expires**: a proposal can no longer be accepted once the record has moved to another step, is no longer locked (then it is simply edited), or proposals have been turned off for the collection — decline it or ask for a new one.',
+        '**Decline** needs a short note, which the proposer sees.',
+        '**Notifications** have their own category, **Change proposals**: the step’s owners are told when a proposal waits on them (the administrators when nobody owns the step), and the proposer when it is accepted or declined. It is on by default on the same channels as Workflow; mute or route it in Profile → Notification rules. A sample of each is on the Notification Bench.'
+      ]
+    },
+    { type: 'h2', id: 'change-proposals-history', text: 'History' },
+    {
+      type: 'p',
+      text: 'Each proposal, decline and withdrawal is a line in the record’s Notes; an accepted proposal’s save carries the reason "Accepted change proposal #N from …" in the record history. Earlier proposals fold under the waiting ones on the record. Fields a reader cannot see are never named or shown.'
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/change-proposals/record/:collection/:item   // may I propose? fields, proposals
+POST /api/change-proposals/record/:collection/:item   { "values": { "amount": 1200 }, "reason": "…" }
+POST /api/change-proposals/:id/accept
+POST /api/change-proposals/:id/decline                { "note": "…" }
+POST /api/change-proposals/:id/withdraw               // the proposer`
     }
   ]
 }

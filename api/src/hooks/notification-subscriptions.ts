@@ -8,6 +8,7 @@ import { getRelations } from '../services/collections.js'
 import { sendMail } from '../services/mail.js'
 import { buildRecordCard } from '../services/mail-record-card.js'
 import { detailColumn, notificationRowMeta } from '../services/notification-channels.js'
+import { foldIntoRecent } from '../services/notification-fold.js'
 import { rawWriterReason, reasonColumn } from '../services/notification-reason.js'
 import {
   renderChangesToken,
@@ -19,6 +20,7 @@ import { computeDelta } from '../services/revisions.js'
 import { canSeeRecord } from '../services/sla-visibility.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { deferEffect } from '../services/unit-of-work.js'
+import { announceNotificationsRead } from '../services/user-sync.js'
 import type { User } from '../types.js'
 import { hooks } from './registry.js'
 
@@ -665,7 +667,31 @@ async function fireSubscriptionNotifications(
       const wantInapp = channelOn(sub.notify_inapp)
       const wantEmail = channelOn(sub.notify_email)
 
-      if (wantInapp) {
+      // Several updates on one watched record inside the fold window become
+      // one row (services/notification-fold.ts) — collection-wide feeds too.
+      const rowMeta = notificationRowMeta({
+        subject,
+        category: 'watch',
+        kind: 'record',
+        action: 'open'
+      })
+      const foldedId =
+        wantInapp && openItem != null
+          ? await foldIntoRecent({
+              recipient: sub.user,
+              collection: openCollection,
+              item: openItem,
+              category: rowMeta.category,
+              lane: rowMeta.lane,
+              subject,
+              message,
+              sender: actorUserId ?? null,
+              now,
+              label: async () => friendly ?? recordName ?? String(openItem)
+            })
+          : null
+      if (foldedId != null) announceNotificationsRead(sub.user)
+      if (wantInapp && foldedId == null) {
         // Stored detail (#27 / #77): every change line the message summarised
         // ("+3 more" expands in the bell) and which watch produced the row.
         const detail = detailColumn({

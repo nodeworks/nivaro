@@ -5,10 +5,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // changed", and a recap that cannot be read must not roll the watermark (the
 // next open would lose the baseline for good).
 
+// A View-as request (Bearer nvm_): the person, with the administrator behind it.
+const viewAs = vi.hoisted(() => ({ on: false }))
 vi.mock('../../../middleware/authenticate.js', () => ({
-  requireAuth: vi.fn(async (req: { user?: unknown }) => {
-    req.user = { id: 'USER-1', role: 'role-1' }
-  })
+  requireAuth: vi.fn(
+    async (req: { user?: unknown; authMethod?: string; masqueradeAdminId?: string }) => {
+      req.user = { id: 'USER-1', role: 'role-1' }
+      if (viewAs.on) {
+        req.authMethod = 'masquerade'
+        req.masqueradeAdminId = 'ADMIN-1'
+      }
+    }
+  )
 }))
 vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => true) }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
@@ -52,6 +60,7 @@ function installDb() {
 }
 
 afterEach(() => {
+  viewAs.on = false
   writes.length = 0
   failing = []
   rows = {}
@@ -84,5 +93,37 @@ describe('POST /record-views/:collection/:id/touch', () => {
     const res = await app.inject({ method: 'POST', url: '/record-views/orders/7/touch' })
     expect(res.statusCode).toBe(503)
     expect(writes).toEqual([])
+  })
+
+  it('under View-as leaves the person’s watermark alone (a View-as open never counts)', async () => {
+    installDb()
+    viewAs.on = true
+    const app = Fastify({ logger: false })
+    app.register(recordViewRoutes)
+    await app.ready()
+    // First open (no row): no insert.
+    let res = await app.inject({ method: 'POST', url: '/record-views/orders/7/touch' })
+    expect(res.statusCode).toBe(200)
+    // A new visit over an old row: no update either.
+    rows = {
+      nivaro_record_views: [
+        { id: 1, last_viewed_at: new Date(Date.now() - 2 * 3_600_000), prev_viewed_at: null }
+      ]
+    }
+    res = await app.inject({ method: 'POST', url: '/record-views/orders/7/touch' })
+    expect(res.statusCode).toBe(200)
+    res = await app.inject({ method: 'POST', url: '/record-views/orders/7/dismiss' })
+    expect(res.statusCode).toBe(200)
+    expect(writes).toEqual([])
+  })
+
+  it('the person’s own open still rolls the watermark', async () => {
+    installDb()
+    const app = Fastify({ logger: false })
+    app.register(recordViewRoutes)
+    await app.ready()
+    const res = await app.inject({ method: 'POST', url: '/record-views/orders/7/touch' })
+    expect(res.statusCode).toBe(200)
+    expect(writes).toEqual(['nivaro_record_views.insert'])
   })
 })

@@ -8,10 +8,13 @@
  *     rules: [{ roles?: uuid[], states?: key[], states_op?: 'in'|'not_in',
  *               conditions?: [{field, op, value}],   // #737, at-risk ops
  *               mode: 'edit' | 'summary' }],
- *     edit_lock?: { states: key[], children: collection[] } }   // edit-lock.ts
+ *     edit_lock?: { states: key[], children: collection[] },     // edit-lock.ts
+ *     change_proposals?: true }                                  // change-proposals.ts
  *
  * `edit_lock` is not an opening mode: the server enforces it (edit-lock.ts);
  * it lives here because it is the same per-collection Form UX setting.
+ * `change_proposals` (default off) lets a person propose new values on a
+ * record its admin-only lock tier keeps them out of (change-proposals.ts).
  */
 import { type EditLockConfig, parseEditLock, validateEditLock } from './edit-lock.js'
 
@@ -35,6 +38,11 @@ export interface SummaryModeRules {
   default: SummaryMode
   rules: SummaryModeRule[]
   edit_lock?: EditLockConfig
+  /** Propose a change on a record locked after approval (change-proposals.ts). */
+  change_proposals?: true
+  /** Lines (a record's own child rows) lock one at a time instead of with the
+   *  record (realtime item 7, item-lock-guard.ts / edit-lock.ts). Off by default. */
+  line_locks?: boolean
 }
 
 export const NO_STATE = '__none__'
@@ -71,7 +79,13 @@ export function parseSummaryModeRules(raw: unknown): SummaryModeRules {
     }
   }
   if (!obj || typeof obj !== 'object') return EMPTY_RULES
-  const o = obj as { default?: unknown; rules?: unknown; edit_lock?: unknown }
+  const o = obj as {
+    default?: unknown
+    rules?: unknown
+    edit_lock?: unknown
+    change_proposals?: unknown
+    line_locks?: unknown
+  }
   const rules: SummaryModeRule[] = []
   if (Array.isArray(o.rules)) {
     for (const r of o.rules) {
@@ -97,7 +111,9 @@ export function parseSummaryModeRules(raw: unknown): SummaryModeRules {
   return {
     default: o.default === 'summary' ? 'summary' : 'edit',
     rules,
-    ...(lock ? { edit_lock: lock } : {})
+    ...(lock ? { edit_lock: lock } : {}),
+    ...(o.change_proposals === true ? { change_proposals: true as const } : {}),
+    ...(o.line_locks === true ? { line_locks: true } : {})
   }
 }
 
@@ -113,9 +129,19 @@ export function validateSummaryModeRules(
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { error: 'summary_mode_rules must be an object' }
   }
-  const o = raw as { default?: unknown; rules?: unknown; edit_lock?: unknown }
+  const o = raw as {
+    default?: unknown
+    rules?: unknown
+    edit_lock?: unknown
+    change_proposals?: unknown
+    line_locks?: unknown
+  }
   const lock = validateEditLock(o.edit_lock)
+  const lineLocks = o.line_locks === true
   if (lock.error) return { error: lock.error }
+  if (o.change_proposals != null && typeof o.change_proposals !== 'boolean')
+    return { error: 'summary_mode_rules.change_proposals must be true or false' }
+  const proposals = o.change_proposals === true
   if (o.default !== undefined && o.default !== 'edit' && o.default !== 'summary') {
     return { error: "summary_mode_rules.default must be 'edit' or 'summary'" }
   }
@@ -220,6 +246,15 @@ export function validateSummaryModeRules(
       mode: rr.mode
     })
   }
-  if (def === 'edit' && rules.length === 0 && !lock.value) return { value: null }
-  return { value: { default: def, rules, ...(lock.value ? { edit_lock: lock.value } : {}) } }
+  if (def === 'edit' && rules.length === 0 && !lock.value && !proposals && !lineLocks)
+    return { value: null }
+  return {
+    value: {
+      default: def,
+      rules,
+      ...(lock.value ? { edit_lock: lock.value } : {}),
+      ...(proposals ? { change_proposals: true as const } : {}),
+      ...(lineLocks ? { line_locks: true } : {})
+    }
+  }
 }

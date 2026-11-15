@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Clock3 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
+import { dueInText, liveDeadlineStatus, useDeadlineNow } from '../../lib/deadline-ticker'
+import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
 import { userErrorMessage } from '../../lib/safe-error'
 import { formatRelative, humanHours } from '../../lib/utils'
 import { invalidateRecordNotes } from '../item-edit/RecordInsights'
@@ -40,6 +42,53 @@ export interface SlaStatusData {
   /** May this person acknowledge the breach (step owners, admins). */
   can_ack?: boolean
   override?: SlaOverrideInfo | null
+  /** When the clock turns amber / red (ISO) — the page counts down to them (realtime round 2). */
+  warning_at?: string | null
+  due_at?: string | null
+}
+
+type SlaStatusValue = NonNullable<SlaStatusData['status']>
+
+/**
+ * The SLA reading moved on by the page's shared clock (lib/deadline-ticker): the status turns
+ * amber and red at the rule's own lines and `dueText` counts down ("due in 1 h 59 m"), with no
+ * read per tick. When the clock crosses a line on screen, the status is read again ONCE (the
+ * banner needs the server's acknowledgement / escalation answer); the server's `$sla` notice
+ * and the record's own `$state` moves refresh it too.
+ */
+export function useLiveSlaStatus(
+  collection: string,
+  itemId: string | null | undefined,
+  data: SlaStatusData | null | undefined
+): { status: SlaStatusValue | undefined; dueText: string | null } {
+  const qc = useQueryClient()
+  const hasDue = !!data?.due_at && !!data.status && data.status !== 'none'
+  const now = useDeadlineNow(hasDue)
+  const live = hasDue && data ? liveDeadlineStatus(data, now) : null
+  const status: SlaStatusValue | undefined = live ?? data?.status
+  const crossed = useRef<string | null>(null)
+  useEffect(() => {
+    if (!live || !data?.status || !itemId) return
+    if (live === data.status) {
+      crossed.current = null
+      return
+    }
+    // Crossed a line since the last read: ask once for the server's view of it.
+    const key = `${data.due_at}|${live}`
+    if (crossed.current === key) return
+    crossed.current = key
+    void qc.invalidateQueries({ queryKey: slaStatusKey(collection, String(itemId)) })
+  }, [live, data?.status, data?.due_at, qc, collection, itemId])
+  useLiveRecord(
+    collection,
+    itemId,
+    (batch) => {
+      if (batchTouches(batch, LIVE_ASPECTS.sla, LIVE_ASPECTS.state))
+        void qc.invalidateQueries({ queryKey: slaStatusKey(collection, String(itemId)) })
+    },
+    { debounceMs: 800, includeOwn: true, enabled: !!itemId }
+  )
+  return { status, dueText: hasDue && data ? dueInText(data, now) : null }
 }
 
 function errorText(e: unknown): string | null {
@@ -274,19 +323,34 @@ export function AdjustClockPopover({
  */
 export function SlaClockLine({ collection, itemId }: { collection: string; itemId: string }) {
   const { data } = useSlaStatus(collection, itemId)
+  const live = useLiveSlaStatus(collection, itemId, data)
   if (!data?.status || data.status === 'none' || data.total_hours == null) return null
+  const status = live.status ?? data.status
   const tone =
-    data.status === 'breached'
+    status === 'breached'
       ? 'text-red-700 dark:text-red-300'
-      : data.status === 'warning'
+      : status === 'warning'
         ? 'text-amber-700 dark:text-amber-300'
         : 'text-slate-600 dark:text-slate-300'
   return (
-    <div className='flex flex-wrap items-center gap-2' data-sla-clock-line={data.status}>
+    <div className='flex flex-wrap items-center gap-2' data-sla-clock-line={status}>
       <Clock3 className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-      <p className={`min-w-0 flex-1 text-[12px] ${tone}`}>
+      <p className={`min-w-0 flex-1 text-[12px] transition-colors duration-500 ${tone}`}>
         <span className='font-medium'>SLA</span>
-        {data.sla_rule?.name ? ` · ${data.sla_rule.name}` : ''} · {slaClockText(data)}
+        {data.sla_rule?.name ? ` · ${data.sla_rule.name}` : ''} ·{' '}
+        {live.dueText ? (
+          <span className='tabular-nums' data-sla-due-in>
+            {live.dueText}
+            {data.sla_rule?.business_hours_only && (
+              <span className='text-slate-500 dark:text-slate-400'>
+                {' '}
+                ({Math.round(data.total_hours)}-working-hour limit)
+              </span>
+            )}
+          </span>
+        ) : (
+          slaClockText(data)
+        )}
         {data.override && (
           <span
             className='ml-1 text-slate-500 dark:text-slate-400'

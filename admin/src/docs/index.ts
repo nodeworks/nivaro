@@ -12,6 +12,7 @@ export * from './sections/ai-knowledge.js'
 export * from './sections/ai-panel.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
+export * from './sections/back-and-peek.js'
 export * from './sections/bulk-actions.js'
 export * from './sections/chaos.js'
 export * from './sections/chaos-ci.js'
@@ -51,11 +52,17 @@ export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
 export * from './sections/layout-editor.js'
+export * from './sections/line-split.js'
+export * from './sections/live-attention.js'
+export * from './sections/live-conflicts.js'
 export * from './sections/live-feeds.js'
 export * from './sections/live-lists.js'
 export * from './sections/live-ops.js'
+export * from './sections/live-outside.js'
 export * from './sections/live-progress.js'
 export * from './sections/live-records.js'
+export * from './sections/live-screens.js'
+export * from './sections/live-setting.js'
 export * from './sections/low-code.js'
 export * from './sections/mobile-app.js'
 export * from './sections/monitoring.js'
@@ -65,15 +72,19 @@ export * from './sections/ops-daily-report.js'
 export * from './sections/ops-observability.js'
 export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
+export * from './sections/partner-needs.js'
 export * from './sections/payload-templates.js'
 export * from './sections/platform.js'
 export * from './sections/platform-additions.js'
 export * from './sections/quality-checks.js'
 export * from './sections/queues.js'
+export * from './sections/ready-to-send.js'
 export * from './sections/realtime-tier.js'
+export * from './sections/record-glance.js'
 export * from './sections/record-insights.js'
 export * from './sections/record-integrations.js'
 export * from './sections/release-image.js'
+export * from './sections/reload-trust.js'
 export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
@@ -119,6 +130,7 @@ import {
   ssoDocs
 } from './sections/assist-ops.js'
 import { attributesGuide } from './sections/attributes.js'
+import { collabBackAndPeek } from './sections/back-and-peek.js'
 import { bulkActionsGuide } from './sections/bulk-actions.js'
 import { chaosDocs } from './sections/chaos.js'
 import { chaosBuilderDocs } from './sections/chaos-builder.js'
@@ -132,6 +144,7 @@ import { chaosOpsDocs } from './sections/chaos-ops.js'
 import { chaosReportDocs } from './sections/chaos-report.js'
 import {
   collabApprovals,
+  collabChangeProposals,
   collabChat,
   collabItemLocking,
   collabKeyboardShortcuts,
@@ -189,7 +202,8 @@ import {
   sessionReplayDocs,
   spreadsheetDocs,
   timeTravelDocs,
-  trashDocs
+  trashDocs,
+  widgetImageDocs
 } from './sections/data-safety.js'
 import { dbTuning } from './sections/db-tuning.js'
 import { detailSheets } from './sections/detail-sheets.js'
@@ -295,9 +309,12 @@ import {
 } from './sections/integrations.js'
 import { integrationsConsole } from './sections/integrations-console.js'
 import { layoutEditor, layoutPersonalDefaults } from './sections/layout-editor.js'
+import { lineSplitDocs } from './sections/line-split.js'
 import { listEditing } from './sections/list-editing'
+import { collabLiveTrace, collabTabCount } from './sections/live-attention.js'
+import { collabLiveConflicts } from './sections/live-conflicts.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
-import { collabLiveLists } from './sections/live-lists.js'
+import { collabLiveCounts, collabLiveLists } from './sections/live-lists.js'
 import {
   aiActionsDocs,
   flowMapReplayDocs,
@@ -305,8 +322,11 @@ import {
   wallboardPulseDocs,
   webPushDocs
 } from './sections/live-ops.js'
+import { liveOutsideDocs } from './sections/live-outside.js'
 import { collabLiveProgress } from './sections/live-progress.js'
 import { collabLiveOps, collabLiveRecords, collabPresence } from './sections/live-records.js'
+import { liveScreensDocs } from './sections/live-screens.js'
+import { collabLiveSetting } from './sections/live-setting.js'
 import { loadingFeelDocs } from './sections/loading-feel'
 import {
   lowCodeFormulaBuilder,
@@ -382,6 +402,7 @@ import {
 } from './sections/overview.js'
 import { overviewPageDocs } from './sections/overview-page'
 import { overviewSectionsDocs } from './sections/overview-sections'
+import { partnerNeedsDocs } from './sections/partner-needs.js'
 import { payloadTemplates } from './sections/payload-templates.js'
 import {
   aiContentValidation,
@@ -414,13 +435,16 @@ import {
 } from './sections/platform-additions.js'
 import { qualityChecksDocs } from './sections/quality-checks.js'
 import { queuesGuide } from './sections/queues.js'
+import { readyToSend } from './sections/ready-to-send.js'
 import { realtimeLoadTest } from './sections/realtime-load-test.js'
 import { realtimePresenceLoad } from './sections/realtime-presence-load.js'
 import { realtimeTierDocs } from './sections/realtime-tier.js'
 import { realtimeTransport } from './sections/realtime-transport.js'
+import { collabRecordGlance } from './sections/record-glance.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
 import { recordIntegrations } from './sections/record-integrations.js'
 import { releaseImageDocs } from './sections/release-image.js'
+import { collabReloadTrust } from './sections/reload-trust.js'
 import {
   apiCollections,
   apiFiles,
@@ -527,6 +551,7 @@ import {
   pipelineNoOwnerSteps,
   pipelineOverview,
   pipelineOwnerMatrix,
+  pipelineOwnerOpened,
   pipelineSpecificity,
   userWorkflows,
   workflowsApi
@@ -588,6 +613,7 @@ export const navSections: NavGroup[] = [
       pipelineDimensions,
       pipelineOwnerMatrix,
       pipelineNoOwnerSteps,
+      pipelineOwnerOpened,
       pipelineSpecificity,
       pipelineBranching,
       queuesGuide,
@@ -872,6 +898,7 @@ export const navSections: NavGroup[] = [
     label: 'Integration & Sync',
     items: [
       integrationsConsole,
+      readyToSend,
       integrationsErp,
       payloadTemplates,
       integrationObligations,
@@ -892,16 +919,27 @@ export const navSections: NavGroup[] = [
     items: [
       collabTasks,
       collabSupportRequests,
+      collabChangeProposals,
       collabApprovals,
       collabChat,
       collabItemLocking,
       collabLiveRecords,
+      collabReloadTrust,
+      collabLiveConflicts,
+      collabRecordGlance,
       liveWidgetsDocs,
+      liveOutsideDocs,
       collabLiveProgress,
       collabOfflinePopout,
       collabLiveLists,
+      liveScreensDocs,
+      collabLiveCounts,
+      collabBackAndPeek,
       collabLiveOps,
       collabPresence,
+      collabTabCount,
+      collabLiveSetting,
+      collabLiveTrace,
       collabNotificationsCenter,
       collabUserActivityFeed,
       collabKeyboardShortcuts,
@@ -929,6 +967,8 @@ export const navSections: NavGroup[] = [
       adminUxSavedViews,
       adminUxFormCollaboration,
       duplicateWarningsDocs,
+      partnerNeedsDocs,
+      lineSplitDocs,
       adminUxListSignals,
       adminUxImportFromUrl,
       adminUxAiMapping,
@@ -939,7 +979,13 @@ export const navSections: NavGroup[] = [
   {
     id: 'low-code',
     label: 'Low-Code Builders',
-    items: [lowCodePageBuilder, lowCodeRuleBuilder, lowCodeFormulaBuilder, dashboardLinkDocs]
+    items: [
+      lowCodePageBuilder,
+      lowCodeRuleBuilder,
+      lowCodeFormulaBuilder,
+      dashboardLinkDocs,
+      widgetImageDocs
+    ]
   },
   {
     id: 'observability',

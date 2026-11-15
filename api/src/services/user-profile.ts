@@ -82,6 +82,9 @@ export interface PersonProfile {
   /** 10th–90th percentile of the UTC hour of their actions (8 weeks), or
    *  null under 12 samples. Hours are fractional (9.5 = 09:30 UTC). */
   typical_hours_utc: { start: number; end: number; samples: number } | null
+  /** Idea 32 — the viewer may open this person's sign-in troubleshooter: administrators, and
+   *  people who work the support desk (canWorkDesk; they get it without network details). */
+  sign_in_help: boolean
   admin: {
     account_kind: string | null
     city: string | null
@@ -518,6 +521,12 @@ export async function buildUserProfile(
     scopes,
     open_tasks: openTasks,
     typical_hours_utc: await rhythm,
+    sign_in_help:
+      viewer.isAdmin ||
+      (await import('./sign-in-troubleshooter.js')
+        .then((m) => m.signInHelpAudience(viewer))
+        .then((a) => a != null)
+        .catch(() => false)),
     admin
   }
 }

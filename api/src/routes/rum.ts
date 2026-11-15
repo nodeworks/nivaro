@@ -2,9 +2,11 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { navColumns, reloadStats } from '../services/reload-stats.js'
 import { deadClickReport } from '../services/rum-dead-clicks.js'
 import { rumSummary } from '../services/rum-summary.js'
 import { parseBrowser, screenClass } from '../services/traffic-inspect/people-ux-logic.js'
+import { NIVARO_VERSION } from '../version.js'
 
 /**
  * Real-user monitoring intake + summary. Intake accepts small batches from
@@ -36,6 +38,8 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
     const device = (await hasColumn('nivaro_rum_events', 'browser'))
       ? parseBrowser(req.headers['user-agent'])
       : null
+    // Realtime idea 15 — how the page was reached (migration 530; skipped until it lands).
+    const navOn = await hasColumn('nivaro_rum_events', 'nav_type')
     const rows = events
       .filter(
         (e) =>
@@ -72,7 +76,8 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
               os: device.os.slice(0, 30),
               screen: screenClass(e.vw)
             }
-          : {})
+          : {}),
+        ...(navOn ? navColumns(e, NIVARO_VERSION) : {})
       }))
     if (rows.length > 0)
       await db('nivaro_rum_events')
@@ -94,6 +99,13 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
   app.get('/summary', { preHandler: requireAdmin }, async (req) => {
     const days = Math.min(14, Math.max(1, Number((req.query as { days?: string }).days) || 1))
     return rumSummary(days)
+  })
+
+  /** Realtime idea 15 — most reloaded screens and Back-and-forth pairs, per release. `?days=`
+   *  1–14 (default 7). Route patterns and counts only. */
+  app.get('/reloads', { preHandler: requireAdmin }, async (req) => {
+    const days = Math.min(14, Math.max(1, Number((req.query as { days?: string }).days) || 7))
+    return { data: await reloadStats({ days }) }
   })
 
   /** Worst dead-click / rage-click elements per route (#1314), with a sample replay link where a

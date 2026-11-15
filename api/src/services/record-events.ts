@@ -1,5 +1,4 @@
 import { db } from '../db/index.js'
-import { onOwnersChanged } from '../db/owner-signal.js'
 import { getIo } from './io-holder.js'
 import { broadcastCollectionUpdate } from './realtime.js'
 import { noteRealtimeEmit } from './request-trace.js'
@@ -18,7 +17,8 @@ import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
  *   hear it, while the traffic map / GraphQL subscriptions (which key on
  *   `action`) do not count it as a write. Aspects: `$state` (pipeline moved),
  *   `$addendums`, `$comments`, `$tasks`, `$integrations`, `$lock` (an edit lock
- *   was taken or released — list rows show/clear the lock icon).
+ *   was taken or released — list rows show/clear the lock icon), `$files` and `$related`
+ *   (both normally coalesced through services/related-announce.ts).
  * - `emitRecordEvent(c, id, 'record:integrity')` goes only to the record
  *   room (`record:<c>:<id>` — joined after a `can(read)` check), for signals
  *   nobody outside the open record needs.
@@ -31,6 +31,14 @@ export type RecordAspect =
   | '$tasks'
   | '$integrations'
   | '$lock'
+  /** The files a record carries changed (realtime 3; services/related-announce.ts). */
+  | '$files'
+  /** The SLA clock crossed its warning or breach line with no write (services/sla-flips.ts). */
+  | '$sla'
+  /** A child or linked record changed (realtime 18; services/related-announce.ts). */
+  | '$related'
+  /** rt2 #17 — the record's resolved owners moved (services/owner-change-live.ts). */
+  | '$owners'
 
 export function announceRecordAspect(
   collection: string | null | undefined,
@@ -212,20 +220,11 @@ export function keyedThrottle(
   }
 }
 
-/**
- * #1870: who owns records changed (owner matrix, delegation, out-of-office,
- * team membership — the in-process owner signal, which on nivaro_users only
- * rises for the delegation/out-of-office/status columns). One payload-free
- * `owners:changed` to the tenant, coalesced over 5s and at most one per 15s
- * (the signal also rises on every transition, which already tells its own
- * record through `$state`); open records refetch their owners chip and
- * approval chain. With the Redis adapter the emit reaches every replica's
- * sockets; each process only announces its own writes.
+/*
+ * #1870 → rt2 #17: who owns records changed (owner matrix, delegation, out-of-office, team
+ * membership). The tenant-wide `owners:changed` and the per-record `$owners` aspect now come
+ * from services/owner-change-live.ts, which re-resolves only the records somebody has open.
  */
-const ownersThrottle = keyedThrottle(5000, 15_000, (tenant) =>
-  emitToTenant(tenant, 'owners:changed', { at: Date.now() })
-)
-onOwnersChanged(() => ownersThrottle(currentTenantKey()))
 
 /**
  * #1925: a role, policy, row filter, scope or subtree grant changed — any open
@@ -236,7 +235,9 @@ onOwnersChanged(() => ownersThrottle(currentTenantKey()))
  * the access-route onResponse hook (routes/index.ts) via accessAnnouncement.
  */
 const accessThrottle = keyedThrottle(2000, 5000, (key) => {
-  const payload = { at: Date.now() }
+  // rt2 #18 — `perms`: what this person may do moved (menus, buttons, fields, rows), not only
+  // which records they read; the shared client refetches what is on screen as them.
+  const payload = { at: Date.now(), perms: true }
   if (key.startsWith('u:')) {
     try {
       getIo()

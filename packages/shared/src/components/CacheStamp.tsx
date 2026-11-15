@@ -1,5 +1,6 @@
 import { RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useLiveStamp } from '../lib/live-data-changed'
 
 /** The cache facts a response carries; the widget render route returns just
  *  these under `cache`, the execute route spreads them at the top level. */
@@ -81,12 +82,18 @@ export function CacheStamp({
   envelope,
   onRefresh,
   refreshing,
-  className
+  className,
+  changedLive,
+  autoRefresh
 }: {
   envelope: CustomQueryEnvelope | undefined
   onRefresh?: () => void
   refreshing?: boolean
   className?: string
+  /** A table this figure reads changed since it was computed (see LiveCacheStamp). */
+  changedLive?: boolean
+  /** The viewer's opt-in to refresh by itself when that happens. */
+  autoRefresh?: { on: boolean; onChange: (on: boolean) => void } | null
 }) {
   // Age is counted from the stamp, not from render, so the label keeps moving
   // while the widget sits open.
@@ -98,7 +105,9 @@ export function CacheStamp({
     return () => clearInterval(id)
   }, [cachedAt])
 
-  if (!envelope || !envelope.cache_ttl) return null
+  // An uncached query has no age to show; it only speaks once the data it reads has changed.
+  const uncached = !envelope?.cache_ttl
+  if (!envelope || (uncached && !changedLive)) return null
 
   const ageSeconds = cachedAt
     ? Math.max(0, Math.round((Date.now() - cachedAt) / 1000))
@@ -109,19 +118,21 @@ export function CacheStamp({
       className={`flex items-center gap-1.5 text-[11px] text-muted-foreground ${className ?? ''}`}
       data-cache-stamp={envelope.cached ? 'cached' : 'fresh'}
     >
-      <span
-        data-tip={
-          envelope.expires_in_seconds != null
-            ? `Cached result — refreshes on its own in ${relative(envelope.expires_in_seconds).replace(' ago', '')}`
-            : 'Computed for this request'
-        }
-      >
-        {ageSeconds == null
-          ? envelope.cached
-            ? 'Cached'
-            : 'Updated just now'
-          : `Updated ${relative(ageSeconds)}`}
-      </span>
+      {!uncached && (
+        <span
+          data-tip={
+            envelope.expires_in_seconds != null
+              ? `Cached result — refreshes on its own in ${relative(envelope.expires_in_seconds).replace(' ago', '')}`
+              : 'Computed for this request'
+          }
+        >
+          {ageSeconds == null
+            ? envelope.cached
+              ? 'Cached'
+              : 'Updated just now'
+            : `Updated ${relative(ageSeconds)}`}
+        </span>
+      )}
       {envelope.stale ? (
         <span
           data-cache-stale
@@ -129,6 +140,15 @@ export function CacheStamp({
           data-tip={staleText(envelope)}
         >
           {staleText(envelope).replace(/ — newer than this figure\.$/, '')}
+        </span>
+      ) : changedLive ? (
+        <span
+          data-cache-changed
+          role='status'
+          className='rounded bg-[#fef3c7] px-1 py-px text-[10.5px] font-medium text-amber-800 dark:bg-[#4a3a10] dark:text-amber-200'
+          data-tip='A record this figure reads was changed after it was computed. Refresh to bring it up to date.'
+        >
+          Data changed since run
         </span>
       ) : envelope.cached && envelope.data_changed_at ? (
         <span
@@ -152,6 +172,46 @@ export function CacheStamp({
           {refreshing ? 'Refreshing' : 'Refresh'}
         </button>
       ) : null}
+      {autoRefresh ? (
+        <button
+          type='button'
+          onClick={() => autoRefresh.onChange(!autoRefresh.on)}
+          aria-pressed={autoRefresh.on}
+          className={`rounded px-1 py-0.5 hover:bg-muted ${autoRefresh.on ? 'font-medium text-foreground' : ''}`}
+          data-cache-auto
+          data-tip={
+            autoRefresh.on
+              ? 'Refreshing on its own when its data changes. Click to stop.'
+              : 'Refresh this on its own when its data changes (you can turn it off again)'
+          }
+        >
+          {autoRefresh.on ? 'Auto-refresh on' : 'Auto-refresh'}
+        </button>
+      ) : null}
     </div>
+  )
+}
+
+/**
+ * CacheStamp that also watches the tables the figure reads (`freshness_sources`): the first
+ * write after the run raises "Data changed since run", and the viewer may opt in to refreshing
+ * automatically (`scope` keeps that choice, e.g. `widget:7`). Without known tables it is the
+ * plain stamp.
+ */
+export function LiveCacheStamp({
+  scope,
+  ...stamp
+}: Omit<Parameters<typeof CacheStamp>[0], 'changedLive' | 'autoRefresh'> & { scope: string }) {
+  const live = useLiveStamp({
+    envelope: stamp.envelope,
+    scope,
+    refresh: () => stamp.onRefresh?.()
+  })
+  return (
+    <CacheStamp
+      {...stamp}
+      changedLive={live.changed}
+      autoRefresh={stamp.onRefresh ? live.autoRefresh : null}
+    />
   )
 }

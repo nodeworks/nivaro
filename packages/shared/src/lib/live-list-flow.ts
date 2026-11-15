@@ -607,27 +607,4 @@ export function totalsMayMove(
   }
   return false
 }
-
-/** Totals reads re-ask at most this often while changes keep coming. */
-export const TOTALS_REFRESH_MS = 2000
-
-/**
- * A trailing coalescer for totals re-reads: `poke()` from each live batch that may move them;
- * `run` fires once per `ms` at most, after the burst settles a little.
- */
-export function createCoalescer(run: () => void, ms = TOTALS_REFRESH_MS) {
-  let timer: ReturnType<typeof setTimeout> | null = null
-  return {
-    poke() {
-      if (timer) return
-      timer = setTimeout(() => {
-        timer = null
-        run()
-      }, ms)
-    },
-    cancel() {
-      if (timer) clearTimeout(timer)
-      timer = null
-    }
-  }
-}
+// The re-read itself is coalesced with `createCoalescer` (lib/live-counts.ts).

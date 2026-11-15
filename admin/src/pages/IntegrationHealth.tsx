@@ -95,6 +95,7 @@ const TAB_TITLES: Record<string, string> = {
   firefight: 'Firefight',
   partners: 'Partners',
   events: 'Events',
+  ready: 'Ready to send',
   erp: 'ERP submissions',
   jobs: 'Jobs',
   inbound: 'Inbound',

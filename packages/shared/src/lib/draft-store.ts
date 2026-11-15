@@ -49,6 +49,61 @@ export interface StoredDraft {
    *  every new form shares one draft key, so a draft is only offered back on
    *  a form that started from the same prefill. Absent = a blank new form. */
   prefill_sig?: string | null
+  /** The device that wrote the draft (rt4 #21): a random per-browser id + a plain label
+   *  ("laptop", "phone"…). A draft from ANOTHER device is offered as "Continue your draft from
+   *  your laptop". Absent on drafts stored by older builds. */
+  device?: DraftDevice | null
+  /** Set when a draft came back from the server: how many of its fields the person may no
+   *  longer edit and were left out (permissions are judged again at restore). */
+  dropped_fields?: number
+}
+
+export interface DraftDevice {
+  id: string
+  label: string
+}
+
+const DEVICE_KEY = 'nvr:device-id'
+
+/** What kind of device this is, from the browser's own words — never a hostname. */
+export function deviceLabelFor(ua: string, touchPoints = 0): string {
+  if (/iPad|Tablet/i.test(ua) || (/Macintosh/i.test(ua) && touchPoints > 1)) return 'tablet'
+  if (/Android/i.test(ua)) return /Mobile/i.test(ua) ? 'phone' : 'tablet'
+  if (/iPhone|iPod|Mobile/i.test(ua)) return 'phone'
+  return 'computer'
+}
+
+let cachedDevice: DraftDevice | null = null
+
+/** This browser's device tag: a stable random id (localStorage) + its plain label. */
+export function thisDraftDevice(): DraftDevice {
+  if (cachedDevice) return cachedDevice
+  let id = ''
+  try {
+    id = localStorage.getItem(DEVICE_KEY) ?? ''
+    if (!/^[A-Za-z0-9_-]{6,64}$/.test(id)) {
+      id = Array.from(crypto.getRandomValues(new Uint8Array(9)), (b) =>
+        b.toString(36).padStart(2, '0')
+      ).join('')
+      localStorage.setItem(DEVICE_KEY, id)
+    }
+  } catch {
+    id = id || `tmp${Math.random().toString(36).slice(2, 12)}`
+  }
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent
+  cachedDevice = {
+    id,
+    label: deviceLabelFor(ua, typeof navigator === 'undefined' ? 0 : navigator.maxTouchPoints)
+  }
+  return cachedDevice
+}
+
+/** Is this draft from another device than the one open now? (older drafts: no.) */
+export function draftIsFromOtherDevice(
+  draft: Pick<StoredDraft, 'device'>,
+  here: DraftDevice = thisDraftDevice()
+): boolean {
+  return !!draft.device?.id && draft.device.id !== here.id
 }
 
 /**

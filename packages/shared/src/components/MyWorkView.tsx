@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bot, Check } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNavigation } from '../context'
+import { liveSlaReading, useDeadlineNow } from '../lib/deadline-ticker'
 import { useLiveEvent } from '../lib/live'
 import { useFreshIds, useLiveOps } from '../lib/live-ops'
 import {
@@ -11,9 +12,10 @@ import {
 } from '../lib/notification-target'
 import { usePrefetchIntent } from '../lib/prefetch'
 import { useOptionalRealtime } from '../lib/realtime'
+import { peekable, usePeekOrOpen } from '../lib/record-peek'
 import { userErrorMessage } from '../lib/safe-error'
 import { slaChip, withinDay } from '../lib/sla-chip'
-import { cn } from '../lib/utils'
+import { cn, formatRelative } from '../lib/utils'
 import { type AgentQuestionRow, AgentQuestionsCard } from './AgentQuestionsCard'
 import { FirstWeekCard } from './ai/FirstWeekCard'
 import { TaskDoButton } from './ai/TaskDo'
@@ -38,6 +40,9 @@ import { UserAvatar } from './UserAvatar'
 interface SlaInfo {
   status: 'ok' | 'warning' | 'breached' | null
   remaining_hours: number | null
+  /** When the clock turns amber / red (ISO) — the chip counts down to them live. */
+  warning_at?: string | null
+  due_at?: string | null
 }
 
 interface OwnedRow {
@@ -84,6 +89,17 @@ interface NotificationRow {
   timestamp: string
 }
 
+interface ProposalRow {
+  id: number
+  collection: string
+  item: string
+  item_label: string
+  fields: string[]
+  reason: string
+  created_by_name: string | null
+  created_at: string
+}
+
 interface MyWorkData {
   owned: OwnedRow[]
   owned_total: number
@@ -94,6 +110,8 @@ interface MyWorkData {
   requested?: TaskRow[]
   on_a_team?: boolean
   approvals: Array<Record<string, unknown>>
+  /** Idea 6 — proposed changes on locked records this person may accept or decline. */
+  proposals?: ProposalRow[]
   notifications: NotificationRow[]
   /** #3220 — questions assistants asked this person, still open. */
   questions?: AgentQuestionRow[]
@@ -110,9 +128,12 @@ interface MyWorkData {
 /** Minimum gap between live refetches: My Work re-aggregates live owner resolution. */
 const LIVE_GAP_MS = 8000
 
-const MY_WORK_SECTIONS = ['records', 'tasks', 'team', 'waiting', 'notifications']
+const MY_WORK_SECTIONS = ['records', 'proposals', 'tasks', 'team', 'waiting', 'notifications']
+/** Sections that take the full width (the rest pair up two by two). */
+const FULL_WIDTH = new Set(['records', 'proposals'])
 const SECTION_LABEL: Record<string, string> = {
   records: 'Waiting on you',
+  proposals: 'Changes to review',
   tasks: 'My tasks',
   team: 'Team tasks',
   waiting: 'Waiting on others',
@@ -131,13 +152,16 @@ const SLA_TONE_CLASS: Record<'ok' | 'warn' | 'alert' | 'neutral', string> = {
 
 // Time-to-breach chip — "breaches in 6h" / "breached 2d ago" — amber for a
 // soon-due warning, red once breached, slate otherwise. #853.
-function SlaChip({ sla }: { sla: SlaInfo | null }) {
+function SlaChip({ sla: read }: { sla: SlaInfo | null }) {
+  // Realtime round 2: moved on by the page's shared clock between reads.
+  const now = useDeadlineNow(!!read?.due_at)
+  const sla = read?.due_at ? liveSlaReading(read, now) : read
   const chip = slaChip(sla)
   if (!chip) return null
   return (
     <span
       data-sla-chip={chip.tone}
-      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${SLA_TONE_CLASS[chip.tone]}`}
+      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums transition-colors duration-500 ${SLA_TONE_CLASS[chip.tone]}`}
     >
       {chip.label}
     </span>
@@ -269,6 +293,7 @@ export function MyWorkView({
 } = {}) {
   const { apiBase, authHeaders, credentials } = useApiFetchConfig()
   const { open: openItem } = useItemNavigation()
+  const peekOrOpen = usePeekOrOpen()
   const nav = useNavigation()
   const qc = useQueryClient()
   // #3230 — resting on a row warms the record it opens.
@@ -365,7 +390,8 @@ export function MyWorkView({
     ...(data?.tasks ?? []).map((t) => `t:${t.id}`),
     ...(data?.team_tasks ?? []).map((t) => `tt:${t.id}`),
     ...(data?.requested ?? []).map((t) => `r:${t.id}`),
-    ...(data?.notifications ?? []).map((n) => `n:${n.id}`)
+    ...(data?.notifications ?? []).map((n) => `n:${n.id}`),
+    ...(data?.proposals ?? []).map((p) => `p:${p.id}`)
   ])
   const hl = (key: string) =>
     freshKeys.has(key)
@@ -438,7 +464,21 @@ export function MyWorkView({
     }
   })
 
-  const open = (collection: string | null, item: string | null) => {
+  const open = (
+    collection: string | null,
+    item: string | null,
+    e?: React.MouseEvent,
+    list?: Array<{ collection: string | null; item: string | null }>
+  ) => {
+    // Realtime #17: a record opens in the app's record sheet (the page stays where it is);
+    // Cmd / Ctrl-click opens it in a new tab. Hosts without a sheet navigate as before.
+    if (collection && item && peekable(collection)) {
+      const peekList = (list ?? [])
+        .filter((r) => r.collection && r.item && peekable(r.collection))
+        .map((r) => ({ collection: r.collection as string, itemId: String(r.item) }))
+      if (peekOrOpen({ collection, itemId: String(item) }, e, { list: peekList }) !== 'navigate')
+        return
+    }
     const routes: NotificationRouteMap = {
       record: (c, i) => {
         // Record targets always work — openItem is the host's record router.
@@ -662,7 +702,7 @@ export function MyWorkView({
                       >
                         <button
                           type='button'
-                          onClick={() => open(o.collection, o.item)}
+                          onClick={(e) => open(o.collection, o.item, e, filteredOwned)}
                           {...intent.record(o.collection, o.item)}
                           className='flex w-full items-center gap-2.5 px-4 py-2 text-left hover:bg-muted'
                         >
@@ -691,6 +731,49 @@ export function MyWorkView({
               </section>
             )
           },
+          // Idea 6 — only when something waits on this person's decision.
+          proposals: () =>
+            (data.proposals ?? []).length === 0 ? null : (
+              <section
+                className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+                data-my-work-proposals
+              >
+                <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
+                  <h2 className='text-[13px] font-medium'>Changes to review</h2>
+                  <p className='text-[11px] text-muted-foreground'>
+                    Proposed changes on locked records — open one to compare old and new and accept
+                    or decline it.
+                  </p>
+                </div>
+                <ul className='divide-y divide-slate-100 dark:divide-border/60'>
+                  {(data.proposals ?? []).map((p) => (
+                    <li key={p.id} className={hl(`p:${p.id}`)} data-my-work-proposal={p.id}>
+                      <button
+                        type='button'
+                        onClick={() => open(p.collection, p.item)}
+                        {...intent.record(p.collection, p.item)}
+                        className='flex w-full items-start gap-2.5 px-4 py-2 text-left hover:bg-muted'
+                      >
+                        <span className='min-w-0 flex-1'>
+                          <span className='flex flex-wrap items-baseline gap-x-2'>
+                            <span className='text-[12.5px] font-medium'>{p.item_label}</span>
+                            <span className='text-[11.5px] text-muted-foreground'>
+                              {p.fields.join(', ')}
+                            </span>
+                          </span>
+                          <span className='mt-0.5 block truncate text-[11.5px] text-slate-500 dark:text-slate-400'>
+                            {p.created_by_name ?? 'Someone'}: {p.reason}
+                          </span>
+                        </span>
+                        <span className='shrink-0 pt-0.5 text-[11px] text-muted-foreground'>
+                          {formatRelative(p.created_at)}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ),
           tasks: () => (
             <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
               <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
@@ -738,8 +821,8 @@ export function MyWorkView({
                       )}
                       <button
                         type='button'
-                        onClick={() =>
-                          t.kind === 'support' ? openTicket(t.id) : open(t.collection, t.item)
+                        onClick={(e) =>
+                          t.kind === 'support' ? openTicket(t.id) : open(t.collection, t.item, e)
                         }
                         className='min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline'
                       >
@@ -804,7 +887,7 @@ export function MyWorkView({
                         )}
                         <button
                           type='button'
-                          onClick={() => open(t.collection, t.item)}
+                          onClick={(e) => open(t.collection, t.item, e)}
                           className='min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline'
                         >
                           {t.title}
@@ -876,8 +959,10 @@ export function MyWorkView({
                         >
                           <button
                             type='button'
-                            onClick={() =>
-                              t.kind === 'support' ? openTicket(t.id) : open(t.collection, t.item)
+                            onClick={(e) =>
+                              t.kind === 'support'
+                                ? openTicket(t.id)
+                                : open(t.collection, t.item, e)
                             }
                             className='min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline'
                           >
@@ -957,7 +1042,7 @@ export function MyWorkView({
                       {notificationTargetFor(n.collection, n.item) ? (
                         <button
                           type='button'
-                          onClick={() => open(n.collection, n.item)}
+                          onClick={(e) => open(n.collection, n.item, e, data.notifications)}
                           className='min-w-0 flex-1 cursor-pointer text-left hover:opacity-80'
                         >
                           <p className='truncate text-[12.5px] font-medium'>{n.subject}</p>
@@ -1006,12 +1091,12 @@ export function MyWorkView({
         let i = 0
         while (i < visible.length) {
           const k = visible[i]
-          if (k === 'records') {
+          if (FULL_WIDTH.has(k)) {
             out.push(<div key={k}>{built.get(k)}</div>)
             i++
           } else {
             const pair = [k]
-            if (i + 1 < visible.length && visible[i + 1] !== 'records') pair.push(visible[i + 1])
+            if (i + 1 < visible.length && !FULL_WIDTH.has(visible[i + 1])) pair.push(visible[i + 1])
             out.push(
               <div key={pair.join('+')} className='grid gap-5 lg:grid-cols-2'>
                 {pair.map((pk) => (

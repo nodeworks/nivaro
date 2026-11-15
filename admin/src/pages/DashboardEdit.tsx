@@ -15,7 +15,8 @@ import {
   queryKeys,
   useLiveRefetchInterval,
   useLiveWidget,
-  usePretendDownScope
+  usePretendDownScope,
+  WidgetImageMenu
 } from '@nivaro/shared'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -31,7 +32,7 @@ import {
   TrendingUp,
   X
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import {
   Bar,
@@ -295,7 +296,8 @@ export function WidgetCard({
     requireBridge: true,
     enabled: followsCollection
   })
-  const { data, isLoading, isError, error, refetch } = useQuery({
+  const frameRef = useRef<HTMLDivElement>(null)
+  const { data, isLoading, isError, error, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['widget-data', widget.id, filtersKey],
     queryFn: () =>
       api
@@ -318,6 +320,7 @@ export function WidgetCard({
 
   return (
     <div
+      ref={frameRef}
       className={cn(
         'flex flex-col rounded-xl border border-slate-200 dark:border-white/[0.07] bg-white dark:bg-[#161b22] p-4 shadow-sm',
         fill && 'h-full min-h-[200px] rounded-lg shadow-none'
@@ -332,7 +335,7 @@ export function WidgetCard({
       }
     >
       {/* Header */}
-      <div className='mb-3 flex items-start justify-between gap-2'>
+      <div className='mb-3 flex items-start justify-between gap-2' data-widget-image-ignore=''>
         <div className='min-w-0'>
           <p
             className='truncate text-[13px] font-semibold text-slate-700 dark:text-slate-200'
@@ -376,6 +379,16 @@ export function WidgetCard({
               <Pin className={cn('h-3.5 w-3.5', pin.pinned && 'fill-current')} />
             </button>
           )}
+          <WidgetImageMenu
+            getTarget={() => frameRef.current}
+            label={() => ({
+              title: widget.title,
+              asOf: dataUpdatedAt || Date.now(),
+              dashboardFilters: globalFilters,
+              // An Ask AI chart keeps its question in `filters`, not a filter.
+              widgetFilter: widget.type === 'ai_query' ? null : widget.filters
+            })}
+          />
           {onDelete && (
             <button
               type='button'

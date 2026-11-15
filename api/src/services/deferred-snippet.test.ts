@@ -41,13 +41,19 @@ describe('deferred snippet round trip', () => {
     expect(decodeDeferredSnippet(raw)).toEqual({
       text: 'From Waiting on Level 4 Approval to Waiting on Level 5 Approval. It is now waiting on you.',
       collection: 'workflows',
-      item: '372991'
+      item: '372991',
+      notification: null
     })
+  })
+
+  it('carries the inbox row so the summary can re-check it at send time', () => {
+    const raw = encodeDeferredSnippet(MAIL, { collection: 'workflows', item: 1, notification: 88 })
+    expect(decodeDeferredSnippet(raw).notification).toBe(88)
   })
 
   it('an old plain row (the stripped page) shows nothing rather than boilerplate', () => {
     expect(
       decodeDeferredSnippet('Engineering Finance Portal Engineering Finance Portal EFP Approve')
-    ).toEqual({ text: '', collection: null, item: null })
+    ).toEqual({ text: '', collection: null, item: null, notification: null })
   })
 })

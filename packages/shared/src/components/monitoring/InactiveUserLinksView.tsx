@@ -3,8 +3,10 @@ import { ChevronDown, ChevronRight, RotateCw, Search, UserX } from 'lucide-react
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { type FindingRef, type ResolvedMark, useResolvedFindings } from '../../lib/live-findings'
 import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatRelative } from '../../lib/utils'
+import { FindingFixedMark } from '../FindingFixedMark'
 import { UserAvatar } from '../UserAvatar'
 
 /**
@@ -546,6 +548,36 @@ function SourceRow({
         .then((r) => r.data),
     enabled: show && listable
   })
+  // A record someone hands on or fixes while this is open turns to "Fixed by Beth" in place;
+  // the next refresh drops it. "Fixed" = it is no longer in the person's list, asked of the
+  // same read as the viewer (live-findings.ts).
+  const listed = records.data?.records
+  const linkRefs = useMemo<FindingRef[]>(
+    () =>
+      platform
+        ? []
+        : (listed ?? []).map((r) => ({
+            key: `${r.collection}:${r.id}`,
+            collection: r.collection,
+            itemId: r.id
+          })),
+    [listed, platform]
+  )
+  const { resolved } = useResolvedFindings({
+    findings: linkRefs,
+    enabled: show && !platform,
+    recheck: (refs) =>
+      client
+        .request<{ data: { records: LinkedRecord[] } }>(
+          get(
+            `/inactive-user-links/${userId}/records?source=${encodeURIComponent(source.key)}&limit=100`
+          )
+        )
+        .then((r) => {
+          const still = new Set((r.data.records ?? []).map((x) => `${x.collection}:${x.id}`))
+          return refs.filter((x) => !still.has(x.key)).map((x) => x.key)
+        })
+  })
   return (
     <li data-inactive-source={source.key}>
       <div className='flex items-center gap-2 text-[12px]'>
@@ -592,17 +624,24 @@ function SourceRow({
             />
           ) : records.data?.records.length ? (
             <ul className='flex flex-wrap gap-1' data-inactive-records>
-              {records.data.records.map((r) => (
-                <li key={`${r.collection}:${r.id}`}>
-                  <button
-                    type='button'
-                    onClick={() => openItem({ collection: r.collection, itemId: r.id })}
-                    className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-700 hover:border-slate-400 dark:border-border dark:bg-card dark:text-foreground'
-                  >
-                    {r.label?.trim() || `#${r.id}`}
-                  </button>
-                </li>
-              ))}
+              {records.data.records.map((r) => {
+                const mark = resolved.get(`${r.collection}:${r.id}`) as ResolvedMark | undefined
+                return (
+                  <li key={`${r.collection}:${r.id}`} data-finding-resolved={mark ? '' : undefined}>
+                    <button
+                      type='button'
+                      onClick={() => openItem({ collection: r.collection, itemId: r.id })}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-700 transition-opacity hover:border-slate-400 dark:border-border dark:bg-card dark:text-foreground',
+                        mark && 'opacity-60'
+                      )}
+                    >
+                      {r.label?.trim() || `#${r.id}`}
+                      {mark && <FindingFixedMark mark={mark} className='text-[10.5px]' />}
+                    </button>
+                  </li>
+                )
+              })}
               {count > records.data.records.length && (
                 <li className='px-1 py-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
                   +{n(count - records.data.records.length)} more

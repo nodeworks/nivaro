@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { announceMentionSeen } from '../services/mention-receipts.js'
 import { can } from '../services/permissions.js'
+import { viewAsAdminOf } from '../services/view-as-attribution.js'
 
 function parseJson(val: unknown): Record<string, unknown> | null {
   if (val == null) return null
@@ -325,6 +326,8 @@ export async function recordViewRoutes(app: FastifyInstance) {
       if (!IDENT.test(collection) || /^nivaro_/i.test(collection)) {
         return reply.code(400).send({ error: 'Not a valid collection' })
       }
+      // A View-as tab leaves the person's watermarks alone (see /touch).
+      if (viewAsAdminOf(req)) return reply.send({ data: { ok: true } })
       const now = new Date()
       await db('nivaro_record_views')
         .where({ user: req.user!.id, collection, item_id: String(id) })
@@ -398,16 +401,58 @@ export async function recordViewRoutes(app: FastifyInstance) {
             .send({ error: 'Could not load this right now', code: 'RECORD_RECAP_UNAVAILABLE' })
         }
       }
-      await roll()
-      // Mention read receipts (#2117): if this open is what makes a mention of this person
-      // "seen", the thread of everyone viewing the record refreshes its marks.
-      void announceMentionSeen(collection, String(id), userId, existing?.last_viewed_at ?? null)
+      // An administrator viewing as this person is not the person opening the record: the
+      // watermark stays where it was, so the open never counts as theirs — not for the
+      // owners' "opened this" line (services/owner-opened.ts), mention read receipts, the
+      // unseen dots or the admin first-open metric — and their own next recap is intact.
+      if (!viewAsAdminOf(req)) {
+        await roll()
+        // Mention read receipts (#2117): if this open is what makes a mention of this person
+        // "seen", the thread of everyone viewing the record refreshes its marks.
+        void announceMentionSeen(collection, String(id), userId, existing?.last_viewed_at ?? null)
+      }
 
       if (!since || !recap) return reply.send({ data: null })
       if (recap.field_changes === 0 && recap.comments === 0 && recap.transitions === 0) {
         return reply.send({ data: null })
       }
       return reply.send({ data: { since: since.toISOString(), ...recap } })
+    }
+  )
+
+  /** Realtime round 3 #2 — "Since this email": what happened to this record after `at` (the
+   *  send time an email link carries), judged as the caller: the record must be readable, and
+   *  only changes to fields the caller may read count. Read-only; never moves a watermark.
+   *  `data: null` = nothing changed (or an unusable `at`). */
+  app.get<{ Params: { collection: string; id: string }; Querystring: { at?: string } }>(
+    '/record-views/:collection/:id/since',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, id } = req.params
+      if (!IDENT.test(collection) || /^nivaro_/i.test(collection)) {
+        return reply.code(400).send({ error: 'Not a valid collection' })
+      }
+      const { parseSinceParam, recordChangesSince } = await import('../services/record-since.js')
+      const since = parseSinceParam(req.query.at)
+      if (!since) return reply.send({ data: null })
+      const { recordRefusal } = await import('../services/erp-record-gate.js')
+      const refusal = await recordRefusal(req, collection, String(id), 'read')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
+      try {
+        const data = await recordChangesSince(
+          req.user!,
+          !!req.isAdmin,
+          collection,
+          String(id),
+          since
+        )
+        return reply.send({ data })
+      } catch (err) {
+        req.log.warn({ err }, 'record since-email summary failed')
+        return reply
+          .code(503)
+          .send({ error: 'Could not load this right now', code: 'RECORD_SINCE_UNAVAILABLE' })
+      }
     }
   )
 

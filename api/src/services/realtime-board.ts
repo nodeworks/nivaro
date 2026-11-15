@@ -71,6 +71,21 @@ export interface BoardViewer {
   socket: string
   id: string
   name: string
+  /** What signed the socket in (SocketBind kind: session | masq | token | apikey | device).
+   *  Internal only — never sent to clients. Missing on boards from older processes; a reader
+   *  that decides on it (the live keystroke relay) must treat missing as "not known". */
+  kind?: string
+}
+
+/** One record-room viewer as this process publishes it; `kind` only when known. */
+export function boardViewerEntry(
+  socket: string,
+  viewer: { id: string; name: string },
+  kind?: string
+): BoardViewer {
+  const entry: BoardViewer = { socket, id: viewer.id, name: viewer.name }
+  if (typeof kind === 'string' && kind) entry.kind = kind
+  return entry
 }
 
 export interface BoardLive {

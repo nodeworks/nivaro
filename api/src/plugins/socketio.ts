@@ -27,11 +27,21 @@ import {
   type VersionGroup
 } from '../services/client-versions-cluster.js'
 import { ownUserRoom, scopeUserRoomsPerTenant } from '../services/cloud-user-rooms.js'
-import { fieldValueAudience } from '../services/field-change-relay.js'
+import {
+  fieldChangeDelivery,
+  relayableValue,
+  relayViewers
+} from '../services/field-change-relay.js'
 import { fieldFocusTracker } from '../services/field-focus.js'
+import {
+  cleanSignalField,
+  fieldSignalSockets,
+  mayReadSignalField
+} from '../services/field-signal-gate.js'
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
 import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
+import { liveCollectionsFrom } from '../services/live-collections.js'
 import { setLockPresenceProbe } from '../services/lock-presence.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { opsRoom, opsTopicGate } from '../services/ops-live.js'
@@ -73,14 +83,17 @@ import {
   boardHasUser,
   boardIsViewing,
   boardKnowsEveryone,
+  boardLive,
   boardMergeOn,
   boardPeerViewers,
   boardReaderOn,
   boardRealtimeStats,
   boardRecordViewers,
   boardSocketUser,
+  boardStats,
   boardUsersOnPath,
   boardUsersOnPathPrefix,
+  boardViewerEntry,
   isGateRoom,
   type LocalBoard,
   onPeerBoardChange,
@@ -488,6 +501,21 @@ function socketTenantKey(socketId: string): string | null {
   return typeof key === 'string' ? key : null
 }
 
+/**
+ * Realtime round 2 — the collections a list, queue or open record is watching right now, across
+ * every process this one can see (its own socket rooms + the realtime board). Null when this
+ * process cannot see every socket (no board, Redis away, cloud mode): callers then treat every
+ * collection as watched rather than skip one somebody has open.
+ */
+export function getLiveCollectionNames(): Set<string> | null {
+  if (!boardKnowsEveryone()) return null
+  const rooms: string[] = []
+  for (const [room] of _ioRef?.sockets.adapter.rooms ?? []) rooms.push(room)
+  for (const b of boardLive()) rooms.push(...Object.keys(b.viewers ?? {}))
+  for (const s of boardStats()) for (const r of s.rooms ?? []) rooms.push(r.room)
+  return liveCollectionsFrom(rooms)
+}
+
 /** Local concurrency snapshot for the sampling cron (#275). */
 export function getLocalConcurrency(): { sockets: number; users: number } {
   const users = new Set<string>()
@@ -506,13 +534,23 @@ export function localBoardCollector(io: SocketIOServer | null = _ioRef): BoardCo
   return { live: () => collectLocalLive(io), stats: () => collectLocalStats(io) }
 }
 
+/** What signed a local socket in (SocketBind kind), or undefined when not known. */
+function socketBindKind(io: SocketIOServer | null, socketId: string): string | undefined {
+  const kind = (io?.sockets.sockets.get(socketId)?.data?.nvrBind as { kind?: unknown } | undefined)
+    ?.kind
+  return typeof kind === 'string' ? kind : undefined
+}
+
 /** The live part (every second): counts, viewers, page pings, gate rooms, topic viewers. */
 function collectLocalLive(io: SocketIOServer | null): LocalBoard['live'] {
   const users = new Set<string>()
   for (const m of socketMeta.values()) if (m.user) users.add(m.user.id)
   const viewers: LocalBoard['live']['viewers'] = {}
+  // The bind kind lets another process's keystroke relay keep values from API-key sockets.
   for (const [room, map] of recordViewers)
-    viewers[room] = [...map].map(([socket, v]) => ({ socket, id: v.id, name: v.name }))
+    viewers[room] = [...map].map(([socket, v]) =>
+      boardViewerEntry(socket, v, socketBindKind(io, socket))
+    )
   const rooms: Record<string, number> = {}
   for (const [room, set] of io?.sockets.adapter.rooms ?? [])
     if (isGateRoom(room)) rooms[room] = set.size
@@ -2007,22 +2045,62 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     })
     // Signals on a record (a note being written #1721, a transition dialog open #1722):
     // names only, to sockets already admitted to the record's room by the read gate.
+    // Realtime round 2: a note typed on ONE field's comment thread carries `field`, and goes
+    // only to the room's people who may read that field (services/field-signal-gate.ts).
+    const fieldSignalAt = new Map<string, number>()
+    const relayFieldSignal = inSocketTenant(
+      socket,
+      async (room: string, field: string, collection: string, out: Record<string, unknown>) => {
+        const sender = authenticatedUser
+        if (!sender) return
+        // A typist repeats `start` every few seconds; more often than once a second is noise.
+        const key = `${room}\u0001${field}`
+        const now = Date.now()
+        if (out.state === 'start' && now - (fieldSignalAt.get(key) ?? 0) < 1000) return
+        fieldSignalAt.set(key, now)
+        if (fieldSignalAt.size > 50) fieldSignalAt.clear()
+        if (!(await mayReadSignalField(String(sender.id), collection, field))) return
+        const viewers = [
+          ...[...(recordViewers.get(room) ?? new Map()).entries()].map(([sid, v]) => ({
+            socket: sid,
+            id: v.id
+          })),
+          ...boardPeerViewers(room).map((v) => ({ socket: v.socket, id: v.id }))
+        ]
+        const targets = await fieldSignalSockets(viewers, socket.id, (uid) =>
+          mayReadSignalField(uid, collection, field)
+        )
+        for (const sid of targets) io.to(sid).emit('record:signal', { ...out, field })
+      }
+    )
     socket.on(
       'record:signal',
-      (payload: { collection?: string; item?: unknown; kind?: string; state?: string }) => {
+      (payload: {
+        collection?: string
+        item?: unknown
+        kind?: string
+        state?: string
+        field?: unknown
+      }) => {
         const { collection, item } = payload ?? {}
         const state = cleanSignalState(payload?.state)
         if (!collection || item == null || !authenticatedUser || !state) return
         if (!RECORD_SIGNAL_KINDS.has(String(payload?.kind))) return
         const room = recordRoom(collection, item)
         if (!joinedRecordRooms.has(room)) return
-        socket.to(room).emit('record:signal', {
+        const out = {
           collection,
           item: String(item),
           kind: payload.kind,
           state,
           user: { id: authenticatedUser.id, name: displayName(authenticatedUser).slice(0, 80) }
-        })
+        }
+        if (payload?.field != null) {
+          const field = payload.kind === 'note' ? cleanSignalField(payload.field) : null
+          if (field) void relayFieldSignal(room, field, collection, out)
+          return
+        }
+        socket.to(room).emit('record:signal', out)
       }
     )
     const onRecordJoin = async (payload: { collection?: string; item?: string }) => {
@@ -2191,8 +2269,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Live co-editing v3 — relay value keystrokes inside the record room.
     // Preview-only on the receiving side; persistence still goes through the
     // normal save path with all its validation.
-    // M6 — the value goes only to viewers whose read policy includes the field; the others get
-    // the same event without a value (they still see who is editing which field).
+    // The typed value goes only to the SOCKETS in the room whose person may read that field
+    // (the record read's field list) — never for system collections, encrypted, credential or
+    // concealed fields, to-many aliases or names the collection lacks, never to API-key sockets
+    // (services/field-change-relay.ts). Everyone else gets the same event without `value` (who
+    // is editing which field). Same event and shape as before; `value` is simply absent.
     socket.on(
       'field:change',
       inSocketTenant(
@@ -2207,35 +2288,34 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           const room = roomFor(payload)
           if (!user || !room || typeof payload?.field !== 'string') return
           const field = payload.field
-          const value =
-            typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
+          if (!field || field.length > 128) return
           // Typing keeps the "editing this field" mark alive.
           focusMarks.touch(room, field)
           const record = recordOf(room)
           const base = { ...record, field, user: { id: user.id, name: displayName(user) } }
           const me = String(user.id).toLowerCase()
-          const viewerIds = [
-            ...(recordViewers.get(room)?.values() ?? []),
-            ...boardPeerViewers(room)
-          ]
-            .map((v) => String(v.id))
-            .filter((id) => id.toLowerCase() !== me)
-          if (viewerIds.length === 0 || !record.collection) return
-          let audience: { readers: string[]; others: string[] }
-          try {
-            audience = await fieldValueAudience(viewerIds, record.collection, field)
-          } catch {
-            audience = { readers: [], others: viewerIds }
+          const viewers = relayViewers(
+            recordViewers.get(room)?.entries() ?? [],
+            (sid) => socketBindKind(io, sid),
+            boardPeerViewers(room)
+          ).filter((v) => v.socket !== socket.id && v.id.toLowerCase() !== me)
+          if (viewers.length === 0 || !record.collection) return
+          const namesOnly = { valueTo: [] as string[], nameTo: viewers.map((v) => v.socket) }
+          let delivery = namesOnly
+          if (relayableValue(payload.value)) {
+            try {
+              delivery = await fieldChangeDelivery(viewers, record.collection, field)
+            } catch {
+              delivery = namesOnly
+            }
           }
-          // Personal rooms reach each viewer's tabs on every replica; a tab not on this record
-          // ignores it (the payload names its record).
-          if (audience.readers.length)
-            io.to(audience.readers.map((id) => `user:${id}`)).emit('field:changed', {
-              ...base,
-              value
-            })
-          if (audience.others.length)
-            io.to(audience.others.map((id) => `user:${id}`)).emit('field:changed', base)
+          const value =
+            typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
+          // Socket ids reach a socket on any replica (adapter); a person's other tabs and
+          // devices that are not on this record get nothing.
+          if (delivery.valueTo.length)
+            io.to(delivery.valueTo).emit('field:changed', { ...base, value })
+          if (delivery.nameTo.length) io.to(delivery.nameTo).emit('field:changed', base)
         }
       )
     )

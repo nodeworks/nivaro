@@ -371,3 +371,77 @@ describe('liveRefetchInterval', () => {
     expect(liveRefetchInterval(true, undefined)).toBe(undefined)
   })
 })
+
+describe('createLiveQueryBridge jitter (realtime screens 2026-11-14)', () => {
+  it('spreads a refetch over the random jitter and coalesces a burst into one read', async () => {
+    const rt = fakeRealtime()
+    const bridge = createLiveQueryBridge(
+      qc,
+      rt,
+      bridgeOpts({ windowMs: 100, random: () => 0.5, readsGapMs: 0 })
+    )
+    watch('tile', { reads: ['orders'], jitterMs: 4000, minGapMs: 0 })
+    await settle()
+    expect(calls.tile).toBe(1)
+    for (let i = 0; i < 500; i++)
+      rt.push({ collection: 'orders', item: String(i), changed_fields: ['status'] })
+    await settle(100)
+    // Jitter of 0.5 × 4000 ms: not yet.
+    await settle(1990)
+    expect(calls.tile).toBe(1)
+    await settle(20)
+    expect(calls.tile).toBe(2)
+    // A second burst reads once more, never once per event.
+    rt.push({ collection: 'orders', item: '1', changed_fields: ['status'] })
+    rt.push({ collection: 'orders', item: '2', changed_fields: ['status'] })
+    await settle(2200)
+    expect(calls.tile).toBe(3)
+    bridge.dispose()
+  })
+
+  it('a burst arriving while a jittered read waits does not add a second read', async () => {
+    const rt = fakeRealtime()
+    const bridge = createLiveQueryBridge(
+      qc,
+      rt,
+      bridgeOpts({ windowMs: 50, random: () => 0.9, readsGapMs: 0 })
+    )
+    watch('tile', { reads: ['orders'], jitterMs: 1000, minGapMs: 0 })
+    await settle()
+    rt.push({ collection: 'orders', item: '1', changed_fields: ['x'] })
+    await settle(60)
+    rt.push({ collection: 'orders', item: '2', changed_fields: ['x'] })
+    await settle(60)
+    await settle(1000)
+    expect(calls.tile).toBe(2)
+    bridge.dispose()
+  })
+
+  it('delayMs waits for a server cache drop before reading (plus any jitter)', async () => {
+    const rt = fakeRealtime()
+    const bridge = createLiveQueryBridge(
+      qc,
+      rt,
+      bridgeOpts({ windowMs: 50, random: () => 0.5, readsGapMs: 0 })
+    )
+    watch('figure', { reads: ['orders'], delayMs: 3000, jitterMs: 1000, minGapMs: 0 })
+    await settle()
+    rt.push({ collection: 'orders', item: '1', changed_fields: ['x'] })
+    await settle(50 + 3490)
+    expect(calls.figure).toBe(1)
+    await settle(20)
+    expect(calls.figure).toBe(2)
+    bridge.dispose()
+  })
+
+  it('queries without jitter still refetch at once', async () => {
+    const rt = fakeRealtime()
+    const bridge = createLiveQueryBridge(qc, rt, bridgeOpts({ windowMs: 50, random: () => 0.9 }))
+    watch('list', { reads: ['orders'], minGapMs: 0 })
+    await settle()
+    rt.push({ collection: 'orders', item: '1', changed_fields: ['x'] })
+    await settle(60)
+    expect(calls.list).toBe(2)
+    bridge.dispose()
+  })
+})

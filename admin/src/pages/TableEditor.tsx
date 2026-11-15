@@ -48,14 +48,12 @@ import { toast } from 'sonner'
 import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
 import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
-import {
-  DuplicateCheckSetting,
-  type DuplicateCheckValue
-} from '@/components/duplicate-check-setting'
+import { DuplicateCheckCard, type DuplicateCheckValue } from '@/components/duplicate-check-card'
 import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
 import { HeavyListColumnsCard } from '@/components/heavy-list-columns-card'
 import { InlineEditSetting } from '@/components/inline-edit-setting'
 import { LabelSearchFieldsSetting } from '@/components/label-search-fields-setting'
+import { LineSplitCard } from '@/components/line-split-card'
 import { PagePresence } from '@/components/page-presence'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { Badge } from '@/components/ui/badge'
@@ -4374,11 +4372,13 @@ function SettingsTab({
       <PickerFilterSection tableName={tableName} />
       <HeavyListColumnsCard collection={tableName} />
       <BrowserSettingsSection tableName={tableName} />
+      <DuplicateCheckCard tableName={tableName} />
       <EmptyStateSlugSection tableName={tableName} />
       <RenameCollectionSection tableName={tableName} />
       <AuditDepthSection tableName={tableName} />
       <IntegrityBadgeSection tableName={tableName} />
       <FormUxSection tableName={tableName} onGoToLayouts={onGoToLayouts} />
+      <LineSplitCard tableName={tableName} />
       <DataProtectionSection tableName={tableName} />
       <CastCheckSection tableName={tableName} />
       <GenerateTestDataCard tableName={tableName} />
@@ -4698,6 +4698,10 @@ type SummaryModeRulesDraft = {
   rules: SummaryModeRuleDraft[]
   /** Server-enforced edit lock (api services/edit-lock.ts) — carried through, not edited here. */
   edit_lock?: unknown
+  /** Propose a change on a record locked after approval (api change-proposals.ts). */
+  change_proposals?: boolean
+  /** Lines lock one at a time (Item locking section) — carried through, not edited here. */
+  line_locks?: boolean
 }
 const NO_STATE_KEY = '__none__'
 
@@ -4717,6 +4721,7 @@ function FormUxSection({
           data: {
             read_mode_toggle?: boolean
             summary_mode_rules?: SummaryModeRulesDraft | null
+            browser_config?: Record<string, unknown> | null
             fields?: Array<{
               field: string
               type?: string | null
@@ -4743,9 +4748,12 @@ function FormUxSection({
     mutationFn: (patch: {
       read_mode_toggle?: boolean
       summary_mode_rules?: SummaryModeRulesDraft
+      browser_config?: Record<string, unknown> | null
     }) => api.patch(`/collections/${tableName}`, patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['collection-meta-read-mode', tableName] })
+      qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(tableName) })
+      qc.invalidateQueries({ queryKey: ['col-meta', tableName] })
       toast.success('Form UX setting saved')
     },
     onError: (e: unknown) => {
@@ -4767,7 +4775,9 @@ function FormUxSection({
             mode: r.mode === 'summary' ? 'summary' : 'edit'
           }))
         : [],
-      ...(raw?.edit_lock ? { edit_lock: raw.edit_lock } : {})
+      ...(raw?.edit_lock ? { edit_lock: raw.edit_lock } : {}),
+      ...(raw?.change_proposals === true ? { change_proposals: true } : {}),
+      ...(raw?.line_locks === true ? { line_locks: true } : {})
     }
   }, [meta])
   const save = (next: SummaryModeRulesDraft) => saveMut.mutate({ summary_mode_rules: next })
@@ -4810,6 +4820,30 @@ function FormUxSection({
   )
   const busy = saveMut.isPending || meta === undefined
   const toggleOn = meta?.read_mode_toggle === true
+  // Idea 43: "Needed by <partner>" badges ride browser_config (the other keys kept as they are).
+  const partnerBadges = meta?.browser_config?.partner_badges === true
+  const setPartnerBadges = async (on: boolean) => {
+    // Read browser_config fresh: the Collection Browser card writes the same object.
+    const fresh = await api
+      .get<{ data: { browser_config?: Record<string, unknown> | null } }>(
+        `/collections/${tableName}`
+      )
+      .then((r) => r.data.data.browser_config ?? null)
+      .catch(() => meta?.browser_config ?? null)
+    const next: Record<string, unknown> = { ...(fresh ?? {}) }
+    if (on) next.partner_badges = true
+    else delete next.partner_badges
+    saveMut.mutate({ browser_config: Object.keys(next).length > 0 ? next : null })
+  }
+
+  // Idea 6 — the switch only matters where a post-approval (admin-only) lock is set.
+  const adminOnlyLock = !!(cfg.edit_lock as { admin_only?: { states?: unknown[] } } | undefined)
+    ?.admin_only?.states?.length
+  const proposalsOn = cfg.change_proposals === true
+  const setProposals = (on: boolean) => {
+    const { change_proposals: _drop, ...rest } = cfg
+    save(on ? { ...rest, change_proposals: true } : rest)
+  }
 
   const ModeSeg = ({
     value,
@@ -4961,6 +4995,23 @@ function FormUxSection({
             data-summary-mode-switch
           />
         </div>
+        {/* Idea 43: "Needed by <partner>" badges */}
+        <div className='flex items-center justify-between gap-4 px-4 py-3'>
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>Partner needs on the form</p>
+            <p className='mt-0.5 text-[12px] text-slate-500'>
+              Mark fields a partner system will need at a later step (“Needed by …”), so people fill
+              them before that step stops on them. Follows the record's current values, line by
+              line. Off by default.
+            </p>
+          </div>
+          <Switch
+            checked={partnerBadges}
+            onCheckedChange={(v) => void setPartnerBadges(v)}
+            disabled={busy}
+            data-partner-badges-switch
+          />
+        </div>
         {/* Opening-mode rules */}
         <div className={cn('px-4 py-3', !toggleOn && 'opacity-60')} data-summary-mode-rules>
           <div className='flex flex-wrap items-center justify-between gap-2'>
@@ -5075,6 +5126,35 @@ function FormUxSection({
               This collection is not bound to a pipeline, so state rules only match "No state yet".
             </p>
           )}
+        </div>
+        {/* Propose a change on a locked record (idea 6) */}
+        <div
+          className='flex items-start justify-between gap-4 px-4 py-3'
+          data-change-proposals-setting
+        >
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>
+              Propose a change on locked records
+            </p>
+            <p className='mt-0.5 text-[12px] text-slate-500'>
+              When a record is locked after approval, people who could otherwise edit it get a
+              Propose change button: they enter new values and a reason, and the owners of the
+              current step (or an administrator) accept or decline. Request help stays available.
+              Off by default.
+            </p>
+            {!adminOnlyLock && (
+              <p className='mt-1.5 text-[11.5px] text-amber-700'>
+                This collection has no post-approval lock, so nothing is offered yet.
+              </p>
+            )}
+          </div>
+          <Switch
+            checked={proposalsOn}
+            onCheckedChange={setProposals}
+            disabled={busy}
+            aria-label='Propose a change on locked records'
+            data-change-proposals-switch
+          />
         </div>
         {/* Changes tray pointer */}
         <div className='px-4 py-2.5 text-[12px] text-slate-500'>
@@ -6645,8 +6725,58 @@ function ItemLockingSection({ tableName }: { tableName: string }) {
     onError: () => toast.error('Failed to update setting')
   })
 
+  // Lines lock one at a time (realtime item 7): stored in summary_mode_rules with the
+  // record's other lock settings; PATCH /collections keeps the rest of that config.
+  const { data: lockMeta } = useQuery({
+    queryKey: ['collection-meta-read-mode', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { summary_mode_rules?: Record<string, unknown> | null } }>(
+          `/collections/${tableName}`
+        )
+        .then((r) => r.data.data),
+    enabled: !!tableName
+  })
+  const lineLocks = lockMeta?.summary_mode_rules?.line_locks === true
+  const lineLocksMut = useMutation({
+    mutationFn: (on: boolean) => {
+      const cur = (lockMeta?.summary_mode_rules ?? { default: 'edit', rules: [] }) as Record<
+        string,
+        unknown
+      >
+      const next: Record<string, unknown> = { default: 'edit', rules: [], ...cur }
+      if (on) next.line_locks = true
+      else delete next.line_locks
+      return api.patch(`/collections/${tableName}`, { summary_mode_rules: next })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['collection-meta-read-mode', tableName] })
+      toast.success('Line locking setting saved')
+    },
+    onError: () => toast.error('Failed to update setting')
+  })
+
   return (
-    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <div className='flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3 dark:border-border'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+            Lock lines one at a time
+          </p>
+          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400'>
+            Off: someone editing a record holds all of its lines too. On: the record's lock covers
+            its own fields only, and each line locks while one person edits it — two people can work
+            on different lines at once.
+          </p>
+        </div>
+        <Switch
+          checked={lineLocks}
+          onCheckedChange={(v) => lineLocksMut.mutate(v)}
+          disabled={lineLocksMut.isPending || lockMeta === undefined}
+          aria-label='Lock lines one at a time'
+          data-line-locks-toggle
+        />
+      </div>
       <div className='flex items-center justify-between px-4 py-3'>
         <div>
           <p className='text-[13px] font-medium text-slate-800'>Item locking</p>
@@ -7352,7 +7482,8 @@ interface BrowserConfig {
   label_search_fields?: string[]
   /** #3224 — edit in the list: {enabled, fields}; absent = off. */
   inline_edit?: InlineEditConfig | null
-  /** Duplicate warnings on create (api services/duplicate-check.ts); absent = auto. */
+  /** Duplicate warnings on create (DuplicateCheckCard; api services/duplicate-rules.ts);
+   *  absent = on with the default criteria. Edited by its own card, kept as is here. */
   duplicate_check?: DuplicateCheckValue
   /** Keys edited elsewhere (export_filename, fulfilment, …) ride along untouched. */
   [key: string]: unknown
@@ -7768,12 +7899,6 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           displayTemplate={col?.display_template}
           value={cfg.label_search_fields}
           onChange={(v) => void patch({ label_search_fields: v })}
-        />
-        <DuplicateCheckSetting
-          collection={tableName}
-          fields={col?.fields ?? []}
-          value={cfg.duplicate_check}
-          onChange={(v) => void patch({ duplicate_check: v })}
         />
         <div className='flex items-center justify-between gap-4'>
           <div>

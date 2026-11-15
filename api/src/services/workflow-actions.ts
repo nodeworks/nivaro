@@ -17,6 +17,7 @@ import {
   secretsForScrub
 } from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
 import type { RequestedVia } from './erp-submission-status.js'
@@ -80,7 +81,7 @@ import { type ConditionRule, evalConditionRule } from './workflow-conditions.js'
 //   next_open_day          — skip weekends and nivaro_blackout_dates forward
 //   pad_start: N, 'c'      — left-pad to N chars with 'c' (default '0')
 
-interface ContextQueryDef {
+export interface ContextQueryDef {
   collection: string
   filter?: Record<string, unknown>
   /** Restrict rows to those with a matching junction row — expresses
@@ -179,7 +180,7 @@ const engine = payloadLiquid()
 
 export { addCalendarDays, calendarDay, registerPayloadFilters }
 
-function parseActions(raw: string | null | undefined): TransitionActionDef[] {
+export function parseActions(raw: string | null | undefined): TransitionActionDef[] {
   if (!raw) return []
   try {
     const parsed = JSON.parse(raw)
@@ -339,40 +340,183 @@ export async function buildContext(
       const rows = (await q.limit(Math.min(Number(cfg.limit ?? 500), 2000))) as Array<
         Record<string, unknown>
       >
-
-      // Batched M2O expansion: each configured fk column gains a <fk>_data object.
-      // When the queried table is an M2A junction and the fk is its item column,
-      // each row is read from the collection its discriminator names (a ship-to
-      // contact is a person OR an external email): reading every row from the
-      // one configured collection left external emails empty, and MDSi refused
-      // the deployment request ("Contact email is required").
-      for (const [fk, exp] of Object.entries(cfg.expand ?? {})) {
-        if (!IDENTIFIER_RE.test(fk) || !collectionAllowed(exp?.collection)) continue
-        const fields = (exp.fields ?? []).filter((f) => IDENTIFIER_RE.test(f))
-        if (fields.length === 0) continue
-        if (!rows.some((r) => r[fk] != null)) continue
-        try {
-          const m2a = await m2aItemLeg(cfg.collection, fk)
-          const groups = groupM2aRows(rows, fk, exp.collection, m2a)
-          for (const r of rows) r[`${fk}_data`] = null
-          for (const [target, members] of groups) {
-            if (!collectionAllowed(target)) continue
-            const cols = target === exp.collection ? fields : await existingColumns(target, fields)
-            if (cols.length === 0) continue
-            const ids = [...new Set(members.map((r) => r[fk]))]
-            const related = (await db(target)
-              .whereIn('id', ids as never[])
-              .select(['id', ...cols])) as Array<Record<string, unknown>>
-            const byId = new Map(related.map((x) => [String(x.id).toUpperCase(), x]))
-            for (const r of members) r[`${fk}_data`] = byId.get(String(r[fk]).toUpperCase()) ?? null
-          }
-        } catch {
-          /* expansion is best-effort */
-        }
-      }
+      await expandContextRows(cfg, rows)
       out[key] = rows
     } catch {
       out[key] = []
+    }
+  }
+  return out
+}
+
+/**
+ * Batched M2O expansion of context rows (in place): each configured fk column gains a
+ * <fk>_data object. When the queried table is an M2A junction and the fk is its item column,
+ * each row is read from the collection its discriminator names (a ship-to contact is a person
+ * OR an external email): reading every row from the one configured collection left external
+ * emails empty, and the partner refused the deployment request ("Contact email is required").
+ * One read per target for ALL the rows given — the ready-to-send batch passes many records'.
+ */
+async function expandContextRows(
+  cfg: ContextQueryDef,
+  rows: Array<Record<string, unknown>>
+): Promise<void> {
+  for (const [fk, exp] of Object.entries(cfg.expand ?? {})) {
+    if (!IDENTIFIER_RE.test(fk) || !collectionAllowed(exp?.collection)) continue
+    const fields = (exp.fields ?? []).filter((f) => IDENTIFIER_RE.test(f))
+    if (fields.length === 0) continue
+    if (!rows.some((r) => r[fk] != null)) continue
+    try {
+      const m2a = await m2aItemLeg(cfg.collection, fk)
+      const groups = groupM2aRows(rows, fk, exp.collection, m2a)
+      for (const r of rows) r[`${fk}_data`] = null
+      for (const [target, members] of groups) {
+        if (!collectionAllowed(target)) continue
+        const cols = target === exp.collection ? fields : await existingColumns(target, fields)
+        if (cols.length === 0) continue
+        const ids = [...new Set(members.map((r) => r[fk]))]
+        // Chunked: the batch path expands many records' rows at once (2,100-parameter cap).
+        const related = (await selectInChunks(ids as Array<string | number>, 1000, (chunk) =>
+          whereInList(db(target), 'id', chunk).select(['id', ...cols])
+        )) as Array<Record<string, unknown>>
+        const byId = new Map(related.map((x) => [String(x.id).toUpperCase(), x]))
+        for (const r of members) r[`${fk}_data`] = byId.get(String(r[fk]).toUpperCase()) ?? null
+      }
+    } catch {
+      /* expansion is best-effort */
+    }
+  }
+}
+
+type ContextBatchKey = { column: string; from: '$id' | { field: string } }
+
+/** The one filter that differs per record — `$id` or `$record.<field>` — when a context def can
+ *  be read for many records in one statement (every other filter a constant or `$user`, a
+ *  junction filter allowed). Null when there is none (the same rows for every record) or two. */
+export function batchableContextKey(cfg: ContextQueryDef | undefined): ContextBatchKey | null {
+  if (!cfg || !collectionAllowed(cfg.collection)) return null
+  let key: ContextBatchKey | null = null
+  for (const [f, v] of Object.entries(cfg.filter ?? {})) {
+    if (!IDENTIFIER_RE.test(f)) continue
+    let next: ContextBatchKey | null = null
+    if (v === '$id') next = { column: f, from: '$id' }
+    else if (typeof v === 'string' && v.startsWith('$record.'))
+      next = { column: f, from: { field: v.slice('$record.'.length) } }
+    if (!next) continue
+    if (key) return null
+    key = next
+  }
+  return key
+}
+
+/** How many filters of a def differ per record (`$id` / `$record.<field>`). */
+const perRecordFilters = (cfg: ContextQueryDef) =>
+  Object.entries(cfg.filter ?? {}).filter(
+    ([f, v]) =>
+      IDENTIFIER_RE.test(f) && (v === '$id' || (typeof v === 'string' && v.startsWith('$record.')))
+  ).length
+
+/**
+ * buildContext for many records of one collection (the ready-to-send board): each def whose only
+ * per-record filter is `$id` or one `$record.<field>` is ONE statement for every record — capped
+ * per value in SQL (ROW_NUMBER over that column, the def's own sort and limit) — and one
+ * expansion over all of the rows. Records whose value is empty (and defs with no per-record
+ * filter) share one read. Two per-record filters, or a failed statement, fall back to the
+ * per-record read. Same rows per record as buildContext.
+ */
+export async function buildContextBatch(
+  defs: TransitionActionDef['context'],
+  items: Array<{ item: string; record: Record<string, unknown> }>,
+  userId?: string | null
+): Promise<Map<string, Record<string, unknown>>> {
+  const out = new Map<string, Record<string, unknown>>()
+  for (const it of items) out.set(String(it.item), {})
+  const assign = (it: { item: string }, key: string, rows: unknown) => {
+    const ctx = out.get(String(it.item))
+    if (ctx) ctx[key] = rows
+  }
+  const perRecord = async (key: string, cfg: ContextQueryDef) => {
+    for (const it of items) {
+      const one = await buildContext({ [key]: cfg }, it.item, it.record, userId)
+      assign(it, key, one[key] ?? [])
+    }
+  }
+  for (const [key, cfg] of Object.entries(defs ?? {})) {
+    if (!collectionAllowed(cfg?.collection) || items.length === 0) continue
+    const by = batchableContextKey(cfg)
+    if (!by && perRecordFilters(cfg) > 0) {
+      await perRecord(key, cfg)
+      continue
+    }
+    try {
+      const keyValueOf = (it: { item: string; record: Record<string, unknown> }): unknown =>
+        !by ? null : by.from === '$id' ? it.item : (it.record[by.from.field] ?? null)
+      // No per-record filter, or an empty value: the same rows for each such record, read once.
+      const same = items.filter((it) => keyValueOf(it) == null)
+      if (same.length > 0) {
+        const one = await buildContext({ [key]: cfg }, same[0].item, same[0].record, userId)
+        for (const it of same) assign(it, key, one[key] ?? [])
+      }
+      const keyed = items.filter((it) => keyValueOf(it) != null)
+      if (!by || keyed.length === 0) continue
+      const values = [
+        ...new Map(
+          keyed.map((it) => [String(keyValueOf(it)).toUpperCase(), keyValueOf(it)])
+        ).values()
+      ] as Array<string | number>
+      const limit = Math.min(Number(cfg.limit ?? 500), 2000)
+      const desc = !!cfg.sort?.startsWith('-')
+      const sortCol = cfg.sort ? (desc ? cfg.sort.slice(1) : cfg.sort) : ''
+      const sorted = IDENTIFIER_RE.test(sortCol)
+      const order = sorted ? `?? ${desc ? 'DESC' : 'ASC'}` : '(SELECT NULL)'
+      let inner = db(cfg.collection).select(
+        `${cfg.collection}.*`,
+        db.raw(
+          `ROW_NUMBER() OVER (PARTITION BY ?? ORDER BY ${order}) AS __nvr_rn`,
+          sorted ? [by.column, sortCol] : [by.column]
+        )
+      )
+      for (const [f, v] of Object.entries(cfg.filter ?? {})) {
+        if (!IDENTIFIER_RE.test(f) || f === by.column) continue
+        const resolved = v === '$user' ? (userId ?? null) : v
+        inner =
+          resolved === null || resolved === undefined
+            ? inner.whereNull(f)
+            : inner.where(f, resolved as never)
+      }
+      const jf = cfg.junction_filter
+      if (
+        jf &&
+        collectionAllowed(jf.junction) &&
+        IDENTIFIER_RE.test(jf.fk_to_row ?? '') &&
+        IDENTIFIER_RE.test(jf.field ?? '')
+      ) {
+        inner = inner.whereIn(
+          'id',
+          db(jf.junction)
+            .select(jf.fk_to_row)
+            .where(jf.field, jf.value as never)
+        )
+      }
+      inner = whereInList(inner, by.column, values)
+      const rows = (await db
+        .select('*')
+        .from(inner.as('nvr_ctx'))
+        .where('__nvr_rn', '<=', limit)
+        .orderBy('__nvr_rn')) as Array<Record<string, unknown>>
+      for (const r of rows) delete r.__nvr_rn
+      await expandContextRows(cfg, rows)
+      const byValue = new Map<string, Array<Record<string, unknown>>>()
+      for (const r of rows) {
+        const k = String(r[by.column] ?? '').toUpperCase()
+        const list = byValue.get(k)
+        if (list) list.push(r)
+        else byValue.set(k, [r])
+      }
+      for (const it of keyed)
+        assign(it, key, byValue.get(String(keyValueOf(it)).toUpperCase()) ?? [])
+    } catch {
+      await perRecord(key, cfg)
     }
   }
   return out
@@ -427,7 +571,7 @@ async function applyWriteback(
   return updateAsAction(await w.writer(), collection, itemId, patch, w.reason)
 }
 
-async function resolveExternalApiId(ref: number | string): Promise<number | null> {
+export async function resolveExternalApiId(ref: number | string): Promise<number | null> {
   if (typeof ref === 'number') return ref
   if (/^\d+$/.test(ref)) return Number(ref)
   try {
@@ -443,7 +587,7 @@ async function resolveExternalApiId(ref: number | string): Promise<number | null
 // ─── Payload body (inline Liquid or a saved payload template) ──────────────────
 
 /** The saved payload template an action names, or null (blank / not a string = none). */
-function templateKeyOf(action: Partial<TransitionActionDef>): string | null {
+export function templateKeyOf(action: Partial<TransitionActionDef>): string | null {
   const k = action.payload_template_key
   return typeof k === 'string' && k.trim() !== '' ? k.trim() : null
 }
@@ -454,7 +598,7 @@ const hasPayload = (action: Partial<TransitionActionDef>): boolean =>
 
 /** The action field that keeps it from producing a push, or null. `apiId` = the resolved external
  *  API (null = did not resolve); omitted, the action's own `external_api` is judged. */
-function notConfiguredField(
+export function notConfiguredField(
   action: Partial<TransitionActionDef>,
   apiId?: number | null
 ): 'external_api' | 'endpoint_path' | 'payload_template' | null {
@@ -604,7 +748,7 @@ async function templateInfo(key: string): Promise<TemplateInfo | null> {
  * The context query defs an action runs: its own `context`, over the referenced template's
  * `lookups` (same shape) — the action's keys win on a clash.
  */
-async function contextDefsFor(
+export async function contextDefsFor(
   action: TransitionActionDef
 ): Promise<TransitionActionDef['context']> {
   const key = templateKeyOf(action)
@@ -621,18 +765,25 @@ const apiKey = (name: string): string => name.trim().toLowerCase()
  * configuration mistake, never a push. Compared by name, case-insensitively, after resolving the
  * action's api id. A template with no API set (or an unknown template) is not checked here.
  */
+/** A read memo: the preview path shares record-independent reads across records with it. */
+type ReadMemo = <T>(key: string, load: () => Promise<T>) => Promise<T>
+const noMemo: ReadMemo = (_key, load) => load()
+
 async function assertTemplateApi(
   key: string,
   action: TransitionActionDef,
-  apiId: number
+  apiId: number,
+  memo: ReadMemo = noMemo
 ): Promise<void> {
   const templateApi = (await templateInfo(key))?.external_api
   if (!templateApi?.trim()) return
   let actionApi: string | null = null
   try {
-    const row = (await db('nivaro_external_apis').where({ id: apiId }).first('name')) as
-      | { name?: string | null }
-      | undefined
+    const row = await memo(`apiname:${apiId}`, async () => {
+      return (await db('nivaro_external_apis').where({ id: apiId }).first('name')) as
+        | { name?: string | null }
+        | undefined
+    })
     actionApi = row?.name ?? null
   } catch {
     actionApi = null
@@ -657,16 +808,18 @@ async function assertTemplateApi(
 async function renderActionBody(
   action: TransitionActionDef,
   scope: Record<string, unknown>,
-  apiId: number
+  apiId: number,
+  memo: ReadMemo = noMemo
 ): Promise<Record<string, unknown>> {
   const key = templateKeyOf(action)
   if (key) {
-    await assertTemplateApi(key, action, apiId)
+    await assertTemplateApi(key, action, apiId, memo)
     // The secret slots are checked against the API this action sends to, by id: the template's
     // stored API name is compared loosely above (' partner ' = Partner), but looked up by that
     // raw name it found no API, so every secret slot read as unknown and the push was refused.
     const r = await renderPayloadTemplate(key, scope, {
-      secretNames: () => bodySecretNames(String(apiId))
+      secretNames: () => memo(`secretnames:${apiId}`, () => bodySecretNames(String(apiId))),
+      secretNamesById: true
     })
     if (!r.body || typeof r.body !== 'object' || Array.isArray(r.body)) {
       throw new PayloadTemplateError(
@@ -2106,6 +2259,88 @@ export interface ErpActionPreview {
   contract_missing: string[]
 }
 
+/** Preview cache keys that depend on the record — what a batch caller may seed (ready-to-send). */
+export const previewRecordKey = (collection: string, item: string) =>
+  `rec:${collection}:${String(item)}`
+export const previewLastKey = (
+  collection: string,
+  item: string,
+  apiId: number,
+  endpointPath: string
+) => `last:${collection}:${String(item)}:${apiId}:${endpointPath}`
+export const previewCtxKey = (
+  collection: string,
+  item: string,
+  defs: TransitionActionDef['context'] | undefined
+) => `ctx:${collection}:${String(item)}:${JSON.stringify(defs ?? {})}`
+/** Record-independent: the context query defs one action runs (its own + its template's). */
+const previewCtxDefsKey = (action: TransitionActionDef) =>
+  `ctxdefs:${templateKeyOf(action) ?? ''}:${JSON.stringify(action.context ?? {})}`
+
+/** The context query defs an action runs — exported for the ready-to-send batch prefetch. */
+export async function previewContextDefs(
+  action: TransitionActionDef,
+  cache?: Map<string, Promise<unknown>>
+): Promise<TransitionActionDef['context']> {
+  if (!cache) return contextDefsFor(action)
+  const key = previewCtxDefsKey(action)
+  let p = cache.get(key) as Promise<TransitionActionDef['context']> | undefined
+  if (!p) {
+    p = contextDefsFor(action)
+    cache.set(key, p)
+  }
+  return p
+}
+
+/** An action's API ref resolved to an id, through the preview cache (ready-to-send). */
+export async function previewApiId(
+  ref: number | string,
+  cache?: Map<string, Promise<unknown>>
+): Promise<number | null> {
+  if (!cache) return resolveExternalApiId(ref)
+  const key = `api:${String(ref)}`
+  let p = cache.get(key) as Promise<number | null> | undefined
+  if (!p) {
+    p = resolveExternalApiId(ref)
+    cache.set(key, p)
+  }
+  return p
+}
+
+/**
+ * The newest landed push to one endpoint among a record's newest landed submissions (newest
+ * first, up to 25 across endpoints — what lastLandedSubmission reads). Pure: the ready-to-send
+ * batch reads those rows for many records in one statement and picks with this.
+ */
+export function pickLastLanded(
+  rows: Array<{
+    id: number
+    status: string
+    created_at: Date | string
+    payload: string | null
+    change_signature: string | null
+  }>,
+  endpointPath: string
+): ErpActionPreview['last'] {
+  for (const r of rows) {
+    let parsed: { endpoint_path?: string; body?: unknown } | null = null
+    try {
+      parsed = r.payload ? JSON.parse(r.payload) : null
+    } catch {
+      parsed = null
+    }
+    if (!parsed || parsed.endpoint_path !== endpointPath) continue
+    return {
+      submission_id: Number(r.id),
+      status: r.status,
+      at: new Date(r.created_at).toISOString(),
+      body: parsed.body ?? null,
+      change_signature: r.change_signature
+    }
+  }
+  return null
+}
+
 async function lastLandedSubmission(
   collection: string,
   item: string,
@@ -2125,22 +2360,7 @@ async function lastLandedSubmission(
       payload: string | null
       change_signature: string | null
     }>
-    for (const r of rows) {
-      let parsed: { endpoint_path?: string; body?: unknown } | null = null
-      try {
-        parsed = r.payload ? JSON.parse(r.payload) : null
-      } catch {
-        parsed = null
-      }
-      if (!parsed || parsed.endpoint_path !== endpointPath) continue
-      return {
-        submission_id: Number(r.id),
-        status: r.status,
-        at: new Date(r.created_at).toISOString(),
-        body: parsed.body ?? null,
-        change_signature: r.change_signature
-      }
-    }
+    return pickLastLanded(rows, endpointPath)
   } catch {
     /* history unreadable — reads as "never sent" */
   }
@@ -2152,8 +2372,11 @@ export async function previewErpActions(opts: {
   instance: { collection: string; item: string }
   newStateObj: { key: string; label: string; external_label?: string | null } | null
   userId: string | null
-  /** Shared across several transitions of one record: the record and each
-   *  distinct context query set are read once, not once per transition. */
+  /** Shared across several transitions (and several records — the ready-to-send board): the
+   *  record and each distinct context query set are read once per record, not once per
+   *  transition; what does not depend on the record (the API, its secrets and contract, the
+   *  template's lookups, the acting person) once for every record. A batch caller may seed the
+   *  per-record keys (`previewRecordKey`, `previewLastKey`, `previewCtxKey`) from set reads. */
   cache?: Map<string, Promise<unknown>>
 }): Promise<ErpActionPreview[]> {
   const actions = parseActions(opts.transition.actions)
@@ -2167,7 +2390,7 @@ export async function previewErpActions(opts: {
     }
     return p
   }
-  const record = await cached('record', async () => {
+  const record = await cached(previewRecordKey(collection, item), async () => {
     try {
       return ((await db(collection).where({ id: item }).first()) ?? {}) as Record<string, unknown>
     } catch {
@@ -2197,12 +2420,16 @@ export async function previewErpActions(opts: {
       contract_missing: []
     }
     if (action.on_success?.set || action.on_success_children?.length) earlierWriteback = true
-    const apiId = action.external_api ? await resolveExternalApiId(action.external_api) : null
+    const apiId = action.external_api
+      ? await cached(`api:${String(action.external_api)}`, () =>
+          resolveExternalApiId(action.external_api as number | string)
+        )
+      : null
     base.api_id = apiId
     let context: Record<string, unknown> = {}
     if (!notConfiguredField(action, apiId)) {
-      const ctxDefs = await contextDefsFor(action)
-      context = await cached(`ctx:${JSON.stringify(ctxDefs ?? {})}`, () =>
+      const ctxDefs = await cached(previewCtxDefsKey(action), () => contextDefsFor(action))
+      context = await cached(previewCtxKey(collection, item, ctxDefs), () =>
         buildContext(ctxDefs, item, record, opts.userId)
       )
     }
@@ -2217,7 +2444,7 @@ export async function previewErpActions(opts: {
     }
     // Past not_configured, so the api and endpoint are set.
     const endpointPath = action.endpoint_path as string
-    base.last = await cached(`last:${apiId}:${endpointPath}`, () =>
+    base.last = await cached(previewLastKey(collection, item, apiId as number, endpointPath), () =>
       lastLandedSubmission(collection, item, apiId as number, endpointPath)
     )
     if (gate?.rule) {
@@ -2246,7 +2473,7 @@ export async function previewErpActions(opts: {
     let body: Record<string, unknown>
     try {
       // The same render as the real push, so the payload signature matches.
-      body = await renderActionBody(action, scope, apiId as number)
+      body = await renderActionBody(action, scope, apiId as number, cached)
     } catch (err) {
       out.push({
         ...base,
@@ -2257,7 +2484,10 @@ export async function previewErpActions(opts: {
     }
     // Shown and diffed against the last STORED body, which recordSubmission scrubbed — so scrub
     // the same way (after the signature below, which is taken over the body as sent).
-    base.body = applyScrub(body, await secretsForScrub(apiId as number)) as Record<string, unknown>
+    base.body = applyScrub(
+      body,
+      await cached(`scrub:${apiId}`, () => secretsForScrub(apiId as number))
+    ) as Record<string, unknown>
     if (action.push_when) {
       const signature =
         action.push_when.payload === true
@@ -2280,9 +2510,11 @@ export async function previewErpActions(opts: {
       }
     }
     try {
-      const apiRow = (await db('nivaro_external_apis')
-        .where({ id: Number(apiId) })
-        .first('outbound_contract')) as { outbound_contract: string | null } | undefined
+      const apiRow = await cached(`contract:${apiId}`, async () => {
+        return (await db('nivaro_external_apis')
+          .where({ id: Number(apiId) })
+          .first('outbound_contract')) as { outbound_contract: string | null } | undefined
+      })
       const contract = apiRow?.outbound_contract
         ? (JSON.parse(apiRow.outbound_contract) as { required?: string[] })
         : null

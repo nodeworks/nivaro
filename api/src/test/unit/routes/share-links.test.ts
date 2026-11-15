@@ -1,4 +1,6 @@
-import Fastify from 'fastify'
+import { request as httpRequest } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import Fastify, { type FastifyInstance } from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Record share links must never hand out, list, revoke or render a form preview link
@@ -93,7 +95,11 @@ vi.mock('../../../db/index.js', () => {
   return { db: Object.assign((t: string) => chain(t), { raw: vi.fn() }) }
 })
 
+vi.mock('../../../services/widget-live.js', () => ({ takeBudget: () => true }))
+vi.mock('../../../services/tenant-rooms.js', () => ({ currentTenantKey: () => '' }))
+
 const { shareLinksRoutes, sharePublicRoutes } = await import('../../../routes/share-links.js')
+const { publishSseEvent } = await import('../../../services/sse-hub.js')
 
 async function build() {
   const app = Fastify()
@@ -310,5 +316,99 @@ describe('share links never reach past the creator’s own access', () => {
     m.users = [{ id: 'paul', role: 'approver', status: 'suspended' }]
     const gone = await app.inject({ method: 'GET', url: '/share/live' })
     expect(gone.statusCode).toBe(404)
+  })
+})
+
+function readStream(
+  app: FastifyInstance,
+  path: string,
+  ms: number
+): Promise<{ status: number; body: string }> {
+  const { port } = app.server.address() as AddressInfo
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path }, (res) => {
+      let body = ''
+      res.setEncoding('utf8')
+      res.on('data', (c: string) => {
+        body += c
+      })
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
+      setTimeout(() => {
+        req.destroy()
+        resolve({ status: res.statusCode ?? 0, body })
+      }, ms)
+    })
+    req.on('error', (e) => {
+      if ((e as NodeJS.ErrnoException).code === 'ECONNRESET') return
+      reject(e)
+    })
+    req.end()
+  })
+}
+
+// Realtime round 3 #4 — an open share page updates live: a token-scoped stream that carries a
+// bare `changed` only when THIS link's page (read as the creator) actually changed.
+describe('share link live stream', () => {
+  const liveLink = {
+    id: 'l1',
+    collection: 'orders',
+    item: '42',
+    token: 'live',
+    layout_id: 5,
+    is_active: 1,
+    expires_at: '2099-01-01T00:00:00Z',
+    created_by: 'paul'
+  }
+
+  it('refuses an unknown, revoked or preview token', async () => {
+    const app = await build()
+    expect((await app.inject('/share/nope/stream')).statusCode).toBe(404)
+    m.link = { ...liveLink, is_active: 0 }
+    expect((await app.inject('/share/live/stream')).statusCode).toBe(404)
+    m.link = { ...previewRow }
+    expect((await app.inject('/share/tok/stream')).statusCode).toBe(404)
+    await app.close()
+  })
+
+  it('signals once for a real change of its own record, never for other records', async () => {
+    m.link = { ...liveLink }
+    m.users = [{ id: 'paul', role: 'approver', status: 'active' }]
+    m.readable = { id: 42, name: 'PO 42' }
+    const app = Fastify()
+    await app.register(sharePublicRoutes)
+    await app.listen({ port: 0, host: '127.0.0.1' })
+    const pending = readStream(app, '/share/live/stream', 3_200)
+    await new Promise((r) => setTimeout(r, 200))
+    // Another record of the same collection, another collection: ignored even though the
+    // page would read differently now.
+    m.readable = { id: 42, name: 'PO 42 renamed' }
+    publishSseEvent({ collection: 'orders', item: 43, action: 'update', changed_fields: ['name'] })
+    publishSseEvent({ collection: 'lines', item: 42, action: 'update' })
+    await new Promise((r) => setTimeout(r, 1_400))
+    // Its own record: one signal (two writes coalesce).
+    publishSseEvent({ collection: 'orders', item: 42, action: 'update', changed_fields: ['name'] })
+    publishSseEvent({ collection: 'orders', item: '42', action: 'update' })
+    const { status, body } = await pending
+    await app.close()
+    expect(status).toBe(200)
+    expect(body.match(/event: changed/g)?.length).toBe(1)
+    expect(body).not.toContain('orders')
+    expect(body).not.toContain('PO 42')
+    expect(body).not.toContain('name')
+  }, 10_000)
+
+  it('the page carries its live script under a nonce, and a refresh is not a view', async () => {
+    m.link = { ...liveLink }
+    m.users = [{ id: 'paul', role: 'approver', status: 'active' }]
+    m.readable = { id: 42, name: 'PO 42' }
+    const app = await build()
+    const r = await app.inject('/share/live')
+    const csp = String(r.headers['content-security-policy'])
+    const nonce = /'nonce-([^']+)'/.exec(csp)?.[1]
+    expect(nonce).toBeTruthy()
+    expect(r.body).toContain(`<script nonce="${nonce}">`)
+    expect(r.body).toContain('/stream')
+    expect(r.body).toContain('id="nvr-share-body"')
+    await app.close()
   })
 })

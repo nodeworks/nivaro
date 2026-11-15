@@ -9,8 +9,10 @@ import {
 } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { getIo } from './io-holder.js'
+import { fanOutRawWrites } from './raw-write-fanout.js'
 import { broadcastCollectionUpdate } from './realtime.js'
 import { currentTenantKey } from './tenant-rooms.js'
+import { currentTrafficSource } from './traffic-source.js'
 
 /**
  * Raw writers announce changes (#1875).
@@ -53,6 +55,9 @@ export interface RawWriteAnnouncement {
   changed_fields?: string[]
   /** Who wrote ("procedure:reforecast", "rollup", "batch-update"). Diagnostics only. */
   source?: string
+  /** Loop guard (realtime round 3 #6): the flow run that made the write (`flow:<id>`), so an
+   *  opted-in flow never fires for its own write. Set from the flow run's traffic source. */
+  origin?: string | null
 }
 
 export interface PlannedBroadcast {
@@ -168,6 +173,9 @@ function broadcastPlanned(list: RawWriteAnnouncement[]): number {
     }
   }
   stats.broadcasts += planned.length
+  // Realtime round 3 #6 — GraphQL events for action-less announcements, opted-in webhooks and
+  // flows, alert re-evaluation (services/raw-write-fanout.ts). Never blocks the broadcast.
+  void fanOutRawWrites(list, planned).catch(() => {})
   return planned.length
 }
 
@@ -232,7 +240,13 @@ export async function announceRawWrites(
 ): Promise<void> {
   const { apiOnly, ...rest } = opts
   if (apiOnly && !getIo()) return
-  const a: RawWriteAnnouncement = { collection, ids: ids ?? null, ...rest }
+  const src = currentTrafficSource()
+  const a: RawWriteAnnouncement = {
+    collection,
+    ids: ids ?? null,
+    ...rest,
+    ...(src?.kind === 'flow' ? { origin: src.id } : {})
+  }
   stats.announced++
   if (!getIo()) {
     try {
@@ -269,8 +283,10 @@ export async function announceRawWrites(
 /** Read and delete one batch from the inbox. Rows are claimed by the delete itself. */
 async function claimBatch(): Promise<Record<string, unknown>[]> {
   if (isMssql(db)) {
+    // READPAST: rows a procedure announced inside a transaction that is still open are left for
+    // a later drain (they may yet roll back) instead of holding the drain until it commits.
     const res = (await db.raw(
-      `DELETE TOP (${DRAIN_BATCH}) FROM ${TABLE}
+      `DELETE TOP (${DRAIN_BATCH}) FROM ${TABLE} WITH (READPAST)
        OUTPUT DELETED.collection, DELETED.item, DELETED.action, DELETED.changed_fields, DELETED.source`
     )) as unknown
     return Array.isArray(res) ? (res as Record<string, unknown>[]) : []

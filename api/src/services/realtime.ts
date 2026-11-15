@@ -11,6 +11,7 @@ import {
 } from './collection-live-mode.js'
 import { type EmitResult, journaledEmit } from './event-journal.js'
 import { publishCollectionTouched, publishItemEvent } from './item-events.js'
+import { pokeOps } from './ops-live.js'
 import { noteCollectionWrite, readCachesActive } from './read-caches.js'
 import { emitRecordChangeNotice, recordChangeListenerCount } from './record-change-notices.js'
 import { noteRealtimeEmit } from './request-trace.js'
@@ -68,6 +69,9 @@ export function broadcastCollectionUpdate(
       at: Date.now()
     })
   }
+  // The Collections directory's counts / last change follow data writes (never system tables
+  // or `$` aspect notices): one coalesced poke to admins who have the directory open.
+  if (extra?.action && !collection.startsWith('nivaro_')) pokeOps('collections')
   // #1826 — a staged import run writing through the items service says so, so a form open on
   // the record can warn "an import is updating this record" instead of looking like a person.
   const source = extra?.source ?? (currentTrafficSource()?.kind === 'import' ? 'import' : undefined)

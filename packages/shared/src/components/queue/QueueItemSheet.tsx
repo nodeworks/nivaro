@@ -234,6 +234,9 @@ export function QueueItemSheet({
     if (batchTouches(batch, LIVE_ASPECTS.state)) {
       void qc.invalidateQueries({ queryKey: ['queue-sheet-instance', collection, itemId] })
       if (!batch.own) refetchItems()
+    } else if (batchTouches(batch, LIVE_ASPECTS.owners)) {
+      // rt2 #17 — owners moved: owner-only moves may appear or go.
+      void qc.invalidateQueries({ queryKey: ['queue-sheet-instance', collection, itemId] })
     }
     if (batchTouches(batch, LIVE_ASPECTS.comments))
       void qc.invalidateQueries({ queryKey: ['queue-sheet-comments', collection, itemId] })

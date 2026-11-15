@@ -18,6 +18,7 @@ import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from '
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
 import { get, post } from '../lib/commands'
+import { createCoalescer } from '../lib/live-counts'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import {
   type NotificationActionSpec,
@@ -30,8 +31,9 @@ import {
   resolveNotificationTargetFor,
   runNotificationTarget
 } from '../lib/notification-target'
-import { useTabAttention } from '../lib/tab-attention'
+import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../lib/record-peek'
 import { cn, formatRelative } from '../lib/utils'
+import { LiveCount } from './LiveCount'
 import { AsItWasSheet } from './notifications/AsItWasSheet'
 import {
   bundleAsNotification,
@@ -43,7 +45,8 @@ import {
 } from './notifications/bundles'
 import { DeliveryChips } from './notifications/DeliveryChips'
 import { NotificationActions } from './notifications/NotificationActions'
-import { NotificationDetailBits } from './notifications/NotificationDetailBits'
+import { NotificationDetailBits, ResolvedLine } from './notifications/NotificationDetailBits'
+import { RelativeTime } from './RelativeTime'
 
 // Server serialize() shape. The SDK's NotificationItem carries the raw
 // columns; the bell needs the click-target extras too, so it types the rows
@@ -185,7 +188,7 @@ export interface NotificationBellProps {
    *  positions it beside the trigger — for a sidebar rail whose overflow
    *  would clip an inline panel. */
   panelPlacement?: 'below' | 'right'
-  /** Put the attention count in front of the browser tab title (default true). */
+  /** @deprecated The tab count moved to `TabCountHost`; this does nothing. */
   tabBadge?: boolean
 }
 
@@ -213,10 +216,10 @@ export function NotificationBell({
   subscriptionsPath,
   rulesPath,
   onActionError,
-  panelPlacement = 'below',
-  tabBadge = true
+  panelPlacement = 'below'
 }: NotificationBellProps) {
   const client = useNivaroClient()
+  const peek = useRecordPeek()
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<BellLaneTab>('attention')
   const rootRef = useRef<HTMLDivElement>(null)
@@ -246,9 +249,8 @@ export function NotificationBell({
   // The badge is EVERY unread row — an FYI you have not seen is still unread.
   // Red when a critical one is among them; `attention` only sizes the tab.
   const badge = unread + extraBadge
-  // The browser tab carries what needs the person (not every FYI), so a
-  // glance at another tab says whether to come back.
-  useTabAttention(attention + extraBadge, { enabled: tabBadge })
+  // The browser tab's count is no longer the bell's: TabCountHost carries what is waiting on
+  // the person (the My Work figure), so a glance at another tab says whether to come back.
 
   // #1256 — the server folds rows that name the same record into bundles
   // (`bundle=record`); an older server answers rows only and the same rule
@@ -290,7 +292,18 @@ export function NotificationBell({
   const [asItWas, setAsItWas] = useState<BellNotification | null>(null)
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: invalidate is stable per client/qc; re-subscribing on every render would leak listeners
-  useEffect(() => subscribe?.(invalidate), [subscribe])
+  // A burst of new notifications is one re-read of the count and list (2 s quiet window).
+  const invalidateRef = useRef(invalidate)
+  invalidateRef.current = invalidate
+  useEffect(() => {
+    if (!subscribe) return
+    const co = createCoalescer(() => invalidateRef.current())
+    const off = subscribe(() => co.poke())
+    return () => {
+      off()
+      co.cancel()
+    }
+  }, [subscribe])
 
   useEffect(() => {
     if (!open) return
@@ -362,7 +375,15 @@ export function NotificationBell({
     return [...map.values()]
   }, [shown])
 
-  const openTarget = (n: BellNotification) => {
+  const openTarget = (n: BellNotification, e?: React.MouseEvent) => {
+    // Realtime #17: a plain record notification opens in the app's record sheet; the person
+    // stays where they were. The row's "Open record" button still goes to the full page.
+    const peekAt = peek ? notificationPeekTarget(n) : null
+    if (peekAt && peek && !isNewTabClick(e)) {
+      setOpen(false)
+      peek.open(peekAt)
+      return
+    }
     const target = resolveNotificationTargetFor(n, routes)
     if (target) {
       setOpen(false)
@@ -412,8 +433,9 @@ export function NotificationBell({
               {n.message.replace(/<[^>]+>/g, '')}
             </span>
           )}
+          <ResolvedLine resolved={n.detail?.resolved} />
           <span className='mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px] text-slate-400'>
-            {formatRelative(n.created_at)}
+            <RelativeTime value={n.created_at} />
             <DeliveryChips
               delivery={n.delivery}
               mailLogUrl={mailLogUrl}
@@ -456,9 +478,9 @@ export function NotificationBell({
         {opens ? (
           <button
             type='button'
-            onClick={() => {
+            onClick={(e) => {
               if (!n.read) markRead.mutate(n.id)
-              openTarget(n)
+              openTarget(n, e)
             }}
             className={`flex w-full items-start gap-2.5 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted ${pad}`}
             data-notification-row={n.id}
@@ -524,7 +546,7 @@ export function NotificationBell({
             </button>
           </div>
         )}
-        {n.actions && n.actions.length > 0 && !n.read && (
+        {n.actions && n.actions.length > 0 && !n.read && !n.detail?.resolved && (
           <NotificationActions
             actions={n.actions}
             notificationId={n.id}
@@ -723,7 +745,7 @@ export function NotificationBell({
                 lanes.critical > 0 ? 'bg-red-500 text-white' : 'bg-nvr-cyan text-nvr-navy'
               }`}
             >
-              {badge > 99 ? '99+' : badge}
+              <LiveCount value={badge > 99 ? '99+' : badge} />
             </span>
           )}
         </button>
@@ -766,7 +788,7 @@ export function NotificationBell({
                             : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
                         }`}
                       >
-                        {t.count}
+                        <LiveCount value={t.count} />
                       </span>
                     )}
                   </button>

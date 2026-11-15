@@ -127,6 +127,33 @@ export interface NotificationDetailRecord {
   changes?: Array<{ field: string; label: string; old: string; new: string }>
   via_child?: { collection: string; item: string; event: string; label?: string | null } | null
   bundle?: { writes: number; children: string[] } | null
+  /** Someone handled what the row asked ("Approved by Beth"); the row reads as read. */
+  resolved?: NotificationResolved | null
+  /** Several FYI updates on one record folded into this row, newest first. */
+  fold?: NotificationFold | null
+}
+
+/** The calm "done" line of a settled notification (server notification-resolve.ts). */
+export interface NotificationResolved {
+  on: 'step' | 'task' | 'approval' | 'ticket'
+  by: string | null
+  by_name: string | null
+  /** ISO time it was handled. */
+  at: string
+  /** "Approved by Beth", "Moved to PUB'd by you". */
+  text: string
+}
+
+/** Updates folded into one row (server notification-fold.ts). */
+export interface NotificationFold {
+  count: number
+  items: Array<{
+    subject: string
+    message: string | null
+    at: string
+    sender: string | null
+    category: string | null
+  }>
 }
 
 /** Why the person got the row (#77): which watch / subscription / sender /

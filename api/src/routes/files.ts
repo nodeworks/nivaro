@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { posix } from 'node:path'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import mime from 'mime-types'
@@ -19,6 +18,7 @@ import {
   attachFileToRecord
 } from '../services/file-attach.js'
 import { logFileDownload } from '../services/file-downloads.js'
+import { startFileProcessing, transformCacheKey } from '../services/file-processing.js'
 import {
   STORED_FILE_SECURITY_HEADERS,
   servingNeedsHead,
@@ -42,6 +42,7 @@ import {
 } from '../services/files.js'
 import { helpVideoFileIds, isHelpVideoFile, isUuid } from '../services/help-video-files.js'
 import { viewerMaySeeFile } from '../services/private-files.js'
+import { announceFileCarriers, recordsCarryingFile } from '../services/related-announce.js'
 import { getStorage } from '../services/storage/index.js'
 import {
   bustStorageDriverCache,
@@ -174,6 +175,8 @@ export async function filesRoutes(app: FastifyInstance) {
       user: req.user?.id,
       req
     })
+    // Thumbnail / text extraction in the background; the chip shows "Processing…" meanwhile.
+    startFileProcessing(file)
     return reply.code(201).send({ data: file })
   })
 
@@ -540,13 +543,10 @@ export async function filesRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Invalid dimensions' })
     }
 
-    const paramsHash = createHash('sha1')
-      .update(`w=${width ?? ''}&h=${height ?? ''}&fit=${fit}&format=${format}&q=${quality}`)
-      .digest('hex')
-      .slice(0, 16)
     // Built from the resolved row only: the caller's string may carry path segments the
-    // database ignores when matching (SQL Server reads "<id>/../<other>" as "<id>").
-    const cacheKey = `transforms/${String(file.id).toLowerCase()}/${paramsHash}.${format}`
+    // database ignores when matching (SQL Server reads "<id>/../<other>" as "<id>"). The same
+    // key the upload processor fills for the chip thumbnail (services/file-processing.ts).
+    const cacheKey = transformCacheKey(String(file.id), { width, height, fit, format, quality })
     const contentType = `image/${format}`
     const storage = getStorage()
 
@@ -676,6 +676,8 @@ export async function filesRoutes(app: FastifyInstance) {
       user: req.user?.id,
       req
     })
+    // Realtime 3: open records carrying the file show its new name (`$files`, ids only).
+    void recordsCarryingFile(String(existing.id)).then(announceFileCarriers)
     return reply.send({ data: file })
   })
 
@@ -712,6 +714,7 @@ export async function filesRoutes(app: FastifyInstance) {
       comment: `${existing.filename_download} → ${multipart.filename} (${buffer.length} bytes)`,
       req
     })
+    void recordsCarryingFile(String(existing.id)).then(announceFileCarriers)
     return reply.send({ data: file })
   })
 
@@ -723,7 +726,10 @@ export async function filesRoutes(app: FastifyInstance) {
     if (!file) return reply.code(404).send({ error: 'Not found' })
     const verdict = await mayChangeFile(file, req)
     if (!verdict.ok) return reply.code(403).send({ error: verdict.message, code: verdict.code })
+    // Who carried it, read before it goes: their open Files panels show it as removed.
+    const carriers = await recordsCarryingFile(String(file.id))
     await deleteFile(String(file.id))
+    announceFileCarriers(carriers)
     await logActivity({
       action: 'delete',
       collection: 'nivaro_files',

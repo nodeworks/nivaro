@@ -27,7 +27,7 @@ import {
   samlEnabled,
   setSamlRedis
 } from '../auth/saml.js'
-import { regenerateForSignIn, revokeUserSessions } from '../auth/session.js'
+import { regenerateForSignIn, revokeUserSessions, SESSION_COOKIE } from '../auth/session.js'
 import { config } from '../config.js'
 import { configEpochState } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
@@ -51,6 +51,16 @@ import {
 } from '../services/masquerade-tokens.js'
 import { bumpUserAccessVersion } from '../services/permission-cache.js'
 import { recordLogin } from '../services/security.js'
+import {
+  classifyCallbackFailure,
+  classifyMissingState,
+  hasSessionCookie
+} from '../services/sign-in-reasons.js'
+import {
+  matchAttemptedIdentity,
+  noteSignInApp,
+  noteSignInFailure
+} from '../services/sign-in-troubleshooter.js'
 import {
   bindFromRequest,
   encodeBoundToken,
@@ -265,6 +275,26 @@ export async function authRoutes(app: FastifyInstance) {
     req.session.userId = userId
     req.session.authAt = Date.now()
     void recordLogin(app, userId, method, req)
+    // Which app the sign-in was for (the person page's sign-in troubleshooter).
+    if (method !== 'static_token') void noteSignInApp(app.redis, userId, req)
+  }
+
+  /** A failed password sign-in, filed on the account its email names (any status); none = nothing. */
+  async function notePasswordFailure(
+    req: FastifyRequest,
+    email: string,
+    reason: 'throttled' | 'suspended'
+  ): Promise<void> {
+    const row = (await db('nivaro_users')
+      .where({ email })
+      .first('id')
+      .catch(() => undefined)) as { id: string } | undefined
+    if (row)
+      await noteSignInFailure(req, app.redis, {
+        reason,
+        method: 'password',
+        userId: String(row.id)
+      })
   }
 
   /** Park a sign-in that still needs its second factor, on a new session id. */
@@ -497,6 +527,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (providerParam) {
       const provider = await loadSsoProvider(providerParam)
       if (!provider) {
+        void noteSignInFailure(req, app.redis, { reason: 'provider_unavailable', method: 'oidc' })
         return reply.redirect(loginUrlFor(req.session.returnTo, '?error=provider_unavailable'))
       }
       try {
@@ -507,6 +538,7 @@ export async function authRoutes(app: FastifyInstance) {
         // Discovery/config failure — misconfigured provider must not strand
         // the user on a broken IdP redirect.
         app.log.error({ err, provider: provider.id }, 'SSO provider login error')
+        void noteSignInFailure(req, app.redis, { reason: 'provider_unavailable', method: 'oidc' })
         return reply.redirect(loginUrlFor(req.session.returnTo, '?error=provider_unavailable'))
       }
     }
@@ -525,6 +557,7 @@ export async function authRoutes(app: FastifyInstance) {
       // #2834 — the provider's discovery is down (a fresh replica has nothing cached): send
       // people back to the sign-in page with a reason, never a raw 500 on a navigation.
       app.log.error({ err }, 'OIDC login error')
+      void noteSignInFailure(req, app.redis, { reason: 'provider_unavailable', method: 'oidc' })
       return reply.redirect(loginUrlFor(req.session.returnTo, '?error=provider_unavailable'))
     }
   })
@@ -569,9 +602,17 @@ export async function authRoutes(app: FastifyInstance) {
     }
     const { oidcState, codeVerifier } = req.session
     if (!oidcState || !codeVerifier) {
+      // No state = the browser lost the sign-in it started: no cookie at all, or a stale one.
+      void noteSignInFailure(req, app.redis, {
+        reason: classifyMissingState(hasSessionCookie(req.headers.cookie, SESSION_COOKIE)),
+        method: 'oidc'
+      })
       return reply.code(400).send({ error: 'Invalid session state' })
     }
 
+    // What the provider said, and who it said it was: classify a failure, file it on the account.
+    const cbQuery = req.query as Record<string, string | undefined>
+    let attempted: { sub?: string; email?: string; entraOid?: string | null } | null = null
     try {
       // Token exchange validates redirect_uri — reconstruct the callback URL on
       // the origin the login actually used, not a fixed configured one.
@@ -591,6 +632,7 @@ export async function authRoutes(app: FastifyInstance) {
       } else {
         profile = await handleCallback(requestUrl, oidcState, codeVerifier)
       }
+      attempted = profile
       const user = (await findOrCreateFromOIDC(profile)) as UserWithTotp
 
       req.session.oidcState = undefined
@@ -618,9 +660,14 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.redirect(returnTo)
     } catch (err) {
       if (err instanceof AccountLinkRefusedError) {
-        await logActivity({ action: 'login-refused', user: null, comment: err.message, req }).catch(
-          () => {}
-        )
+        // Filed on the account the email names (item), never as that person's own act (user).
+        await logActivity({
+          action: 'login-refused',
+          user: null,
+          ...(err.userId ? { collection: 'nivaro_users', item: err.userId } : {}),
+          comment: err.message,
+          req
+        }).catch(() => {})
         return reply.redirect(loginUrlFor(req.session.returnTo, '?error=account_link'))
       }
       app.log.error({ err }, 'OIDC callback error')
@@ -637,7 +684,27 @@ export async function authRoutes(app: FastifyInstance) {
         )
         .catch(() => {})
       // #2834 — an unreachable provider is not a failed sign-in: say which it was.
-      const why = idpUnreachable(err) ? 'provider_unavailable' : 'auth_failed'
+      const unreachable = idpUnreachable(err)
+      const why = unreachable ? 'provider_unavailable' : 'auth_failed'
+      const failure = classifyCallbackFailure({
+        idpError: cbQuery.error,
+        idpDescription: cbQuery.error_description,
+        err,
+        unreachable
+      })
+      const named = attempted
+        ? await matchAttemptedIdentity({
+            sub: attempted.sub,
+            oid: attempted.entraOid,
+            email: attempted.email
+          })
+        : null
+      void noteSignInFailure(req, app.redis, {
+        reason: failure.reason,
+        code: failure.code,
+        method: 'oidc',
+        userId: named
+      })
       return reply.redirect(loginUrlFor(req.session.returnTo, `?error=${why}`))
     }
   })
@@ -654,7 +721,14 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Invalid verification code' })
     }
     // Per account (whichever session the attempts come from) and per address (H9).
-    if (await refuseIfThrottled(req, reply, 'totp', String(pendingUserId))) return reply
+    if (await refuseIfThrottled(req, reply, 'totp', String(pendingUserId))) {
+      void noteSignInFailure(req, app.redis, {
+        reason: 'throttled',
+        method: 'totp',
+        userId: String(pendingUserId)
+      })
+      return reply
+    }
 
     const user = (await db<User>('nivaro_users')
       .where({ id: pendingUserId, status: 'active' })
@@ -683,12 +757,22 @@ export async function authRoutes(app: FastifyInstance) {
         // This pending sign-in is over: the person signs in with their provider again.
         req.session.pendingTotpUserId = undefined
         req.session.totpFailures = undefined
+        void noteSignInFailure(req, app.redis, {
+          reason: 'totp_restart',
+          method: 'totp',
+          userId: String(user.id)
+        })
         return reply.code(401).send({
           error: 'Too many wrong codes. Sign in again.',
           code: 'TOTP_RESTART'
         })
       }
       req.session.totpFailures = failures
+      void noteSignInFailure(req, app.redis, {
+        reason: 'totp_wrong',
+        method: 'totp',
+        userId: String(user.id)
+      })
       return reply.code(401).send({ error: 'Invalid verification code' })
     }
 
@@ -727,11 +811,13 @@ export async function authRoutes(app: FastifyInstance) {
         req.body as Record<string, string>
       )
       if (loggedOut || !profile) {
+        void noteSignInFailure(req, app.redis, { reason: 'auth_failed', method: 'saml' })
         return reply.redirect(loginUrlFor(req.session.returnTo, '?error=auth_failed'))
       }
       // A captured response cannot be posted again (replay): each assertion id works once.
       if (!(await consumeAssertionId(profile))) {
         app.log.warn('SAML assertion refused: replayed or without an ID')
+        void noteSignInFailure(req, app.redis, { reason: 'code_expired', method: 'saml' })
         return reply.redirect(loginUrlFor(req.session.returnTo, '?error=auth_failed'))
       }
 
@@ -763,6 +849,10 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.redirect(returnTo)
     } catch (err) {
       app.log.error({ err }, 'SAML callback error')
+      void noteSignInFailure(req, app.redis, {
+        reason: idpUnreachable(err) ? 'provider_unavailable' : 'auth_failed',
+        method: 'saml'
+      })
       return reply.redirect(loginUrlFor(req.session.returnTo, '?error=auth_failed'))
     }
   })
@@ -829,7 +919,10 @@ export async function authRoutes(app: FastifyInstance) {
     if (typeof email !== 'string' || !email || typeof password !== 'string' || !password)
       return reply.code(400).send({ error: 'email and password required' })
     const account = email.toLowerCase().trim()
-    if (await refuseIfThrottled(req, reply, 'password', account)) return reply
+    if (await refuseIfThrottled(req, reply, 'password', account)) {
+      void notePasswordFailure(req, account, 'throttled')
+      return reply
+    }
 
     const user = (await db('nivaro_users').where({ email: account, status: 'active' }).first()) as
       | (UserWithTotp & { password_hash?: string | null })
@@ -842,10 +935,26 @@ export async function authRoutes(app: FastifyInstance) {
     else await verifyPassword(password, await timingDummyHash())
     if (!user || !valid) {
       await noteLoginFailure(app.redis, 'password', req.ip, account)
+      // Filed on the account the email names (never the password): a wrong password, or an
+      // account that is not active. An email with no account leaves nothing.
+      if (user) {
+        void noteSignInFailure(req, app.redis, {
+          reason: 'wrong_password',
+          method: 'password',
+          userId: String(user.id)
+        })
+      } else void notePasswordFailure(req, account, 'suspended')
       return reply.code(401).send({ error: 'Invalid email or password' })
     }
     await clearLoginFailures(app.redis, 'password', account)
-    if (!(await signInAllowedByRole(user))) return reply.code(403).send(SIGN_IN_DISABLED)
+    if (!(await signInAllowedByRole(user))) {
+      void noteSignInFailure(req, app.redis, {
+        reason: 'sign_in_disabled',
+        method: 'password',
+        userId: String(user.id)
+      })
+      return reply.code(403).send(SIGN_IN_DISABLED)
+    }
 
     if (user.totp_enabled) {
       await beginPendingTotp(req, user.id)

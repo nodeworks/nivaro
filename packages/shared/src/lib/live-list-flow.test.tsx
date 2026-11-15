@@ -7,7 +7,6 @@ import {
   burstLabel,
   burstWriter,
   createBurstTracker,
-  createCoalescer,
   heldChangeCount,
   isListPaused,
   type LivePause,
@@ -275,23 +274,6 @@ describe('totals follow the rows', () => {
     expect(totalsMayMove([{ action: 'update', changed_fields: ['title'] }], totalled)).toBe(false)
     expect(totalsMayMove([{ changed_fields: ['$tasks'] }], totalled)).toBe(false)
     expect(totalsMayMove([{ action: 'create' }], new Set())).toBe(false)
-  })
-  it('coalesces re-reads', () => {
-    vi.useFakeTimers()
-    const run = vi.fn()
-    const c = createCoalescer(run, 2000)
-    c.poke()
-    c.poke()
-    vi.advanceTimersByTime(1999)
-    c.poke()
-    expect(run).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(1)
-    expect(run).toHaveBeenCalledTimes(1)
-    c.poke()
-    c.cancel()
-    vi.advanceTimersByTime(5000)
-    expect(run).toHaveBeenCalledTimes(1)
-    vi.useRealTimers()
   })
 })
 

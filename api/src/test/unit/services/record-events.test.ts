@@ -169,33 +169,6 @@ describe('tenant-wide notices (F1/F2)', () => {
     delete process.env.CLOUD_META_DB_URL
   })
 
-  it('owners:changed coalesces a burst, then waits at least 15s before the next', () => {
-    vi.useFakeTimers()
-    tenant.id = undefined
-    owners.listener?.()
-    owners.listener?.()
-    owners.listener?.()
-    expect(roomEmits).toHaveLength(0)
-    vi.advanceTimersByTime(5000)
-    expect(roomEmits.map((e) => [e.room, e.event])).toEqual([[null, 'owners:changed']])
-    owners.listener?.()
-    vi.advanceTimersByTime(5000)
-    expect(roomEmits).toHaveLength(1)
-    vi.advanceTimersByTime(10_000)
-    expect(roomEmits).toHaveLength(2)
-  })
-
-  it('cloud: owners:changed reaches only the signalling tenant’s room', () => {
-    vi.useFakeTimers()
-    process.env.CLOUD_META_DB_URL = 'postgres://meta'
-    tenant.id = 'tenant-a'
-    owners.listener?.()
-    tenant.id = 'tenant-b'
-    owners.listener?.()
-    vi.advanceTimersByTime(5000)
-    expect(roomEmits.map((e) => e.room).sort()).toEqual(['t:tenant-a:all', 't:tenant-b:all'])
-  })
-
   it('cloud: a signal with no tenant context goes nowhere', () => {
     vi.useFakeTimers()
     process.env.CLOUD_META_DB_URL = 'postgres://meta'

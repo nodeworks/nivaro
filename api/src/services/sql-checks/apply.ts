@@ -53,7 +53,7 @@ import {
   unifiedDiff,
   withExplicitName
 } from './propose.js'
-import { EVENTS, FINDINGS, FIXES, loadCatalog } from './run.js'
+import { EVENTS, FINDINGS, FIXES, type LoadedCatalog, loadCatalog } from './run.js'
 import { canonicalDefinition } from './tokenizer.js'
 
 export class FixError extends Error {
@@ -105,12 +105,18 @@ interface Current {
   sql: string
   kind: 'module' | 'import_definition' | 'managed_procedure'
   importKey?: string
+  /** import_definition reached from a procedure finding (announce fix): the definition's id. */
+  importId?: string
   /** import_definition: the definition's procedure; managed_procedure: the config row's name. */
   procedure?: string | null
 }
 
 export const MANAGED_NOTE =
   'This procedure is app-managed: the fix is saved as a new version in config and deployed from there.'
+
+/** The announce fix is applied only where config owns the procedure (one writer). */
+export const ANNOUNCE_PROPOSE_ONLY =
+  'This procedure is not app-managed and no import definition owns it, so the announce fix is shown here but not applied. Adopt it on the Procedures page (Developer → Procedures) to apply it from here, or copy the change into wherever its source lives.'
 
 /** The config owner of a dbo procedure finding when it is app-managed (not an import's). */
 async function managedOwner(f: FindingRecord) {
@@ -137,6 +143,27 @@ async function currentDefinition(f: FindingRecord): Promise<Current> {
     // next app-managed deploy, so the fix belongs on the import definition's finding instead.
     if ((f.object_schema ?? 'dbo').toLowerCase() === 'dbo') {
       const owner = await procedureOwner(f.object_name)
+      // The announce fix goes to the owning definition's stored body straight away (its
+      // finding is reported on the deployed module whenever the two agree).
+      if (owner?.kind === 'import' && f.check_key === 'write-unannounced') {
+        const row = (await db('nivaro_import_definitions')
+          .where('key', owner.key)
+          .first('id', 'key', 'procedure', 'procedure_body')) as
+          | { id: number; key: string; procedure: string | null; procedure_body: string | null }
+          | undefined
+        if (!row?.procedure_body)
+          throw new FixError(
+            409,
+            `${owner.name} is owned by import definition "${owner.key}", which has no stored body to fix.`
+          )
+        return {
+          sql: row.procedure_body,
+          kind: 'import_definition',
+          importKey: row.key,
+          importId: String(row.id),
+          procedure: row.procedure
+        }
+      }
       if (owner?.kind === 'import')
         throw new FixError(
           409,
@@ -282,6 +309,10 @@ export interface ProposalOut {
   finding_id: number
   proposable: boolean
   class: ProposalResult['class']
+  /** `announce`: per collection, which statements announce ids and which "many changed". */
+  plan?: ProposalResult['plan']
+  /** Set when the proposal is shown but cannot be applied from here (and why). */
+  apply_refused?: string
   manual_reason?: string
   risky: boolean
   reasons: string[]
@@ -295,14 +326,32 @@ export interface ProposalOut {
   note: string
 }
 
-async function build(f: FindingRecord): Promise<{
+/** What an announcement names as its writer: the procedure (an import's, when it owns it). */
+function announceSource(f: FindingRecord, current: Current): string {
+  if (current.procedure) return `procedure:${current.procedure}`
+  if (f.object_type === 'import_definition') return `import:${f.object_name}`
+  return `procedure:${objectLabel(f)}`
+}
+
+async function build(
+  f: FindingRecord,
+  opts: { catalog?: LoadedCatalog } = {}
+): Promise<{
   out: ProposalOut
   current: Current
   proposal: ProposalResult
 }> {
   const current = await currentDefinition(f)
-  const proposal = proposeFix(current.sql, forFix(f), { sourceDupes: await hasSourceDupes(f) })
+  const announce = f.check_key === 'write-unannounced'
+  const catalog = announce ? (opts.catalog ?? (await loadCatalog())) : undefined
+  const proposal = proposeFix(current.sql, forFix(f), {
+    sourceDupes: await hasSourceDupes(f),
+    catalog,
+    source: announce ? announceSource(f, current) : undefined
+  })
   const diff = proposal.proposable ? diffForEdits(current.sql, proposal.edits) : []
+  const applyRefused =
+    proposal.class === 'announce' && current.kind === 'module' ? ANNOUNCE_PROPOSE_ONLY : undefined
   return {
     current,
     proposal,
@@ -310,6 +359,8 @@ async function build(f: FindingRecord): Promise<{
       finding_id: f.id,
       proposable: proposal.proposable,
       class: proposal.class,
+      plan: proposal.plan,
+      apply_refused: applyRefused,
       manual_reason: proposal.manual_reason,
       risky: proposal.risky,
       reasons: proposal.reasons,
@@ -319,9 +370,10 @@ async function build(f: FindingRecord): Promise<{
       current_hash: sha256(current.sql),
       new_definition_hash: proposal.newDefinition ? sha256(proposal.newDefinition) : null,
       target: { type: f.object_type, label: objectLabel(f), kind: current.kind },
-      deploys: current.kind !== 'import_definition',
-      note:
-        current.kind === 'module'
+      deploys: current.kind !== 'import_definition' && !applyRefused,
+      note: applyRefused
+        ? applyRefused
+        : current.kind === 'module'
           ? SOURCE_ELSEWHERE_NOTE
           : current.kind === 'managed_procedure'
             ? MANAGED_NOTE
@@ -345,6 +397,61 @@ export async function proposalFor(findingId: number): Promise<ProposalOut> {
   const f = await loadFinding(findingId)
   if (f.status === 'resolved') throw new FixError(409, 'This finding is already resolved.')
   return (await build(f)).out
+}
+
+export interface AnnouncePlanEntry {
+  finding_id: number
+  /** Other open findings on the same procedure (other collections); one fix covers them. */
+  sibling_ids: number[]
+  object: { type: ObjectType; schema: string | null; name: string; label: string }
+  collections: string[]
+  proposal: ProposalOut | null
+  /** Why no proposal could be built (the definition could not be read, …). */
+  error?: string
+}
+
+/**
+ * GET /announce/plan — every open "writes without announcing" finding, one entry per procedure,
+ * each with its proposal (diff, per-collection plan, whether it can be applied from here). Reads
+ * only: the bulk action applies the entries one by one through POST /findings/:id/apply.
+ */
+export async function announcePlan(limit = 300): Promise<AnnouncePlanEntry[]> {
+  const rows = (await db(FINDINGS)
+    .where({ check_key: 'write-unannounced', status: 'open' })
+    .orderBy('object_name')
+    .orderBy('id')
+    .limit(limit * 4)) as FindingRecord[]
+  const byObject = new Map<string, FindingRecord[]>()
+  for (const r of rows) {
+    const key = `${r.object_type}|${objectLabel(r).toLowerCase()}`
+    const list = byObject.get(key) ?? []
+    list.push(r)
+    byObject.set(key, list)
+  }
+  const catalog = byObject.size ? await loadCatalog() : undefined
+  const out: AnnouncePlanEntry[] = []
+  for (const list of [...byObject.values()].slice(0, limit)) {
+    const f = list[0]
+    const entry: AnnouncePlanEntry = {
+      finding_id: f.id,
+      sibling_ids: list.slice(1).map((r) => r.id),
+      object: {
+        type: f.object_type,
+        schema: f.object_schema,
+        name: f.object_name,
+        label: objectLabel(f)
+      },
+      collections: list.map((r) => String(parse(r.detail)?.collection ?? '')).filter(Boolean),
+      proposal: null
+    }
+    try {
+      entry.proposal = (await build(f, { catalog })).out
+    } catch (e) {
+      entry.error = e instanceof FixError ? e.message : 'The definition could not be read.'
+    }
+    out.push(entry)
+  }
+  return out
 }
 
 /**
@@ -532,6 +639,7 @@ export async function applyFix(opts: {
       )
     if (proposal.risky && !opts.confirmRisky)
       throw new FixError(400, 'This fix needs the extra confirmation (see the warnings).')
+    if (out.apply_refused) throw new FixError(409, out.apply_refused, 'SQL_CHECK_FIX_PROPOSE_ONLY')
     const text = compileTextFor(f, current, proposal.newDefinition)
     const compile = await compileCheck(text)
     if (!compile.ok)
@@ -592,7 +700,7 @@ export async function applyFix(opts: {
         opts.who.userId
       )
       const n = await db('nivaro_import_definitions')
-        .where('id', f.object_ref)
+        .where('id', current.importId ?? f.object_ref)
         .where('procedure_body', current.sql)
         .update({ procedure_body: proposal.newDefinition })
       if (!n)
@@ -610,6 +718,7 @@ export async function applyFix(opts: {
           rolled_back: false,
           deployed: false,
           applied_definition_hash: sha256(proposal.newDefinition),
+          import_id: current.importId,
           recheck: { before: before.length, after: after.length }
         },
         who: opts.who
@@ -620,6 +729,7 @@ export async function applyFix(opts: {
         opts.who,
         'Stored body fixed from the SQL checks page (not deployed)'
       )
+      if (proposal.class === 'announce') await markSiblingsFixed(f, fixId, opts.who)
       await audit('sql-check-proc-fix', f, `stored body of ${current.importKey}`, opts.who)
       return { fix_id: fixId, applied: true, rolled_back: false, deployed: false }
     }
@@ -693,6 +803,7 @@ export async function applyFix(opts: {
         req: opts.who.req
       })
       await markFixed(f, fixId, opts.who, 'Fixed from the SQL checks page (saved to app config)')
+      if (proposal.class === 'announce') await markSiblingsFixed(f, fixId, opts.who)
       await audit(
         'sql-check-proc-fix',
         f,
@@ -808,6 +919,26 @@ export async function applyFix(opts: {
   }
 }
 
+/**
+ * The announce fix covers every collection the procedure writes; the other collections' open
+ * findings on the same object resolve with it (the next run would resolve them anyway).
+ */
+async function markSiblingsFixed(f: FindingRecord, fixId: number, who: Who) {
+  const siblings = (await db(FINDINGS)
+    .where({
+      check_key: f.check_key,
+      object_type: f.object_type,
+      object_name: f.object_name,
+      status: 'open'
+    })
+    .whereNot('id', f.id)
+    .select('id', 'object_schema')) as Array<{ id: number; object_schema: string | null }>
+  for (const s of siblings) {
+    if ((s.object_schema ?? '').toLowerCase() !== (f.object_schema ?? '').toLowerCase()) continue
+    await markFixed({ ...f, id: s.id }, fixId, who, `Announced by the same fix as finding #${f.id}`)
+  }
+}
+
 async function markFixed(f: FindingRecord, fixId: number, who: Who, note: string) {
   const now = new Date()
   await db(FINDINGS).where('id', f.id).update({ status: 'resolved', resolved_at: now })
@@ -844,6 +975,8 @@ interface FixDetail {
   applied_definition_hash?: string
   import_previous_bodies?: SyncedBody[]
   managed_procedure?: string
+  /** An announce fix to an import definition reached from its procedure's finding. */
+  import_id?: string
 }
 
 /** Whether a fixes row can be reverted from the page (pure). */
@@ -968,7 +1101,7 @@ export async function revertFix(
       }
     } else {
       const cur = (await db('nivaro_import_definitions')
-        .where('id', obj.ref)
+        .where('id', d.import_id ?? obj.ref)
         .first('key', 'procedure_body')) as
         | { key: string; procedure_body: string | null }
         | undefined
@@ -979,7 +1112,7 @@ export async function revertFix(
         )
       await snapshotImportDefinition(cur.key, 'before reverting a SQL checks fix', who.userId)
       await db('nivaro_import_definitions')
-        .where('id', obj.ref)
+        .where('id', d.import_id ?? obj.ref)
         .where('procedure_body', cur.procedure_body)
         .update({ procedure_body: previous })
     }

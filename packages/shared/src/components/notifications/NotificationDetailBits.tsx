@@ -1,16 +1,18 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, HelpCircle } from 'lucide-react'
+import { Check, ChevronDown, HelpCircle } from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import type {
   NotificationDeliveryRecord,
   NotificationDetailRecord,
+  NotificationResolved,
   NotificationWhy
 } from '../../lib/notification-target'
-import { cn } from '../../lib/utils'
+import { cn, formatRelative } from '../../lib/utils'
 import { type ChangeLine, changeLines, type NotificationChangesPayload } from './changes-lines'
 import { describeDelivery } from './DeliveryChips'
+import { foldItems, resolvedLabel } from './resolved-line'
 import {
   type StoredWhyReason,
   WHY_KIND_LABELS,
@@ -248,6 +250,38 @@ function WhyPanel({
   )
 }
 
+/**
+ * A settled notification's calm line — someone handled what it asked:
+ * "✓ Approved by Beth · 10:42 AM". Muted, never a banner; the row itself
+ * already reads as read.
+ */
+export function ResolvedLine({
+  resolved,
+  className
+}: {
+  resolved?: NotificationResolved | null
+  className?: string
+}) {
+  const label = resolvedLabel(resolved)
+  if (!label) return null
+  return (
+    <span
+      data-notification-resolved={resolved?.on}
+      className={cn(
+        'mt-0.5 flex items-center gap-1 text-[11px] leading-snug text-slate-500 dark:text-slate-400',
+        className
+      )}
+    >
+      <Check
+        aria-hidden
+        className='h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400'
+        strokeWidth={2.5}
+      />
+      <span className='truncate'>{label}</span>
+    </span>
+  )
+}
+
 export function NotificationDetailBits({
   detail,
   why,
@@ -275,13 +309,31 @@ export function NotificationDetailBits({
   onNavigate?: (path: string) => void
   className?: string
 }) {
-  const [open, setOpen] = useState<null | 'changes' | 'why'>(null)
+  const [open, setOpen] = useState<null | 'changes' | 'why' | 'fold'>(null)
   const changes = detail?.changes ?? []
+  const folded = foldItems(detail?.fold)
   const live = !!recordChanges && notificationId != null
-  const toggle = (k: 'changes' | 'why') => setOpen((o) => (o === k ? null : k))
+  const toggle = (k: 'changes' | 'why' | 'fold') => setOpen((o) => (o === k ? null : k))
   return (
     <div className={cn('text-[10.5px]', className)} data-notification-bits>
       <div className='flex flex-wrap items-center gap-1'>
+        {folded.length > 0 && (
+          <button
+            type='button'
+            onClick={(e) => {
+              e.stopPropagation()
+              toggle('fold')
+            }}
+            aria-expanded={open === 'fold'}
+            data-notification-fold
+            className='inline-flex first:-ml-1.5 h-6 items-center gap-1 rounded-md px-1.5 font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-100'
+          >
+            {`${detail?.fold?.count ?? folded.length} updates`}
+            <ChevronDown
+              className={cn('h-3 w-3 transition-transform', open === 'fold' && 'rotate-180')}
+            />
+          </button>
+        )}
         {(changes.length > 0 || live) && (
           <button
             type='button'
@@ -291,7 +343,7 @@ export function NotificationDetailBits({
             }}
             aria-expanded={open === 'changes'}
             data-notification-changes
-            className='-ml-1.5 inline-flex h-6 items-center gap-1 rounded-md px-1.5 font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-100'
+            className='inline-flex first:-ml-1.5 h-6 items-center gap-1 rounded-md px-1.5 font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-100'
           >
             {changes.length > 0
               ? `${changes.length} change${changes.length === 1 ? '' : 's'}`
@@ -317,6 +369,36 @@ export function NotificationDetailBits({
           </button>
         )}
       </div>
+      {open === 'fold' && folded.length > 0 && (
+        <ol
+          className='mt-1 space-y-1 rounded-md border border-slate-100 bg-slate-50/70 px-2 py-1.5 dark:border-border/60 dark:bg-muted/40'
+          data-notification-fold-list
+        >
+          {folded.map((it, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: folded updates have no id; two may share a time
+            <li key={`${it.at}-${i}`} className='text-[11px] leading-snug'>
+              <span className='flex items-baseline gap-1.5'>
+                <span className='min-w-0 flex-1 truncate font-medium text-slate-700 dark:text-slate-200'>
+                  {it.subject}
+                </span>
+                <span className='shrink-0 text-[10px] tabular-nums text-slate-400'>
+                  {formatRelative(it.at)}
+                </span>
+              </span>
+              {it.message && (
+                <span className='line-clamp-2 block text-slate-500 dark:text-slate-400'>
+                  {it.message.replace(/<[^>]+>/g, '')}
+                </span>
+              )}
+            </li>
+          ))}
+          {(detail?.fold?.count ?? 0) > folded.length && (
+            <li className='text-[10.5px] text-slate-400'>
+              +{(detail?.fold?.count ?? 0) - folded.length} earlier
+            </li>
+          )}
+        </ol>
+      )}
       {open === 'changes' && live && notificationId != null && (
         <NotificationChangesList notificationId={notificationId} />
       )}

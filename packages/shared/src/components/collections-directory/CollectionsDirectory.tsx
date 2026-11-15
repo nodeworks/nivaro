@@ -28,6 +28,7 @@ import {
   useCollectionUsage,
   useDirectoryCollections,
   useHeavyListFlags,
+  useLiveDirectory,
   useNavFavoriteCollections,
   useOverviewStats,
   writeLocal
@@ -315,6 +316,17 @@ export function CollectionsDirectory({
   }, [data])
 
   const { data: stats } = useOverviewStats(isAdmin)
+  useLiveDirectory(isAdmin)
+  // Row order (Most records / Recently changed) follows a snapshot that does not move while the
+  // pointer is over the list, so a live count never reshuffles rows under the cursor; the
+  // numbers shown on each row are always the current ones.
+  const [orderStats, setOrderStats] = useState(stats)
+  const hoverRef = useRef(false)
+  const latestStats = useRef(stats)
+  latestStats.current = stats
+  useEffect(() => {
+    if (!hoverRef.current) setOrderStats(stats)
+  }, [stats])
   const { data: heavyLists } = useHeavyListFlags(isAdmin)
   const usage = useCollectionUsage()
   const ownFavorites = useNavFavoriteCollections(!hostFavorites)
@@ -324,8 +336,8 @@ export function CollectionsDirectory({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: state fields are listed one by one
   const model = useMemo(
-    () => buildPageModel(local, stats, state, filter, usage),
-    [local, stats, filter, usage, state.view, state.chips, state.showHidden, state.showLinks]
+    () => buildPageModel(local, orderStats, state, filter, usage),
+    [local, orderStats, filter, usage, state.view, state.chips, state.showHidden, state.showLinks]
   )
   const byName = useMemo(() => new Map(model.real.map((c) => [c.collection, c])), [model.real])
 
@@ -543,7 +555,18 @@ export function CollectionsDirectory({
     // Grows with its content (shrink-0): the sticky toolbar only sticks inside this
     // box, so a viewport-tall box let it scroll away and left the folder headers
     // stuck below an empty gap.
-    <div ref={pageRef} className='flex min-h-full shrink-0 flex-col' data-collections-directory>
+    <div
+      ref={pageRef}
+      className='flex min-h-full shrink-0 flex-col'
+      data-collections-directory
+      onPointerEnter={() => {
+        hoverRef.current = true
+      }}
+      onPointerLeave={() => {
+        hoverRef.current = false
+        setOrderStats(latestStats.current)
+      }}
+    >
       {/* Sticky from md up; on a phone it would hold a third of the screen. */}
       <div
         ref={toolbarRef}

@@ -200,7 +200,54 @@ export async function acceptAck(
   const ms = ackDelayMs({ st, rx: p.rx, ackAt: now, rttMs })
   if (ms == null) return null
   await noteDeliverySample('client', ms, { at: now })
+  noteAckedBy(seq, userId)
   return ms
+}
+
+// ─── Who acknowledged what (the "Why didn't my page update?" trace) ───────────
+
+export const ACK_WHO_PREFIX = 'nvr:rt:ack:who:'
+const ACK_WHO_TTL_S = 26 * 3600
+
+/**
+ * Remember WHO acknowledged sampled event `seq` (a small set per sequence, kept a day):
+ * the trace names the people whose client confirmed the event. Fire-and-forget; skipped in
+ * cloud mode, like the other delivery figures. Only people ids — never anything an event held.
+ */
+export function noteAckedBy(seq: number, userId: string, redis: Redis | null = redisOf()): void {
+  if (!redis || process.env.CLOUD_META_DB_URL) return
+  try {
+    void Promise.resolve(
+      redis
+        .multi()
+        .sadd(`${ACK_WHO_PREFIX}${seq}`, userId)
+        .expire(`${ACK_WHO_PREFIX}${seq}`, ACK_WHO_TTL_S)
+        .exec()
+    ).catch(() => {})
+  } catch {
+    /* a lost note never matters */
+  }
+}
+
+/** People who acknowledged each of `seqs` (empty map without Redis, or on any trouble). */
+export async function ackedByForSeqs(
+  seqs: readonly number[],
+  redis: Redis | null = redisOf()
+): Promise<Map<number, string[]>> {
+  const out = new Map<number, string[]>()
+  if (!redis || seqs.length === 0 || process.env.CLOUD_META_DB_URL) return out
+  try {
+    const pipe = redis.pipeline()
+    for (const q of seqs) pipe.smembers(`${ACK_WHO_PREFIX}${q}`)
+    const res = (await pipe.exec()) ?? []
+    res.forEach((r, i) => {
+      const members = r?.[1]
+      if (Array.isArray(members) && members.length > 0) out.set(seqs[i], members.map(String))
+    })
+  } catch {
+    /* no acknowledgements known */
+  }
+  return out
 }
 
 /** Tests only. */

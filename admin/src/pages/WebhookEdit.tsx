@@ -446,6 +446,23 @@ export function WebhookEditPage() {
                       </label>
                     ))}
                   </div>
+                  {form.events.includes('update') && (
+                    <label className='flex cursor-pointer items-start gap-2 pt-1 text-[12px] text-slate-600 dark:text-slate-300'>
+                      <input
+                        type='checkbox'
+                        className='mt-0.5 h-3.5 w-3.5 accent-nvr-cyan'
+                        checked={form.events.includes('outside')}
+                        onChange={() => toggleEvent('outside')}
+                      />
+                      <span>
+                        Also fire on changes made outside the app
+                        <span className='block text-[11px] text-slate-400 dark:text-slate-500'>
+                          Updates that procedures, imports or scripts announce. These carry the
+                          record as it is now, with no previous values and no person.
+                        </span>
+                      </span>
+                    </label>
+                  )}
                 </div>
 
                 <div className='grid grid-cols-[1fr_auto] gap-3'>

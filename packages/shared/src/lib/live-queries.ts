@@ -1,6 +1,7 @@
 import { type Query, type QueryClient, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { expandCoalesced } from './live'
+import { getLiveMode } from './live-preference'
 import { LIVE_WIDGET_SAFETY_MS } from './live-widgets'
 import { isOwnWrite } from './own-writes'
 import {
@@ -10,6 +11,7 @@ import {
   useOptionalRealtime,
   useRealtimeStatus
 } from './realtime'
+import { setScreenRefreshClient } from './screen-refresh'
 
 /**
  * Socket events refresh exactly what changed (#2450).
@@ -56,6 +58,20 @@ export interface LiveQueryMeta {
   minGapMs?: number
   /** Never refreshed by events — only reconciled after a gap (a surface that keeps itself live). */
   reconcileOnly?: boolean
+  /**
+   * Events (and reconciles) only mark it stale — it is never re-read while on screen; it reads
+   * again the next time it is shown or enabled. For a picker's option list: someone else's new
+   * vendor appears the next time the dropdown opens, and an OPEN dropdown never reshuffles under
+   * the pointer. Joins its collection's room only once it holds data (a picker nobody opened
+   * listens to nothing).
+   */
+  staleOnly?: boolean
+  /** Wait a random 0..jitterMs before an event refetch, so every open tab does not read in the
+   *  same second (a dashboard many people keep open). Default 0. */
+  jitterMs?: number
+  /** Wait at least this long before an event refetch (a server cache dropped a moment after
+   *  the write, e.g. a cached report). Default 0. */
+  delayMs?: number
 }
 
 /** `meta` for a query the bridge keeps current: `useQuery({ …, meta: liveQueryMeta({ reads: ['orders'] }) })`. */
@@ -101,7 +117,9 @@ export const LIVE_RECONCILE_HEADS: readonly string[] = [
   'my-work',
   'widget-data',
   'live-record',
-  'live-list'
+  'live-list',
+  // Realtime round 2 (rt2-record): the record page's SLA clock re-reads after a reconnect too.
+  'sla-breach'
 ]
 
 export interface LiveQueryBridgeOptions {
@@ -250,7 +268,10 @@ export function createLiveQueryBridge(
     const wanted = new Set<string>()
     for (const q of cache.getAll() as AnyQuery[]) {
       if (q.getObserversCount() === 0) continue
-      for (const c of liveCollectionsOf(metaOf(q))) wanted.add(c)
+      const meta = metaOf(q)
+      // A stale-only list nobody has loaded yet cannot go stale.
+      if (meta?.staleOnly && !q.state.dataUpdatedAt) continue
+      for (const c of liveCollectionsOf(meta)) wanted.add(c)
     }
     for (const c of wanted) {
       const t = lingering.get(c)
@@ -281,6 +302,7 @@ export function createLiveQueryBridge(
       syncRooms()
     })
   }
+  const joinedStaleOnly = new WeakSet<AnyQuery>()
   const offCache = cache.subscribe((e) => {
     if (
       e.type === 'added' ||
@@ -290,11 +312,20 @@ export function createLiveQueryBridge(
       e.type === 'observerOptionsUpdated'
     )
       queueSync()
+    // A stale-only list's first answer: now it has something that can go stale.
+    else if (e.type === 'updated' && e.action?.type === 'success') {
+      const q = e.query as AnyQuery
+      if (metaOf(q)?.staleOnly && !joinedStaleOnly.has(q)) {
+        joinedStaleOnly.add(q)
+        queueSync()
+      }
+    }
   })
 
   // ── Refetching: only active queries, min gap per query, hidden tabs defer ──
   const lastRefetch = new WeakMap<AnyQuery, number>()
   const trailing = new Map<AnyQuery, ReturnType<typeof setTimeout>>()
+  const jittered = new Map<AnyQuery, ReturnType<typeof setTimeout>>()
   const deferred = new Set<AnyQuery>()
 
   // `cancel`: a fetch already in flight may have started before the write — restart it. Off when
@@ -315,7 +346,7 @@ export function createLiveQueryBridge(
     const due: AnyQuery[] = []
     const idle: AnyQuery[] = []
     for (const q of targets) {
-      if (q.getObserversCount() === 0) idle.push(q)
+      if (q.getObserversCount() === 0 || metaOf(q)?.staleOnly) idle.push(q)
       else if (doc?.hidden) {
         idle.push(q)
         deferred.add(q)
@@ -353,7 +384,29 @@ export function createLiveQueryBridge(
         )
       }
     }
-    refetchNow(ready, cancel)
+    // Spread over a random delay when the query asks for it; one pending spread per query.
+    const now0: AnyQuery[] = []
+    for (const q of ready) {
+      const jitter = metaOf(q)?.jitterMs ?? 0
+      const delay = metaOf(q)?.delayMs ?? 0
+      if (jitter <= 0 && delay <= 0) {
+        now0.push(q)
+        continue
+      }
+      if (jittered.has(q)) continue
+      lastRefetch.set(q, nowAt)
+      jittered.set(
+        q,
+        setTimeout(
+          () => {
+            jittered.delete(q)
+            if (!disposed) refetchNow([q], cancel)
+          },
+          delay + Math.floor(random() * Math.max(0, jitter))
+        )
+      )
+    }
+    refetchNow(now0, cancel)
   }
 
   const flush = (collection: string) => {
@@ -373,13 +426,22 @@ export function createLiveQueryBridge(
   const heads = new Set(LIVE_RECONCILE_HEADS)
   const reconcile = (reason: string) => {
     void reason
-    if (disposed) return
+    // Live updates Off (lib/live-preference.ts): no catch-up refetch either — the person's ↻.
+    if (disposed || getLiveMode() === 'off') return
     counters.reconciles++
     const tagged: AnyQuery[] = []
+    const staleOnly = new Set<AnyQuery>()
     for (const q of cache.getAll() as AnyQuery[]) {
-      if (metaOf(q)) tagged.push(q)
+      const meta = metaOf(q)
+      if (meta?.staleOnly) staleOnly.add(q)
+      else if (meta) tagged.push(q)
     }
     deferred.clear()
+    if (staleOnly.size > 0)
+      void qc.invalidateQueries({
+        predicate: (q) => staleOnly.has(q as AnyQuery),
+        refetchType: 'none'
+      })
     const set = new Set(tagged)
     // Tagged queries (active refetch, the rest marked stale) + the active self-live surfaces.
     // A read already in flight (a focus refetch) started after the gap: keep it.
@@ -451,7 +513,12 @@ export function createLiveQueryBridge(
       offStatus?.()
       catchupWin?.removeEventListener('nvr:catchup-full', onCatchupFull)
       doc?.removeEventListener('visibilitychange', onVisibility)
-      for (const t of [...flushTimers.values(), ...lingering.values(), ...trailing.values()])
+      for (const t of [
+        ...flushTimers.values(),
+        ...lingering.values(),
+        ...trailing.values(),
+        ...jittered.values()
+      ])
         clearTimeout(t)
       if (reconcileTimer) clearTimeout(reconcileTimer)
       for (const off of subs.values()) off()
@@ -471,6 +538,10 @@ export function useLiveQueryBridge(opts?: LiveQueryBridgeOptions): void {
   const realtime = useOptionalRealtime()
   // Options are read once per mount (the bridge is long-lived).
   const optsRef = useRef(opts)
+  // Realtime idea 12: the screen refresh (↻, Cmd-K, idle resync) refetches through this client.
+  useEffect(() => {
+    setScreenRefreshClient(qc)
+  }, [qc])
   useEffect(() => {
     if (!realtime) return
     const bridge = createLiveQueryBridge(qc, realtime, optsRef.current)

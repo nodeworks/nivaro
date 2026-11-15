@@ -17,9 +17,13 @@ import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { invalidateRecordTasks, OPEN_TASK_STATUSES } from '../../lib/record-tasks'
+import { type SeenEntry, useNewSince } from '../../lib/seen-since'
+import { usePresenceStates } from '../../lib/use-online-users'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import { cn, formatDate, formatDateTime, formatRelative } from '../../lib/utils'
 import { TaskDoButton } from '../ai/TaskDo'
+import { PresenceDot } from '../PresenceDot'
+import { RelativeTime } from '../RelativeTime'
 import { Button } from '../ui/button'
 import { Checkbox } from '../ui/checkbox'
 import {
@@ -35,6 +39,7 @@ import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Textarea } from '../ui/textarea'
+import { NewSinceChip } from './NewSinceChip'
 
 type Priority = 'low' | 'normal' | 'urgent'
 
@@ -238,6 +243,8 @@ function AssigneePicker({
     staleTime: 60_000
   })
 
+  // The online dot beside a name (rt4 #22) — a dot only, the order is untouched.
+  const presence = usePresenceStates(open)
   const row = (p: Person, reasons?: string[]) => {
     const n = openCounts?.[String(p.id).toUpperCase()] ?? 0
     return (
@@ -254,6 +261,7 @@ function AssigneePicker({
         <Check
           className={cn('mr-2 h-3.5 w-3.5', same(value, p.id) ? 'opacity-100' : 'opacity-0')}
         />
+        <PresenceDot state={presence.get(String(p.id).toUpperCase())} className='mr-1.5' />
         <span className='min-w-0 flex-1 truncate'>
           {personName(p)}
           {reasons?.length ? (
@@ -814,7 +822,9 @@ function TaskHistory({ taskId }: { taskId: number }) {
           <span className='text-slate-400'>
             {' '}
             · {h.user_name ? `${h.user_name}, ` : ''}
-            <span title={formatDateTime(h.at)}>{formatRelative(h.at)}</span>
+            <span title={formatDateTime(h.at)}>
+              <RelativeTime value={h.at} />
+            </span>
           </span>
         </li>
       ))}
@@ -852,13 +862,33 @@ export function TaskPanel({
   const [showCompleted, setShowCompleted] = useState(false)
 
   const isNew = !item || item === 'new'
-  const { data: tasks = [] } = useQuery({
+  const { data: tasks = [], isSuccess: tasksLoaded } = useQuery({
     queryKey: ['tasks', collection, item],
     queryFn: () =>
       client.request<{ data: Task[] }>(get('/tasks', { collection, item })).then((r) => r.data),
     enabled: !!collection && !isNew
   })
   const { labels } = useFieldLabels(collection)
+  // "2 new" while folded shut: tasks others added or finished since you last had it open.
+  const tasksSeen = useMemo<SeenEntry[]>(
+    () =>
+      tasks.flatMap((t) => {
+        const row = t as Task & { created_at?: string | null }
+        const out: SeenEntry[] = [{ at: row.created_at, by: row.created_by }]
+        if (row.completed_at) out.push({ at: row.completed_at, by: row.completed_by ?? null })
+        return out
+      }),
+    [tasks]
+  )
+  const newTasks = useNewSince({
+    userId,
+    collection,
+    item,
+    tab: 'tasks',
+    open: expanded,
+    entries: tasksSeen,
+    ready: !isNew && tasksLoaded
+  })
 
   const invalidate = () => {
     invalidateRecordTasks(qc, collection, item)
@@ -988,7 +1018,9 @@ export function TaskPanel({
             {t.status === 'cancelled'
               ? 'Cancelled'
               : `Done${t.completed_by_name ? ` by ${t.completed_by_name}` : ''}`}{' '}
-            <span title={formatDateTime(t.completed_at)}>{formatRelative(t.completed_at)}</span>
+            <span title={formatDateTime(t.completed_at)}>
+              <RelativeTime value={t.completed_at} />
+            </span>
           </span>
         )}
         {t.created_by_name && !same(t.created_by, t.assignee) && (
@@ -1069,6 +1101,7 @@ export function TaskPanel({
               {isNew ? `${(queuedTasks ?? []).length} queued` : `${openTasks.length} open`}
             </span>
           )}
+          <NewSinceChip count={newTasks} tab='tasks' />
           <ChevronDown
             className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
           />
