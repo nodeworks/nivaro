@@ -66,7 +66,9 @@ export const LIVE_PRESENCE_EVENTS: ReadonlySet<string> = new Set([
   'field:editing',
   'field:changed',
   'presence:rows',
-  'record:uploading'
+  'record:uploading',
+  // Round 9 #17 — ghosts of others' calendar / Gantt drags.
+  'record:drag'
 ])
 
 /**

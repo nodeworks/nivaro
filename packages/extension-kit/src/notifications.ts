@@ -145,6 +145,10 @@ export interface NotifyUserOptions {
    *  pinned in the bell until acknowledged, escalates up the recipient's
    *  chain, and the sender sees who has and has not acknowledged. */
   ack_required?: boolean
+  /** Urgent work for this person (a priority record, a breach): with their "Play a sound for
+   *  urgent items" setting on, the app plays a short chime when it arrives. Only counts on a
+   *  row that asks them to act (critical / needs you), never on an FYI. */
+  urgent?: boolean
   /** Structured content stored with the row. */
   detail?: Omit<NotificationDetail, 'why'> | null
   /** Internal: set on outbox re-deliveries to prevent re-enqueue loops. */

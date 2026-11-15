@@ -442,6 +442,104 @@ export const GONE_ROW_TITLE =
  *  scrolls under it. */
 export const GONE_ROW_CLASS = '[&>td:not(.sticky)]:opacity-50 [&>td.sticky>*]:opacity-50'
 
+/** Where the person's pointer and keyboard focus rest inside a list (row keys). */
+export interface ListAnchors {
+  /** The keys under the pointer and focus (null = none) — read at render time. */
+  current: () => Array<string | null>
+  /** Forget both (the longest hold ran out: draw the new order even if the pointer stays). */
+  clear: () => void
+}
+
+/** The prefix a group header's key carries among row keys (lib/live-groups.ts). */
+export const GROUP_ANCHOR_PREFIX = '§'
+
+/** The anchor key of an element: its row (`data-row-key`) or a group header
+ *  (`data-group-key`, returned as `§<key>`). */
+export function anchorKeyOf(t: EventTarget | null): string | null {
+  if (!(t instanceof Element)) return null
+  const el = t.closest('[data-row-key],[data-group-key]')
+  if (!el) return null
+  const row = el.getAttribute('data-row-key')
+  if (row != null) return row
+  const g = el.getAttribute('data-group-key')
+  return g != null ? `${GROUP_ANCHOR_PREFIX}${g}` : null
+}
+
+/**
+ * Track the row (or group header) under the pointer and keyboard focus inside `rootRef`;
+ * `onRelease` runs when the pointer leaves the list or focus moves out of it. Shared by the
+ * steady rows (#12) and steady groups (lib/live-groups.ts) holds.
+ */
+export function useListAnchors(
+  rootRef: React.RefObject<HTMLElement | null>,
+  enabled: boolean,
+  onRelease: () => void
+): ListAnchors {
+  const pointerRef = useRef<string | null>(null)
+  const focusRef = useRef<string | null>(null)
+  const releaseRef = useRef(onRelease)
+  releaseRef.current = onRelease
+  // Pointer / focus anchors on the rows (re-attached when the list's element changes).
+  const attachedRef = useRef<HTMLElement | null>(null)
+  const detachRef = useRef<(() => void) | null>(null)
+  useEffect(() => {
+    const el = enabled ? rootRef.current : null
+    if (attachedRef.current === el) return
+    detachRef.current?.()
+    detachRef.current = null
+    attachedRef.current = el
+    pointerRef.current = null
+    focusRef.current = null
+    if (!el) return
+    const onOver = (e: Event) => {
+      pointerRef.current = anchorKeyOf(e.target)
+    }
+    const onLeave = () => {
+      pointerRef.current = null
+      releaseRef.current()
+    }
+    const onFocusIn = (e: Event) => {
+      focusRef.current = anchorKeyOf(e.target)
+    }
+    const onFocusOut = (e: Event) => {
+      const to = (e as FocusEvent).relatedTarget
+      if (to instanceof Node && el.contains(to)) return
+      focusRef.current = null
+      releaseRef.current()
+    }
+    el.addEventListener('pointerover', onOver)
+    el.addEventListener('pointerleave', onLeave)
+    el.addEventListener('focusin', onFocusIn)
+    el.addEventListener('focusout', onFocusOut)
+    detachRef.current = () => {
+      el.removeEventListener('pointerover', onOver)
+      el.removeEventListener('pointerleave', onLeave)
+      el.removeEventListener('focusin', onFocusIn)
+      el.removeEventListener('focusout', onFocusOut)
+    }
+  })
+  // Forget the element too: StrictMode runs this cleanup and the effects again on mount, and
+  // the attach effect must then attach afresh (it skips an element it thinks it holds).
+  useEffect(
+    () => () => {
+      detachRef.current?.()
+      detachRef.current = null
+      attachedRef.current = null
+    },
+    []
+  )
+  return useMemo(
+    () => ({
+      current: () => [pointerRef.current, focusRef.current],
+      clear: () => {
+        pointerRef.current = null
+        focusRef.current = null
+      }
+    }),
+    []
+  )
+}
+
 export interface SteadyRows<T> {
   rows: T[]
   /** Kept on screen only until the hold ends: no longer in this list. */
@@ -466,77 +564,21 @@ export function useSteadyRows<T>(
   opts: { enabled?: boolean; resetKey?: string; maxHoldMs?: number } = {}
 ): SteadyRows<T> {
   const enabled = opts.enabled !== false
-  const pointerRef = useRef<string | null>(null)
-  const focusRef = useRef<string | null>(null)
   const shownRef = useRef<{ order: string[]; byKey: Map<string, T>; resetKey?: string }>({
     order: [],
     byKey: new Map()
   })
   const holdingRef = useRef(false)
   const [, setTick] = useState(0)
-
-  // Pointer / focus anchors on the rows (re-attached when the list's element changes).
-  const attachedRef = useRef<HTMLElement | null>(null)
-  const detachRef = useRef<(() => void) | null>(null)
-  useEffect(() => {
-    const el = enabled ? rootRef.current : null
-    if (attachedRef.current === el) return
-    detachRef.current?.()
-    detachRef.current = null
-    attachedRef.current = el
-    pointerRef.current = null
-    focusRef.current = null
-    if (!el) return
-    const rowKey = (t: EventTarget | null) =>
-      t instanceof Element
-        ? (t.closest('[data-row-key]')?.getAttribute('data-row-key') ?? null)
-        : null
-    const release = () => {
-      if (holdingRef.current) setTick((n) => n + 1)
-    }
-    const onOver = (e: Event) => {
-      pointerRef.current = rowKey(e.target)
-    }
-    const onLeave = () => {
-      pointerRef.current = null
-      release()
-    }
-    const onFocusIn = (e: Event) => {
-      focusRef.current = rowKey(e.target)
-    }
-    const onFocusOut = (e: Event) => {
-      const to = (e as FocusEvent).relatedTarget
-      if (to instanceof Node && el.contains(to)) return
-      focusRef.current = null
-      release()
-    }
-    el.addEventListener('pointerover', onOver)
-    el.addEventListener('pointerleave', onLeave)
-    el.addEventListener('focusin', onFocusIn)
-    el.addEventListener('focusout', onFocusOut)
-    detachRef.current = () => {
-      el.removeEventListener('pointerover', onOver)
-      el.removeEventListener('pointerleave', onLeave)
-      el.removeEventListener('focusin', onFocusIn)
-      el.removeEventListener('focusout', onFocusOut)
-    }
+  const anchors = useListAnchors(rootRef, enabled, () => {
+    if (holdingRef.current) setTick((n) => n + 1)
   })
-  // Forget the element too: StrictMode runs this cleanup and the effects again on mount, and
-  // the attach effect must then attach afresh (it skips an element it thinks it holds).
-  useEffect(
-    () => () => {
-      detachRef.current?.()
-      detachRef.current = null
-      attachedRef.current = null
-    },
-    []
-  )
 
   const nextKeys = rows.map(keyOf)
   const shown = shownRef.current
   const plan =
     enabled && shown.resetKey === opts.resetKey
-      ? planRowOrder(shown.order, nextKeys, [pointerRef.current, focusRef.current])
+      ? planRowOrder(shown.order, nextKeys, anchors.current())
       : null
   const holding = !!plan?.held
 
@@ -546,12 +588,11 @@ export function useSteadyRows<T>(
     holdingRef.current = holding
     if (!holding) return
     const t = setTimeout(() => {
-      pointerRef.current = null
-      focusRef.current = null
+      anchors.clear()
       setTick((n) => n + 1)
     }, maxHoldMs)
     return () => clearTimeout(t)
-  }, [holding, maxHoldMs])
+  }, [holding, maxHoldMs, anchors])
 
   let out: T[] = rows
   let gone: Set<string> = EMPTY_SET

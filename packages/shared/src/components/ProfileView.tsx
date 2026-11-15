@@ -31,7 +31,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post, put } from '../lib/commands'
-import { LIVE_MODE_LABELS, parseLiveMode } from '../lib/live-preference'
+import { LIVE_MODE_LABELS, parseLiveMode, useLivePreference } from '../lib/live-preference'
 import { playNotificationSound } from '../lib/notification-sound'
 import {
   cascadeFilter,
@@ -39,6 +39,7 @@ import {
   restrictedScopeSelections
 } from '../lib/quick-filter-cascade'
 import { BRAND_ACCENT, DEFAULT_THEME_ACCENTS, parseThemeAccents } from '../lib/theme-accents'
+import { playUrgentChime } from '../lib/urgent-chime'
 import { announceLocalPrefs } from '../lib/user-sync'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
@@ -526,6 +527,13 @@ export function NotificationRulesCard() {
             toasts and sounds wait while you talk; you get one summary when you leave
           </span>
         </div>
+        <UrgentSoundRow
+          on={prefs?.urgent_sound === true}
+          onChange={(next) => {
+            if (next) playUrgentChime({ preview: true })
+            saveRaw.mutate({ urgent_sound: next ? true : null })
+          }}
+        />
         <NotificationRulesEditor
           subject='person'
           isAdmin={rulesAuth.isAdmin}
@@ -2522,6 +2530,42 @@ export function DisplayPrefsCard() {
           />
         </label>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Round 9 #14 — "Play a sound for urgent items" (off by default): one short chime when urgent
+ * work lands on this person (lib/urgent-chime.ts). Says plainly when it cannot play.
+ */
+function UrgentSoundRow({ on, onChange }: { on: boolean; onChange: (next: boolean) => void }) {
+  const live = useLivePreference()
+  return (
+    <div
+      data-urgent-sound
+      className='flex flex-wrap items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'
+    >
+      <Toggle on={on} onChange={() => onChange(!on)} label='Play a sound for urgent items' />
+      Play a sound for urgent items
+      <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+        one short chime when an urgent task, a missed deadline you own or a priority record lands on
+        you — never in quiet hours, do not disturb or focus mode
+      </span>
+      <button
+        type='button'
+        onClick={() => playUrgentChime({ preview: true })}
+        className='rounded px-1.5 py-0.5 text-[11.5px] font-medium text-[#0089ad] underline decoration-dotted underline-offset-2 hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-nvr-cyan'
+      >
+        Hear it
+      </button>
+      {on && live.off && (
+        <span
+          data-urgent-sound-off
+          className='basis-full pl-10 text-[11.5px] text-amber-700 dark:text-amber-300'
+        >
+          Live updates are Off, so it stays silent until you turn them back on (Display).
+        </span>
+      )}
     </div>
   )
 }

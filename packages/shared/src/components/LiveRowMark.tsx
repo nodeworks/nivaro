@@ -1,11 +1,13 @@
-import { EyeOff, Lock } from 'lucide-react'
+import { ArrowDownUp, EyeOff, Lock } from 'lucide-react'
+import { movingRowTitle } from '../lib/live-groups'
 import { lockLabel, type RowLock } from '../lib/live-list'
 import { GONE_ROW_TITLE } from '../lib/live-list-flow'
 
 /**
  * The 16px leading mark a live list row can carry, in the slot the unseen dot
  * already reserves: "no longer in this view" (a row kept in place under the
- * pointer, lib/live-list-flow.ts) wins, then a lock (someone is editing the
+ * pointer, lib/live-list-flow.ts) wins, then "now in another group" (a grouped list holding
+ * still, lib/live-groups.ts), then a lock (someone is editing the
  * record right now), then the "new" dot (the row just slid in). Returns null
  * when none applies so the caller falls back to its usual mark.
  */
@@ -13,19 +15,29 @@ export function LiveRowMark({
   lock,
   isNew,
   gone,
+  movingTo,
   dataAttr = 'data-live-mark',
   hang = false
 }: {
   lock?: RowLock | null
   isNew?: boolean
   gone?: boolean
+  /** The group label a held row moves to once the pointer leaves. */
+  movingTo?: string | null
   dataAttr?: string
   /** Hang in the cell's left padding (like UnseenDot's `hang`). */
   hang?: boolean
 }) {
-  if (!lock && !isNew && !gone) return null
-  const kind = gone ? 'gone' : lock ? 'lock' : 'new'
-  const tip = gone ? GONE_ROW_TITLE : lock ? lockLabel(lock) : 'New — just added to this list'
+  const moving = !gone && movingTo != null
+  if (!lock && !isNew && !gone && !moving) return null
+  const kind = gone ? 'gone' : moving ? 'moving' : lock ? 'lock' : 'new'
+  const tip = gone
+    ? GONE_ROW_TITLE
+    : moving
+      ? movingRowTitle(movingTo as string)
+      : lock
+        ? lockLabel(lock)
+        : 'New — just added to this list'
   return (
     <span
       {...{ [dataAttr]: kind }}
@@ -34,6 +46,8 @@ export function LiveRowMark({
     >
       {gone ? (
         <EyeOff className='h-3 w-3 text-slate-700 dark:text-slate-100' aria-label={tip} />
+      ) : moving ? (
+        <ArrowDownUp className='h-3 w-3 text-[#0089ad] dark:text-nvr-cyan' aria-label={tip} />
       ) : lock ? (
         <Lock
           className={`h-3 w-3 ${lock.is_mine ? 'text-slate-400' : 'text-amber-500'}`}

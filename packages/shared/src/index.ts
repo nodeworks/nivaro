@@ -406,6 +406,7 @@ export { LiveCount, type LiveCountProps } from './components/LiveCount'
 export { ConfigChangeStrip } from './components/ConfigChangeStrip'
 export { ConfigTheirsPanel } from './components/ConfigTheirsPanel'
 export { LiveNewMatchesPill } from './components/LiveNewMatchesPill'
+export { DragClashNotice } from './components/DragClashNotice'
 export { LiveRowMark } from './components/LiveRowMark'
 export { LoadErrorNote } from './components/LoadErrorNote'
 export * from './components/layout-editor'
@@ -999,7 +1000,27 @@ export * from './lib/live-counts'
 export * from './lib/live-data-changed'
 export * from './lib/live-findings'
 export * from './lib/live-list'
+export {
+  addDays as dragAddDays,
+  applyDragMessage,
+  clashSentence,
+  clashWriter,
+  type DragGhost,
+  type DragPosition,
+  type DropResult,
+  dayKey as dragDayKey,
+  dayLabel as dragDayLabel,
+  dayOf as dragDayOf,
+  daysBetween as dragDaysBetween,
+  dragBaseRevision,
+  type LiveDrag,
+  saveDrop,
+  useLiveDrag,
+  valueOnDay
+} from './lib/live-drag'
+export * from './lib/live-groups'
 export * from './lib/live-list-flow'
+export * from './lib/urgent-chime'
 export * from './lib/live-moves'
 export * from './lib/live-ops'
 export * from './lib/config-watch'

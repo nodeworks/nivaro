@@ -27,6 +27,7 @@ import {
   normalizeTarget,
   resolveTargetUrl
 } from './notification-target.js'
+import { notificationIsUrgent } from './notification-urgent.js'
 import { currentTenantKey } from './tenant-rooms.js'
 import { announceNotificationsRead } from './user-sync.js'
 import { sendDevicePush } from './web-push.js'
@@ -1269,7 +1270,22 @@ export async function notifyUser(
       }
 
       if (app.io) {
+        // Round 9 #14 — urgent work for this person: the browser may chime (their own opt-in
+        // setting decides); `quiet` = inside their quiet hours, so it stays silent.
+        const urgent = await notificationIsUrgent({
+          lane,
+          category: decision.category,
+          target,
+          urgent: opts.urgent,
+          collection: opts.collection,
+          item: opts.item
+        }).catch(() => false)
+        const quiet = urgent
+          ? inQuietHours(await getNotifyPrefs(userId).catch(() => null), now)
+          : false
         emitNotification(app.io, userId, {
+          ...(urgent ? { urgent: true } : {}),
+          ...(quiet ? { quiet: true } : {}),
           id: notifId,
           subject: opts.subject.slice(0, 255),
           message: opts.message.slice(0, 200),
