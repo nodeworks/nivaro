@@ -106,13 +106,73 @@ function shareTargetName(share: ScreenShareInfo): string {
   return share.to.kind === 'team' ? `the ${share.to.name} team` : share.to.name
 }
 
+/** The first solid background from `el` up to `stop`; null for a translucent layer. */
+function solidBackground(
+  start: HTMLElement | null,
+  stop: HTMLElement
+): { color: string; el: HTMLElement } | null {
+  let el = start
+  while (el) {
+    const bg = getComputedStyle(el).backgroundColor
+    const m = /rgba?\(([^)]+)\)/.exec(bg)
+    if (m) {
+      const parts = m[1].split(',').map((p) => Number.parseFloat(p))
+      if (parts.length < 4 || parts[3] >= 0.99) return { color: bg, el }
+      if (parts[3] > 0) return null
+    }
+    if (el === stop) return null
+    el = el.parentElement
+  }
+  return null
+}
+
+/**
+ * What the page area shows just above the room kept for the bar, column by column (a list
+ * beside a detail pane has two surfaces): sampled across #main-content's width and turned into
+ * a hard-stop gradient for #main-content, so the room continues each column's own colour.
+ * Null when that row is not the page (an overlay, a sheet, a translucent layer) — the last
+ * value stays.
+ */
+export function pageSurfaceBackground(doc: Document, samples = 32): string | null {
+  const main = doc.getElementById('main-content')
+  if (!main) return null
+  const r = main.getBoundingClientRect()
+  if (r.width < 10 || r.height < 120) return null
+  // The room is the page root's bottom padding (the rule beside the bar).
+  const page = doc.querySelector('[data-page-scroll] > *')
+  const bar = page ? Number.parseFloat(getComputedStyle(page).paddingBottom) || 0 : 0
+  const y = r.bottom - bar - 8
+  const stops: Array<{ from: number; to: number; color: string }> = []
+  for (let i = 0; i < samples; i++) {
+    const x = r.left + ((i + 0.5) * r.width) / samples
+    const hit = doc.elementFromPoint(x, y) as HTMLElement | null
+    if (!hit || !main.contains(hit)) return null
+    const solid = solidBackground(hit, main)
+    if (!solid) return null
+    const b = solid.el.getBoundingClientRect()
+    const to = Math.min(Math.round(r.width), Math.round(b.right - r.left))
+    const last = stops[stops.length - 1]
+    if (last && last.color === solid.color) last.to = Math.max(last.to, to)
+    else {
+      const from = last ? Math.max(Math.round(b.left - r.left), last.to) : 0
+      if (last) last.to = from
+      stops.push({ from, to, color: solid.color })
+    }
+  }
+  if (stops.length === 0) return null
+  stops[stops.length - 1].to = Math.round(r.width)
+  if (stops.length === 1) return stops[0].color
+  const parts = stops.flatMap((st) => [`${st.color} ${st.from}px`, `${st.color} ${st.to}px`])
+  return `linear-gradient(to right, ${parts.join(', ')})`
+}
+
+/** Room scrolling content keeps under the bar: its height + 16 px + the phone's safe area. */
+const SHARE_BAR_SPACE = 'calc(2.5rem + 1rem + 1rem + env(safe-area-inset-bottom))'
+
 /**
  * The bar the sharing person sees on every screen. Always-dark so it reads as "this is not the
  * page" in light and dark mode; never recorded itself (`data-replay-block`).
  */
-/** Room scrolling content keeps under the bar: its height + 16 px + the phone's safe area. */
-const SHARE_BAR_SPACE = 'calc(2.5rem + 1rem + 1rem + env(safe-area-inset-bottom))'
-
 export function ScreenShareBar() {
   const status = useScreenShareStatus()
   const left = useCountdown(status && !status.ended ? status.share.expires_at : null)
@@ -123,8 +183,19 @@ export function ScreenShareBar() {
     const root = document.documentElement
     root.style.setProperty('--nvr-share-bar', SHARE_BAR_SPACE)
     root.setAttribute('data-screen-sharing', '')
+    // The reserved room shows #main-content behind the page. Page roots are mostly transparent
+    // and paint their body further in, so the room takes the colour the page shows just above
+    // it (sampled once a second: a navigation or a theme switch changes it).
+    const paint = () => {
+      const surface = pageSurfaceBackground(document)
+      if (surface) root.style.setProperty('--nvr-share-surface', surface)
+    }
+    paint()
+    const timer = setInterval(paint, 1_000)
     return () => {
+      clearInterval(timer)
       root.style.removeProperty('--nvr-share-bar')
+      root.style.removeProperty('--nvr-share-surface')
       root.removeAttribute('data-screen-sharing')
     }
   }, [showing])
@@ -147,7 +218,8 @@ export function ScreenShareBar() {
     >
       {/* The app's page area (both hosts use #main-content) keeps clear of the bar too. */}
       <style>
-        {'html[data-screen-sharing] [data-page-scroll]>*{padding-bottom:var(--nvr-share-bar)}'}
+        {'html[data-screen-sharing] [data-page-scroll]>*{padding-bottom:var(--nvr-share-bar)}' +
+          'html[data-screen-sharing] #main-content{background:var(--nvr-share-surface)}'}
       </style>
       <div className='pointer-events-auto flex max-w-full items-center gap-3 rounded-full border border-white/10 bg-[#111827] py-1.5 pl-3.5 pr-1.5 text-[12.5px] text-slate-100 shadow-[0_8px_24px_-6px_rgba(15,23,42,0.45)]'>
         {ended ? (

@@ -297,11 +297,24 @@ describe('ticket history', () => {
     ])
     expect(out.map((r) => r.text)).toEqual([
       'Picked up by Beth · In progress',
-      'Shared their screen with Beth · 4 min · watched by Beth · page closed',
+      'Shared their screen with Beth · 4 min · watched · page closed',
       'Viewed the requester traffic',
       'Shared their screen with Beth · 1 min · not watched'
     ])
     expect(out[1].user_name).toBe('Rita')
+  })
+
+  it('names a watcher who is not the shared-with person; a live unwatched share = not opened yet', () => {
+    const out = foldShareHistory([
+      row(1, 'screen-share-start', 'Started sharing their screen with the Desk team'),
+      row(2, 'screen-share-watch', "Watched Rita's shared screen", 'Tom'),
+      row(3, 'screen-share-stop', 'Stopped sharing their screen (2 min)'),
+      row(4, 'screen-share-start', 'Started sharing their screen with Beth')
+    ])
+    expect(out.map((r) => r.text)).toEqual([
+      'Shared their screen with the Desk team · 2 min · watched by Tom',
+      'Sharing their screen with Beth now · not opened yet'
+    ])
   })
 
   it('a share still running reads as now', () => {
@@ -309,6 +322,6 @@ describe('ticket history', () => {
       row(1, 'screen-share-start', 'Started sharing their screen with Beth'),
       row(2, 'screen-share-watch', "Watched Rita's shared screen", 'Beth')
     ])
-    expect(out.map((r) => r.text)).toEqual(['Sharing their screen with Beth now · watched by Beth'])
+    expect(out.map((r) => r.text)).toEqual(['Sharing their screen with Beth now · watching now'])
   })
 })

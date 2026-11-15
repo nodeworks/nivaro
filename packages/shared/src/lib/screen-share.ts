@@ -462,7 +462,11 @@ export function foldShareHistory<T extends ShareHistoryRow>(rows: T[]): T[] {
       running ? `Sharing their screen with ${to} now` : `Shared their screen with ${to}`
     ]
     if (dur) parts.push(dur)
-    parts.push(watchers.length ? `watched by ${watchers.join(', ')}` : 'not watched')
+    // The bar's words for a running share; the shared-with person is not named twice.
+    const onlyTarget = watchers.length > 0 && watchers.every((w) => w === to)
+    if (running) parts.push(watchers.length ? 'watching now' : 'not opened yet')
+    else if (watchers.length === 0) parts.push('not watched')
+    else parts.push(onlyTarget ? 'watched' : `watched by ${watchers.join(', ')}`)
     if (why) parts.push(why)
     out[open.at] = { ...open.row, text: parts.join(' · ') }
     open = null
