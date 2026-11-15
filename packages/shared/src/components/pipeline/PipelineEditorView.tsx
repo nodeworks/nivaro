@@ -71,6 +71,7 @@ import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { FieldPicker, type PickedField } from './FieldPicker'
 import { OwnerMatrix } from './OwnerMatrix'
+import { OwnerMatrixSheetActions } from './OwnerMatrixSheet'
 import { OwnerMatrixVersionsCard } from './OwnerMatrixVersionsCard'
 import { SkipReportCard, TemplateLintCard } from './PipelineHealthCards'
 import { PipelineSkipCriteria } from './PipelineSkipCriteria'
@@ -4296,7 +4297,7 @@ export function PipelineEditorView({
             id='owner-matrix'
             className='scroll-mt-4 rounded-xl border border-slate-200 bg-white p-6 space-y-4'
           >
-            <div className='flex items-start justify-between gap-4'>
+            <div className='flex flex-wrap items-start justify-between gap-x-4 gap-y-2'>
               <h2 className='text-[13px] font-semibold text-slate-800'>
                 <Term id='owner-matrix'>Owner Matrix</Term>
                 <span className='mt-0.5 block max-w-[72ch] text-[12px] font-normal text-slate-500'>
@@ -4304,14 +4305,20 @@ export function PipelineEditorView({
                   owners from this grid automatically — notifications, queues, and SLAs follow it.
                 </span>
               </h2>
-              <Button
-                size='sm'
-                variant='outline'
-                className='h-7 shrink-0 gap-1.5 text-[12px]'
-                onClick={() => setTeamsSheetOpen(true)}
-              >
-                <ListChecks className='h-3.5 w-3.5' /> Manage teams
-              </Button>
+              <div className='flex min-w-0 flex-wrap gap-1.5 sm:justify-end'>
+                <OwnerMatrixSheetActions
+                  templateId={templateId}
+                  collections={bindings.map((b) => b.collection)}
+                />
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className='h-7 shrink-0 gap-1.5 text-[12px]'
+                  onClick={() => setTeamsSheetOpen(true)}
+                >
+                  <ListChecks className='h-3.5 w-3.5' /> Manage teams
+                </Button>
+              </div>
             </div>
             <OwnerMatrix templateId={templateId} states={orderedStates} bindings={bindings} />
           </div>

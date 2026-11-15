@@ -32,6 +32,8 @@ export interface Sheet {
   hidden?: boolean
   rows: Array<Array<Cell | { v: Cell; s: CellStyle }>>
   widths?: number[]
+  /** 0-based columns to hide (e.g. a row id that must ride along unedited). */
+  hiddenCols?: number[]
   /** Freeze this many rows at the top. */
   freezeRows?: number
   validations?: Validation[]
@@ -108,11 +110,18 @@ function sheetXml(sheet: Sheet, selected: boolean): string {
   const view = freeze
     ? `<sheetView workbookViewId="0"${selected ? ' tabSelected="1"' : ''}><pane ySplit="${freeze}" topLeftCell="A${freeze + 1}" activePane="bottomLeft" state="frozen"/></sheetView>`
     : `<sheetView workbookViewId="0"${selected ? ' tabSelected="1"' : ''}/>`
-  const cols = sheet.widths?.length
-    ? `<cols>${sheet.widths
-        .map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`)
-        .join('')}</cols>`
-    : ''
+  const hidden = new Set(sheet.hiddenCols ?? [])
+  const colCount = Math.max(sheet.widths?.length ?? 0, ...[...hidden].map((c) => c + 1))
+  const colDefs: string[] = []
+  for (let i = 0; i < colCount; i++) {
+    const w = sheet.widths?.[i]
+    if (w == null && !hidden.has(i)) continue
+    const width = w != null ? ` width="${w}" customWidth="1"` : ''
+    colDefs.push(
+      `<col min="${i + 1}" max="${i + 1}"${width}${hidden.has(i) ? ' hidden="1"' : ''}/>`
+    )
+  }
+  const cols = colDefs.length ? `<cols>${colDefs.join('')}</cols>` : ''
   const rows = sheet.rows
     .map((cells, r) => {
       const xml = cells.map((c, i) => cellXml(`${colName(i)}${r + 1}`, c)).join('')
