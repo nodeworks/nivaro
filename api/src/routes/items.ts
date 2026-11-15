@@ -2495,11 +2495,16 @@ export async function itemsRoutes(app: FastifyInstance) {
       // as the caller; a list the caller may not set, or a link refused there, is
       // left out quietly and named in the answer (`not_copied`, field names only).
       const notCopied: Array<{ field: string; reason: string }> = []
-      const links = await linkSetsToCopy(req.user!, collection, id).catch(
-        () => ({}) as Record<string, unknown>
-      )
+      const linkCopy = await linkSetsToCopy(req.user!, collection, id, {
+        isAdmin: req.isAdmin
+      }).catch(() => ({ links: {}, notCopied: [] }))
+      const links: Record<string, unknown> = linkCopy.links
+      notCopied.push(...linkCopy.notCopied)
       if (Object.keys(links).length > 0 && !req.isAdmin) {
-        const allowed = await getAllowedFields(req.user!, 'create', collection).catch(() => null)
+        // Fail closed: a field list we could not get means no list may be set.
+        const allowed = await getAllowedFields(req.user!, 'create', collection).catch(
+          () => [] as string[]
+        )
         if (allowed && !allowed.includes('*'))
           for (const f of Object.keys(links))
             if (!allowed.includes(f)) {

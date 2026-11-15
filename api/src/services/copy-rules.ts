@@ -247,6 +247,8 @@ export interface LinkPlan {
   junction: string
   parentFk: string
   relatedFk: string
+  /** The linked collection (null for M2A: each row names its own). */
+  target: string | null
   /** M2A: the junction column naming the target collection. */
   discriminator: string | null
 }
@@ -311,29 +313,42 @@ export function linkPlans(
       junction: r.many_collection,
       parentFk: r.many_field,
       relatedFk: jf,
+      target: discriminator ? null : target,
       discriminator
     })
   }
   return out
 }
 
+/** What a copy's link sets are, and the lists that stay behind (field names only). */
+export interface LinkCopy {
+  links: Record<string, unknown>
+  notCopied: Array<{ field: string; reason: string }>
+}
+
 /**
  * The link sets record `id` holds, as the alias payload a create writes
- * (`{regions: [2, 5]}`; M2A `{collection, id}` pairs). The original was read as
- * the caller before this. Each link is then written by the create through the
- * items service AS THE CALLER, so a link they may not make is refused there and
- * named in the create's link failures.
+ * (`{regions: [2, 5]}`; M2A `{collection, id}` pairs) — read AS THE CALLER:
+ * the junction rows through the items service (its row filter, User Scopes and
+ * field list), then only links whose linked record the caller can see
+ * (compileAccessGates + visibleIds on the linked collection). Every access check
+ * that fails to answer counts as "no access". The create then writes each link
+ * through the items service as the caller, so a link they may not make is
+ * refused there and named in its link failures.
  */
 export async function linkSetsToCopy(
   user: User,
   collection: string,
-  id: string | number
-): Promise<Record<string, unknown>> {
+  id: string | number,
+  opts: { isAdmin?: boolean } = {}
+): Promise<LinkCopy> {
+  const notCopied: LinkCopy['notCopied'] = []
   const [col, fields, own, readable] = await Promise.all([
     getCollection(collection).catch(() => null),
     getFields(collection).catch(() => []),
     getRelations(collection).catch(() => []),
-    getAllowedFields(user, 'read', collection).catch(() => null)
+    // Fail closed: an answer we could not get means no field may be read.
+    getAllowedFields(user, 'read', collection).catch(() => [] as string[])
   ])
   const junctions = [
     ...new Set(
@@ -351,26 +366,53 @@ export async function linkSetsToCopy(
       neverCopy: new Set(
         parseNeverCopy((col as { browser_config?: unknown } | null)?.browser_config)
       ),
-      mayRead: (f) => !readable || readable.includes('*') || readable.includes(f)
+      mayRead: (f) => readable === null || readable.includes('*') || readable.includes(f)
     }
   )
-  const out: Record<string, unknown> = {}
+  if (plans.length === 0) return { links: {}, notCopied }
+  const { readItems } = await import('./items.js')
+  const { compileAccessGates, visibleIds } = await import('./record-access.js')
+  const links: Record<string, unknown> = {}
   for (const p of plans) {
+    let rows: Array<Record<string, unknown>>
     try {
-      const cols = p.discriminator ? [p.relatedFk, p.discriminator] : [p.relatedFk]
-      const rows = (await db(p.junction)
-        .where(p.parentFk, id)
-        .whereNotNull(p.relatedFk)
-        .limit(COPY_MAX_LINKS)
-        .select(cols)) as Array<Record<string, unknown>>
-      if (rows.length === 0) continue
-      const disc = p.discriminator
-      out[p.field] = disc
-        ? rows.map((x) => ({ collection: String(x[disc] ?? ''), id: x[p.relatedFk] }))
-        : rows.map((x) => x[p.relatedFk])
+      const res = (await readItems(user, p.junction, {
+        filter: { [p.parentFk]: { _eq: id } },
+        fields: p.discriminator ? [p.relatedFk, p.discriminator] : [p.relatedFk],
+        limit: COPY_MAX_LINKS
+      })) as { data?: Array<Record<string, unknown>> }
+      rows = (res?.data ?? []).filter((r) => r[p.relatedFk] != null)
     } catch {
-      /* a link table that cannot be read just does not copy */
+      notCopied.push({ field: p.field, reason: 'no-read' })
+      continue
     }
+    if (rows.length === 0) continue
+    // Only links to records the caller can see, judged per linked collection.
+    const byTarget = new Map<string, Array<Record<string, unknown>>>()
+    for (const r of rows) {
+      const target = p.discriminator ? String(r[p.discriminator] ?? '') : (p.target ?? '')
+      if (!IDENT.test(target)) continue
+      byTarget.set(target, [...(byTarget.get(target) ?? []), r])
+    }
+    const kept: Array<Record<string, unknown>> = []
+    for (const [target, group] of byTarget) {
+      try {
+        const gates = await compileAccessGates(user, target, { actingAdmin: opts.isAdmin })
+        const seen = await visibleIds(
+          gates,
+          group.map((r) => String(r[p.relatedFk]))
+        )
+        kept.push(...group.filter((r) => seen.has(String(r[p.relatedFk]))))
+      } catch {
+        /* fail closed: links into a collection we could not judge stay behind */
+      }
+    }
+    if (kept.length < rows.length) notCopied.push({ field: p.field, reason: 'no-read' })
+    if (kept.length === 0) continue
+    const disc = p.discriminator
+    links[p.field] = disc
+      ? kept.map((x) => ({ collection: String(x[disc] ?? ''), id: x[p.relatedFk] }))
+      : kept.map((x) => x[p.relatedFk])
   }
-  return out
+  return { links, notCopied }
 }
