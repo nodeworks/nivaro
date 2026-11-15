@@ -61,7 +61,9 @@ vi.mock('../routes/sla.js', () => ({
       elapsed_hours: 20,
       duration_hours: 24,
       remaining_hours: 4,
-      business_hours_only: true
+      business_hours_only: true,
+      warning_at: '2026-11-15T10:00:00.000Z',
+      due_at: '2026-11-15T14:00:00.000Z'
     }
   })
 }))
@@ -86,7 +88,10 @@ describe('record room state chip', () => {
       elapsed_hours: 20,
       due_hours: 24,
       remaining_hours: 4,
-      business_hours: true
+      business_hours: true,
+      // The instants the record's SLA banner counts down to — the chip uses these, not hours.
+      warning_at: '2026-11-15T10:00:00.000Z',
+      due_at: '2026-11-15T14:00:00.000Z'
     })
   })
 

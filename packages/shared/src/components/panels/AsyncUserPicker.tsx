@@ -13,7 +13,8 @@ export function AsyncUserPicker({
   onChange
 }: {
   value: string
-  onChange: (v: string) => void
+  /** `person` = the row that was picked (id + display name), absent when cleared. */
+  onChange: (v: string, person?: { id: string; name: string }) => void
 }) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
@@ -58,8 +59,14 @@ export function AsyncUserPicker({
     staleTime: 5 * 60_000
   })
   const users = data ?? []
-  // The search row it was picked from answers at once; the card after.
-  const picked = selectedUser ?? users.find((u) => u.id === value) ?? null
+  // The row the person just picked is kept as it was, so the field names them at once — the
+  // search results go when the list closes and the card read may not have answered yet.
+  const [pickedRow, setPickedRow] = useState<User | null>(null)
+  const picked =
+    (pickedRow && pickedRow.id === value ? pickedRow : null) ??
+    selectedUser ??
+    users.find((u) => u.id === value) ??
+    null
   const selectedLabel = picked
     ? [picked.first_name, picked.last_name].filter(Boolean).join(' ').trim() || picked.email
     : value
@@ -124,7 +131,8 @@ export function AsyncUserPicker({
                   key={u.id}
                   type='button'
                   onClick={() => {
-                    onChange(u.id)
+                    setPickedRow(u)
+                    onChange(u.id, { id: u.id, name: nameOf(u) || u.email })
                     setOpen(false)
                   }}
                   className='flex w-full items-start gap-2 px-3 py-1.5 text-left hover:bg-slate-50 dark:hover:bg-muted'

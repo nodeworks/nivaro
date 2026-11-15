@@ -46,6 +46,7 @@ import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, patch as patchCmd, post } from '../../lib/commands'
+import { useDeadlineNow } from '../../lib/deadline-ticker'
 import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
 import { usePresenceOnlinePoll } from '../../lib/presence-live'
 import { fullHref, presencePlaceHref, type StuckState, stuckText } from '../../lib/presence-state'
@@ -161,7 +162,7 @@ import {
   ThreadPane,
   WelcomeNote
 } from './RoomParts'
-import { dueText } from './room-due'
+import { dueStatus, dueText } from './room-due'
 import { ClipPlayer, clipInfo } from './ScreenClip'
 
 /**
@@ -796,6 +797,8 @@ function EntityRoomCard({ room }: { room: string }) {
     },
     { includeOwn: true, debounceMs: 600 }
   )
+  // The clock counts on the page's shared deadline ticker — the same beat the SLA banner uses.
+  const deadlineNow = useDeadlineNow(!!facts?.sla?.due_at)
   if (!isEntity || !card) return null
   const build = cfg.recordUrl ?? ((c: string, id: string | number) => `/collections/${c}/${id}`)
   const href = build(card.collection, card.id)
@@ -804,94 +807,111 @@ function EntityRoomCard({ room }: { room: string }) {
   // step + owners + clock), the card's own read until then.
   const stepLabel = facts?.state?.label ?? card.state
   const stepColor = facts?.state ? facts.state.color : card.color
-  const due = dueText(sla)
+  const due = dueText(sla, deadlineNow)
+  const slaStatus = dueStatus(sla, deadlineNow) ?? sla?.status
+  // The room header already names the record; repeat it only when its label says more.
+  const recordName =
+    facts?.label && facts.label.toLowerCase() !== String(token ?? '').toLowerCase()
+      ? facts.label
+      : null
   const slaTone =
-    sla?.status === 'breached'
+    slaStatus === 'breached'
       ? 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300'
-      : sla?.status === 'warning'
+      : slaStatus === 'warning'
         ? 'bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
         : 'bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300'
   return (
+    // Two lines: what the record is and where it stands, then its clock (left) and who owns
+    // it + Open (right) — the step always keeps its whole name, even in a narrow chat dock.
     <div
-      className={cn('flex shrink-0 items-center gap-2 border-b px-3 py-1.5', th.divider)}
+      className={cn('flex shrink-0 flex-col gap-1 border-b px-3 py-1.5', th.divider)}
       data-chat-room-card
     >
-      <span className='shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
-        {card.type_label}
-      </span>
-      {/* The record's own name keeps its room (~12 characters) — the step pill shrinks
-          first, so the chip always says WHICH record it is. */}
-      <span
-        className='min-w-[12ch] max-w-[18ch] shrink-0 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'
-        data-tip={token ?? undefined}
-      >
-        {token}
-      </span>
-      {stepLabel && (
-        <span
-          key={stepLabel}
-          data-chat-room-state={stepLabel}
-          data-tip={stepLabel}
-          className='nvr-fade-in min-w-0 truncate rounded-full px-2 py-0.5 text-[10px] font-semibold'
-          style={{
-            backgroundColor: stepColor ? `${stepColor}26` : 'rgba(100,116,139,.15)',
-            color: stepColor ?? undefined
-          }}
-        >
-          {stepLabel}
+      <div className='flex min-w-0 items-center gap-2'>
+        <span className='shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+          {card.type_label}
         </span>
-      )}
-      {sla && (
-        <span
-          key={`${sla.status}|${due ?? ''}`}
-          className={cn(
-            'nvr-fade-in shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
-            slaTone
-          )}
-          title={
-            sla.due_hours != null
-              ? `${Math.round(sla.elapsed_hours ?? 0)}h in this step of ${sla.due_hours}h allowed${sla.business_hours ? ' (business hours)' : ''}`
-              : undefined
-          }
-          data-chat-room-sla={sla.status}
-        >
-          {due ??
-            (sla.status === 'breached'
-              ? 'Past SLA'
-              : sla.status === 'warning'
-                ? 'SLA soon'
-                : 'On time')}
-        </span>
-      )}
-      {facts && facts.owners.length > 0 && (
-        <span
-          className='ml-auto flex shrink-0 -space-x-1.5'
-          data-tip={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
-          aria-label={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
-          role='img'
-          data-chat-room-owners={facts.owners.length}
-        >
-          {facts.owners.slice(0, 4).map((o) => (
-            <Avatar key={o.id} id={o.id} name={o.name} size={18} presence={false} />
-          ))}
-          {facts.owners.length > 4 && (
-            <span className='flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-slate-200 px-1 text-[9px] font-semibold text-slate-600 dark:bg-muted dark:text-slate-300'>
-              +{facts.owners.length - 4}
+        {recordName && (
+          <span
+            className='min-w-0 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'
+            data-tip={recordName}
+          >
+            {recordName}
+          </span>
+        )}
+        {stepLabel && (
+          // The list's State pill: a tint of the step colour with a dot of it, the words in the
+          // neutral text colour (a 10 px label in the step's own colour fails AA on its tint).
+          <span
+            key={stepLabel}
+            data-chat-room-state={stepLabel}
+            data-tip={stepLabel}
+            className='nvr-fade-in inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full py-0.5 pl-2 pr-2.5 text-[10.5px] font-semibold text-slate-700 dark:text-slate-200'
+            style={{ backgroundColor: `${stepColor ?? '#6b7280'}1f` }}
+          >
+            <span
+              aria-hidden
+              className='h-1.5 w-1.5 shrink-0 rounded-full'
+              style={{ backgroundColor: stepColor ?? '#6b7280' }}
+            />
+            <span className='truncate'>{stepLabel}</span>
+          </span>
+        )}
+      </div>
+      {(sla || (facts && facts.owners.length > 0) || href) && (
+        <div className='flex min-w-0 items-center gap-2'>
+          {sla && (
+            <span
+              key={slaStatus ?? 'none'}
+              className={cn(
+                'nvr-fade-in shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
+                slaTone
+              )}
+              title={
+                sla.due_hours != null
+                  ? `${Math.round(sla.elapsed_hours ?? 0)}h in this step of ${sla.due_hours}h allowed${sla.business_hours ? ' (business hours)' : ''}`
+                  : undefined
+              }
+              data-chat-room-sla={slaStatus}
+            >
+              {due ??
+                (slaStatus === 'breached'
+                  ? 'Past SLA'
+                  : slaStatus === 'warning'
+                    ? 'SLA soon'
+                    : 'On time')}
             </span>
           )}
-        </span>
-      )}
-      {href && (
-        <button
-          type='button'
-          onClick={() => cfg.navigate?.(href)}
-          className={cn(
-            'shrink-0 text-[11px] font-semibold text-[#007a99] underline-offset-2 hover:underline dark:text-nvr-cyan',
-            facts?.owners.length ? 'ml-1.5' : 'ml-auto'
-          )}
-        >
-          Open
-        </button>
+          <span className='ml-auto flex shrink-0 items-center gap-2'>
+            {facts && facts.owners.length > 0 && (
+              <span
+                className='flex shrink-0 -space-x-1.5'
+                data-tip={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
+                aria-label={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
+                role='img'
+                data-chat-room-owners={facts.owners.length}
+              >
+                {facts.owners.slice(0, 4).map((o) => (
+                  <Avatar key={o.id} id={o.id} name={o.name} size={18} presence={false} />
+                ))}
+                {facts.owners.length > 4 && (
+                  <span className='flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-slate-200 px-1 text-[9px] font-semibold text-slate-600 dark:bg-muted dark:text-slate-300'>
+                    +{facts.owners.length - 4}
+                  </span>
+                )}
+              </span>
+            )}
+            {href && (
+              <button
+                type='button'
+                onClick={() => cfg.navigate?.(href)}
+                className='shrink-0 text-[11px] font-semibold text-[#007a99] underline-offset-2 hover:underline dark:text-nvr-cyan'
+              >
+                Open
+              </button>
+            )}
+          </span>
+        </div>
       )}
     </div>
   )

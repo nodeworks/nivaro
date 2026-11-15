@@ -14773,7 +14773,9 @@ function ItemEditFormView({
                                                   tab: currentRecordTab()
                                                 })}
                                                 describe={() =>
-                                                  `This ${singularTitle.toLowerCase()}`
+                                                  itemTitle && itemTitle !== title
+                                                    ? `${title} — ${itemTitle}`
+                                                    : `This ${singularTitle.toLowerCase()}`
                                                 }
                                               />
                                               <RecordInsightsButton
