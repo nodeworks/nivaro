@@ -1042,6 +1042,7 @@ export { currentViewport } from './lib/layout-resolve'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export { LineLockContext, lineLockView, useLineLocks } from './lib/line-locks'
+export { coeditCovers, coeditLive } from './lib/coedit-registry'
 export { linkedChangeSentence, useLinkedRecordWatch } from './lib/linked-changes'
 export * from './lib/list-inline-edit'
 // rt6 — status badges in pickers + soft locks on list cells.

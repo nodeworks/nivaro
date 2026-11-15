@@ -18,6 +18,20 @@ vi.mock('../../../services/support-tickets.js', () => ({
       v.isAdmin || String(t.created_by).toUpperCase() === v.id
   )
 }))
+const coeditGate = vi.hoisted(() => ({
+  mayRead: vi.fn(async () => true),
+  mayWrite: vi.fn(async () => true)
+}))
+vi.mock('../../../services/coedit-socket.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/coedit-socket.js')>()),
+  coeditGates: () => ({
+    canSeeRecord: async () => true,
+    mayRead: coeditGate.mayRead,
+    mayWrite: coeditGate.mayWrite,
+    writeRefused: async () => false,
+    fieldMayTravel: async () => true
+  })
+}))
 vi.mock('../../../services/socket-tenant.js', () => ({
   inSocketTenant:
     (_s: unknown, fn: (...a: unknown[]) => Promise<void>) =>
@@ -220,6 +234,18 @@ describe('room gates (#1720)', () => {
     vi.mocked(visibleIds).mockResolvedValueOnce(new Set())
     expect(await roomStillAllowed(ANA, 'record:orders:7', notAdmin)).toBe(false)
     expect(await roomStillAllowed(ANA, 'record:orders:7', notAdmin)).toBe(true)
+  })
+  it('co-edit rooms: the record gate, then the field read (and write for the cursor room)', async () => {
+    expect(await roomStillAllowed(ANA, 'coedit:r:notes:orders:7', notAdmin)).toBe(true)
+    vi.mocked(visibleIds).mockResolvedValueOnce(new Set())
+    expect(await roomStillAllowed(ANA, 'coedit:r:notes:orders:7', notAdmin)).toBe(false)
+    coeditGate.mayRead.mockResolvedValueOnce(false)
+    expect(await roomStillAllowed(ANA, 'coedit:r:notes:orders:7', notAdmin)).toBe(false)
+    coeditGate.mayWrite.mockResolvedValueOnce(false)
+    expect(await roomStillAllowed(ANA, 'coedit:r:notes:orders:7', notAdmin)).toBe(true)
+    coeditGate.mayWrite.mockResolvedValueOnce(false)
+    expect(await roomStillAllowed(ANA, 'coedit:w:notes:orders:7', notAdmin)).toBe(false)
+    expect(await roomStillAllowed(ANA, 'coedit:x:junk', notAdmin)).toBe(false)
   })
   it('asks canSeeRoom for chat rooms', async () => {
     vi.mocked(canSeeRoom).mockResolvedValueOnce(false)

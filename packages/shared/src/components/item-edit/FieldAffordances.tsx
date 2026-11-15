@@ -777,7 +777,13 @@ export function holdsLockByTakeOver(): boolean {
   return takeOverHolds.size > 0
 }
 
-export function usePresenceSoftLock(wrapperRef: RefObject<HTMLDivElement | null>) {
+export function usePresenceSoftLock(
+  wrapperRef: RefObject<HTMLDivElement | null>,
+  opts: { off?: boolean } = {}
+) {
+  // A field people write in together (rich text in the record form, realtime round 3 item 8)
+  // never asks: their typing merges, nobody overwrites anybody.
+  const off = !!opts.off
   const [editor, setEditor] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
   const confirmedRef = useRef(false)
@@ -804,7 +810,7 @@ export function usePresenceSoftLock(wrapperRef: RefObject<HTMLDivElement | null>
 
   const onFocusCapture = useCallback(
     (e: React.FocusEvent) => {
-      if (!editor || confirmedRef.current || holdsLockByTakeOver()) return
+      if (off || !editor || confirmedRef.current || holdsLockByTakeOver()) return
       const t = e.target as HTMLElement
       if (!t.matches('input, textarea, select, [contenteditable="true"], [role="combobox"]')) return
       pendingTargetRef.current = t
@@ -815,7 +821,7 @@ export function usePresenceSoftLock(wrapperRef: RefObject<HTMLDivElement | null>
       }, 0)
       setConfirming(true)
     },
-    [editor]
+    [editor, off]
   )
 
   const confirm = useCallback(() => {
@@ -830,7 +836,7 @@ export function usePresenceSoftLock(wrapperRef: RefObject<HTMLDivElement | null>
     pendingTargetRef.current = null
   }, [])
 
-  return { editor, confirming, onFocusCapture, confirm, cancel }
+  return { editor: off ? null : editor, confirming, onFocusCapture, confirm, cancel }
 }
 
 export function PresenceSoftLockStrip({

@@ -58,6 +58,7 @@ import {
 import { useSlowReason } from '../hooks/useSlowReason'
 import { formatApiPayload } from '../lib/api-payload'
 import { openSectionOf } from '../lib/co-edit'
+import { coeditCovers } from '../lib/coedit-registry'
 import { del, get, getActiveLayout, patch, post, put } from '../lib/commands'
 import type { FieldSource } from '../lib/config-sentences'
 import { childCopySkip, fetchCopySkip, headerCopySkip } from '../lib/copy-rules'
@@ -125,6 +126,7 @@ import { requestMoveState } from '../lib/move-state'
 import { lockedAfterMoveText, movedNoticeId, namedMovedNoticeRecent } from '../lib/moved-notice'
 import { ownersHeaderTile } from '../lib/owners-header-tile'
 import { queryKeys } from '../lib/query-keys'
+import { useOptionalRealtime } from '../lib/realtime'
 import { useRecordReader } from '../lib/record-loader'
 import {
   bindRecordOutbox,
@@ -227,6 +229,12 @@ import {
   settleTouchedAfterSave,
   useCascadeClearNotices
 } from './item-edit/cascade-clear-notice'
+import {
+  CoeditFormContext,
+  type CoeditFormInfo,
+  isCoeditInterface,
+  sharedTextUnderLock
+} from './item-edit/coedit/context'
 import { columnLengthError } from './item-edit/column-length'
 import { configUpdateReaction } from './item-edit/config-update'
 import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
@@ -1962,6 +1970,7 @@ function FieldContexts({
   fieldComments,
   partnerNeeds,
   lineLocks = false,
+  coedit = null,
   duplicateMerge = null,
   children
 }: {
@@ -1974,6 +1983,8 @@ function FieldContexts({
   partnerNeeds?: PartnerNeedsCtx | null
   /** The record's lines lock one at a time (realtime item 7) — line grids read it. */
   lineLocks?: boolean
+  /** The record long-text fields co-edit on (realtime round 3 item 8); null = none. */
+  coedit?: CoeditFormInfo | null
   children: ReactNode
 }) {
   return (
@@ -1983,9 +1994,11 @@ function FieldContexts({
           <FieldCommentsContext.Provider value={fieldComments}>
             <PartnerNeedsContext.Provider value={partnerNeeds ?? null}>
               <LineLockContext.Provider value={lineLocks}>
-                <DuplicateMergeContext.Provider value={duplicateMerge}>
-                  {children}
-                </DuplicateMergeContext.Provider>
+                <CoeditFormContext.Provider value={coedit}>
+                  <DuplicateMergeContext.Provider value={duplicateMerge}>
+                    {children}
+                  </DuplicateMergeContext.Provider>
+                </CoeditFormContext.Provider>
               </LineLockContext.Provider>
             </PartnerNeedsContext.Provider>
           </FieldCommentsContext.Provider>
@@ -2995,6 +3008,16 @@ function ItemEditFormView({
   }
   const initialDataRef = useRef<Record<string, unknown>>({})
   const touchedFields = useRef<Set<string>>(new Set())
+  // Co-editing long text (realtime round 3 item 8): the record its rich-text fields write
+  // together on, and each field's saved value (a watcher's clean form is never touched).
+  const realtimeHost = useOptionalRealtime()
+  const coeditForm = useMemo<CoeditFormInfo | null>(
+    () =>
+      isNew || designOn
+        ? null
+        : { collection, item: String(itemId), saved: (f) => initialDataRef.current[f] },
+    [collection, itemId, isNew, designOn]
+  )
 
   const [copiedHeaderField, setCopiedHeaderField] = useState<string | null>(null)
 
@@ -4030,6 +4053,14 @@ function ItemEditFormView({
       // "2 changes" and resend the old values against an old revision.
       const ownEdits = ownEditFields(changed, userTouchedRef.current, draftRef.current, prev)
       const isOwnEdit = (k: string) => ownEdits.has(k)
+      // A save from the writing session this person is in (realtime round 3 item 8): their
+      // draft already holds that text — never a conflict with itself, never a "changed" note.
+      // Decided here, so Save's mid-air check does not ask about it either.
+      const coeditedNow = new Set(
+        changed.filter((k) => coeditCovers(collection, String(itemId), k, record[k]))
+      )
+      for (const k of coeditedNow) if (isOwnEdit(k)) decideRemoteConflict(k, record[k])
+      const coedited = (k: string) => coeditedNow.has(k)
       // Notes only for a refetch that follows someone else's live write, and
       // only for the fields it named (live-record-marks.ts) — any other refetch
       // (Edit taking the lock, focus, Summary → Edit after a reload) is not a
@@ -4051,8 +4082,9 @@ function ItemEditFormView({
             // the remote value waits behind "Take theirs / Keep mine" (#6).
             // Conflicts always show (they protect the person's edit, socket
             // or not); plain notes only for a live write that named the field.
-            const conflict = isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k])
-            if (!conflict && !noted.includes(k)) continue
+            const conflict =
+              isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k]) && !coedited(k)
+            if (!conflict && (!noted.includes(k) || coedited(k))) continue
             next[k] = conflict
               ? { was: prev[k], by, at, theirs: record[k], conflict: true }
               : { was: prev[k], by, at }
@@ -4060,7 +4092,9 @@ function ItemEditFormView({
           return next
         })
         const logged = changed.filter(
-          (k) => noted.includes(k) || (isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k]))
+          (k) =>
+            !coedited(k) &&
+            (noted.includes(k) || (isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k])))
         )
         if (logged.length > 0)
           setRemoteLog((cur) =>
@@ -5597,6 +5631,8 @@ function ItemEditFormView({
     evaluateFieldRulesForChange
   ])
 
+  // The shared-text fields open under someone else's record lock (set below, with the lock).
+  const sharedTextOpenRef = useRef<ReadonlySet<string>>(new Set())
   // After a manual lock release the next real edit re-acquires the lock.
   // Ref because useItemLock is declared below this callback.
   const relockOnEditRef = useRef<null | (() => void)>(null)
@@ -5611,7 +5647,9 @@ function ItemEditFormView({
     (field: string, value: unknown) => {
       // Design mode: inputs are inert.
       if (designOn) return
-      if (readOnlyRef.current && !undoingRef.current) return
+      // Shared text stays writable under someone else's record lock (realtime round 3 item 8).
+      if (readOnlyRef.current && !undoingRef.current && !sharedTextOpenRef.current.has(field))
+        return
       // No-op guard: editors can emit a change with an IDENTICAL value (rich
       // text normalizing on mount is the classic) — that must not dirty the
       // form, or a freshly loaded record claims unsaved changes with nothing
@@ -6195,9 +6233,35 @@ function ItemEditFormView({
   // work never takes (or keeps) the record lock.
   const lineLocksOn =
     !isNew && !designOn && !!normalizeSummaryModeRules(colMeta?.summary_mode_rules).line_locks
-  const recordLockDirty = lineLocksOn
-    ? unsavedSummary.fields.length + unsavedSummary.links + unsavedSummary.unlinks > 0
-    : hasUnsaved || lineDrafts.size > 0
+  // Shared text (realtime round 3 item 8, Rob 2026-11-14): rich-text fields people write
+  // together stay open on a record someone else holds the lock on, and changing only them
+  // neither takes the lock nor is refused by it. Needs the live connection.
+  const sharedTextFields = useMemo(
+    () =>
+      new Set(
+        realtimeHost && !isNew && !designOn
+          ? (fieldConfig ?? []).filter((f) => isCoeditInterface(f)).map((f) => f.field)
+          : []
+      ),
+    [fieldConfig, realtimeHost, isNew, designOn]
+  )
+  const sharedTextBase = {
+    sharedFields: sharedTextFields,
+    unsavedFields: unsavedSummary.fields,
+    otherChanges:
+      unsavedSummary.rows + unsavedSummary.links + unsavedSummary.unlinks + lineDrafts.size,
+    recordGone: !!recordGone
+  }
+  const onlySharedTextUnsaved = sharedTextUnderLock({
+    ...sharedTextBase,
+    heldByOther: false,
+    stepLocked: false
+  }).onlySharedUnsaved
+  const recordLockDirty = onlySharedTextUnsaved
+    ? false
+    : lineLocksOn
+      ? unsavedSummary.fields.length + unsavedSummary.links + unsavedSummary.unlinks > 0
+      : hasUnsaved || lineDrafts.size > 0
   const {
     lockHolder,
     acquired: lockAcquired,
@@ -6241,11 +6305,24 @@ function ItemEditFormView({
       ),
     [fieldConfig]
   )
-  /** The form-wide read-only, for one field (line grids stay open under line locks). */
+  // Someone else holds the RECORD lock (not a step's own edit lock): shared text stays open.
+  const sharedTextView = sharedTextUnderLock({
+    ...sharedTextBase,
+    heldByOther: lockReadOnly,
+    stepLocked: !!editLockMessage && !editLockPartial
+  })
+  const textOpenUnderLock = sharedTextView.open
+  /** The form-wide read-only, for one field (line grids stay open under line locks, shared
+   *  text under a held record lock). */
   const formLocks = (field: string) =>
-    isReadOnly && !(linesOpenUnderLock && lineGridFields.has(field))
-  /** Save stays possible when only lines (which lock on their own) can change. */
-  const saveBlockedByLock = isReadOnly && !linesOpenUnderLock
+    isReadOnly &&
+    !(linesOpenUnderLock && lineGridFields.has(field)) &&
+    !(textOpenUnderLock && sharedTextFields.has(field))
+  /** A save of shared text alone goes through a held lock (the server lets it, coedit-fields). */
+  const sharedTextSaveOk = sharedTextView.saveOk
+  sharedTextOpenRef.current = textOpenUnderLock ? sharedTextFields : new Set()
+  /** Save stays possible when only lines (which lock on their own) or shared text can change. */
+  const saveBlockedByLock = isReadOnly && !linesOpenUnderLock && !sharedTextSaveOk
   // The step moved (this form's own transition, a live state change, another
   // tab): who may edit now is the server's call — re-read the edit-lock
   // verdict, so a record that just went into approval turns read-only (and
@@ -9420,7 +9497,11 @@ function ItemEditFormView({
     if (recordGone) return
     // The header Save is disabled on a read-only record; the host's triggers
     // (workspace "Save all", the entry keyboard) are not — they land here.
-    if (isReadOnly && !isNew && (saveBlockedByLock || unsavedSummary.fields.length > 0)) {
+    if (
+      isReadOnly &&
+      !isNew &&
+      (saveBlockedByLock || (unsavedSummary.fields.length > 0 && !sharedTextSaveOk))
+    ) {
       toast.info(
         editLockMessage ??
           `${lockHolder?.locked_by_name ?? 'Someone else'} is editing this record — nothing was saved`
@@ -13747,6 +13828,7 @@ function ItemEditFormView({
                                 fieldComments={fieldComments}
                                 partnerNeeds={partnerNeeds}
                                 lineLocks={lineLocksOn}
+                                coedit={coeditForm}
                                 duplicateMerge={duplicateMergeApi}
                               >
                                 {/* Instant tooltips for truncated header values. Self-deduplicating —

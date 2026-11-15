@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { Skeleton } from '../ui/skeleton'
+import type { CoeditFieldTarget } from './coedit/context'
 
 // TipTap and ProseMirror are ~380 KB. Most screens never show a rich-text
 // field, so the editor loads as its own chunk the first time one mounts
@@ -13,6 +14,8 @@ type Props = {
   disabled?: boolean
   /** Paste control (#189): strip formatting from pasted content. */
   pastePlain?: boolean
+  /** Co-editing (realtime round 3, item 8): the record form's field this editor shows. */
+  coedit?: CoeditFieldTarget | null
 }
 
 export function RichTextEditor(props: Props) {
