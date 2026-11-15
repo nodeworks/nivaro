@@ -514,6 +514,7 @@
           <a class="docs-nav-item" data-section="live-conflicts" href="#live-conflicts">Working on the same record</a>
           <a class="docs-nav-item" data-section="live-coedit" href="#live-coedit">Writing together in long text</a>
           <a class="docs-nav-item" data-section="live-sync" href="#live-sync">Offline saves and shared budget grids</a>
+          <a class="docs-nav-item" data-section="live-outside" href="#live-outside">Live Beyond the App</a>
           <a class="docs-nav-item" data-section="notifications-center" href="#notifications-center">Notifications Center</a>
           <a class="docs-nav-item" data-section="user-activity-feed" href="#user-activity-feed">User Activity Feed</a>
           <a class="docs-nav-item" data-section="keyboard-shortcuts" href="#keyboard-shortcuts">Keyboard Shortcuts</a>
@@ -21851,6 +21852,54 @@ installClientChaosFetch() // before anything creates a client
               <tr><td>GET /api/ai/task-do/analytics</td><td>admin</td><td>The card’s figures.</td></tr></tr></tbody>
           </table></div>
           <!-- /SYNC:ai-task-do -->
+        </div>
+
+        <div class="doc-section" id="s-live-outside" data-toc='[{"id":"live-outside","label":"Live beyond the app"},{"id":"since-this-email","label":"Since this email"},{"id":"live-share-links","label":"Share links and embedded feeds"},{"id":"approval-links-live","label":"Approve and Reject from email"},{"id":"submission-status-page","label":"Status page for public form submissions"},{"id":"threshold-banners","label":"Threshold banners"},{"id":"outside-changes","label":"Changes made outside the app"}]'>
+          <!-- SYNC:live-outside -->
+          <h1 class="doc-h1" id="live-outside">Live beyond the app</h1>
+          <p class="doc-p">Pages you open from outside the app keep up with the record too, without a reload.</p>
+          <h2 class="doc-h2" id="since-this-email">Since this email</h2>
+          <p class="doc-p">Record links in the emails Nivaro sends carry the time the email went out. Open the record from one and a quiet line above the form says what happened since: “Since this email: moved to Approved · 2 fields changed”. It counts only fields you may read, and you can close it (the link then drops the time, so a reload stays quiet). The link carries a time only, never data.</p>
+          <h2 class="doc-h2" id="live-share-links">Share links and embedded feeds</h2>
+          <ul class="doc-ul">
+            <li>An open share link page (/share/…) updates in place when the shared record changes. The changed value fades in briefly; nothing scrolls or moves.</li>
+            <li>An embedded list with data-live="true" re-reads its feed when what it shows changed.</li>
+            <li>Both listen on a stream that carries only “something changed” — no ids, field names or values — and only when the page itself would now read differently. The page then re-reads through its usual link, as its creator, exactly as a reload would. Streams are limited per address, and the checks share the pushed-widget budget (<code class="doc-code">WIDGET_LIVE_MAX_PER_MIN</code>).</li>
+          </ul>
+          <h2 class="doc-h2" id="approval-links-live">Approve and Reject from email</h2>
+          <p class="doc-p">Turn on “Approve / Reject in emails” at the top of the Approvals page and each approval request email carries an Approve and a Reject button, signed for that approver alone and good for 7 days. Teams cards use the same page.</p>
+          <ul class="doc-ul">
+            <li>The button opens a page that says where the approval stands now and keeps saying it while open: “Already approved by Beth Lee at 10:42 AM”, “Waiting on Finance review”, “This approval was withdrawn”.</li>
+            <li>Deciding still needs the approver named in the link, signed in to Nivaro in that browser, and a press of the button on the page (a link scanner that opens the email decides nothing). A link decides once.</li>
+            <li>A second press, a second tab, or a colleague who decided first never shows an error: the page shows the decision that stands and nothing to press.</li>
+            <li>Who decided and when show only once you are signed in as someone who can read the record. Anyone else holding the link sees only “This approval has already been decided” or the step it waits on. The page never shows values from the record; “Open in Nivaro” opens it as you.</li>
+          </ul>
+          <h2 class="doc-h2" id="submission-status-page">Status page for public form submissions</h2>
+          <p class="doc-p">On a public form, turn on “Status page” (form editor, right column). After sending, the person gets a “Follow your request” link — and an email with it, when you pick which form field holds their email address. The page shows Received → In review → Decided and updates while it is open.</p>
+          <ul class="doc-ul">
+            <li>Pick where the status comes from: the record’s pipeline step, or one field. Then list the steps (or values) people may see, with the stage and the words they read (for example “Approved”). Anything you did not list reads “In review” — internal step names never show.</li>
+            <li>Nothing else from the record is on the page: no values, no names, no ids.</li>
+            <li>Each link belongs to one submission. It is signed, works for the days you set (90 by default) and stops working when you turn the status page off. Only a fingerprint of it is stored, and it never appears in the request log.</li>
+            <li>Page loads and live connections are limited per address.</li>
+          </ul>
+          <h2 class="doc-h2" id="threshold-banners">Threshold banners</h2>
+          <p class="doc-p">An alert definition can also show as a banner: open it under Alerts and turn on “Show as a banner”. People who open the record then see, for example, “Project US201979 just crossed 90%” with the value now, for up to 7 days while the value still holds.</p>
+          <ul class="doc-ul">
+            <li>The banner appears without a reload when the alert fires, and goes when the value drops back.</li>
+            <li>Each person can hide a banner for themselves (×). A later crossing shows again.</li>
+            <li>Everyone sees banners only for records and fields they can read.</li>
+            <li>Pages that list a collection’s newest crossings (a budget console, for example) show the first three and “N more”.</li>
+          </ul>
+          <h2 class="doc-h2" id="outside-changes">Changes made outside the app</h2>
+          <p class="doc-p">When a procedure, an import or a script announces what it wrote (<code class="doc-code">nivaro_announce_writes</code> or <code class="doc-code">nivaro_raw_writes</code>), open screens, the event stream, GraphQL subscriptions and live queries hear it like any save. Alert rules on the collection are checked again for the announced records.</p>
+          <ul class="doc-ul">
+            <li>Webhooks and event flows can fire on these updates too, but only when you turn it on: on the webhook, tick “Also fire on changes made outside the app” under Events; on an event flow (After timing), turn on “Also run on changes made outside the app”. Off by default.</li>
+            <li>Such a call carries the record as it is now, the changed field names, and no previous values or person (webhook origin <code class="doc-code">outside</code>; flow payload <code class="doc-code">outside: true</code>, <code class="doc-code">previousData</code> empty).</li>
+            <li>An announcement of “many records changed” never fires per-record webhooks or flows.</li>
+            <li>A flow or webhook never fires for its own write: a flow run’s writes are marked with the flow, and a procedure can mark its announcement with <code class="doc-code">@Source = 'flow:&lt;id&gt;'</code> or <code class="doc-code">'webhook:&lt;id&gt;'</code>.</li>
+            <li>Field watches do not fire for these changes: they need the old value to tell you what it was.</li>
+          </ul>
+          <!-- /SYNC:live-outside -->
         </div>
 
       </div><!-- /docs-content -->

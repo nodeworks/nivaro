@@ -10,6 +10,13 @@
   {%- else -%}Every step signed off{% if actor_name %} &mdash; last by <strong>{{ actor_name }}</strong>{% endif %}.{%- endif -%}
 </p>
 {% render 'partials/quote', text: comment, by: actor_name %}
+{%- if kind == 'requested' and decision and decision.approve_url -%}
+<p style="margin:0 0 10px;">
+  <a href="{{ decision.approve_url }}" style="display:inline-block;padding:11px 24px;background-color:#00ceff;color:#172940;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:700;text-decoration:none;border-radius:6px;">Approve</a>
+  <a href="{{ decision.reject_url }}" style="display:inline-block;margin-left:10px;padding:10px 22px;border:1px solid #b4232f;color:#b4232f;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:700;text-decoration:none;border-radius:6px;">Reject</a>
+</p>
+<p style="margin:0 0 22px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:1.5;color:#64748b;">Each button opens a page that shows where this approval stands now and asks you to confirm. It works only for you, signed in, once.</p>
+{%- endif -%}
 {% render 'partials/button', url: record_url, label: 'Open record', secondary_url: approvals_url, secondary_label: 'All approvals' %}
 {% render 'partials/record-card', card: record_card %}
 {% render 'partials/approval-chain', chain: steps %}

@@ -976,6 +976,8 @@ export {
   workerSocketPreference
 } from '@nivaro/shared'
 export { ScreenShareHost } from './components/ScreenShareHost'
+// Realtime round 9 (#20) — threshold banners.
+export { type AlertBannerData, AlertBanners, alertBannersKey } from '@nivaro/shared'
 export { BooleanField } from './components/fields/BooleanField'
 export { DateField } from './components/fields/DateField'
 export { FileField } from './components/fields/FileField'

@@ -49,6 +49,8 @@ export type RecordAspect =
   /** rt7 #12 — a scheduled change on the record was made, moved, cancelled or applied
    *  (routes/scheduled-changes.ts). */
   | '$scheduled'
+  /** rt9 #20 — a banner-enabled threshold alert fired on the record (hooks/alerts.ts). */
+  | '$alerts'
 
 export function announceRecordAspect(
   collection: string | null | undefined,

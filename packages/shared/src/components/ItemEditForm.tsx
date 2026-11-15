@@ -411,6 +411,7 @@ import {
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
 import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
 import { choiceLabelsFrom } from './layout-editor/overview/describe-conditions'
+import { AlertBanners } from './panels/AlertBanners'
 import { LegalHoldBanner } from './panels/LegalHoldBanner'
 import { RecordIntegrityBanner, useRecordIntegrity } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
@@ -16754,6 +16755,14 @@ function ItemEditFormView({
                                             itemId={String(pipelineItem)}
                                           />
                                         )}
+                                      {/* rt9 #20 — threshold banners ("just crossed 90%"), null
+                                      unless an admin turned a definition's banner on. */}
+                                      {!isNew && itemId && !designOn && (
+                                        <AlertBanners
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                        />
+                                      )}
                                       {/* #17 — null unless the record is under legal hold (no wrapper:
                                       an empty sibling still costs this stack a gap). */}
                                       {!isNew && itemId && !designOn && (

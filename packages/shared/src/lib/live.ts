@@ -106,7 +106,9 @@ export const LIVE_ASPECTS = {
    *  with inline editing re-read who holds which cell. */
   cells: '$cells',
   /** A scheduled change on the record was made, moved, cancelled or applied (rt7 #12). */
-  scheduled: '$scheduled'
+  scheduled: '$scheduled',
+  /** A banner-enabled threshold alert fired on the record (rt9 #20): banners re-read. */
+  alerts: '$alerts'
 } as const
 
 // The person's live-updates setting (Normal / Calm / Off): the transport tap and the hooks

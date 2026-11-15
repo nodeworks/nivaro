@@ -34,6 +34,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { api, type Collection } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
 import { cn, formatDate, titleCase } from '@/lib/utils'
+import { StatusPageCard, type StatusPageSettings } from './submission-form-status-card'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ interface FormConfig {
   description?: string
   submit_label?: string
   fields?: Record<string, FormFieldConfig>
+  status_page?: StatusPageSettings
 }
 
 interface SubmissionForm {
@@ -926,6 +928,14 @@ export function SubmissionFormEditPage() {
                   />
                 </button>
               </div>
+
+              {/* rt9 #22 — submitter status page */}
+              <StatusPageCard
+                collection={collection}
+                formFields={fieldEntries.map((f) => f.path)}
+                value={formConfig.status_page ?? {}}
+                onChange={(status_page) => setFormConfig((c) => ({ ...c, status_page }))}
+              />
 
               {/* Access & Limits */}
               <div className='rounded-lg border border-border bg-card p-5 space-y-4'>

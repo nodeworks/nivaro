@@ -291,6 +291,16 @@ form.addEventListener('submit',async function(e){
       doneEl.className='done';
       doneEl.innerHTML='<div class="done-icon">&#10003;</div><p class="done-title">Submitted!</p><p class="done-msg"></p>';
       doneEl.querySelector('.done-msg').textContent=SUCCESS_MSG;
+      // Realtime round 9 (#22): the form's status page, when its owner turned it on.
+      var su=json&&json.data&&json.data.status_url;
+      if(typeof su==='string'&&su.indexOf('/form-status/')>=0){
+        var p=document.createElement('p');p.className='done-status';
+        var a=document.createElement('a');a.href=su;a.textContent='Follow your request';a.rel='noreferrer';
+        p.appendChild(a);
+        if(json.data.status_emailed){var s=document.createElement('span');s.textContent=' · we also emailed you this link';p.appendChild(s);}
+        else{var s2=document.createElement('span');s2.textContent=' · keep this link to check on it later';p.appendChild(s2);}
+        doneEl.appendChild(p);
+      }
       document.getElementById('form-wrap').replaceChildren(doneEl);
     }
   }catch(err){
@@ -379,6 +389,8 @@ form.addEventListener('submit',async function(e){
     .done-icon{font-size:36px;margin-bottom:12px;color:var(--ok)}
     .done-title{font-size:18px;font-weight:600;margin-bottom:8px}
     .done-msg{color:var(--muted)}
+    .done-status{margin-top:18px;font-size:13px;color:var(--muted)}
+    .done-status a{color:var(--text);font-weight:600;text-decoration:underline;text-decoration-color:var(--accent);text-underline-offset:3px;text-decoration-thickness:2px}
   </style>
 </head>
 <body>

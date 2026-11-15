@@ -8,6 +8,12 @@ import {
   ACTIVITY_PATTERN_KIND,
   invalidateActivityPatternRules
 } from '../services/activity-pattern-gate.js'
+import {
+  alertBannersFor,
+  bannerDefinitionIds,
+  dismissAlertBanner,
+  setDefinitionBanner
+} from '../services/alert-banners.js'
 import { checkAudienceConfirm, logAudienceConfirm } from '../services/audience-gate.js'
 import { can } from '../services/permissions.js'
 
@@ -83,9 +89,11 @@ export async function alertsRoutes(app: FastifyInstance) {
       )
       .orderBy('d.id', 'desc')
 
+    const banners = await bannerDefinitionIds()
     return reply.send({
       data: rows.map((r) => ({
         ...formatDef(r as AlertDefinitionRow),
+        show_banner: banners.has(Number(r.id)),
         subscriber_count: Number(r.subscriber_count ?? 0),
         last_triggered: r.last_triggered ?? null
       }))
@@ -113,7 +121,8 @@ export async function alertsRoutes(app: FastifyInstance) {
           'u.email'
         )
 
-      return reply.send({ data: { ...formatDef(row), subscribers } })
+      const banners = await bannerDefinitionIds()
+      return reply.send({ data: { ...formatDef(row), show_banner: banners.has(id), subscribers } })
     }
   )
 
@@ -131,6 +140,7 @@ export async function alertsRoutes(app: FastifyInstance) {
       is_active?: boolean
       detection_type?: string
       sensitivity?: number | null
+      show_banner?: boolean
     }
 
     const detectionType = detectionTypeOf(body.detection_type)
@@ -186,7 +196,10 @@ export async function alertsRoutes(app: FastifyInstance) {
       item: String(id),
       req
     })
-    return reply.code(201).send({ data: formatDef(created!) })
+    if (body.show_banner === true) await setDefinitionBanner(Number(id), true)
+    return reply
+      .code(201)
+      .send({ data: { ...formatDef(created!), show_banner: body.show_banner === true } })
   })
 
   app.patch<{ Params: { id: string } }>(
@@ -212,6 +225,7 @@ export async function alertsRoutes(app: FastifyInstance) {
         is_active: boolean
         detection_type: string
         sensitivity: number | null
+        show_banner: boolean
       }>
 
       // #23 — an activity-pattern rule re-checks its config (and record filter) on change.
@@ -266,7 +280,9 @@ export async function alertsRoutes(app: FastifyInstance) {
         item: String(id),
         req
       })
-      return reply.send({ data: formatDef(updated!) })
+      if (typeof body.show_banner === 'boolean') await setDefinitionBanner(id, body.show_banner)
+      const banners = await bannerDefinitionIds()
+      return reply.send({ data: { ...formatDef(updated!), show_banner: banners.has(id) } })
     }
   )
 
@@ -282,6 +298,7 @@ export async function alertsRoutes(app: FastifyInstance) {
       await db('nivaro_alert_subscriptions').where({ alert_definition: id }).delete()
       await db('nivaro_alert_definitions').where({ id }).delete()
       invalidateActivityPatternRules()
+      if ((await bannerDefinitionIds()).has(id)) await setDefinitionBanner(id, false)
 
       await logActivity({
         action: 'delete',
@@ -291,6 +308,36 @@ export async function alertsRoutes(app: FastifyInstance) {
         req
       })
       return reply.code(204).send()
+    }
+  )
+
+  // ── Threshold banners (realtime round 9, #20) — any signed-in person, as themselves ──
+  // GET /banners?collection=&item= — crossings of banner-enabled definitions the viewer can
+  // see (one record, or the collection's newest when `item` is absent). Never more than a
+  // reload of those records as the viewer would show.
+  app.get<{ Querystring: { collection?: string; item?: string } }>(
+    '/banners',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const collection = String(req.query.collection ?? '')
+      if (!/^[A-Za-z0-9_]{1,64}$/.test(collection))
+        return reply.code(400).send({ error: 'collection is required' })
+      const item = req.query.item ? String(req.query.item).slice(0, 100) : null
+      return reply.send({ data: await alertBannersFor(req.user!, collection, item) })
+    }
+  )
+
+  // POST /banners/:logId/dismiss — hide one crossing for the caller only.
+  app.post<{ Params: { logId: string } }>(
+    '/banners/:logId/dismiss',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const logId = Number(req.params.logId)
+      if (!Number.isInteger(logId) || logId <= 0)
+        return reply.code(404).send({ error: 'Not found' })
+      const ok = await dismissAlertBanner(req.user!, logId)
+      if (!ok) return reply.code(404).send({ error: 'Not found' })
+      return reply.send({ data: { dismissed: logId } })
     }
   )
 
