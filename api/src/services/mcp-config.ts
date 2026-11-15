@@ -175,8 +175,14 @@ function cleanAppName(raw: string | undefined, fallback: string): string {
  */
 export function mcpAppLabel(req: FastifyRequest): { name: string; ref: string } | null {
   // rt8 #21: the name the connection goes by (its owner's or an admin's choice) wins.
-  const named = (fallback: string) =>
-    agentDisplayName(mcpConnOf(req), fallback, peekMcpSettings()).slice(0, 60)
+  // Without a chosen name the app's own (cleaned, APP_LABEL_MAX) name stands — agentDisplayName's
+  // badge cap (40) is for the record badge, not for this label.
+  const named = (fallback: string) => {
+    const conn = mcpConnOf(req)
+    const settings = peekMcpSettings()
+    const chosen = conn ? settings?.connection_names?.[String(conn).toLowerCase()] : undefined
+    return chosen ? agentDisplayName(conn, fallback, settings).slice(0, APP_LABEL_MAX) : fallback
+  }
   if (req.authMethod === 'oauth' && req.oauthClientId)
     return {
       name: named(cleanAppName(req.oauthClientName, 'Connected app')),

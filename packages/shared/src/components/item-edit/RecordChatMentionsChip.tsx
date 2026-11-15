@@ -70,7 +70,8 @@ export function RecordChatMentionsChip({
       const res = (await client.request(
         get<{ data: MentionsAnswer }>('/chat/record-discussion', { collection, item: itemId })
       )) as { data: MentionsAnswer }
-      return res.data ?? null
+      // A malformed answer (older server, stub) is "nothing to show", never a header crash.
+      return Array.isArray(res?.data?.rooms) ? res.data : null
     },
     enabled: !!itemId,
     staleTime: 30_000,

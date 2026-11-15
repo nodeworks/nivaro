@@ -36,7 +36,7 @@ export const recordHelpKey = (collection: string, itemId: string) => [
 
 /** The chip's words (pure). */
 export function helpChipText(help: RecordHelp | null | undefined): string | null {
-  const first = help?.tickets[0]
+  const first = Array.isArray(help?.tickets) ? help.tickets[0] : undefined
   if (!help || !first) return null
   const more = help.tickets.length - 1
   const who = first.requested_by
@@ -69,7 +69,9 @@ export function RecordHelpChip({ collection, itemId }: { collection: string; ite
         .request<{ data: RecordHelp }>(
           get(`/support/record/${encodeURIComponent(collection)}/${encodeURIComponent(id ?? '')}`)
         )
-        .then((r) => r.data ?? null)
+        // Only a well-formed answer draws the chip; anything else (an older server, a stub)
+        // is "no open request", never a crash in the record header.
+        .then((r) => (Array.isArray(r?.data?.tickets) ? r.data : null))
         .catch(() => null),
     enabled: !!id && !/^(nivaro_|directus_)/.test(collection),
     staleTime: 60_000,

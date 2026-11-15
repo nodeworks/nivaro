@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { useNavigation, useOptionalNivaroClient } from './../context'
 import { get, post } from '../lib/commands'
 import { useLiveAvailable, useLiveEvent } from '../lib/live'
@@ -22,26 +23,32 @@ export function AnnouncementBanner() {
   // The host's videos page, for a banner's "Watch the video" link.
   const helpVideosPath = useNavigation().helpVideosPath ?? '/help-videos'
   const live = useLiveAvailable()
-  const { data: items = [] } = useQuery<Array<{ id: number; message: string; severity: string }>>({
-    queryKey: ['announcements-active'],
-    queryFn: () =>
-      client!
-        .request<{ data: Array<{ id: number; message: string; severity: string }> }>(
-          get('/announcements/active')
-        )
-        .then((r) => r.data ?? [])
-        .catch(() => []),
-    enabled: !!client,
-    // The socket says when something changed; the poll still catches a window that simply
-    // elapsed (ends_at passing sends nothing) and a socket that is down.
-    refetchInterval: live ? 300_000 : 60_000
-  })
+  // Dismissed in this tab, waiting for the server: hidden at once (a React state update, so
+  // it never waits on the query cache's notify tick).
+  const [dismissed, setDismissed] = useState<ReadonlySet<number>>(() => new Set())
+  const { data: fetched = [] } = useQuery<Array<{ id: number; message: string; severity: string }>>(
+    {
+      queryKey: ['announcements-active'],
+      queryFn: () =>
+        client!
+          .request<{ data: Array<{ id: number; message: string; severity: string }> }>(
+            get('/announcements/active')
+          )
+          .then((r) => r.data ?? [])
+          .catch(() => []),
+      enabled: !!client,
+      // The socket says when something changed; the poll still catches a window that simply
+      // elapsed (ends_at passing sends nothing) and a socket that is down.
+      refetchInterval: live ? 300_000 : 60_000
+    }
+  )
   // The notice is payload-free: the viewer's audience rules apply when they re-read.
   useLiveEvent(
     'announcements:changed',
     () => void qc.invalidateQueries({ queryKey: ['announcements-active'] }),
     { debounceMs: 300, includeOwn: true, enabled: !!client }
   )
+  const items = dismissed.size > 0 ? fetched.filter((a) => !dismissed.has(a.id)) : fetched
   if (items.length === 0) return null
   // Must-acknowledge rows (#90) render a BLOCKING overlay — the app is usable
   // again only after every one of them is explicitly acknowledged.
@@ -51,6 +58,7 @@ export function AnnouncementBanner() {
   // devices (`announcements:changed`), which drop it through the same re-read. A failed ack
   // re-reads, so the banner comes back rather than silently staying "dismissed".
   const ack = (id: number) => {
+    setDismissed((cur) => new Set(cur).add(id))
     const drop = () =>
       qc.setQueryData<Array<{ id: number }> | undefined>(['announcements-active'], (cur) =>
         cur?.filter((a) => a.id !== id)
@@ -61,7 +69,14 @@ export function AnnouncementBanner() {
     void client
       ?.request(post(`/announcements/${id}/ack`, {}))
       .then(() => qc.invalidateQueries({ queryKey: ['announcements-active'] }))
-      .catch(() => qc.invalidateQueries({ queryKey: ['announcements-active'] }))
+      .catch(() => {
+        setDismissed((cur) => {
+          const next = new Set(cur)
+          next.delete(id)
+          return next
+        })
+        return qc.invalidateQueries({ queryKey: ['announcements-active'] })
+      })
   }
   return (
     <div data-announcements data-nvr-recording-hide className='shrink-0'>

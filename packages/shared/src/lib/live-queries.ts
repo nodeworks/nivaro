@@ -101,6 +101,8 @@ export const LIVE_RECONCILE_HEADS: readonly string[] = [
   'pipeline-instance-owners',
   'pipeline-owners-resolved',
   'approval-brief',
+  // rt8 #12: what changed since a send back (a RECORD_QUERY_HEADS entry).
+  'resubmission',
   'erp-submissions',
   'record-integrations',
   'record-integrity',
