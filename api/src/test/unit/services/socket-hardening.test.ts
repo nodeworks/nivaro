@@ -11,8 +11,15 @@ import {
   __resetFieldChangeRelay,
   fieldChangeDelivery,
   type RelayDeps,
-  relayableValue
+  relayableValue,
+  relayViewers
 } from '../../../services/field-change-relay.js'
+import {
+  boardPeerViewers,
+  boardViewerEntry,
+  resetBoard,
+  setPeerBoardsForTests
+} from '../../../services/realtime-board.js'
 import {
   createSocketLimiter,
   eventClass,
@@ -108,7 +115,11 @@ describe('field:change values go only to sockets whose person may read the field
     valueFields: async (c) => valueFields(c),
     now: () => 0
   })
-  const v = (socket: string, id: string, kind?: string) => ({ socket, id, kind })
+  const v = (socket: string, id: string, kind: string | undefined = 'session') => ({
+    socket,
+    id,
+    kind
+  })
 
   it('a field reader gets the value; a non-reader gets the name only', async () => {
     const out = await fieldChangeDelivery(
@@ -200,6 +211,73 @@ describe('field:change values go only to sockets whose person may read the field
       deps({ admin: null })
     )
     expect(out).toEqual({ valueTo: [], nameTo: ['k'] })
+  })
+
+  it('a socket whose sign-in kind is missing or unknown gets the name only', async () => {
+    const out = await fieldChangeDelivery(
+      [
+        v('known', 'admin'),
+        { socket: 'missing', id: 'admin' },
+        v('odd', 'admin', 'carrier-pigeon')
+      ],
+      'orders',
+      'cost',
+      deps({ admin: null })
+    )
+    expect(out.valueTo).toEqual(['known'])
+    expect(out.nameTo.sort()).toEqual(['missing', 'odd'])
+  })
+
+  it('the board publishes the bind kind, and a peer viewer is judged by it (fail closed)', async () => {
+    // Publishing side: the entry carries the kind when known, and has no kind otherwise.
+    expect(boardViewerEntry('s1', { id: 'u', name: 'U' }, 'apikey')).toEqual({
+      socket: 's1',
+      id: 'u',
+      name: 'U',
+      kind: 'apikey'
+    })
+    expect(boardViewerEntry('s2', { id: 'u', name: 'U' })).toEqual({
+      socket: 's2',
+      id: 'u',
+      name: 'U'
+    })
+    // Reading side: three viewers on ANOTHER process — a session, an API key, and one from an
+    // older process that publishes no kind.
+    const room = 'record:orders:7'
+    setPeerBoardsForTests([
+      {
+        node: 'other-replica',
+        at: Date.now(),
+        sockets: 3,
+        users: ['admin'],
+        viewers: {
+          [room]: [
+            boardViewerEntry('peer-session', { id: 'admin', name: 'A' }, 'session'),
+            boardViewerEntry('peer-key', { id: 'admin', name: 'A' }, 'apikey'),
+            { socket: 'peer-old', id: 'admin', name: 'A' }
+          ]
+        },
+        pages: []
+      }
+    ])
+    try {
+      const viewers = relayViewers(
+        [['local-tab', { id: 'admin' }]],
+        () => 'session',
+        boardPeerViewers(room)
+      )
+      expect(viewers.map((x) => [x.socket, x.kind])).toEqual([
+        ['local-tab', 'session'],
+        ['peer-session', 'session'],
+        ['peer-key', 'apikey'],
+        ['peer-old', undefined]
+      ])
+      const out = await fieldChangeDelivery(viewers, 'orders', 'cost', deps({ admin: null }))
+      expect(out.valueTo.sort()).toEqual(['local-tab', 'peer-session'])
+      expect(out.nameTo.sort()).toEqual(['peer-key', 'peer-old'])
+    } finally {
+      resetBoard()
+    }
   })
 
   it('a failing permission read keeps the value back', async () => {
