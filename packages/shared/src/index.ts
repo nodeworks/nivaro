@@ -1100,6 +1100,17 @@ export {
   useRowPresence,
   useTyping
 } from './lib/presence-hooks'
+// Realtime round 7 — co-editing on a record page (section presence, pointing a co-viewer).
+export {
+  bindRecordCoEdit,
+  type CoEditSocket,
+  type CoViewer,
+  type FieldPointer,
+  pointCoViewer,
+  useCoViewers,
+  useFieldEditors,
+  useFieldPointer
+} from './lib/co-edit'
 export {
   PRESENCE_ONLINE_KEY,
   PRESENCE_POLL_BACKSTOP_MS,

@@ -57,6 +57,7 @@ import {
 } from '../context'
 import { useSlowReason } from '../hooks/useSlowReason'
 import { formatApiPayload } from '../lib/api-payload'
+import { openSectionOf } from '../lib/co-edit'
 import { del, get, getActiveLayout, patch, post, put } from '../lib/commands'
 import type { FieldSource } from '../lib/config-sentences'
 import {
@@ -393,6 +394,7 @@ let formulaCtxHydrated = false
 import { EntryStrip } from './item-edit/entry/EntryStrip'
 import { useEntryKeyboard } from './item-edit/entry/useEntryKeyboard'
 import { useEntryMode } from './item-edit/entry/useEntryMode'
+import { FieldPointerHost } from './item-edit/FieldPointer'
 import { type FindableField, FindInRecordButton } from './item-edit/FindInRecord'
 import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { StepsBar } from './item-edit/StepsBar'
@@ -7469,12 +7471,16 @@ function ItemEditFormView({
       setActiveTab('__general__')
       switched = true
     }
-    if (!switched) return false
+    // A folded section holding the field opens itself (co-edit OPEN_SECTION_EVENT): asked now
+    // and again while a tab switch paints, since the section mounts only after it.
+    openSectionOf(key)
+    if (!switched && group.type !== 'section' && group.type !== 'metadata') return false
     const tryFlash = (attempt: number) => {
       if (document.querySelector(`[data-field="${key}"]`)) {
         flashField(key)
         return
       }
+      openSectionOf(key)
       if (attempt < 12) setTimeout(() => tryFlash(attempt + 1), 150)
     }
     setTimeout(() => tryFlash(0), 150)
@@ -16466,6 +16472,14 @@ function ItemEditFormView({
                                           dirty={isDirty}
                                           loadDenied={itemLoadDenied}
                                           onGoneChange={setRecordGone}
+                                        />
+                                      )}
+                                      {!isNew && !designOn && itemId != null && (
+                                        <FieldPointerHost
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                          fieldLabel={fieldCommentLabel}
+                                          onGo={(f) => jumpToFieldRef.current(f)}
                                         />
                                       )}
                                       {accessRegained && !isNew && itemId != null && (

@@ -34,6 +34,12 @@ import {
 } from '../services/field-change-relay.js'
 import { fieldFocusTracker } from '../services/field-focus.js'
 import {
+  cleanPointTarget,
+  createPointLimiter,
+  type PointRefusal,
+  pointTargetSockets
+} from '../services/field-point.js'
+import {
   cleanSignalField,
   fieldSignalSockets,
   mayReadSignalField
@@ -2316,6 +2322,66 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           if (delivery.valueTo.length)
             io.to(delivery.valueTo).emit('field:changed', { ...base, value })
           if (delivery.nameTo.length) io.to(delivery.nameTo).emit('field:changed', base)
+        }
+      )
+    )
+
+    // Realtime round 7 #4 — "Point Beth to this field": a transient nudge to one person who has
+    // this record open right now (services/field-point.ts). Nothing stored, no notification;
+    // both people must be able to read the field. The sender hears `field:point-result`.
+    const pointLimiter = createPointLimiter()
+    socket.on(
+      'field:point',
+      inSocketTenant(
+        socket,
+        async (payload: {
+          field?: unknown
+          collection?: string
+          item?: unknown
+          to?: unknown
+          ref?: unknown
+        }) => {
+          const user = authenticatedUser
+          const collection = payload?.collection
+          if (!user || typeof collection !== 'string' || payload?.item == null) return
+          const room = recordRoom(collection, payload.item)
+          if (!joinedRecordRooms.has(room)) return
+          const field = cleanSignalField(payload.field)
+          const to = cleanPointTarget(payload.to)
+          if (!field || !to) return
+          // The asking tab's own id for the request, echoed so only that tab says how it went
+          // (a shared socket hands record events to every tab holding the record).
+          const ref =
+            typeof payload.ref === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(payload.ref)
+              ? payload.ref
+              : null
+          const record = { collection, item: String(payload.item), field, to, ref }
+          const answer = (ok: boolean, reason?: PointRefusal): void => {
+            socket.emit('field:point-result', { ...record, ok, ...(reason ? { reason } : {}) })
+          }
+          if (String(user.id).toUpperCase() === to.toUpperCase()) return answer(false, 'self')
+          if (!pointLimiter.allow(to)) return answer(false, 'rate')
+          const viewers = [
+            ...[...(recordViewers.get(room) ?? new Map()).entries()].map(([sid, v]) => ({
+              socket: sid,
+              id: String(v.id)
+            })),
+            ...boardPeerViewers(room).map((v) => ({ socket: v.socket, id: String(v.id) }))
+          ]
+          const targets = pointTargetSockets(viewers, to, socket.id)
+          if (targets.length === 0) return answer(false, 'gone')
+          const readable =
+            (await mayReadSignalField(String(user.id), collection, field)) &&
+            (await mayReadSignalField(to, collection, field))
+          if (!readable) return answer(false, 'field')
+          io.to(targets).emit('field:pointed', {
+            collection,
+            item: String(payload.item),
+            field,
+            user: { id: user.id, name: displayName(user).slice(0, 80) },
+            at: Date.now()
+          })
+          answer(true)
         }
       )
     )
