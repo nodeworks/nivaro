@@ -604,6 +604,12 @@ export function NotificationCenterView({
               <button
                 type='button'
                 onClick={() => runNotificationTarget(target, onNavigate)}
+                {...(n.collection && !n.item && target.type !== 'chat' && target.type !== 'external'
+                  ? {
+                      'aria-label': `See what changed in ${titleWords(n.collection)}`,
+                      'data-tip': `See what changed in ${titleWords(n.collection)}`
+                    }
+                  : {})}
                 className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
               >
                 {target.type === 'chat'
@@ -615,7 +621,7 @@ export function NotificationCenterView({
                       : n.collection === '__chat__'
                         ? 'Chat'
                         : n.collection && !n.item
-                          ? `See what changed in ${titleWords(n.collection)}`
+                          ? 'See changes'
                           : n.collection
                             ? `${n.collection} #${n.item}`
                             : 'Open'}
