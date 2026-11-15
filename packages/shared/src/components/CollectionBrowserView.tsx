@@ -9739,10 +9739,10 @@ export function CollectionBrowserView({
                 <button
                   type='button'
                   onClick={() => toggleViewSub.mutate(v.id)}
-                  title={
+                  data-tip={
                     subForView(v.id)
-                      ? 'Subscribed — a daily digest reports records that enter this view. Click to unsubscribe.'
-                      : 'Subscribe — get a daily digest of records that enter this view'
+                      ? 'Daily digest on: once a day you hear about records that entered this view. Click to stop it.'
+                      : 'Daily digest off: click to hear once a day about records that enter this view.'
                   }
                   aria-label={`Toggle digest subscription for ${v.name}`}
                   className={
@@ -9989,7 +9989,7 @@ export function CollectionBrowserView({
             data-filter-sentence
             data-tip={filterSentenceText}
             aria-live='polite'
-            className='mb-1.5 shrink-0 truncate px-0.5 text-[11.5px] text-slate-500 dark:text-slate-400'
+            className='mb-1.5 line-clamp-2 shrink-0 break-words px-0.5 text-[11.5px] text-slate-500 dark:text-slate-400'
           >
             {filterSentenceText}
           </p>
