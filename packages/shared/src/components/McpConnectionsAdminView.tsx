@@ -7,6 +7,7 @@ import { userErrorMessage } from '../lib/safe-error'
 import { cn, formatDate, formatNumber, formatRelative } from '../lib/utils'
 import { AgentBadge } from './AgentBadge'
 import { McpKitsPanel, McpScopeSheet, ScopeBadge } from './McpConnectionScope'
+import { AgentNameField } from './profile/AgentNameField'
 import {
   CallFigures,
   CallsSparkline,
@@ -558,10 +559,15 @@ export function McpConnectionsAdminView({
                       <tr className='border-b border-slate-100 align-middle last:border-0 hover:bg-muted/50 dark:border-border/60'>
                         <td className='px-4 py-2.5'>
                           <div className='flex items-center gap-2'>
-                            <span className='font-medium text-slate-800 dark:text-slate-100'>
-                              {c.name}
-                            </span>
-                            <KindPill kind={c.kind} />
+                            <AgentNameField
+                              conn={c.conn}
+                              displayName={c.display_name ?? c.name}
+                              customName={c.custom_name}
+                              appName={c.name}
+                              forName={c.user_name ?? 'this person'}
+                              scope='admin'
+                              trailing={<KindPill kind={c.kind} />}
+                            />
                           </div>
                         </td>
                         <td className='py-2.5 pr-3 text-slate-700 dark:text-slate-200'>

@@ -94,6 +94,7 @@ import { configConformanceRecordRoutes, configConformanceRoutes } from './config
 import { configDiffRoutes } from './config-diff.js'
 import { configDriftRoutes } from './config-drift.js'
 import { configHealthRoutes } from './config-health.js'
+import { configReachRoutes } from './config-reach.js'
 import { configReviewRoutes } from './config-review.js'
 import { configSearchRoutes } from './config-search.js'
 import { configPlainSearchRoutes } from './config-search-plain.js'
@@ -587,6 +588,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(exportRunsRoutes, { prefix: '/export-runs' })
   await app.register(recordMergeRoutes, { prefix: '/record-merge' })
   await app.register(realtimeRoutes, { prefix: '/realtime' })
+  // rt8 #25 — "This reaches 34 open forms, 12 people right now" (administrators).
+  await app.register(configReachRoutes, { prefix: '/realtime' })
   // #2937 — sign-in only: is this tab on an old build (reload old tabs when idle).
   await app.register(realtimeBuildRoutes, { prefix: '/realtime' })
   // Realtime ideas 14/15 — missed-update beacons (signed in) + their report (admin).

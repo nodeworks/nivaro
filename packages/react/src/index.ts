@@ -117,6 +117,12 @@ export {
   type FeedSourceInput,
   RecordActivityStream,
   AddendumPanel,
+  // rt8 #21 / #25 — agents on a record, and who a config save reaches.
+  AgentPresenceChip,
+  agentSentence,
+  ConfigReachNote,
+  type RecordAgent,
+  useRecordAgents,
   AiAnalyticsView,
   AiFeedbackButtons,
   AiMarkdown,

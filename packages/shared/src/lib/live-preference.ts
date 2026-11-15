@@ -66,7 +66,9 @@ export const LIVE_PRESENCE_EVENTS: ReadonlySet<string> = new Set([
   'field:editing',
   'field:changed',
   'presence:rows',
-  'record:uploading'
+  'record:uploading',
+  // rt8 #21 — "Claude (for Rob) is updating this record".
+  'record:agents'
 ])
 
 /**

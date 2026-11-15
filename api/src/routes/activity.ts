@@ -28,7 +28,7 @@ import {
 import { markConfigRead } from '../services/config-live.js'
 import { whereInList } from '../services/db-batch.js'
 import { agentBadgesForActivity } from '../services/mcp-attribution.js'
-import { agentBadgeLabel, readMcpSettings } from '../services/mcp-calls.js'
+import { agentBadgeLabel, agentDisplayName, readMcpSettings } from '../services/mcp-calls.js'
 import { myRecordSet, whereInRecordSet } from '../services/overview/my-records.js'
 import { getAllowedFields } from '../services/permissions.js'
 import { withReadGate } from '../services/read-gate.js'
@@ -109,9 +109,18 @@ async function enrichRows(rows: Array<Record<string, unknown>>, hasVia: boolean)
     approvalsForRows(unique as never).catch(() => new Map()),
     hasVia ? readMcpSettings().catch(() => null) : Promise.resolve(null)
   ])
-  const badge = settings ? (via: string | null) => agentBadgeLabel(via, settings) : undefined
+  const badge = settings
+    ? (via: string | null, conn?: string | null) => agentBadgeLabel(via, settings, conn)
+    : undefined
+  const agentName = settings
+    ? (conn: string, fallback: string | null) => agentDisplayName(conn, fallback, settings)
+    : undefined
   return unique.map((r) =>
-    enrichActivityRow(r as never, { badge, approval: approvals.get(String(r.id)) ?? null })
+    enrichActivityRow(r as never, {
+      badge,
+      agentName,
+      approval: approvals.get(String(r.id)) ?? null
+    })
   )
 }
 

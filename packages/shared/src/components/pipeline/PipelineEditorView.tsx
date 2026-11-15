@@ -64,6 +64,7 @@ import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ExplainCard } from '../ai/ExplainButton'
 import { ConfigChangeStrip } from '../ConfigChangeStrip'
 import { ConfigHistoryButton } from '../ConfigHistory'
+import { ConfigReachNote } from '../ConfigReachNote'
 import { ConfigReadBack } from '../ConfigReadBack'
 import { PipelineCumulativeFlowCard } from '../charts/CumulativeFlowChart'
 import { useCollectionBody } from '../layout-editor/collection-meta'
@@ -414,8 +415,11 @@ function StateForm({
   initial,
   onSave,
   onCancel,
-  saving
+  saving,
+  reach
 }: {
+  /** rt8 #25 — the bound collections: "This reaches N open forms" beside Save. */
+  reach?: string[]
   // external_label rides a real state row (PipelineState) too, whose column
   // is nullable — the form's own draft stays a plain string (never null, so
   // the controlled input always has a value).
@@ -584,7 +588,10 @@ function StateForm({
         </div>
       </div>
 
-      <div className='flex gap-2 justify-end'>
+      <div className='flex flex-wrap items-center justify-end gap-2'>
+        {reach && reach.length > 0 && (
+          <ConfigReachNote className='mr-auto min-w-0' collections={reach} />
+        )}
         <Button type='button' variant='outline' size='sm' onClick={onCancel}>
           Cancel
         </Button>
@@ -1913,8 +1920,11 @@ function TransitionForm({
   fixedLabel,
   onSave,
   onCancel,
-  saving
+  saving,
+  reach
 }: {
+  /** rt8 #25 — the bound collections: "This reaches N open forms" beside Save. */
+  reach?: string[]
   initial: Partial<TransitionFormData>
   states: PipelineState[]
   collection?: string
@@ -2201,7 +2211,10 @@ function TransitionForm({
 
       <ConfigReadBack kind='transition' sentences={readBack} />
 
-      <div className='flex gap-2 justify-end'>
+      <div className='flex flex-wrap items-center justify-end gap-2'>
+        {reach && reach.length > 0 && (
+          <ConfigReachNote className='mr-auto min-w-0' collections={reach} />
+        )}
         <Button type='button' variant='outline' size='sm' onClick={onCancel}>
           Cancel
         </Button>
@@ -3492,6 +3505,8 @@ export function PipelineEditorView({
   const states: PipelineState[] = templateData.states ?? []
   const transitions: PipelineTransition[] = templateData.transitions ?? []
   const bindings: PipelineBinding[] = templateData.bindings ?? []
+  // rt8 #25 — the state and transition forms say who a save reaches.
+  const boundReach = [...new Set(bindings.map((b) => b.collection))]
   const collections: Collection[] = collectionsData ?? []
 
   const orderedStates =
@@ -3745,6 +3760,7 @@ export function PipelineEditorView({
                         <div key={s.id}>
                           {editingState?.id === s.id ? (
                             <StateForm
+                              reach={boundReach}
                               initial={s}
                               saving={updateState.isPending}
                               onSave={(data) => updateState.mutate({ stateId: s.id, body: data })}
@@ -3787,6 +3803,7 @@ export function PipelineEditorView({
 
                       {addingState && (
                         <StateForm
+                          reach={boundReach}
                           initial={{}}
                           saving={addState.isPending}
                           onSave={(data) => addState.mutate({ ...data, sort: states.length })}
@@ -4055,6 +4072,7 @@ export function PipelineEditorView({
                                           className='border-b border-slate-100 last:border-0 p-3'
                                         >
                                           <TransitionForm
+                                            reach={boundReach}
                                             initial={{
                                               from_state: route.from_state,
                                               to_states: route.to_states,
@@ -4203,6 +4221,7 @@ export function PipelineEditorView({
                               {addingRouteTo === grp.label && (
                                 <div className='border-t border-slate-100 p-3'>
                                   <TransitionForm
+                                    reach={boundReach}
                                     initial={{ color: grp.color }}
                                     fixedLabel={grp.label}
                                     states={states}
@@ -4222,6 +4241,7 @@ export function PipelineEditorView({
 
                   {addingTransition && (
                     <TransitionForm
+                      reach={boundReach}
                       initial={{}}
                       states={states}
                       collection={bindings[0]?.collection}

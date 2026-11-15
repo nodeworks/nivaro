@@ -3,6 +3,7 @@ import {
   type AudiencePreview,
   audienceConfirmFromError,
   ConfigChangeStrip,
+  ConfigReachNote,
   ConfigTheirsPanel,
   configBaseRevHeaders,
   diffConfigFields,
@@ -1300,6 +1301,10 @@ export function RuleEditPage() {
             </Button>
           </div>
         </div>
+        {ruleDirty && form.collection && (
+          // rt8 #25 — who this save lands on right now (administrators).
+          <ConfigReachNote className='mt-2' collections={[form.collection]} />
+        )}
         {audienceAsk && (
           <AudienceConfirmPanel
             className='mt-3'

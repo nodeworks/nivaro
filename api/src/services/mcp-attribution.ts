@@ -2,7 +2,14 @@ import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { selectInChunks } from './db-batch.js'
-import { agentBadgeLabel, cleanBadge, mcpConnOf, readMcpSettings } from './mcp-calls.js'
+import {
+  agentBadgeLabel,
+  agentDisplayName,
+  cleanBadge,
+  mcpConnOf,
+  peekMcpSettings,
+  readMcpSettings
+} from './mcp-calls.js'
 
 /**
  * Which writes an agent made, and the badge records show for them (#3213, #3219).
@@ -37,7 +44,7 @@ type StampSource = Pick<
  * (services/mcp-config.ts, kept out of this module so the activity log never loads config):
  * the OAuth client's registered name, the API key's name, else "Assistant".
  */
-function appNameOf(req: StampSource): string {
+export function appNameOf(req: StampSource): string {
   if (req.authMethod === 'oauth' && req.oauthClientId)
     return cleanBadge(String(req.oauthClientName ?? '')) || 'Connected app'
   const keyId = req.apiKeyId ?? req.apiKeySimulatedId
@@ -46,12 +53,17 @@ function appNameOf(req: StampSource): string {
   return 'Assistant'
 }
 
-/** The stamp of a write made through the hosted MCP endpoint, else null (pure). */
+/**
+ * The stamp of a write made through the hosted MCP endpoint, else null. `via_app` is the name
+ * the connection goes by (rt8 #21: its owner's or an admin's choice, from the settings this
+ * process already holds — the endpoint read them for the call's rate limit), else the app's.
+ */
 export function mcpWriteStampOf(req: StampSource | null | undefined): McpWriteStamp | null {
   if (!req?.mcpInner) return null
   const conn = mcpConnOf(req)
   if (!conn) return null
-  return { mcp_conn: conn, via_app: appNameOf(req).slice(0, 80) }
+  const name = agentDisplayName(conn, appNameOf(req), peekMcpSettings())
+  return { mcp_conn: conn, via_app: name.slice(0, 80) }
 }
 
 /** True when nivaro_activity has the attribution columns (migration 512). */
@@ -75,12 +87,15 @@ export async function agentBadgesForActivity(ids: number[]): Promise<Map<number,
   if (!uniq.length || !(await hasAttributionColumns())) return out
   const rows = (await selectInChunks(uniq, 1000, (chunk) =>
     Promise.resolve(
-      db('nivaro_activity').whereIn('id', chunk).whereNotNull('mcp_conn').select('id', 'via_app')
+      db('nivaro_activity')
+        .whereIn('id', chunk)
+        .whereNotNull('mcp_conn')
+        .select('id', 'via_app', 'mcp_conn')
     )
-  ).catch(() => [])) as Array<{ id: number; via_app: string | null }>
+  ).catch(() => [])) as Array<{ id: number; via_app: string | null; mcp_conn: string | null }>
   if (!rows.length) return out
   const settings = await readMcpSettings()
-  for (const r of rows) out.set(Number(r.id), agentBadgeLabel(r.via_app, settings))
+  for (const r of rows) out.set(Number(r.id), agentBadgeLabel(r.via_app, settings, r.mcp_conn))
   return out
 }
 
@@ -95,11 +110,12 @@ export async function agentBadgesForComments(ids: string[]): Promise<Map<string,
         .where({ collection: 'nivaro_comments', action: 'create' })
         .whereIn('item', chunk)
         .whereNotNull('mcp_conn')
-        .select('item', 'via_app')
+        .select('item', 'via_app', 'mcp_conn')
     )
-  ).catch(() => [])) as Array<{ item: string; via_app: string | null }>
+  ).catch(() => [])) as Array<{ item: string; via_app: string | null; mcp_conn: string | null }>
   if (!rows.length) return out
   const settings = await readMcpSettings()
-  for (const r of rows) out.set(String(r.item).toLowerCase(), agentBadgeLabel(r.via_app, settings))
+  for (const r of rows)
+    out.set(String(r.item).toLowerCase(), agentBadgeLabel(r.via_app, settings, r.mcp_conn))
   return out
 }

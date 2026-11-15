@@ -6,6 +6,8 @@ import { emitNotification } from '../plugins/socketio.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { sendMail } from './mail.js'
+import { mcpWriteStampOf } from './mcp-attribution.js'
+import { agentBadgeLabel, readMcpSettings } from './mcp-calls.js'
 import { foldIntoRecent } from './notification-fold.js'
 import {
   effectiveRules,
@@ -27,6 +29,7 @@ import {
   normalizeTarget,
   resolveTargetUrl
 } from './notification-target.js'
+import { currentTraceRequestObject } from './request-trace.js'
 import { currentTenantKey } from './tenant-rooms.js'
 import { announceNotificationsRead } from './user-sync.js'
 import { sendDevicePush } from './web-push.js'
@@ -76,6 +79,17 @@ export function sendPush(
   app.io.to(`user:${userId}`).emit('push', payload)
 }
 
+/**
+ * rt8 #21: when the current request is an agent's tool call (hosted MCP), the badge its
+ * changes carry — "via Claude", the name the connection goes by — else null.
+ */
+async function viaAgentOfRequest(): Promise<string | null> {
+  const req = currentTraceRequestObject() as Parameters<typeof mcpWriteStampOf>[0] | null
+  const stamp = mcpWriteStampOf(req)
+  if (!stamp) return null
+  return agentBadgeLabel(stamp.via_app, await readMcpSettings(), stamp.mcp_conn)
+}
+
 /** Serialise a detail record for the column — bounded, never throws. */
 export function detailColumn(detail: NotificationDetail | null | undefined): string | null {
   if (!detail) return null
@@ -97,6 +111,8 @@ export function detailColumn(detail: NotificationDetail | null | undefined): str
       label: detail.why.label != null ? clip(detail.why.label, 160) : null,
       id: detail.why.id ?? null
     }
+  if (typeof detail.via_agent === 'string' && detail.via_agent)
+    out.via_agent = clip(detail.via_agent, 60)
   if (detail.ack_required === true) out.ack_required = true
   if (typeof detail.ack_at === 'string') out.ack_at = clip(detail.ack_at, 40)
   if (typeof detail.ack_by === 'string') out.ack_by = clip(detail.ack_by, 40)
@@ -1113,11 +1129,15 @@ export async function notifyUser(
     resolve_key: _rk,
     resolved: _rs,
     fold: _fd,
+    via_agent: _va,
     ...ownDetail
   } = safeDetail as Record<string, unknown>
+  // rt8 #21 — a change an agent made for the sender says so ("via Claude"), from the request.
+  const viaAgent = await viaAgentOfRequest().catch(() => null)
   const detail = detailColumn({
     ...(ownDetail as NotificationDetail),
     why,
+    ...(viaAgent ? { via_agent: viaAgent } : {}),
     ...(opts.ack_required ? { ack_required: true } : {}),
     ...(resolveKey ? { resolve_key: resolveKey } : {})
   })

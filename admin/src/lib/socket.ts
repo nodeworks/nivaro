@@ -594,7 +594,9 @@ export function getSocket(): Socket {
     'record:signal',
     'record:chat',
     // rt7 #9 — a big save is recalculating this record's totals (field names only).
-    'record:recalc'
+    'record:recalc',
+    // rt8 #21 — an AI agent reading or writing the record (names only).
+    'record:agents'
   ])
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   if (!usesWorkerSocket())

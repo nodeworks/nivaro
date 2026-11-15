@@ -24,6 +24,7 @@ import {
 import { McpScopeSheet, type McpScopeSummary, ScopeBadge } from '../McpConnectionScope'
 import { SimpleSelectXs } from '../ui/SimpleSelect'
 import { Skeleton } from '../ui/skeleton'
+import { AgentNameField } from './AgentNameField'
 import { ConnectionRollback } from './ConnectionRollback'
 import { ConfirmButton, EmptyLine, Pill, SectionCard } from './primitives'
 
@@ -50,6 +51,9 @@ export interface McpConnection {
   conn: string
   kind: McpConnKind
   name: string
+  /** rt8 #21 — the name the agent goes by (custom_name when set, else name). */
+  display_name?: string
+  custom_name?: string | null
   user_id: string
   user_name?: string
   created_at: string | null
@@ -226,10 +230,15 @@ function ConnectionRow({
     <li className='flex flex-wrap items-center gap-x-6 gap-y-3 py-3 first:pt-0 last:pb-0'>
       <div className='min-w-[220px] flex-1'>
         <div className='flex flex-wrap items-center gap-2'>
-          <span className='truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
-            {c.name}
-          </span>
-          <KindPill kind={c.kind} />
+          <AgentNameField
+            conn={c.conn}
+            displayName={c.display_name ?? c.name}
+            customName={c.custom_name}
+            appName={c.name}
+            forName='you'
+            scope='mine'
+            trailing={<KindPill kind={c.kind} />}
+          />
         </div>
         <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400'>
           {c.created_at ? `Connected ${formatDate(c.created_at)}` : 'Seen in the request log'}
@@ -590,7 +599,7 @@ export function AgentsPanel({ className }: { className?: string }) {
       { value: '', label: 'Every app' },
       ...list
         .filter((c) => (c.stats?.calls ?? 0) > 0)
-        .map((c) => ({ value: c.conn, label: c.name }))
+        .map((c) => ({ value: c.conn, label: c.display_name ?? c.name }))
     ],
     [list]
   )
