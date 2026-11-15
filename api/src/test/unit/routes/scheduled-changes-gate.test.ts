@@ -498,6 +498,9 @@ describe('a scope-restricted administrator', () => {
       payload: { scheduled_at: '2026-12-01T09:00:00.000Z' }
     })
     expect(res.statusCode).toBe(200)
+  })
+})
+
 // Undo (scheduled changes apply themselves, 2026-11-15): the values a change replaced go back,
 // as the person pressing Undo, only within a day and only while nobody moved the field again.
 describe('POST /scheduled-changes/:id/undo', () => {
