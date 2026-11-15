@@ -6,6 +6,8 @@ import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { ensureAutoWatch } from '../services/auto-watch.js'
 import { findRecordInstance } from '../services/branch-instances.js'
+import { commentTextForPreview } from '../services/comment-images.js'
+import { commentSeenBy } from '../services/comment-seen.js'
 import {
   cleanCommentField,
   fieldCommentGate,
@@ -14,8 +16,8 @@ import {
   hasFieldCommentColumns,
   plainFieldLabel
 } from '../services/field-comments.js'
-import { commentTextForPreview } from '../services/comment-images.js'
 import { agentBadgesForComments } from '../services/mcp-attribution.js'
+import { mentionDeliveryFor } from '../services/mention-delivery.js'
 import { mentionReceipts, receiptKey } from '../services/mention-receipts.js'
 import { sendTeamsNotification } from '../services/microsoft.js'
 import { notifyUser } from '../services/notification-channels.js'
@@ -356,6 +358,23 @@ export async function commentsRoutes(app: FastifyInstance) {
           )
         : new Map<string, string>()
 
+    // "Seen by Beth, Mark" (realtime round 7): who opened the record since each comment was
+    // written — only people who may open this record (and read a field comment's field), judged
+    // as each of them; View-as opens never count (services/comment-seen.ts).
+    const seenBy = await commentSeenBy(
+      collection,
+      String(item),
+      comments.filter((c) => !c.deleted_at),
+      req.user!.id,
+      mentions.map((m) => ({
+        comment: m.comment,
+        user: m.user,
+        name: [m.first_name, m.last_name].filter(Boolean).join(' ').trim() || m.email || 'Someone',
+        seen_at: receipts.get(receiptKey(m.comment, m.user)) ?? null
+      }))
+    ).catch(() => new Map())
+    const me = String(req.user!.id).toUpperCase()
+
     // #3213: comments an agent posted through MCP carry its badge ("via Claude").
     const agentBadges = await agentBadgesForComments(ids).catch(() => new Map<string, string>())
     // View-as (Rob 2026-11-14): a comment written in a View-as tab is the person's; only an
@@ -395,6 +414,13 @@ export async function commentsRoutes(app: FastifyInstance) {
         seen_at: receipts.get(receiptKey(c.id, m.user)) ?? null
       })),
       reactions: reactionsByComment.get(c.id) ?? [],
+      seen_by: c.deleted_at ? [] : (seenBy.get(c.id) ?? []),
+      // Mention delivery (realtime round 7): the author and administrators may open
+      // GET /comments/:id/delivery for a comment that mentions someone.
+      delivery_visible:
+        !c.deleted_at &&
+        (mentionsByComment.get(c.id) ?? []).length > 0 &&
+        (!!req.isAdmin || String(c.user ?? '').toUpperCase() === me),
       // #3232: a comment left on one field ("on Amount") and whether it was resolved.
       field: c.field ?? null,
       resolved_at: c.resolved_at ?? null
@@ -812,6 +838,65 @@ export async function commentsRoutes(app: FastifyInstance) {
       return { data: { id: comment.id, resolved } }
     }
   )
+
+  /**
+   * Mention delivery status (realtime round 7, item 16): per person the comment mentions — seen
+   * in app, in their inbox, phone alert sent, emailed, bounced, muted. Only the comment's author
+   * and administrators; the record read gate first (a comment on a record the caller cannot
+   * open is a 404). A field comment's mention of someone who may not read the field reads
+   * "not told" — nothing about the field reaches them.
+   */
+  app.get<{ Params: { id: string } }>('/:id/delivery', async (req, reply) => {
+    const comment = (await db('nivaro_comments')
+      .where('id', req.params.id)
+      .first('id', 'collection', 'item', 'user', 'created_at', 'deleted_at')) as
+      | Pick<CommentRow, 'id' | 'collection' | 'item' | 'user' | 'created_at' | 'deleted_at'>
+      | undefined
+    if (!comment || comment.deleted_at) return reply.code(404).send({ error: 'Not found' })
+    if (!(await recordVisible(req, comment.collection, comment.item))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    const isAuthor = String(comment.user).toUpperCase() === String(req.user!.id).toUpperCase()
+    if (!isAuthor && !req.isAdmin) {
+      return reply.code(403).send({
+        error: 'Only the person who wrote this comment can see who it reached',
+        code: 'NOT_COMMENT_AUTHOR'
+      })
+    }
+    const people = (await db('nivaro_comment_mentions as m')
+      .leftJoin('nivaro_users as u', 'm.user', 'u.id')
+      .where('m.comment', comment.id)
+      .select('m.user', 'u.first_name', 'u.last_name', 'u.email')) as Array<{
+      user: string
+      first_name: string | null
+      last_name: string | null
+      email: string | null
+    }>
+    const seen = new Set<string>()
+    const list = people
+      .filter((p) => {
+        const k = String(p.user).toUpperCase()
+        if (seen.has(k)) return false
+        seen.add(k)
+        return true
+      })
+      .map((p) => ({
+        id: String(p.user),
+        name: [p.first_name, p.last_name].filter(Boolean).join(' ').trim() || p.email || 'Someone'
+      }))
+    const data = await mentionDeliveryFor(
+      {
+        id: comment.id,
+        collection: comment.collection,
+        item: String(comment.item),
+        user: String(comment.user),
+        created_at: comment.created_at
+      },
+      list,
+      !!req.isAdmin
+    )
+    return { data }
+  })
 
   // Edit history: admins, the record's current pipeline owners, and the comment's author.
   app.get<{ Params: { id: string } }>('/:id/history', async (req, reply) => {

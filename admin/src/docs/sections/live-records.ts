@@ -243,6 +243,20 @@ useQuery({
       type: 'note',
       text: 'Socket notice `record:chat {collection, item}` goes to the record room when a message lands in that record’s chat room (ids only); pages re-read `GET /api/chat/record-room` as the viewer. `GET /api/my-work/covering` answers `{covering: [{user_id, name, first_name, ends_at, records, keys}]}` for the signed-in person — one quick read when they cover nobody. The tab channel’s `saved` note carries field names only, never values.'
     },
+    { type: 'h3', id: 'live-records-comments', text: 'Replies, seen by and who a mention reached' },
+    {
+      type: 'ul',
+      items: [
+        'Replies while you type. If someone posts a comment on the record while you have an unsent comment in the box, a small note above the box says "2 new replies since you started typing" and lists them — name, first words, when. Nothing scrolls; click a name to go to that reply. The note goes when you post, empty the box or close it with ✕. A field’s comment thread does the same for replies on that field.',
+        '"Seen by Beth, Mark" under a comment names the people who opened the record after it was written. Hover or click it for the full list with times. It only ever names people who may open this record — and, for a comment on one field, read that field — never the person who wrote it, and never you. People a comment mentions keep their own line ("Beth saw this 2 h ago"), so the seen line then reads "Also seen by". With live updates set to Calm or Off it shows a count ("Seen by 3") and the names on hover.',
+        'An administrator using View as never counts as the person seeing anything: opening a record or marking a notification read in a View-as tab leaves the person’s marks alone.',
+        'Who a mention reached. On a comment you wrote that mentions people, Delivery opens one line per person: Seen in app (with the time), In their notifications but not seen yet, Phone or browser alert sent, Emailed 10:42 AM, Email bounced, Teams message sent, or Muted — won’t be told (their own notification rules keep mentions out). Only the comment’s author and administrators see it; administrators also see why someone was not told.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'GET /api/comments now carries `seen_by [{id, name, seen_at}]` and `delivery_visible` per comment. GET /api/comments/:id/delivery (the author or an administrator, 403 `NOT_COMMENT_AUTHOR` otherwise) answers per mentioned person `{headline: seen|in_inbox|muted|not_told, seen_at, delivered_at, channels [{key: push|email|teams, status, at}], reason}` from the mention’s notification row, its delivery record and the mail log. Opening a record that reveals someone else’s comment sends the record room the existing `record:comment` notice (ids only), so open threads refresh their seen lines.'
+    },
     { type: 'h3', id: 'live-ops-pages', text: 'Live operations pages' },
     {
       type: 'p',

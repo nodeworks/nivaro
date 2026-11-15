@@ -118,6 +118,7 @@ export type {
 } from './components/CollectionBrowserView'
 export { CollectionBrowserView } from './components/CollectionBrowserView'
 export { CollectionImportBanner } from './components/CollectionImportBanner'
+export { ConfigChangeStrip } from './components/ConfigChangeStrip'
 export {
   ConfigHistory,
   ConfigHistoryButton,
@@ -130,6 +131,7 @@ export {
   FieldSourceBody,
   FieldSourceInfo
 } from './components/ConfigReadBack'
+export { ConfigTheirsPanel } from './components/ConfigTheirsPanel'
 export * from './components/ConformanceView'
 export { CopyAsButton } from './components/CopyAsButton'
 export { CronBuilder, describeCron } from './components/CronBuilder'
@@ -226,6 +228,15 @@ export type {
 } from './components/collections-directory/types'
 export { CommandCenterView } from './components/command-center/CommandCenterView'
 export * from './components/DataTable'
+// rt5 #15 — "You're covering for Jane today — 4 of Jane's records need you".
+export {
+  type CoverLine,
+  coverEnds,
+  coverSentence,
+  DelegateCoverLine,
+  useCovering,
+  useCoveringQuery
+} from './components/DelegateCoverLine'
 export { DndMark, DoNotDisturbRow, useDndActive } from './components/DoNotDisturb'
 export type { DelegationConsoleViewProps } from './components/delegation/DelegationConsoleView'
 export { DelegationConsoleView } from './components/delegation/DelegationConsoleView'
@@ -402,9 +413,9 @@ export { JsonMapEditor } from './components/JsonMapEditor'
 export { ListLoadError } from './components/ListLoadError'
 export { LiveAnnouncer } from './components/LiveAnnouncer'
 export { LiveCount, type LiveCountProps } from './components/LiveCount'
-export { ConfigChangeStrip } from './components/ConfigChangeStrip'
-export { ConfigTheirsPanel } from './components/ConfigTheirsPanel'
 export { LiveNewMatchesPill } from './components/LiveNewMatchesPill'
+export { LIVE_OFF_TIP, LiveOffNote } from './components/LiveOffNote'
+export { LivePreferenceHost } from './components/LivePreferenceHost'
 export { LiveRowMark } from './components/LiveRowMark'
 export { LoadErrorNote } from './components/LoadErrorNote'
 export * from './components/layout-editor'
@@ -432,15 +443,6 @@ export {
   McpConnectionsAdminView
 } from './components/McpConnectionsAdminView'
 export { MyWorkView } from './components/MyWorkView'
-// rt5 #15 — "You're covering for Jane today — 4 of Jane's records need you".
-export {
-  type CoverLine,
-  coverEnds,
-  coverSentence,
-  DelegateCoverLine,
-  useCovering,
-  useCoveringQuery
-} from './components/DelegateCoverLine'
 export {
   type ApiCaller,
   type ApiLogRow,
@@ -773,6 +775,7 @@ export {
 } from './lib/api-version'
 export * from './lib/approval-progress'
 export * from './lib/attention-prefs'
+export * from './lib/attention-prefs'
 export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
 export {
@@ -823,6 +826,7 @@ export {
   setClientBuild
 } from './lib/client-version'
 export * from './lib/commands'
+export * from './lib/comment-awareness'
 export {
   andList,
   collectionLabelOf,
@@ -854,6 +858,7 @@ export {
   sentenceLabelsFromFields,
   valueTextOf
 } from './lib/config-sentences'
+export * from './lib/config-watch'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
 export {
   CORE_GLOSSARY,
@@ -994,25 +999,36 @@ export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
 export * from './lib/list-return'
 export * from './lib/live'
 export * from './lib/live-announcer'
+export * from './lib/live-announcer'
 export * from './lib/live-counts'
 export * from './lib/live-data-changed'
 export * from './lib/live-findings'
 export * from './lib/live-list'
 export * from './lib/live-moves'
 export * from './lib/live-ops'
-export * from './lib/config-watch'
+// Realtime round 3 #24 — Live updates: Normal / Calm / Off (Profile → Display, role defaults)
+export {
+  __resetLivePreferenceForTests,
+  LIVE_CALM_PAUSE_MS,
+  LIVE_DATA_EVENTS,
+  LIVE_MODE_LABELS,
+  LIVE_MODES,
+  LIVE_PRESENCE_EVENTS,
+  type LiveModeSource,
+  type LivePreference,
+  liveCollectionEventPasses,
+  liveEventQuiet,
+  livePausedAt,
+  livePreferenceOf,
+  parseLiveMode,
+  resolveLiveMode,
+  setLiveMode,
+  subscribeLiveMode
+} from './lib/live-preference'
 export * from './lib/live-queries'
 export * from './lib/live-screen'
 export * from './lib/live-search'
 export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
-export {
-  createWriteToScreenSampler,
-  noteWriteToScreenEvent,
-  startWriteToScreen,
-  type W2SDeps,
-  type W2SSample,
-  type W2SSampler
-} from './lib/write-to-screen'
 export * from './lib/live-views'
 export * from './lib/live-widgets'
 export {
@@ -1170,6 +1186,12 @@ export {
   useRealtimeStatus
 } from './lib/realtime'
 export {
+  createRecordGapTracker,
+  type RecordGapTracker,
+  type RecordRef,
+  recordRefetchEvent
+} from './lib/record-gaps'
+export {
   bindRecordOutbox,
   clearRecordOutbox,
   clearRecordOutboxFor,
@@ -1298,23 +1320,6 @@ export {
 } from './lib/request-gate'
 export { restoreSkippedNote } from './lib/restore-skipped'
 export { coarseCollectionUpdate, createRoomGapTracker, refetchEventsFor } from './lib/room-gaps'
-export {
-  createRecordGapTracker,
-  type RecordGapTracker,
-  type RecordRef,
-  recordRefetchEvent
-} from './lib/record-gaps'
-export {
-  attachSocketLiveness,
-  createLiveness,
-  HIDDEN_WAKE_MS,
-  type Liveness,
-  type LivenessHandle,
-  livenessOf,
-  onWakeSignals,
-  type RepairOutcome,
-  registerLiveness
-} from './lib/socket-liveness'
 export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from './lib/row-highlight'
 export { rumRouteChange, rumWidget, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'
@@ -1404,35 +1409,22 @@ export {
   slowReasonText,
   type WaitAnswer as SlowReadWaitAnswer
 } from './lib/slow-reason'
+export {
+  attachSocketLiveness,
+  createLiveness,
+  HIDDEN_WAKE_MS,
+  type Liveness,
+  type LivenessHandle,
+  livenessOf,
+  onWakeSignals,
+  type RepairOutcome,
+  registerLiveness
+} from './lib/socket-liveness'
 export * from './lib/socket-realtime'
 export { registerStagedRowLabel, stagedRowLabel } from './lib/staged-row-labels'
 export * from './lib/stale-chunk'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
-export * from './lib/attention-prefs'
-export * from './lib/waiting-count'
-export * from './lib/live-announcer'
-// Realtime round 3 #24 — Live updates: Normal / Calm / Off (Profile → Display, role defaults)
-export {
-  __resetLivePreferenceForTests,
-  LIVE_CALM_PAUSE_MS,
-  LIVE_DATA_EVENTS,
-  LIVE_MODE_LABELS,
-  LIVE_MODES,
-  LIVE_PRESENCE_EVENTS,
-  type LiveModeSource,
-  type LivePreference,
-  liveCollectionEventPasses,
-  liveEventQuiet,
-  livePausedAt,
-  livePreferenceOf,
-  parseLiveMode,
-  resolveLiveMode,
-  setLiveMode,
-  subscribeLiveMode
-} from './lib/live-preference'
-export { LIVE_OFF_TIP, LiveOffNote } from './components/LiveOffNote'
-export { LivePreferenceHost } from './components/LivePreferenceHost'
 export { configureTabSound, pickSoundTab, shouldPlayHere } from './lib/tab-sound'
 export {
   BRAND_ACCENT,
@@ -1489,6 +1481,7 @@ export {
   viewAsPath
 } from './lib/view-as'
 export * from './lib/waiting-count'
+export * from './lib/waiting-count'
 export {
   buildWidgetImageLabel,
   describeDateRangeFilter,
@@ -1510,4 +1503,12 @@ export {
 } from './lib/widget-image-render'
 export * from './lib/worker-socket'
 export * from './lib/write-formula'
+export {
+  createWriteToScreenSampler,
+  noteWriteToScreenEvent,
+  startWriteToScreen,
+  type W2SDeps,
+  type W2SSample,
+  type W2SSampler
+} from './lib/write-to-screen'
 export * from './types'
