@@ -7603,6 +7603,10 @@ export async function updateOne(
     /** Rehearse (#3222): everything up to the write, the UPDATE tried and rolled back, and an
      *  UpdateDryRunReport answered instead of the record. See rehearseUpdate. */
     dryRun?: boolean
+    /** Accepting a change proposal (change-proposals.ts): the post-approval (admin-only) edit
+     *  lock tier is skipped for this one write — permissions, validation and the approval tier
+     *  still judge it. Never set from a request body. */
+    skipAdminOnlyLock?: boolean
   }
 ) {
   const dry = opts?.dryRun === true
@@ -7712,7 +7716,13 @@ export async function updateOne(
   if (treeAllow === false) throw new ForbiddenError()
   // While the record (or its parent) waits on someone, only its creator, the
   // step's owners and admins may change it (edit-lock.ts).
-  await assertNotEditLocked(user, collection, { ids: [id], payload: data }, req)
+  await assertNotEditLocked(
+    user,
+    collection,
+    { ids: [id], payload: data },
+    req,
+    opts?.skipAdminOnlyLock ? { adminOnlyTier: false } : {}
+  )
 
   const ctx = {
     collection,

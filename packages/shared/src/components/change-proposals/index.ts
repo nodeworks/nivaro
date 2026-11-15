@@ -1,0 +1,5 @@
+export { ChangeProposalsPanel, useRecordProposals } from './ChangeProposalsPanel'
+export { ProposalValue } from './ProposalValue'
+export { ProposeChangeButton } from './ProposeChangeButton'
+export { ProposeChangeDialog } from './ProposeChangeDialog'
+export * from './types'

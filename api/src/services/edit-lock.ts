@@ -327,6 +327,36 @@ async function latestInstance(collection: string, item: string): Promise<Instanc
 }
 
 /**
+ * The record's latest run (open or finished) as the admin-only tier judges it,
+ * with its state key/label — for change proposals (who owns the step now).
+ */
+export async function latestRecordRun(
+  collection: string,
+  item: string
+): Promise<{
+  id: string
+  current_state: string
+  key: string
+  label: string | null
+  completed_at: unknown
+} | null> {
+  const inst = await latestInstance(collection, String(item))
+  if (!inst) return null
+  return {
+    id: String(inst.id),
+    current_state: String(inst.current_state),
+    key: inst.key,
+    label: inst.label ?? null,
+    completed_at: inst.completed_at ?? null
+  }
+}
+
+/** The admin-only lock configured on `collection`, or null. */
+export async function adminOnlyLockOf(collection: string): Promise<EditLockAdminOnly | null> {
+  return (await lockPlan()).locks.get(collection)?.admin_only ?? null
+}
+
+/**
  * The admin-only state `item` of `collection` sits in (its latest run), or
  * null — for the gates that judge moves out of it and the form.
  */

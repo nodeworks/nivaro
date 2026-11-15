@@ -4700,6 +4700,8 @@ type SummaryModeRulesDraft = {
   rules: SummaryModeRuleDraft[]
   /** Server-enforced edit lock (api services/edit-lock.ts) — carried through, not edited here. */
   edit_lock?: unknown
+  /** Propose a change on a record locked after approval (api change-proposals.ts). */
+  change_proposals?: boolean
 }
 const NO_STATE_KEY = '__none__'
 
@@ -4773,7 +4775,8 @@ function FormUxSection({
             mode: r.mode === 'summary' ? 'summary' : 'edit'
           }))
         : [],
-      ...(raw?.edit_lock ? { edit_lock: raw.edit_lock } : {})
+      ...(raw?.edit_lock ? { edit_lock: raw.edit_lock } : {}),
+      ...(raw?.change_proposals === true ? { change_proposals: true } : {})
     }
   }, [meta])
   const save = (next: SummaryModeRulesDraft) => saveMut.mutate({ summary_mode_rules: next })
@@ -4830,6 +4833,15 @@ function FormUxSection({
     if (on) next.partner_badges = true
     else delete next.partner_badges
     saveMut.mutate({ browser_config: Object.keys(next).length > 0 ? next : null })
+  }
+
+  // Idea 6 — the switch only matters where a post-approval (admin-only) lock is set.
+  const adminOnlyLock = !!(cfg.edit_lock as { admin_only?: { states?: unknown[] } } | undefined)
+    ?.admin_only?.states?.length
+  const proposalsOn = cfg.change_proposals === true
+  const setProposals = (on: boolean) => {
+    const { change_proposals: _drop, ...rest } = cfg
+    save(on ? { ...rest, change_proposals: true } : rest)
   }
 
   const ModeSeg = ({
@@ -5113,6 +5125,35 @@ function FormUxSection({
               This collection is not bound to a pipeline, so state rules only match "No state yet".
             </p>
           )}
+        </div>
+        {/* Propose a change on a locked record (idea 6) */}
+        <div
+          className='flex items-start justify-between gap-4 px-4 py-3'
+          data-change-proposals-setting
+        >
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>
+              Propose a change on locked records
+            </p>
+            <p className='mt-0.5 text-[12px] text-slate-500'>
+              When a record is locked after approval, people who could otherwise edit it get a
+              Propose change button: they enter new values and a reason, and the owners of the
+              current step (or an administrator) accept or decline. Request help stays available.
+              Off by default.
+            </p>
+            {!adminOnlyLock && (
+              <p className='mt-1.5 text-[11.5px] text-amber-700'>
+                This collection has no post-approval lock, so nothing is offered yet.
+              </p>
+            )}
+          </div>
+          <Switch
+            checked={proposalsOn}
+            onCheckedChange={setProposals}
+            disabled={busy}
+            aria-label='Propose a change on locked records'
+            data-change-proposals-switch
+          />
         </div>
         {/* Changes tray pointer */}
         <div className='px-4 py-2.5 text-[12px] text-slate-500'>

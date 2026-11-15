@@ -13,7 +13,7 @@ import { usePrefetchIntent } from '../lib/prefetch'
 import { useOptionalRealtime } from '../lib/realtime'
 import { userErrorMessage } from '../lib/safe-error'
 import { slaChip, withinDay } from '../lib/sla-chip'
-import { cn } from '../lib/utils'
+import { cn, formatRelative } from '../lib/utils'
 import { type AgentQuestionRow, AgentQuestionsCard } from './AgentQuestionsCard'
 import { FirstWeekCard } from './ai/FirstWeekCard'
 import { TaskDoButton } from './ai/TaskDo'
@@ -84,6 +84,17 @@ interface NotificationRow {
   timestamp: string
 }
 
+interface ProposalRow {
+  id: number
+  collection: string
+  item: string
+  item_label: string
+  fields: string[]
+  reason: string
+  created_by_name: string | null
+  created_at: string
+}
+
 interface MyWorkData {
   owned: OwnedRow[]
   owned_total: number
@@ -94,6 +105,8 @@ interface MyWorkData {
   requested?: TaskRow[]
   on_a_team?: boolean
   approvals: Array<Record<string, unknown>>
+  /** Idea 6 — proposed changes on locked records this person may accept or decline. */
+  proposals?: ProposalRow[]
   notifications: NotificationRow[]
   /** #3220 — questions assistants asked this person, still open. */
   questions?: AgentQuestionRow[]
@@ -110,9 +123,12 @@ interface MyWorkData {
 /** Minimum gap between live refetches: My Work re-aggregates live owner resolution. */
 const LIVE_GAP_MS = 8000
 
-const MY_WORK_SECTIONS = ['records', 'tasks', 'team', 'waiting', 'notifications']
+const MY_WORK_SECTIONS = ['records', 'proposals', 'tasks', 'team', 'waiting', 'notifications']
+/** Sections that take the full width (the rest pair up two by two). */
+const FULL_WIDTH = new Set(['records', 'proposals'])
 const SECTION_LABEL: Record<string, string> = {
   records: 'Waiting on you',
+  proposals: 'Changes to review',
   tasks: 'My tasks',
   team: 'Team tasks',
   waiting: 'Waiting on others',
@@ -365,7 +381,8 @@ export function MyWorkView({
     ...(data?.tasks ?? []).map((t) => `t:${t.id}`),
     ...(data?.team_tasks ?? []).map((t) => `tt:${t.id}`),
     ...(data?.requested ?? []).map((t) => `r:${t.id}`),
-    ...(data?.notifications ?? []).map((n) => `n:${n.id}`)
+    ...(data?.notifications ?? []).map((n) => `n:${n.id}`),
+    ...(data?.proposals ?? []).map((p) => `p:${p.id}`)
   ])
   const hl = (key: string) =>
     freshKeys.has(key)
@@ -691,6 +708,49 @@ export function MyWorkView({
               </section>
             )
           },
+          // Idea 6 — only when something waits on this person's decision.
+          proposals: () =>
+            (data.proposals ?? []).length === 0 ? null : (
+              <section
+                className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+                data-my-work-proposals
+              >
+                <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
+                  <h2 className='text-[13px] font-medium'>Changes to review</h2>
+                  <p className='text-[11px] text-muted-foreground'>
+                    Proposed changes on locked records — open one to compare old and new and accept
+                    or decline it.
+                  </p>
+                </div>
+                <ul className='divide-y divide-slate-100 dark:divide-border/60'>
+                  {(data.proposals ?? []).map((p) => (
+                    <li key={p.id} className={hl(`p:${p.id}`)} data-my-work-proposal={p.id}>
+                      <button
+                        type='button'
+                        onClick={() => open(p.collection, p.item)}
+                        {...intent.record(p.collection, p.item)}
+                        className='flex w-full items-start gap-2.5 px-4 py-2 text-left hover:bg-muted'
+                      >
+                        <span className='min-w-0 flex-1'>
+                          <span className='flex flex-wrap items-baseline gap-x-2'>
+                            <span className='text-[12.5px] font-medium'>{p.item_label}</span>
+                            <span className='text-[11.5px] text-muted-foreground'>
+                              {p.fields.join(', ')}
+                            </span>
+                          </span>
+                          <span className='mt-0.5 block truncate text-[11.5px] text-slate-500 dark:text-slate-400'>
+                            {p.created_by_name ?? 'Someone'}: {p.reason}
+                          </span>
+                        </span>
+                        <span className='shrink-0 pt-0.5 text-[11px] text-muted-foreground'>
+                          {formatRelative(p.created_at)}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ),
           tasks: () => (
             <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
               <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
@@ -1006,12 +1066,12 @@ export function MyWorkView({
         let i = 0
         while (i < visible.length) {
           const k = visible[i]
-          if (k === 'records') {
+          if (FULL_WIDTH.has(k)) {
             out.push(<div key={k}>{built.get(k)}</div>)
             i++
           } else {
             const pair = [k]
-            if (i + 1 < visible.length && visible[i + 1] !== 'records') pair.push(visible[i + 1])
+            if (i + 1 < visible.length && !FULL_WIDTH.has(visible[i + 1])) pair.push(visible[i + 1])
             out.push(
               <div key={pair.join('+')} className='grid gap-5 lg:grid-cols-2'>
                 {pair.map((pk) => (

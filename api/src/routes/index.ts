@@ -61,6 +61,7 @@ import { bulkActionsRoutes } from './bulk-actions.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { cacheConfigRoutes } from './cache-config.js'
 import { catalogRelatedRoutes } from './catalog-related.js'
+import { changeProposalRoutes } from './change-proposals.js'
 import { changeSetsRoutes } from './change-sets.js'
 import { changesRoutes } from './changes.js'
 import { chaosRoutes } from './chaos.js'
@@ -473,6 +474,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // /delegation/:userId/remind, /access-requests/:id/vouch.
   await app.register(teamMiscRoutes)
   await app.register(myWorkRoutes)
+  // Propose a change on a record locked after approval (idea 6, migration 527).
+  await app.register(changeProposalRoutes, { prefix: '/change-proposals' })
   // The admin Overview page (route `/`): figures, last-visit digest, layout + pins.
   await app.register(overviewPageRoutes, { prefix: '/overview' })
   await app.register(roleChecklistRoutes)

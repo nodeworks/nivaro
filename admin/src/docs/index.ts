@@ -135,6 +135,7 @@ import { chaosOpsDocs } from './sections/chaos-ops.js'
 import { chaosReportDocs } from './sections/chaos-report.js'
 import {
   collabApprovals,
+  collabChangeProposals,
   collabChat,
   collabItemLocking,
   collabKeyboardShortcuts,
@@ -902,6 +903,7 @@ export const navSections: NavGroup[] = [
     items: [
       collabTasks,
       collabSupportRequests,
+      collabChangeProposals,
       collabApprovals,
       collabChat,
       collabItemLocking,

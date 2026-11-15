@@ -1190,6 +1190,56 @@ export const collabChat: DocSection = {
   ]
 }
 
+export const collabChangeProposals: DocSection = {
+  id: 'change-proposals',
+  label: 'Propose a Change',
+  content: [
+    { type: 'h1', id: 'change-proposals', text: 'Propose a Change on a Locked Record' },
+    {
+      type: 'p',
+      text: 'Once a record is locked after approval, only administrators can change its fields. With proposals turned on for the collection, a person who could otherwise edit the record gets a **Propose change** button beside Request help: they enter the new values and say why, and the owners of the step the record is at (or an administrator) accept or decline. Nobody re-keys a change from a ticket.'
+    },
+    { type: 'h2', id: 'change-proposals-turn-on', text: 'Turning it on' },
+    {
+      type: 'p',
+      text: 'Data Model → the collection → Form UX → **Propose a change on locked records** (administrators, off by default). It only offers anything on a collection with a post-approval lock (`summary_mode_rules.edit_lock.admin_only`); the switch is stored as `summary_mode_rules.change_proposals: true`. Where it is off, Request help works as before.'
+    },
+    { type: 'h2', id: 'change-proposals-propose', text: 'Proposing' },
+    {
+      type: 'ul',
+      items: [
+        '**Which fields**: only the ones you could change if the record were open — your role’s update and read field lists, never read-only, administrator-only, encrypted, computed or audit fields, never link lists, files or formatted text. Fields the lock leaves open (for example On hold) you change directly.',
+        '**Checked when you send it**: the values are tried against the record’s validation and rules as if you saved them, so a value the record would refuse is refused now, with the reason.',
+        '**One at a time**: you can have one waiting proposal per record; Withdraw it to send a different one.'
+      ]
+    },
+    { type: 'h2', id: 'change-proposals-decide', text: 'Accepting or declining' },
+    {
+      type: 'ul',
+      items: [
+        '**Who decides**: the owners of the record’s current step and administrators — never the person who proposed it. Waiting proposals appear on the record (old → new per field) and under **Changes to review** in their My Work.',
+        '**Accept and apply** writes the new values as the person accepting: their permissions, row access and the record’s validation all apply; only the post-approval lock is set aside for that one save. If they could not change one of the fields, or a field changed since the proposal was made, nothing is written and they are told why.',
+        '**When it expires**: a proposal can no longer be accepted once the record has moved to another step, is no longer locked (then it is simply edited), or proposals have been turned off for the collection — decline it or ask for a new one.',
+        '**Decline** needs a short note, which the proposer sees.',
+        'The proposer is notified either way (Workflow notifications — mute or route them in Profile → Notification rules).'
+      ]
+    },
+    { type: 'h2', id: 'change-proposals-history', text: 'History' },
+    {
+      type: 'p',
+      text: 'Each proposal, decline and withdrawal is a line in the record’s Notes; an accepted proposal’s save carries the reason "Accepted change proposal #N from …" in the record history. Earlier proposals fold under the waiting ones on the record. Fields a reader cannot see are never named or shown.'
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/change-proposals/record/:collection/:item   // may I propose? fields, proposals
+POST /api/change-proposals/record/:collection/:item   { "values": { "amount": 1200 }, "reason": "…" }
+POST /api/change-proposals/:id/accept
+POST /api/change-proposals/:id/decline                { "note": "…" }
+POST /api/change-proposals/:id/withdraw               // the proposer`
+    }
+  ]
+}
+
 export const collabSupportRequests: DocSection = {
   id: 'support-requests',
   label: 'Support Requests',

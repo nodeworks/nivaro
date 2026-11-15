@@ -505,6 +505,7 @@
         <div class="docs-nav-items" id="group-collab">
           <a class="docs-nav-item" data-section="tasks" href="#tasks">Task Assignments</a>
           <a class="docs-nav-item" data-section="support-requests" href="#support-requests">Support Requests</a>
+          <a class="docs-nav-item" data-section="change-proposals" href="#change-proposals">Propose a Change</a>
           <a class="docs-nav-item" data-section="approval-chains" href="#approval-chains">Approval Chains</a>
           <a class="docs-nav-item" data-section="collab-chat" href="#collab-chat">Chat &amp; Channels</a>
           <a class="docs-nav-item" data-section="item-locking" href="#item-locking">Item Locking &amp; Presence</a>
@@ -16992,6 +16993,35 @@ GET   /api/tasks/requested               // tasks I asked others to do</code></p
   "replay": { "recording_id": "&lt;own recording&gt;", "offset_ms": 8600 } }
 → { "data": { "ticket": { … }, "issue_id": 501 } }</code></pre>
           <!-- /SYNC:support-requests -->
+        </div>
+        <div class="doc-section" id="s-change-proposals" data-toc='[{"id":"change-proposals","label":"Propose a Change on a Locked Record"},{"id":"change-proposals-turn-on","label":"Turning it on"},{"id":"change-proposals-propose","label":"Proposing"},{"id":"change-proposals-decide","label":"Accepting or declining"},{"id":"change-proposals-history","label":"History"}]'>
+          <!-- SYNC:change-proposals -->
+          <h1 class="doc-h1" id="change-proposals">Propose a Change on a Locked Record</h1>
+          <p class="doc-p">Once a record is locked after approval, only administrators can change its fields. With proposals turned on for the collection, a person who could otherwise edit the record gets a **Propose change** button beside Request help: they enter the new values and say why, and the owners of the step the record is at (or an administrator) accept or decline. Nobody re-keys a change from a ticket.</p>
+          <h2 class="doc-h2" id="change-proposals-turn-on">Turning it on</h2>
+          <p class="doc-p">Data Model → the collection → Form UX → **Propose a change on locked records** (administrators, off by default). It only offers anything on a collection with a post-approval lock (<code class="doc-code">summary_mode_rules.edit_lock.admin_only</code>); the switch is stored as <code class="doc-code">summary_mode_rules.change_proposals: true</code>. Where it is off, Request help works as before.</p>
+          <h2 class="doc-h2" id="change-proposals-propose">Proposing</h2>
+          <ul class="doc-ul">
+            <li>**Which fields**: only the ones you could change if the record were open — your role’s update and read field lists, never read-only, administrator-only, encrypted, computed or audit fields, never link lists, files or formatted text. Fields the lock leaves open (for example On hold) you change directly.</li>
+            <li>**Checked when you send it**: the values are tried against the record’s validation and rules as if you saved them, so a value the record would refuse is refused now, with the reason.</li>
+            <li>**One at a time**: you can have one waiting proposal per record; Withdraw it to send a different one.</li>
+          </ul>
+          <h2 class="doc-h2" id="change-proposals-decide">Accepting or declining</h2>
+          <ul class="doc-ul">
+            <li>**Who decides**: the owners of the record’s current step and administrators — never the person who proposed it. Waiting proposals appear on the record (old → new per field) and under **Changes to review** in their My Work.</li>
+            <li>**Accept and apply** writes the new values as the person accepting: their permissions, row access and the record’s validation all apply; only the post-approval lock is set aside for that one save. If they could not change one of the fields, or a field changed since the proposal was made, nothing is written and they are told why.</li>
+            <li>**When it expires**: a proposal can no longer be accepted once the record has moved to another step, is no longer locked (then it is simply edited), or proposals have been turned off for the collection — decline it or ask for a new one.</li>
+            <li>**Decline** needs a short note, which the proposer sees.</li>
+            <li>The proposer is notified either way (Workflow notifications — mute or route them in Profile → Notification rules).</li>
+          </ul>
+          <h2 class="doc-h2" id="change-proposals-history">History</h2>
+          <p class="doc-p">Each proposal, decline and withdrawal is a line in the record’s Notes; an accepted proposal’s save carries the reason "Accepted change proposal #N from …" in the record history. Earlier proposals fold under the waiting ones on the record. Fields a reader cannot see are never named or shown.</p>
+          <pre class="doc-pre"><code>GET  /api/change-proposals/record/:collection/:item   // may I propose? fields, proposals
+POST /api/change-proposals/record/:collection/:item   { "values": { "amount": 1200 }, "reason": "…" }
+POST /api/change-proposals/:id/accept
+POST /api/change-proposals/:id/decline                { "note": "…" }
+POST /api/change-proposals/:id/withdraw               // the proposer</code></pre>
+          <!-- /SYNC:change-proposals -->
         </div>
 
         <!-- APPROVAL CHAINS -->

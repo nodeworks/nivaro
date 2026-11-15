@@ -139,6 +139,12 @@ export {
   CustomStatusEditor,
   formatStatusExpiry
 } from './components/CustomStatusEditor'
+export {
+  ChangeProposalsPanel,
+  ProposeChangeButton,
+  ProposeChangeDialog,
+  useRecordProposals
+} from './components/change-proposals'
 export { DeclareIncidentButton } from './components/chaos/DeclareIncidentButton'
 export {
   ARMED_FAULTS_KEY,
