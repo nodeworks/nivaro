@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
@@ -8,6 +8,9 @@ import { loadFormLayout } from '../services/form-layout.js'
 import { readOne } from '../services/items.js'
 import { FORM_PREVIEW_ITEM } from '../services/layout-preview.js'
 import { can } from '../services/permissions.js'
+import { SignalStreamRoute, sharedSignature } from '../services/public-signal-stream.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
+import { takeBudget } from '../services/widget-live.js'
 import type { User } from '../types.js'
 
 /**
@@ -179,103 +182,255 @@ export async function shareLinksRoutes(app: FastifyInstance) {
 }
 
 // ── Public renderer — registered WITHOUT the /api prefix ───────────────────
-export async function sharePublicRoutes(app: FastifyInstance) {
-  app.get<{ Params: { token: string } }>('/share/:token', async (req, reply) => {
-    const link = await db('nivaro_share_links')
-      .where({ token: req.params.token })
-      .whereNot('item', FORM_PREVIEW_ITEM)
-      .whereNot('item', CC_KIOSK_ITEM)
+
+type SharePage =
+  | { ok: false; title: string; msg: string }
+  | {
+      ok: true
+      link: Record<string, unknown>
+      collection: string
+      title: string
+      /** The record part of the page (what changes when the record does). */
+      body: string
+    }
+
+/** A live share link's row, or null (unknown, revoked, reserved for another feature, expired). */
+async function liveShareLink(token: string): Promise<Record<string, unknown> | null> {
+  const link = (await db('nivaro_share_links')
+    .where({ token })
+    .whereNot('item', FORM_PREVIEW_ITEM)
+    .whereNot('item', CC_KIOSK_ITEM)
+    .first()
+    .catch(() => null)) as Record<string, unknown> | null | undefined
+  if (!link?.is_active || isReservedItem(link.item)) return null
+  if (link.expires_at && new Date(link.expires_at as string) < new Date()) return null
+  return link
+}
+
+/** Everything the page shows, read as the link's creator — the one place the page is built. */
+async function buildSharePage(token: string): Promise<SharePage> {
+  const raw = (await db('nivaro_share_links')
+    .where({ token })
+    .whereNot('item', FORM_PREVIEW_ITEM)
+    .whereNot('item', CC_KIOSK_ITEM)
+    .first()
+    .catch(() => null)) as Record<string, unknown> | null | undefined
+  if (!raw?.is_active || isReservedItem(raw.item))
+    return {
+      ok: false,
+      title: 'Link not found',
+      msg: 'This share link does not exist or was revoked.'
+    }
+  if (raw.expires_at && new Date(raw.expires_at as string) < new Date())
+    return { ok: false, title: 'Link expired', msg: 'This share link is no longer available.' }
+  const link = raw
+
+  const collection = String(link.collection)
+  let layoutId = link.layout_id ? Number(link.layout_id) : null
+  if (!layoutId) {
+    const active = await db('nivaro_collection_layouts')
+      .where({ collection, is_active: 1 })
+      .where((qb) => qb.where('layout_type', 'grouped').orWhereNull('layout_type'))
       .first()
-      .catch(() => null)
+    layoutId = active ? Number(active.id) : null
+  }
+  const layout = layoutId
+    ? await loadFormLayout(layoutId, collection, { includeReadonly: true })
+    : null
 
-    const gone = (title: string, msg: string) =>
-      reply
-        .code(404)
-        .type('text/html')
-        .send(
-          `<!doctype html><html><body style="font-family:sans-serif;padding:60px;text-align:center;color:#334155"><h2>${esc(title)}</h2><p>${esc(msg)}</p></body></html>`
-        )
-
-    if (!link?.is_active || isReservedItem(link.item))
-      return gone('Link not found', 'This share link does not exist or was revoked.')
-    if (link.expires_at && new Date(link.expires_at) < new Date()) {
-      return gone('Link expired', 'This share link is no longer available.')
-    }
-
-    const collection = String(link.collection)
-    let layoutId = link.layout_id ? Number(link.layout_id) : null
-    if (!layoutId) {
-      const active = await db('nivaro_collection_layouts')
-        .where({ collection, is_active: 1 })
-        .where((qb) => qb.where('layout_type', 'grouped').orWhereNull('layout_type'))
+  // Read as the creator: the page never shows more than they could see now.
+  const creator = link.created_by
+    ? ((await db('nivaro_users')
+        .where({ id: link.created_by })
         .first()
-      layoutId = active ? Number(active.id) : null
+        .catch(() => null)) as User | null)
+    : null
+  if (creator?.status !== 'active') {
+    return {
+      ok: false,
+      title: 'Link not found',
+      msg: 'This share link does not exist or was revoked.'
     }
-    const layout = layoutId
-      ? await loadFormLayout(layoutId, collection, { includeReadonly: true })
-      : null
+  }
+  const record = await readAs(creator, collection, String(link.item))
+  if (!record)
+    return { ok: false, title: 'Record unavailable', msg: 'The shared record no longer exists.' }
 
-    // Read as the creator: the page never shows more than they could see now.
-    const creator = link.created_by
-      ? ((await db('nivaro_users')
-          .where({ id: link.created_by })
-          .first()
-          .catch(() => null)) as User | null)
-      : null
-    if (creator?.status !== 'active') {
-      return gone('Link not found', 'This share link does not exist or was revoked.')
+  const colMeta = await db('nivaro_collections').where({ collection }).first()
+  const title = String(colMeta?.display_name ?? collection)
+
+  // No layout → nothing curated to show; refuse rather than dump raw columns
+  if (!layout) {
+    return {
+      ok: false,
+      title: 'Not shareable',
+      msg: 'No layout is configured for this record type.'
     }
-    const record = await readAs(creator, collection, String(link.item))
-    if (!record) return gone('Record unavailable', 'The shared record no longer exists.')
+  }
 
-    const colMeta = await db('nivaro_collections').where({ collection }).first()
-    const title = String(colMeta?.display_name ?? collection)
+  const body = layout.sections
+    .map((sec) => {
+      const rows = sec.fields
+        // Fields outside the creator's read allow-list are not in the record.
+        .filter((f) => Object.hasOwn(record, f.path))
+        .map((f) => {
+          const choice = f.choices?.find((c) => String(c.value) === String(record[f.path]))
+          const val = choice ? choice.text : formatValue(f.db_type, record[f.path])
+          return `<div class="row" data-k="${esc(f.path)}"><div class="k">${esc(f.label)}</div><div class="v">${esc(val)}</div></div>`
+        })
+        .join('')
+      return `<section>${sec.label ? `<h2>${esc(sec.label)}</h2>` : ''}${rows}</section>`
+    })
+    .join('')
+  return { ok: true, link, collection, title, body }
+}
 
-    // No layout → nothing curated to show; refuse rather than dump raw columns
-    if (!layout) {
-      return gone('Not shareable', 'No layout is configured for this record type.')
-    }
+/**
+ * The page's live script (nonce'd): listen on /share/:token/stream for a bare `changed`, refetch
+ * the page through the share route itself (`?refresh=1`: not counted as a view), and swap the
+ * changed values in place with a short fade — same rows keep their place, nothing scrolls. A
+ * hidden tab waits until it is shown; `gone` reloads into the page's own "not found" answer.
+ */
+const LIVE_SCRIPT = `(function(){
+if(!window.EventSource||!window.fetch||!window.DOMParser)return;
+var base=location.pathname.replace(/\\/+$/,'');var busy=false,again=false,owed=false;
+function swap(t){var doc=new DOMParser().parseFromString(t,'text/html');var next=doc.getElementById('nvr-share-body');var cur=document.getElementById('nvr-share-body');if(!next||!cur)return;
+var a=cur.querySelectorAll('.row'),b=next.querySelectorAll('.row');var same=a.length===b.length;
+for(var i=0;same&&i<a.length;i++){if(a[i].getAttribute('data-k')!==b[i].getAttribute('data-k'))same=false}
+if(!same){cur.replaceWith(next);return}
+for(var j=0;j<a.length;j++){var v=a[j].querySelector('.v'),w=b[j].querySelector('.v');if(v&&w&&v.textContent!==w.textContent){v.textContent=w.textContent;a[j].classList.remove('chg');void a[j].offsetWidth;a[j].classList.add('chg')}}}
+function refresh(){if(document.hidden){owed=true;return}if(busy){again=true;return}busy=true;
+fetch(base+'?refresh=1',{credentials:'omit',cache:'no-store'}).then(function(r){if(r.status===404){location.reload();return null}return r.ok?r.text():null}).then(function(t){if(t)swap(t)}).catch(function(){}).then(function(){busy=false;if(again){again=false;refresh()}})}
+document.addEventListener('visibilitychange',function(){if(!document.hidden&&owed){owed=false;refresh()}});
+var es=new EventSource(base+'/stream');es.addEventListener('changed',refresh);es.addEventListener('gone',function(){es.close();location.reload()});
+})();`
 
-    db('nivaro_share_links')
-      .where({ id: link.id })
-      .update({ view_count: db.raw('view_count + 1'), last_viewed_at: new Date() })
-      .catch(() => {})
-
-    const sections = layout.sections
-      .map((sec) => {
-        const rows = sec.fields
-          // Fields outside the creator's read allow-list are not in the record.
-          .filter((f) => Object.hasOwn(record, f.path))
-          .map((f) => {
-            const choice = f.choices?.find((c) => String(c.value) === String(record[f.path]))
-            const val = choice ? choice.text : formatValue(f.db_type, record[f.path])
-            return `<div class="row"><div class="k">${esc(f.label)}</div><div class="v">${esc(val)}</div></div>`
-          })
-          .join('')
-        return `<section>${sec.label ? `<h2>${esc(sec.label)}</h2>` : ''}${rows}</section>`
-      })
-      .join('')
-
-    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+function sharePageHtml(page: Extract<SharePage, { ok: true }>, nonce: string): string {
+  const { link, title, body } = page
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
 <title>${esc(title)}</title><style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;font-size:14px;color:#0f172a;background:#f8fafc;padding:32px 16px;line-height:1.5}
-.wrap{max-width:640px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:32px}
+:root{--bg:#f8fafc;--card:#fff;--fg:#0f172a;--muted:#64748b;--line:#e2e8f0;--line2:#f1f5f9;--h2:#334155;--foot:#94a3b8;--chg:rgba(0,206,255,.16)}
+@media (prefers-color-scheme:dark){:root{--bg:#0b1120;--card:#111827;--fg:#e2e8f0;--muted:#94a3b8;--line:#1f2937;--line2:#1a2332;--h2:#cbd5e1;--foot:#64748b;--chg:rgba(0,206,255,.18)}}
+body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;font-size:14px;color:var(--fg);background:var(--bg);padding:32px 16px;line-height:1.5}
+.wrap{max-width:640px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:32px}
+@media (max-width:480px){.wrap{padding:20px 16px}.row{flex-direction:column;gap:2px}.k{width:auto}}
 h1{font-size:19px;letter-spacing:-.01em}
-.meta{color:#64748b;font-size:12px;margin:4px 0 20px}
-h2{font-size:13px;margin:22px 0 8px;padding-bottom:6px;border-bottom:1px solid #e2e8f0;color:#334155}
-.row{display:flex;gap:16px;padding:6px 0;border-bottom:1px solid #f1f5f9}
-.k{width:38%;color:#64748b;font-size:12px;padding-top:1px}
+.meta{color:var(--muted);font-size:12px;margin:4px 0 20px}
+h2{font-size:13px;margin:22px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line);color:var(--h2)}
+.row{display:flex;gap:16px;padding:6px 0;border-bottom:1px solid var(--line2)}
+.k{width:38%;color:var(--muted);font-size:12px;padding-top:1px}
 .v{flex:1;font-size:13px;word-break:break-word}
-.foot{margin-top:24px;text-align:center;color:#94a3b8;font-size:11px}
+.row.chg .v{animation:nvrchg 1.6s ease-out}
+@keyframes nvrchg{from{background:var(--chg)}to{background:transparent}}
+@media (prefers-reduced-motion:reduce){.row.chg .v{animation:none}}
+.foot{margin-top:24px;text-align:center;color:var(--foot);font-size:11px}
 </style></head><body><div class="wrap">
 <h1>${esc(title)} · Record ${esc(link.item)}</h1>
-<p class="meta">Read-only shared view${link.expires_at ? ` · expires ${new Date(link.expires_at).toLocaleDateString('en-US')}` : ''}</p>
-${sections}
+<p class="meta">Read-only shared view${link.expires_at ? ` · expires ${new Date(link.expires_at as string).toLocaleDateString('en-US')}` : ''}</p>
+<div id="nvr-share-body">${body}</div>
 <p class="foot">Shared via Nivaro</p>
-</div></body></html>`
+</div><script nonce="${nonce}">${LIVE_SCRIPT}</script></body></html>`
+}
 
-    return reply.type('text/html').send(html)
+/** The page's policy: its own inline style, its nonce'd live script, reads of its own origin. */
+export function shareCsp(nonce: string): string {
+  return [
+    "default-src 'none'",
+    "style-src 'unsafe-inline'",
+    `script-src 'nonce-${nonce}'`,
+    "connect-src 'self'",
+    "frame-ancestors 'self'",
+    "base-uri 'none'",
+    "form-action 'none'"
+  ].join('; ')
+}
+
+const SHARE_STREAM_PER_IP = 20
+const SHARE_STREAM_HEARTBEAT_MS = 25_000
+const SHARE_STREAM_COALESCE_MS = 1_000
+const shareSigs = new Map<string, { at: number; sig: Promise<string | null> }>()
+
+/** Fingerprint of the record part of the page, shared per token for a moment, budgeted. */
+function shareSignature(token: string): Promise<string | null> {
+  const tenant = currentTenantKey()
+  return sharedSignature(
+    shareSigs,
+    `${tenant}|${token}`,
+    async () => {
+      const page = await buildSharePage(token)
+      return page.ok ? createHash('sha256').update(page.body).digest('hex') : 'gone'
+    },
+    { budget: () => takeBudget(tenant) }
+  )
+}
+
+export async function sharePublicRoutes(app: FastifyInstance) {
+  // ── GET /share/:token/stream — live "changed" signal for an open share page ─
+  // Token-scoped: only writes to THIS link's record prompt a check, the page's own answer (read
+  // as the creator) must actually change, and the event carries nothing — the page refetches
+  // through /share/:token. Mechanics shared with embed feeds (services/public-signal-stream.ts).
+  const streams = new SignalStreamRoute()
+  app.addHook('preClose', async () => {
+    streams.closeAll()
   })
+  app.get<{ Params: { token: string } }>(
+    '/share/:token/stream',
+    { compress: false },
+    async (req, reply) => {
+      const { token } = req.params
+      if (!token || token.length > 128) return reply.code(404).send({ error: 'Not found' })
+      await streams.serve(req, reply, {
+        perIp: SHARE_STREAM_PER_IP,
+        heartbeatMs: SHARE_STREAM_HEARTBEAT_MS,
+        coalesceMs: SHARE_STREAM_COALESCE_MS,
+        async open() {
+          const link = await liveShareLink(token)
+          if (!link) return { ok: false, code: 404, body: { error: 'Not found' } }
+          const collection = String(link.collection)
+          const item = String(link.item).toLowerCase()
+          return {
+            ok: true,
+            subject: {
+              watches: (ev) =>
+                ev.collection === collection &&
+                (ev.item === '*' || String(ev.item).toLowerCase() === item),
+              signature: () => shareSignature(token),
+              stillServes: async () => !!(await liveShareLink(token))
+            }
+          }
+        }
+      })
+    }
+  )
+
+  app.get<{ Params: { token: string }; Querystring: { refresh?: string } }>(
+    '/share/:token',
+    async (req, reply) => {
+      const page = await buildSharePage(req.params.token)
+      if (!page.ok) {
+        return reply
+          .code(404)
+          .type('text/html')
+          .send(
+            `<!doctype html><html><body style="font-family:sans-serif;padding:60px;text-align:center;color:#334155"><h2>${esc(page.title)}</h2><p>${esc(page.msg)}</p></body></html>`
+          )
+      }
+      // A live refresh of an open page is not a new view.
+      if (req.query.refresh !== '1') {
+        db('nivaro_share_links')
+          .where({ id: page.link.id })
+          .update({ view_count: db.raw('view_count + 1'), last_viewed_at: new Date() })
+          .catch(() => {})
+      }
+      const nonce = randomBytes(16).toString('base64')
+      return reply
+        .type('text/html')
+        .header('Cache-Control', 'no-store')
+        .header('Content-Security-Policy', shareCsp(nonce))
+        .send(sharePageHtml(page, nonce))
+    }
+  )
 }

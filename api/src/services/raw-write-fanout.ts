@@ -330,7 +330,11 @@ const defaultDeps: FanoutDeps = {
       payload,
       log
     }).catch((err: unknown) =>
-      console.warn('[raw-write-fanout] flow failed', flow.id, err instanceof Error ? err.message : err)
+      console.warn(
+        '[raw-write-fanout] flow failed',
+        flow.id,
+        err instanceof Error ? err.message : err
+      )
     )
   },
   async evaluateAlerts(collection, row, id) {
@@ -418,12 +422,14 @@ export async function fanOutRawWrites(
       flows = []
     }
     for (const g of groups) {
-      const hooks = g.action === 'update'
-        ? webhooks.filter((w) => webhookHearsOutside(w, g.collection, g.origin))
-        : []
-      const runs = g.action === 'update'
-        ? flows.filter((f) => flowHearsOutside(f, g.collection, g.origin))
-        : []
+      const hooks =
+        g.action === 'update'
+          ? webhooks.filter((w) => webhookHearsOutside(w, g.collection, g.origin))
+          : []
+      const runs =
+        g.action === 'update'
+          ? flows.filter((f) => flowHearsOutside(f, g.collection, g.origin))
+          : []
       const alerts = await deps.hasAlerts(g.collection).catch(() => false)
       if (hooks.length === 0 && runs.length === 0 && !alerts) continue
       let rows: Array<Record<string, unknown>> = []

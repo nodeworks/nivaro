@@ -15,6 +15,7 @@ import {
   type MailBrandingLookup,
   resolveMailBranding
 } from './mail-branding.js'
+import { stampMailRecordLinks } from './mail-since-links.js'
 import { filterSuppressed, recordBouncesFromError } from './mail-suppressions.js'
 import type { NotifyCategory } from './notification-channels.js'
 import { overlaySettings } from './settings-overrides.js'
@@ -915,6 +916,11 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
       html: safeHtml(safe ? `<p style="margin:0;white-space:pre-wrap;">${safe}</p>` : '')
     })
   }
+  // Realtime round 3 #2 — record links carry the send time (`?since=`), so the record page
+  // opened from this email can say what changed since it was sent.
+  const stamped = await stampMailRecordLinks(html, opts.text)
+  html = stamped.html
+  const text = stamped.text
   // Digest deferral FIRST, against the ORIGINAL recipients — the preference
   // belongs to the intended reader; test-mode redirection happens after, on
   // whatever still sends.
@@ -969,7 +975,7 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
         from: applySenderName(smtp.from, brand.from_name),
         subject: withEnvLabel(smtp, routed.subject),
         html,
-        text: opts.text
+        text
       },
       {
         subject: opts.subject,
@@ -1001,7 +1007,7 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
       from: applySenderName(smtp.from, brand.from_name),
       subject: withEnvLabel(smtp, routed.subject),
       html,
-      text: opts.text
+      text
     }
     await buildTransporter(smtp).sendMail({ ...message, to: routed.to })
     const id = await logMail(routed.to, opts.subject, 'sent', {
@@ -1092,6 +1098,8 @@ export async function sendRawMail(opts: {
       // Template missing/broken — the unwrapped fragment still sends.
     }
   }
+  // Realtime round 3 #2 — record links carry the send time (`?since=`).
+  html = (await stampMailRecordLinks(html, undefined)).html
   // Digest deferral FIRST, against the ORIGINAL recipients; test-mode
   // redirection applies to whatever still sends.
   const original = (Array.isArray(opts.to) ? opts.to : String(opts.to).split(','))

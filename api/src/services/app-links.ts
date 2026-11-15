@@ -188,6 +188,20 @@ export async function linkTo(
   return adminBase() + fill(ADMIN_ROUTES[kind], params)
 }
 
+/** Every record-page URL shape this instance hands out (admin + portal), for the mail
+ *  send-time `since` stamp (services/mail-since-links.ts). */
+export async function recordLinkMatchers(): Promise<Array<{ base: string; template: string }>> {
+  const out = [{ base: adminBase(), template: ADMIN_ROUTES.record }]
+  const portal = await portalRegistration()
+  if (portal) {
+    for (const [kind, template] of Object.entries(portal.routes ?? {})) {
+      if ((kind === 'record' || kind.startsWith('record:')) && typeof template === 'string')
+        out.push({ base: portal.base, template })
+    }
+  }
+  return out
+}
+
 /** Record link with an optional query suffix (addendum view etc.). */
 export async function recordLink(
   collection: string,

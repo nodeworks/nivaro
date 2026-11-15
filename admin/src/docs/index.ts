@@ -54,6 +54,7 @@ export * from './sections/layout-editor.js'
 export * from './sections/live-feeds.js'
 export * from './sections/live-lists.js'
 export * from './sections/live-ops.js'
+export * from './sections/live-outside.js'
 export * from './sections/live-progress.js'
 export * from './sections/live-records.js'
 export * from './sections/low-code.js'
@@ -305,6 +306,7 @@ import {
   wallboardPulseDocs,
   webPushDocs
 } from './sections/live-ops.js'
+import { liveOutsideDocs } from './sections/live-outside.js'
 import { collabLiveProgress } from './sections/live-progress.js'
 import { collabLiveOps, collabLiveRecords, collabPresence } from './sections/live-records.js'
 import { loadingFeelDocs } from './sections/loading-feel'
@@ -897,6 +899,7 @@ export const navSections: NavGroup[] = [
       collabItemLocking,
       collabLiveRecords,
       liveWidgetsDocs,
+      liveOutsideDocs,
       collabLiveProgress,
       collabOfflinePopout,
       collabLiveLists,
