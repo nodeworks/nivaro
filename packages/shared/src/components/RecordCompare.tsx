@@ -1,4 +1,4 @@
-import { useQueries, useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -11,6 +11,8 @@ import {
   type SectionGroupIn,
   type SectionPlacementIn
 } from '../lib/form-sections'
+import { type LiveBatch, useLiveAvailable, useLiveRecord } from '../lib/live'
+import { liveMotionAllowed, useLivePreference } from '../lib/live-preference'
 import { friendlyIdOf, type RecordRefMeta, recordRefLabel } from '../lib/record-ref'
 import { cn, titleCase } from '../lib/utils'
 import { Skeleton } from './ui/skeleton'
@@ -155,6 +157,68 @@ export function compareSideName(
   return `Record ${index + 1}`
 }
 
+/**
+ * Which fields moved on each side between two reads of the compared records (rt5 #16) — the
+ * cells that take the quiet live fade. A side that was not loaded before (first read) or is
+ * gone now marks nothing. Pure.
+ */
+export function changedCompareCells(
+  prev: Array<Record<string, unknown> | null>,
+  next: Array<Record<string, unknown> | null>
+): string[][] {
+  return next.map((rec, i) => {
+    const was = prev[i]
+    if (!rec || !was) return []
+    const out: string[] = []
+    for (const k of Object.keys(rec)) {
+      if (k === 'id' || !(k in was)) continue
+      if (compareKey(was[k]) !== compareKey(rec[k])) out.push(k)
+    }
+    return out
+  })
+}
+
+/**
+ * "Differences only" while records change underneath (rt5 #16): a row already on screen stays
+ * on screen (it now reads the same — that is news too), new differences join in place. Rows
+ * never vanish from under the person. Pure: `shown` = rows shown so far in this mode.
+ */
+export function stickyDiffRows(
+  sections: CompareSection[],
+  shown: ReadonlySet<string>
+): CompareSection[] {
+  return sections
+    .map((s) => ({ ...s, rows: s.rows.filter((r) => r.differs || shown.has(r.field)) }))
+    .filter((s) => s.rows.length > 0)
+}
+
+/** One compared record's live feed: its writes (anyone's, own included) re-read it as the viewer. */
+function CompareLiveSide({
+  collection,
+  id,
+  onChange
+}: {
+  collection: string
+  id: string | number
+  onChange: (id: string, batch: LiveBatch) => void
+}) {
+  useLiveRecord(collection, id, (batch) => onChange(String(id), batch), {
+    debounceMs: 800,
+    includeOwn: true
+  })
+  return null
+}
+
+/** The quiet fade on a compare cell whose value just changed (none with reduced motion / Calm / Off). */
+function fadeCell(el: Element | null): void {
+  if (!el || !(el instanceof HTMLElement) || typeof el.animate !== 'function') return
+  if (!liveMotionAllowed()) return
+  el.animate(
+    [{ backgroundColor: 'rgba(0, 206, 255, 0.18)' }, { backgroundColor: 'rgba(0, 206, 255, 0)' }],
+    { duration: 1600, easing: 'ease-out' }
+  )
+}
+
 const ABSENT_TEXT = {
   record: 'Not available',
   form: 'Not on this form',
@@ -267,11 +331,47 @@ export function RecordCompareDialog({
 
   const [diffOnly, setDiffOnly] = useState(false)
   const diffCount = sections.reduce((n, s) => n + s.rows.filter((r) => r.differs).length, 0)
-  const visible = diffOnly
-    ? sections
-        .map((s) => ({ ...s, rows: s.rows.filter((r) => r.differs) }))
-        .filter((s) => s.rows.length > 0)
-    : sections
+  // rt5 #16: with "Differences only" on, a row once shown stays while the records change.
+  const shownRef = useRef<Set<string>>(new Set())
+  const visible = diffOnly ? stickyDiffRows(sections, shownRef.current) : sections
+  if (diffOnly) for (const s of visible) for (const r of s.rows) shownRef.current.add(r.field)
+  else shownRef.current = new Set()
+
+  // rt5 #16 — live: a write to either record re-reads it as the viewer (a burst is one read),
+  // and the cells that moved take a short fade. Nothing reorders, nothing scrolls.
+  const qc = useQueryClient()
+  // "Live" only says so when changes really arrive (a socket, and live updates not Off).
+  const liveAvailable = useLiveAvailable()
+  const livePref = useLivePreference()
+  const live = liveAvailable && !livePref.off
+  const onLive = (id: string, batch: LiveBatch) => {
+    if (batch.aspectsOnly && !batch.changedFields?.includes('$state')) return
+    void qc.invalidateQueries({ queryKey: ['cbv-compare', collection, id] })
+    // A step move can change which form the record gets.
+    if (batch.changedFields === null || batch.changedFields.includes('$state'))
+      void qc.invalidateQueries({ queryKey: ['compare-form', collection, id] })
+  }
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const prevRecs = useRef<Array<Record<string, unknown> | null> | null>(null)
+  const [liveNote, setLiveNote] = useState('')
+  const readStamp = records.map((q) => q.dataUpdatedAt).join(',')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when a side's read changes (readStamp), never on a plain re-render
+  useEffect(() => {
+    if (loading || !readStamp) return
+    const prev = prevRecs.current
+    prevRecs.current = recs
+    if (!prev) return
+    const moved = changedCompareCells(prev, recs)
+    const rows = new Map<string, Element>()
+    for (const el of bodyRef.current?.querySelectorAll('[data-compare-row]') ?? [])
+      rows.set(el.getAttribute('data-compare-row') ?? '', el)
+    moved.forEach((fields, i) => {
+      for (const f of fields)
+        fadeCell(rows.get(f)?.querySelector(`[data-compare-cell="${i}"]`) ?? null)
+    })
+    const sides = moved.map((m, i) => (m.length ? sideName(i) : null)).filter(Boolean)
+    if (sides.length) setLiveNote(`${sides.join(' and ')} changed just now`)
+  }, [loading, readStamp])
   const formNames = formRows.map((f) => f?.layout?.name ?? null)
   const sameForm = new Set(formRows.map((f) => f?.layout?.id ?? null)).size === 1
   const cols = { gridTemplateColumns: `minmax(160px, 220px) repeat(${ids.length}, minmax(0, 1fr))` }
@@ -303,6 +403,25 @@ export function RecordCompareDialog({
               {sameForm && formNames[0] ? ` · ${formNames[0]} form` : ''}
             </span>
           )}
+          {live && !loading && (
+            <span
+              className='inline-flex items-center gap-1 text-[11.5px] text-muted-foreground'
+              data-tip='Changes to these records show here as they are saved'
+              data-compare-live
+            >
+              <span
+                className='h-1.5 w-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400'
+                aria-hidden
+              />
+              Live
+            </span>
+          )}
+          <span className='sr-only' role='status' aria-live='polite'>
+            {liveNote}
+          </span>
+          {ids.map((id) => (
+            <CompareLiveSide key={String(id)} collection={collection} id={id} onChange={onLive} />
+          ))}
           <label className='ml-auto flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground'>
             <input
               type='checkbox'
@@ -321,7 +440,7 @@ export function RecordCompareDialog({
             <X className='h-4 w-4' />
           </button>
         </div>
-        <div className='min-h-0 flex-1 overflow-auto'>
+        <div ref={bodyRef} className='relative min-h-0 flex-1 overflow-auto'>
           <div
             className='sticky top-0 z-[1] grid border-b border-border bg-slate-50 dark:bg-background'
             style={cols}
@@ -390,7 +509,8 @@ export function RecordCompareDialog({
                       <span className='min-w-0 px-3 py-1.5 text-muted-foreground'>{r.label}</span>
                       {r.cells.map((c, i) => (
                         <span
-                          key={i}
+                          key={String(ids[i])}
+                          data-compare-cell={i}
                           className={cn(
                             'min-w-0 break-words px-3 py-1.5 tabular-nums',
                             c.absent

@@ -516,7 +516,14 @@ export function getSocket(): Socket {
   // Record rooms ride this connection in both modes (use-record-presence joins them here), so the
   // record notices are relayed once here for every record page. `access:changed` reaches the live
   // hooks the same way on a per-tab socket; on the shared one the adapter hands it over.
-  for (const ev of ['record:integrity', 'record:automation', 'owners:changed', 'record:signal'])
+  // `record:chat` (rt5 #9): a message landed in the record's chat room — unread count re-read.
+  for (const ev of [
+    'record:integrity',
+    'record:automation',
+    'owners:changed',
+    'record:signal',
+    'record:chat'
+  ])
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   if (!usesWorkerSocket())
     socket.on('access:changed', (payload: unknown) => relayLiveEvent('access:changed', payload))

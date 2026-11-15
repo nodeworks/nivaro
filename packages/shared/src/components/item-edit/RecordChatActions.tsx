@@ -1,9 +1,10 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, MessageSquare, Send, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { useLiveAvailable, useLiveRecordEvent } from '../../lib/live'
 import { canOpenChatRoom, openChatRoom, useRecordRoomTypes } from '../chat/chat-core'
 import { HuddleLiveBadge } from '../chat/huddle/HuddleLiveBadge'
 import { useHuddleLive } from '../chat/huddle/huddle-live'
@@ -50,6 +51,18 @@ export function RecordChatActions({
 
   // Unread in this record's room (#986) — the button says there is something
   // to read before anyone opens it.
+  // rt5 #9: live — a message in the room (`record:chat` to this record's room, ids only) or
+  // reading it anywhere (`read:changed`, lib/user-sync.ts) re-reads the count as the viewer.
+  // A burst of messages is one re-read; the slow poll stays as the fallback without a socket.
+  const qc = useQueryClient()
+  const live = useLiveAvailable()
+  useLiveRecordEvent(
+    'record:chat',
+    collection,
+    itemId || null,
+    () => void qc.invalidateQueries({ queryKey: ['nvr-chat-record-room', collection, itemId] }),
+    { debounceMs: 1000, includeOwn: true, enabled: !!type && !!token }
+  )
   const { data: roomState } = useQuery({
     queryKey: ['nvr-chat-record-room', collection, itemId],
     queryFn: async () => {
@@ -63,7 +76,7 @@ export function RecordChatActions({
     },
     enabled: !!type && !!token && !!itemId,
     staleTime: 30_000,
-    refetchInterval: 60_000
+    refetchInterval: live ? 5 * 60_000 : 60_000
   })
   const unread = roomState?.unread ?? 0
   const huddleLive = useHuddleLive()

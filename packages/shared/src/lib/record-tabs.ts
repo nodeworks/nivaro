@@ -15,6 +15,10 @@ import { useEffect, useRef, useState } from 'react'
  * the record's edit lock on its way out announces `lock-released`, so the
  * window still showing the record takes the lock straight back.
  *
+ * rt5 #6: `saved` names the fields that save carried (field NAMES only, never
+ * values — the receiving window re-reads the record as the viewer), so the
+ * other window marks exactly those fields with the quiet live fade.
+ *
  * The channel is keyed by sign-in (`scope` = the signed-in user id): a
  * "View as" tab is another person and never shares state with the admin's
  * own tabs.
@@ -27,7 +31,7 @@ type TabMessage =
   | { type: 'hello'; tab: string; key: string }
   | { type: 'bye'; tab: string; key: string }
   | { type: 'focus'; tab: string; key: string; target: string }
-  | { type: 'saved'; tab: string; key: string }
+  | { type: 'saved'; tab: string; key: string; fields?: string[] }
   | { type: 'lock-released'; tab: string; key: string }
 
 function channelName(scope: string | null | undefined): string {
@@ -110,21 +114,44 @@ function openTabsChannel(
   }
 }
 
+/** The field names a `saved` note may carry: real fields only (no `_meta` / `$aspect`
+ *  keys), de-duplicated, at most 200. Null = "the record changed" (no list). Pure. */
+export function savedFieldNames(fields: readonly unknown[] | null | undefined): string[] | null {
+  if (!Array.isArray(fields)) return null
+  const out = [
+    ...new Set(
+      fields.filter(
+        (f): f is string =>
+          typeof f === 'string' && f.length > 0 && f.length <= 128 && !/^[_$]/.test(f)
+      )
+    )
+  ]
+  return out.length > 0 ? out.slice(0, 200) : null
+}
+
 /**
  * Tell this record's other windows (same sign-in) that something happened
- * here: `saved` (refresh) or `lock-released` (take the lock back).
+ * here: `saved` (refresh; `fields` = the field names the save carried) or
+ * `lock-released` (take the lock back).
  */
 export function announceRecordTabs(
   scope: string | null | undefined,
   type: 'saved' | 'lock-released',
   collection: string,
-  itemId: string | number
+  itemId: string | number,
+  fields?: readonly string[] | null
 ): void {
   const key = recordKey(collection, itemId)
   if (!key) return
   const ch = openTabsChannel(scope, () => {})
-  ch?.post({ type, tab: TAB_ID, key })
+  const names = type === 'saved' ? savedFieldNames(fields) : null
+  ch?.post(names ? { type: 'saved', tab: TAB_ID, key, fields: names } : { type, tab: TAB_ID, key })
   ch?.close()
+}
+
+/** What another window's announcement says: the saved field names, or null for "the record". */
+export interface RecordTabsInfo {
+  fields: string[] | null
 }
 
 /** Listen for another window's `type` announcement for one record (no React). */
@@ -133,12 +160,13 @@ export function subscribeRecordTabs(
   type: 'saved' | 'lock-released',
   collection: string,
   itemId: string | number,
-  cb: () => void
+  cb: (info: RecordTabsInfo) => void
 ): () => void {
   const key = recordKey(collection, itemId)
   if (!key) return () => {}
   const ch = openTabsChannel(scope, (m) => {
-    if (m.type === type && m.key === key) cb()
+    if (m.type === type && m.key === key)
+      cb({ fields: m.type === 'saved' ? savedFieldNames(m.fields) : null })
   })
   return () => ch?.close()
 }
@@ -149,14 +177,32 @@ export function useRecordTabsSignal(
   type: 'saved' | 'lock-released',
   collection: string | null | undefined,
   itemId: string | number | null | undefined,
-  cb: () => void
+  cb: (info: RecordTabsInfo) => void
 ): void {
   const cbRef = useRef(cb)
   cbRef.current = cb
   useEffect(() => {
     if (!collection || itemId == null) return
-    return subscribeRecordTabs(scope, type, collection, itemId, () => cbRef.current())
+    return subscribeRecordTabs(scope, type, collection, itemId, (info) => cbRef.current(info))
   }, [scope, type, collection, itemId])
+}
+
+/**
+ * How the "same record in another tab" note reads (rt5 #6), or null when there is nothing to
+ * say. Quiet on purpose: one line, no banner. `both` = this tab ALSO holds unsaved edits — two
+ * edit sets are racing, so the line says what the second save will do. Pure.
+ */
+export function otherTabNote(state: {
+  otherDirty: boolean
+  dirty: boolean
+}): { tone: 'quiet' | 'both'; text: string } | null {
+  if (!state.otherDirty) return null
+  if (state.dirty)
+    return {
+      tone: 'both',
+      text: 'Unsaved changes in another tab too — save one first; the other then asks about any field changed in both'
+    }
+  return { tone: 'quiet', text: 'Also open in another tab — editing there' }
 }
 
 export function useRecordTabs(
