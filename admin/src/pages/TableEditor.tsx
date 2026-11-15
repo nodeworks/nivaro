@@ -1,6 +1,7 @@
 import {
   ChangeImpactStrip,
   Combobox,
+  ConfigReachNote,
   ConfigReadBack,
   cleanQuickFilters,
   DataGuideCard,
@@ -2834,6 +2835,8 @@ function FieldMetaEditor({
           </Button>
         </div>
       </div>
+      {/* rt8 #25 — who a save of this field reaches right now (administrators). */}
+      <ConfigReachNote className='mt-2' collections={[tableName]} />
       {impactCheck && (
         <ChangeImpactStrip
           className='mt-2'

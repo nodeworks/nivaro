@@ -87,6 +87,9 @@ export interface NotificationDetail {
     label?: string | null
     id?: string | number | null
   } | null
+  /** rt8 #21 — the change came from an agent working for the sender ("via Claude"); set by
+   *  notifyUser from the request, never by a caller. */
+  via_agent?: string
   /** #2365 — the sender asked for an explicit acknowledgement. */
   ack_required?: boolean
   /** ISO time the recipient acknowledged; absent while pending. */

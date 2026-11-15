@@ -196,6 +196,19 @@ export const mcpDocs: DocSection = {
       type: 'p',
       text: 'Every edit and comment an assistant makes through the hosted endpoint carries a small badge beside the person’s name — in the record’s History, its comments and the Activity log, in the admin and in apps built on the shared components. By default it names the app (**via Claude**, **via Claude Code**: the name the app registered with, or the API key’s name); an administrator can switch it to one fixed label for every assistant (default **via assistant**) on **MCP → Connections**. The label is worked out when the record is read, so changing the setting relabels earlier changes too. The app’s name and the connection are stored on the Activity row (`nivaro_activity.via_app`, `mcp_conn`, migration 512) from server-known facts only — never from a header the app sends. Writes a person makes themselves, scripts using an API key directly, imports and scheduled jobs carry no badge.'
     },
+    { type: 'h2', id: 'mcp-agent-names', text: 'Agent names, and agents on a record' },
+    {
+      type: 'p',
+      text: 'Each connection goes by a name — by default the app’s own (**Claude**, **Claude Code**, the API key’s name). The person who connected it can rename it on **Profile → What my agents did** (the pencil beside its name), and an administrator can rename anyone’s on **MCP → Connections**. Names are plain text, up to 40 characters; clearing one goes back to the app’s name. The name is used everywhere an agent’s work is shown: the badge on its changes and comments (**via Desk Claude**), notifications its changes cause, chat messages it posts, and on the record itself.'
+    },
+    {
+      type: 'p',
+      text: 'While an agent reads or changes a record, everyone who has that record open sees a quiet line beside its viewers: **Claude (for Rob) is updating this record** (or **is reading**). It shows only to people who can open the record, names only the agent and the person it works for, and goes away by itself a few seconds after the agent stops (about 15 seconds after a read, 25 after a change). People who chose **Calm** or **Off** for live updates do not see it.'
+    },
+    {
+      type: 'p',
+      text: 'How it works: names are kept per connection in the MCP settings (`connection_names`); `PATCH /api/mcp-connections/mine/:conn/name` `{name | null}` for the owner, `PATCH /api/mcp-connections/:conn/name` for administrators. A renamed agent relabels its earlier changes too. Each in-process tool call that reads or writes one record (`/api/items/:collection/:id`, a pipeline move, a comment) marks that record for a short time and tells the record’s room `record:agents`; a page opened later is told on joining. Nothing is sent for a record nobody has open.'
+    },
     { type: 'h2', id: 'mcp-rollback', text: 'Roll back a connection’s changes' },
     {
       type: 'p',

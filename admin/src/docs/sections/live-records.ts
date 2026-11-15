@@ -304,6 +304,16 @@ export const collabLiveOps: DocSection = {
   label: 'Live Operations Screens',
   content: [
     { type: 'h1', id: 'live-ops', text: 'Live Operations Screens' },
+    { type: 'h2', id: 'config-reach', text: 'Who a config change reaches' },
+    {
+      type: 'p',
+      text: 'When an administrator saves a layout, a field, a rule, a pipeline step or transition, or a draft of the owner matrix, the save shows **This reaches 34 open forms, 12 people right now** — the record pages of the affected collections that are open at that moment, not counting your own. Open the line to see who, with how many forms each. It is worked out from the live connections in memory (`GET /api/realtime/config-reach?collections=…`, administrators only) and refreshed every 15 seconds while shown.'
+    },
+    { type: 'h2', id: 'search-live', text: 'Search results stay current' },
+    {
+      type: 'p',
+      text: 'While the search palette (⌘K) is open, its record results follow changes to the collections they come from: a renamed record shows its new name in place, a record that no longer matches stays where it was, struck through and marked **No longer matches** (it cannot be opened from there), and new matches are counted on a small **1 new match · Show** pill — Show asks again and lays the results out afresh. Nothing moves under the keyboard selection on its own. It is the same live results the full search page has: every re-ask is your own search, so a record you can no longer see stops matching; bursts of changes are one re-ask, and nothing arrives when live updates are **Off**.'
+    },
     {
       type: 'p',
       text: 'The operations screens, and help videos, follow what is happening without a reload. As with live records, the server only says THAT something moved (ids, counts and field names — never values); each screen re-reads through its own permission-checked request. A slow poll stays underneath as the safety net, so a screen is never worse off when the socket is down.'

@@ -33,6 +33,7 @@ import {
 } from '../lib/notification-target'
 import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../lib/record-peek'
 import { cn, formatRelative } from '../lib/utils'
+import { AgentBadge } from './AgentBadge'
 import { LiveCount } from './LiveCount'
 import { AsItWasSheet } from './notifications/AsItWasSheet'
 import {
@@ -436,6 +437,7 @@ export function NotificationBell({
           <ResolvedLine resolved={n.detail?.resolved} />
           <span className='mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px] text-slate-400'>
             <RelativeTime value={n.created_at} />
+            <AgentBadge label={n.detail?.via_agent} />
             <DeliveryChips
               delivery={n.delivery}
               mailLogUrl={mailLogUrl}

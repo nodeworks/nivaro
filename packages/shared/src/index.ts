@@ -1,6 +1,19 @@
 export type { ActivityEntryProps } from './components/ActivityEntry'
 export { ActivityEntry, ActivityFeed, useActivityLabels } from './components/ActivityEntry'
 export { AgentBadge } from './components/AgentBadge'
+export { AgentPresenceChip } from './components/AgentPresenceChip'
+export {
+  type ConfigReachAnswer,
+  ConfigReachNote,
+  configReachText
+} from './components/ConfigReachNote'
+export {
+  type AgentMode,
+  agentSentence,
+  agentsFromPayload,
+  type RecordAgent,
+  useRecordAgents
+} from './lib/agent-presence'
 export * from './components/AnnouncementBanner'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export * from './components/AudienceConfirmPanel'

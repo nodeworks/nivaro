@@ -312,6 +312,13 @@ export interface McpSettings {
   agent_label_mode: 'app' | 'fixed'
   /** The fixed badge text, and the fallback when an app has no name. */
   agent_label: string
+  /**
+   * The name each connection goes by (rt8 #21), by connection key: what a record's presence
+   * ("Claude (for Rob) is updating this record"), its activity badge and notifications call the
+   * agent. Set by the connection's owner or an administrator; a connection without one goes by
+   * its app's registered name (the OAuth client, the API key's name).
+   */
+  connection_names: Record<string, string>
 }
 
 export const MCP_SETTINGS_DEFAULTS: McpSettings = {
@@ -320,11 +327,14 @@ export const MCP_SETTINGS_DEFAULTS: McpSettings = {
   rate_limit_per_minute: 120,
   connection_limits: {},
   agent_label_mode: 'app',
-  agent_label: 'via assistant'
+  agent_label: 'via assistant',
+  connection_names: {}
 }
 /** The notice before an idle disconnection. */
 export const IDLE_NOTICE_DAYS = 7
 const MAX_OVERRIDES = 500
+/** Connection names kept (one per connection that has one). */
+const MAX_NAMES = 2000
 
 const int = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) ? v : Number.NaN)
 
@@ -333,7 +343,11 @@ export function mergeMcpSettings(base: McpSettings, patch: unknown): McpSettings
   if (!patch || typeof patch !== 'object' || Array.isArray(patch))
     throw new Error('Settings must be an object')
   const p = patch as Record<string, unknown>
-  const out: McpSettings = { ...base, connection_limits: { ...base.connection_limits } }
+  const out: McpSettings = {
+    ...base,
+    connection_limits: { ...base.connection_limits },
+    connection_names: { ...(base.connection_names ?? {}) }
+  }
   if (p.idle_flag_days !== undefined) {
     const n = int(p.idle_flag_days)
     if (!(n >= 7 && n <= 365)) throw new Error('Flag after must be 7 to 365 days')
@@ -370,6 +384,23 @@ export function mergeMcpSettings(base: McpSettings, patch: unknown): McpSettings
     if (Object.keys(out.connection_limits).length > MAX_OVERRIDES)
       throw new Error(`At most ${MAX_OVERRIDES} connection limits`)
   }
+  if (p.connection_names !== undefined) {
+    const m = p.connection_names
+    if (!m || typeof m !== 'object' || Array.isArray(m))
+      throw new Error('connection_names must be an object')
+    for (const [k, v] of Object.entries(m as Record<string, unknown>)) {
+      if (!CONN_RE.test(k)) throw new Error(`${k} is not a connection`)
+      if (v === null || v === '') {
+        delete out.connection_names[k]
+        continue
+      }
+      const name = typeof v === 'string' ? cleanAgentName(v) : ''
+      if (!name) throw new Error('An agent name needs at least one letter or digit')
+      out.connection_names[k] = name
+    }
+    if (Object.keys(out.connection_names).length > MAX_NAMES)
+      throw new Error(`At most ${MAX_NAMES} agent names`)
+  }
   if (p.agent_label_mode !== undefined) {
     if (p.agent_label_mode !== 'app' && p.agent_label_mode !== 'fixed')
       throw new Error('The badge must name the app or use the fixed label')
@@ -396,12 +427,43 @@ export function cleanBadge(raw: string): string {
     .slice(0, 40)
 }
 
+/** Longest agent name kept (it reads inside "<name> (for Rob) is updating this record"). */
+export const AGENT_NAME_MAX = 40
+
+/**
+ * An agent name as stored and shown: plain text on one line (no control characters, no angle
+ * brackets — it is never markup), ≤ 40 characters; '' when nothing readable is left.
+ */
+export function cleanAgentName(raw: string): string {
+  const s = cleanBadge(String(raw ?? '').replace(/[<>]/g, ''))
+  return /[\p{L}\p{N}]/u.test(s) ? s.slice(0, AGENT_NAME_MAX) : ''
+}
+
+/** The name a connection goes by: its owner's or an admin's choice, else `fallback` (the app). */
+export function agentDisplayName(
+  conn: string | null | undefined,
+  fallback: string | null | undefined,
+  s: Pick<McpSettings, 'connection_names'> | null | undefined
+): string {
+  const set = conn ? s?.connection_names?.[String(conn).toLowerCase()] : undefined
+  if (set) return set
+  const app = typeof fallback === 'string' ? cleanBadge(fallback) : ''
+  return app || 'Assistant'
+}
+
 /**
  * The badge a record shows beside a write an agent made (#3213), from the app name stored on
- * the activity row (`via_app`) and the settings: "via Claude Code", or the fixed label.
+ * the activity row (`via_app`) and the settings: "via Claude Code", or the fixed label. With the
+ * row's connection (`conn`), the name the connection goes by now wins (rt8 #21) — renaming an
+ * agent relabels its history.
  */
-export function agentBadgeLabel(viaApp: string | null | undefined, s: McpSettings): string {
-  const app = typeof viaApp === 'string' ? cleanBadge(viaApp) : ''
+export function agentBadgeLabel(
+  viaApp: string | null | undefined,
+  s: McpSettings,
+  conn?: string | null
+): string {
+  const named = conn ? s.connection_names?.[String(conn).toLowerCase()] : undefined
+  const app = named || (typeof viaApp === 'string' ? cleanBadge(viaApp) : '')
   if (s.agent_label_mode === 'fixed' || !app) return s.agent_label
   return cleanBadge(`via ${app}`)
 }
@@ -429,6 +491,15 @@ function lenient(raw: unknown): McpSettings {
 }
 
 const cache = new Map<string, { at: number; value: McpSettings }>()
+
+/**
+ * The settings this process last read for the current tenant, without waiting (null = none read
+ * yet). For sync paths inside a request that already read them (the MCP endpoint reads them on
+ * every call for its rate limit): the write stamp names the agent by its chosen name.
+ */
+export function peekMcpSettings(): McpSettings | null {
+  return cache.get(getTenantId() ?? '')?.value ?? null
+}
 
 /** Effective settings (instance overrides overlaid). Never throws; 60 s cache per tenant. */
 export async function readMcpSettings(): Promise<McpSettings> {

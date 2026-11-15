@@ -590,7 +590,9 @@ export function getSocket(): Socket {
     'record:automation',
     'owners:changed',
     'record:signal',
-    'record:chat'
+    'record:chat',
+    // rt8 #21 — an AI agent reading or writing the record (names only).
+    'record:agents'
   ])
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   if (!usesWorkerSocket())

@@ -33,6 +33,7 @@ import {
 import { openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../../lib/record-peek'
 import { cn, formatRelative } from '../../lib/utils'
+import { AgentBadge } from '../AgentBadge'
 import { hasSnapshotView, offersChanges } from '../NotificationBell'
 import { RelativeTime } from '../RelativeTime'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -543,7 +544,8 @@ export function NotificationCenterView({
           >
             {n.subject ?? n.title ?? '—'}
           </span>
-          <span className='shrink-0 text-[10.5px] text-slate-400'>
+          <span className='flex shrink-0 items-center gap-1.5 text-[10.5px] text-slate-400'>
+            <AgentBadge label={n.detail?.via_agent} />
             <RelativeTime value={n.created_at ?? new Date()} />
           </span>
         </div>

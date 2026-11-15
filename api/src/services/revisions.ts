@@ -3,6 +3,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import { optionalActivityColumns } from './activity-readable.js'
 import { type ActivityActor, actorOf } from './activity-sentence.js'
 import { agentBadgesForActivity } from './mcp-attribution.js'
+import { agentDisplayName, peekMcpSettings } from './mcp-calls.js'
 import { noteDerivedWrite } from './request-trace.js'
 import { hideViewAsActor, viewAsMovesFor } from './view-as-attribution.js'
 
@@ -227,7 +228,10 @@ function withActorInputs(q: ReturnType<typeof db>, cols: Set<string>) {
 /** The derived actor on a history row; the raw credential columns never leave the server. */
 function settleActor(row: Record<string, unknown>): Record<string, unknown> {
   if (row.activity == null) return row
-  const actor = actorOf(row as never)
+  let actor = actorOf(row as never)
+  // rt8 #21: an agent goes by the name its connection has now (renames relabel history).
+  if (actor.kind === 'mcp' && actor.id)
+    actor = { ...actor, name: agentDisplayName(actor.id, actor.name, peekMcpSettings()) }
   const out: Record<string, unknown> = { ...row, actor: actor.kind === 'person' ? null : actor }
   for (const c of [...INTERNAL_INPUTS, 'api_key_name']) delete out[c]
   return out

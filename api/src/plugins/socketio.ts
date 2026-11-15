@@ -9,6 +9,7 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { issuingAdminStillAdmin } from '../middleware/authenticate.js'
 import { accessPendingSignIn } from '../services/access-pending.js'
+import { agentSnapshot } from '../services/agent-presence.js'
 import { userHasSocket } from '../services/ai-stream-delivery.js'
 import { chaosRedisClient, chaosRedisSubscriber } from '../services/chaos/redis-hook.js'
 import { canSeeRoom } from '../services/chat.js'
@@ -245,6 +246,16 @@ export function isUserViewing(collection: string, item: string, userId: string):
   for (const v of map?.values() ?? []) if (v.id === userId) return true
   // Post-mortem 3.3 — viewing on another process (the board, entries younger than 3 s).
   return boardMergeOn() && boardIsViewing(room, userId)
+}
+
+/**
+ * rt8 #21: has anyone this record's room open (`room` tenant-scoped)? This process's sockets,
+ * plus the other processes' from the board when it is merged. Lets agent presence skip the emit
+ * for a record nobody is looking at.
+ */
+export function recordRoomHasViewers(room: string): boolean {
+  if ((recordViewers.get(room)?.size ?? 0) > 0) return true
+  return boardMergeOn() && boardPeerViewers(room).length > 0
 }
 
 /**
@@ -2161,6 +2172,13 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       }
       map.set(socket.id, { id: user.id, name: displayName(user) })
       broadcastViewers(room)
+      // rt8 #21 — agents working on the record right now (their marks outlive no one's join).
+      void agentSnapshot(app.redis, room)
+        .then((agents) => {
+          if (agents.length && joinedRecordRooms.has(room))
+            socket.emit('record:agents', { collection, item: String(item), agents })
+        })
+        .catch(() => {})
     }
     // Cloud: in the socket's tenant, so the gate reads that tenant's database.
     socket.on('record:join', inSocketTenant(socket, onRecordJoin))

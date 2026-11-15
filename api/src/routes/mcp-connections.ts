@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -8,7 +8,14 @@ import {
   readAgentActivity,
   undoAgentWrite
 } from '../services/mcp-activity.js'
-import { CONN_RE, readMcpSettings, writeMcpSettings } from '../services/mcp-calls.js'
+import {
+  AGENT_NAME_MAX,
+  agentDisplayName,
+  CONN_RE,
+  cleanAgentName,
+  readMcpSettings,
+  writeMcpSettings
+} from '../services/mcp-calls.js'
 import { idleDecision, runIdleReview } from '../services/mcp-idle-review.js'
 import { deleteScope, scopedKeysNotListed, withScopes } from '../services/mcp-scope.js'
 import { getGrant, listGrants, revokeGrant } from '../services/oauth-store.js'
@@ -21,10 +28,12 @@ import { bumpUserAccessVersion } from '../services/permission-cache.js'
  *   GET    /mine/activity                their agents' tool calls (?conn=&before=&limit=)
  *   POST   /mine/activity/:activityId/undo   undo one write an agent made, as the person
  *   DELETE /mine/:conn                   disconnect one of their OAuth connections
+ *   PATCH  /mine/:conn/name              {name | null} the name their agent goes by (rt8 #21)
  *   GET    /                             admin: everyone's connections + stats + idle state
  *   GET    /idle                         admin: connections the idle review has flagged or will
  *   DELETE /:conn                        admin: disconnect anyone's connection (OAuth or key)
  *   PATCH  /:conn/limit                  admin: {rate_limit_per_minute: n | null}
+ *   PATCH  /:conn/name                   admin: {name | null} anyone's agent name (rt8 #21)
  *   GET    /settings  PATCH /settings    admin: idle review days + default rate limit
  *   POST   /idle-review/run              admin: {dry_run?} run the review now
  *
@@ -49,6 +58,64 @@ const publicSettings = async () => {
     idle_flag_days: s.idle_flag_days,
     idle_revoke_days: s.idle_revoke_days,
     rate_limit_per_minute: s.rate_limit_per_minute
+  }
+}
+
+/** Who a connection belongs to (the person its calls act as), or null when it is not there. */
+async function connectionOwner(app: FastifyInstance, conn: string): Promise<string | null> {
+  if (conn.startsWith('o')) {
+    const g = await getGrant(app.redis, conn.slice(1), 'mcp')
+    return g ? String(g.user_id) : null
+  }
+  if (conn.startsWith('k')) {
+    const key = (await db('nivaro_api_keys')
+      .where({ id: Number(conn.slice(1)) })
+      .first('user')) as { user: string } | undefined
+    return key ? String(key.user) : null
+  }
+  return conn.slice(1)
+}
+
+/**
+ * rt8 #21 — set or clear the name an agent goes by. `name` null / '' = back to the app's own.
+ * Plain text, ≤ 40 characters; shown as text everywhere (presence, badges, notifications).
+ */
+async function setConnectionName(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  reply: FastifyReply,
+  conn: string,
+  admin: boolean
+) {
+  if (!CONN_RE.test(conn)) return reply.code(400).send({ error: 'conn is not valid' })
+  const raw = (req.body as { name?: unknown } | null)?.name
+  if (raw !== null && raw !== undefined && typeof raw !== 'string')
+    return reply.code(400).send({ error: 'name must be text' })
+  if (typeof raw === 'string' && raw.length > 200)
+    return reply.code(400).send({ error: `A name is at most ${AGENT_NAME_MAX} characters` })
+  const name = typeof raw === 'string' && raw.trim() ? cleanAgentName(raw) : null
+  if (typeof raw === 'string' && raw.trim() && !name)
+    return reply.code(400).send({ error: 'A name needs at least one letter or digit' })
+  const owner = await connectionOwner(app, conn).catch(() => null)
+  const me = String(req.user!.id).toLowerCase()
+  // Not found and not theirs answer alike: a person cannot probe other people's connections.
+  if (!owner || (!admin && owner.toLowerCase() !== me))
+    return reply.code(404).send({ error: 'Connection not found' })
+  const next = await writeMcpSettings({ connection_names: { [conn]: name } })
+  if (next === false)
+    return reply.code(409).send({ error: 'MCP settings need migration 480 on this database' })
+  await logActivity({
+    action: 'mcp-connection-name',
+    user: req.user!.id,
+    comment: `${conn}: ${name ?? '(app name)'}`.slice(0, 200),
+    req
+  })
+  return {
+    data: {
+      conn,
+      // null = it goes by its app's own name again (the listing names it).
+      custom_name: next.connection_names[conn] ?? null
+    }
   }
 }
 
@@ -79,8 +146,17 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'before must be a timestamp' })
       const userId = String(req.user!.id)
       // The apps' registered names (the log keeps a caller-key slug of each).
-      const grants = await listGrants(app.redis, userId, 'mcp')
-      const names = new Map(grants.map((g) => [`o${g.id.toLowerCase()}`, g.client_name]))
+      const [grants, settings] = await Promise.all([
+        listGrants(app.redis, userId, 'mcp'),
+        readMcpSettings()
+      ])
+      // rt8 #21 — each by the name it goes by.
+      const names = new Map(
+        grants.map((g) => {
+          const conn = `o${g.id.toLowerCase()}`
+          return [conn, agentDisplayName(conn, g.client_name, settings)]
+        })
+      )
       const page = await readAgentActivity(userId, {
         conn: conn ?? null,
         before: before ?? null,
@@ -124,6 +200,12 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     }
   )
 
+  app.patch<{ Params: { conn: string }; Body: { name?: string | null } }>(
+    '/mine/:conn/name',
+    { preHandler: requireAuth },
+    (req, reply) => setConnectionName(app, req, reply, req.params.conn, false)
+  )
+
   // ── Administrators ────────────────────────────────────────────────────────
   app.get('/', { preHandler: requireAdmin }, async () => {
     const settings = await readMcpSettings()
@@ -137,6 +219,8 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         kind: 'api_key' as const,
         rate_limit_per_minute: settings.connection_limits[k.conn] ?? settings.rate_limit_per_minute,
         rate_limit_custom: settings.connection_limits[k.conn] !== undefined,
+        custom_name: settings.connection_names?.[k.conn] ?? null,
+        display_name: agentDisplayName(k.conn, k.name, settings),
         idle: null,
         stats: null
       }))
@@ -213,6 +297,12 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: (err as Error).message })
       }
     }
+  )
+
+  app.patch<{ Params: { conn: string }; Body: { name?: string | null } }>(
+    '/:conn/name',
+    { preHandler: requireAdmin },
+    (req, reply) => setConnectionName(app, req, reply, req.params.conn, true)
   )
 
   app.delete<{ Params: { conn: string } }>(
