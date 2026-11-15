@@ -142,7 +142,7 @@ function Face({
       <UserAvatar
         userId={member.id}
         alt={member.name}
-        className={cn('rounded-full object-cover ring-2', ring)}
+        className={cn('block rounded-full object-cover ring-2', ring)}
         style={{ width: px, height: px }}
         fallback={
           <span
@@ -156,14 +156,17 @@ function Face({
           </span>
         }
       />
-      <span
-        aria-hidden
-        className={cn(
-          '-bottom-px -right-px absolute h-2.5 w-2.5 rounded-full ring-2',
-          ring,
-          DOT[status]
-        )}
-      />
+      {/* No dot = not online: a grey dot on every absent face read as uneven spacing. */}
+      {status !== 'offline' && (
+        <span
+          aria-hidden
+          className={cn(
+            'absolute right-0 bottom-0 h-2 w-2 rounded-full ring-[1.5px]',
+            ring,
+            DOT[status]
+          )}
+        />
+      )}
     </span>
   )
 }
@@ -322,13 +325,18 @@ export function QueueTeamStrip({ queueId }: { queueId: string }) {
       data-queue-team
       data-live-quiet={pref.quiet ? '' : undefined}
     >
-      <span className='shrink-0 font-medium text-slate-500 dark:text-slate-400'>Team</span>
+      <span
+        className='shrink-0 font-medium text-slate-500 dark:text-slate-400'
+        data-tip='The people who own records in this queue (its owner groups)'
+      >
+        Owners
+      </span>
       <Popover>
         <PopoverTrigger asChild>
           <button
             type='button'
             className='flex min-w-0 items-center gap-3 rounded-md px-1 py-0.5 hover:bg-slate-50 dark:hover:bg-slate-800'
-            aria-label={`Team availability: ${teamSummary(rows)}. Show everyone`}
+            aria-label={`Owners of this queue: ${teamSummary(rows)}. Show everyone`}
           >
             <span className='shrink-0 whitespace-nowrap text-slate-700 dark:text-slate-200'>
               {teamSummary(rows)}
@@ -338,7 +346,7 @@ export function QueueTeamStrip({ queueId }: { queueId: string }) {
               {shown.map((r, i) => (
                 <span
                   key={r.member.id}
-                  className='relative'
+                  className='relative inline-flex'
                   style={{ zIndex: shown.length - i }}
                   data-tip={`${r.member.name} · ${TEAM_STATUS_LABEL[r.status]}`}
                 >
