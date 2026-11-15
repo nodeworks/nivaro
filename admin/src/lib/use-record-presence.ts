@@ -1,4 +1,4 @@
-import { markRemoteCell } from '@nivaro/shared'
+import { liveEventQuiet, markRemoteCell, useLivePreference } from '@nivaro/shared'
 import { useEffect, useRef, useState } from 'react'
 import type { Socket } from 'socket.io-client'
 import { useAuth } from '@/lib/auth'
@@ -27,6 +27,8 @@ export interface Viewer {
 export interface LiveEdit extends Viewer {
   value?: unknown
 }
+
+const NO_EDITING: Record<string, LiveEdit> = {}
 
 export function useRecordPresence(collection: string | undefined, item: string | undefined) {
   const { user } = useAuth()
@@ -103,6 +105,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
     // On the shared socket the sender's own `realtime.emit('record:signal')` already reaches it.
     if (!shared) window.addEventListener('nvr:record-signal-out', onSignalOut)
     bind('record:uploading', (payload: unknown) => {
+      if (liveEventQuiet('record:uploading')) return
       window.dispatchEvent(new CustomEvent('nvr:record-uploading', { detail: payload }))
     })
 
@@ -223,10 +226,16 @@ export function useRecordPresence(collection: string | undefined, item: string |
     }
   }, [collection, item, user?.id])
 
+  // Live updates Calm/Off (Profile → Display): no "who else is here" or "editing" marks. The
+  // person still joins the room (others keep seeing them); only what this tab shows goes quiet.
+  const { quiet } = useLivePreference()
+  const shownEditing = quiet ? NO_EDITING : editing
+
   // Imperative outline on remotely-edited fields
   useEffect(() => {
     const marked: HTMLElement[] = []
     const undo: Array<() => void> = []
+    const editing = shownEditing
     for (const field of Object.keys(editing)) {
       // A grid cell: the person's own colour, their name on hover (realtime item 25).
       if (field.startsWith('cell:')) {
@@ -259,8 +268,8 @@ export function useRecordPresence(collection: string | undefined, item: string |
       }
       for (const u of undo) u()
     }
-  }, [editing])
+  }, [shownEditing])
 
-  const others = viewers.filter((v) => v.id !== user?.id)
-  return { viewers: others, editing }
+  const others = quiet ? [] : viewers.filter((v) => v.id !== user?.id)
+  return { viewers: others, editing: shownEditing }
 }

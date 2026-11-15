@@ -214,6 +214,35 @@ last 24 hours; the target is typed back to start. Runs live under
 `.runbook-runs/`, survive the API restarting, and can be cancelled or resumed
 at the step that failed.
 
+### After a staging deploy: the realtime bot
+
+`scripts/realtime-bot/bot.mjs` checks that a change one person makes shows on
+another person's open screen within 2 s, without a reload. It creates two
+throwaway people (`rt-bot-…@rt-bot.invalid`), opens the admin app as A in
+headless Chromium, makes changes as B through the API (field edit, comment,
+file attach, line add, pipeline move, create in a list, delete) and prints a
+pass/fail table with timings. Everything it made is removed at the end, also
+when a check or the setup fails (the pipeline move cannot be undone, so it only
+runs when you name a transition).
+
+```bash
+npx playwright install chromium        # once per machine
+node scripts/realtime-bot/bot.mjs --target https://<staging host> --dry-run
+RT_BOT_ADMIN_TOKEN=<an administrator's own static token> \
+node scripts/realtime-bot/bot.mjs --target https://<staging host> \
+  --role <role uuid that may read and update the collection> \
+  --collection <collection> --record <throwaway record id> --field <text field> \
+  [--line-collection <c> --line-fk <fk field> --line-field <text field>] \
+  [--transition <transition uuid> --move-expect "<state label>"] \
+  [--create-json '{"required_field": 1}'] [--skip file]
+```
+
+Exit code 0 = every check that ran passed, 1 = one failed, 2 = refused or bad
+options, 3 = setup failed. It refuses any target whose `/api/app-info` says
+`production` (or does not answer), and host names with prod/production in them.
+Pick a record nobody else follows: B's comment, file and line are real writes.
+The `--field` (or `--list-field`) must be a column the list shows.
+
 ## SDK coverage
 
 `pnpm --filter @nivaro/api run sdk:coverage` registers the route tree in

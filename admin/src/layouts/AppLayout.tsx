@@ -93,6 +93,7 @@ import {
   isRecordPopout,
   JobsTray,
   LiveAnnouncer,
+  LivePreferenceHost,
   NavigationContext,
   NivaroProvider,
   OfflineBanner,
@@ -1227,6 +1228,8 @@ function UserSyncHost() {
   return (
     <NivaroProvider client={announcementsClient}>
       <UserSyncInner onPrefsChanged={() => void refetch()} />
+      {/* Realtime round 3 #24 — Profile → Display → Live updates (Normal / Calm / Off). */}
+      <LivePreferenceHost />
     </NivaroProvider>
   )
 }

@@ -1361,6 +1361,27 @@ export * from './lib/waiting-count'
 export * from './lib/live-announcer'
 export { LiveAnnouncer } from './components/LiveAnnouncer'
 export { TabCountHost } from './components/TabCountHost'
+// Realtime round 3 #24 — Live updates: Normal / Calm / Off (Profile → Display, role defaults)
+export {
+  __resetLivePreferenceForTests,
+  LIVE_CALM_PAUSE_MS,
+  LIVE_DATA_EVENTS,
+  LIVE_MODE_LABELS,
+  LIVE_MODES,
+  LIVE_PRESENCE_EVENTS,
+  type LiveModeSource,
+  type LivePreference,
+  liveCollectionEventPasses,
+  liveEventQuiet,
+  livePausedAt,
+  livePreferenceOf,
+  parseLiveMode,
+  resolveLiveMode,
+  setLiveMode,
+  subscribeLiveMode
+} from './lib/live-preference'
+export { LIVE_OFF_TIP, LiveOffNote } from './components/LiveOffNote'
+export { LivePreferenceHost } from './components/LivePreferenceHost'
 export { configureTabSound, pickSoundTab, shouldPlayHere } from './lib/tab-sound'
 export {
   BRAND_ACCENT,

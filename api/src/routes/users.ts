@@ -1289,6 +1289,14 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.live_announce = body.live_announce
     }
+    if ('live_mode' in body) {
+      // Live updates (realtime round 3, item 24): calm / normal / off; null = the role's default.
+      const v = body.live_mode
+      if (v !== null && !['calm', 'normal', 'off'].includes(String(v))) {
+        return reply.code(400).send({ error: 'live_mode must be calm, normal, off or null' })
+      }
+      patch.live_mode = v
+    }
     if ('week_start' in body) {
       if (!['mon', 'sun'].includes(String(body.week_start))) {
         return reply.code(400).send({ error: "week_start must be 'mon' or 'sun'" })

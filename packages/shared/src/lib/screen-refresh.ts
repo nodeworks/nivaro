@@ -1,5 +1,6 @@
 import type { Query, QueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { getLiveMode } from './live-preference'
 import { forgetSettledReads } from './request-gate'
 
 /**
@@ -187,6 +188,10 @@ export function refreshScreenData(
   if (running) return running.then((r) => ({ ...r, coalesced: true }))
   const now = opts.now ?? Date.now
   const manual = reason === 'button' || reason === 'palette' || reason === 'shortcut'
+  // Live updates Off (lib/live-preference.ts): only the person refreshes data — no automatic
+  // resync of an idle or returning tab. The button, palette and shortcut always work.
+  if (!manual && getLiveMode() === 'off')
+    return Promise.resolve({ queries: 0, loaders: 0, failed: 0, ms: 0, coalesced: true })
   if (!manual && lastResult && now() - lastFinishedAt < SCREEN_REFRESH_MIN_GAP_MS)
     return Promise.resolve({ ...lastResult, coalesced: true })
   const qc = opts.qc === undefined ? boundClient : opts.qc
