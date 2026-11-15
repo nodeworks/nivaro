@@ -1,4 +1,6 @@
 import { getIo } from './io-holder.js'
+import { emitToSignedIn } from './record-events.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Tells a person's other tabs and devices that something of theirs changed, so
@@ -7,6 +9,10 @@ import { getIo } from './io-holder.js'
  *
  *   read:changed   {kind: 'notifications' | 'chat', room?}   unread state moved
  *   prefs:changed  {keys: string[]}                          preferences were saved
+ *   mine:changed   {kind: MineKind}                          one of the person's own lists moved
+ *                  (saved views, saved searches, Overview pins) — rt4 #20
+ *   pins:changed   {}                                        the shared collection pins moved
+ *                  (everyone's list: sent to every signed-in socket of the tenant)
  *
  * Payloads carry kinds, room keys and preference NAMES — never values; the tab
  * refetches through its own permission-checked routes.
@@ -34,6 +40,23 @@ export function announceChatRead(userId: string | null | undefined, room: string
 /** Preferences were saved; `keys` names which. */
 export function announcePrefsChanged(userId: string | null | undefined, keys: string[]) {
   emitToUserRoom(userId, 'prefs:changed', { keys: keys.slice(0, 60) })
+}
+
+/** The person's own lists a save in one tab or device must show in the others (rt4 #20). */
+export type MineKind = 'saved-views' | 'saved-searches' | 'overview'
+
+/** One of the caller's own lists changed (a saved view, a saved search, an Overview pin). */
+export function announceMineChanged(userId: string | null | undefined, kind: MineKind) {
+  emitToUserRoom(userId, 'mine:changed', { kind })
+}
+
+/** The shared collection pins changed — every signed-in person's Collections page refetches. */
+export function announcePinsChanged() {
+  try {
+    emitToSignedIn(currentTenantKey(), 'pins:changed', {})
+  } catch {
+    /* best-effort */
+  }
 }
 
 /** Routes under /notifications that move unread state (method + path tail). */

@@ -19,6 +19,7 @@ import {
 } from '../services/overview/prefs.js'
 import { computeOverviewStats, computeSinceDigest, memo } from '../services/overview/stats.js'
 import { sharedGatedRead } from '../services/read-gate.js'
+import { announceMineChanged } from '../services/user-sync.js'
 import type { User } from '../types.js'
 import { NIVARO_VERSION } from '../version.js'
 
@@ -134,6 +135,7 @@ export async function overviewPageRoutes(app: FastifyInstance) {
         ? { pinned_widgets: normalizePinnedWidgets(body.pinned_widgets) }
         : {})
     }))
+    announceMineChanged(String(user.id), 'overview')
     return { data: next }
   })
 

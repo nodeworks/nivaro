@@ -1976,6 +1976,11 @@ export async function buildServer() {
         const { pruneDrafts } = await import('./services/chat-drafts.js')
         await pruneDrafts()
       })
+      // Record-form drafts kept for a person's other devices live 7 days (rt4 #21).
+      app.cron.schedule('record-drafts-prune', '25 4 * * *', async () => {
+        const { pruneExpiredDrafts } = await import('./services/record-drafts.js')
+        await pruneExpiredDrafts()
+      })
       // Close chat polls whose time has passed and post their summary line (#2337).
       app.cron.schedule(
         'chat-polls-close',

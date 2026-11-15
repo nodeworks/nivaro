@@ -17,9 +17,12 @@ import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { invalidateRecordTasks, OPEN_TASK_STATUSES } from '../../lib/record-tasks'
+import { usePresenceStates } from '../../lib/use-online-users'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import { cn, formatDate, formatDateTime, formatRelative } from '../../lib/utils'
 import { TaskDoButton } from '../ai/TaskDo'
+import { PresenceDot } from '../PresenceDot'
+import { RelativeTime } from '../RelativeTime'
 import { Button } from '../ui/button'
 import { Checkbox } from '../ui/checkbox'
 import {
@@ -238,6 +241,8 @@ function AssigneePicker({
     staleTime: 60_000
   })
 
+  // The online dot beside a name (rt4 #22) — a dot only, the order is untouched.
+  const presence = usePresenceStates(open)
   const row = (p: Person, reasons?: string[]) => {
     const n = openCounts?.[String(p.id).toUpperCase()] ?? 0
     return (
@@ -254,6 +259,7 @@ function AssigneePicker({
         <Check
           className={cn('mr-2 h-3.5 w-3.5', same(value, p.id) ? 'opacity-100' : 'opacity-0')}
         />
+        <PresenceDot state={presence.get(String(p.id).toUpperCase())} className='mr-1.5' />
         <span className='min-w-0 flex-1 truncate'>
           {personName(p)}
           {reasons?.length ? (
@@ -814,7 +820,9 @@ function TaskHistory({ taskId }: { taskId: number }) {
           <span className='text-slate-400'>
             {' '}
             · {h.user_name ? `${h.user_name}, ` : ''}
-            <span title={formatDateTime(h.at)}>{formatRelative(h.at)}</span>
+            <span title={formatDateTime(h.at)}>
+              <RelativeTime value={h.at} />
+            </span>
           </span>
         </li>
       ))}
@@ -988,7 +996,9 @@ export function TaskPanel({
             {t.status === 'cancelled'
               ? 'Cancelled'
               : `Done${t.completed_by_name ? ` by ${t.completed_by_name}` : ''}`}{' '}
-            <span title={formatDateTime(t.completed_at)}>{formatRelative(t.completed_at)}</span>
+            <span title={formatDateTime(t.completed_at)}>
+              <RelativeTime value={t.completed_at} />
+            </span>
           </span>
         )}
         {t.created_by_name && !same(t.created_by, t.assignee) && (

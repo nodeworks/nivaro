@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { draftFilledBack, type StoredDraft } from '../../lib/draft-store'
+import { draftFilledBack, type StoredDraft, thisDraftDevice } from '../../lib/draft-store'
 import { DraftRecoveryBanner } from './DraftRecoveryBanner'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -105,5 +105,37 @@ describe('draftFilledBack — the restore and the offer count by one rule (R7 re
   })
   it('a draft of filled fields only: none (they all come back as the person’s)', () => {
     expect(draftFilledBack(draftOf({ fields: { a: 1 }, filled: ['a'] })).size).toBe(0)
+  })
+})
+
+describe('DraftRecoveryBanner from another device (rt4 #21)', () => {
+  it('says "Continue your draft from your laptop" and offers Continue', () => {
+    const text = show(
+      draftOf({
+        item_id: '7',
+        fields: { title: 'x' },
+        device: { id: 'laptop-device-1', label: 'laptop' }
+      })
+    )
+    expect(text).toContain('Continue your draft from your laptop')
+    expect(text).not.toContain('Restore your unsaved changes')
+    expect(
+      host
+        .querySelector('[data-nvr-draft-other-device]')
+        ?.getAttribute('data-nvr-draft-other-device')
+    ).toBe('laptop')
+    expect(host.querySelector('[data-nvr-draft-restore]')?.textContent).toContain('Continue')
+  })
+
+  it('a draft this same device stored is the plain restore offer', () => {
+    const here = thisDraftDevice()
+    const text = show(draftOf({ item_id: '7', fields: { title: 'x' }, device: here }))
+    expect(text).toContain('Restore your unsaved changes')
+    expect(text).not.toContain('Continue your draft')
+  })
+
+  it('names fields left out because the person can no longer edit them', () => {
+    const text = show(draftOf({ item_id: '7', fields: { title: 'x' }, dropped_fields: 2 }))
+    expect(text).toContain('2 fields you can no longer edit were left out')
   })
 })

@@ -114,6 +114,7 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { copyIdText } from '../../lib/record-ref'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { userErrorMessage } from '../../lib/safe-error'
+import { useTableDensity } from '../../lib/table-density'
 import { matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
 import {
@@ -803,14 +804,8 @@ export function QueueWorklist({
   const [page, setPage] = useState(1)
   // #2447 — cursors that reach the next table pages of the current view.
   const cursorBookRef = useRef(createCursorBook())
-  // Row density — shares the per-browser preference the collection browser uses.
-  const [density, setDensity] = useState<'compact' | 'comfortable'>(() => {
-    try {
-      return localStorage.getItem('nvr_table_density') === 'comfortable' ? 'comfortable' : 'compact'
-    } catch {
-      return 'compact'
-    }
-  })
+  // Row density — shares the preference the collection browser uses (rt4 #19).
+  const [density, setDensity] = useTableDensity()
   const [view, setView] = useState<'table' | 'kanban' | 'workload'>('table')
   const [sort, setSort] = useState('')
   const [filterValues, setFilterValues] = useState<Record<string, string | string[]>>({})
@@ -4843,13 +4838,7 @@ export function QueueWorklist({
               <button
                 type='button'
                 onClick={() => {
-                  const next = density === 'compact' ? 'comfortable' : 'compact'
-                  setDensity(next)
-                  try {
-                    localStorage.setItem('nvr_table_density', next)
-                  } catch {
-                    /* private mode */
-                  }
+                  setDensity(density === 'compact' ? 'comfortable' : 'compact')
                 }}
                 aria-label='Row density'
                 title={

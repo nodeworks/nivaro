@@ -178,6 +178,7 @@ import { type CellShape, type SkeletonColumn, shapeForField } from '../lib/skele
 import { knownTotalFrom } from '../lib/slow-reason'
 import { nextSortValue } from '../lib/sort-cycle'
 import { isFileCollection } from '../lib/system-collections'
+import { useTableDensity } from '../lib/table-density'
 import { templateRelationPaths } from '../lib/template-paths'
 import {
   effectiveScopeSeedIds,
@@ -285,6 +286,7 @@ import { useQuickFilterEditing } from './quick-filters/useQuickFilterEditing'
 import { RealtimeStaleMark } from './RealtimeStatusBanner'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RecordHoverCard } from './RecordHoverCard'
+import { RelativeTime } from './RelativeTime'
 import { RowHighlightLegend } from './RowHighlightLegend'
 import { RowPresence } from './RowPresence'
 import { TableSkeletonRows } from './Skeletons'
@@ -1870,7 +1872,11 @@ function CellValue({
     }
     // Rendered as human text ("2 days ago", "08/05/2026"), so it reads as prose;
     // tabular figures keep the column's digits aligned.
-    return <span className='text-[12px] tabular-nums text-slate-400'>{formatRelative(value)}</span>
+    return (
+      <span className='text-[12px] tabular-nums text-slate-400'>
+        <RelativeTime value={String(value)} format={formatRelative} />
+      </span>
+    )
   }
   if (typeof value === 'string') {
     // Long text (names, descriptions) ellipses at a sane width — the full
@@ -4659,23 +4665,10 @@ export function CollectionBrowserView({
   const drillStack = recordDrill.value
   const [auditId, setAuditId] = useState<string | null>(null)
   const [colsOpen, setColsOpen] = useState(false)
-  // Row density — a per-browser preference shared by every table surface.
-  const [density, setDensity] = useState<'compact' | 'comfortable'>(() => {
-    try {
-      return localStorage.getItem('nvr_table_density') === 'comfortable' ? 'comfortable' : 'compact'
-    } catch {
-      return 'compact'
-    }
-  })
-  const toggleDensity = () => {
-    const next = density === 'compact' ? 'comfortable' : 'compact'
-    setDensity(next)
-    try {
-      localStorage.setItem('nvr_table_density', next)
-    } catch {
-      /* private mode */
-    }
-  }
+  // Row density — shared by every table surface; follows the person between tabs and
+  // devices (lib/table-density.ts, rt4 #19).
+  const [density, setDensity] = useTableDensity()
+  const toggleDensity = () => setDensity(density === 'compact' ? 'comfortable' : 'compact')
   // Group rows under collapsible section headers by one column's value.
   // Per-collection preference; grouping fetches up to 500 rows in one page so
   // sections cover the (filtered) set rather than one page of it.

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { formatRelative } from '../../lib/utils'
+import { RelativeTime } from '../RelativeTime'
 
 interface Recap {
   since: string
@@ -186,8 +187,8 @@ export function RecordRecapStrip({ collection, itemId }: { collection: string; i
         className='min-w-0 flex-1 truncate text-[12px] text-sky-800 dark:text-sky-300'
         data-tip={recap.fields.length > 0 ? `Changed: ${recap.fields.join(', ')}` : undefined}
       >
-        Since you last viewed ({formatRelative(recap.since)}):{' '}
-        <span className='font-medium'>{parts.join(' · ')}</span>
+        Since you last viewed (<RelativeTime value={recap.since} />
+        ): <span className='font-medium'>{parts.join(' · ')}</span>
         {who}
       </p>
       <button
