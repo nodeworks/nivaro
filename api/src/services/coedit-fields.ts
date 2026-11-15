@@ -33,9 +33,16 @@ export async function isSharedTextField(collection: string, field: string): Prom
 }
 
 /**
- * Does this update body change shared text fields and nothing else? Then the record's held
- * edit lock does not refuse it (the PATCH route). Any other key — a plain field, a relation,
- * anything unknown — and the lock applies as always.
+ * The save's own meta keys the record form sends beside its fields (the optimistic base revision
+ * and the change note). They change no data, so they never decide whether a save is shared text
+ * alone — and nothing else is skipped.
+ */
+export const SAVE_META_KEYS: ReadonlySet<string> = new Set(['_base_revision', '_change_reason'])
+
+/**
+ * Does this update body change shared text fields and nothing else (besides SAVE_META_KEYS)?
+ * Then the record's held edit lock does not refuse it (the PATCH route). Any other key — a plain
+ * field, a relation, anything unknown — and the lock applies as always.
  */
 export async function onlySharedText(
   collection: string,
@@ -43,7 +50,7 @@ export async function onlySharedText(
   isShared: (collection: string, field: string) => Promise<boolean> = isSharedTextField
 ): Promise<boolean> {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false
-  const keys = Object.keys(body)
+  const keys = Object.keys(body).filter((k) => !SAVE_META_KEYS.has(k))
   if (keys.length === 0 || keys.length > 20) return false
   for (const k of keys) if (!(await isShared(collection, k).catch(() => false))) return false
   return true

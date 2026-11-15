@@ -32,6 +32,12 @@ vi.mock('../../../services/coedit-socket.js', async (orig) => ({
     fieldMayTravel: async () => true
   })
 }))
+const followGate = vi.hoisted(() => ({
+  canFollowSharedView: vi.fn(
+    async (_k: string, _id: string, u: { id: string }, admin: boolean) => admin || u.id === 'ANA'
+  )
+}))
+vi.mock('../../../services/config-watch.js', () => followGate)
 vi.mock('../../../services/socket-tenant.js', () => ({
   inSocketTenant:
     (_s: unknown, fn: (...a: unknown[]) => Promise<void>) =>
@@ -40,6 +46,7 @@ vi.mock('../../../services/socket-tenant.js', () => ({
 }))
 
 import { db } from '../../../db/index.js'
+import { accessStamp } from '../../../services/access-stamp.js'
 import { canSeeRoom } from '../../../services/chat.js'
 import { getIo } from '../../../services/io-holder.js'
 import { can } from '../../../services/permissions.js'
@@ -150,6 +157,42 @@ describe('ticket presence rooms (#1882)', () => {
   })
 })
 
+describe('shared dashboard / report follow rooms (review 2026-11-14 F8)', () => {
+  it('a re-check keeps a non-admin follower the view is shared with, by the join gate', async () => {
+    const notAdmin = async () => false
+    expect(await roomStillAllowed(ANA, 'ops:cfg-dashboard:12', notAdmin)).toBe(true)
+    expect(followGate.canFollowSharedView).toHaveBeenLastCalledWith(
+      'dashboard',
+      '12',
+      { id: 'ANA', role: ANA.role ?? null },
+      false
+    )
+    expect(await roomStillAllowed(ANA, 'ops:cfg-report:r-9', notAdmin)).toBe(true)
+    expect(followGate.canFollowSharedView).toHaveBeenLastCalledWith(
+      'report',
+      'r-9',
+      expect.anything(),
+      false
+    )
+    // No longer shared with them: out.
+    followGate.canFollowSharedView.mockResolvedValueOnce(false)
+    expect(await roomStillAllowed(ANA, 'ops:cfg-dashboard:12', notAdmin)).toBe(false)
+    // Other config editors stay admin-only.
+    expect(await roomStillAllowed(ANA, 'ops:cfg-pipeline:3', notAdmin)).toBe(false)
+  })
+})
+
+describe('access re-check makes cached realtime verdicts stale (review 2026-11-14 M1/L5)', () => {
+  it('forgetJoinVerdicts moves the access stamp', () => {
+    const before = accessStamp()
+    forgetJoinVerdicts()
+    expect(accessStamp()).not.toBe(before)
+    const mid = accessStamp()
+    forgetJoinVerdicts('ana')
+    expect(accessStamp()).not.toBe(mid)
+  })
+})
+
 describe('ws-token binding (#1719, H1)', () => {
   it('round-trips every bind kind', () => {
     for (const bind of [
@@ -241,6 +284,8 @@ describe('room gates (#1720)', () => {
     expect(await roomStillAllowed(ANA, 'coedit:r:notes:orders:7', notAdmin)).toBe(false)
     coeditGate.mayRead.mockResolvedValueOnce(false)
     expect(await roomStillAllowed(ANA, 'coedit:r:notes:orders:7', notAdmin)).toBe(false)
+    // The field read is asked fresh (uncached relay field list, M1).
+    expect(coeditGate.mayRead).toHaveBeenLastCalledWith(ANA, 'orders', 'notes', undefined, true)
     coeditGate.mayWrite.mockResolvedValueOnce(false)
     expect(await roomStillAllowed(ANA, 'coedit:r:notes:orders:7', notAdmin)).toBe(true)
     coeditGate.mayWrite.mockResolvedValueOnce(false)

@@ -9,6 +9,7 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { issuingAdminStillAdmin } from '../middleware/authenticate.js'
 import { accessPendingSignIn } from '../services/access-pending.js'
+import { accessStamp } from '../services/access-stamp.js'
 import { agentSnapshot } from '../services/agent-presence.js'
 import { userHasSocket } from '../services/ai-stream-delivery.js'
 import { chaosRedisClient, chaosRedisSubscriber } from '../services/chaos/redis-hook.js'
@@ -32,6 +33,8 @@ import { defaultCoeditDeps, registerCoedit } from '../services/coedit-socket.js'
 import { createDragThrottle, parseDragMessage } from '../services/drag-relay.js'
 import {
   fieldChangeDelivery,
+  fieldNameDelivery,
+  isMachineViewer,
   relayableValue,
   relayViewers,
   uploadNameDelivery
@@ -705,6 +708,8 @@ export function getRecordViewerSnapshot(): Array<{
 
 /** A field mark ("X is editing this field") lapses after this long with no focus or keystroke. */
 const FIELD_FOCUS_TTL_MS = 5 * 60_000
+/** How long a sender's field:change update permission is reused (same access stamp only). */
+const SENDER_WRITE_TTL_MS = 5_000
 const FIELD_FOCUS_MAX = 64
 
 // Watch rooms admins may join via admin:join (traffic feed, job progress,
@@ -1500,6 +1505,10 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     const signIn = (user: User, bind: SocketBind, pending = false) => {
       authenticatedUser = pending ? null : user
       socket.data.nvrBind = bind
+      // Who this socket is, for a mark another replica judges per socket (grid presence field
+      // readers, fetchSockets). A machine account is never named a reader (review L6).
+      socket.data.nvrUserId =
+        pending || isMachineViewer(user as { account_kind?: string | null }) ? null : user.id
       const meta = socketMeta.get(socket.id)
       if (meta)
         meta.user = {
@@ -2102,25 +2111,44 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const m = room ? /^record:(.+):([^:]+)$/.exec(splitTenantRoom(room).room) : null
       return { collection: m?.[1] ?? null, item: m?.[2] ?? null }
     }
+    /** The other sockets viewing a record room (this process + the realtime board). */
+    const otherViewers = (room: string) =>
+      relayViewers(
+        recordViewers.get(room)?.entries() ?? [],
+        (sid) => socketBindKind(io, sid),
+        boardPeerViewers(room)
+      ).filter((v) => v.socket !== socket.id)
+    /** "X is editing <field>" (user) / "stopped" (null) — to the readers of that field among the
+     *  record's viewers only, per socket (review 2026-11-14 L4: a field name is for its readers;
+     *  services/field-change-relay.ts fieldNameDelivery). */
+    const emitFieldMark = inSocketTenant(
+      socket,
+      async (room: string, field: string, who: { id: string; name: string } | null) => {
+        const record = recordOf(room)
+        if (!record.collection) return
+        const viewers = otherViewers(room)
+        if (viewers.length === 0) return
+        const to = await fieldNameDelivery(viewers, record.collection, field).catch(
+          () => [] as string[]
+        )
+        if (to.length) io.to(to).emit('field:editing', { ...record, field, user: who })
+      }
+    )
     // "X is editing this field" marks this socket holds (services/field-focus.ts): cleared
     // for co-viewers on leave and disconnect (via leaveOneRoom) and when they lapse.
-    const announceBlur = (room: string, field: string) =>
-      socket.to(room).emit('field:editing', { ...recordOf(room), field, user: null })
+    const announceBlur = (room: string, field: string) => void emitFieldMark(room, field, null)
     const uploads = uploadTracker()
     const relayUpload = inSocketTenant(socket, (r: UploadReport) => {
       const user = authenticatedUser
       if (!user) return
       const record = recordOf(r.room)
       const me = String(user.id).toLowerCase()
-      const viewers = relayViewers(
-        recordViewers.get(r.room)?.entries() ?? [],
-        (sid) => socketBindKind(io, sid),
-        boardPeerViewers(r.room)
-      ).filter((v) => v.socket !== socket.id && v.id.toLowerCase() !== me)
+      const viewers = otherViewers(r.room).filter((v) => v.id.toLowerCase() !== me)
       if (viewers.length === 0 || !record.collection) return
       const who = { id: user.id, name: displayName(user) }
+      // The event names the field: its readers only (L4); a failure tells nobody.
       void uploadNameDelivery(viewers, record.collection, r.field)
-        .catch(() => ({ valueTo: [] as string[], nameTo: viewers.map((v) => v.socket) }))
+        .catch(() => ({ valueTo: [] as string[], nameTo: [] as string[] }))
         .then((d) => {
           if (d.valueTo.length)
             io.to(d.valueTo).emit('record:uploading', uploadEvent(r, record, who, true))
@@ -2255,13 +2283,17 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       joinedRecordRoom = room
       joinedRecordRooms.add(room)
       socket.join(room)
-      let map = recordViewers.get(room)
-      if (!map) {
-        map = new Map()
-        recordViewers.set(room, map)
+      // A machine account (integration, bot, service) is never a co-viewer: not listed, and
+      // never sent anyone's typing or field marks (review 2026-11-14 L6).
+      if (!isMachineViewer(user as { account_kind?: string | null })) {
+        let map = recordViewers.get(room)
+        if (!map) {
+          map = new Map()
+          recordViewers.set(room, map)
+        }
+        map.set(socket.id, { id: user.id, name: displayName(user) })
+        broadcastViewers(room)
       }
-      map.set(socket.id, { id: user.id, name: displayName(user) })
-      broadcastViewers(room)
       // rt8 #21 — agents working on the record right now (their marks outlive no one's join).
       void agentSnapshot(app.redis, room)
         .then((agents) => {
@@ -2319,7 +2351,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // watch that record's row (services/drag-relay.ts). The dragger must watch the row itself
     // (read gate) and may update the collection; ids, view and days only.
     const dragThrottle = createDragThrottle()
-    const dragMayUpdate = new Map<string, Promise<boolean>>()
+    // The "may update" answer per collection, reused only under the same access stamp: an
+    // access re-check (role / policy change) drops it (review 2026-11-14 L5).
+    const dragMayUpdate = new Map<string, { stamp: string; ok: Promise<boolean> }>()
     socket.on(
       'record:drag',
       inSocketTenant(socket, async (raw: unknown) => {
@@ -2329,14 +2363,19 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         const watch = rowsRoomName(recordRoom(msg.collection, msg.item))
         if (!watchedRows.has(watch)) return
         if (!dragThrottle(`${msg.collection}:${msg.item}`, msg.phase, Date.now())) return
+        const stamp = accessStamp()
         let allowed = dragMayUpdate.get(msg.collection)
-        if (!allowed) {
-          allowed = import('../services/permissions.js')
-            .then((m) => m.can(user, 'update', msg.collection))
-            .catch(() => false)
-          if (dragMayUpdate.size < 50) dragMayUpdate.set(msg.collection, allowed)
+        if (!allowed || allowed.stamp !== stamp) {
+          allowed = {
+            stamp,
+            ok: import('../services/permissions.js')
+              .then((m) => m.can(user, 'update', msg.collection))
+              .catch(() => false)
+          }
+          if (dragMayUpdate.size >= 50) dragMayUpdate.clear()
+          dragMayUpdate.set(msg.collection, allowed)
         }
-        if (!(await allowed)) return
+        if (!(await allowed.ok)) return
         socket.to(watch).emit('record:drag', { ...msg, user_id: user.id })
       })
     )
@@ -2423,18 +2462,42 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     )
     socket.on('presence-map:leave', () => leaveScoped('presence-map'))
 
-    // Field editing indicator — fan out inside the record room only.
+    // Field editing indicator — to the field's readers among the record's viewers only.
     socket.on('field:focus', (payload: { field?: string; collection?: string; item?: unknown }) => {
       const user = authenticatedUser
       const room = roomFor(payload)
       if (!user || !room || typeof payload?.field !== 'string') return
+      if (!payload.field || payload.field.length > 300) return
       focusMarks.hold(room, payload.field)
-      socket.to(room).emit('field:editing', {
-        ...recordOf(room),
-        field: payload.field,
-        user: { id: user.id, name: displayName(user) }
-      })
+      void emitFieldMark(room, payload.field, { id: user.id, name: displayName(user) })
     })
+    /** May the sender change `field` of `collection` (its role's update field list)? A
+     *  keystroke relay for a field they cannot write is never passed on (L4). The list is
+     *  reused briefly, only under the same access stamp (any access re-check drops it, L5). */
+    const senderLists = new Map<
+      string,
+      { stamp: string; at: number; list: Promise<string[] | null> }
+    >()
+    const senderMayWrite = async (user: User, collection: string, field: string) => {
+      const stamp = accessStamp()
+      const now = Date.now()
+      const key = `${collection}\u0001${user.role ?? ''}`
+      let hit = senderLists.get(key)
+      if (!hit || hit.stamp !== stamp || now - hit.at > SENDER_WRITE_TTL_MS) {
+        const list = import('../services/permissions.js')
+          .then(async (m) =>
+            (await m.can(user, 'update', collection))
+              ? m.getAllowedFields(user, 'update', collection)
+              : []
+          )
+          .catch(() => [] as string[])
+        hit = { stamp, at: now, list }
+        if (senderLists.size > 50) senderLists.clear()
+        senderLists.set(key, hit)
+      }
+      const l = await hit.list
+      return l === null || l.includes('*') || l.includes(field)
+    }
     // Live co-editing v3 — relay value keystrokes inside the record room.
     // Preview-only on the receiving side; persistence still goes through the
     // normal save path with all its validation.
@@ -2458,26 +2521,28 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           if (!user || !room || typeof payload?.field !== 'string') return
           const field = payload.field
           if (!field || field.length > 128) return
+          const record = recordOf(room)
+          if (!record.collection) return
+          // Only someone who may change the field types into it (L4): anyone else's
+          // "keystrokes" are not passed on, not even the field's name.
+          if (!(await senderMayWrite(user, record.collection, field))) return
           // Typing keeps the "editing this field" mark alive.
           focusMarks.touch(room, field)
-          const record = recordOf(room)
           const base = { ...record, field, user: { id: user.id, name: displayName(user) } }
           const me = String(user.id).toLowerCase()
-          const viewers = relayViewers(
-            recordViewers.get(room)?.entries() ?? [],
-            (sid) => socketBindKind(io, sid),
-            boardPeerViewers(room)
-          ).filter((v) => v.socket !== socket.id && v.id.toLowerCase() !== me)
-          if (viewers.length === 0 || !record.collection) return
-          const namesOnly = { valueTo: [] as string[], nameTo: viewers.map((v) => v.socket) }
-          let delivery = namesOnly
-          if (relayableValue(payload.value)) {
-            try {
-              delivery = await fieldChangeDelivery(viewers, record.collection, field)
-            } catch {
-              delivery = namesOnly
-            }
+          const viewers = otherViewers(room).filter((v) => v.id.toLowerCase() !== me)
+          if (viewers.length === 0) return
+          // The field's readers only, with or without the value (fieldChangeDelivery).
+          const nobody = { valueTo: [] as string[], nameTo: [] as string[] }
+          let delivery = nobody
+          try {
+            delivery = await fieldChangeDelivery(viewers, record.collection, field)
+          } catch {
+            delivery = nobody
           }
+          // A value that may not travel (not a scalar) goes to the field's readers as a name.
+          if (!relayableValue(payload.value))
+            delivery = { valueTo: [], nameTo: [...delivery.valueTo, ...delivery.nameTo] }
           const value =
             typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
           // Socket ids reach a socket on any replica (adapter); a person's other tabs and

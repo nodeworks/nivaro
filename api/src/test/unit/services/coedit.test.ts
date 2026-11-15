@@ -19,11 +19,15 @@ import {
   memoryCoeditStore
 } from '../../../services/coedit.js'
 import {
+  COEDIT_FULL_SYNC_MAX,
+  COEDIT_GATE_RUNS_MAX,
+  COEDIT_WATCH_REPEAT_MS,
   type CoeditDeps,
   coeditGates,
   parseCoeditRoom,
   registerCoedit
 } from '../../../services/coedit-socket.js'
+import { fieldChangeDelivery } from '../../../services/field-change-relay.js'
 import type { User } from '../../../types.js'
 
 // ── Fakes: one io (rooms → sockets), sockets that record what they were sent ─────────────────
@@ -116,6 +120,50 @@ describe('coedit payload checks', () => {
     expect(cleanSteps([insert(1, 'x'.repeat(COEDIT_MAX_STEP_BYTES))])).toBeNull()
     expect(cleanDoc(doc)).toBe(JSON.stringify(doc))
     expect(cleanDoc({ content: [] })).toBeNull()
+  })
+  it('L7: link marks / URL attributes that run script or embed a document are emptied', () => {
+    const bad = [
+      'javascript:alert(1)',
+      ' JavaScript:alert(1)',
+      'java\tscript:alert(1)',
+      'data:text/html,<script>alert(1)</script>',
+      'vbscript:x',
+      'file:///etc/passwd'
+    ]
+    for (const href of bad) {
+      const mark = { type: 'link', attrs: { href, target: '_blank' } }
+      const [add] = cleanSteps([{ stepType: 'addMark', from: 1, to: 3, mark }]) ?? []
+      expect(JSON.parse(add).mark.attrs).toEqual({ href: '', target: '_blank' })
+      // Inside a pasted slice (text node marks) and a session's starting document too.
+      const slice = {
+        ...insert(1, 'x'),
+        slice: { content: [{ type: 'text', text: 'x', marks: [mark] }] }
+      }
+      const [rep] = cleanSteps([slice]) ?? []
+      expect(JSON.parse(rep).slice.content[0].marks[0].attrs.href).toBe('')
+      const d = cleanDoc({
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x', marks: [mark] }] }]
+      })
+      expect(d).not.toContain(href.trim().slice(0, 8))
+      // An attr step setting a URL attribute.
+      const [at] = cleanSteps([{ stepType: 'attr', pos: 1, attr: 'href', value: href }]) ?? []
+      expect(JSON.parse(at).value).toBe('')
+    }
+    // Plain links, record links and raster images stay as they are.
+    for (const href of ['https://example.com/a?b', 'mailto:a@b.c', 'record://orders/7', '/x']) {
+      const [ok] =
+        cleanSteps([
+          { stepType: 'addMark', from: 1, to: 3, mark: { type: 'link', attrs: { href } } }
+        ]) ?? []
+      expect(JSON.parse(ok).mark.attrs.href).toBe(href)
+    }
+    const img = { type: 'image', attrs: { src: 'data:image/png;base64,AAAA' } }
+    expect(cleanDoc({ type: 'doc', content: [img] })).toContain('data:image/png')
+    // Nesting deeper than any editor makes is refused outright.
+    let deep: Record<string, unknown> = { type: 'text', text: 'x' }
+    for (let i = 0; i < 260; i++) deep = { type: 'p', content: [deep] }
+    expect(cleanDoc({ type: 'doc', content: [deep] })).toBeNull()
   })
   it('parses its room names', () => {
     expect(parseCoeditRoom('coedit:w:notes:orders:7')).toEqual({ write: true, ...target })
@@ -436,6 +484,74 @@ describe('coedit socket — who may join and type', () => {
     expect(ben.got.at(-1)).toMatchObject({ event: 'coedit:steps', payload: { version: 2 } })
   })
 
+  it('M2: a repeated watch runs no gate and sends the session id + version only', async () => {
+    const io = fakeIo()
+    let reads = 0
+    const inner = deps.mayRead
+    deps.mayRead = async (...a) => {
+      reads++
+      return inner(...a)
+    }
+    const ana = connect(io, 's-ana', user('ana', 'Ana'))
+    await ana.call('coedit:watch', target)
+    await ana.call('coedit:open', { ...target, clientID: 'ana-ed-1', doc })
+    expect(reads).toBe(1)
+    for (let i = 0; i < 30; i++) await ana.call('coedit:watch', target)
+    expect(reads).toBe(1)
+    const last = ana.got.at(-1)
+    expect(last).toMatchObject({ event: 'coedit:state', payload: { write: true } })
+    expect(last?.payload.session).toEqual({
+      sid: expect.any(String),
+      version: 0,
+      summary: true
+    })
+    expect(JSON.stringify(last?.payload)).not.toContain('paragraph')
+    // After the window the gates run again (a permission may have changed).
+    clock += COEDIT_WATCH_REPEAT_MS + 1
+    await ana.call('coedit:watch', target)
+    expect(reads).toBe(2)
+    // A refused field is not re-gated on every repeat either.
+    const dee = connect(io, 's-dee', user('dee', 'Dee'))
+    for (let i = 0; i < 10; i++) await dee.call('coedit:watch', target)
+    expect(reads).toBe(3)
+    expect(dee.got).toEqual([])
+  })
+
+  it('M2: watch / unwatch cycles share one gate budget per socket', async () => {
+    const io = fakeIo()
+    let reads = 0
+    deps.mayRead = async () => {
+      reads++
+      return true
+    }
+    const ana = connect(io, 's-ana', user('ana', 'Ana'))
+    for (let i = 0; i < COEDIT_GATE_RUNS_MAX + 40; i++) {
+      await ana.call('coedit:watch', target)
+      await ana.call('coedit:unwatch', target)
+    }
+    expect(reads).toBe(COEDIT_GATE_RUNS_MAX)
+  })
+
+  it('M2: whole-session syncs are capped per socket; past it, id + version only', async () => {
+    const io = fakeIo()
+    const ana = connect(io, 's-ana', user('ana', 'Ana'))
+    await ana.call('coedit:watch', target)
+    await ana.call('coedit:open', { ...target, clientID: 'ana-ed-1', doc })
+    ana.got.length = 0
+    for (let i = 0; i < COEDIT_FULL_SYNC_MAX + 20; i++) await ana.call('coedit:sync', target)
+    const states = ana.got.filter((g) => g.event === 'coedit:state')
+    expect(states).toHaveLength(COEDIT_FULL_SYNC_MAX + 20)
+    expect(states.filter((g) => g.payload.session?.doc).length).toBe(COEDIT_FULL_SYNC_MAX)
+    expect(states.at(-1)?.payload.session).toMatchObject({ summary: true, version: 0 })
+    // A bogus session id (the whole-session fallback) counts against the same cap.
+    await ana.call('coedit:sync', { ...target, sid: 'nope', version: 0 })
+    expect(ana.got.at(-1)?.payload.session?.doc).toBeUndefined()
+    // The window passes: whole sessions again.
+    clock += 10_001
+    await ana.call('coedit:sync', target)
+    expect(ana.got.at(-1)?.payload.session?.doc).toEqual(doc)
+  })
+
   it('losing the field (room recheck) stops typing', async () => {
     const io = fakeIo()
     const ana = connect(io, 's-ana', user('ana', 'Ana'))
@@ -463,5 +579,12 @@ describe('coedit read gate = the keystroke relay answer (fix-keystroke)', () => 
     expect(await gates.mayRead(ana, 'orders', 'notes', 'session')).toBe(true)
     expect(await gates.mayRead(ana, 'orders', 'notes', 'apikey')).toBe(false)
     expect(await gates.mayRead(ana, 'orders', 'notes', undefined)).toBe(false)
+  })
+  it('the room re-check asks the relay fresh (no cached field list, M1)', async () => {
+    const gates = coeditGates()
+    await gates.mayRead(user('ana', 'Ana'), 'orders', 'notes', 'session', true)
+    expect(vi.mocked(fieldChangeDelivery).mock.calls.at(-1)?.[4]).toEqual({ fresh: true })
+    await gates.mayRead(user('ana', 'Ana'), 'orders', 'notes', 'session')
+    expect(vi.mocked(fieldChangeDelivery).mock.calls.at(-1)?.[4]).toEqual({ fresh: false })
   })
 })

@@ -33,6 +33,20 @@ describe('shared text fields (co-edited rich text, open under a held record lock
     expect(await onlySharedText('workflows', { notes: 'a', amount: 5 }, shared)).toBe(false)
     expect(await onlySharedText('workflows', { status: 'x' }, shared)).toBe(false)
     expect(await onlySharedText('workflows', {}, shared)).toBe(false)
+    // The save's own meta keys (base revision, change note) never count as a field (L3)…
+    expect(
+      await onlySharedText(
+        'workflows',
+        { notes: 'a', _base_revision: 41, _change_reason: 'typo' },
+        shared
+      )
+    ).toBe(true)
+    // …but alone they are not a shared-text save, and nothing else is skipped.
+    expect(await onlySharedText('workflows', { _base_revision: 41 }, shared)).toBe(false)
+    expect(await onlySharedText('workflows', { notes: 'a', _other: 1 }, shared)).toBe(false)
+    expect(
+      await onlySharedText('workflows', { notes: 'a', _base_revision: 1, amount: 2 }, shared)
+    ).toBe(false)
     expect(await onlySharedText('workflows', null, shared)).toBe(false)
     expect(await onlySharedText('workflows', [{ notes: 'a' }], shared)).toBe(false)
     expect(

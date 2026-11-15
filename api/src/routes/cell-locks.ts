@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { requireAuth } from '../middleware/authenticate.js'
+import { accessStamp } from '../services/access-stamp.js'
 import {
   type CellLockRedis,
   type CellLockStore,
@@ -86,7 +87,11 @@ export function callerIdentity(req: FastifyRequest): string {
 }
 
 async function visibleRowIds(req: FastifyRequest, collection: string, ids: string[]) {
-  const key = [callerIdentity(req), collection, [...ids].sort().join(',')].join('\u0002')
+  // Keyed on the access stamp too: a role / policy / scope change (any socket access re-check,
+  // a config write, a config epoch move) makes an older answer unusable (review 2026-11-14 L5).
+  const key = [callerIdentity(req), accessStamp(), collection, [...ids].sort().join(',')].join(
+    '\u0002'
+  )
   const hit = visibleCache.get(key)
   if (hit && Date.now() - hit.at < VISIBLE_TTL_MS) return hit.ids
   // Restrict User Scopes bind administrators too: never "admin = every row".

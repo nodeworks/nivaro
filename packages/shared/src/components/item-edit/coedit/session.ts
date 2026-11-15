@@ -96,6 +96,9 @@ interface Peer {
   head: number
 }
 
+/** A summary answer asks for the whole session at most this often. */
+const FULL_SYNC_ASK_GAP_MS = 5_000
+
 export class CoeditSession {
   readonly clientID = newClientId()
   private live = false
@@ -127,6 +130,8 @@ export class CoeditSession {
   private apart = new Map<string, CoeditPeer>()
   private offs: Array<() => void> = []
   private disposed = false
+  /** When this editor last asked for a whole session after a summary answer. */
+  private fullSyncAskedAt = 0
 
   constructor(
     private editor: Editor,
@@ -207,7 +212,10 @@ export class CoeditSession {
 
   // ── Server events ───────────────────────────────────────────────────────────
 
-  private onState(p: { write?: boolean; session: SessionPayload | null }) {
+  private onState(p: {
+    write?: boolean
+    session: SessionPayload | { sid: string; version: number; summary: true } | null
+  }) {
     this.write = !!p.write
     if (!this.write && this.member) {
       // We may no longer type here (a lock, the record moved on, permission): a plain editor
@@ -222,17 +230,37 @@ export class CoeditSession {
       if (this.editor.isFocused && this.write && !this.member) this.open()
       return
     }
-    const same = this.live && p.session.sid === this.sid
+    const session = p.session
+    if ('summary' in session) {
+      // Only which session and where it stands (the server answers a repeated watch, or a sync
+      // past its per-socket cap, this way): catch up by steps, or ask for the whole session at
+      // most once every few seconds.
+      if (this.live && session.sid === this.sid) {
+        if (session.version > this.version)
+          this.transport.emit('coedit:sync', {
+            ...this.target,
+            sid: this.sid,
+            version: this.version
+          })
+        return
+      }
+      const now = Date.now()
+      if (now - this.fullSyncAskedAt < FULL_SYNC_ASK_GAP_MS) return
+      this.fullSyncAskedAt = now
+      this.transport.emit('coedit:sync', { ...this.target })
+      return
+    }
+    const same = this.live && session.sid === this.sid
     // Our session, at our version or older (a reply that crossed newer steps): nothing to do.
-    if (same && p.session.version <= this.version) return
-    if (same && p.session.version > this.version && p.session.baseVersion <= this.version) {
+    if (same && session.version <= this.version) return
+    if (same && session.version > this.version && session.baseVersion <= this.version) {
       // A catch-up (reconnect, second tab): the steps we missed are in the session.
-      const from = this.version - p.session.baseVersion
-      this.applyBatch(this.version, p.session.steps.slice(from))
+      const from = this.version - session.baseVersion
+      this.applyBatch(this.version, session.steps.slice(from))
       return
     }
     if (this.live) this.leaveLive()
-    this.enter(p.session)
+    this.enter(session)
   }
 
   private onActive(p: { session: SessionPayload; by?: string }) {

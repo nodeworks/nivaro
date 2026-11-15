@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { accessStamp, onAccessStampBump } from './access-stamp.js'
 import { getFields, getRelations } from './collections.js'
 import { getEncryptedFields } from './encryption.js'
 import { getAllowedFields } from './permissions.js'
@@ -23,15 +24,20 @@ import { currentTenantKey } from './tenant-rooms.js'
  *    sign-in kind is not known — sockets on other processes carry the kind their process
  *    published on the realtime board; an older process publishes none (fail closed).
  *
- * Everyone else in the room gets the same event without `value` ("Beth is editing Amount").
- * Answers are sent to socket ids, never to `user:` rooms — a person's other tabs and devices
- * that are not on the record get nothing.
+ * Other READERS of the field get the same event without `value` ("Beth is editing Amount");
+ * people who may not read the field, API-key / unknown-kind sockets and machine accounts get
+ * nothing (security review 2026-11-14 L4/L6). Answers are sent to socket ids, never to `user:`
+ * rooms — a person's other tabs and devices that are not on the record get nothing.
  *
  * Keystrokes are throttled by the client to ~4 a second per editor, so both answers are cached
- * briefly (TTL_MS) per tenant + person + collection and per tenant + collection.
+ * briefly (TTL_MS): field lists per tenant + person + role + collection + access stamp
+ * (services/access-stamp.ts — any access re-check, policy write or config epoch move makes them
+ * stale at once; forgetRelayVerdicts drops them), value fields per tenant + collection.
  */
 
 const TTL_MS = 30_000
+/** The person row (active, not a machine) behind a socket. */
+const USER_TTL_MS = 5_000
 const CACHE_MAX = 5_000
 
 interface Cached<T> {
@@ -41,6 +47,8 @@ interface Cached<T> {
 
 /** Person → their readable field list (null = every field). */
 const readCache = new Map<string, Cached<Set<string> | null>>()
+/** Person → their row (null = not an active person who may be sent anything). */
+const userCache = new Map<string, Cached<User | null>>()
 /** Collection → the fields whose typed value may travel at all. */
 const valueFieldCache = new Map<string, Cached<Set<string>>>()
 
@@ -145,22 +153,60 @@ async function valueFieldsOf(collection: string, deps: RelayDeps): Promise<Set<s
   return remember(valueFieldCache, key, await deps.valueFields(collection), t)
 }
 
-/** false = no such active person (never sent a value). */
+/** A machine identity (integration, bot, service): never a co-viewer, never sent a value. A
+ *  placeholder row is not one (it never signs in). */
+export function isMachineViewer(user: { account_kind?: string | null } | null): boolean {
+  const kind = user?.account_kind
+  return typeof kind === 'string' && kind !== '' && kind !== 'placeholder'
+}
+
+/** The active, non-machine person behind a socket, or null. Cached briefly under the access
+ *  stamp; `fresh` reads it again (an access re-check). */
+async function viewerUser(userId: string, deps: RelayDeps, fresh: boolean): Promise<User | null> {
+  const key = `${currentTenantKey()}|${userId.toLowerCase()}|${accessStamp()}`
+  const t = deps.now()
+  if (!fresh) {
+    const hit = userCache.get(key)
+    if (hit && hit.expires > t) return hit.value
+  }
+  const row = await deps.loadUser(userId)
+  const user = row && !isMachineViewer(row as { account_kind?: string | null }) ? row : null
+  if (userCache.size >= CACHE_MAX) userCache.clear()
+  userCache.set(key, { value: user, expires: t + USER_TTL_MS })
+  return user
+}
+
+/**
+ * false = no such active person (never sent anything). Keyed on tenant + person + ROLE +
+ * collection + the access stamp (services/access-stamp.ts): a role change, a policy write or any
+ * socket access re-check makes the old answer unusable at once. `fresh` = ask again, uncached
+ * (the co-edit room re-check).
+ */
 async function readableFields(
   userId: string,
   collection: string,
-  deps: RelayDeps
+  deps: RelayDeps,
+  fresh = false
 ): Promise<Set<string> | null | false> {
-  const key = `${currentTenantKey()}|${userId.toLowerCase()}|${collection}`
-  const hit = readCache.get(key)
-  const t = deps.now()
-  if (hit && hit.expires > t) return hit.value
-  const user = await deps.loadUser(userId)
+  const user = await viewerUser(userId, deps, fresh)
   if (!user) return false
+  const key = `${currentTenantKey()}|${userId.toLowerCase()}|${user.role ?? ''}|${collection}|${accessStamp()}`
+  const t = deps.now()
+  if (!fresh) {
+    const hit = readCache.get(key)
+    if (hit && hit.expires > t) return hit.value
+  }
   const list = await deps.allowedFields(user, collection)
   const fields = list === null || list.includes('*') ? null : new Set(list)
   return remember(readCache, key, fields, t)
 }
+
+/** Drop every cached field list and person (an access re-check, socket-access.ts). */
+export function forgetRelayVerdicts(): void {
+  readCache.clear()
+  userCache.clear()
+}
+onAccessStampBump(forgetRelayVerdicts)
 
 /** May the typed value of this payload travel at all (before any recipient is judged)? */
 export function relayableValue(value: unknown): boolean {
@@ -173,50 +219,111 @@ export function relayableValue(value: unknown): boolean {
   )
 }
 
+/** Options for one delivery split. */
+export interface DeliveryOptions {
+  /** Ask every field list again, uncached (a room re-check after an access change). */
+  fresh?: boolean
+}
+
 /**
- * Split the sockets viewing a record into those that get `field`'s typed value and those that
- * get its name only. Fails closed: a field that cannot be judged, or a viewer whose field list
- * cannot be read (no active account, an error), gets the name only.
+ * Split the sockets viewing a record by what they may hear about `field`:
+ *  - `valueTo`: the typed value too — a field whose value may travel, a sign-in kind that is
+ *    exactly its person, and a person who may read the field;
+ *  - `nameTo`: only that someone is editing `field` — a person who may read the field but is not
+ *    sent the value (the field's value never travels: encrypted, concealed, a to-many alias…);
+ *  - everyone else gets NOTHING about the field (security review 2026-11-14 L4: a field name is
+ *    for the field's readers only). An API-key or unknown-kind socket, a machine account, a
+ *    viewer whose field list cannot be read: nothing (fail closed).
  */
 export async function fieldChangeDelivery(
   viewers: RelayViewer[],
   collection: string,
   field: string,
-  deps: RelayDeps = defaultDeps
+  deps: RelayDeps = defaultDeps,
+  opts: DeliveryOptions = {}
 ): Promise<{ valueTo: string[]; nameTo: string[] }> {
   const sockets = [...new Map(viewers.map((v) => [String(v.socket), v])).values()]
-  const all = sockets.map((v) => String(v.socket))
   let travels = false
   try {
     travels = (await valueFieldsOf(collection, deps)).has(field)
   } catch {
     travels = false
   }
-  if (!travels) return { valueTo: [], nameTo: all }
   const valueTo: string[] = []
   const nameTo: string[] = []
   await Promise.all(
     sockets.map(async (v) => {
       const sid = String(v.socket)
-      if (!v.kind || !VALUE_KINDS.has(v.kind)) {
-        nameTo.push(sid)
-        return
-      }
+      if (!v.kind || !VALUE_KINDS.has(v.kind)) return
       try {
-        const fields = await readableFields(String(v.id), collection, deps)
-        if (fields !== false && (fields === null || fields.has(field))) valueTo.push(sid)
+        const fields = await readableFields(String(v.id), collection, deps, !!opts.fresh)
+        if (fields === false || (fields !== null && !fields.has(field))) return
+        if (travels) valueTo.push(sid)
         else nameTo.push(sid)
       } catch {
-        nameTo.push(sid)
+        /* nothing for a viewer that cannot be judged */
       }
     })
   )
   return { valueTo, nameTo }
 }
 
+/**
+ * What a presence field NAME (field:focus / field:blur marks, grid cells) refers to: a field of
+ * the record's collection, or one of the synthetic marks an inline grid sends — `row:<c>:<id>`
+ * (a child row is open: readers of collection c) and `cell:<c>:<row>:<field>` (a child cell:
+ * readers of that field of c).
+ */
+export function presenceNameTarget(
+  collection: string,
+  name: string
+): { collection: string; field: string | null } | null {
+  if (!name || name.length > 300) return null
+  const row = /^row:([A-Za-z0-9_]{1,128}):[^:]{1,64}$/.exec(name)
+  if (row) return { collection: row[1], field: null }
+  const cell = /^cell:([A-Za-z0-9_]{1,128}):[^:]{1,64}:([A-Za-z0-9_]{1,128})$/.exec(name)
+  if (cell) return { collection: cell[1], field: cell[2] }
+  if (name.includes(':')) return null
+  return { collection, field: name }
+}
+
+/**
+ * The sockets (of `viewers`) that may be told a presence mark naming `name` on a record of
+ * `collection` — readers of that field only (L4). Same sign-in-kind and machine rules as typed
+ * values; a name that is not a field or a known mark reaches nobody.
+ */
+export async function fieldNameDelivery(
+  viewers: RelayViewer[],
+  collection: string,
+  name: string,
+  deps: RelayDeps = defaultDeps
+): Promise<string[]> {
+  const target = presenceNameTarget(collection, name)
+  if (!target) return []
+  const sockets = [...new Map(viewers.map((v) => [String(v.socket), v])).values()]
+  const out: string[] = []
+  await Promise.all(
+    sockets.map(async (v) => {
+      if (!v.kind || !VALUE_KINDS.has(v.kind)) return
+      try {
+        const fields = await readableFields(String(v.id), target.collection, deps)
+        if (fields === false) return
+        // A row mark: anyone who reads the child collection at all.
+        const ok =
+          fields === null || (target.field == null ? fields.size > 0 : fields.has(target.field))
+        if (ok) out.push(String(v.socket))
+      } catch {
+        /* nothing */
+      }
+    })
+  )
+  return out
+}
+
 /** Tests only. */
 export function __resetFieldChangeRelay(): void {
   readCache.clear()
+  userCache.clear()
   valueFieldCache.clear()
 }
 
@@ -248,9 +355,10 @@ async function loadNameableFields(collection: string): Promise<Set<string>> {
 /**
  * Split a record's viewers for "Beth is uploading quote.pdf (60%)": the file NAME goes only to
  * sockets whose person may read `field` on this collection (a file follows where it is used —
- * services/file-access.ts reads a record's files through its fields), everyone else is told an
- * upload is happening without the name. No field, or one that cannot be judged = no name for
- * anyone. Same sign-in-kind rule as typed values (an API-key or unknown socket gets no name).
+ * services/file-access.ts reads a record's files through its fields); a reader of a field whose
+ * upload may not be named hears "uploading a file"; everyone else hears nothing (the event names
+ * the field, L4). No field = everyone hears "uploading a file". Same sign-in-kind and machine
+ * rules as typed values.
  */
 export function uploadNameDelivery(
   viewers: RelayViewer[],

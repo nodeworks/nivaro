@@ -87,6 +87,7 @@ vi.mock('../../../services/items.js', () => ({
 
 import { cellLockRoutes, resetCellLockCaches } from '../../../routes/cell-locks.js'
 import { pickerBadgeRoutes, resetPickerBadgeFacts } from '../../../routes/picker-badges.js'
+import { bumpAccessStamp } from '../../../services/access-stamp.js'
 import { memoryCellLockStore } from '../../../services/cell-locks.js'
 
 beforeEach(() => {
@@ -298,6 +299,26 @@ describe('cell locks routes', () => {
     state.userExtra = {}
     await read()
     expect(state.gateCalls).toBe(3)
+  })
+
+  it('cached visibility is dropped by an access re-check (access stamp, review L5)', async () => {
+    const app = await lockApp()
+    await app.inject({ method: 'POST', url: '/api/cell-locks/take', payload: cell })
+    const read = () =>
+      app.inject({
+        method: 'POST',
+        url: '/api/cell-locks/read',
+        payload: { collection: 'orders', ids: ['7'], fields: ['qty'] }
+      })
+    state.auth = { authMethod: 'session' }
+    expect((await read()).json().data).toHaveLength(1)
+    state.gateCalls = 0
+    // The row leaves their scope; the same caller inside the 30 s TTL is still judged again
+    // once an access re-check moved the stamp.
+    state.visibleIds = []
+    bumpAccessStamp()
+    expect((await read()).json().data).toEqual([])
+    expect(state.gateCalls).toBe(1)
   })
 
   it('an administrator with a Restrict User Scope cannot take a cell out of scope', async () => {
