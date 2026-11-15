@@ -30,6 +30,7 @@ import { PersonHeader } from './PersonHeader'
 import { AboutCard, AvailabilityCard, PeopleCard, ResponsibilitiesCard } from './PersonOverview'
 import { PersonWeekCard } from './PersonWeek'
 import { SignedInDevices } from './SignedInDevices'
+import { SignInTroubleshooterCard } from './SignInTroubleshooter'
 import { SlowScreensCard } from './SlowScreensCard'
 import { useInvalidatePerson, usePersonProfile } from './types'
 
@@ -235,7 +236,9 @@ export function PersonProfile({
             )}
           </TabsContent>
           <TabsContent value='tools' className='mt-4 focus-visible:outline-none'>
-            <div className='grid gap-4 lg:grid-cols-2'>
+            {/* Idea 32 — why their sign-ins fail; reads an admin-only route, so only on this tab. */}
+            {tab === 'tools' && <SignInTroubleshooterCard profile={profile} />}
+            <div className='mt-4 grid gap-4 lg:grid-cols-2'>
               <div className='space-y-4'>
                 <ForceReloadCard profile={profile} />
                 <SignOutEverywhereCard profile={profile} />
