@@ -28,16 +28,17 @@ import { announceRecordAspect } from './record-events.js'
  * - Off per collection (`browser_config.scheduled_auto_apply: false`): changes there wait for an
  *   administrator's Execute, as before.
  *
- * NO MIGRATION: the per-change bookkeeping (values when scheduled, values before applying, the
- * undo deadline) is JSON in `inngest_event_id`, a column unused since Inngest was removed
- * (2026-10-01; 500 characters — a change too large for it simply has no conflict check / undo).
+ * Bookkeeping per change (values when scheduled, values before applying, the undo deadline, who
+ * applied it) is JSON in `apply_meta` (migration 528, nvarchar(max)), never sent to clients.
+ * Rows written before that migration kept it in `inngest_event_id`; `readMeta` falls back to it.
  */
 
 export const APPLY_STALE_MS = 15 * 60_000
 export const UNDO_WINDOW_MS = 24 * 3600_000
 export const LOCK_WAIT_MS = 60 * 60_000
-const META_COLUMN = 'inngest_event_id'
-const META_MAX = 500
+const META_COLUMN = 'apply_meta'
+/** Where rows written before migration 528 kept the same JSON (read only). */
+const LEGACY_META_COLUMN = 'inngest_event_id'
 const TABLE = 'nivaro_scheduled_changes'
 
 export interface ScheduleMeta {
@@ -62,14 +63,17 @@ export function decodeMeta(raw: unknown): ScheduleMeta {
   }
 }
 
-/** JSON for the column; parts that do not fit are dropped (undo first, then the conflict snapshot). */
-export function encodeMeta(m: ScheduleMeta): string | null {
-  const tries: ScheduleMeta[] = [m, { ...m, at: undefined }, { v: 1, applied_by: m.applied_by }]
-  for (const t of tries) {
-    const s = JSON.stringify(t)
-    if (s.length <= META_MAX) return s
-  }
-  return null
+/** A change row's bookkeeping: `apply_meta`, else (rows from before migration 528) the legacy column. */
+export function readMeta(row: Record<string, unknown> | null | undefined): ScheduleMeta {
+  if (!row) return { v: 1 }
+  const now = row[META_COLUMN]
+  if (typeof now === 'string' && now.startsWith('{')) return decodeMeta(now)
+  return decodeMeta(row[LEGACY_META_COLUMN])
+}
+
+/** JSON for `apply_meta` (no size limit: nvarchar(max)). */
+export function encodeMeta(m: ScheduleMeta): string {
+  return JSON.stringify(m)
 }
 
 /** Loose equality for stored values (a decimal read back as a string, a date as a Date). */
@@ -249,7 +253,7 @@ export async function applyClaimed(
   opts: { req?: FastifyRequest; manualBy?: string | null } = {}
 ): Promise<ApplyOutcome> {
   const now = deps.now()
-  const meta = decodeMeta(change[META_COLUMN])
+  const meta = readMeta(change)
   const { labelOf, textOf } = await fieldWords(change.collection)
   const changes = parseChanges(change.changes)
   const scheduler = change.created_by ? String(change.created_by) : null
@@ -445,4 +449,4 @@ export async function runScheduledChanges(
   return out
 }
 
-export { META_COLUMN as SCHEDULE_META_COLUMN }
+export { LEGACY_META_COLUMN as SCHEDULE_LEGACY_META_COLUMN, META_COLUMN as SCHEDULE_META_COLUMN }
