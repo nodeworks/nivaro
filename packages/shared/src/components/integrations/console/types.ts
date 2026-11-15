@@ -517,6 +517,12 @@ export interface ReadyBoard {
     duration_ms: number
   } | null
   running: boolean
+  /** Administrators only: how far the running check is. */
+  progress?: { checked: number; total: number } | null
+  /** The latest run ended before it wrote its board (deploy, restart); this board is older. */
+  stopped_short?: boolean
+  /** Administrators only: where it stopped. */
+  stopped?: { checked: number; total: number | null; at: string | null } | null
   can_run: boolean
   /** Administrators only. */
   coverage?: {
@@ -524,7 +530,6 @@ export interface ReadyBoard {
     checked: number
     ready: number
     errors: number
-    partial: { reason: 'cap' | 'time'; checked: number; total: number } | null
   } | null
   collections?: Record<string, string>
   totals?: { records: number; refused: number; warnings: number; asks: number }

@@ -28,8 +28,11 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const CLAIM_WAIT_MS = 3_000
 const BOARD_HREF = '/integration-health?tab=ready'
 
-/** Pure: the daily report rows for one stored board. */
-export function readySectionRows(r: ReadyResult | null) {
+/** Pure: the daily report rows for one stored board (+ where the last run stopped, if short). */
+export function readySectionRows(
+  r: ReadyResult | null,
+  stopped: { checked: number; total: number | null } | null = null
+) {
   if (!r) return []
   const t = boardGroups(r.entries).totals
   return [
@@ -54,8 +57,8 @@ export function readySectionRows(r: ReadyResult | null) {
       label: 'Records checked',
       value: r.checked,
       unit: 'count' as const,
-      note: r.partial
-        ? `Partial run: ${r.partial.checked} of ${r.partial.total} (${r.partial.reason === 'time' ? 'time limit' : 'record cap'})`
+      note: stopped
+        ? `The latest run stopped at ${stopped.checked}${stopped.total != null ? ` of ${stopped.total}` : ''}; these figures are from the run before`
         : undefined
     }
   ]
@@ -63,9 +66,17 @@ export function readySectionRows(r: ReadyResult | null) {
 
 export async function readyToSendRoutes(app: FastifyInstance) {
   app.get('/ready-to-send', { preHandler: requireAuth }, async (req) => {
-    const { run, running } = await latestReadyResult()
+    const { run, running, progress, stopped } = await latestReadyResult()
     const isAdmin = !!req.isAdmin
-    if (!run) return { data: { run: null, running, can_run: isAdmin } }
+    // How far a run got reads across every record: the counts are for administrators.
+    const runState = {
+      running,
+      progress: isAdmin ? progress : null,
+      stopped_short: !!stopped,
+      stopped: isAdmin ? stopped : null,
+      can_run: isAdmin
+    }
+    if (!run) return { data: { run: null, ...runState } }
     const r = run.result
     const entries = await visibleEntries(r.entries, req.user!, isAdmin)
     const groups = boardGroups(entries)
@@ -80,16 +91,14 @@ export async function readyToSendRoutes(app: FastifyInstance) {
           trigger: r.trigger,
           duration_ms: r.duration_ms
         },
-        running,
-        can_run: isAdmin,
+        ...runState,
         // How much was checked reads across every record: administrators only.
         coverage: isAdmin
           ? {
               candidates: r.candidates,
               checked: r.checked,
               ready: r.ready,
-              errors: r.errors,
-              partial: r.partial
+              errors: r.errors
             }
           : null,
         collections: Object.fromEntries(
@@ -170,7 +179,8 @@ export async function readyToSendRoutes(app: FastifyInstance) {
   )
 
   // Health → Daily report: what the nightly check found (counts; the rows link the board).
-  registerOpsSection('ready_to_send', 'Ready to send', async () =>
-    readySectionRows((await latestReadyResult()).run?.result ?? null)
-  )
+  registerOpsSection('ready_to_send', 'Ready to send', async () => {
+    const { run, stopped } = await latestReadyResult()
+    return readySectionRows(run?.result ?? null, stopped)
+  })
 }

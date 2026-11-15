@@ -2642,14 +2642,16 @@ export async function buildServer() {
           const { readyToSendTick } = await import('./services/ready-to-send/run.js')
           const r = await readyToSendTick('cron')
           app.log.info(
-            `ready-to-send: ${r.checked} checked, ${r.entries.length} moves with problems${r.partial ? ` (partial: ${r.partial.reason})` : ''}`
+            `ready-to-send: ${r.checked} of ${r.candidates} checked, ${r.entries.length} moves with problems`
           )
         },
         {
           heavy: true,
           idempotent: 'safe',
+          // Every open record is checked however long it takes (chunked, yields between chunks).
+          watchdogMs: 6 * 3_600_000,
           description:
-            "Nightly 04:20 — finds every open record whose next manual step sends to a partner API and checks that send the way the record's own Push readiness chip does (requirements, conditions, push guards, payload build, partner contract), many records at a time. Stores what would be refused on Integrations → Ready to send. Reads only: nothing is sent or written back. Checks at most 1,500 records (newest first) within 10 minutes and says when it stopped short."
+            "Nightly 04:20 — finds every open record whose next manual step sends to a partner API and checks that send the way the record's own Push readiness chip does (requirements, conditions, push guards, payload build, partner contract), many records at a time. Stores what would be refused on Integrations → Ready to send. Reads only: nothing is sent or written back. Checks every such record, 100 at a time, letting requests through between chunks; a run cut short (deploy, restart) leaves the last complete board in place and the board says where it stopped."
         }
       )
       // #2801 — nightly restore drill: restores the newest database backup into a scratch

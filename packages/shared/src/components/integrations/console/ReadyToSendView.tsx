@@ -178,19 +178,29 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
       </div>
 
       {data.running && (
-        <Banner tone='info' icon={<Loader2 className='mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin' />}>
-          A new check is running. This board is from the last one and updates when it finishes.
+        <Banner
+          tone='info'
+          icon={<Loader2 className='mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin' />}
+          data-ic-ready-running
+        >
+          A new check is running
+          {data.progress?.total
+            ? ` (${data.progress.checked} of ${data.progress.total} records so far)`
+            : ''}
+          . This board is from the last complete check and updates when it finishes.
         </Banner>
       )}
-      {cov?.partial && (
+      {!data.running && data.stopped_short && (
         <Banner
           tone='warning'
           icon={<Clock className='mt-0.5 h-3.5 w-3.5 shrink-0' />}
-          data-ic-ready-partial
+          data-ic-ready-stopped
         >
-          The last check stopped after {cov.partial.checked} of {cov.partial.total} records (
-          {cov.partial.reason === 'time' ? 'its time limit' : 'its record limit'}), newest first.
-          The rest are checked when they come up in a later run.
+          The latest check stopped before it finished
+          {data.stopped
+            ? ` (at ${data.stopped.checked}${data.stopped.total != null ? ` of ${data.stopped.total}` : ''} records${data.stopped.at ? `, started ${agoText(data.stopped.at)}` : ''})`
+            : ''}
+          , so this board is from the last complete check. The next check starts from the beginning.
         </Banner>
       )}
 
