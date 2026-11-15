@@ -96,8 +96,10 @@ import { broadcastCollectionUpdate } from './realtime.js'
 import { attachRecordInstance, splitInstanceField } from './record-instance.js'
 import {
   applyAgingFilter,
+  applyInStepSort,
   applyStateFilter,
   attachRecordState,
+  IN_STEP_SORT,
   STATE_FIELD,
   splitStateField
 } from './record-state.js'
@@ -3415,6 +3417,12 @@ async function applySorts(
     const desc = s.startsWith('-')
     const path = desc ? s.slice(1) : s
     const direction = desc ? 'desc' : 'asc'
+
+    // Time in the current pipeline step (the lists' "In step" column) — record-state.ts.
+    if (path === IN_STEP_SORT) {
+      applyInStepSort(q, collection, desc)
+      continue
+    }
 
     if (!path.includes('.')) {
       // Simple scalar sort — a calculated field orders by its expression

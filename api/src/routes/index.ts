@@ -59,6 +59,7 @@ import { batchGetRoutes } from './batch-get.js'
 import { blackoutDatesRoutes } from './blackout-dates.js'
 import { blueprintsRoutes } from './blueprints.js'
 import { bulkActionsRoutes } from './bulk-actions.js'
+import { bulkPreflightRoutes } from './bulk-preflight.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { cacheConfigRoutes } from './cache-config.js'
 import { catalogRelatedRoutes } from './catalog-related.js'
@@ -636,6 +637,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(directoryRoutes, { prefix: '/directory' })
   await app.register(revisionsRoutes, { prefix: '/revisions' })
   await app.register(changesRoutes, { prefix: '/changes' })
+  await app.register(bulkPreflightRoutes, { prefix: '/bulk-preflight' })
   await app.register(rolesRoutes, { prefix: '/roles' })
   await app.register(filesRoutes, { prefix: '/files' })
   await app.register(fileDownloadsRoutes, { prefix: '/file-downloads' })

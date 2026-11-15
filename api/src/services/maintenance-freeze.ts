@@ -46,6 +46,8 @@ export function maintenanceExemptPath(url: string): boolean {
     // Batched GETs (services/batch-get.ts): each part is its own in-process GET.
     url.startsWith('/api/batch-get') ||
     url.startsWith('/api/users/cards') ||
+    // "Changed since you picked them" before a bulk action (rt8): a read carrying the ids.
+    /^\/api\/bulk-preflight\/changes(\?|$)/.test(url) ||
     // Activity sentence labels (migration 516): a read carrying the page's refs.
     url.startsWith('/api/activity/labels') ||
     // "Needed by <partner>" badges (idea 43): a read carrying the form's values.

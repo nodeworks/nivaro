@@ -66,6 +66,7 @@ import {
 } from '../../lib/filter-sentence'
 import { deliverLive, releaseLiveOwner } from '../../lib/focus-mode'
 import { type ColumnFormatConfig, formatMultiValue, formatValue } from '../../lib/format-value'
+import { QUEUE_IN_STEP_COLUMN, queueServerSort } from '../../lib/in-step'
 import { createCursorBook, noteNextCursor, pageRequest } from '../../lib/keyset-pager'
 import {
   type InlineEditorKind,
@@ -114,6 +115,14 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { copyIdText } from '../../lib/record-ref'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { userErrorMessage } from '../../lib/safe-error'
+import {
+  selectionSums,
+  splitSelKey,
+  useSelectedRowMemory,
+  useSelectionChanges,
+  useSelectionLiveMarks,
+  useSelectionPicks
+} from '../../lib/selection-watch'
 import { useTableDensity } from '../../lib/table-density'
 import { matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
@@ -131,6 +140,11 @@ import { BulkActionButtons, useBuiltinGate } from '../bulk/BulkActionButtons'
 import { BulkCompareButton } from '../bulk/BulkCompareButton'
 import { BulkFieldUpdateButton } from '../bulk/BulkFieldUpdateButton'
 import { BulkRowMark } from '../bulk/BulkRowMark'
+import {
+  BulkSelectionNotices,
+  type OpenInput,
+  SelectionFigures
+} from '../bulk/BulkSelectionNotices'
 import { BulkMessageButton } from '../bulk/MessageStakeholders'
 import { compareCell, RowActionsMenu, roleMayUpdate } from '../CollectionBrowserView'
 import { ColumnHeaderMenu } from '../cbv/ColumnHeaderMenu'
@@ -149,6 +163,7 @@ import { type Column, DataTable, type FilterDef } from '../DataTable'
 import { EmptyState } from '../EmptyState'
 import { FocusModeToggle } from '../FocusModeToggle'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill } from '../FulfilmentPill'
+import { InStepCell } from '../InStep'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/IntegrationDots'
 import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
@@ -441,6 +456,8 @@ interface QueueView {
 
 /** Rows per server group request (#741); "Show more" adds another page. */
 const GROUP_PAGE_SIZE = 50
+/** An empty selection (stable, so the selection-watch hooks see no change). */
+const NO_KEYS: string[] = []
 
 /** #741 — a group header as the server sends it. */
 interface ServerGroup {
@@ -1473,12 +1490,7 @@ export function QueueWorklist({
           scope,
           // Last State Change is Aging read the other way round: the newest
           // move is the least aged.
-          sort:
-            sort === 'state_entered'
-              ? '-aging_hours'
-              : sort === '-state_entered'
-                ? 'aging_hours'
-                : sort,
+          sort: queueServerSort(sort),
           filters: JSON.stringify(apiFilters),
           // Table + group: headers only (rows load per group on expand, #741).
           // Kanban renders the full matching set, grouped client-side.
@@ -1759,12 +1771,7 @@ export function QueueWorklist({
           .request(
             get(`/queues/${queueId}/items`, {
               scope,
-              sort:
-                sort === 'state_entered'
-                  ? '-aging_hours'
-                  : sort === '-state_entered'
-                    ? 'aging_hours'
-                    : sort,
+              sort: queueServerSort(sort),
               filters: JSON.stringify(apiFilters),
               group_by: groupBy as string,
               group_key: key,
@@ -2914,6 +2921,57 @@ export function QueueWorklist({
     return null
   }
 
+  // ── The selection, watched while it is held (rt8 items 5–7, lib/selection-watch.ts) ──────
+  // Row keys are already `collection:item` (rowId), the selection-watch key shape.
+  const selectionKeys = bulkMode ? selectedIds : NO_KEYS
+  const selPicks = useSelectionPicks(selectionKeys)
+  const selCollections = useMemo(
+    () => [...new Set(selectionKeys.map((k) => splitSelKey(k).collection))],
+    [selectionKeys]
+  )
+  const selMarks = useSelectionLiveMarks(selCollections, selPicks.picks)
+  const selCheckKeys = useMemo(
+    () => selectionKeys.filter((k) => selMarks.marked.has(k)),
+    [selectionKeys, selMarks.marked]
+  )
+  const selChanges = useSelectionChanges(selCheckKeys, selPicks.picks)
+  const selChangedRows = selChanges.rows.filter((r) => selPicks.picks.has(r.key))
+  const selLocks = useRowLocksByCollection(
+    selectionKeys.map((k) => {
+      const { collection, id } = splitSelKey(k)
+      return { collection, id }
+    }),
+    lockTick
+  )
+  const selOpen: OpenInput[] = selectionKeys
+    .map((key) => {
+      const { collection, id } = splitSelKey(key)
+      const v = rowViewers[rowPresenceKey(collection, id)]
+      const lock = selLocks.get(key)
+      return {
+        key,
+        viewerIds: v?.ids ?? [],
+        viewerCount: v?.count ?? 0,
+        lockName: lock && !lock.is_mine ? (lock.locked_by_name ?? 'someone') : null
+      }
+    })
+    .filter((o) => o.viewerCount > 0 || !!o.lockName)
+  const selRows = useSelectedRowMemory(
+    items as unknown as Array<Record<string, unknown>>,
+    (r) => `${r.collection}:${r.item_id}`,
+    selectionKeys
+  )
+  // The sums: the stored columns the totals row sums.
+  const selSumCols = totalCols.filter(
+    (k) =>
+      columnAggs[k] === 'sum' && totalsSupportOf(k)?.kind === 'server' && k.startsWith('extra.')
+  )
+  const selSums = selectionSums(
+    selRows,
+    selSumCols,
+    (r, k) => (r.extra as Record<string, unknown> | undefined)?.[k.slice('extra.'.length)]
+  )
+
   const groupKeyLabel = (key: string): string => {
     if (groupBy === 'state') return key === 'No state' ? key : stateLabel(key)
     if (groupBy === 'collection') return collectionLabel(key)
@@ -3099,6 +3157,19 @@ export function QueueWorklist({
       header: aliasFor('aging_hours', 'Aging'),
       sortable: true,
       render: (row) => formatAging(row.aging_hours)
+    },
+    {
+      // rt8 — the step and how long it has been there, ticking on the page clock; sorts on
+      // the server as Aging. Off unless the viewer adds it.
+      key: QUEUE_IN_STEP_COLUMN,
+      header: aliasFor(QUEUE_IN_STEP_COLUMN, 'In step'),
+      sortable: true,
+      render: (row) => (
+        <InStepCell
+          stepLabel={row.state ? stateLabel(row.state) : null}
+          enteredAt={row.state_entered_at}
+        />
+      )
     },
     {
       // When the record entered its current state — the same moment Aging
@@ -3566,6 +3637,7 @@ export function QueueWorklist({
     'owners',
     'aging_hours',
     'state_entered',
+    QUEUE_IN_STEP_COLUMN,
     'sla_status',
     'at_risk',
     ...(addendumsEnabled ? ['addendums'] : []),
@@ -3861,12 +3933,7 @@ export function QueueWorklist({
         const res = await client.request<QueueItemsPage>(
           get(`/queues/${queueId}/items`, {
             scope,
-            sort:
-              sort === 'state_entered'
-                ? '-aging_hours'
-                : sort === '-state_entered'
-                  ? 'aging_hours'
-                  : sort,
+            sort: queueServerSort(sort),
             filters: JSON.stringify(apiFilters),
             page: p,
             limit: 100
@@ -5688,6 +5755,41 @@ export function QueueWorklist({
           }
           onTransition={(state) => runBulk('Transition', (row) => performTransition(row, state))}
           onClear={() => setSelectedIds([])}
+          figures={
+            <SelectionFigures
+              tone='light'
+              total={selectedIds.length}
+              sums={selSums.sums}
+              known={selSums.known}
+              noun='row'
+              labelOf={(k) => {
+                const c = columns.find((x) => x.key === k)
+                return c ? columnHeaderText(c) : k
+              }}
+              format={(k, v) => {
+                const fmt = formatConfigFor(k.slice('extra.'.length))
+                return formatTotal(v, 'sum', (fmt?.type === 'number' ? fmt : null) as never)
+              }}
+            />
+          }
+          notices={
+            <BulkSelectionNotices
+              tone='light'
+              framed
+              total={selectedIds.length}
+              open={selOpen}
+              changed={selChangedRows}
+              labelOf={(k) => items.find((r) => rowId(r) === k)?.label ?? null}
+              onSkip={(keys) => setSelectedIds((s) => s.filter((k) => !keys.includes(k)))}
+              onAcknowledgeChanged={(keys) => {
+                selPicks.restamp(keys)
+                selMarks.clear(keys)
+              }}
+              onOpenRecord={({ collection, id }) =>
+                window.open(itemNav.urlFor({ collection, itemId: id }), '_blank', 'noopener')
+              }
+            />
+          }
         >
           {selectedIds.length >= 2 && (
             <button
