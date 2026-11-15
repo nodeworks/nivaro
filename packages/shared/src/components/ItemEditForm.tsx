@@ -11488,7 +11488,12 @@ function ItemEditFormView({
   }
   // Likely duplicates of a new record's label fields (Rob 2026-11-13): an inline
   // notice under the field, never a block here (the server refuses where configured).
-  const duplicateHints = useDuplicateCheck({ collection, enabled: isNew && !designOn, draft })
+  const duplicateHints = useDuplicateCheck({
+    collection,
+    enabled: isNew && !designOn,
+    draft,
+    stagedLines: pendingO2MRows
+  })
   const fieldAffordancesRaw = {
     remoteChanges,
     dismissRemoteChange: (field: string) => {

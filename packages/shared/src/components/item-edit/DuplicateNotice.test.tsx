@@ -89,6 +89,20 @@ describe('watchedValues', () => {
     expect(watchedValues(['name'], { name: 'M' })).toBe('')
     expect(watchedValues([], { name: 'MX480' })).toBe('')
   })
+  it('custom rules: numbers, dates, link ids and staged line values', () => {
+    const watch = [
+      { field: 'vendor', kind: 'relation' as const },
+      { field: 'amount', kind: 'number' as const },
+      { field: 'due', kind: 'date' as const },
+      { field: 'lines', kind: 'lines' as const, line_field: 'item', child: 'po_lines', fk: 'po' }
+    ]
+    const staged = [{ item: { id: 9 } }, { item: 3 }, { item: 9 }]
+    expect(
+      watchedValues(watch, { vendor: { id: 4 }, amount: '12.5', due: '2026-11-14' }, () => staged)
+    ).toBe('{"vendor":4,"amount":12.5,"due":"2026-11-14","lines":["3","9"]}')
+    // Nothing usable yet → no ask.
+    expect(watchedValues(watch, { vendor: null, amount: '', due: 'soon' }, () => [])).toBe('')
+  })
 })
 
 describe('useDuplicateCheck', () => {
