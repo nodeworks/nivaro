@@ -12,6 +12,7 @@ export * from './sections/ai-knowledge.js'
 export * from './sections/ai-panel.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
+export * from './sections/back-and-peek.js'
 export * from './sections/bulk-actions.js'
 export * from './sections/chaos.js'
 export * from './sections/chaos-ci.js'
@@ -119,6 +120,7 @@ import {
   ssoDocs
 } from './sections/assist-ops.js'
 import { attributesGuide } from './sections/attributes.js'
+import { collabBackAndPeek } from './sections/back-and-peek.js'
 import { bulkActionsGuide } from './sections/bulk-actions.js'
 import { chaosDocs } from './sections/chaos.js'
 import { chaosBuilderDocs } from './sections/chaos-builder.js'
@@ -900,6 +902,7 @@ export const navSections: NavGroup[] = [
       collabLiveProgress,
       collabOfflinePopout,
       collabLiveLists,
+      collabBackAndPeek,
       collabLiveOps,
       collabPresence,
       collabNotificationsCenter,

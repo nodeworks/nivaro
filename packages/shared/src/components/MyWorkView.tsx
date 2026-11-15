@@ -11,6 +11,7 @@ import {
 } from '../lib/notification-target'
 import { usePrefetchIntent } from '../lib/prefetch'
 import { useOptionalRealtime } from '../lib/realtime'
+import { peekable, usePeekOrOpen } from '../lib/record-peek'
 import { userErrorMessage } from '../lib/safe-error'
 import { slaChip, withinDay } from '../lib/sla-chip'
 import { cn } from '../lib/utils'
@@ -269,6 +270,7 @@ export function MyWorkView({
 } = {}) {
   const { apiBase, authHeaders, credentials } = useApiFetchConfig()
   const { open: openItem } = useItemNavigation()
+  const peekOrOpen = usePeekOrOpen()
   const nav = useNavigation()
   const qc = useQueryClient()
   // #3230 — resting on a row warms the record it opens.
@@ -438,7 +440,21 @@ export function MyWorkView({
     }
   })
 
-  const open = (collection: string | null, item: string | null) => {
+  const open = (
+    collection: string | null,
+    item: string | null,
+    e?: React.MouseEvent,
+    list?: Array<{ collection: string | null; item: string | null }>
+  ) => {
+    // Realtime #17: a record opens in the app's record sheet (the page stays where it is);
+    // Cmd / Ctrl-click opens it in a new tab. Hosts without a sheet navigate as before.
+    if (collection && item && peekable(collection)) {
+      const peekList = (list ?? [])
+        .filter((r) => r.collection && r.item && peekable(r.collection))
+        .map((r) => ({ collection: r.collection as string, itemId: String(r.item) }))
+      if (peekOrOpen({ collection, itemId: String(item) }, e, { list: peekList }) !== 'navigate')
+        return
+    }
     const routes: NotificationRouteMap = {
       record: (c, i) => {
         // Record targets always work — openItem is the host's record router.
@@ -662,7 +678,7 @@ export function MyWorkView({
                       >
                         <button
                           type='button'
-                          onClick={() => open(o.collection, o.item)}
+                          onClick={(e) => open(o.collection, o.item, e, filteredOwned)}
                           {...intent.record(o.collection, o.item)}
                           className='flex w-full items-center gap-2.5 px-4 py-2 text-left hover:bg-muted'
                         >
@@ -738,8 +754,8 @@ export function MyWorkView({
                       )}
                       <button
                         type='button'
-                        onClick={() =>
-                          t.kind === 'support' ? openTicket(t.id) : open(t.collection, t.item)
+                        onClick={(e) =>
+                          t.kind === 'support' ? openTicket(t.id) : open(t.collection, t.item, e)
                         }
                         className='min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline'
                       >
@@ -804,7 +820,7 @@ export function MyWorkView({
                         )}
                         <button
                           type='button'
-                          onClick={() => open(t.collection, t.item)}
+                          onClick={(e) => open(t.collection, t.item, e)}
                           className='min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline'
                         >
                           {t.title}
@@ -876,8 +892,10 @@ export function MyWorkView({
                         >
                           <button
                             type='button'
-                            onClick={() =>
-                              t.kind === 'support' ? openTicket(t.id) : open(t.collection, t.item)
+                            onClick={(e) =>
+                              t.kind === 'support'
+                                ? openTicket(t.id)
+                                : open(t.collection, t.item, e)
                             }
                             className='min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline'
                           >
@@ -957,7 +975,7 @@ export function MyWorkView({
                       {notificationTargetFor(n.collection, n.item) ? (
                         <button
                           type='button'
-                          onClick={() => open(n.collection, n.item)}
+                          onClick={(e) => open(n.collection, n.item, e, data.notifications)}
                           className='min-w-0 flex-1 cursor-pointer text-left hover:opacity-80'
                         >
                           <p className='truncate text-[12.5px] font-medium'>{n.subject}</p>

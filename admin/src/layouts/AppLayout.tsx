@@ -88,6 +88,7 @@ import {
   HelpVideoRecordingProvider,
   HuddleCallLayer,
   IncidentBanner,
+  ItemEditAuthContext,
   isCodeError,
   isRecordPopout,
   JobsTray,
@@ -98,6 +99,7 @@ import {
   RealtimeContext,
   RealtimeStatusBanner,
   RecordOutboxHost,
+  RecordPeekHost,
   recordNavigation,
   restoreTrailScroll,
   SOMETHING_WENT_WRONG,
@@ -988,8 +990,28 @@ export function AppLayout() {
         <UserSyncHost />
         <OutboxHost userId={authUser?.id ?? null} />
         <HuddleCallHost />
+        {/* Realtime #17: one record sheet for the whole app (My Work, the bell, notifications,
+            search, record links in comments open records in it). */}
+        <RecordPeekHost wrapSheet={(sheet) => <PeekSheetProviders>{sheet}</PeekSheetProviders>} />
       </TooltipProvider>
     </RealtimeContext.Provider>
+  )
+}
+
+/** What the app record sheet's form needs (realtime #17): the pages provide these lower down. */
+function PeekSheetProviders({ children }: { children: ReactNode }) {
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <NavigationContext.Provider value={{ navigate, itemUrl: defaultItemUrl }}>
+        <ItemEditAuthContext.Provider
+          value={{ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }}
+        >
+          {children}
+        </ItemEditAuthContext.Provider>
+      </NavigationContext.Provider>
+    </NivaroProvider>
   )
 }
 

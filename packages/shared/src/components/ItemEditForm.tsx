@@ -267,6 +267,7 @@ import {
 } from './item-edit/helpers'
 import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
+import { ListNeighborNav } from './item-edit/ListNeighborNav'
 import { deferredSections } from './item-edit/lazy-sections'
 import { type LineRevision, mergeEditOf, restoredLineConflicts } from './item-edit/line-merge'
 import {
@@ -13647,6 +13648,10 @@ function ItemEditFormView({
                                             className='h-4 w-4 transition-transform duration-150 group-hover/back:-translate-x-0.5'
                                           />
                                         </button>
+                                      )}
+                                      {/* Realtime #16: walk the list this record came from. */}
+                                      {!isNew && !designMode && (
+                                        <ListNeighborNav collection={collection} itemId={itemId} />
                                       )}
                                       {/* min-width floor: without it flex crushes this block to
                                       zero width before the row ever overflows, so HeaderTools'

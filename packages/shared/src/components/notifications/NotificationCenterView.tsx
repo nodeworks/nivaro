@@ -29,6 +29,7 @@ import {
   runNotificationTarget
 } from '../../lib/notification-target'
 import { openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
+import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../../lib/record-peek'
 import { cn, formatRelative } from '../../lib/utils'
 import { hasSnapshotView, offersChanges } from '../NotificationBell'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -178,6 +179,7 @@ export function NotificationCenterView({
   className
 }: NotificationCenterViewProps) {
   const client = useNivaroClient()
+  const peek = useRecordPeek()
   const qc = useQueryClient()
   const [landingChanges, setLandingChanges] = useState<number | null>(() => {
     if (changesId !== undefined) return changesId
@@ -434,7 +436,22 @@ export function NotificationCenterView({
     await client.request(post(`/notifications/${id}/read`)).catch(() => undefined)
     invalidate()
   }
-  const handleRowClick = async (n: NotificationRow) => {
+  const handleRowClick = async (n: NotificationRow, e?: React.MouseEvent) => {
+    // Realtime #17: a plain record notification opens in the app's record sheet, with ↑ / ↓
+    // through the other record notifications on screen; Cmd / Ctrl-click opens a new tab.
+    const peekAt = peek && !isNewTabClick(e) ? notificationPeekTarget(n) : null
+    if (peekAt && peek) {
+      const list = notifications
+        .map((r) => notificationPeekTarget(r))
+        .filter((t): t is NonNullable<typeof t> => !!t)
+      peek.open(peekAt, { list })
+      if (!n.read)
+        void client
+          .request(post(`/notifications/${n.id}/read`))
+          .catch(() => undefined)
+          .then(() => invalidate())
+      return
+    }
     if (!n.read) {
       await client.request(post(`/notifications/${n.id}/read`)).catch(() => undefined)
       invalidate()
@@ -519,7 +536,7 @@ export function NotificationCenterView({
           {target ? (
             <button
               type='button'
-              onClick={() => void handleRowClick(n)}
+              onClick={(e) => void handleRowClick(n, e)}
               className='block w-full text-left'
             >
               {head}

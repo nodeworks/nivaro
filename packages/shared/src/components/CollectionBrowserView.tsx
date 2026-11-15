@@ -117,14 +117,30 @@ import {
   sanitizeCbvLinkState
 } from '../lib/list-link'
 import {
+  arrivedByListReturn,
+  ensureHistoryKey,
+  historyKey,
   pageWhileSettling,
   rememberedListPage,
   rememberListPage,
   restoreWindowOutcome
 } from '../lib/list-page-memory'
+import {
+  type AwayLog,
+  changedRowIds,
+  markReturnRow,
+  noteListOpen,
+  peekListAway,
+  planListReturn,
+  readListReturn,
+  rowInView,
+  standbyListAway,
+  takeListAway
+} from '../lib/list-return'
 import { expandCoalesced, LIVE_ASPECTS } from '../lib/live'
 import {
   conditionFields,
+  flashRows,
   lockLabel,
   mayAffectMatch,
   useRowChanges,
@@ -4526,6 +4542,11 @@ export function CollectionBrowserView({
     sharedLink ? null : rememberedListPage(`cbv:${collection}`)
   )
   const [page, setPage] = useState(sharedLink?.p ?? restoredPage ?? 1)
+  // Back to the list keeps your place (realtime #16, lib/list-return.ts): what changed while
+  // the list was away decides whether its cached rows stay as they are (nothing changed),
+  // only the changed rows are re-read, or the page is read once more under the kept rows.
+  const [awayPeek] = useState(() => peekListAway(`cbv:${collection}`))
+  const [holdCache, setHoldCache] = useState(() => planListReturn(awayPeek) !== 'fresh')
   // Army 9 b14: the async scope seed (Funding Year / Zone defaults) changes the conditions
   // right after mount, and that automatic reset to page 1 deleted the remembered page.
   // Until the first settled page has loaded, a reset to 1 goes back to the restored page.
@@ -5496,6 +5517,10 @@ export function CollectionBrowserView({
     queryFn: () => fetchItemsPage(page),
     enabled: !!collection && scopeGateOpen,
     placeholderData: (prev) => prev,
+    // A list someone comes back to within the away window shows its cached page at once
+    // (realtime #16): kept as long as the away log can vouch for it (see the return effect).
+    gcTime: 20 * 60_000,
+    ...(holdCache ? { staleTime: Number.POSITIVE_INFINITY } : {}),
     // #2490 — a collection whose live record events are off polls instead (visible tabs only).
     refetchInterval: bc.live_events === 'off' ? 30_000 : false,
     retry: false
@@ -5855,6 +5880,8 @@ export function CollectionBrowserView({
   // count into a pill the viewer clicks to refresh — a paging table that
   // silently reshuffles rows under the cursor reads as a glitch, not freshness.
   const [pendingLive, setPendingLive] = useState(0)
+  // The live handler, for replaying what changed while the list was away (realtime #16).
+  const replayRef = useRef<((evs: CollectionUpdateEvent[]) => void) | null>(null)
   useEffect(() => {
     if (!realtime || !collection) return
     const countPill = (n = 1) => setPendingLive((c) => c + n)
@@ -5937,7 +5964,9 @@ export function CollectionBrowserView({
       }
       if (bulk) countPill()
       const visible = visibleIdsRef.current
-      const own = (ev: CollectionUpdateEvent) => isOwnWrite(collection, ev.item as string)
+      // A replayed away event carries whether it was the viewer's own save when it arrived.
+      const own = (ev: CollectionUpdateEvent) =>
+        (ev as { own?: boolean }).own === true || isOwnWrite(collection, ev.item as string)
       // The writer is only ever read back from the viewer's own /items read
       // (user_updated, field-permission checked) — events never name them.
       const byOf = (row?: Record<string, unknown> | null) => {
@@ -6059,8 +6088,10 @@ export function CollectionBrowserView({
     const unsub = realtime.subscribeCollections([collection], (ev) =>
       deliverLive(liveOwner, [ev], handle)
     )
+    replayRef.current = handle
     return () => {
       disposed = true
+      if (replayRef.current === handle) replayRef.current = null
       unsub()
       releaseLiveOwner(liveOwner)
       if (aspectTimer) clearTimeout(aspectTimer)
@@ -6068,6 +6099,72 @@ export function CollectionBrowserView({
       if (countsTimer) clearTimeout(countsTimer)
     }
   }, [realtime, collection, qc, client, selfUserId, rowChanges, liveOwner])
+
+  // ── Back to the list keeps your place (realtime #16, lib/list-return.ts) ──
+  // While mounted, a quiet standby subscription waits; once the list unmounts it records what
+  // changed (ids + field names) until the list comes back and takes the log.
+  const awayLogRef = useRef<AwayLog | null>(null)
+  useEffect(() => {
+    if (!collection) return
+    const log = takeListAway(`cbv:${collection}`)
+    if (log && !awayLogRef.current) awayLogRef.current = log
+    return standbyListAway(realtime, `cbv:${collection}`, [collection])
+  }, [realtime, collection])
+  // Once the page on screen settles: nothing changed → leave it; a few rows changed → re-read
+  // only those (the live handler, as the viewer); the log cannot vouch → read the page once
+  // under the kept rows and fade only the rows that came back different.
+  const returnRef = useRef<{
+    phase: 'wait' | 'refetching' | 'done'
+    before?: Array<Record<string, unknown>>
+  }>({ phase: 'wait' })
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a one-shot settle step; refetch, rowChanges and the refs are read as they are then
+  useEffect(() => {
+    const r = returnRef.current
+    if (r.phase === 'done' || !scopeGateOpen || !itemsRes || isPlaceholderData) return
+    if (r.phase === 'refetching') {
+      if (isFetching) return
+      r.phase = 'done'
+      flashRows(rowChanges.rootRef.current, changedRowIds(r.before, itemsRes.data))
+      return
+    }
+    const log = awayLogRef.current
+    const fromCache = !!log && dataUpdatedAt > 0 && dataUpdatedAt <= log.leftAt
+    const plan = fromCache ? planListReturn(log) : 'fresh'
+    if (plan === 'replay' && log && replayRef.current) {
+      replayRef.current(log.events)
+    } else if (plan === 'refetch' || (plan === 'replay' && !replayRef.current)) {
+      r.phase = 'refetching'
+      r.before = itemsRes.data
+      if (!isFetching) void refetch()
+      setHoldCache(false)
+      return
+    }
+    r.phase = 'done'
+    setHoldCache(false)
+  }, [scopeGateOpen, itemsRes, isPlaceholderData, isFetching, dataUpdatedAt])
+  // The row the person comes back to (the one they opened, or walked to with Next) gets a
+  // brief quiet mark — on a Back to this list's own history entry or a "return to the list".
+  const returnMarkRef = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on the first settled page
+  useEffect(() => {
+    if (returnMarkRef.current || !scopeGateOpen || !itemsRes || isPlaceholderData) return
+    returnMarkRef.current = true
+    const stash = readListReturn()
+    if (!stash || stash.list !== `cbv:${collection}`) return
+    const entry = historyKey()
+    if (!((stash.entry && entry && stash.entry === entry) || arrivedByListReturn())) return
+    const id = String(stash.current.id)
+    const walked = String(stash.opened?.id ?? id) !== id
+    // After the restored scroll has landed (nav-trail puts it back as soon as rows are there).
+    setTimeout(() => {
+      const root = rowChanges.rootRef.current
+      if (!markReturnRow(root, id) || !walked) return
+      const esc = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id
+      const row = root?.querySelector(`[data-row-key="${esc}"]`)
+      // Walked to a row further down with Next: bring it into view, once, on arrival.
+      if (row && !rowInView(row, null)) row.scrollIntoView?.({ block: 'nearest' })
+    }, 260)
+  }, [scopeGateOpen, itemsRes, isPlaceholderData, collection])
   const rowLocks = useRowLocks(
     collection,
     rows.map((r) => String(r.id)),
@@ -7448,6 +7545,16 @@ export function CollectionBrowserView({
         item: id === 'new' ? null : id
       })
     }
+    // Keep the page's order so the record can offer Previous / Next in list, and the list can
+    // mark this row when the person comes back (realtime #16).
+    if (id !== 'new')
+      noteListOpen({
+        list: `cbv:${collection}`,
+        label: meta?.display_name ?? titleCase(collection),
+        rows: rows.map((r) => ({ collection, id: String(r.id) })),
+        opened: { collection, id: String(id) },
+        entry: ensureHistoryKey()
+      })
     if (onOpenItem) onOpenItem(id)
     else openTarget({ collection, itemId: String(id) })
   }

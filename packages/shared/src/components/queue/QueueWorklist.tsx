@@ -85,6 +85,16 @@ import {
   sanitizeQueueLinkState
 } from '../../lib/list-link'
 import { arrivedByListReturn, ensureHistoryKey, historyKey } from '../../lib/list-page-memory'
+import {
+  type AwayLog,
+  markReturnRow,
+  noteListOpen,
+  peekListAway,
+  planListReturn,
+  returnRowFor,
+  standbyListAway,
+  takeListAway
+} from '../../lib/list-return'
 import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
 import { listTrailDetail, setTrailDetail } from '../../lib/nav-trail'
@@ -1367,6 +1377,14 @@ export function QueueWorklist({
     /** The live read stopped at its row ceiling — the totals cover the rows it read. */
     totals_partial?: boolean
   }
+  // Back to the worklist keeps its place (realtime #16, lib/list-return.ts): when nothing in
+  // its collections changed while the person was on a record, the cached rows stay as they are.
+  const [queueAwayPeek] = useState(() => peekListAway(`queue:${queueId}`))
+  // Any return holds the cache through the first settle (no dimmed mount refetch); what the
+  // log says then decides whether a quiet re-read follows (see the return effect below).
+  const [holdQueueCache, setHoldQueueCache] = useState(
+    () => planListReturn(queueAwayPeek) !== 'fresh'
+  )
   const {
     data,
     isLoading,
@@ -1432,7 +1450,9 @@ export function QueueWorklist({
       !!queueId && displayReady && scopeGateOpen && (firstFetchedRef.current || filtersSettled),
     // Keep the previous page rendered while a sort/filter/page change refetches —
     // swapping to skeletons collapsed the table height and jittered the page.
-    placeholderData: (prev) => prev
+    placeholderData: (prev) => prev,
+    gcTime: 20 * 60_000,
+    ...(holdQueueCache ? { staleTime: Number.POSITIVE_INFINITY } : {})
   })
 
   if (data && !firstFetchedRef.current) firstFetchedRef.current = true
@@ -1850,6 +1870,25 @@ export function QueueWorklist({
     prevKeysRef.current = keys
   }, [dataUpdatedAt])
 
+  // ── Back to the worklist keeps its place (realtime #16, lib/list-return.ts) ──
+  // A quiet standby subscription to the queue's collections records what changed while the
+  // person was on a record. Coming back: nothing changed → the cached rows stay (no read);
+  // anything changed → one quiet re-read (the server re-judges membership as the viewer) that
+  // flashes only the rows that changed, like any live refresh.
+  const queueAwayRef = useRef<AwayLog | null>(null)
+  const awayCollectionsKey = [
+    ...new Set(
+      (queue?.sources ?? [])
+        .filter((s) => s.type === 'collection' && s.collection)
+        .map((s) => s.collection as string)
+    )
+  ].join(',')
+  useEffect(() => {
+    if (!awayCollectionsKey) return
+    const log = takeListAway(`queue:${queueId}`)
+    if (log && !queueAwayRef.current) queueAwayRef.current = log
+    return standbyListAway(ctxRealtime, `queue:${queueId}`, awayCollectionsKey.split(','))
+  }, [ctxRealtime, queueId, awayCollectionsKey])
   // Any completed refetch clears the pending-updates pill — the data on screen
   // is current again, however the refetch was triggered. Keyed on the fetch
   // time, not the data object (army 8 b08-N6): a re-read that came back equal
@@ -2221,6 +2260,8 @@ export function QueueWorklist({
   const [sheetItem, setSheetItem] = useState<QueueItemRow | null>(null)
   const [workNext, setWorkNext] = useState(false)
   const [highlightedId, setHighlightedId] = useState<string | null>(null)
+  /** Row key to mark once the rows are on screen after a return (realtime #16). */
+  const returnMarkRef = useRef<string | null>(null)
 
   // Item edit-page opener with the queue's configured layout pinned. Goes
   // through useItemNavigation so an embedding host's itemUrl/openItem
@@ -2253,8 +2294,19 @@ export function QueueWorklist({
   // chip (and the browser's Back) returns here with the same filters, page and
   // scroll position. Every way out to a record goes through this (army 11 Q1-4:
   // the side sheet's Open record skipped it, so Back landed on My Items page 1).
-  const rememberPlace = () => {
+  const rememberPlace = (opened?: { collection: string; id: string }) => {
     if (!queue) return
+    // The rows in order, for the record's Previous / Next in list (realtime #16).
+    if (opened)
+      noteListOpen({
+        list: `queue:${queueId}`,
+        label: queue.name,
+        rows: items
+          .filter((r) => r.collection !== ADDENDUM_ROW_COLLECTION)
+          .map((r) => ({ collection: r.collection, id: String(r.item_id) })),
+        opened,
+        entry: ensureHistoryKey()
+      })
     writeQueueReturn({
       queue_id: queueId,
       name: queue.name,
@@ -2266,12 +2318,12 @@ export function QueueWorklist({
     })
   }
   const openItemPage = (row: QueueItemRow) => {
-    rememberPlace()
+    rememberPlace({ collection: row.collection, id: String(row.item_id) })
     itemNav.open(rowTarget(row))
   }
   /** "Open record" in a side sheet: the root record keeps the queue's pinned layout. */
   const openFromSheet = (target: { collection: string; itemId: string }) => {
-    rememberPlace()
+    rememberPlace({ collection: target.collection, id: String(target.itemId) })
     const root = drillStack?.[0]
     const isRoot =
       !!root && root.collection === target.collection && String(root.itemId) === target.itemId
@@ -2493,10 +2545,52 @@ export function QueueWorklist({
     if (s.view) setView(s.view as 'table' | 'kanban' | 'workload')
     if (s.page) setPage(s.page)
     pendingScrollRef.current = stash.scroll ?? 0
+    // The row the person comes back to (opened, or walked to with Next) is the keyboard row
+    // again and gets a brief quiet mark once the rows are on screen (realtime #16).
+    const back = returnRowFor(`queue:${queueId}`)
+    if (back) {
+      const key = `${back.collection}:${back.id}`
+      setHighlightedId(key)
+      returnMarkRef.current = key
+    }
     // Back from a record opened out of a side sheet lands on the sheet's history
     // entry: the list comes back as it was, the sheet does not (army 11 Q1-4).
     if (drillStack && drillStack.length > 0) drill.back(drillStack.length)
   }, [displayReady, queueId])
+  // Once the restored view (scope, filters, page) is on screen — one render after the view is
+  // ready, so the stash restore above has landed — decide what the return re-reads.
+  const queueReturnDoneRef = useRef(false)
+  const [queueReturnTick, setQueueReturnTick] = useState(0)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot once the restored page is on screen
+  useEffect(() => {
+    if (queueReturnDoneRef.current || !displayReady || !awayCollectionsKey) return
+    if (queueReturnTick === 0) {
+      setQueueReturnTick(1)
+      return
+    }
+    if (!data || isPlaceholderData) return
+    queueReturnDoneRef.current = true
+    const log = queueAwayRef.current
+    const fromCache = !!log && dataUpdatedAt > 0 && dataUpdatedAt <= log.leftAt
+    const plan = fromCache ? planListReturn(log) : 'fresh'
+    if (plan === 'replay' || plan === 'refetch') {
+      livePendingRef.current = (log?.events ?? [])
+        .filter((e) => !e.own)
+        .map((e) => ({ key: `${e.collection}:${String(e.item)}`, by: null }))
+      liveRefetchRef.current = true
+      void qc
+        .invalidateQueries({
+          queryKey: serverGrouped ? ['queue-items', queueId] : ['queue-items', queueId, scope]
+        })
+        .finally(() => {
+          liveRefetchRef.current = false
+        })
+    }
+    setHoldQueueCache(false)
+    const key = returnMarkRef.current
+    returnMarkRef.current = null
+    if (key) setTimeout(() => markReturnRow(rowChanges.rootRef.current, key), 260)
+  }, [data, isPlaceholderData, displayReady, awayCollectionsKey, queueReturnTick])
   // army 5 b16-N3 — a dashboard link carries ?scope=all|mine so "Your
   // worklists" opens the scope the number was counted in (not an empty My
   // Items). Applied once after the default view landed, then dropped like

@@ -3,6 +3,7 @@ import { useMemo } from 'react'
 import { defaultItemUrl, useNavigation, useNivaroClient } from '../context'
 import { get } from '../lib/commands'
 import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../lib/live'
+import { peekDecision, useRecordPeek } from '../lib/record-peek'
 import { chatRoomTypesQuery } from './chat/chat-core'
 
 /**
@@ -33,6 +34,7 @@ function useRoomTypes(): RoomType[] {
 function RecordToken({ token, plain }: { token: string; plain?: boolean }) {
   const client = useNivaroClient()
   const nav = useNavigation()
+  const peek = useRecordPeek()
   const types = useRoomTypes()
 
   const { data: card } = useQuery({
@@ -95,7 +97,15 @@ function RecordToken({ token, plain }: { token: string; plain?: boolean }) {
   if (!card) return <>{token}</>
   if (plain) return <span className='font-medium'>{token}</span>
   const target = { collection: card.collection, itemId: String(card.id) }
-  const open = () => {
+  const open = (e: React.MouseEvent) => {
+    // Realtime #17: a record link in a comment opens in the app's record sheet when the host
+    // has one (the comment thread stays put); Cmd / Ctrl-click opens a new tab.
+    const what = peek ? peekDecision(e, true, target.collection) : null
+    if (what === 'peek' && peek) return peek.open(target)
+    if (what === 'new-tab') {
+      window.open((nav.itemUrl ?? defaultItemUrl)(target), '_blank', 'noopener')
+      return
+    }
     if (nav.openItem?.(target)) return
     nav.navigate((nav.itemUrl ?? defaultItemUrl)(target))
   }
@@ -153,6 +163,7 @@ function RecordPathToken({
 }) {
   const client = useNivaroClient()
   const nav = useNavigation()
+  const peek = useRecordPeek()
   const { data } = useQuery({
     queryKey: ['nvr-record-path', collection, id],
     queryFn: async () => {
@@ -183,7 +194,15 @@ function RecordPathToken({
   if (!data) return <>{raw}</>
   if (plain) return <span className='font-medium'>{data.label}</span>
   const target = { collection, itemId: id }
-  const open = () => {
+  const open = (e: React.MouseEvent) => {
+    // Realtime #17: a record link in a comment opens in the app's record sheet when the host
+    // has one (the comment thread stays put); Cmd / Ctrl-click opens a new tab.
+    const what = peek ? peekDecision(e, true, target.collection) : null
+    if (what === 'peek' && peek) return peek.open(target)
+    if (what === 'new-tab') {
+      window.open((nav.itemUrl ?? defaultItemUrl)(target), '_blank', 'noopener')
+      return
+    }
     if (nav.openItem?.(target)) return
     nav.navigate((nav.itemUrl ?? defaultItemUrl)(target))
   }

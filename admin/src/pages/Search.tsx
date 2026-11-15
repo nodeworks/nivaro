@@ -1,4 +1,4 @@
-import { openAskPanel, TipLayer } from '@nivaro/shared'
+import { isNewTabClick, openAskPanel, peekable, TipLayer, useRecordPeek } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import {
   ArrowRight,
@@ -895,6 +895,7 @@ function RecordsTable({
   showCollection: boolean
   onOpen: (r: SearchRecord, index: number) => void
 }) {
+  const peek = useRecordPeek()
   if (loading)
     return (
       <div className='space-y-2 rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
@@ -909,6 +910,19 @@ function RecordsTable({
         No records on this page.
       </p>
     )
+  // Realtime #17: a plain click peeks at the record in the app's record sheet (↑ / ↓ walk
+  // these results); Cmd / Ctrl / middle click keeps the link's own new tab.
+  const peekList = rows
+    .filter((x) => peekable(x.collection))
+    .map((x) => ({ collection: x.collection, itemId: String(x.id), title: recordLabel(x) }))
+  const peekAt = (e: React.MouseEvent, r: SearchRecord) => {
+    if (!peek || isNewTabClick(e) || e.altKey || !peekable(r.collection)) return
+    e.preventDefault()
+    peek.open(
+      { collection: r.collection, itemId: String(r.id), title: recordLabel(r) },
+      { list: peekList }
+    )
+  }
   return (
     <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
       <table className='w-full table-fixed text-[12px]'>
@@ -931,7 +945,10 @@ function RecordsTable({
                 <td className='px-3 py-1.5'>
                   <Link
                     to={recordPath(r.collection, r.id)}
-                    onClick={() => onOpen(r, i)}
+                    onClick={(e) => {
+                      onOpen(r, i)
+                      peekAt(e, r)
+                    }}
                     className='flex min-w-0 items-center gap-2 rounded text-slate-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-foreground'
                   >
                     <span className='truncate'>
