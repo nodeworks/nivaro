@@ -32,6 +32,9 @@ export function GridPresenceLine({
   }
   const shown = editors.slice(0, 3)
   const more = editors.length - shown.length
+  // Everyone in the same row (one project's matrix): name the row once, then each person's cell.
+  const oneRow = editors.every((e) => e.item === editors[0].item)
+  const cellOnly = (e: GridEditor) => (e.field ? cellLabel?.(e.field, e.item) : null)
   return (
     <div
       role='status'
@@ -50,13 +53,28 @@ export function GridPresenceLine({
         </Person>
       ) : (
         <>
-          <span>Editing {noun} now:</span>
-          {shown.map((e) => (
-            <Person key={`${e.userId}|${e.page}`} editor={e}>
-              <span className='font-medium text-slate-900 dark:text-slate-50'>{e.name}</span>
-              <span className='text-slate-500 dark:text-slate-400'> · {where(e)}</span>
-            </Person>
-          ))}
+          <span>
+            Editing {noun}
+            {oneRow && (
+              <>
+                {' '}
+                for{' '}
+                <span className='font-medium text-slate-900 dark:text-slate-50'>
+                  {rowLabel(editors[0].item) || `#${editors[0].item}`}
+                </span>
+              </>
+            )}
+            :
+          </span>
+          {shown.map((e) => {
+            const at = oneRow ? cellOnly(e) : where(e)
+            return (
+              <Person key={`${e.userId}|${e.page}`} editor={e}>
+                <span className='font-medium text-slate-900 dark:text-slate-50'>{e.name}</span>
+                {at && <span className='text-slate-500 dark:text-slate-400'> · {at}</span>}
+              </Person>
+            )
+          })}
           {more > 0 && <span className='text-slate-500 dark:text-slate-400'>and {more} more</span>}
         </>
       )}

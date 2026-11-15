@@ -70,8 +70,8 @@ describe('offline clash review', () => {
       </ul>
     )
     expect(host.textContent).toContain('Beth Ray changed Amount while you were offline')
-    expect(host.textContent).toContain('Theirs1200')
-    expect(host.textContent).toContain('Yours1500')
+    expect(host.textContent).toContain('Theirs1,200')
+    expect(host.textContent).toContain('Yours1,500')
     // Numbers have no merge — keep or take only.
     expect(host.querySelector('[data-outbox-merge]')).toBeNull()
     act(() => (host.querySelector('[data-outbox-keep-mine]') as HTMLElement).click())

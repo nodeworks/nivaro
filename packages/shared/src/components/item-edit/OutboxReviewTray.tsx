@@ -195,7 +195,10 @@ export function OutboxClashRow({
   const mine = entry.payload[clash.field]
   const theirs = clash.current_value
   const base = entry.before[clash.field]
-  const shown = useShown(field, relatedCollection, [mine, theirs, base])
+  const shownRaw = useShown(field, relatedCollection, [mine, theirs, base])
+  // Plain numbers read with their thousands separators (17,900).
+  const shown = (v: unknown, max?: number) =>
+    typeof v === 'number' && Number.isFinite(v) ? v.toLocaleString() : shownRaw(v, max)
   const [merging, setMerging] = useState(false)
   const [busy, setBusy] = useState(false)
   const kind: FieldMergeKind = clash.hidden ? 'none' : fieldMergeKind(field, mine, theirs)
