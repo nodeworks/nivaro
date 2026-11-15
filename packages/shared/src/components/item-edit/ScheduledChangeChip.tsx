@@ -206,7 +206,7 @@ function ScheduledRow({
         {due && ' — waiting to be applied'}
       </p>
       {row.created_by_name && (
-        <p className='mt-0.5 text-[11px] text-slate-400 dark:text-slate-500'>
+        <p className='mt-0.5 text-[11px] text-slate-500 dark:text-slate-400'>
           Scheduled by {row.created_by_name}
         </p>
       )}

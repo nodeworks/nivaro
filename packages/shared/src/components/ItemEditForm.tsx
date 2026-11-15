@@ -557,8 +557,8 @@ function GridContainer({ children }: { children: (containerWidth: number) => Rea
 /** The "can't save yet" toast — one at a time however often Save is pressed. */
 const VALIDATION_TOAST_ID = 'nvr-form-validation'
 
-type SaveStepStatus = 'pending' | 'running' | 'done' | 'error'
-interface SaveStepItem {
+export type SaveStepStatus = 'pending' | 'running' | 'done' | 'error'
+export interface SaveStepItem {
   id: string
   label: string
   status: SaveStepStatus
@@ -583,7 +583,8 @@ function SaveStepIcon({ status }: { status: SaveStepStatus }) {
   )
 }
 
-function SaveProgressDialog({
+/** Exported for the design harness and tests; the form is its only caller. */
+export function SaveProgressDialog({
   open,
   steps,
   onClose,
@@ -12608,7 +12609,19 @@ function ItemEditFormView({
       const f = rc
         ? {
             ...f0,
-            options: { ...((f0.options as Record<string, unknown> | null) ?? {}), __recalc: rc }
+            options: {
+              // Options arrive parsed; a raw JSON string (older rows) is read first.
+              ...(typeof f0.options === 'string'
+                ? (() => {
+                    try {
+                      return JSON.parse(f0.options) as Record<string, unknown>
+                    } catch {
+                      return {}
+                    }
+                  })()
+                : ((f0.options as Record<string, unknown> | null) ?? {})),
+              __recalc: rc
+            }
           }
         : f0
       const live = liveRollupValues.get(f.field)
