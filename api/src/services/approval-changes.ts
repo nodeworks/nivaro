@@ -12,9 +12,11 @@
  * Approvers' notice: ONE quiet notice per change burst (category `approval_changes`, mutable in
  * Profile → Notification rules, FYI lane) through notifyUser, never to the person whose own
  * change it was, only to approvers who can still open the record and read a changed field. A
- * burst = the first change after a quiet window (BURST_WINDOW_S, Redis NX gate across
- * processes), gathered for GATHER_MS so a save that writes ten fields or a 500-row import is one
- * notice. Engine writes count too (a procedure's announced write, an accepted proposal).
+ * burst = the first change after a quiet window (BURST_WINDOW_S), gathered for GATHER_MS so a
+ * save that writes ten fields or a 500-row import is one notice. Across API replicas every
+ * process adds its changers to a Redis set, one process opens the burst (SET NX PX) and each
+ * approver's notice is claimed per record + approver (SET NX PX) before it is sent; per-process
+ * maps stand in only while Redis is down. Engine writes count too (a procedure's announced write, an accepted proposal).
  */
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
@@ -519,7 +521,10 @@ interface Burst {
   timer: ReturnType<typeof setTimeout>
 }
 const bursts = new Map<string, Burst>()
+/** Fallback gates while Redis is down: key -> expiry (ms). This process decides alone then. */
 const localGate = new Map<string, number>()
+const NOBODY = '~'
+const BURST_MS = BURST_WINDOW_S * 1000
 
 /** Pure: who gets this burst's notice — approvers other than the people who made it. */
 export function noticeRecipients(approvers: string[], changers: Iterable<string | null>): string[] {
@@ -528,27 +533,72 @@ export function noticeRecipients(approvers: string[], changers: Iterable<string 
   return approvers.filter((a) => made.some((c) => c == null || c.toLowerCase() !== a.toLowerCase()))
 }
 
-async function openBurst(key: string): Promise<boolean> {
-  const app = (await import('./io-holder.js')).getApp() as any
-  const redis = app?.redis
-  if (redis?.set) {
+interface BurstRedis {
+  set(...args: unknown[]): Promise<unknown>
+  sadd?(key: string, ...members: string[]): Promise<unknown>
+  pexpire?(key: string, ms: number): Promise<unknown>
+  smembers?(key: string): Promise<string[]>
+}
+
+async function burstRedis(): Promise<BurstRedis | null> {
+  const app = (await import('./io-holder.js')).getApp() as { redis?: BurstRedis } | null
+  return app?.redis?.set ? app.redis : null
+}
+
+/**
+ * Claim `key` for `ms` across every API process (SET NX PX). True = this caller holds it.
+ * Redis down or absent: a per-process gate stands in (each process then decides alone).
+ */
+export async function claimOnce(key: string, ms: number): Promise<boolean> {
+  const redis = await burstRedis()
+  if (redis) {
     try {
-      return (await redis.set(`nvr:cab:${key}`, '1', 'EX', BURST_WINDOW_S, 'NX')) === 'OK'
+      return (await redis.set(`nvr:cab:${key}`, '1', 'PX', ms, 'NX')) === 'OK'
     } catch {
-      /* Redis trouble: this process decides alone */
+      /* fall through to the local gate */
     }
   }
   const now = Date.now()
-  const until = localGate.get(key) ?? 0
-  if (until > now) return false
-  localGate.set(key, now + BURST_WINDOW_S * 1000)
+  if ((localGate.get(key) ?? 0) > now) return false
+  localGate.set(key, now + ms)
   if (localGate.size > 5000) for (const [k, t] of localGate) if (t <= now) localGate.delete(k)
   return true
 }
 
+/** Remember who changed the record in this burst, on every process (Redis set). */
+async function addChanger(key: string, changer: string | null): Promise<void> {
+  const redis = await burstRedis()
+  if (!redis?.sadd || !redis.pexpire) return
+  try {
+    const k = `nvr:cab:chg:${key}`
+    await redis.sadd(k, changer ?? NOBODY)
+    await redis.pexpire(k, BURST_MS + GATHER_MS)
+  } catch {
+    /* the local set still has this process's changers */
+  }
+}
+
+/** Every process's changers for the burst, merged with this process's own. */
+export async function burstChangers(
+  key: string,
+  local: Set<string | null>
+): Promise<Set<string | null>> {
+  const out = new Set(local)
+  const redis = await burstRedis()
+  if (redis?.smembers) {
+    try {
+      for (const m of await redis.smembers(`nvr:cab:chg:${key}`)) out.add(m === NOBODY ? null : m)
+    } catch {
+      /* local only */
+    }
+  }
+  return out
+}
+
 /**
  * A write landed on records of `collection` (after-update hook, an announced outside write).
- * `changer` = the person who made it, null for a procedure / script / engine write.
+ * `changer` = the person who made it, null for a procedure / script / engine write. Every
+ * process records the changer; ONE process (the one whose SET NX won) gathers and sends.
  */
 export async function noteApprovalWrite(
   collection: string,
@@ -561,18 +611,21 @@ export async function noteApprovalWrite(
   for (const raw of ids) {
     const item = String(raw)
     const key = `${currentTenantKey() || '-'}:${collection}:${item}`
+    await addChanger(key, changer)
     const open = bursts.get(key)
     if (open) {
       open.changers.add(changer)
       continue
     }
-    if (!(await openBurst(key))) continue
+    if (!(await claimOnce(`open:${key}`, BURST_MS))) continue
     const burst: Burst = {
       changers: new Set([changer]),
       startedAt: new Date(),
       timer: setTimeout(() => {
         bursts.delete(key)
-        void sendApprovalNotices(collection, item, burst.changers, burst.startedAt).catch(() => {})
+        void burstChangers(key, burst.changers)
+          .then((all) => sendApprovalNotices(collection, item, all, burst.startedAt, key))
+          .catch(() => {})
       }, GATHER_MS)
     }
     burst.timer.unref?.()
@@ -585,7 +638,8 @@ export async function sendApprovalNotices(
   collection: string,
   item: string,
   changers: Set<string | null>,
-  burstStart: Date = new Date(Date.now() - GATHER_MS)
+  burstStart: Date = new Date(Date.now() - GATHER_MS),
+  burstKey = `${currentTenantKey() || '-'}:${collection}:${item}`
 ): Promise<number> {
   const cfg = await approvalChangesConfigFor(collection)
   if (!cfg) return 0
@@ -637,6 +691,9 @@ export async function sendApprovalNotices(
       const ref = await recordDisplayRef(collection, item, { recipient: user }).catch(
         () => `#${item}`
       )
+      // One notice per approver per burst window across every API process (Redis SET NX PX on
+      // record + approver; the per-process gate only while Redis is down).
+      if (!(await claimOnce(`sent:${burstKey}:${rid.toLowerCase()}`, BURST_MS))) continue
       await notifyUser(app, rid, {
         subject: `Changed after approval: ${ref}`,
         message: `${who} changed ${what} after it was approved. Open the record to see the approved value next to the value now.`,

@@ -5,6 +5,12 @@ const state = vi.hoisted(() => ({
   tables: {} as Record<string, unknown[]>,
   notified: [] as Array<{ to: string; opts: Record<string, unknown> }>,
   unreadable: new Set<string>(),
+  // A shared Redis stand-in: every "process" in a test sees the same keys.
+  redis: null as null | {
+    store: Map<string, string>
+    sets: Map<string, Set<string>>
+    down: boolean
+  },
   rules: null as unknown,
   run: { id: 'run-1', current_state: 's', key: 'approved', label: 'Approved', completed_at: null }
 }))
@@ -42,7 +48,40 @@ vi.mock('./edit-lock.js', async () => {
 })
 vi.mock('./encryption.js', () => ({ getEncryptedFields: async () => [] }))
 vi.mock('./revision-fields.js', () => ({ readableFieldSet: async () => null }))
-vi.mock('./io-holder.js', () => ({ getApp: () => ({ redis: null }) }))
+vi.mock('./io-holder.js', () => ({
+  getApp: () => {
+    const r = state.redis
+    if (!r) return { redis: null }
+    const up = () => {
+      if (r.down) throw new Error('ECONNREFUSED')
+    }
+    return {
+      redis: {
+        set: async (key: string, value: string, _px: string, _ms: number, nx: string) => {
+          up()
+          if (nx === 'NX' && r.store.has(key)) return null
+          r.store.set(key, value)
+          return 'OK'
+        },
+        sadd: async (key: string, ...members: string[]) => {
+          up()
+          const set = r.sets.get(key) ?? new Set<string>()
+          for (const m of members) set.add(m)
+          r.sets.set(key, set)
+          return members.length
+        },
+        pexpire: async () => {
+          up()
+          return 1
+        },
+        smembers: async (key: string) => {
+          up()
+          return [...(r.sets.get(key) ?? [])]
+        }
+      }
+    }
+  }
+}))
 vi.mock('./users.js', () => ({
   getUser: async (id: string) => ({ id, status: 'active', email: `${id}@example.test` })
 }))
@@ -63,6 +102,8 @@ import {
   APPROVAL_CHANGES_CATEGORY,
   approvalChangedWanted,
   approvalChangesFor,
+  burstChangers,
+  claimOnce,
   noticeRecipients,
   sendApprovalNotices
 } from './approval-changes.js'
@@ -71,6 +112,7 @@ const approvedAt = new Date(Date.now() - 3_600_000)
 const recent = new Date(Date.now() - 5_000)
 
 beforeEach(() => {
+  state.redis = { store: new Map(), sets: new Map(), down: false }
   state.notified = []
   state.unreadable = new Set()
   state.rules = {
@@ -183,6 +225,44 @@ describe('approvers notice', () => {
   it('a burst that changed nothing new tells nobody', async () => {
     const sent = await sendApprovalNotices('requests', '7', new Set(['admin']), new Date())
     expect(sent).toBe(0)
+  })
+})
+
+describe('several API replicas', () => {
+  it('two processes gathering the same burst send each approver ONE notice', async () => {
+    // Replica A and replica B both reached the send step for record 7 (e.g. both opened the
+    // burst while Redis blinked): the per-approver SET NX PX lets only the first one through.
+    const a = await sendApprovalNotices('requests', '7', new Set(['admin']), recent, 't:requests:7')
+    const b = await sendApprovalNotices('requests', '7', new Set(['admin']), recent, 't:requests:7')
+    expect(a).toBe(2)
+    expect(b).toBe(0)
+    expect(state.notified.map((n) => n.to).sort()).toEqual(['dir', 'mgr'])
+    expect([...(state.redis?.store.keys() ?? [])].sort()).toEqual([
+      'nvr:cab:sent:t:requests:7:dir',
+      'nvr:cab:sent:t:requests:7:mgr'
+    ])
+  })
+  it('only one process opens a burst; changers from every process are merged', async () => {
+    expect(await claimOnce('open:t:requests:7', 600_000)).toBe(true)
+    expect(await claimOnce('open:t:requests:7', 600_000)).toBe(false)
+    state.redis?.sets.set('nvr:cab:chg:t:requests:7', new Set(['admin', '~']))
+    const all = await burstChangers('t:requests:7', new Set(['dir']))
+    expect([...all].sort((x, y) => String(x).localeCompare(String(y)))).toEqual([
+      'admin',
+      'dir',
+      null
+    ])
+  })
+  it('falls back to a per-process gate while Redis is down', async () => {
+    if (state.redis) state.redis.down = true
+    expect(await claimOnce('open:t:requests:99', 600_000)).toBe(true)
+    expect(await claimOnce('open:t:requests:99', 600_000)).toBe(false)
+    const first = await sendApprovalNotices('requests', '7', new Set(['admin']), recent, 't:r:98')
+    const again = await sendApprovalNotices('requests', '7', new Set(['admin']), recent, 't:r:98')
+    expect(first).toBe(2)
+    expect(again).toBe(0)
+    // Changers: the local set alone.
+    expect([...(await burstChangers('t:r:98', new Set(['x'])))]).toEqual(['x'])
   })
 })
 
