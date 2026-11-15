@@ -139,8 +139,11 @@ describe('value equality', () => {
     expect(sameValue('<p><img src="/api/files/1"></p>', '<p><img src="/api/files/2"></p>')).toBe(
       false
     )
-    // Spelling only: whitespace and entities.
-    expect(sameValue('<p>A&nbsp;B</p>\n<p>C</p>', '<p>A B</p><p>C</p>')).toBe(true)
+    // Whitespace between and inside tags is spelling only.
+    expect(sameValue('<p>A  B</p>\n<p>C</p>', '<p>A B</p><p>C</p>')).toBe(true)
+    // Escaped text is not the markup it spells.
+    expect(sameValue('<p>&lt;b&gt;x&lt;/b&gt;</p>', '<p><b>x</b></p>')).toBe(false)
+    expect(sameValue('<p><a href="x&quot;y">q</a></p>', "<p><a href='x\"y'>q</a></p>")).toBe(false)
   })
   it('two documents compare as their blocks (the save stamp is not content)', () => {
     const one = { time: 1, blocks: [{ type: 'paragraph', data: { text: 'x' } }] }

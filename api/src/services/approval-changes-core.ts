@@ -217,9 +217,13 @@ function plainWords(html: string): string {
     .trim()
 }
 
-/** HTML compared as markup: whitespace and entity spellings normalised, tags and attributes kept. */
+/**
+ * HTML compared as markup: only whitespace runs and whitespace between tags are normalised.
+ * Entities stay as written — decoding them would let escaped text (`&lt;a href=x&gt;`) and a real
+ * tag compare equal.
+ */
 function normalHtml(html: string): string {
-  return decodeEntities(html).replace(/\s+/g, ' ').replace(/>\s+</g, '><').trim()
+  return html.replace(/>\s+</g, '><').replace(/\s+/g, ' ').trim()
 }
 
 /** A legacy EditorJS document compared as its blocks (the save `time` stamp is not content). */
