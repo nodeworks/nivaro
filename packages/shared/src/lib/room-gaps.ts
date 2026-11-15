@@ -43,7 +43,13 @@ export interface RoomGapTracker {
   replayed(answer: {
     room?: string
     full?: boolean
-    events?: Array<{ seq: number; event: string; payload: Record<string, unknown>; rseq?: number }>
+    events?: Array<{
+      seq: number
+      event: string
+      payload: Record<string, unknown>
+      rseq?: number
+      iseq?: number
+    }>
   }): void
   /** Forget rooms (all when omitted): a new connection, a room left or joined again. */
   reset(rooms?: string[]): void
@@ -157,7 +163,9 @@ export function createRoomGapTracker(opts: RoomGapOptions): RoomGapTracker {
           typeof ev.rseq === 'number' ? g.missing.has(ev.rseq) : g.toSeq === 0 || ev.seq < g.toSeq
         if (!inside) continue
         counts.replayed++
-        opts.dispatch(ev.event, { ...ev.payload, _seq: ev.seq })
+        // Realtime 23 — the record's own number rides along (record-gaps.ts fills its gap).
+        const rec = typeof ev.iseq === 'number' ? { _iseq: ev.iseq } : {}
+        opts.dispatch(ev.event, { ...ev.payload, _seq: ev.seq, ...rec })
       }
     },
     reset(list) {

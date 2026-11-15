@@ -9,7 +9,9 @@ import { OutsideWritesTab } from './realtime/OutsideWritesTab'
 import { MissedUpdatesTab } from './realtime/MissedUpdatesTab'
 import { SocketHealthTab } from './realtime/SocketHealthTab'
 import { AutoReloadControl, MinBuildControl, RememberedRefreshes } from './realtime/StickyRefresh'
+import { TeamBoardTab } from './realtime/TeamBoardTab'
 import { VerifyTab } from './realtime/VerifyTab'
+import { WriteToScreenTab } from './realtime/WriteToScreenTab'
 
 /**
  * Realtime console (#270 diagnostics, #273 now-editing, #275 concurrency
@@ -30,6 +32,8 @@ type Tab =
   | 'outside'
   | 'verify'
   | 'missed'
+  | 'team'
+  | 'screen'
 
 const REALTIME_TABS: Array<[Tab, string]> = [
   ['sockets', 'Sockets & rooms'],
@@ -42,7 +46,9 @@ const REALTIME_TABS: Array<[Tab, string]> = [
   ['pipeline', 'Event pipeline'],
   ['outside', 'Outside writes'],
   ['verify', 'Verification'],
-  ['missed', 'Missed updates']
+  ['missed', 'Missed updates'],
+  ['team', 'Team board'],
+  ['screen', 'Write to screen']
 ]
 
 interface SocketRow {
@@ -185,6 +191,8 @@ export default function Realtime() {
         {tab === 'outside' && <OutsideWritesTab />}
         {tab === 'verify' && <VerifyTab />}
         {tab === 'missed' && <MissedUpdatesTab />}
+        {tab === 'team' && <TeamBoardTab />}
+        {tab === 'screen' && <WriteToScreenTab />}
       </div>
     </div>
   )

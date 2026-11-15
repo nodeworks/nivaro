@@ -1,6 +1,7 @@
+import { useBackgroundArm, useLiveFade, useLiveJobs, useSettledRows } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { RotateCw } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -107,13 +108,16 @@ function fmtDuration(ms: number | null): string {
 export function CronTimelinePage() {
   const [hours, setHours] = useState<number>(24)
 
-  const { data, isLoading, isFetching, refetch } = useQuery<TimelinePayload>({
+  // A run starting or finishing redraws the bars once per quiet window; the minute poll is the
+  // safety net for when events cannot arrive.
+  const live = useLiveJobs({ keys: [['cron-timeline']] })
+  const { data, isLoading, isFetching, refetch, dataUpdatedAt } = useQuery<TimelinePayload>({
     queryKey: ['cron-timeline', hours],
     queryFn: () =>
       api
         .get<{ data: TimelinePayload }>('/cron-timeline', { params: { hours } })
         .then((r) => r.data.data),
-    refetchInterval: 60_000
+    refetchInterval: live ? 5 * 60_000 : 60_000
   })
 
   const now = Date.now()
@@ -136,6 +140,18 @@ export function CronTimelinePage() {
       return a.id.localeCompare(b.id)
     })
   }, [data])
+  // Lanes never reorder under the pointer: busiest-first order holds while the chart is hovered
+  // or focused and re-sorts once the person moves on; bars change in place and fade in.
+  const lanes = useSettledRows(jobs, (j) => j.id, { resetKey: String(hours) })
+  const settleRef = lanes.containerRef
+  const fadeRef = useLiveFade(useBackgroundArm(dataUpdatedAt, String(hours)))
+  const chartRef = useCallback(
+    (el: HTMLElement | null) => {
+      settleRef(el)
+      fadeRef(el)
+    },
+    [settleRef, fadeRef]
+  )
 
   const gridlines = useMemo(() => {
     const lines: number[] = []
@@ -179,7 +195,7 @@ export function CronTimelinePage() {
         }
       />
 
-      <div className='flex-1 overflow-auto bg-slate-50 p-6 dark:bg-background'>
+      <div className='flex-1 overflow-auto bg-slate-50 p-6 dark:bg-background' ref={chartRef}>
         {isLoading || !data ? (
           <div className='space-y-2'>
             {[1, 2, 3, 4, 5].map((i) => (
@@ -231,10 +247,13 @@ export function CronTimelinePage() {
                 ))}
               </div>
 
-              {jobs.map((job) => (
+              {lanes.rows.map(({ row: job, state }) => (
                 <div
                   key={job.id}
-                  className='flex border-b border-slate-100 last:border-0 dark:border-border/50'
+                  className={cn(
+                    'flex border-b border-slate-100 last:border-0 dark:border-border/50',
+                    state === 'departed' && 'opacity-50'
+                  )}
                 >
                   <div className='flex w-[240px] shrink-0 items-center gap-1.5 overflow-hidden px-3 py-2'>
                     <code

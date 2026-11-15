@@ -1,19 +1,26 @@
 import {
+  attachSocketLiveness,
   bindClientChaosSocket,
   type ClockSample,
   type CollectionUpdateEvent,
   createJitteredReaction,
   createLeaderSocket,
+  createRecordGapTracker,
   createRoomGapTracker,
   createSocketRealtime,
   createWorkerSocket,
   deliveryAckFor,
   forgetSettledReads,
   guardIdentityCall,
+  type LivenessHandle,
+  liveCollectionEventPasses,
+  liveEventQuiet,
   measureClockOffset,
+  noteWriteToScreenEvent,
   parseSignOutNote,
   type RealtimeAdapter,
   type RealtimeStatus,
+  recordRefetchEvent,
   refetchEventsFor,
   relayLiveEvent,
   SIGN_OUT_NOTE_EVENT,
@@ -57,6 +64,11 @@ import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
  * - Missed events while connected (#2462): a room whose own counter (`_rseq`) skips is caught up
  *   alone (`catchup:room`); `realtime:stale` (#2460, the server held this tab's broadcasts while
  *   it was too far behind) refetches the rooms it names.
+ * - Missed changes per record (realtime 23): a record whose own counter (`_iseq`) skips is
+ *   re-read alone, also after a reconnect whose catch-up went unanswered (record-gaps.ts).
+ * - Silent self-repair (realtime 24): this tab's own socket is watched (socket-liveness.ts) —
+ *   a connection that says it is up but is dead is reopened quietly; `status.repair` keeps the
+ *   banner away unless the repair fails twice. On the shared worker the worker does it.
  * - One socket per browser (#2475): when the browser has SharedWorker and the API serves the
  *   worker script, `getSocket()` is a facade over the shared worker's port (every tab, one
  *   connection, rooms and catch-up owned by the worker) and the shared `createSocketRealtime`
@@ -81,7 +93,8 @@ function setStatus(patch: Partial<RealtimeStatus>) {
     next.state === status.state &&
     next.transport === status.transport &&
     next.refreshed === status.refreshed &&
-    next.resumed === status.resumed
+    next.resumed === status.resumed &&
+    (next.repair ?? null) === (status.repair ?? null)
   )
     return
   status = next
@@ -93,6 +106,16 @@ function caughtUp(refreshed: string | null, resumed: NonNullable<RealtimeStatus[
   if (catchupTimer) clearTimeout(catchupTimer)
   catchupTimer = null
   setStatus({ state: 'live', refreshed, resumed })
+  endRepair()
+}
+/** Realtime 24 — this tab's socket watch (per-tab socket only). */
+let liveness: LivenessHandle | null = null
+/** A quiet repair signed in again: the status stays quiet until its catch-up has answered. */
+let repairEnding = false
+function endRepair() {
+  if (!repairEnding) return
+  repairEnding = false
+  setStatus({ repair: null })
 }
 
 /**
@@ -105,16 +128,29 @@ function relayLocal(event: string, payload: Record<string, unknown>) {
   if (RELAYED_EVENTS.has(event)) leaderDeliver?.(event, payload)
 }
 function refetchRooms(rooms: string[]) {
+  recordGaps.forget(rooms.filter((r) => r.startsWith('collection:')).map((r) => r.slice(11)))
   for (const ev of refetchEventsFor(rooms)) relayLocal(ev.event, ev.payload)
   window.dispatchEvent(new CustomEvent('nvr:realtime-stale', { detail: { rooms } }))
 }
+/** Realtime 23 — a record that skipped a change is re-read alone (this tab's own socket). */
+const recordGaps = createRecordGapTracker({
+  refetch: (list) => {
+    for (const r of list) {
+      const ev = recordRefetchEvent(r)
+      relayLocal(ev.event, ev.payload)
+    }
+  }
+})
 /** catchup:full and access:changed reach every tab at once (deploy, role change): each tab's
  *  reload reaction waits a random 0–3 s so the refetches do not hit the API as one wave. */
 const later = createJitteredReaction()
 const accessRoomsLeft = new Set<string>()
 const roomGaps = createRoomGapTracker({
   request: (req) => socket?.emit('catchup:room', req),
-  dispatch: relayLocal,
+  dispatch: (event, payload) => {
+    recordGaps.observe(event, payload)
+    relayLocal(event, payload)
+  },
   refetch: refetchRooms
 })
 
@@ -333,6 +369,15 @@ export function getSocket(): Socket {
   bindClientChaosSocket(socket)
   // #2476 — the session recorder lists the events this socket receives (names, rooms, ids).
   tapReplaySocket(socket)
+  // Realtime 24 — a per-tab socket repairs itself quietly (the worker facade's watch lives in
+  // the worker; its status reaches the page through the shared adapter, viaWorker).
+  if (!usesWorkerSocket()) {
+    liveness = attachSocketLiveness(socket)
+    liveness?.onRepairing((on, outcome) => {
+      repairEnding = !on && outcome === 'repaired'
+      if (!repairEnding) setStatus({ repair: on ? 'silent' : null })
+    })
+  }
   socket.on('connect', () => {
     leaveSseMode()
     reconnects += 1
@@ -354,7 +399,10 @@ export function getSocket(): Socket {
     if (sessionEnded) return
     if (catchupTimer) clearTimeout(catchupTimer)
     catchupTimer = null
-    setStatus({ state: 'reconnecting', refreshed: null })
+    // Quiet only while a repair runs (its watch set the flag before this listener ran).
+    const quiet = !!liveness?.repairing()
+    repairEnding = false
+    setStatus({ state: 'reconnecting', refreshed: null, ...(quiet ? {} : { repair: null }) })
   })
   // An administrator signed this person out with a message (sign-out-note): keep it for the
   // sign-in page; `session:ended` arrives right after and takes the tab there.
@@ -423,6 +471,7 @@ export function getSocket(): Socket {
         refreshed: null,
         resumed: everAuthed && status.state === 'reconnecting' ? 'unverified' : null
       })
+      endRepair()
     }
     everAuthed = true
   })
@@ -435,11 +484,12 @@ export function getSocket(): Socket {
   // #2475 — on the shared worker's socket the shared adapter (viaWorker) owns room gaps, delivery
   // acks and stale-room refetches; doing them here as well would ask and ack twice per tab.
   const perTab = !usesWorkerSocket()
-  socket.onAny((_event, payload) => {
+  socket.onAny((event, payload) => {
     const seq = (payload as { _seq?: number } | undefined)?._seq
     if (typeof seq === 'number' && seq > lastSeq) lastSeq = seq
     if (!perTab) return
     roomGaps.observe(payload)
+    recordGaps.observe(event, payload)
     // #2477 — a sampled event asks for its receive time (the delivery SLO's real clients).
     const ack = deliveryAckFor(payload)
     if (ack) socket?.emit('rt:ack', ack)
@@ -451,6 +501,7 @@ export function getSocket(): Socket {
     socket.on('realtime:stale', (p: { rooms?: string[]; all?: boolean }) => {
       const rooms = Array.isArray(p?.rooms) ? p.rooms.filter((r) => typeof r === 'string') : []
       roomGaps.reset(rooms)
+      if (p?.all) recordGaps.forget()
       if (p?.all) {
         window.dispatchEvent(new CustomEvent('nvr:catchup-full'))
         window.dispatchEvent(
@@ -466,16 +517,31 @@ export function getSocket(): Socket {
   }
   socket.on(
     'catchup:events',
-    (p: { events?: Array<{ seq: number; event: string; payload: Record<string, unknown> }> }) => {
+    (p: {
+      events?: Array<{
+        seq: number
+        event: string
+        payload: Record<string, unknown>
+        iseq?: number
+      }>
+    }) => {
       for (const ev of p?.events ?? []) {
         if (ev.seq > lastSeq) lastSeq = ev.seq
+        const payload = {
+          ...ev.payload,
+          _seq: ev.seq,
+          ...(typeof ev.iseq === 'number' ? { _iseq: ev.iseq } : {})
+        }
+        if (perTab) recordGaps.observe(ev.event, payload)
         // Re-dispatch into local listeners (and the leader's feed) as if it arrived live.
-        relayLocal(ev.event, { ...ev.payload, _seq: ev.seq })
+        relayLocal(ev.event, payload)
       }
       caughtUp(null, 'replayed')
     }
   )
   socket.on('catchup:full', (p?: { reason?: string }) => {
+    // Every list and record reloads: nothing left to judge per record.
+    recordGaps.forget()
     later('full', () => window.dispatchEvent(new CustomEvent('nvr:catchup-full')))
     caughtUp(
       p?.reason === 'slow-consumer'
@@ -503,7 +569,11 @@ export function getSocket(): Socket {
     'announcements:changed',
     'flags:changed',
     // rt2 #19 — the people directory moved (pickers, mentions, avatars; ids only).
-    'people:changed'
+    'people:changed',
+    // rt4 #20 — the person's own lists (saved views, searches, Overview pins) and the shared
+    // collection pins moved.
+    'mine:changed',
+    'pins:changed'
   ]) {
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   }
@@ -514,7 +584,14 @@ export function getSocket(): Socket {
   // Record rooms ride this connection in both modes (use-record-presence joins them here), so the
   // record notices are relayed once here for every record page. `access:changed` reaches the live
   // hooks the same way on a per-tab socket; on the shared one the adapter hands it over.
-  for (const ev of ['record:integrity', 'record:automation', 'owners:changed', 'record:signal'])
+  // `record:chat` (rt5 #9): a message landed in the record's chat room — unread count re-read.
+  for (const ev of [
+    'record:integrity',
+    'record:automation',
+    'owners:changed',
+    'record:signal',
+    'record:chat'
+  ])
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   if (!usesWorkerSocket())
     socket.on('access:changed', (payload: unknown) => relayLiveEvent('access:changed', payload))
@@ -574,6 +651,9 @@ const RELAYED_EVENTS = new Set([
   'traffic-map:frame',
   'traffic-map:batch',
   'traffic-map:viewer',
+  // Flow Run History (#287, rt4 #16): runs and their steps as they land.
+  'flow:run',
+  'flow:step',
   'lock:requested',
   'lock:response',
   'lock:available',
@@ -585,6 +665,12 @@ const RELAYED_EVENTS = new Set([
   'presence:changed',
   'read:changed',
   'prefs:changed',
+  // Send my view: a poke on the person's own room (the card reads the view as them).
+  'view:sent',
+  // rt4 #20 — a person's own lists and the shared pins, to follower tabs too (the same notice
+  // reaching a tab twice inside 150 ms is delivered once by useLiveEvent).
+  'mine:changed',
+  'pins:changed',
   // #1675 — pushed widgets: the figure computed as this sign-in, for this tab's own watch key.
   'widget:watching',
   'widget:data',
@@ -626,6 +712,7 @@ function ensureLeaderSocket() {
         if (event === '__join_collection') {
           joinedCollections.add(String(payload))
           roomGaps.reset([`collection:${String(payload)}`])
+          recordGaps.forget([String(payload)])
           if (so.connected) so.emit('collection:join', { collection: payload })
           else syncSse()
         } else if (event === '__join_watch') {
@@ -690,7 +777,15 @@ function viaWorker(): SocketRealtime | null {
 
 /** RealtimeAdapter for shared components (CBV patches, RecordLiveSync, MyWork). */
 export const adminRealtime: RealtimeAdapter = {
-  subscribeCollections(collections, cb) {
+  subscribeCollections(collections, deliver) {
+    // Live updates Off (Profile → Display): others' writes stop here for the admin's direct
+    // subscribers too (the shared tap filters what reads through the context).
+    const cb: typeof deliver = (ev) => {
+      if (!liveCollectionEventPasses(ev as never)) return
+      // rt5 item 25: admin pages subscribed here time others' saves too (deduped per event).
+      noteWriteToScreenEvent(ev)
+      deliver(ev)
+    }
     const w = viaWorker()
     if (w) return w.subscribeCollections(collections, cb)
     const handle = ensureLeaderSocket()
@@ -707,7 +802,14 @@ export const adminRealtime: RealtimeAdapter = {
     })
     return off
   },
-  on(event, cb) {
+  on(event, deliver) {
+    const cb = (payload: any) => {
+      if (
+        event === 'collection:update' ? !liveCollectionEventPasses(payload) : liveEventQuiet(event)
+      )
+        return
+      deliver(payload)
+    }
     const w = viaWorker()
     if (w) return w.on(event, cb)
     const handle = ensureLeaderSocket()

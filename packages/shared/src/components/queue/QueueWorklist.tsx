@@ -98,6 +98,15 @@ import {
 } from '../../lib/list-return'
 import { expandCoalesced, LIVE_ASPECTS, useLiveEvent } from '../../lib/live'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
+import {
+  type BurstEvent,
+  GONE_ROW_CLASS,
+  GONE_ROW_TITLE,
+  resumeAsRefetch,
+  useLiveBurst,
+  useLivePause,
+  useSteadyRows
+} from '../../lib/live-list-flow'
 import { listTrailDetail, setTrailDetail } from '../../lib/nav-trail'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isOwnWrite } from '../../lib/own-writes'
@@ -114,6 +123,8 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { copyIdText } from '../../lib/record-ref'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { userErrorMessage } from '../../lib/safe-error'
+import { listViewInput } from '../../lib/send-view'
+import { useTableDensity } from '../../lib/table-density'
 import { matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
 import {
@@ -154,9 +165,11 @@ import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { queueReturnApplies, readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { ListLoadError } from '../ListLoadError'
 import { LiveCount } from '../LiveCount'
+import { LiveBurstPill, LivePauseButton } from '../LiveListControls'
 import { LiveRowMark } from '../LiveRowMark'
 import { CopyListLinkButton } from '../list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from '../list/InlineEdit'
+import { ListViewers } from '../list/ListViewers'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
   PICKER_EXCLUDED_TITLE,
@@ -166,6 +179,7 @@ import { RealtimeStaleMark } from '../RealtimeStatusBanner'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
 import { RowPresence } from '../RowPresence'
+import { SendViewButton } from '../send-view/SendViewButton'
 import { UnseenDot } from '../UnseenDot'
 import { Badge } from '../ui/badge'
 import { Checkbox } from '../ui/checkbox'
@@ -233,6 +247,9 @@ export interface QueueWorklistProps {
    *  everywhere; a list hides them only when every collection the queue can
    *  create in is on it (the header covers those, not the rest). */
   hideCreateActions?: boolean | string[]
+  /** The host's header row shows who else has this queue open (admin queue page), so the
+   *  toolbar keeps no slot for it. */
+  viewersInHeader?: boolean
   /** Hosts with an Ask AI page pass this: the toolbar gains "Ask about this
    *  queue" (#1276), which hands the queue over so the host can open Ask AI
    *  with the question seeded. Absent = no button. */
@@ -792,6 +809,7 @@ export function QueueWorklist({
   realtime,
   renderError,
   hideCreateActions = false,
+  viewersInHeader = false,
   onAsk
 }: QueueWorklistProps) {
   const qc = useQueryClient()
@@ -803,14 +821,8 @@ export function QueueWorklist({
   const [page, setPage] = useState(1)
   // #2447 — cursors that reach the next table pages of the current view.
   const cursorBookRef = useRef(createCursorBook())
-  // Row density — shares the per-browser preference the collection browser uses.
-  const [density, setDensity] = useState<'compact' | 'comfortable'>(() => {
-    try {
-      return localStorage.getItem('nvr_table_density') === 'comfortable' ? 'comfortable' : 'compact'
-    } catch {
-      return 'compact'
-    }
-  })
+  // Row density — shares the preference the collection browser uses (rt4 #19).
+  const [density, setDensity] = useTableDensity()
   const [view, setView] = useState<'table' | 'kanban' | 'workload'>('table')
   const [sort, setSort] = useState('')
   const [filterValues, setFilterValues] = useState<Record<string, string | string[]>>({})
@@ -873,6 +885,17 @@ export function QueueWorklist({
   const selectedCountRef = useRef(0)
   const viewRef = useRef<'table' | 'kanban' | 'workload'>('table')
   viewRef.current = view
+  // Realtime round 2 (2026-11-14, lib/live-list-flow.ts): an import or bulk change is one
+  // quiet pill (#10); the list can be paused, and Resume applies what waited in one go (#11).
+  const liveBurst = useLiveBurst()
+  const liveBurstRef = useRef(liveBurst)
+  liveBurstRef.current = liveBurst
+  const liveApplyRef = useRef<((evs: BurstEvent[]) => void) | null>(null)
+  const livePause = useLivePause<BurstEvent>(queueId ? `queue:${queueId}` : null, (held) => {
+    if (!resumeAsRefetch(held) && liveApplyRef.current) return liveApplyRef.current(held)
+    showLiveChanges()
+  })
+  const livePauseGate = livePause.gate
   const limit = 25
 
   const { data: queue, error: queueError } = useQuery<QueueMeta>({
@@ -1121,10 +1144,26 @@ export function QueueWorklist({
       const flat = evs.flatMap((e) =>
         e ? (expandCoalesced(e as never) as unknown as LiveEv[]) : [e]
       )
+      const aspectOnly = (ev: LiveEv | undefined) =>
+        !!ev &&
+        !ev.action &&
+        !!ev.changed_fields?.length &&
+        ev.changed_fields.every((f) => f.startsWith('$'))
+      // An import or bulk change (#10): its rows wait for the pill's Show (one re-read) —
+      // no refetch, flashes or stats ticks per batch. Records key by collection + id.
+      const writes = flat
+        .filter((ev) => ev && !aspectOnly(ev))
+        .map((ev) => ({
+          ...ev,
+          item: String(ev?.item ?? '*') === '*' ? '*' : `${ev?.collection}:${String(ev?.item)}`
+        }))
+      const inBurst = writes.length > 0 && liveBurstRef.current.tracker.push(writes as never)
+      if (inBurst) liveBurstRef.current.publish()
       for (const ev of flat) {
         const fields = ev?.changed_fields
         const key = ev?.collection != null ? `${ev.collection}:${String(ev.item)}` : null
         const visible = key != null && visibleKeysRef.current.has(key)
+        if (inBurst && !aspectOnly(ev)) continue
         if (ev && !ev.action && fields?.length && fields.every((f) => f.startsWith('$'))) {
           if (fields.includes(LIVE_ASPECTS.tasks)) aspectKeys.add('queue-task-counts')
           if (fields.includes(LIVE_ASPECTS.integrations))
@@ -1162,16 +1201,20 @@ export function QueueWorklist({
       if (refresh) scheduleRefetch()
       if (stats) scheduleStats()
     }
-    const unsub = subscribe(collections, (ev) => deliverLive(liveOwner, [ev ?? {}], handle))
+    // Paused (#11): held per queue until Resume; then focus mode decides as before.
+    const apply = (held: BurstEvent[]) => deliverLive(liveOwner, held as LiveEv[], handle)
+    liveApplyRef.current = apply
+    const unsub = subscribe(collections, (ev) => livePauseGate([(ev ?? {}) as BurstEvent], apply))
     return () => {
       scheduleRefetchRef.current = null
       unsub()
+      liveApplyRef.current = null
       releaseLiveOwner(liveOwner)
       if (aspectTimer) clearTimeout(aspectTimer)
       if (refetchTimer) clearTimeout(refetchTimer)
       if (statsTimer) clearTimeout(statsTimer)
     }
-  }, [ctxRealtime, realtime, queue?.sources, qc, queueId, userId, liveOwner])
+  }, [ctxRealtime, realtime, queue?.sources, qc, queueId, userId, liveOwner, livePauseGate])
 
   // rt2 #17 — who owns records changed without those records being written (owner matrix,
   // delegation, out of office): rows may enter or leave "My items" and owner cells move. A
@@ -1827,15 +1870,20 @@ export function QueueWorklist({
     stats: QueueStats
     filtered_stats: QueueStats | null
     state_counts?: Record<string, number>
+    totals?: QueueTotalsAnswer
+    totals_partial?: boolean
   }>({
     queryKey: ['queue-live-stats', queueId, scope, debouncedFilterValues, statsTick],
+    // The totals row ticks with the tiles (#13): the same read totals the whole result as the
+    // viewer (it reads every row for the stats already), coalesced by the stats tick.
     queryFn: () =>
       client.request(
         get(`/queues/${queueId}/items`, {
           scope,
           filters: JSON.stringify(apiFilters),
           page: 1,
-          limit: 1
+          limit: 1,
+          ...(totalPaths.length ? { totals: totalPaths.join(',') } : {})
         })
       ),
     enabled: statsTick > 0 && !!data,
@@ -1901,6 +1949,17 @@ export function QueueWorklist({
     items.map((r) => ({ collection: r.collection, id: r.item_id })),
     lockTick
   )
+  // Rows never move under the pointer or keyboard focus (#12): a reorder from a live refetch
+  // waits until the pointer leaves the table (≤ 10 s); values still update in place.
+  const steadyItems = useSteadyRows(
+    items,
+    (r) => `${r.collection}:${r.item_id}`,
+    rowChanges.rootRef,
+    {
+      enabled: view === 'table' && !serverGrouped,
+      resetKey: JSON.stringify([queueId, scope, page, sort, debouncedFilterValues])
+    }
+  )
   // A stable enter key through live refetches, so rows that did not change
   // do not replay their enter animation.
   const enterKeyRef = useRef(dataUpdatedAt)
@@ -1959,12 +2018,19 @@ export function QueueWorklist({
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on each completed read
   useEffect(() => {
     setPendingUpdates(0)
+    liveBurstRef.current.clear()
   }, [dataUpdatedAt])
 
   function refreshPendingUpdates() {
     qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
     qc.invalidateQueries({ queryKey: ['queue-workload', queueId] })
     setPendingUpdates(0)
+  }
+  /** Show (burst pill) / a big Resume: one re-read of the rows, stats and totals. */
+  function showLiveChanges() {
+    liveBurstRef.current.clear()
+    livePause.dropHeld()
+    refreshPendingUpdates()
   }
 
   // ── Trends (daily snapshots → sparklines + deltas on the global tiles) ──
@@ -2635,7 +2701,10 @@ export function QueueWorklist({
     const log = queueAwayRef.current
     const fromCache = !!log && dataUpdatedAt > 0 && dataUpdatedAt <= log.leftAt
     const plan = fromCache ? planListReturn(log) : 'fresh'
-    if (plan === 'replay' || plan === 'refetch') {
+    if (plan === 'replay' && log && livePause.paused) {
+      // A paused queue (#11) holds what changed while away too; Resume applies it.
+      livePauseGate(log.events.filter((e) => !e.own) as BurstEvent[], () => {})
+    } else if (plan === 'replay' || plan === 'refetch') {
       livePendingRef.current = (log?.events ?? [])
         .filter((e) => !e.own)
         .map((e) => ({ key: `${e.collection}:${String(e.item)}`, by: null }))
@@ -2732,6 +2801,17 @@ export function QueueWorklist({
     if (views.data.some((v) => v.id === want)) setActiveViewId(want)
   }, [views, displayReady])
   /** What "Copy link" puts in the URL — the worklist as on screen. */
+  // Send my view: the tab and how many filters — the sender's settings, never row values.
+  const queueViewSummary = (): string | null => {
+    const parts: string[] = []
+    const tab = SCOPE_TABS.find((t) => t.value === scope)?.label
+    if (tab) parts.push(tab)
+    const n = Object.values(filterValues).filter((v) =>
+      Array.isArray(v) ? v.length > 0 : v !== '' && v != null
+    ).length
+    if (n > 0) parts.push(`${n} filter${n === 1 ? '' : 's'}`)
+    return parts.length ? parts.join(', ') : null
+  }
   const listLinkState = (): QueueLinkState => ({
     scope,
     filters: filterValues,
@@ -3021,10 +3101,13 @@ export function QueueWorklist({
           {/* #643 — someone else changed this since you last opened it. The
             mark hangs in the column's widened left padding, so item names
             stay aligned with each other and with the header. */}
-          {rowLocks.get(rowId(row)) || rowChanges.isNew(rowId(row)) ? (
+          {rowLocks.get(rowId(row)) ||
+          rowChanges.isNew(rowId(row)) ||
+          steadyItems.isGone(rowId(row)) ? (
             <LiveRowMark
               lock={rowLocks.get(rowId(row))}
               isNew={rowChanges.isNew(rowId(row))}
+              gone={steadyItems.isGone(rowId(row))}
               dataAttr='data-queue-live-mark'
               hang
             />
@@ -3781,8 +3864,15 @@ export function QueueWorklist({
     ...(claimsEnabled ? [claimColumn] : []),
     actionsColumn
   ]
-  // The footer: one figure per visible column with a total on, over the whole result.
-  const totalsAnswer = data?.totals
+  // The footer: one figure per visible column with a total on, over the whole result. The
+  // newer of the list read and the live stats read (#13) wins, per column.
+  const liveTotalsNewer = liveStatsNewer && !!liveStats?.totals
+  const totalsAnswer: QueueTotalsAnswer | undefined = liveTotalsNewer
+    ? { ...data?.totals, ...liveStats?.totals }
+    : data?.totals
+  const totalsPartial = liveTotalsNewer
+    ? liveStats?.totals_partial === true
+    : data?.totals_partial === true
   const totalsRow = (() => {
     if (!totalsOn) return undefined
     const cells: Record<string, React.ReactNode> = {}
@@ -3812,7 +3902,7 @@ export function QueueWorklist({
               sup.kind === 'server' ? totalsAnswer?.[sup.path]?.by_collection : undefined,
             collectionLabel,
             format,
-            partial: data?.totals_partial === true,
+            partial: totalsPartial,
             derivedText: sup.kind === 'derived' ? derivedText(sup.terms) : undefined
           })
       cells[c.key] = (
@@ -3825,7 +3915,7 @@ export function QueueWorklist({
           ) : (
             <span className='text-slate-700 dark:text-slate-200'>
               {value == null ? '—' : format(value)}
-              {data?.totals_partial ? '*' : ''}
+              {totalsPartial ? '*' : ''}
             </span>
           )}
         </span>
@@ -4621,7 +4711,14 @@ export function QueueWorklist({
           )}
           <RealtimeStaleMark className='h-8' />
           <FocusModeToggle />
-          {pendingUpdates > 0 && (
+          {(ctxRealtime || realtime) && queueId && (
+            <LivePauseButton
+              paused={livePause.paused}
+              held={livePause.held}
+              onToggle={livePause.toggle}
+            />
+          )}
+          {pendingUpdates > 0 && !liveBurst.label && (
             <button
               type='button'
               onClick={refreshPendingUpdates}
@@ -4751,6 +4848,23 @@ export function QueueWorklist({
               </button>
             )}
             <CopyListLinkButton listKey={`queue:${queueId}`} getState={listLinkState} />
+            <SendViewButton
+              getView={() =>
+                listViewInput(
+                  'queue',
+                  queueId,
+                  `queue:${queueId}`,
+                  listLinkState() as unknown as Record<string, unknown>,
+                  queueViewSummary()
+                )
+              }
+              describe={() => {
+                const s = queueViewSummary()
+                const name = queue?.name ?? 'This queue'
+                return s ? `${name} — ${s}` : name
+              }}
+            />
+            {!viewersInHeader && <ListViewers kind='queue' id={queueId} />}
             {view === 'table' && (
               <button
                 type='button'
@@ -4843,13 +4957,7 @@ export function QueueWorklist({
               <button
                 type='button'
                 onClick={() => {
-                  const next = density === 'compact' ? 'comfortable' : 'compact'
-                  setDensity(next)
-                  try {
-                    localStorage.setItem('nvr_table_density', next)
-                  } catch {
-                    /* private mode */
-                  }
+                  setDensity(density === 'compact' ? 'comfortable' : 'compact')
                 }}
                 aria-label='Row density'
                 title={
@@ -5470,6 +5578,14 @@ export function QueueWorklist({
                 )}
                 aria-busy={isRefetching || undefined}
               >
+                {/* #10 — an import or bulk change: one pill over the table, never in the toolbar. */}
+                {liveBurst.label && (
+                  <LiveBurstPill
+                    label={liveBurst.label}
+                    onShow={showLiveChanges}
+                    className='bottom-28'
+                  />
+                )}
                 {loadElapsed != null && (
                   <span className='nvr-slide-up-centered absolute left-1/2 top-6 z-[6] -translate-x-1/2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 shadow-lg dark:border-border dark:bg-card dark:text-slate-300'>
                     {queueSlow.text ?? 'Still working'} — {loadElapsed}s
@@ -5481,7 +5597,7 @@ export function QueueWorklist({
                   density={density}
                   minBodyHeight={360}
                   columns={columns}
-                  rows={items}
+                  rows={steadyItems.rows}
                   rowKey={(row) => `${row.collection}:${row.item_id}`}
                   total={data?.total ?? 0}
                   page={page}
@@ -5505,6 +5621,7 @@ export function QueueWorklist({
                   rowTitle={(row) => {
                     const lock = rowLocks.get(rowId(row))
                     return (
+                      (steadyItems.isGone(rowId(row)) ? GONE_ROW_TITLE : undefined) ??
                       rowChanges.titleFor(rowId(row)) ??
                       (lock && !lock.is_mine ? lockLabel(lock) : undefined) ??
                       (isPickerExcluded(row.collection, row.item_id)
@@ -5515,7 +5632,8 @@ export function QueueWorklist({
                   rowClassName={(row) =>
                     cn(
                       rowHighlight(row),
-                      isPickerExcluded(row.collection, row.item_id) && PICKER_EXCLUDED_ROW_CLASS
+                      isPickerExcluded(row.collection, row.item_id) && PICKER_EXCLUDED_ROW_CLASS,
+                      steadyItems.isGone(rowId(row)) && GONE_ROW_CLASS
                     )
                   }
                   emptyMessage={

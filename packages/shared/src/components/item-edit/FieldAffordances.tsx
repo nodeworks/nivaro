@@ -84,6 +84,9 @@ export interface FieldAffordances {
   placementText?: TextContext | null
   /** New records: field → existing records that look the same (DuplicateNotice). */
   duplicates?: Record<string, DuplicateHint>
+  /** rt4 #6 — field → what happened to the record it links to, shown while the picker
+   *  flags the value as no longer offered ("Vendor ABC was deactivated 2 min ago by Beth"). */
+  linkedChanges?: Record<string, string>
 }
 
 export const FieldAffordancesContext = createContext<FieldAffordances | null>(null)

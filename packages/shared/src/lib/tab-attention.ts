@@ -5,6 +5,11 @@
 // unread), and several pages rewrite document.title as they mount, so the
 // prefix is re-applied whenever the title changes instead of being set once.
 //
+// One owner composes the title: `(<count>) <Label> · <page title>`. The environment label
+// ("Staging · ", EnvironmentNotice) is registered here too (`useTabTitleLabel`) instead of
+// running its own title observer: two observers that each put their part first rewrote each
+// other forever and froze the tab (staging/dev with unread items, found 2026-11-14).
+//
 // The favicon is the host's own (a white-label icon included): the badge is
 // drawn over whatever icon the page carries, the original href is kept on the
 // link as data-nvr-icon and restored at zero, and an icon the host swaps in
@@ -18,6 +23,9 @@ interface Owner {
   favicon: boolean
 }
 const owners = new Map<symbol, Owner>()
+/** The environment label in front of the title ("Staging"), and labels to take off. */
+let titleLabel: string | null = null
+let goneLabels: string[] = []
 let observer: MutationObserver | null = null
 let iconRequest = 0
 /** The data URL this module last put on the icon links (to tell it from a host's own change). */
@@ -32,6 +40,28 @@ export function tabTitlePrefix(count: number): string {
 /** The title with our prefix swapped for the one `count` calls for. */
 export function withTitlePrefix(title: string, count: number): string {
   return tabTitlePrefix(count) + title.replace(PREFIX, '')
+}
+
+/**
+ * The one title: `(<count>) <label> · <page title>`. Whatever count and labels the title
+ * already carries — in either order, from either writer, `stripLabels` included (a label that
+ * just went away) — are taken off first, so composing a composed title changes nothing.
+ */
+export function composeTabTitle(
+  title: string,
+  count: number,
+  label: string | null,
+  stripLabels: Array<string | null | undefined> = []
+): string {
+  const labels = [...new Set([label, ...stripLabels].filter((l): l is string => !!l))]
+  let rest = title
+  for (let guard = 0; guard < 8; guard++) {
+    const before = rest
+    rest = rest.replace(PREFIX, '')
+    for (const l of labels) if (rest.startsWith(`${l} · `)) rest = rest.slice(l.length + 3)
+    if (rest === before) break
+  }
+  return tabTitlePrefix(count) + (label ? `${label} · ` : '') + rest
 }
 
 /** What the favicon dot says: "3", "9+" (a 16 px tab icon has room for one digit). */
@@ -68,8 +98,14 @@ function wantsFavicon(): boolean {
 }
 
 function applyTitle() {
-  const want = withTitlePrefix(document.title, currentCount())
+  const want = composeTabTitle(document.title, currentCount(), titleLabel, goneLabels)
+  goneLabels = []
   if (document.title !== want) document.title = want
+}
+
+/** Anything for this module to keep in the title (a count owner or a label). */
+function active(): boolean {
+  return owners.size > 0 || !!titleLabel
 }
 
 function iconLinks(): HTMLLinkElement[] {
@@ -172,7 +208,7 @@ function applyFavicon() {
 function ensureObserver() {
   if (observer || typeof MutationObserver === 'undefined') return
   observer = new MutationObserver((records) => {
-    if (owners.size === 0) return
+    if (!active()) return
     applyTitle()
     // The host changed its icon (a white-label load): the new one is the base now.
     const swapped = records.some(
@@ -199,7 +235,7 @@ function ensureObserver() {
 function apply() {
   applyTitle()
   applyFavicon()
-  if (owners.size === 0 && observer) {
+  if (!active() && observer) {
     observer.disconnect()
     observer = null
   }
@@ -236,4 +272,25 @@ export function useTabAttention(
       if (owners.delete(k)) apply()
     }
   }, [])
+}
+
+/**
+ * Put `label · ` in front of the tab title while mounted ("Staging · My Work"), after the
+ * attention count when there is one: `(3) Staging · My Work`. null = no label. The latest
+ * label asked for wins; unmounting takes it off again.
+ */
+export function useTabTitleLabel(label: string | null) {
+  useEffect(() => {
+    if (typeof document === 'undefined' || !label) return
+    if (titleLabel && titleLabel !== label) goneLabels.push(titleLabel)
+    titleLabel = label
+    ensureObserver()
+    apply()
+    return () => {
+      if (titleLabel !== label) return
+      titleLabel = null
+      goneLabels.push(label)
+      apply()
+    }
+  }, [label])
 }

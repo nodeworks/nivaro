@@ -18,6 +18,8 @@ export type NotifyCategory =
   | 'chaos'
   /** Front-end crashes new in a release (Issue Log → Crashes). Administrators only. */
   | 'crashes'
+  /** A colleague used "Send my view" (a record, list or queue they were looking at). */
+  | 'views'
   | 'other'
 
 export type NotificationKind =
@@ -93,6 +95,28 @@ export interface NotificationDetail {
   ack_at?: string
   /** Who acknowledged (the recipient's user id). */
   ack_by?: string
+  /** What settles this row ("step:<collection>:<item>", "task:<id>",
+   *  "approval:<instance>", "ticket:<id>"); set by notifyUser. */
+  resolve_key?: string
+  /** Set when someone handled what the row asked: the calm "done" line. */
+  resolved?: {
+    on: 'step' | 'task' | 'approval' | 'ticket'
+    by: string | null
+    by_name: string | null
+    at: string
+    text: string
+  }
+  /** Several FYI updates on one record folded into this row, newest first. */
+  fold?: {
+    count: number
+    items: Array<{
+      subject: string
+      message: string | null
+      at: string
+      sender: string | null
+      category: string | null
+    }>
+  }
 }
 
 export interface NotifyUserOptions {

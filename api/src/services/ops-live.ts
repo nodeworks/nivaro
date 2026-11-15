@@ -1,6 +1,7 @@
 import { onOpsWrite } from '../db/ops-signal.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
 import { getIo } from './io-holder.js'
+import { parseListViewTopic } from './list-viewer-topics.js'
 import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
 
 /**
@@ -30,9 +31,16 @@ export type OpsTopic =
   | 'collections'
   | 'integrations'
   | 'access-requests'
+  | 'webhooks'
+  | 'dead-letters'
 
-/** 'ticket' — the person must be able to see that support ticket (canSeeTicket). */
-export type OpsGate = 'admin' | 'auth' | 'ticket'
+/**
+ * 'ticket' — the person must be able to see that support ticket (canSeeTicket).
+ * 'dashboard' / 'report' — that dashboard / report is visible to the person (rt4 #18).
+ * 'viewers' — "who else has this list / queue open" (services/list-viewers.ts): anyone who may
+ * read the list ANNOUNCES themselves, only administrators join the room and hear the names.
+ */
+export type OpsGate = 'admin' | 'auth' | 'ticket' | 'dashboard' | 'report' | 'viewers'
 
 const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   readiness: 'admin',
@@ -47,7 +55,10 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   // through its own admin-only route.
   collections: 'admin',
   integrations: 'admin',
-  'access-requests': 'admin'
+  'access-requests': 'admin',
+  // Webhook deliveries and the dead-letter queue (2026-11-14): pokes only, admin pages.
+  webhooks: 'admin',
+  'dead-letters': 'admin'
 }
 
 /**
@@ -66,10 +77,17 @@ const ID_TOPICS: Record<string, OpsGate> = {
 
 /** A client-supplied topic string → its room suffix and gate, or null when not a real topic. */
 export function opsTopicGate(raw: unknown): { topic: string; gate: OpsGate } | null {
-  if (typeof raw !== 'string' || raw.length > 40) return null
+  if (typeof raw !== 'string' || raw.length > 100) return null
   if (raw in TOPIC_GATES) return { topic: raw, gate: TOPIC_GATES[raw as OpsTopic] }
   const m = /^([a-z-]+):(\d{1,12})$/.exec(raw)
   if (m && m[1] in ID_TOPICS) return { topic: raw, gate: ID_TOPICS[m[1]] }
+  // Config editors + shared dashboards (services/config-watch.ts): `cfg-<kind>:<id>`.
+  const c =
+    /^cfg-(pipeline|flow|rule|external-api|payload|dashboard|report):[A-Za-z0-9_.-]{1,80}$/.exec(
+      raw
+    )
+  if (c) return { topic: raw, gate: c[1] === 'dashboard' || c[1] === 'report' ? c[1] : 'admin' }
+  if (raw.length <= 80 && parseListViewTopic(raw)) return { topic: raw, gate: 'viewers' }
   return null
 }
 

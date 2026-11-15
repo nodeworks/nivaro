@@ -5,6 +5,7 @@ import {
   createCoalescer,
   encodeEvent,
   eventNameOf,
+  livePayload,
   mergeUpdates,
   noteCoalesced,
   noteTenantSocket,
@@ -114,6 +115,22 @@ describe('mergeUpdates (#1681)', () => {
       _seq: 9
     })
   })
+  it('keeps the import / raw source only when every merged write had it', () => {
+    const imp = { collection: 'o', action: 'create', source: 'import' }
+    expect(
+      mergeUpdates('o', [
+        { ...imp, item: 1 },
+        { ...imp, item: 2 }
+      ]).source
+    ).toBe('import')
+    expect(
+      mergeUpdates('o', [
+        { ...imp, item: 1 },
+        { collection: 'o', item: 2, action: 'create' }
+      ]).source
+    ).toBeUndefined()
+    expect(mergeUpdates('o', [{ collection: 'o', item: 1 }]).source).toBeUndefined()
+  })
   it('says "many" past the cap and leaves the field list open when one event had none', () => {
     const list = Array.from({ length: 5 }, (_, i) => ({
       collection: 'o',
@@ -127,6 +144,32 @@ describe('mergeUpdates (#1681)', () => {
     expect(m.count).toBe(6)
     expect(m.action).toBeUndefined()
     expect(m.changed_fields).toBeUndefined()
+  })
+  it("keeps each record's own counter range (realtime 23), only where every event had one", () => {
+    const m = mergeUpdates('orders', [
+      { collection: 'orders', item: 1, _seq: 4, _iseq: 3 },
+      { collection: 'orders', item: 2, _seq: 5, _iseq: 8 },
+      { collection: 'orders', item: 1, _seq: 6, _iseq: 4 },
+      { collection: 'orders', item: 3, _seq: 7, _iseq: 1 },
+      { collection: 'orders', item: 3, _seq: 8 }
+    ])
+    expect(m._iseqs).toEqual({ '1': [3, 4], '2': [8, 8] })
+    expect(mergeUpdates('o', [{ collection: 'o', item: 1 }])._iseqs).toBeUndefined()
+  })
+})
+
+describe('livePayload (realtime 23)', () => {
+  it("adds the record's own position when the entry has one", () => {
+    const entry = { seq: 10, room: 'collection:o', payload: { collection: 'o', item: 1 } }
+    expect(livePayload({ ...entry, rseq: 2, iseq: 5 })).toEqual({
+      collection: 'o',
+      item: 1,
+      _seq: 10,
+      _rseq: 2,
+      _room: 'collection:o',
+      _iseq: 5
+    })
+    expect(livePayload(entry)).toEqual({ collection: 'o', item: 1, _seq: 10 })
   })
 })
 

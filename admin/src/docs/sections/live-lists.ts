@@ -45,8 +45,25 @@ export const collabLiveLists: DocSection = {
         [
           'Calendar, Gantt and map views',
           'Records others add, move or reschedule appear in place without a flash.'
+        ],
+        [
+          'An import or bulk change (a dozen or more records within two seconds)',
+          'No row flashes. One quiet pill floats over the bottom of the list (the toolbar never moves) and says what happened — "Import added 500 records  Show", "Beth updated 40 rows  Show" — and Show re-reads the list once. The name comes from your own read of a few of the rows, so it only appears when you can see who changed them.'
+        ],
+        [
+          'Your pointer or keyboard is on a row',
+          'Rows at and above it never move. A record that would slide in above it waits, a record that left the list stays in place, faded, with a crossed-out eye mark ("No longer matches this view" on hover) and its labels still shown, and values still update. The new order is drawn when the pointer leaves the list or focus moves elsewhere (at most about 10 seconds).'
+        ],
+        [
+          'A totals row is on',
+          'The Sum / Average / Min / Max / Count figures re-count as you, at most every couple of seconds while changes keep coming, and only when a change could move them (a new or removed record, or a totalled or filtered field). On a queue they tick with the stat tiles.'
         ]
       ]
+    },
+    { type: 'h3', id: 'live-lists-pause', text: 'Pause live updates' },
+    {
+      type: 'p',
+      text: 'The "Pause live" button in a list or queue toolbar stops that one list from changing while you work through it. While paused it turns amber, reads "Paused" and counts the changes waiting (it keeps the same width, so nothing in the toolbar moves); click it again to resume and they are applied in one go (a few records are updated in place, a lot are re-read at once). Each list remembers being paused until you close the browser tab. Focus mode still works on top of it and applies to every list.'
     },
     { type: 'h3', id: 'live-lists-focus', text: 'Focus mode' },
     {
@@ -89,7 +106,9 @@ export const collabLiveLists: DocSection = {
         'A lock taken or released sends a payload-free `$lock` notice on the collection feed (`LIVE_ASPECTS.lock`).',
         '`GET /api/global-search?fresh=1` skips the 20-second per-person answer cache; the live results page uses it for its quiet re-ask (still run as the caller, at most one every few seconds, none while the tab is hidden).',
         'Live results: `useLiveSearchResults` + `LiveNewMatchesPill` (a re-ask only decides for the records an event named, never by working out matching on the client). Fixed findings: `useResolvedFindings` + `FindingFixedMark` — a board passes its findings as `{key, collection, itemId}` and a `recheck(refs)` that returns the keys that no longer have a finding. Query figures: `LiveCacheStamp` / `useLiveStamp` watch the tables in the response `freshness_sources`; no tables, no chip.',
-        'In `@nivaro/shared`: `useRowChanges`, `useRowLocks` / `useRowLocksByCollection`, `viewerMatches`, `useLiveQueryRefresh` (query-backed views) and `FocusModeToggle` / `deliverLive` for focus mode. `useLiveCollection(…, { focusable: true })` holds its batches while focus mode is on.'
+        'In `@nivaro/shared`: `useRowChanges`, `useRowLocks` / `useRowLocksByCollection`, `viewerMatches`, `useLiveQueryRefresh` (query-backed views) and `FocusModeToggle` / `deliverLive` for focus mode. `useLiveCollection(…, { focusable: true })` holds its batches while focus mode is on.',
+        'lib/live-list-flow.ts: `createBurstTracker` / `useLiveBurst` + `LiveBurstPill` (bursts), `useLivePause` + `LivePauseButton` (pause, kept in sessionStorage `nvr:live-paused` per list key such as `cbv:<collection>` or `queue:<id>`; `useLiveQueryRefresh(…, { paused })` for query-backed views), `useSteadyRows` / `planRowOrder` (rows carry `data-row-key`), `totalsMayMove` (when a totals row re-reads; coalesced with `createCoalescer`).',
+        "A merged (coalesced or batched) `collection:update` keeps `source: 'import' | 'raw'` when every write in it had the same one."
       ]
     }
   ]
@@ -147,6 +166,66 @@ export const collabLiveCounts: DocSection = {
         'In `@nivaro/shared`: `createCoalescer(fn, { quietMs, maxWaitMs })`, `useLiveRefresh({ topic, keys })` (one shared re-read per client + key set, 2 s floor) and `<LiveCount value format />`.',
         'New admin-only ops topics for `useLiveOps` / `useLiveRefresh`: `collections` (poked by data writes, coalesced), `integrations` (signal, partner-call, submission and obligation tables) and `access-requests`. Pokes carry no rows, people or values.',
         'Writes that bypass the items service (procedures, scripts, extensions) should call `announceRawWrites(collection)` so lists and counts on that collection update; the safety re-read is only a net.'
+      ]
+    }
+  ]
+}
+
+export const collabLiveConfig: DocSection = {
+  id: 'live-config',
+  label: 'Live Config & Admin Screens',
+  content: [
+    { type: 'h1', id: 'live-config', text: 'Live Config & Admin Screens' },
+    {
+      type: 'p',
+      text: 'Configuration editors, shared dashboards and reports, the Activity log and flow runs follow what other people do while you have them open. It happens quietly, without toasts or sounds, and nothing you are looking at moves.'
+    },
+    { type: 'h3', id: 'live-config-editors', text: 'Two admins in one editor' },
+    {
+      type: 'table',
+      head: ['When', 'What happens'],
+      rows: [
+        [
+          'Another administrator saves the pipeline, flow, rule, external API or payload template you have open',
+          'A quiet line appears under the header: "Beth changed a state 1 min ago · Show". Nothing re-reads by itself. With no unsaved edits, Show loads their version. Pipeline and flow editors keep what you were typing. In the rule and external API editors, Show opens their saved version above your form when you have unsaved edits: only the fields that differ, theirs beside yours. Your form changes only if you press Take theirs. Keep mine closes it, and your next save goes over theirs. The payload editor says "Show replaces your unsaved edits" when you have some.'
+        ],
+        [
+          'You save a flow, rule or external API after someone else saved it',
+          'The save is refused instead of overwriting their work: "Beth saved this since you opened it · Show their version · Save mine anyway". Payload templates already worked this way (the conflict banner).'
+        ],
+        ['Your own saves, in any tab', 'Never raise the line.']
+      ]
+    },
+    { type: 'h3', id: 'live-config-dashboards', text: 'Shared dashboards and reports' },
+    {
+      type: 'p',
+      text: "When the owner adds, moves or changes widgets on a dashboard or report you are looking at, your page re-reads it in place. Widgets keep their places and your scroll stays put. Only widgets whose definition changed reload their figures, so a move or resize does not. If you are editing a report, your draft stays as it is and the owner's change arrives when you leave edit mode. Your own copy of a report is a separate report, so the owner's edits never touch it. Only people the dashboard or report is shared with are told about it."
+    },
+    { type: 'h3', id: 'live-config-activity', text: 'Activity log and flow runs' },
+    {
+      type: 'ul',
+      items: [
+        'Activity → Log (administrators): page 1 picks up new entries as they are written, and they fade in at the top. The log re-reads at most every 2 seconds for changes and every 15 seconds for record views. If you have scrolled down or your pointer is over the list, new entries wait behind a quiet "3 newer entries" line. They arrive when you come back to the top or click it. Later pages never shift.',
+        'Flow → Run History: a run appears when it starts. Open it to watch its steps arrive one by one, each with its outcome and time, then its final status. Steps are shown for runs that happen while the page is open. The run list re-reads only when a run starts or ends.'
+      ]
+    },
+    {
+      type: 'h3',
+      id: 'live-config-coverage',
+      text: 'Readiness: "Database writes reach open screens"'
+    },
+    {
+      type: 'p',
+      text: 'The Readiness check `announce-coverage` (Realtime group) warns when a stored procedure writes a registered collection without announcing it, and when the outside-write watcher caught rows nobody announced in the last 24 hours. The procedure list comes from the SQL checks\' "Writes without announcing" findings. If the SQL checks have not run in a week, the check reads the deployed procedures itself. It never fails a deploy. Use SQL checks → Propose fix to add the announcement.'
+    },
+    { type: 'h3', id: 'live-config-dev', text: 'For developers' },
+    {
+      type: 'ul',
+      items: [
+        'Topics `cfg-<kind>:<id>`: kinds `pipeline`, `flow`, `rule`, `external-api` and `payload` admit administrators only; `dashboard` and `report` admit the people the object is visible to. A write route needs no change: one pair of hooks (api services/config-watch.ts) names the object a write is about and pokes `ops:changed {topic, part, by?}`. `by` rides the administrator topics only.',
+        'In `@nivaro/shared`: `useConfigWatch(kind, id, { meId, onChange })`, `<ConfigChangeStrip>`, `configBaseRevHeaders(updated_at)`, `isConfigStale(err)` and `changedWidgetIds(before, after)`.',
+        'Whole-object saves (PATCH flows/:id, rules/:id, external-apis/:id, pipelines/:id) accept the optional `x-nivaro-base-rev` header and answer 409 `CONFIG_STALE` when the row has moved on. Callers that do not send it are unaffected.',
+        "Flow runs: the `flows` watch room carries `flow:run {flow_id, run_id, status, ms}` and `flow:step {flow_id, run_id, op, type, status, ms}`. Step keys and outcomes only, never the flow's data."
       ]
     }
   ]

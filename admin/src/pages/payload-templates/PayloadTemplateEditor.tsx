@@ -1,4 +1,4 @@
-import { registerUnsavedWork, TipLayer } from '@nivaro/shared'
+import { ConfigChangeStrip, registerUnsavedWork, TipLayer, useConfigWatch } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -15,6 +15,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { useGoBack } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 import type { ExternalApi } from '../ExternalApis'
@@ -928,6 +929,10 @@ export function PayloadTemplateEditorPage() {
     })
     reload(fresh.data)
   }, [key, qc, reload])
+  // rt4 #14 — another administrator changed this payload (draft, publish, restore): a quiet line.
+  // Their draft edits also meet this editor's own save as the conflict banner (base_rev 409).
+  const { user } = useAuth()
+  const { change, clear: clearChange } = useConfigWatch('payload', key, { meId: user?.id })
 
   const saveState = editor.state
   const recordLabel = useRecordLabel(key, recordId)
@@ -1117,6 +1122,19 @@ export function PayloadTemplateEditorPage() {
             }}
             onKeep={() => editor.keepMine(conflict)}
             onReview={() => setPanel('conflict')}
+          />
+        )}
+        {!conflict && change && (
+          <ConfigChangeStrip
+            change={change}
+            dirty={editor.state.kind === 'pending' || editor.state.kind === 'error'}
+            showDiscards
+            onShow={() => {
+              clearChange()
+              void adoptServerDraft()
+              void tplQ.refetch()
+            }}
+            onDismiss={clearChange}
           />
         )}
         {template.newer_default && (

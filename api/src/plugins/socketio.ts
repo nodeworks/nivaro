@@ -28,7 +28,11 @@ import {
 } from '../services/client-versions-cluster.js'
 import { ownUserRoom, scopeUserRoomsPerTenant } from '../services/cloud-user-rooms.js'
 import { defaultCoeditDeps, registerCoedit } from '../services/coedit-socket.js'
-import { fieldValueAudience } from '../services/field-change-relay.js'
+import {
+  fieldChangeDelivery,
+  relayableValue,
+  relayViewers
+} from '../services/field-change-relay.js'
 import { fieldFocusTracker } from '../services/field-focus.js'
 import {
   cleanSignalField,
@@ -38,6 +42,8 @@ import {
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
 import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
+import { mayReadListTopic } from '../services/list-viewer-access.js'
+import { listViewerJoinPlan } from '../services/list-viewer-topics.js'
 import { liveCollectionsFrom } from '../services/live-collections.js'
 import { setLockPresenceProbe } from '../services/lock-presence.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
@@ -82,6 +88,7 @@ import {
   boardKnowsEveryone,
   boardLive,
   boardMergeOn,
+  boardPeerPages,
   boardPeerViewers,
   boardReaderOn,
   boardRealtimeStats,
@@ -90,6 +97,7 @@ import {
   boardStats,
   boardUsersOnPath,
   boardUsersOnPathPrefix,
+  boardViewerEntry,
   isGateRoom,
   type LocalBoard,
   onPeerBoardChange,
@@ -165,6 +173,20 @@ export function usersOnPath(path: string): Array<{ id: string; name: string; sin
     if (!cur || u.since < cur.since) seen.set(u.id, u)
   }
   return [...seen.values()]
+}
+
+let pageSnapshotReader: ((tenant: string) => Array<PageAtData & { socket: string }>) | null = null
+/**
+ * rt5 team board — every open tab's latest page ping in the caller's tenant (this process's
+ * sockets plus, with several processes, the others' from the realtime board). One entry per
+ * socket; ids, names, paths and times only.
+ */
+export function getPagePresenceSnapshot(): Array<PageAtData & { socket: string }> {
+  const tenant = currentTenantKey()
+  const local = pageSnapshotReader ? pageSnapshotReader(tenant) : []
+  if (!boardMergeOn()) return local
+  const seen = new Set(local.map((p) => p.socket))
+  return [...local, ...boardPeerPages(tenant).filter((p) => !seen.has(p.socket))]
 }
 
 let pagePrefixReader: ((prefixes: string[]) => string[]) | null = null
@@ -530,13 +552,23 @@ export function localBoardCollector(io: SocketIOServer | null = _ioRef): BoardCo
   return { live: () => collectLocalLive(io), stats: () => collectLocalStats(io) }
 }
 
+/** What signed a local socket in (SocketBind kind), or undefined when not known. */
+function socketBindKind(io: SocketIOServer | null, socketId: string): string | undefined {
+  const kind = (io?.sockets.sockets.get(socketId)?.data?.nvrBind as { kind?: unknown } | undefined)
+    ?.kind
+  return typeof kind === 'string' ? kind : undefined
+}
+
 /** The live part (every second): counts, viewers, page pings, gate rooms, topic viewers. */
 function collectLocalLive(io: SocketIOServer | null): LocalBoard['live'] {
   const users = new Set<string>()
   for (const m of socketMeta.values()) if (m.user) users.add(m.user.id)
   const viewers: LocalBoard['live']['viewers'] = {}
+  // The bind kind lets another process's keystroke relay keep values from API-key sockets.
   for (const [room, map] of recordViewers)
-    viewers[room] = [...map].map(([socket, v]) => ({ socket, id: v.id, name: v.name }))
+    viewers[room] = [...map].map(([socket, v]) =>
+      boardViewerEntry(socket, v, socketBindKind(io, socket))
+    )
   const rooms: Record<string, number> = {}
   for (const [room, set] of io?.sockets.adapter.rooms ?? [])
     if (isGateRoom(room)) rooms[room] = set.size
@@ -853,6 +885,13 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (!cur || p.since < cur.since) seen.set(p.user.id, { ...p.user, since: p.since })
     }
     return [...seen.values()]
+  }
+
+  pageSnapshotReader = (tenant: string) => {
+    const out: Array<PageAtData & { socket: string }> = []
+    for (const [socket, p] of pagePresence)
+      if (p.tenant === tenant) out.push({ ...p, app: p.app ?? null, socket })
+    return out
   }
 
   pagePrefixReader = (prefixes: string[]) => {
@@ -1873,10 +1912,50 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         try {
           const room = await opsRoomOf(spec.topic)
           if (!room) return
+          // "Who else has this list open" (list-viewer-topics.ts): readers announce, only
+          // administrators join the room — the names reach administrators and nobody else.
+          if (spec.gate === 'viewers') {
+            let plan = { listen: false, announce: false }
+            await watchGate.join(
+              `ops:${spec.topic}`,
+              async () => {
+                const role = user.role
+                  ? await db('nivaro_roles').where({ id: user.role }).first('admin_access')
+                  : null
+                const isAdmin = !!role?.admin_access
+                plan = listViewerJoinPlan({
+                  isAdmin,
+                  viewAs: (socket.data.nvrBind as SocketBind | undefined)?.kind === 'masq',
+                  mayRead: await mayReadListTopic(user, spec.topic, isAdmin)
+                })
+                return plan.listen || plan.announce
+              },
+              () => {
+                if (plan.listen) socket.join(room)
+                if (plan.announce)
+                  addTopicViewer(room, socket.id, { id: user.id, name: displayName(user) })
+                broadcastTopicViewers(spec.topic, room)
+              }
+            )
+            return
+          }
           await watchGate.join(
             `ops:${spec.topic}`,
             async () => {
               if (spec.gate === 'auth') return true
+              // rt4 #18 — a dashboard / report the person may open (owner, shared, admin).
+              if (spec.gate === 'dashboard' || spec.gate === 'report') {
+                const role = user.role
+                  ? await db('nivaro_roles').where({ id: user.role }).first('admin_access')
+                  : null
+                const { canFollowSharedView } = await import('../services/config-watch.js')
+                return await canFollowSharedView(
+                  spec.gate,
+                  spec.topic.slice(spec.topic.indexOf(':') + 1),
+                  { id: String(user.id), role: user.role ?? null },
+                  !!role?.admin_access
+                )
+              }
               if (!user.role) return false
               const role = await db('nivaro_roles').where({ id: user.role }).first()
               const isAdmin = !!role?.admin_access
@@ -2261,8 +2340,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Live co-editing v3 — relay value keystrokes inside the record room.
     // Preview-only on the receiving side; persistence still goes through the
     // normal save path with all its validation.
-    // M6 — the value goes only to viewers whose read policy includes the field; the others get
-    // the same event without a value (they still see who is editing which field).
+    // The typed value goes only to the SOCKETS in the room whose person may read that field
+    // (the record read's field list) — never for system collections, encrypted, credential or
+    // concealed fields, to-many aliases or names the collection lacks, never to API-key sockets
+    // (services/field-change-relay.ts). Everyone else gets the same event without `value` (who
+    // is editing which field). Same event and shape as before; `value` is simply absent.
     socket.on(
       'field:change',
       inSocketTenant(
@@ -2277,35 +2359,34 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           const room = roomFor(payload)
           if (!user || !room || typeof payload?.field !== 'string') return
           const field = payload.field
-          const value =
-            typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
+          if (!field || field.length > 128) return
           // Typing keeps the "editing this field" mark alive.
           focusMarks.touch(room, field)
           const record = recordOf(room)
           const base = { ...record, field, user: { id: user.id, name: displayName(user) } }
           const me = String(user.id).toLowerCase()
-          const viewerIds = [
-            ...(recordViewers.get(room)?.values() ?? []),
-            ...boardPeerViewers(room)
-          ]
-            .map((v) => String(v.id))
-            .filter((id) => id.toLowerCase() !== me)
-          if (viewerIds.length === 0 || !record.collection) return
-          let audience: { readers: string[]; others: string[] }
-          try {
-            audience = await fieldValueAudience(viewerIds, record.collection, field)
-          } catch {
-            audience = { readers: [], others: viewerIds }
+          const viewers = relayViewers(
+            recordViewers.get(room)?.entries() ?? [],
+            (sid) => socketBindKind(io, sid),
+            boardPeerViewers(room)
+          ).filter((v) => v.socket !== socket.id && v.id.toLowerCase() !== me)
+          if (viewers.length === 0 || !record.collection) return
+          const namesOnly = { valueTo: [] as string[], nameTo: viewers.map((v) => v.socket) }
+          let delivery = namesOnly
+          if (relayableValue(payload.value)) {
+            try {
+              delivery = await fieldChangeDelivery(viewers, record.collection, field)
+            } catch {
+              delivery = namesOnly
+            }
           }
-          // Personal rooms reach each viewer's tabs on every replica; a tab not on this record
-          // ignores it (the payload names its record).
-          if (audience.readers.length)
-            io.to(audience.readers.map((id) => `user:${id}`)).emit('field:changed', {
-              ...base,
-              value
-            })
-          if (audience.others.length)
-            io.to(audience.others.map((id) => `user:${id}`)).emit('field:changed', base)
+          const value =
+            typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
+          // Socket ids reach a socket on any replica (adapter); a person's other tabs and
+          // devices that are not on this record get nothing.
+          if (delivery.valueTo.length)
+            io.to(delivery.valueTo).emit('field:changed', { ...base, value })
+          if (delivery.nameTo.length) io.to(delivery.nameTo).emit('field:changed', base)
         }
       )
     )

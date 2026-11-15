@@ -1,3 +1,4 @@
+import { approvalDecisionText, LIVE_ASPECTS, useLiveRecordQueries } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, ShieldCheck, X } from 'lucide-react'
 import { useState } from 'react'
@@ -89,6 +90,18 @@ export function ApprovalPanel({ collection, item }: { collection: string; item: 
         .then((r) => r.data.data ?? []),
     enabled
   })
+  // rt4 #8 — another approver's decision lands here on its own (the server announces
+  // `$approvals` on the record; this re-reads as the viewer, coalesced).
+  useLiveRecordQueries(
+    collection,
+    enabled ? item : null,
+    [['approval-instances', collection, item]],
+    {
+      aspects: [LIVE_ASPECTS.approvals],
+      client: qc,
+      debounceMs: 800
+    }
+  )
 
   const startMut = useMutation({
     mutationFn: (chainId: number | string) =>
@@ -270,14 +283,17 @@ export function ApprovalPanel({ collection, item }: { collection: string; item: 
                         <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700'>
                           {d.step_label ?? `Step ${idx + 1}`}
                         </span>
-                        <span className='shrink-0 text-[11px] text-slate-400'>
-                          {d.approver_name ?? ''}
+                        <span
+                          className={cn(
+                            'shrink-0 text-[11px]',
+                            isCurrent
+                              ? 'text-sky-700 dark:text-sky-300'
+                              : 'text-slate-500 dark:text-slate-400'
+                          )}
+                          data-tip={d.decided_at ? formatRelative(d.decided_at) : undefined}
+                        >
+                          {approvalDecisionText(d, isCurrent) ?? d.approver_name ?? ''}
                         </span>
-                        {d.decided_at && (
-                          <span className='shrink-0 text-[10px] text-slate-300'>
-                            {formatRelative(d.decided_at)}
-                          </span>
-                        )}
                       </div>
                       {d.comment && (
                         <p className='mt-1 pl-6 text-[11px] italic text-slate-500'>"{d.comment}"</p>

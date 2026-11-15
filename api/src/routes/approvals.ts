@@ -6,6 +6,7 @@ import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { recordDisplayRef } from '../services/record-display-ref.js'
+import { announceRecordAspect } from '../services/record-events.js'
 import type { User } from '../types.js'
 
 interface ApprovalChain {
@@ -189,13 +190,27 @@ export async function applyApprovalDecision(opts: {
     .first()
   if (already) return { ok: false, status: 409, error: 'You already decided this step' }
 
+  const decidedAt = new Date()
   await db('nivaro_approval_decisions').insert({
     instance: instance.id,
     step_order: instance.current_step,
     user: user.id,
     decision,
     comment: comment ?? null,
-    decided_at: new Date()
+    decided_at: decidedAt
+  })
+
+  // The step's other approval requests read "Approved by <who>" / "Rejected by
+  // <who>" and count as read — before the next step's approvers are asked.
+  const { resolveNotifications } = await import('../services/notification-resolve.js')
+  await resolveNotifications({
+    on: 'approval',
+    id: instance.id,
+    at: decidedAt,
+    actorId: user.id,
+    decision,
+    collection: instance.collection,
+    item: instance.item != null ? String(instance.item) : null
   })
 
   const itemRef = `${instance.collection}/${instance.item}`
@@ -225,6 +240,8 @@ export async function applyApprovalDecision(opts: {
     const updated = (await db('nivaro_approval_instances')
       .where({ id: instance.id })
       .first()) as ApprovalInstance
+    // rt4 #8 — everyone with the record open sees the step change (ids + aspect only).
+    announceRecordAspect(instance.collection, instance.item, '$approvals')
     return { ok: true, instance: updated }
   }
 
@@ -267,6 +284,7 @@ export async function applyApprovalDecision(opts: {
   const updated = (await db('nivaro_approval_instances')
     .where({ id: instance.id })
     .first()) as ApprovalInstance
+  announceRecordAspect(instance.collection, instance.item, '$approvals')
   return { ok: true, instance: updated }
 }
 
@@ -501,6 +519,7 @@ export async function approvalsRoutes(app: FastifyInstance) {
 
       // Only the first step's approver(s) are notified — strictly sequential
       await notifyStepApprovers(app, instance, chain, steps[0], req.user!.id)
+      announceRecordAspect(collection, String(item), '$approvals')
 
       return reply.code(201).send({ data: instance })
     }

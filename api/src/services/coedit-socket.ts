@@ -56,7 +56,9 @@ export interface CoeditDeps {
   /** The record read gate (role, row filter, user scopes). */
   canSeeRecord(user: User, collection: string, item: string): Promise<boolean>
   /** May this person read the field? */
-  mayRead(user: User, collection: string, field: string): Promise<boolean>
+  /** Would the typed-value relay (field-change-relay fieldChangeDelivery) send this socket the
+   *  field's value? `kind` = what signed the socket in. Co-edit text is never looser. */
+  mayRead(user: User, collection: string, field: string, kind?: string): Promise<boolean>
   /** May this person change the field on this record (field + record update gates)? */
   mayWrite(user: User, collection: string, item: string, field: string): Promise<boolean>
   /** A write of this field on this record is refused right now: someone else's live edit lock
@@ -164,12 +166,12 @@ export function registerCoedit(
     if (!watches.has(id) && watches.size >= COEDIT_WATCH_MAX) return
     // A person at a screen only (session, View-as, static token, phone): an API key may narrow
     // what its person reads, so integrations never receive typed text (the field:change rule).
-    if (!SCREEN_BINDS.has(String((socket.data?.nvrBind as { kind?: string } | undefined)?.kind)))
-      return
+    const kind = (socket.data?.nvrBind as { kind?: string } | undefined)?.kind
+    if (!SCREEN_BINDS.has(String(kind))) return
     if (!(await deps.fieldMayTravel(t.collection, t.field))) return
     // Non-readers get nothing — not even a refusal naming the field.
     if (!(await deps.canSeeRecord(user, t.collection, t.item))) return
-    if (!(await deps.mayRead(user, t.collection, t.field))) return
+    if (!(await deps.mayRead(user, t.collection, t.field, kind).catch(() => false))) return
     const write = await deps.mayWrite(user, t.collection, t.item, t.field).catch(() => false)
     const names = coeditRoomNames(t)
     const readRoom = await scope.scopedRoom(names.read)
@@ -422,9 +424,16 @@ export function coeditGates(): Omit<CoeditDeps, 'store' | 'now'> {
       const { canSeeRecordRoom } = await import('./socket-access.js')
       return canSeeRecordRoom(user, collection, item)
     },
-    async mayRead(user, collection, field) {
-      const { mayReadSignalField } = await import('./field-signal-gate.js')
-      return mayReadSignalField(String(user.id), collection, field)
+    async mayRead(user, collection, field, kind) {
+      // The same answer the keystroke relay gives this socket (fix-keystroke): a value field of
+      // the collection, the person's read list, and a sign-in kind that is exactly the person.
+      const { fieldChangeDelivery } = await import('./field-change-relay.js')
+      const { valueTo } = await fieldChangeDelivery(
+        [{ socket: 'coedit', id: String(user.id), kind }],
+        collection,
+        field
+      )
+      return valueTo.length === 1
     },
     async mayWrite(user, collection, item, field) {
       const { getAllowedFields } = await import('./permissions.js')

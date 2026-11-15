@@ -19,6 +19,7 @@ import {
 } from '../services/branch-lanes.js'
 import { chainFields } from '../services/chain-columns.js'
 import { getCollection } from '../services/collections.js'
+import { staleConfigRefusal } from '../services/config-watch.js'
 import { getCumulativeFlow, parseCfdParams } from '../services/cumulative-flow.js'
 import { selectInChunks, whereInList } from '../services/db-batch.js'
 import { editLockVerdictFor } from '../services/edit-lock.js'
@@ -757,6 +758,117 @@ export function ownerInactiveKind(row: {
   if (!isInactivePerson(row)) return null
   if (isRedactedPerson(row)) return 'former'
   return String(row.status ?? '').toLowerCase() === 'suspended' ? 'suspended' : 'former'
+}
+
+/**
+ * The owners a record page names for each record (the header Owners tile and list Owners
+ * columns): the instance the page shows (open first, no branch child), an addendum in flight
+ * answering with the addendum's owners, redacted people as "Former user", and people who can
+ * no longer act marked. Callers judge the records first (readable ids only). Shared by
+ * POST /instance/:collection/owners/batch and the record hover card (rt3 #16) so both say the same.
+ */
+export async function resolvedOwnerNames(collection: string, idList: string[]) {
+  const allInstances = (await db('nivaro_workflow_instances')
+    .where({ collection })
+    .whereIn('item', idList)
+    .select(
+      'id',
+      'collection',
+      'item',
+      'template',
+      'current_state',
+      'completed_at',
+      'started_at'
+    )) as Array<{
+    id: string
+    collection: string
+    item: string
+    template: string
+    current_state: string | null
+    completed_at: Date | null
+    started_at: Date | null
+  }>
+  // ONE instance per record — the one the record page shows
+  // (findRecordInstance: open first, newest start). Several rows for one
+  // record (an old completed run, a restart) used to share a key, so the
+  // last one read won and the header Owners tile could show nobody.
+  const instances = pickInstancePerItem(await excludeBranchChildren(allInstances))
+  const requests = instances
+    .filter((i) => i.current_state)
+    .map((i) => ({
+      key: String(i.item),
+      stateId: i.current_state as string,
+      instanceId: i.id,
+      collection,
+      itemId: String(i.item)
+    }))
+  // Records with an addendum in flight answer with the ADDENDUM's owners —
+  // the people whose approval is pending (pipeline-subject.ts maps the
+  // addendum's rules back onto the parent record).
+  if (collection !== ADDENDUM_COLLECTION) {
+    try {
+      if ((await getCollection(collection))?.addendums_enabled) {
+        const active = await activeAddendumInstances(collection, idList)
+        for (const [item, a] of active) {
+          const idx = requests.findIndex((r) => r.key === item)
+          const req = {
+            key: item,
+            stateId: a.state_id,
+            instanceId: a.instance_id,
+            collection: ADDENDUM_COLLECTION,
+            itemId: a.addendum_id
+          }
+          if (idx >= 0) requests[idx] = req
+          else requests.push(req)
+        }
+      }
+    } catch {
+      /* fall back to the record's own owners */
+    }
+  }
+  const byKey = await resolveStateOwnersBatch(requests)
+  // Who can no longer act, so the header names them as such (army 11 f2:
+  // a suspended owner showed as a bare avatar beside the active one).
+  const ownerIds = [...new Set([...byKey.values()].flat().map((o) => String(o.id)))]
+  const gone = new Map<string, 'suspended' | 'former'>()
+  const redacted = new Set<string>()
+  if (ownerIds.length > 0) {
+    const rows = (await selectInChunks(ownerIds, 500, (chunk) =>
+      db('nivaro_users')
+        .whereIn('id', chunk)
+        .select('id', 'status', 'is_redacted', 'first_name', 'last_name')
+    )) as Array<{
+      id: string
+      status: string | null
+      is_redacted: boolean | number | null
+      first_name: string | null
+      last_name: string | null
+    }>
+    for (const r of rows) {
+      const kind = ownerInactiveKind(r)
+      if (kind) gone.set(String(r.id).toLowerCase(), kind)
+      if (isRedactedPerson(r)) redacted.add(String(r.id).toLowerCase())
+    }
+  }
+  const out: Record<
+    string,
+    Array<{ id: string; name: string; inactive?: 'suspended' | 'former' }>
+  > = {}
+  for (const [k, owners] of byKey)
+    out[k] = owners.map((o) => {
+      const inactive = gone.get(String(o.id).toLowerCase())
+      return {
+        id: o.id,
+        // A redacted account reads "Former user" like everywhere else, never
+        // "Redacted Redacted" (army 11 0.3.95 check).
+        name:
+          redacted.has(String(o.id).toLowerCase()) || isRedactedPerson(o)
+            ? 'Former user'
+            : `${o.first_name ?? ''} ${o.last_name ?? ''}`.trim() || o.email,
+        ...(inactive ? { inactive } : {})
+      }
+    })
+  return out
 }
 
 export async function pipelinesRoutes(app: FastifyInstance) {
@@ -1528,6 +1640,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const body = req.body as Partial<WorkflowTemplate>
     const existing = await db<WorkflowTemplate>('nivaro_workflow_templates').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    // rt4 #14 — a save from an older copy never silently overwrites someone else's newer save.
+    const stale = staleConfigRefusal(req, existing.updated_at)
+    if (stale) return reply.code(409).send(stale)
     await snapshotTemplateVersion(id, req.user?.id, 'before template update')
 
     await db('nivaro_workflow_templates')
@@ -4033,106 +4148,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         (ids ?? []).map(String).filter(Boolean).slice(0, 500)
       )
       if (!idList.length) return reply.send({ data: {} })
-      const allInstances = (await db('nivaro_workflow_instances')
-        .where({ collection })
-        .whereIn('item', idList)
-        .select(
-          'id',
-          'collection',
-          'item',
-          'template',
-          'current_state',
-          'completed_at',
-          'started_at'
-        )) as Array<{
-        id: string
-        collection: string
-        item: string
-        template: string
-        current_state: string | null
-        completed_at: Date | null
-        started_at: Date | null
-      }>
-      // ONE instance per record — the one the record page shows
-      // (findRecordInstance: open first, newest start). Several rows for one
-      // record (an old completed run, a restart) used to share a key, so the
-      // last one read won and the header Owners tile could show nobody.
-      const instances = pickInstancePerItem(await excludeBranchChildren(allInstances))
-      const requests = instances
-        .filter((i) => i.current_state)
-        .map((i) => ({
-          key: String(i.item),
-          stateId: i.current_state as string,
-          instanceId: i.id,
-          collection,
-          itemId: String(i.item)
-        }))
-      // Records with an addendum in flight answer with the ADDENDUM's owners —
-      // the people whose approval is pending (pipeline-subject.ts maps the
-      // addendum's rules back onto the parent record).
-      if (collection !== ADDENDUM_COLLECTION) {
-        try {
-          if ((await getCollection(collection))?.addendums_enabled) {
-            const active = await activeAddendumInstances(collection, idList)
-            for (const [item, a] of active) {
-              const idx = requests.findIndex((r) => r.key === item)
-              const req = {
-                key: item,
-                stateId: a.state_id,
-                instanceId: a.instance_id,
-                collection: ADDENDUM_COLLECTION,
-                itemId: a.addendum_id
-              }
-              if (idx >= 0) requests[idx] = req
-              else requests.push(req)
-            }
-          }
-        } catch {
-          /* fall back to the record's own owners */
-        }
-      }
-      const byKey = await resolveStateOwnersBatch(requests)
-      // Who can no longer act, so the header names them as such (army 11 f2:
-      // a suspended owner showed as a bare avatar beside the active one).
-      const ownerIds = [...new Set([...byKey.values()].flat().map((o) => String(o.id)))]
-      const gone = new Map<string, 'suspended' | 'former'>()
-      const redacted = new Set<string>()
-      if (ownerIds.length > 0) {
-        const rows = (await selectInChunks(ownerIds, 500, (chunk) =>
-          db('nivaro_users')
-            .whereIn('id', chunk)
-            .select('id', 'status', 'is_redacted', 'first_name', 'last_name')
-        )) as Array<{
-          id: string
-          status: string | null
-          is_redacted: boolean | number | null
-          first_name: string | null
-          last_name: string | null
-        }>
-        for (const r of rows) {
-          const kind = ownerInactiveKind(r)
-          if (kind) gone.set(String(r.id).toLowerCase(), kind)
-          if (isRedactedPerson(r)) redacted.add(String(r.id).toLowerCase())
-        }
-      }
-      const out: Record<
-        string,
-        Array<{ id: string; name: string; inactive?: 'suspended' | 'former' }>
-      > = {}
-      for (const [k, owners] of byKey)
-        out[k] = owners.map((o) => {
-          const inactive = gone.get(String(o.id).toLowerCase())
-          return {
-            id: o.id,
-            // A redacted account reads "Former user" like everywhere else, never
-            // "Redacted Redacted" (army 11 0.3.95 check).
-            name:
-              redacted.has(String(o.id).toLowerCase()) || isRedactedPerson(o)
-                ? 'Former user'
-                : `${o.first_name ?? ''} ${o.last_name ?? ''}`.trim() || o.email,
-            ...(inactive ? { inactive } : {})
-          }
-        })
+      const out = await resolvedOwnerNames(collection, idList)
       return reply.send({ data: out })
     }
   )

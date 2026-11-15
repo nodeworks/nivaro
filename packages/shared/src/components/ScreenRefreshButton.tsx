@@ -1,6 +1,7 @@
 import { QueryClientContext } from '@tanstack/react-query'
 import { Check, RotateCw } from 'lucide-react'
 import { useContext, useEffect } from 'react'
+import { useLivePreference } from '../lib/live-preference'
 import {
   refreshScreenData,
   registerPageRefreshButton,
@@ -10,6 +11,7 @@ import {
   useScreenRefreshState
 } from '../lib/screen-refresh'
 import { cn } from '../lib/utils'
+import { LiveOffNote } from './LiveOffNote'
 
 /**
  * The small ↻ that refreshes this screen's data in place (realtime idea 12) — never the page.
@@ -42,14 +44,19 @@ export function ScreenRefreshButton({
   const pageHasOne = usePageRefreshButtonShown()
   const { phase } = useScreenRefreshState()
   const running = phase === 'running'
+  // Live updates Off (Profile → Display): the ↻ is how this person sees others' changes, so a
+  // small note says so beside it (a corner dot on the narrow rail).
+  const { off: liveOff } = useLivePreference()
   const label =
-    phase === 'running'
-      ? 'Refreshing this page’s data…'
-      : phase === 'partial'
-        ? 'Some parts of this page did not refresh. Refresh again'
-        : 'Refresh this page’s data (keeps your edits and place)'
+    liveOff && phase !== 'running' && phase !== 'partial'
+      ? 'Live updates are off. Refresh this page’s data (keeps your edits and place)'
+      : phase === 'running'
+        ? 'Refreshing this page’s data…'
+        : phase === 'partial'
+          ? 'Some parts of this page did not refresh. Refresh again'
+          : 'Refresh this page’s data (keeps your edits and place)'
   if (!pageOwn && pageHasOne) return null
-  return (
+  const button = (
     <button
       type='button'
       aria-label={label}
@@ -92,6 +99,14 @@ export function ScreenRefreshButton({
           className='absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-500 dark:bg-amber-400'
         />
       )}
+      {variant === 'rail' && <LiveOffNote variant='dot' />}
     </button>
+  )
+  if (!liveOff || variant === 'rail') return button
+  return (
+    <span className='inline-flex items-center gap-1.5'>
+      <LiveOffNote variant={variant === 'bar' ? 'bar' : 'header'} />
+      {button}
+    </span>
   )
 }

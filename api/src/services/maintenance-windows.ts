@@ -74,7 +74,8 @@ export async function liftMaintenance(settingsId: number): Promise<void> {
 export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<void> {
   // #2835 — the application clock (a clock-skew drill moves it on one replica).
   const now = appDate()
-  const { bustMaintenanceCache } = await import('./security.js')
+  // rt4 #13: maintenanceWritten = bust + tell open tabs once the new state reads back.
+  const { maintenanceWritten } = await import('./security.js')
 
   const due = (await db('nivaro_maintenance_windows')
     .where('status', 'scheduled')
@@ -120,7 +121,7 @@ export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<voi
     await db('nivaro_maintenance_windows')
       .where({ id: w.id })
       .update({ status: 'active', activated_at: now })
-    bustMaintenanceCache()
+    maintenanceWritten()
     app.log.warn(`Maintenance window "${w.title}" started — maintenance mode ON`)
   }
 
@@ -136,7 +137,7 @@ export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<voi
       .orderBy('id', 'asc')
       .first('id')
       .then((row) => (row ? liftMaintenance(row.id) : null))
-    bustMaintenanceCache()
+    maintenanceWritten()
     await db('nivaro_maintenance_windows')
       .where({ id: w.id })
       .update({ status: 'completed', completed_at: now })

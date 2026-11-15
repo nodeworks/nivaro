@@ -12,8 +12,10 @@ import {
   setItemKey,
   setValueLike
 } from '../../lib/field-merge'
+import { liveMotionAllowed } from '../../lib/live-preference'
 import { htmlToText } from '../../lib/sanitize-html'
 import { choiceLabel, cn, formatRelative } from '../../lib/utils'
+import { RelativeTime } from '../RelativeTime'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import type { RemoteFieldChange } from './FieldAffordances'
 import { parseJson } from './helpers'
@@ -71,13 +73,8 @@ function useShown(field: CMSField | null, relatedCollection: string | null, valu
   }
 }
 
-const reducedMotion = () => {
-  try {
-    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-  } catch {
-    return false
-  }
-}
+/** No fade: reduced motion, or live updates set to Calm/Off (lib/live-preference.ts). */
+const reducedMotion = () => !liveMotionAllowed()
 
 /** The quiet fade on a field whose value just changed under the person (never with reduced motion). */
 export function fadeChangedField(el: HTMLElement | null | undefined): void {
@@ -197,7 +194,10 @@ export function RemoteConflictNotice({
           >
             {shown(change.theirs)}
           </span>
-          <span className='text-slate-500 dark:text-slate-400'> · {formatRelative(change.at)}</span>
+          <span className='text-slate-500 dark:text-slate-400'>
+            {' '}
+            · <RelativeTime value={change.at} />
+          </span>
         </span>
         <span className='flex shrink-0 items-center gap-0.5'>
           {!locked && (
@@ -569,7 +569,7 @@ export function RemoteChangesButton({
                     {labelOf(e.field)}
                   </button>
                   <span className='shrink-0 text-[10.5px] text-slate-400'>
-                    {e.by ?? 'Someone'} · {formatRelative(e.at)}
+                    {e.by ?? 'Someone'} · <RelativeTime value={e.at} />
                   </span>
                 </div>
                 <p className='mt-0.5 break-words text-slate-500 dark:text-slate-400'>

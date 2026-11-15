@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { PEOPLE_LIST_KEYS, PERSON_KEYS, peopleQueryMatches } from './user-sync'
+import { MINE_KEYS, PEOPLE_LIST_KEYS, PERSON_KEYS, peopleQueryMatches } from './user-sync'
+
+describe('mine:changed → which queries refetch (rt4 #20)', () => {
+  it('each kind names the lists that show it', () => {
+    expect(MINE_KEYS['saved-views']).toContainEqual(['cbv-views'])
+    expect(MINE_KEYS['saved-searches']).toContainEqual(['global-search-saved'])
+    expect(MINE_KEYS.overview).toContainEqual(['overview', 'prefs'])
+  })
+  it('an unknown kind refetches nothing', () => {
+    expect(MINE_KEYS.nope).toBeUndefined()
+  })
+})
 
 describe('people:changed → which queries refetch', () => {
   it('people lists always refetch', () => {

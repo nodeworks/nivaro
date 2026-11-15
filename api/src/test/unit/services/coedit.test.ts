@@ -1,4 +1,13 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('../../../services/field-change-relay.js', () => ({
+  // The keystroke relay's per-socket answer: only a session socket gets the value here.
+  fieldChangeDelivery: vi.fn(async (viewers: Array<{ socket: string; kind?: string }>) => ({
+    valueTo: viewers.filter((v) => v.kind === 'session').map((v) => v.socket),
+    nameTo: viewers.filter((v) => v.kind !== 'session').map((v) => v.socket)
+  }))
+}))
+
 import {
   COEDIT_MAX_SESSION_BYTES,
   COEDIT_MAX_STEP_BYTES,
@@ -11,6 +20,7 @@ import {
 } from '../../../services/coedit.js'
 import {
   type CoeditDeps,
+  coeditGates,
   parseCoeditRoom,
   registerCoedit
 } from '../../../services/coedit-socket.js'
@@ -243,6 +253,25 @@ describe('coedit socket — who may join and type', () => {
     expect(out.got).toEqual([])
   })
 
+  it('asks the keystroke relay rule with the socket sign-in kind (never looser)', async () => {
+    const io = fakeIo()
+    const kinds: Array<string | undefined> = []
+    const inner = deps.mayRead
+    deps.mayRead = async (u, c, f, kind) => {
+      kinds.push(kind)
+      return inner(u, c, f, kind)
+    }
+    const ana = connect(io, 's-ana', user('ana', 'Ana'), 'masq')
+    await ana.call('coedit:watch', target)
+    expect(kinds).toEqual(['masq'])
+    // The relay refusing the value (e.g. a to-many alias, encrypted field): nothing joined.
+    deps.mayRead = async () => false
+    const ben = connect(io, 's-ben', user('ben', 'Ben'))
+    await ben.call('coedit:watch', target)
+    expect(ben.rooms.size).toBe(1)
+    expect(ben.got).toEqual([])
+  })
+
   it('API keys and fields whose text never travels join nothing', async () => {
     const io = fakeIo()
     const key = connect(io, 's-key', user('ana', 'Ana'), 'apikey')
@@ -424,5 +453,15 @@ describe('coedit socket — who may join and type', () => {
     // Nothing stored; as the only writer, leaving ends the session; told it may no longer type.
     expect((await deps.store.read('nvr:coedit:{-|orders|7|notes}'))?.version ?? 0).toBe(0)
     expect(ana.got.at(-1)).toMatchObject({ event: 'coedit:state', payload: { write: false } })
+  })
+})
+
+describe('coedit read gate = the keystroke relay answer (fix-keystroke)', () => {
+  it('reads come from fieldChangeDelivery with the socket kind', async () => {
+    const gates = coeditGates()
+    const ana = user('ana', 'Ana')
+    expect(await gates.mayRead(ana, 'orders', 'notes', 'session')).toBe(true)
+    expect(await gates.mayRead(ana, 'orders', 'notes', 'apikey')).toBe(false)
+    expect(await gates.mayRead(ana, 'orders', 'notes', undefined)).toBe(false)
   })
 })

@@ -1,6 +1,7 @@
 import { createNivaro } from '@nivaro/sdk'
 import {
   ItemEditAuthContext,
+  ListViewers,
   NavigationContext,
   NivaroProvider,
   type QueueRealtimeAdapter,
@@ -100,6 +101,9 @@ export function QueueDetailPage() {
                   </p>
                 )}
               </div>
+              {/* Who else has this queue open — administrators only; in the header so it
+                  never reflows the worklist toolbar. */}
+              <ListViewers kind='queue' id={id} variant='header' className='ml-auto' />
               {mySub ? (
                 <button
                   type='button'
@@ -132,6 +136,7 @@ export function QueueDetailPage() {
 
             <QueueWorklist
               queueId={id!}
+              viewersInHeader
               realtime={realtime}
               onAsk={(q) => {
                 try {

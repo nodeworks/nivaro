@@ -46,13 +46,15 @@ import type React from 'react'
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
-import { useNavigation, useNivaroClient } from '../../context'
+import { ItemEditAuthContext, useNavigation, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { describeTransition, sentenceLabelsFromFields } from '../../lib/config-sentences'
+import { useConfigWatch } from '../../lib/config-watch'
 import { toastError } from '../../lib/error-toast'
 import { queryKeys } from '../../lib/query-keys'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ExplainCard } from '../ai/ExplainButton'
+import { ConfigChangeStrip } from '../ConfigChangeStrip'
 import { ConfigHistoryButton } from '../ConfigHistory'
 import { ConfigReadBack } from '../ConfigReadBack'
 import { PipelineCumulativeFlowCard } from '../charts/CumulativeFlowChart'
@@ -3036,6 +3038,21 @@ export function PipelineEditorView({
     queryClient.invalidateQueries({ queryKey: ['pipeline-all-owner-groups', templateId] })
   }
 
+  // rt4 #14 — another administrator changed this pipeline (a state, a transition, the owner
+  // matrix …): a quiet line under the header; Show re-reads it. Open edit forms keep what the
+  // person typed (each holds its own copy), and nothing re-reads by itself.
+  const editAuth = useContext(ItemEditAuthContext)
+  const { change: liveChange, clear: clearLiveChange } = useConfigWatch('pipeline', templateId, {
+    meId: editAuth.userId || null
+  })
+  const pipelineDirty =
+    editingName ||
+    addingState ||
+    !!editingState ||
+    addingTransition ||
+    !!addingRouteTo ||
+    !!editingRoute
+
   // ─── Template mutations ─────────────────────────────────────────────────
 
   const updateTemplate = useMutation({
@@ -3542,6 +3559,19 @@ export function PipelineEditorView({
             )}
           </div>
         </div>
+        {liveChange && (
+          <ConfigChangeStrip
+            className='-mx-8 -mb-5 mt-4 border-b-0 border-t'
+            change={liveChange}
+            dirty={pipelineDirty}
+            onShow={() => {
+              clearLiveChange()
+              invalidate()
+              queryClient.invalidateQueries({ queryKey: ['pipeline-versions', templateId] })
+            }}
+            onDismiss={clearLiveChange}
+          />
+        )}
       </div>
 
       <div className='p-6 lg:p-8 space-y-6'>

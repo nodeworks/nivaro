@@ -74,7 +74,8 @@ import {
   markDraftCreated,
   prefillSignature,
   type StoredDraft,
-  saveDraft
+  saveDraft,
+  thisDraftDevice
 } from '../lib/draft-store'
 import { editLockLockedFields } from '../lib/edit-lock-fields'
 import { entryConfigOf } from '../lib/entry-config'
@@ -111,6 +112,11 @@ import { currentViewport, quietHiddenSectionsOf } from '../lib/layout-resolve'
 import { extSlotKey } from '../lib/layout-slots'
 import { useLeaveLinkGuard } from '../lib/leave-guard'
 import { LineLockContext } from '../lib/line-locks'
+import {
+  type LinkedTarget,
+  linkedChangeSentence,
+  useLinkedRecordWatch
+} from '../lib/linked-changes'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useShownRecords } from '../lib/missed-updates'
 import { requestMoveState } from '../lib/move-state'
@@ -137,6 +143,7 @@ import { announceRecordTabs } from '../lib/record-tabs'
 import { invalidateRecordTasks } from '../lib/record-tasks'
 import { reimportAllowed } from '../lib/reimport-visibility'
 import { reportCodeError, userErrorMessage } from '../lib/safe-error'
+import { currentRecordTab } from '../lib/send-view'
 import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
 import { stagedRowLabel } from '../lib/staged-row-labels'
 import {
@@ -301,6 +308,7 @@ import {
   parseRollupParentFilter,
   parseRollupSources
 } from './item-edit/live-rollups'
+import { headingLinksKey, LiveTitleText, useLiveHeadingFill } from './item-edit/live-title'
 import { HiddenByRulesNote, refineLockReasons, useLockWhy } from './item-edit/lock-why'
 import { m2aWriteMeta, parseM2aToken, resolveM2MRelatedCollection } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
@@ -386,6 +394,7 @@ import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordGraphSheet } from './RecordGraph'
 import { type ReadViewLayout, RecordReadView } from './RecordReadView'
 import { ScreenRefreshButton } from './ScreenRefreshButton'
+import { SendViewButton } from './send-view/SendViewButton'
 import { SuggestFormChange } from './support/SuggestFormChange'
 import { SupportRequestDialog } from './support/SupportRequestDialog'
 
@@ -426,6 +435,7 @@ import {
 } from './layout-editor/summary-pref'
 import {
   AccessDeniedPanel,
+  AccessGrantedNote,
   AddendumPanel,
   CommentPanel,
   CustomActionButtons,
@@ -442,6 +452,7 @@ import {
   RelatedRecordsPanel,
   RevisionsPanel,
   TaskPanel,
+  useAccessRegained,
   useExternalRequestsShown,
   useItemLock,
   WhyDeniedButton,
@@ -2412,7 +2423,13 @@ function ItemEditFormView({
   // fields come in one small read of their own (Rob 2026-11-13: "Categories (no number)").
   const headingPaths = templateRelationPaths(colMeta?.display_template)
   const { data: headingLinked } = useQuery<Record<string, unknown> | null>({
-    queryKey: ['item-heading-links', collection, itemId, headingPaths.join(',')],
+    // rt3 #15 — keyed by the link ids too: a changed link names its new record at once.
+    queryKey: headingLinksKey(
+      collection,
+      String(itemId),
+      headingPaths,
+      itemData as Record<string, unknown> | undefined
+    ),
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown> }>(
@@ -2427,6 +2444,14 @@ function ItemEditFormView({
   const headingRow = withLinkedFields(
     itemData as Record<string, unknown> | undefined,
     headingLinked
+  )
+  // rt3 #15 — a number a partner / procedure fills in right after this person's own save.
+  useLiveHeadingFill(
+    collection,
+    isNew ? null : String(itemId),
+    colMeta?.display_template,
+    itemData as Record<string, unknown> | undefined,
+    !isNew && !recordGone && !designOn
   )
   // #3229 — the form's own shape for its loading placeholder, from the layout alone (it
   // resolves before the record, or a hover prefetch already put it in the cache).
@@ -2447,6 +2472,13 @@ function ItemEditFormView({
       (itemLoadError as { response?: { status?: number } })?.response?.status
     return status === 403 || status === 404
   })()
+  // rt4 #11: refused, then readable on this same page (an access request granted while it
+  // stayed open — access:changed refetched the record): the form appears with one quiet line.
+  const accessRegained = useAccessRegained(
+    itemLoadDenied && !fetchedItemData,
+    !!fetchedItemData && !itemLoadError,
+    `${collection}:${String(itemId ?? '')}`
+  )
   // The record read said 403/404 and nothing is showing: every read about the
   // record itself (lines, links, lock, addendums, paths, checks, previews)
   // would answer the same refusal — they stay off (army 9 b14: a missing
@@ -4135,11 +4167,22 @@ function ItemEditFormView({
     const serverKey = isNew ? 'new' : String(itemId)
     const serverDraft = authUserId
       ? client
-          .request<{ data: { payload: StoredDraft; saved_at: string } }>(
-            get(`/drafts/${collection}/${serverKey}`)
-          )
-          .then((r) =>
-            r?.data?.payload && typeof r.data.payload === 'object' ? r.data.payload : null
+          .request<{
+            data: {
+              payload: StoredDraft
+              saved_at: string
+              device?: StoredDraft['device']
+              dropped_fields?: number
+            }
+          }>(get(`/drafts/${collection}/${serverKey}`))
+          .then((r): StoredDraft | null =>
+            r?.data?.payload && typeof r.data.payload === 'object'
+              ? {
+                  ...r.data.payload,
+                  device: r.data.device ?? r.data.payload.device ?? null,
+                  ...(r.data.dropped_fields ? { dropped_fields: r.data.dropped_fields } : {})
+                }
+              : null
           )
           .catch(() => null)
       : Promise.resolve(null)
@@ -4297,7 +4340,8 @@ function ItemEditFormView({
           pending_deletes: obj(pendingO2MDeletes, (d) => [...d]) as StoredDraft['pending_deletes'],
           m2m_links: obj(m2mLinks, (l) => [...l]) as StoredDraft['m2m_links'],
           m2m_unlinks: obj(m2mUnlinks, (u) => [...u]) as StoredDraft['m2m_unlinks'],
-          ...(isNew ? { prefill_sig: prefillSig } : {})
+          ...(isNew ? { prefill_sig: prefillSig } : {}),
+          device: thisDraftDevice()
         },
         lastPersistedDraftRef.current
       )
@@ -4321,7 +4365,8 @@ function ItemEditFormView({
             .request(
               put(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`, {
                 payload: stored,
-                saved_at: stored.saved_at
+                saved_at: stored.saved_at,
+                device: stored.device ?? null
               })
             )
             .then(
@@ -10749,8 +10794,15 @@ function ItemEditFormView({
         void settleRecordOutbox(collection, id, settled)
         releaseOutboxClaim()
         // A popped-out window (or another tab) showing this record refreshes:
-        // the socket skips writes by the viewer themselves (#2131).
-        announceRecordTabs(authUserId, 'saved', collection, id)
+        // the socket skips writes by the viewer themselves (#2131). rt5 #6: the field
+        // names this save carried, so that window fades exactly those.
+        announceRecordTabs(
+          authUserId,
+          'saved',
+          collection,
+          id,
+          Object.keys(lastSavePayloadRef.current)
+        )
       }
       void qc.invalidateQueries({ queryKey: ['collision-base', collection] })
       // A refused line keeps its staged edit: the form stays dirty (and its
@@ -11660,7 +11712,12 @@ function ItemEditFormView({
   }
   // Likely duplicates of a new record's label fields (Rob 2026-11-13): an inline
   // notice under the field, never a block here (the server refuses where configured).
-  const duplicateHints = useDuplicateCheck({ collection, enabled: isNew && !designOn, draft })
+  const duplicateHints = useDuplicateCheck({
+    collection,
+    enabled: isNew && !designOn,
+    draft,
+    stagedLines: pendingO2MRows
+  })
   // Idea 43: "Needed by <partner>" badges, judged on the values the form holds now.
   const partnerNeeds = usePartnerNeedsForm({
     collection,
@@ -11668,7 +11725,42 @@ function ItemEditFormView({
     enabled: colMeta?.browser_config?.partner_badges === true && !designOn,
     draft
   })
+  // rt4 #6 — the records this form links to (its pickers' values). A change to one while the
+  // form is open re-asks the picker's "still an available option" read and the fill-when-empty
+  // field rules, as the viewer; where the value is now flagged, the line under it says why.
+  const linkedTargetsRaw: LinkedTarget[] = []
+  {
+    const m2o = new Map<string, string>()
+    for (const r of relations)
+      if (r.many_collection === collection && !r.junction_field && r.many_field && r.one_collection)
+        m2o.set(r.many_field, r.one_collection)
+    for (const f of fieldConfig ?? []) {
+      const target = m2o.get(f.field)
+      const v = draft[f.field]
+      if (target && v != null && v !== '' && typeof v !== 'object')
+        linkedTargetsRaw.push({ field: f.field, collection: target, id: String(v) })
+    }
+  }
+  const linkedSig = linkedTargetsRaw.map((t) => `${t.field}=${t.collection}:${t.id}`).join('|')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: linkedSig is the content key
+  const linkedTargets = useMemo(() => linkedTargetsRaw, [linkedSig])
+  const linkedWatch = useLinkedRecordWatch({
+    targets: linkedTargets,
+    enabled: !designOn && linkedTargets.length > 0,
+    labels: (f) => {
+      const fc = (fieldConfig ?? []).find((x) => x.field === f)
+      return (fc && placementFieldText(fc, placementTextCtx).label) || fc?.label || titleCase(f)
+    },
+    onRecheck: (fields) => {
+      for (const f of fields) rederiveRef.current(f, draftRef.current[f])
+    }
+  })
+  const linkedChanges: Record<string, string> = {}
+  for (const [f, entry] of Object.entries(linkedWatch))
+    if (staleFields.has(f))
+      linkedChanges[f] = linkedChangeSentence(entry.label, entry.change, Date.now(), entry.shown)
   const fieldAffordancesRaw = {
+    linkedChanges,
     remoteChanges,
     dismissRemoteChange: (field: string) => {
       // Keep mine on a conflict is a decision: the save's mid-air check does not ask
@@ -13870,7 +13962,11 @@ function ItemEditFormView({
                                       >
                                         <div className='group/title flex items-center gap-1.5'>
                                           <h1 className='truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
-                                            {isNew ? `New ${singularTitle}` : itemTitle}
+                                            {isNew ? (
+                                              `New ${singularTitle}`
+                                            ) : (
+                                              <LiveTitleText text={itemTitle} />
+                                            )}
                                           </h1>
                                           {!isNew &&
                                             itemTitle &&
@@ -14302,6 +14398,18 @@ function ItemEditFormView({
                                                 compact
                                                 collection={collection}
                                                 itemId={String(itemId)}
+                                              />
+                                              <SendViewButton
+                                                compact
+                                                getView={() => ({
+                                                  kind: 'record',
+                                                  collection,
+                                                  item: String(itemId),
+                                                  tab: currentRecordTab()
+                                                })}
+                                                describe={() =>
+                                                  `This ${singularTitle.toLowerCase()}`
+                                                }
                                               />
                                               <RecordInsightsButton
                                                 compact
@@ -16461,6 +16569,12 @@ function ItemEditFormView({
                                           dirty={isDirty}
                                           loadDenied={itemLoadDenied}
                                           onGoneChange={setRecordGone}
+                                        />
+                                      )}
+                                      {accessRegained && !isNew && itemId != null && (
+                                        <AccessGrantedNote
+                                          collection={collection}
+                                          itemId={String(itemId)}
                                         />
                                       )}
                                       {staleBy && staleMode !== 'auto-refresh' && (

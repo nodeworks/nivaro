@@ -5,7 +5,9 @@ import { toast } from 'sonner'
 import { useApiFetchConfig, useItemEditAuth, useNivaroClient } from '../../context'
 import { get, patch, post } from '../../lib/commands'
 import { startFileUpload } from '../../lib/upload-file'
+import type { PresenceState } from '../../lib/use-online-users'
 import { cn } from '../../lib/utils'
+import { PresenceDot } from '../PresenceDot'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
   type ChatMessage,
@@ -241,18 +243,17 @@ export const ChatComposer = forwardRef<
       if (matches(name) || (u.email ?? '').toLowerCase().startsWith(q))
         push({ user_id: u.id, display_name: name, sub: null, kind: 'person' })
     }
-    // People who can answer now come first (#2405): online, then idle, then the rest.
-    // Array.prototype.sort is stable, so the existing ranking holds within each tier.
-    const tier = (c: Candidate) => {
-      if (c.kind !== 'person') return -1
-      const u = (cfg.onlineUsers as ChatOnlineUser[]).find(
-        (o) => String(o.user_id).toUpperCase() === c.user_id.toUpperCase()
-      )
-      return u ? (u.is_idle ? 1 : 0) : 2
-    }
-    const ranked = out.map((c, i) => ({ c, i, t: tier(c) })).sort((a, b) => a.t - b.t || a.i - b.i)
-    return ranked.map((r) => r.c).slice(0, 8)
+    // Order is the ranking above; presence shows as a dot only (rt4 #22).
+    return out.slice(0, 8)
   }, [mentionQuery, info, dmPeers, cfg.onlineUsers, searched, botName, isChannel, canBroadcast, me])
+  // The dot beside a person in the @ list (rt4 #22) — read from the same presence list the
+  // chat already holds, so it follows the viewer's own visibility rules.
+  const presenceOf = (id: string): PresenceState | undefined => {
+    const u = (cfg.onlineUsers as ChatOnlineUser[]).find(
+      (o) => String(o.user_id).toUpperCase() === id.toUpperCase()
+    )
+    return u ? (u.is_idle ? 'idle' : 'online') : undefined
+  }
 
   // ── # record picker (#934) ────────────────────────────────────────────────
   const { data: roomTypes } = useQuery(chatRoomTypesQuery(client))
@@ -738,6 +739,7 @@ export const ChatComposer = forwardRef<
                       @
                     </span>
                   )}
+                  {c.kind === 'person' && <PresenceDot state={presenceOf(c.user_id)} />}
                   <span className='min-w-0 flex-1 truncate'>
                     {c.kind === 'here' || c.kind === 'channel'
                       ? `@${c.display_name}`

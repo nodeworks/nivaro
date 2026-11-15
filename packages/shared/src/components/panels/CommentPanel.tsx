@@ -20,12 +20,14 @@ import { stripCommentImages } from '../../lib/comment-images'
 import { usePresenceOnlinePoll } from '../../lib/presence-live'
 import { signalSentence, useDraftTypingSignal, useNoteTypists } from '../../lib/presence-signals'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
+import { type SeenEntry, useNewSince } from '../../lib/seen-since'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import { formatDateTime, formatRelative, titleCase } from '../../lib/utils'
 import { AgentBadge } from '../AgentBadge'
 import { AutolinkedText } from '../AutolinkedText'
 import { InboundRequestPopover } from '../integrations/InboundRequest'
 import { useFieldComments } from '../item-edit/field-comments-context'
+import { RelativeTime } from '../RelativeTime'
 import { UserAvatar } from '../UserAvatar'
 import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Button } from '../ui/button'
@@ -33,6 +35,7 @@ import { Separator } from '../ui/separator'
 import { Textarea } from '../ui/textarea'
 import { CommentBody, CommentImageStrip, imageDropProps, useCommentImages } from './CommentImages'
 import { RecordEventPathSheet } from './IntegrationActivitySection'
+import { NewSinceChip } from './NewSinceChip'
 
 interface Comment {
   id: string
@@ -205,7 +208,7 @@ export function MentionTextarea({
     enabled: !!mention && debouncedQuery.length >= 2,
     staleTime: 30_000
   })
-  // Online people first (#2405). Same query key + shape as the chat panel's
+  // The online dot (#2405, rt4 #22). Same query key + shape as the chat panel's
   // presence read, so the two share one cache entry.
   const presencePoll = usePresenceOnlinePoll(15_000, !!mention)
   const { data: presence } = useQuery({
@@ -222,7 +225,9 @@ export function MentionTextarea({
     const p = presence?.data?.find((r) => String(r.user_id).toUpperCase() === id.toUpperCase())
     return !p ? 2 : p.is_idle || p.away ? 1 : 0
   }
-  const users = [...fetchedUsers].sort((a, b) => onlineState(a.id) - onlineState(b.id))
+  // A dot only (rt4 #22): the list keeps the server's order — people never jump about as
+  // others come and go.
+  const users = fetchedUsers
   // Role mentions (#441): "@finance-approvers" fans server-side to every
   // member of the role. /chat/roles is the non-admin-readable role list.
   const { data: allRoles = [] } = useQuery<Array<{ id: string; name: string }>>({
@@ -678,7 +683,7 @@ function RecordedNote({
               <span className='truncate text-[11px] text-slate-400'>{note.context}</span>
             ))}
           <span className='text-[11px] text-slate-400' data-tip={formatDateTime(note.created_at)}>
-            {formatRelative(note.created_at)}
+            <RelativeTime value={note.created_at} />
           </span>
           {note.source === 'inbound' && note.inbound && (
             <InboundRequestPopover
@@ -912,6 +917,20 @@ export function CommentPanel({
     return c
   }, [threadEntries])
   const badgeCount = isNew ? (queuedComments ?? []).length : kindCounts.people
+  // "2 new" while folded shut: comments others wrote since you last had it open.
+  const commentsSeen = useMemo<SeenEntry[]>(
+    () => (data ?? []).map((c) => ({ at: c.created_at, by: c.user?.id ?? null })),
+    [data]
+  )
+  const newComments = useNewSince({
+    userId,
+    collection,
+    item,
+    tab: 'comments',
+    open: expanded,
+    entries: commentsSeen,
+    ready: !isNew && !!data
+  })
   const visibleEntries = useMemo(() => {
     const q = noteQuery.trim().toLowerCase()
     return threadEntries.filter((e) => {
@@ -1034,6 +1053,7 @@ export function CommentPanel({
               {badgeCount}
             </span>
           )}
+          <NewSinceChip count={newComments} tab='comments' />
           <ChevronDown
             className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
           />
@@ -1272,7 +1292,7 @@ export function CommentPanel({
                               className='text-[11px] text-slate-400'
                               data-tip={formatDateTime(c.created_at)}
                             >
-                              {formatRelative(c.created_at)}
+                              <RelativeTime value={c.created_at} />
                             </span>
                             {c.updated_at && c.updated_at !== c.created_at && (
                               <span className='text-[10px] text-slate-300'>(edited)</span>

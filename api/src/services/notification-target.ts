@@ -185,10 +185,12 @@ export async function resolveTargetUrl(
       case 'approval':
         if (spec.collection && spec.id != null)
           return withFocus(await recordLink(spec.collection, spec.id, opts))
+        // A collection list keeps its query: `ids=1,2,3` (a bulk-change notice), a view digest,
+        // a sent view's `lv=` settings.
         if (spec.collection)
-          return (
+          return withFocus(
             `${await linkTo('home', {}, opts)}`.replace(/\/$/, '') +
-            `/collections/${spec.collection}`
+              `/collections/${spec.collection}`
           )
         return spec.kind === 'approval' ? linkTo('approvals', {}, opts) : null
       // An integration obligation is USUALLY about a record — the same URL
@@ -213,7 +215,7 @@ export async function resolveTargetUrl(
       case 'chat':
         return spec.room ? linkTo('chat', { room: spec.room }, opts) : null
       case 'queue':
-        return spec.id != null ? linkTo('queue', { id: spec.id }, opts) : null
+        return spec.id != null ? withFocus(await linkTo('queue', { id: spec.id }, opts)) : null
       case 'report':
         return spec.id != null ? linkTo('report', { id: spec.id }, opts) : null
       case 'alerts':

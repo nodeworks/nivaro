@@ -219,6 +219,30 @@ useQuery({
       type: 'note',
       text: 'New notices on `collection:update`: `$sla` (an SLA clock passed its warning or breach line) and `$related` (a child row of the record changed; one per parent per 0.8 s). List pages ignore both for their rows. SLA answers (`GET /sla/status/:collection/:item`, `POST /sla/status/batch`, queue rows, My Work) now carry `warning_at` and `due_at` (queue rows: `sla_warning_at`, `sla_due_at`). A `record:signal` of kind `note` may carry `field`.'
     },
+    { type: 'h3', id: 'live-records-access', text: 'Access, maintenance and search' },
+    {
+      type: 'ul',
+      items: [
+        'A record or list that said "You can\'t view this" opens by itself when an administrator grants the access request while it is still on screen. The content appears with one quiet line, "Access granted by Beth" (who decided comes from `GET /api/access-requests/mine`, the person\'s own request only). Nothing pops up.',
+        'The Request access page a new person waits on (efp-new) opens the portal by itself the moment an administrator approves them. The approval reaches their own socket as `access:changed`; the page still checks every minute while the connection is down.',
+        'The full maintenance page returns to the app by itself when maintenance ends — switched off by an administrator, a scheduled window closing, or a rebuild job deleting its Redis flag. The server notices the change (within a few seconds for the Redis flag) and sends `announcements:changed`; each tab re-reads `/announcements/active` as itself. The 30-second check stays as the fallback. The maintenance strip administrators see goes away the same way.',
+        'A record saved a moment ago is found by search on the next look. The server keeps a search answer for 20 seconds only until any collection it searched is written, here or on another server; where SQL Server full-text indexes are in use, the newest 200 rows of a collection are also matched by plain text until the index catches up.'
+      ]
+    },
+    { type: 'h3', id: 'live-records-round5', text: 'Two tabs, record chat, covering and compare' },
+    {
+      type: 'ul',
+      items: [
+        'The same record open in two of your tabs stays in step. When you save in one, the other shows the saved values at once (a short fade on the fields that save changed). While the other tab holds unsaved changes, this one says so in one quiet line — "Also open in another tab — editing there" — with a link to switch to it. If both tabs hold unsaved changes, both say so; save one first, and the other then asks about any field changed in both, the same way it does for someone else’s save.',
+        'The chat button in a record’s header shows how many messages in the record’s room you have not read, and the count moves as messages arrive or as you read the room anywhere — no reload. Only people who may see the room get a count.',
+        'When someone who named you their delegate is out, My Work (and Your work on the home page) says "You’re covering for Jane Smith today — 4 of Jane’s records need you". Show them narrows the waiting list to those records. The count drops as records are handled, and the line goes away when the cover ends or Jane is back. Records you own yourself are not counted — they would need you anyway.',
+        'Compare (two or three records side by side, from a list’s selection) stays live: a save to either record re-reads it as you, the changed values fade in place, and the difference count follows. With Differences only on, a row already shown stays put even when the values become the same, so nothing jumps under you.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Socket notice `record:chat {collection, item}` goes to the record room when a message lands in that record’s chat room (ids only); pages re-read `GET /api/chat/record-room` as the viewer. `GET /api/my-work/covering` answers `{covering: [{user_id, name, first_name, ends_at, records, keys}]}` for the signed-in person — one quick read when they cover nobody. The tab channel’s `saved` note carries field names only, never values.'
+    },
     { type: 'h3', id: 'live-ops-pages', text: 'Live operations pages' },
     {
       type: 'p',
@@ -373,7 +397,9 @@ useLiveEvent('conformance:progress', (p) => setProgress(p), { includeOwn: true }
       items: [
         'Slow clients: once more than `SOCKET_BUFFER_SOFT_BYTES` (default 1 MB) is waiting to reach a client, it stops getting each room event. When it has caught up it gets one `realtime:stale {rooms}` and reloads what those rooms show.',
         'Past `SOCKET_BUFFER_HARD_BYTES` (default 8 MB) the client is disconnected and its queued events dropped, so one slow client cannot hold server memory. When that tab reconnects it reloads its lists and records instead of replaying (`catchup:full {reason: "slow-consumer"}`).',
-        'Missed events while connected: journaled events carry the room they went to (`_room`) and that room’s own counter (`_rseq`). A client that sees the counter skip asks for that room alone (`catchup:room {room, cursor, missed}` → `catchup:room:events {room, full, events}`) instead of reloading everything. The admin app and `createSocketRealtime` both do this.'
+        'Missed events while connected: journaled events carry the room they went to (`_room`) and that room’s own counter (`_rseq`). A client that sees the counter skip asks for that room alone (`catchup:room {room, cursor, missed}` → `catchup:room:events {room, full, events}`) instead of reloading everything. The admin app and `createSocketRealtime` both do this.',
+        'Missed changes per record: a change of one record also carries that record’s own counter (`_iseq`; a merged burst carries `_iseqs {id: [lowest, highest]}`). A client keeps the last number per record it has seen and, when one skips and the missing change has not arrived 4 seconds later, re-reads that record alone — the list row or the open record, as you — never the whole page. These numbers outlive a reconnect, so a reconnect whose catch-up went unanswered still finds what it missed on the records you are looking at. Clients that ignore the field see no difference.',
+        'Connections that repair themselves: a connection can look open while nothing reaches it (the computer slept, the Wi-Fi changed, a proxy dropped it). Each tab’s connection (or the shared worker’s, when tabs share one) is checked after 40 seconds without a word from the server, when the computer wakes, when the tab comes back after 30 seconds or more out of sight, and when the network comes back or changes: one `time:sync` that must be answered within 5 seconds. A dead connection is reopened at once and the usual catch-up replays what was missed. Nothing is shown while that happens; the “Live updates paused” strip appears only if two repairs in a row fail to sign in again within 12 seconds each.'
       ]
     },
     {
@@ -469,7 +495,11 @@ export const collabPresence: DocSection = {
       type: 'ul',
       items: [
         'Reading a notification, or a chat room, clears its unread state on every other tab and device at once (`read:changed` on your `user:<id>` room), instead of on their next poll.',
-        'Saving a display preference (font size, time format, sound, density, do not disturb…) applies in your other tabs and windows immediately: over a BroadcastChannel in the same browser, over `prefs:changed` on your user room across devices. The theme follows across tabs of one browser.',
+        'Saving a display preference (font size, time format, sound, density, do not disturb…) applies in your other tabs and windows immediately: over a BroadcastChannel in the same browser, over `prefs:changed` on your user room across devices.',
+        'The theme (light, dark or system) and the row density of lists and queue worklists (Compact or Comfortable) are saved on your account as `theme` and `table_density`, so a choice made on your laptop shows on your phone and in your other tabs without a reload. A tab opened with "View as" neither saves nor adopts them.',
+        'Your saved views, saved searches and Overview pins refetch quietly in your other tabs and devices when you change them (`mine:changed {kind}` on your user room); favorites ride `prefs:changed`, and the shared collection pins reach everyone signed in (`pins:changed`). Nothing blanks or jumps: lists keep what they show until the fresh answer lands.',
+        'Relative times ("2m ago", "Last changed 5m ago") move forward by themselves in lists, records, notes, tasks and the inbox. Every one of them rides one shared ticker per tab (30 seconds, paused while the tab is hidden, caught up when you return), so a list of a hundred rows costs one timer; times older than a week read as a date and never tick. Hosts use `<RelativeTime value={...} />` or `useRelativeText(value)` instead of calling `formatRelative` in JSX.',
+        'A dot beside a name in people pickers (record people and task assignee), the @ mention list in notes and the chat @ list shows who is online (green) or idle (hollow amber). It is only a dot: nobody moves up the list for being online. It comes from the same presence read as the Online tab, so you only see a dot for people you may see as present.',
         'With several tabs open, a notification or chat sound plays once, from the tab you used last. Tabs that stop answering are ignored, so a frozen tab never takes the sound with it. A "View as" tab keeps its own channels.'
       ]
     },

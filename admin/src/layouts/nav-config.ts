@@ -406,7 +406,13 @@ export const navCategories: NavCategory[] = [
         section: 'Health',
         keywords: 'docker swarm stacks containers services volumes images traefik hosts reboot'
       },
-      { icon: Radio, label: 'Realtime', to: '/realtime', section: 'Health', keywords: 'sockets' },
+      {
+        icon: Radio,
+        label: 'Realtime',
+        to: '/realtime',
+        section: 'Health',
+        keywords: 'sockets team board write to screen'
+      },
       {
         icon: Siren,
         label: 'Chaos',

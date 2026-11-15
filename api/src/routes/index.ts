@@ -4,6 +4,7 @@ import { bustPortalLinkCache } from '../services/app-links.js'
 import { noteReadDuration } from '../services/background-runs.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { announceConfigChanged, collectionHint, isConfigWrite } from '../services/config-live.js'
+import { configWatchOnResponse, configWatchPreHandler } from '../services/config-watch.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
 import { bustLayoutReferences } from '../services/layout-references.js'
 import { announcePermissionChange, permissionTarget } from '../services/permission-live.js'
@@ -186,6 +187,7 @@ import { layoutUsageRoutes } from './layout-usage.js'
 import { layoutWhyRoutes } from './layout-why.js'
 import { legalHoldRoutes } from './legal-holds.js'
 import { lineageRoutes } from './lineage.js'
+import { livePreferenceRoutes } from './live-preference.js'
 import { mailRoutes } from './mail.js'
 import { mailLogReadRoutes, mailLogRoutes } from './mail-log.js'
 import { mailSuppressionRoutes } from './mail-suppressions.js'
@@ -262,6 +264,7 @@ import { realtimeOutsideWritesRoutes } from './realtime-outside-writes.js'
 import { realtimeTrustRoutes } from './realtime-trust.js'
 import { realtimeVerifyRoutes } from './realtime-verify.js'
 import { realtimeWorkerRoutes } from './realtime-worker.js'
+import { recordGlanceRoutes } from './record-glance.js'
 import { recordGraphRoutes } from './record-graph.js'
 import { recordIntegrationsRoutes } from './record-integrations.js'
 import { recordLinkRoutes } from './record-links.js'
@@ -294,6 +297,7 @@ import { searchRoutes } from './search.js'
 import { searchAnalyticsRoutes } from './search-analytics.js'
 import { securityRoutes, securitySelfRoutes } from './security.js'
 import { semanticSearchRoutes } from './semantic-search.js'
+import { sendViewRoutes } from './send-view.js'
 import { sequenceRoutes } from './sequences.js'
 import { sessionRecordingRoutes } from './session-recordings.js'
 import { sessionReplayClipRoutes } from './session-replay-clips.js'
@@ -320,6 +324,7 @@ import { supportRoutes } from './support.js'
 import { syncJobsRoutes } from './sync-jobs.js'
 import { tasksRoutes } from './tasks.js'
 import { teamMiscRoutes, teamUserRoutes } from './team.js'
+import { teamBoardRoutes } from './team-board.js'
 import { teamsBotRoutes } from './teams-bot.js'
 import { telemetryRoutes } from './telemetry.js'
 import { testDataRoutes } from './test-data.js'
@@ -343,6 +348,7 @@ import { buildWidgetScript, widgetRoutes } from './widget.js'
 import { widgetsInternalRoutes } from './widgets-internal.js'
 import { workflowsRoutes } from './workflows.js'
 import { workspacesRoutes } from './workspaces.js'
+import { writeToScreenAdminRoutes, writeToScreenBeaconRoutes } from './write-to-screen.js'
 import { zapierRoutes } from './zapier.js'
 
 export async function registerRoutes(app: FastifyInstance) {
@@ -431,6 +437,10 @@ export async function registerRoutes(app: FastifyInstance) {
     const target = permissionTarget(req)
     if (target) void announcePermissionChange(target)
   })
+  // rt4 #14/#18 — open config editors and shared dashboards hear that their object changed
+  // (services/config-watch.ts: names the object before the write, pokes on 2xx).
+  app.addHook('preHandler', configWatchPreHandler)
+  app.addHook('onResponse', configWatchOnResponse)
   // The Online list shows each person's role, name and zones from their user row: a write that
   // may change them refreshes every open list (after each replica's short answer cache).
   app.addHook('onResponse', async (req, reply) => {
@@ -496,8 +506,12 @@ export async function registerRoutes(app: FastifyInstance) {
   // Idea 37: Integrations console → Ready to send (nightly partner-send preflight board).
   await app.register(readyToSendRoutes)
   await app.register(recordViewRoutes)
+  // rt3 #14/#16/#17 — unseen changes before a move, record hover cards, file processing status.
+  await app.register(recordGlanceRoutes)
   // #3227 — role starter sidebar layouts (a person's own rides preferences.nav_layout)
   await app.register(navLayoutRoutes, { prefix: '/nav-layout' })
+  // Realtime round 3 #24 — Live updates role defaults (a person's own rides preferences.live_mode)
+  await app.register(livePreferenceRoutes, { prefix: '/live-preference' })
   // Collections page: collections an admin pins to the top for everyone
   await app.register(collectionPinRoutes, { prefix: '/collection-pins' })
   await app.register(meNotificationRoutes)
@@ -571,6 +585,11 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(realtimeBuildRoutes, { prefix: '/realtime' })
   // Realtime ideas 14/15 — missed-update beacons (signed in) + their report (admin).
   await app.register(realtimeTrustRoutes, { prefix: '/realtime' })
+  // rt5 — admin team board (who is on which record now) + write-to-screen times (admin) and
+  // their beacon (signed in, under /rum so it rides the RUM telemetry rules).
+  await app.register(teamBoardRoutes, { prefix: '/realtime' })
+  await app.register(writeToScreenAdminRoutes, { prefix: '/realtime' })
+  await app.register(writeToScreenBeaconRoutes, { prefix: '/rum' })
   // #2463 / #2477 / #2478 / #2760 — realtime verification tooling (admin).
   await app.register(realtimeVerifyRoutes, { prefix: '/realtime' })
   // Outside-write watcher setting + what it caught (admin).
@@ -698,6 +717,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(mergeRoutes, { prefix: '/merge' })
   await app.register(dashboardLinkRoutes, { prefix: '/dashboard-links' })
   await app.register(journeyRoutes, { prefix: '/journeys' })
+  await app.register(sendViewRoutes, { prefix: '/send-view' })
   await app.register(sessionRecordingRoutes, { prefix: '/session-recordings' })
   // Clips / library / shares of recordings — full paths, no prefix (#1366).
   await app.register(sessionReplayClipRoutes)

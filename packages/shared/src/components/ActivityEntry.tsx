@@ -221,7 +221,8 @@ export function ActivityFeed({
   onOpen,
   actionsFor,
   empty,
-  className
+  className,
+  isFresh
 }: {
   entries: ActivityEntryInput[]
   labels?: ActivityLabels | null
@@ -230,6 +231,8 @@ export function ActivityFeed({
   actionsFor?: (group: ActivityGroup) => ReactNode
   empty?: ReactNode
   className?: string
+  /** A live feed (rt4 #15): entries that just arrived fade in once (no motion when reduced). */
+  isFresh?: (entry: ActivityEntryInput) => boolean
 }) {
   // With labels, the link rows one write made on one record fold into one line
   // ("changed Division on Workflow CM26-79704: Zone 1 → Zone 2").
@@ -237,16 +240,29 @@ export function ActivityFeed({
   if (groups.length === 0) return <>{empty ?? null}</>
   return (
     <div className={cn('divide-y divide-slate-100 dark:divide-border', className)}>
-      {groups.map((g) => (
-        <ActivityEntry
-          key={g.key}
-          entry={g.entries[0]}
-          group={g.entries.length > 1 ? g.entries : undefined}
-          labels={labels}
-          onOpen={onOpen}
-          actions={actionsFor?.(g)}
-        />
-      ))}
+      {groups.map((g) => {
+        const row = (
+          <ActivityEntry
+            key={g.key}
+            entry={g.entries[0]}
+            group={g.entries.length > 1 ? g.entries : undefined}
+            labels={labels}
+            onOpen={onOpen}
+            actions={actionsFor?.(g)}
+          />
+        )
+        if (!isFresh) return row
+        return (
+          <div
+            key={g.key}
+            className={cn(
+              isFresh(g.entries[0]) && 'motion-safe:animate-[nvr-fade-in_600ms_ease-out_backwards]'
+            )}
+          >
+            {row}
+          </div>
+        )
+      })}
     </div>
   )
 }

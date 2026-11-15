@@ -329,6 +329,7 @@ export {
   type PreflightResult,
   PushReadinessChip
 } from './components/integrations/RecordIntegrationPreview'
+export { SendStatusLines, SendStatusMarks } from './components/integrations/SendStatus'
 export type { ChangeReasonChallenge } from './components/item-edit/ChangeReasonDialog'
 export {
   ChangeReasonDialog,
@@ -399,8 +400,14 @@ export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
 export { ListLoadError } from './components/ListLoadError'
+export { LiveBurstPill, LivePauseButton } from './components/LiveListControls'
+export { LiveAnnouncer } from './components/LiveAnnouncer'
 export { LiveCount, type LiveCountProps } from './components/LiveCount'
+export { ConfigChangeStrip } from './components/ConfigChangeStrip'
+export { ConfigTheirsPanel } from './components/ConfigTheirsPanel'
 export { LiveNewMatchesPill } from './components/LiveNewMatchesPill'
+export { LIVE_OFF_TIP, LiveOffNote } from './components/LiveOffNote'
+export { LivePreferenceHost } from './components/LivePreferenceHost'
 export { LiveRowMark } from './components/LiveRowMark'
 export { LoadErrorNote } from './components/LoadErrorNote'
 export * from './components/layout-editor'
@@ -411,6 +418,7 @@ export {
   type InlineEditController,
   useInlineEdit
 } from './components/list/InlineEdit'
+export { ListViewers } from './components/list/ListViewers'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export {
@@ -428,6 +436,15 @@ export {
   McpConnectionsAdminView
 } from './components/McpConnectionsAdminView'
 export { MyWorkView } from './components/MyWorkView'
+// rt5 #15 — "You're covering for Jane today — 4 of Jane's records need you".
+export {
+  type CoverLine,
+  coverEnds,
+  coverSentence,
+  DelegateCoverLine,
+  useCovering,
+  useCoveringQuery
+} from './components/DelegateCoverLine'
 export {
   type ApiCaller,
   type ApiLogRow,
@@ -527,6 +544,7 @@ export type {
   QueryWidgetConfig
 } from './components/PageRenderer'
 export { PageRenderer, QueryWidgetView, RecordGridWidgetBody } from './components/PageRenderer'
+export { PresenceDot } from './components/PresenceDot'
 export {
   commonPretendDownOptions,
   dashboardPretendDownOptions,
@@ -632,6 +650,7 @@ export type { RecordGridEditorConfig } from './components/RecordGridEditor'
 export { RecordGridEditor } from './components/RecordGridEditor'
 export { RecordPeekHost } from './components/RecordPeekHost'
 export { type ReadViewLayout, RecordReadView } from './components/RecordReadView'
+export { RelativeTime } from './components/RelativeTime'
 export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
 export { RowPresence } from './components/RowPresence'
@@ -649,6 +668,8 @@ export {
 export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
 export { SlowNotice, SlowNoticeView } from './components/SlowNotice'
 export { type StaleBuild, StaleBuildChip } from './components/StaleBuildChip'
+export { SendViewButton } from './components/send-view/SendViewButton'
+export { SentViewCards } from './components/send-view/SentViewCards'
 export {
   buildReportPayload,
   ReportProblemButton,
@@ -666,6 +687,7 @@ export type {
   SupportTicket,
   SupportTicketDetail
 } from './components/support/types'
+export { TabCountHost } from './components/TabCountHost'
 export { Term } from './components/Term'
 export { TickerNumber } from './components/TickerNumber'
 export { TipLayer, useOverflowTip } from './components/TipLayer'
@@ -755,6 +777,9 @@ export {
   startApiVersionWatch,
   useApiUpdate
 } from './lib/api-version'
+export * from './lib/approval-progress'
+export * from './lib/attention-prefs'
+export * from './lib/attention-prefs'
 export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
 export {
@@ -970,21 +995,55 @@ export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slot
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export { LineLockContext, lineLockView, useLineLocks } from './lib/line-locks'
 export { coeditCovers, coeditLive } from './lib/coedit-registry'
+export { linkedChangeSentence, useLinkedRecordWatch } from './lib/linked-changes'
 export * from './lib/list-inline-edit'
 export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
 export * from './lib/list-return'
+export * from './lib/list-viewers'
 export * from './lib/live'
+export * from './lib/live-announcer'
+export * from './lib/live-announcer'
 export * from './lib/live-counts'
-export * from './lib/live-list'
-export * from './lib/live-moves'
-export * from './lib/live-ops'
-export * from './lib/live-queries'
-export * from './lib/live-screen'
-export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
 export * from './lib/live-data-changed'
 export * from './lib/live-findings'
+export * from './lib/live-list'
+export * from './lib/live-list-flow'
+export * from './lib/live-moves'
+export * from './lib/live-ops'
+export * from './lib/config-watch'
+// Realtime round 3 #24 — Live updates: Normal / Calm / Off (Profile → Display, role defaults)
+export {
+  __resetLivePreferenceForTests,
+  LIVE_CALM_PAUSE_MS,
+  LIVE_DATA_EVENTS,
+  LIVE_MODE_LABELS,
+  LIVE_MODES,
+  LIVE_PRESENCE_EVENTS,
+  type LiveModeSource,
+  type LivePreference,
+  liveCollectionEventPasses,
+  liveEventQuiet,
+  livePausedAt,
+  livePreferenceOf,
+  parseLiveMode,
+  resolveLiveMode,
+  setLiveMode,
+  subscribeLiveMode
+} from './lib/live-preference'
+export * from './lib/live-queries'
+export * from './lib/live-screen'
 export * from './lib/live-search'
+export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
+export {
+  createWriteToScreenSampler,
+  noteWriteToScreenEvent,
+  startWriteToScreen,
+  type W2SDeps,
+  type W2SSample,
+  type W2SSampler
+} from './lib/write-to-screen'
+export * from './lib/live-views'
 export * from './lib/live-widgets'
 export {
   isListTimeout,
@@ -1162,6 +1221,12 @@ export {
 } from './lib/record-popout'
 export * from './lib/record-ref'
 export { announceRecordTabs, useRecordTabs, useRecordTabsSignal } from './lib/record-tabs'
+export {
+  relativeTickSubscribers,
+  subscribeRelativeTick,
+  tickRelativeNow,
+  useRelativeText
+} from './lib/relative-ticker'
 export { registerReloadHold, reloadHoldLabels } from './lib/reload-holds'
 export {
   captureReplayClip,
@@ -1263,6 +1328,23 @@ export {
 } from './lib/request-gate'
 export { restoreSkippedNote } from './lib/restore-skipped'
 export { coarseCollectionUpdate, createRoomGapTracker, refetchEventsFor } from './lib/room-gaps'
+export {
+  createRecordGapTracker,
+  type RecordGapTracker,
+  type RecordRef,
+  recordRefetchEvent
+} from './lib/record-gaps'
+export {
+  attachSocketLiveness,
+  createLiveness,
+  HIDDEN_WAKE_MS,
+  type Liveness,
+  type LivenessHandle,
+  livenessOf,
+  onWakeSignals,
+  type RepairOutcome,
+  registerLiveness
+} from './lib/socket-liveness'
 export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from './lib/row-highlight'
 export { rumRouteChange, rumWidget, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'
@@ -1305,6 +1387,8 @@ export {
   searchRankWords,
   tokenize
 } from './lib/search-text'
+export * from './lib/send-status'
+export * from './lib/send-view'
 export {
   type ClockSample,
   measureClockOffset,
@@ -1356,11 +1440,6 @@ export { registerStagedRowLabel, stagedRowLabel } from './lib/staged-row-labels'
 export * from './lib/stale-chunk'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
-export * from './lib/attention-prefs'
-export * from './lib/waiting-count'
-export * from './lib/live-announcer'
-export { LiveAnnouncer } from './components/LiveAnnouncer'
-export { TabCountHost } from './components/TabCountHost'
 export { configureTabSound, pickSoundTab, shouldPlayHere } from './lib/tab-sound'
 export {
   BRAND_ACCENT,
@@ -1394,7 +1473,11 @@ export {
   translateScopeValues,
   useMyScopes
 } from './lib/use-my-scopes'
-export { useOnlineUsers } from './lib/use-online-users'
+export {
+  type PresenceState,
+  useOnlineUsers,
+  usePresenceStates
+} from './lib/use-online-users'
 export { pageAtPayload, usePageAt } from './lib/use-page-at'
 export {
   announceLocalPrefs,
@@ -1412,6 +1495,8 @@ export {
   viewAs,
   viewAsPath
 } from './lib/view-as'
+export * from './lib/waiting-count'
+export * from './lib/waiting-count'
 export {
   buildWidgetImageLabel,
   describeDateRangeFilter,

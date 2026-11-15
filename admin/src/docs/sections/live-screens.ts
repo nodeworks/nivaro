@@ -19,7 +19,9 @@ export const liveScreensDocs: DocSection = {
         'A row someone else dealt with stays where it was, greyed, saying what happened ("Approved by Beth Smith"). It leaves the next time you click or type somewhere else — never while your pointer is on it or its confirm is open.',
         'On the notifications page, new notifications slide in at the top when you are at the top. When you have scrolled down, a small "3 new" button waits instead; press it to go to the top and see them.',
         'A value you are typing is never replaced. Grids and editors keep your unsaved edits; the saved value from someone else shows once you are done.',
-        'The dashboard keeps its layout while it updates. A section never folds away (or opens up) under you because its figures changed.'
+        'The dashboard keeps its layout while it updates. A section never folds away (or opens up) under you because its figures changed.',
+        'The support desk (My requests and Desk) shows new requests, replies, claims and status changes in place, and an open request shows new replies without touching the reply you are writing. A request someone else picked up stays in the list, greyed, until you move on.',
+        'Calendars, the workflow timeline and the Jobs pages (Runs & schedules, Timeline, Calendar, Repair tasks) follow the data the same way: an entry another person moves, or a run that starts or finishes, shows up in place once things settle, and entries keep their place while your pointer is on them.'
       ]
     },
     { type: 'h3', id: 'live-screens-cost', text: 'How it stays light' },
@@ -54,6 +56,18 @@ export const liveScreensDocs: DocSection = {
           'Returns a ref. Text that changed around a background refresh (pass its time as `armKey`) fades in; inputs, `data-live-nofade` areas and the focused element never do.'
         ],
         ['`useUpdatedAgo(at, active)`', '"Updated 10 s ago", ticking only while shown.'],
+        [
+          '`useLiveCalendar({ collection, keys, items, keyOf, resetKey, updatedAt })`',
+          'A month or week grid over a collection: one quiet re-read per burst of other people’s writes, entries that left stay greyed until the person moves on, changed entries fade in. Put the returned `ref` on the grid.'
+        ],
+        [
+          '`useLiveJobs({ keys, onProgress })`',
+          'Run lists and run timelines: joins the admin `jobs` room and re-reads `keys` once per quiet window after a run starts or finishes. Progress reports go to `onProgress` and never refetch.'
+        ],
+        [
+          '`useBackgroundArm(dataUpdatedAt, viewKey)`',
+          'The `armKey` for `useLiveFade`: 0 on a view’s first answer, the refresh time after it. A month, filter or window change never fades.'
+        ],
         [
           '`PageRenderer liveReads={[…]}`',
           'A page-builder page whose query and widget figures follow those collections.'

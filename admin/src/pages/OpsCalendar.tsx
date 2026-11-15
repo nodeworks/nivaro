@@ -1,6 +1,7 @@
+import { useBackgroundArm, useLiveFade, useLiveJobs, useSettledRows } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { HubToolbar } from '@/components/hub-page'
 import { api } from '@/lib/api'
@@ -48,28 +49,51 @@ export default function OpsCalendar() {
   const from = startOfDay(new Date(Date.now() + offsetDays * DAY))
   const to = new Date(from.getTime() + 7 * DAY)
 
-  const { data, isLoading } = useQuery<{ events: OpsEvent[] }>({
+  // A run finishing re-reads the week once per quiet window (what ran, what is next); the
+  // slow poll is the net for schedules edited elsewhere.
+  const live = useLiveJobs({ keys: [['ops-calendar']] })
+  const { data, isLoading, dataUpdatedAt } = useQuery<{ events: OpsEvent[] }>({
     queryKey: ['ops-calendar', from.toISOString()],
     queryFn: () =>
       api
         .get('/ops-calendar', { params: { from: from.toISOString(), to: to.toISOString() } })
         .then((r) => r.data.data),
-    staleTime: 60_000
+    staleTime: 60_000,
+    refetchInterval: live ? 5 * 60_000 : 60_000
   })
+  // Entries never shift under the pointer (a re-read waits for the person to move on); the
+  // changed ones fade in.
+  const weekKey = from.toISOString()
+  const settled = useSettledRows(data?.events, (e) => `${e.kind}|${e.label}|${e.at}`, {
+    resetKey: weekKey
+  })
+  const departed = useMemo(
+    () => new Set(settled.rows.filter((r) => r.state === 'departed').map((r) => r.key)),
+    [settled.rows]
+  )
+  const fadeRef = useLiveFade(useBackgroundArm(dataUpdatedAt, weekKey))
+  const gridRef = useCallback(
+    (el: HTMLElement | null) => {
+      settled.containerRef(el)
+      fadeRef(el)
+    },
+    [settled.containerRef, fadeRef]
+  )
 
+  // `from` is a new Date each render but derived from offsetDays: its time value is the key.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see above
   const days = useMemo(() => {
     const out: Array<{ date: Date; events: OpsEvent[] }> = []
     for (let i = 0; i < 7; i++) {
       out.push({ date: new Date(from.getTime() + i * DAY), events: [] })
     }
-    for (const e of data?.events ?? []) {
+    for (const { row: e } of settled.rows) {
       if (hiddenKinds.has(e.kind)) continue
       const idx = Math.floor((new Date(e.at).getTime() - from.getTime()) / DAY)
       if (idx >= 0 && idx < 7) out[idx].events.push(e)
     }
     return out
-    // biome-ignore lint/correctness/useExhaustiveDependencies: from is derived from offsetDays
-  }, [data, hiddenKinds, offsetDays])
+  }, [settled.rows, hiddenKinds, weekKey])
 
   const kindCounts = useMemo(() => {
     const m = new Map<string, number>()
@@ -140,7 +164,7 @@ export default function OpsCalendar() {
         </div>
       </HubToolbar>
 
-      <div className='flex-1 overflow-y-auto p-4 sm:p-6'>
+      <div className='flex-1 overflow-y-auto p-4 sm:p-6' ref={gridRef}>
         {isLoading ? (
           <p className='px-2 py-8 text-[13px] text-slate-400'>Loading schedule…</p>
         ) : (
@@ -201,11 +225,15 @@ export default function OpsCalendar() {
                         </>
                       )
                       const key = `${e.kind}-${e.label}-${e.at}-${i}`
+                      const gone = departed.has(`${e.kind}|${e.label}|${e.at}`)
                       return e.link ? (
                         <Link
                           key={key}
                           to={e.link}
-                          className='flex items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-slate-50 dark:hover:bg-muted/50'
+                          className={cn(
+                            'flex items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-slate-50 dark:hover:bg-muted/50',
+                            gone && 'opacity-50'
+                          )}
                           data-tip={e.detail ?? undefined}
                         >
                           {body}
@@ -213,7 +241,10 @@ export default function OpsCalendar() {
                       ) : (
                         <div
                           key={key}
-                          className='flex items-center gap-1.5 rounded-md px-1.5 py-1'
+                          className={cn(
+                            'flex items-center gap-1.5 rounded-md px-1.5 py-1',
+                            gone && 'opacity-50'
+                          )}
                           data-tip={e.detail ?? undefined}
                         >
                           {body}

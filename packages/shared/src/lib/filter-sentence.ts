@@ -72,6 +72,8 @@ export interface FilterSentenceInput {
   of?: number | null
   /** The count came from a short-lived cache: say "about". */
   approx?: boolean
+  /** `of` is an approximate count: "1 of about 85,607". */
+  ofApprox?: boolean
 }
 
 const fmt = (n: number) => n.toLocaleString('en-US')
@@ -227,7 +229,7 @@ export function filterSentence(input: FilterSentenceInput): string | null {
     const of = input.of
     text +=
       typeof of === 'number' && Number.isFinite(of) && of > shown
-        ? ` — ${about}${fmt(shown)} of ${fmt(of)}`
+        ? ` — ${about}${fmt(shown)} of ${input.ofApprox ? 'about ' : ''}${fmt(of)}`
         : ` — ${about}${fmt(shown)}`
   }
   return `${text}.`

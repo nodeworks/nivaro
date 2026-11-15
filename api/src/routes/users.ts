@@ -1289,6 +1289,14 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.live_announce = body.live_announce
     }
+    if ('live_mode' in body) {
+      // Live updates (realtime round 3, item 24): calm / normal / off; null = the role's default.
+      const v = body.live_mode
+      if (v !== null && !['calm', 'normal', 'off'].includes(String(v))) {
+        return reply.code(400).send({ error: 'live_mode must be calm, normal, off or null' })
+      }
+      patch.live_mode = v
+    }
     if ('week_start' in body) {
       if (!['mon', 'sun'].includes(String(body.week_start))) {
         return reply.code(400).send({ error: "week_start must be 'mon' or 'sun'" })
@@ -1300,6 +1308,23 @@ export async function usersRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'font_size must be small/default/large' })
       }
       patch.font_size = body.font_size
+    }
+    if ('theme' in body) {
+      // rt4 #19 — light / dark / system follows the person to every browser and device
+      // (null = no pick yet: each device keeps its own).
+      const v = body.theme
+      if (v !== null && v !== 'light' && v !== 'dark' && v !== 'system')
+        return reply.code(400).send({ error: "theme must be 'light', 'dark', 'system' or null" })
+      patch.theme = v
+    }
+    if ('table_density' in body) {
+      // rt4 #19 — row density of every list and table (the Compact / Comfortable toggle).
+      const v = body.table_density
+      if (v !== null && v !== 'compact' && v !== 'comfortable')
+        return reply
+          .code(400)
+          .send({ error: "table_density must be 'compact', 'comfortable' or null" })
+      patch.table_density = v
     }
     if ('timezone' in body) {
       // Per-user display timezone (#31). null = browser default.

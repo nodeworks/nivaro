@@ -1,4 +1,5 @@
 import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { liveMotionAllowed, useLiveBusy } from './live-preference'
 
 /**
  * Screens that update live without moving under the person (realtime program 2026-11-14).
@@ -192,7 +193,10 @@ export function useSettledRows<T>(
     }
   }, [enabled])
 
-  const frozen = enabled && (pointerIn || focusIn)
+  // Calm (live-preference): the order also holds while the person is moving or typing anywhere,
+  // until they pause; arrivals still append at the end meanwhile.
+  const busy = useLiveBusy(enabled)
+  const frozen = enabled && (pointerIn || focusIn || busy)
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: interactions/releaseTick/heldKey re-run the fold
   useLayoutEffect(() => {
@@ -427,12 +431,9 @@ export function slideIn(root: ParentNode | null | undefined, keys: Iterable<stri
 
 // ── Changed figures fade in ───────────────────────────────────────────────
 
+/** No live motion: reduced motion, or live updates set to Calm/Off (lib/live-preference.ts). */
 function reducedMotion(): boolean {
-  try {
-    return !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-  } catch {
-    return false
-  }
+  return !liveMotionAllowed()
 }
 
 const NO_FADE =

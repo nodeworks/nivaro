@@ -5,7 +5,7 @@ import { useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { useLiveOps } from '../lib/live-ops'
 import { useLiveRefetchInterval } from '../lib/live-queries'
-import { cn } from '../lib/utils'
+import { cn, formatDateTime } from '../lib/utils'
 import {
   AudienceConfirmPanel,
   type AudiencePreview,
@@ -15,6 +15,7 @@ import { BroadcastDraftPanel } from './BroadcastDraft'
 import { useHelpVideoLibrary } from './help-videos/api'
 import { formatDuration } from './help-videos/viewer/format'
 import { PickList } from './imports/ServiceConfigBuilder'
+import { LiveFigure } from './LiveFigure'
 
 /**
  * Broadcasts — compose + history for admin messages to a chosen audience
@@ -53,6 +54,8 @@ interface Broadcast {
   ends_at: string | null
   created_at: string | null
   ack_count: number
+  /** People whose in-app inbox row was read (ticks up live as they open it). */
+  opened_count?: number
   scheduled_send_at?: string | null
   sent_at?: string | null
   click_count?: number
@@ -826,7 +829,7 @@ function HistoryRow({
           {a.scheduled_send_at && !a.sent_at && (
             <p className='mt-1 flex items-center gap-2 text-[11.5px]'>
               <span className='rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700 dark:bg-amber-500/15 dark:text-amber-400'>
-                Scheduled · {new Date(a.scheduled_send_at).toLocaleString()}
+                Scheduled · {formatDateTime(a.scheduled_send_at)}
               </span>
               <button
                 type='button'
@@ -840,8 +843,25 @@ function HistoryRow({
           <p className='mt-0.5 text-[11px] text-slate-400'>
             {(a.channels ?? []).join(' + ')}
             {a.delivered_count != null && ` · reached ${a.delivered_count}`}
-            {` · seen by ${a.ack_count}`}
-            {a.created_at && ` · ${new Date(a.created_at).toLocaleString()}`}
+            {/* Quiet live figures: they tick up in place as people read and dismiss. Each says
+                exactly what it counts — the inbox message read, the banner dismissed. */}
+            {a.opened_count != null && (a.channels ?? []).includes('message') && (
+              <>
+                {' · inbox opened '}
+                <LiveFigure value={a.opened_count} className='font-medium'>
+                  {a.opened_count}
+                </LiveFigure>
+              </>
+            )}
+            {(a.channels ?? []).includes('banner') && (
+              <>
+                {' · banner dismissed '}
+                <LiveFigure value={a.ack_count} className='font-medium'>
+                  {a.ack_count}
+                </LiveFigure>
+              </>
+            )}
+            {a.created_at && ` · ${formatDateTime(a.created_at)}`}
             {' · '}
             <button
               type='button'
@@ -874,7 +894,7 @@ function HistoryRow({
         <button
           type='button'
           onClick={() => onRemove(a.id)}
-          className='shrink-0 text-[13px] text-slate-300 transition-colors hover:text-red-500'
+          className='shrink-0 text-[13px] text-slate-500 transition-colors hover:text-red-500 dark:text-muted-foreground'
         >
           ✕
         </button>
@@ -973,7 +993,7 @@ function HistoryRow({
               <p key={i} className='text-[11.5px] text-slate-600 dark:text-muted-foreground'>
                 {r.user_name || r.user_email || 'Unknown'}
                 <span className='text-slate-400'>
-                  {r.acked_at ? ` · ${new Date(r.acked_at).toLocaleString()}` : ''}
+                  {r.acked_at ? ` · ${formatDateTime(r.acked_at)}` : ''}
                 </span>
               </p>
             ))}
@@ -1004,7 +1024,7 @@ function HistoryRow({
                   {r.channel} {r.status !== 'sent' ? r.status : ''}
                 </span>
                 <span className='text-slate-400'>
-                  {r.delivered_at ? ` · ${new Date(r.delivered_at).toLocaleString()}` : ''}
+                  {r.delivered_at ? ` · ${formatDateTime(r.delivered_at)}` : ''}
                 </span>
               </p>
             ))}

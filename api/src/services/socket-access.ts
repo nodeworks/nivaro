@@ -468,7 +468,7 @@ export async function roomStillAllowed(
       if (!t) return false
       if (!(await canSeeRecordRoom(user, t.collection, t.item, await isAdmin()))) return false
       const deps = coeditGates()
-      if (!(await deps.mayRead(user, t.collection, t.field))) return false
+      if (!(await deps.mayRead(user, t.collection, t.field, ctx.bind?.kind))) return false
       if (!t.write) return true
       // The cursor room is for people who may type there now (field + record update gates, no
       // lock refusing them); coedit-socket demotes them on their next step.

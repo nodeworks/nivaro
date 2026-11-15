@@ -1470,6 +1470,16 @@ export const FieldRow = memo(function FieldRow({
           {softWarning}
         </p>
       )}
+      {affordances?.linkedChanges?.[field.field] && (
+        // rt4 #6 — the record this field links to changed while the form was open and is
+        // no longer offered here: what happened, under the field. The value stays.
+        <p
+          data-field-linked-change={field.field}
+          className='text-[11.5px] leading-snug text-amber-700 dark:text-amber-400'
+        >
+          {affordances.linkedChanges[field.field]}
+        </p>
+      )}
       {partnerHintShown && (
         <PartnerNeedHint field={field.field} label={label || titleCase(field.field)} />
       )}

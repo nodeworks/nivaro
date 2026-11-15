@@ -509,6 +509,7 @@
           <a class="docs-nav-item" data-section="approval-chains" href="#approval-chains">Approval Chains</a>
           <a class="docs-nav-item" data-section="collab-chat" href="#collab-chat">Chat &amp; Channels</a>
           <a class="docs-nav-item" data-section="item-locking" href="#item-locking">Item Locking &amp; Presence</a>
+          <a class="docs-nav-item" data-section="send-my-view" href="#send-my-view">Send My View</a>
           <a class="docs-nav-item" data-section="live-conflicts" href="#live-conflicts">Working on the same record</a>
           <a class="docs-nav-item" data-section="live-coedit" href="#live-coedit">Writing together in long text</a>
           <a class="docs-nav-item" data-section="notifications-center" href="#notifications-center">Notifications Center</a>
@@ -1185,6 +1186,9 @@ emitNotification(app.io, targetUserId, {
           <p class="doc-p">Every item edit page includes a Comments panel. Users can post, edit, and delete comments on any record. Mentioning another user with <code class="doc-code">@handle</code> sends them an in-app notification and, if a Teams webhook is configured, a Microsoft Teams card.</p>
           <h3 class="doc-h3">Posting a comment</h3>
           <p class="doc-p">Type in the comment input and submit. Use <code class="doc-code">@email-prefix</code> or <code class="doc-code">@first_name</code> to mention Nivaro users — the server resolves handles on submit, so no autocomplete is required.</p>
+          <h3 class="doc-h3">Pasting a screenshot</h3>
+          <p class="doc-p">Paste an image (Ctrl or Cmd + V) or drop an image file into the comment box, on the record or on a single field. It uploads at once with a progress bar and shows as a small thumbnail under the box. Click the X on a thumbnail to remove it. Up to six images go with one comment, and the Comment button waits until they have finished uploading.</p>
+          <p class="doc-p">In the posted comment the image shows inline. Click it to open it full size. Anyone who can open the record can see the picture, and nobody else can. For a comment on a single field, only people who can read that field see the picture. Notifications and previews show it as a short "[image]" note.</p>
           <h3 class="doc-h3">Mentions</h3>
           <p class="doc-p">When a user is mentioned they receive:</p>
           <ul class="doc-ul">
@@ -17423,6 +17427,32 @@ PATCH /api/item-locks/config/:collection
           <!-- /SYNC:item-locking -->
         </div>
 
+        <!-- SEND MY VIEW -->
+        <div class="doc-section" id="s-send-my-view" data-toc='[{"id":"send-my-view","label":"Send my view"},{"id":"send-my-view-recipient","label":"What the other person gets"},{"id":"send-my-view-api","label":"API"},{"id":"list-viewers","label":"Who else is viewing this list"},{"id":"record-room-chip","label":"Live state chip in record chat rooms"}]'>
+          <!-- SYNC:send-my-view -->
+          <h1 class="doc-h1" id="send-my-view">Send my view</h1>
+          <p class="doc-p">Show a colleague exactly what you are looking at. On a record, a list or a queue worklist, press the paper-plane button, pick the person, add a note if you like, and press Send. A list keeps its filters, sort, columns and page size; a record opens on the same tab.</p>
+          <h3 class="doc-h3" id="send-my-view-recipient">What the other person gets</h3>
+          <ul class="doc-ul">
+            <li>If they have the app open, a small card appears in the corner: "Rob sent you: Workflows — Region: NER". Open takes them there; Later puts it in their notifications instead.</li>
+            <li>If they do not have the app open, it arrives as an ordinary notification in the "Views sent to you" category, which they can mute under Profile → Notification rules.</li>
+            <li>They see the screen with their OWN access. A list shows the rows they may read; a record they cannot read shows the usual no-access page. Nothing of what you can see is sent — only where to go and how the view is set up.</li>
+          </ul>
+          <div class="doc-note">Sending is for people on their own sign-in: API keys, connected apps and View-as cannot send. Each person can send a few views a minute.</div>
+          <h3 class="doc-h3" id="send-my-view-api">API</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td>POST /api/send-view</td><td><code class="doc-code">{to, view: {kind: record | list | queue, collection?, item?, queue?, lv?, tab?, summary?}, note?}</code> → <code class="doc-code">{id, mode: live | notification}</code>. 429 RATE_LIMITED, 403 SEND_VIEW_PEOPLE_ONLY.</td></tr>
+              <tr><td>GET /api/send-view/:id</td><td>The recipient only (404 for anyone else): the view described as THEY may see it, with the target to open.</td></tr>
+              <tr><td>POST /api/send-view/:id/later</td><td>The recipient keeps it as a notification instead of the card.</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="list-viewers">Who else is viewing this list</h2>
+          <p class="doc-p">Administrators see small avatars on a list or queue toolbar when other people have the same list open ("Beth and 2 others are viewing this too"). Hover for the names. Everyone else sees nothing, and their browser is never sent the names. Someone using View-as is never counted.</p>
+          <h2 class="doc-h2" id="record-room-chip">Live state chip in record chat rooms</h2>
+          <p class="doc-p">The top of a record's chat room shows the record's current step, its owners and when the step is due ("Due in 5h", "3h overdue"). It updates by itself when the record moves or its owners change. It only shows for people who can see the room and read the record.</p>
+          <!-- /SYNC:send-my-view -->
+        </div>
+
         <!-- WORKING ON THE SAME RECORD -->
         <div class="doc-section" id="s-live-conflicts" data-toc='[{"id":"live-conflicts","label":"Working on the same record"},{"id":"live-conflicts-quiet","label":"Fields you have not touched"},{"id":"live-conflicts-yours","label":"Fields you are changing"},{"id":"live-conflicts-see-changes","label":"See changes"},{"id":"live-conflicts-lines","label":"Lines: one person per line"},{"id":"live-conflicts-cursors","label":"Cursors in grids"}]'>
           <!-- SYNC:live-conflicts -->
@@ -17491,7 +17521,7 @@ PATCH /api/item-locks/config/:collection
         </div>
 
         <!-- NOTIFICATIONS CENTER -->
-        <div class="doc-section" id="s-notifications-center" data-toc='[{"id":"notifications-center","label":"Notifications Center"},{"id":"notification-role-defaults","label":"Default notification rules by role"},{"id":"notification-why","label":"Why did I get this?"},{"id":"notification-changes","label":"What changed, in the notification"}]'>
+        <div class="doc-section" id="s-notifications-center" data-toc='[{"id":"notifications-center","label":"Notifications Center"},{"id":"notification-role-defaults","label":"Default notification rules by role"},{"id":"notification-why","label":"Why did I get this?"},{"id":"notification-changes","label":"What changed, in the notification"},{"id":"notification-done-by-itself","label":"Done by itself when someone handles it"},{"id":"notification-fold","label":"Several updates, one notification"},{"id":"record-panel-new-count","label":"\"2 new\" on Comments and Tasks"}]'>
           <!-- SYNC:notifications-center -->
           <h1 class="doc-h1" id="notifications-center">Notifications Center</h1>
           <p class="doc-p">Beyond the bell dropdown, the /notifications page is a full paginated inbox of every notification — filter by status, jump to the related record, and mark all as read in one click.</p>
@@ -17569,6 +17599,25 @@ POST /api/notifications/test-my-rules  { "category": "workflow", "email": true, 
     changes: [{ field, label, type, old, new, old_label?, new_label?, diff?: { lead, removed, added, trail } }] }</code></pre>
           <h3 class="doc-h3">Record bundles in the bell</h3>
           <p class="doc-p">Unread rows that name the same record fold into one bell entry — "3 things on REQ-1042" — with the categories as chips and the most urgent lane colouring the row. The chevron expands the rows (each keeps its own actions), clicking the bundle opens the record, and the check marks the whole bundle read in one call. The Notifications page does the same behind "Group by record" (on by default). <code class="doc-code">GET /api/notifications?bundle=record</code> returns <code class="doc-code">bundles</code> ([{collection, item, label, count, unread, lane, categories, newest, url, ids, rows}]) beside <code class="doc-code">data</code>, which then holds only the rows that stayed single; a lone row about a record is never bundled. <code class="doc-code">total</code>, <code class="doc-code">/count</code> and <code class="doc-code">/unread-count</code> are unchanged — a bundle presents rows, it does not reduce them. The label is never a bare id: the friendly id, else the display label, else — for a record deleted since — its trash snapshot's label with a "deleted" chip (<code class="doc-code">deleted: true</code>, no Open link), else "&lt;Singular&gt; #&lt;id&gt;"; <code class="doc-code">collection_label</code> carries the singular name for the chip beside it. Collection-wide subscription rows name the record the same way ("updated PRB1 (regions)").</p>
+          <h3 class="doc-h3" id="notification-done-by-itself">Done by itself when someone handles it</h3>
+          <p class="doc-p">A notification that asked you to do something turns done on its own once it is handled, by you or by anyone else. It keeps its place, counts as read (the bell number drops), and shows one quiet line with a tick: "Approved by Beth · 10:42 AM", "Moved to Review by Beth", "Done by you". Its action buttons go away. Your open tabs update at once.</p>
+          <ul class="doc-ul">
+            <li>A request to act on a record step (you own the step, or a workflow or SLA ask) is done when the record moves to another step. If you made the move and still own the new step, yours stays open.</li>
+            <li>A task notification (assigned, team, reminder, overdue) is done when the task is completed.</li>
+            <li>An approval request is done when someone decides that step: "Approved by …" or "Rejected by …".</li>
+            <li>A support request notification is done when the request is closed or cancelled.</li>
+            <li>A notification that asks you to acknowledge it is never closed for you, and FYIs, mentions and messages are never touched.</li>
+          </ul>
+          <p class="doc-p">The daily summary email checks again just before it goes out: anything handled since it was queued is left out, and a summary with nothing left in it is not sent.</p>
+          <h3 class="doc-h3" id="notification-fold">Several updates, one notification</h3>
+          <p class="doc-p">When updates about one record arrive close together, they fold into one notification instead of stacking up: "3 updates on CM26-79704: moved to Review, 2 comments". While the newest unread update about a record is less than 10 minutes old, the next one rewrites it: it moves to the top, the bell still counts one, and no second phone alert goes out. "3 updates" under the row lists each of them, newest first. Only FYI updates fold; anything that asks you to act, a mention, or an acknowledgement always stays its own notification. Once you have read it, the next update starts a new one.</p>
+          <h3 class="doc-h3" id="record-panel-new-count">"2 new" on Comments and Tasks</h3>
+          <p class="doc-p">On a record, a folded Comments or Tasks panel shows "2 new" beside its name when other people added comments, or added or finished tasks, since you last had that panel open on that record. It updates live and clears when you open the panel. The mark is kept in your browser per record; the first time you see a record it starts from that moment, so an old record never opens on a pile of "new".</p>
+          <pre class="doc-pre"><code>GET /api/notifications → each row carries
+  resolved:   { on: step|task|approval|ticket, by, by_name, at, text } | null
+  fold_count: number | null          (detail.fold.items = the folded updates, newest first)
+Socket (your own room only, ids, never text):
+  notification:retired { ids, resolved: true, collection?, item? }  +  read:changed { kind: 'notifications' }</code></pre>
           <h3 class="doc-h3">As it was — what they saw when notified</h3>
           <p class="doc-p">A notification about a record remembers the record's revision current at send time (<code class="doc-code">revision_id</code>, stamped by notifyUser). "As it was" on a bell or inbox row opens a sheet with the record as it stood then beside the record now; fields that changed since are marked with an amber dot and listed first. Older rows (or a purged revision) fall back to the newest revision written before the notification; a record with no revision from that time says "No snapshot from that time" and shows the current values. <code class="doc-code">GET /api/notifications/:id/as-it-was</code> answers <code class="doc-code">{snapshot, current, changed_fields, fields, labels, revision_id, at}</code> for the caller's own row; <code class="doc-code">current</code> is read as the caller, so a record they can no longer open answers 403/404 and the snapshot is never shown without it. Scalar and link fields only — related sets are not compared.</p>
           <h3 class="doc-h3">Sending a notification (user to user)</h3>
@@ -18335,7 +18384,7 @@ DELETE /api/saved-views/:id        Delete view (creator/admin only)</code></pre>
           <h1 class="doc-h1" id="form-collaboration">Form Collaboration &amp; Drafts</h1>
           <p class="doc-p">Four record-form behaviours for people working on the same records at the same time, or on the same record from two devices.</p>
           <h2 class="doc-h2" id="form-collaboration-drafts">Unsaved drafts follow you</h2>
-          <p class="doc-p">While a form is dirty its unsaved draft (changed fields, staged lines, staged links) is stored in the browser AND mirrored to the server about a second after each change (<code class="doc-code">PUT /api/drafts/:collection/:item</code>, one row per user + collection + record, 256 KB cap). Opening the record elsewhere — another browser, another device — offers “Restore your unsaved changes”; the newer of the local and server copies wins. Saving, Discard, or the form going clean deletes both copies. <code class="doc-code">GET /api/drafts</code> lists your own drafts.</p>
+          <p class="doc-p">While a form is dirty its unsaved draft (changed fields, staged lines, staged links) is stored in the browser AND mirrored to the server about a second after each change (<code class="doc-code">PUT /api/drafts/:collection/:item</code>, one row per user + collection + record, 256 KB cap). Opening the record elsewhere — another browser, another device — offers “Continue your draft from your laptop (5m ago)” (a draft from the same browser reads “Restore your unsaved changes”); the newer of the local and server copies wins. Saving, Discard, or the form going clean deletes both copies. <code class="doc-code">GET /api/drafts</code> lists your own drafts. The server copy is yours alone, sealed at rest (AES-256-GCM, a key derived from the session secret) and kept for 7 days from the last change, then removed. Every read is judged again as you: a record you can no longer open offers nothing, and fields you can no longer edit are left out of the restore, with a note saying how many. System tables, chat and the layout editor keep no server draft, and a "View as" tab never reads or writes the viewed person’s drafts.</p>
           <h2 class="doc-h2" id="form-collaboration-section-lock">Section locked for a role</h2>
           <p class="doc-p">A layout section can be locked for specific roles (Table Editor → Layout → section ⚙ → “Locked for roles”, a sibling of “Hidden for roles”): those roles see every field in it read-only with the reason on the lock glyph, while the rest of the form stays editable. The server drops those fields from an update by a locked role (<code class="doc-code">nivaro_field_groups.locked_for_roles</code>); admins are exempt.</p>
           <h2 class="doc-h2" id="form-collaboration-row-ghost">Someone changed the line you are editing</h2>
@@ -18345,46 +18394,109 @@ DELETE /api/saved-views/:id        Delete view (creator/admin only)</code></pre>
           <!-- /SYNC:form-collaboration -->
         </div>
 
-        <div class="doc-section" id="s-duplicate-warnings" data-toc='[{"id":"duplicate-warnings","label":"Duplicate Warnings"},{"id":"duplicate-warnings-form","label":"On the new-record form"},{"id":"duplicate-warnings-setting","label":"Which collections are checked"},{"id":"duplicate-warnings-api","label":"API"},{"id":"duplicate-warnings-import","label":"Collection import preview"}]'>
+        <div class="doc-section" id="s-duplicate-warnings" data-toc='[{"id":"duplicate-warnings","label":"Duplicate Warnings"},{"id":"duplicate-warnings-form","label":"On the new-record form"},{"id":"duplicate-warnings-setting","label":"Setting it up per collection"},{"id":"duplicate-warnings-big","label":"Big tables are never scanned"},{"id":"duplicate-warnings-api","label":"API"},{"id":"duplicate-warnings-import","label":"Collection import preview"}]'>
           <!-- SYNC:duplicate-warnings -->
           <h1 class="doc-h1" id="duplicate-warnings">Duplicate Warnings</h1>
-          <p class="doc-p">Reference lists (unit types, vendors, categories, project types…) grow copies when nobody sees that “MX480” already exists while typing “mx480”. When someone creates a record, the form compares what they type in the label field with the existing records and shows the likely duplicates under the field — before they save.</p>
+          <p class="doc-p">Lists grow copies when nobody sees that “MX480” already exists while typing “mx480”. When someone creates a record, the form compares what they enter with the existing records and shows the likely duplicates — before they save. It is on for every collection unless an administrator turns it off.</p>
           <h2 class="doc-h2" id="duplicate-warnings-form">On the new-record form</h2>
           <ul class="doc-ul">
-            <li>**Already exists: MX480 (unit type) — Open** in amber: an existing record has the same text, ignoring case and spacing.</li>
-            <li>**Similar: MX-480 B (unit type)** in quiet grey: the same letters and digits once punctuation and accents are removed, one value is the start of the other (“Acme Corp” / “Acme Corporation”), or one or two typos in a longer value.</li>
-            <li>The form asks about 0.6 s after typing stops. A name opens the existing record in the drill-down sheet (the draft stays put) or, where the app has no sheet, in a new tab.</li>
-            <li>Only records the person may read count, and only fields they may read are compared (row filters, User Scopes and field permissions apply exactly as on a list read). Editing an existing record never shows the notice.</li>
-            <li>The notice never stops the save — unless the collection blocks exact copies (below).</li>
+            <li>**Already exists: MX480 (unit type) — Open** in amber: an existing record matches exactly.</li>
+            <li>**Similar: MX-480 B (unit type)** in quiet grey: a near match — punctuation, accents, a typo or two, a value within the allowed range.</li>
+            <li>The form asks about 0.6 s after typing stops; a newer value cancels the older question. A name opens the existing record in the drill-down sheet (the draft stays put) or, where the app has no sheet, in a new tab.</li>
+            <li>While the form is open, a matching record someone else creates appears in the notice on its own — the form asks again, as you, within a second or so.</li>
+            <li>Only records the person may read count, and a check that compares a field they may not read is skipped for them (row filters, User Scopes and field permissions apply exactly as on a list read). Editing an existing record never shows the notice.</li>
+            <li>The notice never stops the save — unless the collection blocks exact duplicates (below).</li>
           </ul>
-          <h2 class="doc-h2" id="duplicate-warnings-setting">Which collections are checked</h2>
-          <p class="doc-p">**Table Editor → Settings → Collection Browser → Warn about duplicates**, stored as <code class="doc-code">browser_config.duplicate_check</code> on the collection (no migration):</p>
+          <h2 class="doc-h2" id="duplicate-warnings-setting">Setting it up per collection</h2>
+          <p class="doc-p">**Data Model → a collection → Settings → Duplicate warnings.** Stored as <code class="doc-code">browser_config.duplicate_check</code> on the collection (no migration). Changes are a draft until you press Save.</p>
+          <ul class="doc-ul">
+            <li>**On / Off** — on by default for every registered collection (system tables are never checked).</li>
+            <li>**Label fields** (default) — each text field of the display template is checked on its own: the same text ignoring case, spacing and punctuation, or a typo or two.</li>
+            <li>**Custom rules** — rules combined with AND. Each rule is a field and how it matches (table below).</li>
+            <li>**Only records created in the last N days** — older records never count (needs a created-date field).</li>
+            <li>**Ignore records in** — pipeline states whose records never count (e.g. Canceled).</li>
+            <li>**Block exact duplicates** — off = warn only. On = a create that matches an existing record exactly on every rule is refused with <code class="doc-code">400 DUPLICATE_RECORD</code> (<code class="doc-code">field</code>, <code class="doc-code">value</code>, and <code class="doc-code">existing_id</code> when the person may read that record). Judged against every record, so the refusal can say a copy exists that the person cannot open. Creates only; a set of rules that compares lines never blocks.</li>
+            <li>**Test with a record** — pick any record: the card shows which other records would be flagged if it were being created now, with the rules as they stand (saved or not).</li>
+          </ul>
           <div class="doc-table-wrap"><table class="doc-table">
-            <thead><tr><th>Mode</th><th>What it does</th></tr></thead>
-            <tbody><tr><tr><td>Auto (unset)</td><td>On for a small reference list: the display template names exactly one plain text field (not computed, not a generated id) and the table holds at most 50,000 rows. Transactional tables, labels built from several fields and system tables are off.</td></tr>
-              <tr><td>On</td><td>The chosen fields (else the display template’s text fields), on any table size. Above 50,000 rows only the exact check runs (it seeks an index); the near-match checks scan and are skipped.</td></tr>
-              <tr><td>Off</td><td>Never checked.</td></tr>
-              <tr><td>Block exact copies</td><td>A create whose value equals an existing record’s (case and spacing ignored) is refused with <code class="doc-code">400 DUPLICATE_RECORD</code> (<code class="doc-code">field</code>, <code class="doc-code">value</code>, and <code class="doc-code">existing_id</code> when the person may read that record). Judged against every record, so the refusal can say a copy exists that the person cannot open. Creates only — renaming an existing record is not checked.</td></tr></tr></tbody>
+            <thead><tr><th>Field kind</th><th>How it can match</th></tr></thead>
+            <tbody><tr><tr><td>Text</td><td>Exact (ignoring case and spaces) · Close (allows typos) · Contains</td></tr>
+              <tr><td>Number / currency</td><td>Equal · Within ± X % · Within ± X</td></tr>
+              <tr><td>Date</td><td>Same day · Within N days</td></tr>
+              <tr><td>Link to one record</td><td>Same record</td></tr>
+              <tr><td>Lines (one-to-many)</td><td>Share at least N values of a line field — e.g. two orders with 3 of the same catalog items</td></tr></tr></tbody>
           </table></div>
-          <pre class="doc-pre"><code>PATCH /api/collections/unit_types
-{ "browser_config": { "duplicate_check": { "mode": "on", "fields": ["name"], "block_exact": true } } }</code></pre>
+          <h2 class="doc-h2" id="duplicate-warnings-big">Big tables are never scanned</h2>
+          <p class="doc-p">On a table with more than 50,000 records a set of rules runs only when one of its rules can use an index (exact text, numbers, dates and links on an indexed column; shared line values on an indexed line column). The other rules then only filter the records that one finds. Near matches (folded and typo passes) and Contains never drive a big table. The settings card says, rule by rule, what is skipped and why — “No index on Vendor Name — exact match skipped”. Everything runs under a 1.5 s time budget; a cut check answers <code class="doc-code">partial</code>.</p>
+          <pre class="doc-pre"><code>PATCH /api/collections/purchase_orders
+{ "browser_config": { "duplicate_check": {
+    "rules": [
+      { "field": "vendor", "match": "same" },
+      { "field": "total", "match": "percent", "amount": 5 },
+      { "field": "lines", "match": "shared", "line_field": "catalog_item", "amount": 2 }
+    ],
+    "within_days": 90,
+    "ignore_states": ["canceled"],
+    "block_exact": false } } }
+
+{ "duplicate_check": { "mode": "off" } }            // never checked
+{ "duplicate_check": { "fields": ["name"] } }       // older setting: still read as before</code></pre>
           <h2 class="doc-h2" id="duplicate-warnings-api">API</h2>
           <pre class="doc-pre"><code>GET /api/duplicates/unit_types
-→ { data: { enabled: true, fields: ["name"], block_exact: false, close: true, source: "auto", label: "Unit Type" } }
+→ { data: { enabled: true, fields: ["name"], watch: [{ field: "name", kind: "text" }],
+            sets: [{ anchor: "name", fields: ["name"] }], block_exact: false, source: "default" } }
 
 GET /api/duplicates/unit_types/check?values={"name":"mx480"}&amp;exclude=&lt;id&gt;
-→ { data: { enabled: true, fields: ["name"], matches: {
+→ { data: { enabled: true, matches: {
       name: [ { id: "7", label: "MX480", value: "MX480", match: "exact", score: 1 },
-              { id: "9", label: "MX-480 B", value: "MX-480 B", match: "close", score: 0.71 } ] } } }</code></pre>
-          <p class="doc-p">Signed in; answered as the caller. Up to 5 matches per field, exact first. The lookup runs under a 1.5 s time budget; <code class="doc-code">partial: true</code> says a check was cut.</p>
+              { id: "9", label: "MX-480 B", value: "MX-480 B", match: "close", score: 0.71 } ] } } }
+
+GET /api/duplicates/unit_types/plan?config=&lt;duplicate_check JSON&gt;     (administrators)
+GET /api/duplicates/unit_types/test?record=&lt;id&gt;&amp;config=&lt;JSON&gt;          (administrators)</code></pre>
+          <p class="doc-p">Signed in; answered as the caller. Matches are keyed by the set’s first field (where the form shows the notice). Up to 5 per set, exact first. Values for links are ids, for lines a list of line-field ids.</p>
           <h2 class="doc-h2" id="duplicate-warnings-import">Collection import preview</h2>
-          <p class="doc-p">The import preview (<code class="doc-code">POST /api/imports/preview</code>) checks every row the import would CREATE against the same fields and answers <code class="doc-code">duplicates: { fields, exact_rows, close_rows, in_file_rows, close, rows[] }</code> (the first 50 rows with what they copy). The confirm step shows “3 new rows would create a duplicate — 2 copy an existing record, 1 repeats an earlier row”. Choose a match field to update the existing records instead, or remove the rows from the file. Exact and punctuation-only matches are checked; the typo check does not run on imports.</p>
-          <div class="doc-note">The form in efp-new uses the same shared record form, so it gets the same notice with no host change.</div>
+          <p class="doc-p">The import preview (<code class="doc-code">POST /api/imports/preview</code>) checks every row the import would CREATE with the same settings and answers <code class="doc-code">duplicates: { fields, exact_rows, close_rows, in_file_rows, close, rows[], skipped? }</code> (the first 50 rows with what they copy). Existing records are looked up by a text, number or link rule; the other rules are checked per row. Rules on lines, and sets with nothing to look records up by, are listed under <code class="doc-code">skipped</code>. The typo check does not run on imports.</p>
+          <div class="doc-note">The form in efp-new uses the same shared record form, so it gets the same notice with no host change. To turn the check off for several collections at once on an environment, use <code class="doc-code">node scripts/duplicate-check-mode.mjs --off &lt;collections&gt; [--like &lt;text&gt;] [--execute]</code>.</div>
           <!-- /SYNC:duplicate-warnings -->
         </div>
 
-        <div class="doc-section" id="s-partner-needs" data-toc='[]'>
+        <div class="doc-section" id="s-partner-needs" data-toc='[{"id":"partner-needs","label":"Partner Needs on the Form"},{"id":"partner-needs-form","label":"What people see"},{"id":"partner-needs-which","label":"Which steps count"},{"id":"partner-needs-setting","label":"Turning it on"},{"id":"partner-needs-api","label":"API"}]'>
           <!-- SYNC:partner-needs -->
+          <h1 class="doc-h1" id="partner-needs">Partner Needs on the Form</h1>
+          <p class="doc-p">A step that sends a record to a partner system (an ERP, a warehouse) can only send what the record holds. When a field it needs is empty, the step stops at the very end. With this on, those fields carry a small **Needed by &lt;partner&gt;** badge from the start, so people fill them while they are on the record anyway.</p>
+          <h2 class="doc-h2" id="partner-needs-form">What people see</h2>
+          <ul class="doc-ul">
+            <li>**Needed by Acme ERP** beside a field’s label while the field is empty. Pointing at it says which step sends it. Filling the field clears the badge at once.</li>
+            <li>Badges follow what the form holds **now**, unsaved changes included. When the record’s values decide which partner gets the record (its warehouse, its type), changing that value moves the badges to the other partner’s fields, before saving.</li>
+            <li>When the field that picks the partner is still empty, there are no partner badges. That field shows a quiet line instead: “Pick a Warehouse to see what it needs.” The badges appear as soon as it is picked.</li>
+            <li>Lines are judged one by one. An empty cell a partner needs shows the partner’s name at its edge, on the lines that go to that partner only. Two lines of one record can name different partners.</li>
+            <li>Only fields the person may read are named. Read-only, calculated and generated fields are never badged.</li>
+          </ul>
+          <h2 class="doc-h2" id="partner-needs-which">Which steps count</h2>
+          <ul class="doc-ul">
+            <li>Partner pushes on steps out of the record’s current step and out of every step it can reach by moving forward (to a step with a higher order). A new record starts at its pipeline’s first step. When the pipeline’s steps have no order, only the next steps count. Steps a person presses and automatic steps both count.</li>
+            <li>A push counts only when its own conditions pass for the current values: the lookup that must find a row (<code class="doc-code">skip_when_empty</code>), the any-of check (<code class="doc-code">skip_unless_any</code>) and the guard rules. These are the same checks the push itself runs.</li>
+            <li>What a push needs is read from its payload template: a value it always sends with no fallback. A value with a fallback, one sent only when it is not empty, or one inside an <code class="doc-code">if</code> in Liquid is not badged.</li>
+          </ul>
+          <h2 class="doc-h2" id="partner-needs-setting">Turning it on</h2>
+          <p class="doc-p">**Data Model → Settings → Form UX → Partner needs on the form**, per collection, off by default. Stored as <code class="doc-code">browser_config.partner_badges</code> on the collection (no migration):</p>
+          <pre class="doc-pre"><code>PATCH /api/collections/stock_requests
+{ "browser_config": { "partner_badges": true } }</code></pre>
+          <h2 class="doc-h2" id="partner-needs-api">API</h2>
+          <pre class="doc-pre"><code>POST /api/partner-needs/stock_requests
+{ "item": "1042",                        // null for a new record
+  "values": { "warehouse": 5 },          // the form's current values
+  "lines": { "stock_request_lines.request": [
+      { "key": "7811", "values": { "quantity": 2 } },
+      { "key": "pending:0", "values": { "quantity": 1 } } ] } }
+→ { data: {
+    enabled: true, depth: "forward", state: { key: "approved", … },
+    fields: { ship_to: { partners: ["Acme ERP"], steps: ["Send to warehouse"] } },
+    hints: {},
+    lines: { "stock_request_lines.request": { rows: {
+      "7811": { item: { partners: ["Acme ERP"], steps: ["Send to warehouse"] } } } } },
+    inputs: { record: [ … ], lines: { … } } } }</code></pre>
+          <p class="doc-p">The caller must be able to read the record (or create in the collection, for a new one). <code class="doc-code">inputs</code> names the values the answer depends on: the form sends only those back, about 0.6 s after typing stops, and reuses an answer for the same values. It is a read: nothing is rendered, sent or written.</p>
           <!-- /SYNC:partner-needs -->
         </div>
 
@@ -18832,7 +18944,7 @@ POST /api/search/semantic/reindex
         <!-- ════ OBSERVABILITY ════ -->
 
         <!-- API ANALYTICS -->
-        <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"},{"id":"api-analytics-traces","label":"Slow requests: round trips, N+1s, the real plan"},{"id":"config-read-cache","label":"Configuration read cache"},{"id":"config-read-cache-shared","label":"Shared across processes (Redis)"},{"id":"cache-epoch","label":"Caches across processes"},{"id":"cache-switches","label":"Cache switches (Database, Caches)"},{"id":"permission-cache","label":"Permission cache"},{"id":"api-analytics-hooks","label":"Hook timings"},{"id":"api-analytics-replay","label":"Replaying a logged request"},{"id":"api-analytics-index-advisor","label":"Index advisor"},{"id":"api-analytics-inbound","label":"Inbound integrations"},{"id":"api-analytics-dependencies","label":"Partner dependencies"},{"id":"api-analytics-dead-clicks","label":"Dead and rage clicks"},{"id":"api-analytics-widget-timing","label":"Per-widget timing on dashboards"}]'>
+        <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"},{"id":"api-analytics-traces","label":"Slow requests: round trips, N+1s, the real plan"},{"id":"config-read-cache","label":"Configuration read cache"},{"id":"config-read-cache-shared","label":"Shared across processes (Redis)"},{"id":"cache-epoch","label":"Caches across processes"},{"id":"cache-switches","label":"Cache switches (Database, Caches)"},{"id":"cache-warm-on-change","label":"Warms after data changes"},{"id":"permission-cache","label":"Permission cache"},{"id":"api-analytics-hooks","label":"Hook timings"},{"id":"api-analytics-replay","label":"Replaying a logged request"},{"id":"api-analytics-index-advisor","label":"Index advisor"},{"id":"api-analytics-inbound","label":"Inbound integrations"},{"id":"api-analytics-dependencies","label":"Partner dependencies"},{"id":"api-analytics-dead-clicks","label":"Dead and rage clicks"},{"id":"api-analytics-widget-timing","label":"Per-widget timing on dashboards"}]'>
           <!-- SYNC:api-analytics -->
           <h1 class="doc-h1" id="api-analytics">API Analytics</h1>
           <p class="doc-p">Every API request is sampled into <code class="doc-code">nivaro_api_logs</code>, a ring buffer retaining 14 days of traffic. The /analytics/api page visualises it: request volume timeseries, p50/p95 latency, error rate, and the slowest/most-hit endpoints.</p>
@@ -18889,6 +19001,7 @@ POST /api/search/semantic/reindex
               <tr><td>metadata_l2.ttl_s</td><td><code class="doc-code">METADATA_L2_TTL_S</code></td><td>600</td></tr>
               <tr><td>warm.mode</td><td><code class="doc-code">CACHE_WARM</code> (on, off, auto)</td><td>auto</td></tr>
               <tr><td>warm.budget_ms</td><td><code class="doc-code">CACHE_WARM_BUDGET_MS</code></td><td>240000</td></tr>
+              <tr><td>warm.on_change</td><td><code class="doc-code">CACHE_WARM_ON_CHANGE</code> (on, off, auto = follows warm.mode)</td><td>auto</td></tr>
               <tr><td>list_total.ttl_ms</td><td><code class="doc-code">LIST_TOTAL_CACHE_MS</code> (0 = off)</td><td>30000</td></tr>
               <tr><td>label.ttl_ms</td><td><code class="doc-code">LABEL_CACHE_MS</code> (0 = off)</td><td>30000</td></tr>
               <tr><td>identity.enabled</td><td><code class="doc-code">IDENTITY_CACHE</code></td><td>on</td></tr>
@@ -18901,6 +19014,17 @@ POST /api/search/semantic/reindex
             <li>Identity rows: the active user row a request signs in with is shared by the requests of the next few seconds (at most 5). A write to <code class="doc-code">nivaro_users</code> through the app forgets them in that process at once; a suspension or role change made on another replica shows within the lifetime. Inactive accounts are always read fresh.</li>
             <li>Record form layouts: the sections and field assignments behind <code class="doc-code">/collection-layouts/active</code>, <code class="doc-code">/summary</code> and <code class="doc-code">/detail</code> are kept per layout and configuration number. Which form a person gets is still decided on every request. A layout edit clears them at once in the process that made it and on every other process when the number moves.</li>
             <li>Cache warm, list totals and label rows read the switch each time they run, so a change applies to the next run.</li>
+          </ul>
+          <h2 class="doc-h2" id="cache-warm-on-change">Warms after data changes</h2>
+          <p class="doc-p">A cached query or widget used to show what it worked out until its cache ran out, however much the records under it changed. With Warm after data changes on, a change to a collection (a save, a pipeline move, an import, or a write a procedure announces) marks every cached query that reads that collection as out of date, and the most-viewed answers of those queries are worked out again in the background, so the next person who opens the dashboard gets the new figure at once.</p>
+          <ul class="doc-ul">
+            <li>Which queries read a collection: the freshness sources a query declares, else the tables its SQL and the procedures it runs name.</li>
+            <li>What is worked out again: the answers people actually opened in the last 7 days, for each widget and each query up to four of them (one person per set of User Scopes, as that person). A Warm daily query nobody opened is left to the 06:00 run.</li>
+            <li>How often: a burst of changes (an import of 500 rows) is gathered for a few seconds and handled once. Each widget, and each query’s own answers, is worked out at most once every 2 minutes across all servers; a change inside that gap is handled when the gap ends, so the last change always lands. An answer already worked out after the change is left alone.</li>
+            <li>Load: it runs on the background database connections, takes a slot of the heavy-read gate like any expensive read, and a person who opens the same answer while it runs shares the run instead of starting another.</li>
+            <li>An answer that was not worked out again says so: its stamp names the collection that changed after it ("regions changed 2m ago, newer than this figure"), and a click refreshes it.</li>
+            <li>Database, Caches shows the last 24 hours across every server: changes heard, queries marked, warms, answers worked out again (and how many a viewer shared), answers left alone, failures and the queries worked out most.</li>
+            <li>Default <code class="doc-code">auto</code> follows the cache warm Mode, so it runs where scheduled jobs run (deployed servers) and not on a development machine. It never runs in cloud mode and needs Redis.</li>
           </ul>
           <h2 class="doc-h2" id="permission-cache">Permission cache</h2>
           <p class="doc-p">Every list read asks the same permission questions: may this person read the collection, which fields, under which row filter, inside which User Scopes. Without the cache each answer is rebuilt from the role's policies on every call, several database round trips per collection and again for every expanded relation. With the cache on (<code class="doc-code">PERMISSION_CACHE=on</code>, or Permission cache, Enabled on Database, Caches) each person's answers are kept in the process for a short time. It is off by default; turn it on for one environment (staging) first.</p>
@@ -19935,7 +20059,7 @@ PATCH /api/users/me/preferences { ops_report_email: true | null }</code></pre>
           <!-- /SYNC:ops-daily-report -->
         </div>
 
-        <div class="doc-section" id="s-realtime-pipeline" data-toc='[{"id":"realtime-pipeline","label":"Realtime Event Pipeline"},{"id":"realtime-pipeline-journal","label":"Catching up after a long absence"},{"id":"realtime-pipeline-stream","label":"Across servers"},{"id":"realtime-pipeline-raw","label":"Changes made outside the API"},{"id":"realtime-pipeline-probe","label":"Delivery probe"}]'>
+        <div class="doc-section" id="s-realtime-pipeline" data-toc='[{"id":"realtime-pipeline","label":"Realtime Event Pipeline"},{"id":"realtime-pipeline-journal","label":"Catching up after a long absence"},{"id":"realtime-pipeline-stream","label":"Across servers"},{"id":"realtime-pipeline-raw","label":"Changes made outside the API"},{"id":"realtime-pipeline-outside","label":"Writes nobody announced"},{"id":"realtime-pipeline-probe","label":"Delivery probe"}]'>
           <!-- SYNC:realtime-pipeline -->
           <h1 class="doc-h1" id="realtime-pipeline">Realtime Event Pipeline</h1>
           <p class="doc-p">When a record changes, open pages hear <code class="doc-code">collection:update</code> with the collection, the record id, the action and the NAMES of the fields written (never a value). This page covers how those events survive a sleeping laptop, a server that lost Redis for a moment, and writes that bypass the items service. Admin → Realtime → Event pipeline shows the counters and the delivery probe.</p>
@@ -19960,6 +20084,17 @@ await ctx.sql.announceWrites?.('forecasts', ids, { action: 'update', changed_fie
             <li>More than 100 records of one collection in one go become a single event with <code class="doc-code">item: "*"</code> and <code class="doc-code">bulk: &lt;count&gt;</code>: lists show the "new changes" pill and open records refetch quietly.</li>
             <li>Imports run by a procedure announce the collections listed in their "Recalculate rollups" setting.</li>
             <li>Only names and ids are broadcast. Pages read the new values through /items, where permissions apply.</li>
+            <li>SQL checks reports every procedure that writes a collection without announcing it (“Writes without announcing”) and proposes the change that does.</li>
+          </ul>
+          <h2 class="doc-h2" id="realtime-pipeline-outside">Writes nobody announced</h2>
+          <p class="doc-p">The outside-write watcher is the safety net for writers that never announce. Every 10 seconds (Realtime → Outside writes sets it, 5 seconds to 5 minutes), on the server that runs scheduled jobs, it looks at the collections people have open right now (or a list you choose) for rows whose changed-at time moved since the last look, and announces them like any other raw write. Rows the app itself announced a moment earlier are skipped, so no screen re-reads them twice.</p>
+          <ul class="doc-ul">
+            <li>Where SQL Server change tracking is on for the table, the watcher reads the tracked changes since the last version it saw instead: no changed-at column or index needed, and removals are seen too (announced as deletes). It stays one look behind, so a procedure that announces its own writes is never announced twice. If the kept history (2 days) no longer reaches the last version, one “many records changed” goes out and it starts again from now. Change tracking is set up per database with api/src/scripts/change-tracking-setup.ts. The Outside writes tab shows per collection which way it is watched.</li>
+            <li>A collection is watched on its changed-at column: the field marked “date updated”, else date_updated, updated_at, modified and similar names. It needs an index that starts with that column and a one-column primary key; without them it is refused (the Outside writes tab says why), so the watcher never reads a whole table every few seconds.</li>
+            <li>Each look reads a small window by the database’s own clock, in UTC and in local time (procedures often stamp GETDATE()), reaching two minutes back for transactions that commit late, and skips rows other transactions hold locked until a later look.</li>
+            <li>More than 500 changed rows in one look become one “many records changed” announcement.</li>
+            <li>Rows caught in 24 hours are counted per collection on the tab: each is a write still made without announcing — usually a procedure that SQL checks can fix.</li>
+            <li>OUTSIDE_WRITE_WATCH=on|off overrides the setting. Collections with realtime switched off are skipped. Never runs on hosted (cloud) plans.</li>
           </ul>
           <h2 class="doc-h2" id="realtime-pipeline-probe">Delivery probe</h2>
           <p class="doc-p">A Realtime delivery monitor (Monitors → New → Realtime delivery) runs every 5 minutes: a test connection inside the server joins a private room, a probe event goes out through the normal path (journal, durable table, stream) and the monitor records how long it took to arrive. Slower than the limit (default 2,000 ms), never arriving, or arriving without being journaled fails the check and raises an issue. "Run probe now" on the Realtime console runs the same check; the last 50 results from every server are kept.</p>
@@ -20292,7 +20427,7 @@ PATCH /api/db-tuning/settings                 { enabled?, ai_rewrites?, min_esti
           <!-- /SYNC:db-tuning -->
         </div>
 
-        <div class="doc-section" id="s-sql-checks" data-toc='[{"id":"sql-checks","label":"SQL Checks"},{"id":"sql-checks-checks","label":"What it checks"},{"id":"sql-checks-page","label":"The page"},{"id":"sql-checks-settings","label":"Settings and schedule"},{"id":"sql-checks-sqlfluff","label":"SQLFluff sidecar"},{"id":"sql-checks-apply","label":"Applying a fix"},{"id":"sql-checks-fixes","label":"Logging a fix from a script"},{"id":"sql-checks-api","label":"API"}]'>
+        <div class="doc-section" id="s-sql-checks" data-toc='[{"id":"sql-checks","label":"SQL Checks"},{"id":"sql-checks-checks","label":"What it checks"},{"id":"sql-checks-page","label":"The page"},{"id":"sql-checks-settings","label":"Settings and schedule"},{"id":"sql-checks-sqlfluff","label":"SQLFluff sidecar"},{"id":"sql-checks-apply","label":"Applying a fix"},{"id":"sql-checks-announce","label":"The announce fix"},{"id":"sql-checks-fixes","label":"Logging a fix from a script"},{"id":"sql-checks-api","label":"API"}]'>
           <!-- SYNC:sql-checks -->
           <h1 class="doc-h1" id="sql-checks">SQL Checks</h1>
           <p class="doc-p">SQL checks, the SQL checks tab of the Database page (/database/sql-checks, Operations → Database), checks the SQL that runs against the database for mistakes that corrupt or slow data. It reads every procedure, function, view and trigger definition from the database itself (sys.sql_modules), plus the SQL bodies Nivaro keeps in its own tables: import definitions’ stored procedure bodies and custom queries. Findings are tracked across runs, so a finding has a history: when it first appeared, how many runs saw it, and when it went away. Checks only read; nothing is changed by a run. Two kinds of procedure fix can be applied from a finding by a person (see Applying a fix). Admins only; SQL Server only.</p>
@@ -20307,7 +20442,8 @@ PATCH /api/db-tuning/settings                 { enabled?, ai_rewrites?, min_esti
               <tr><td>NOT IN over a nullable column</td><td>Warning</td><td>NOT IN (SELECT col …) where col is nullable and the subquery does not filter NULLs.</td></tr>
               <tr><td>SELECT * on a wide table</td><td>Info</td><td>SELECT * from a table with max-length text or binary columns.</td></tr>
               <tr><td>Import body differs from deployed</td><td>Warning (info when not deployed)</td><td>An import definition whose stored procedure body differs from the deployed procedure of the same name (comments, whitespace and the CREATE / ALTER verb are ignored), or names a procedure the database does not have.</td></tr>
-              <tr><td>SQLFluff rule</td><td>Info</td><td>Correctness rules from SQLFluff (ambiguous references RF01/RF02, AM01–AM07, unused CTEs ST03, subqueries in joins ST05) when a SQLFluff sidecar is configured. Layout and style rules are dropped.</td></tr></tr></tbody>
+              <tr><td>SQLFluff rule</td><td>Info</td><td>Correctness rules from SQLFluff (ambiguous references RF01/RF02, AM01–AM07, unused CTEs ST03, subqueries in joins ST05) when a SQLFluff sidecar is configured. Layout and style rules are dropped.</td></tr>
+              <tr><td>Writes without announcing</td><td>Warning</td><td>A procedure (or a stored import body) that inserts, updates, deletes, merges or truncates a table registered as a collection and never announces it (no EXEC nivaro_announce_writes and no INSERT into nivaro_raw_writes naming that collection). Screens with those records open keep the old values until someone reloads. One finding per collection.</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">The checks are pattern checks over T-SQL with comments and string literals blanked out, not a full parser: each prefers missing a case to raising a wrong one. A finding that is intended (a procedure that clears a work table on purpose) is marked as expected with a note; it stays out of the open count until someone reopens it.</div>
           <h2 class="doc-h2" id="sql-checks-page">The page</h2>
@@ -20336,6 +20472,16 @@ PATCH /api/db-tuning/settings                 { enabled?, ai_rewrites?, min_esti
           </ul>
           <div class="doc-note">App-managed procedures: when the procedure is app-managed (see App-managed procedures), the fix is built from the saved config body, not the live text, and Apply saves it as the next version and deploys it through config. Revert saves the previous body as another version. A procedure that was dropped in config, or that an import definition owns, is refused for a managed fix; an import-owned procedure keeps the import path described above. Procedures nobody has adopted are changed as before and are not adopted by a fix.</div>
           <div class="doc-note doc-warn">If your deployment keeps a procedure’s source elsewhere (a repository or deploy script), update it there too — otherwise the next deploy puts the old version back.</div>
+          <h3 class="doc-h3" id="sql-checks-announce">The announce fix</h3>
+          <p class="doc-p">For “Writes without announcing”, Propose fix makes the procedure tell open screens what it changed. Each write gets an OUTPUT clause that collects the changed ids into a table variable (the clause sits inside the statement, so the procedure’s flow is unchanged), and one block at the end of the procedure, before a trailing RETURN, calls nivaro_announce_writes per collection and action: the ids when there are up to 100, “many records changed” past that (open lists then re-read the rows they show). One fix covers every collection the procedure writes.</p>
+          <ul class="doc-ul">
+            <li>The block can never make the procedure fail: it is skipped when the transaction is already doomed or the announcer is missing, runs with XACT_ABORT off (set back as it was) inside TRY/CATCH, and swallows its own errors. Inside a caller’s transaction the announcement commits or rolls back with the work.</li>
+            <li>Where a statement cannot carry an OUTPUT clause (INSERT … EXEC, TRUNCATE, a statement that already has OUTPUT, a table without a one-column primary key) the collection is announced as “many records changed” on every run; the notes say which statements.</li>
+            <li>App-managed procedures are fixed in config (a new version, deployed from there). Procedures an import definition owns get the definition’s stored body rewritten; deploy it from the import definition. Any other procedure is shown with its diff but not changed from here: adopt it on the Procedures page first, or copy the change into its source.</li>
+            <li>Fix them all at once: with the check filter set to “Writes without announcing”, the list offers a review of every procedure — its path, collections and diff — and “Apply announce fix to N procedures” applies the chosen ones one at a time, each compiled and checked again exactly as a single fix.</li>
+            <li>Writes inside dynamic SQL and rows written before an early RETURN are not covered; the outside-write watcher (Realtime → Outside writes) is the safety net for those.</li>
+            <li>node scripts/announce-fix-dry-run.mjs prints the same plan for every procedure without writing anything (--diff for the changes, --compile to compile each under NOEXEC).</li>
+          </ul>
           <h2 class="doc-h2" id="sql-checks-fixes">Logging a fix from a script</h2>
           <p class="doc-p">A script that repairs data (removes copies, adds a guard index) logs what it did so the page can show it next to the findings: insert into nivaro_sql_check_fixes directly, or POST /api/sql-checks/fixes as an administrator (an admin’s API key works).</p>
           <pre class="doc-pre"><code>{

@@ -45,7 +45,8 @@ import {
 } from './notifications/bundles'
 import { DeliveryChips } from './notifications/DeliveryChips'
 import { NotificationActions } from './notifications/NotificationActions'
-import { NotificationDetailBits } from './notifications/NotificationDetailBits'
+import { NotificationDetailBits, ResolvedLine } from './notifications/NotificationDetailBits'
+import { RelativeTime } from './RelativeTime'
 
 // Server serialize() shape. The SDK's NotificationItem carries the raw
 // columns; the bell needs the click-target extras too, so it types the rows
@@ -432,8 +433,9 @@ export function NotificationBell({
               {n.message.replace(/<[^>]+>/g, '')}
             </span>
           )}
+          <ResolvedLine resolved={n.detail?.resolved} />
           <span className='mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px] text-slate-400'>
-            {formatRelative(n.created_at)}
+            <RelativeTime value={n.created_at} />
             <DeliveryChips
               delivery={n.delivery}
               mailLogUrl={mailLogUrl}
@@ -544,7 +546,7 @@ export function NotificationBell({
             </button>
           </div>
         )}
-        {n.actions && n.actions.length > 0 && !n.read && (
+        {n.actions && n.actions.length > 0 && !n.read && !n.detail?.resolved && (
           <NotificationActions
             actions={n.actions}
             notificationId={n.id}

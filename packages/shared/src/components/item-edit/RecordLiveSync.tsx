@@ -18,9 +18,9 @@ import {
   useLiveRecordEvent
 } from '../../lib/live'
 import { useOptionalRealtime } from '../../lib/realtime'
-import { useRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
+import { otherTabNote, useRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
 import { userErrorMessage } from '../../lib/safe-error'
-import { formatRelative } from '../../lib/utils'
+import { cn, formatRelative } from '../../lib/utils'
 import { CollectionImportBanner } from '../CollectionImportBanner'
 import { markLiveRecordWrite } from './live-record-marks'
 import { fileQueryOfRecord, relatedQueryOfRecord, wideSpreadDelay } from './live-related'
@@ -459,9 +459,12 @@ export function RecordLiveSync({
   const { userId } = useItemEditAuth()
   const userIdRef = useRef(userId)
   userIdRef.current = userId
-  useRecordTabsSignal(userId, 'saved', collection, itemId, () => {
+  useRecordTabsSignal(userId, 'saved', collection, itemId, ({ fields }) => {
     if (goneRef.current) return
-    // Their own save in another window: refresh quietly — it was not someone else.
+    // rt5 #6: the fields that save carried take the quiet fade here (a field this tab is
+    // editing keeps its draft and goes through the conflict path instead). No chip — it was
+    // not someone else.
+    if (fields) markLiveRecordWrite(collection, String(itemId), fields)
     void refreshRecord(false)
     invalidate([
       ['pipeline-instance', collection, itemId],
@@ -568,11 +571,10 @@ export function RecordLiveSync({
   }, [loadDenied])
 
   // #1745: another tab of this browser has unsaved edits to this record.
+  // rt5 #6: one quiet line, never a banner; while BOTH tabs hold unsaved edits it says so on
+  // both sides — two edit sets never race silently.
   const tabs = useRecordTabs(collection, itemId, dirty, userId)
-  const [tabsDismissed, setTabsDismissed] = useState(false)
-  useEffect(() => {
-    if (!tabs.otherDirty) setTabsDismissed(false)
-  }, [tabs.otherDirty])
+  const tabNote = gone ? null : otherTabNote({ otherDirty: tabs.otherDirty, dirty })
 
   // Upload presence (#282): relay this tab's file uploads into the record
   // room, and render chips for co-viewers' in-flight uploads.
@@ -634,11 +636,10 @@ export function RecordLiveSync({
   }
 
   const flows = Object.values(automation)
-  const showTabs = tabs.otherDirty && !tabsDismissed && !dirty && !gone
   if (
     !gone &&
     flows.length === 0 &&
-    !showTabs &&
+    !tabNote &&
     !importing &&
     (!realtime || (!flash && uploads.length === 0))
   )
@@ -675,31 +676,31 @@ export function RecordLiveSync({
       {gone?.kind === 'access' && !onGoneChange && (
         <RecordAccessLostPanel onBack={() => window.history.back()} />
       )}
-      {showTabs && (
-        <div
-          data-record-other-tab
-          className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
+      {tabNote && (
+        <p
+          data-record-other-tab={tabNote.tone}
+          role='status'
+          className={cn(
+            'flex flex-wrap items-center gap-x-2 gap-y-0.5 px-0.5 text-[11.5px] leading-5',
+            tabNote.tone === 'both' ? 'text-amber-800 dark:text-amber-300' : 'text-muted-foreground'
+          )}
         >
-          <Copy className='h-4 w-4 shrink-0 text-amber-500' />
-          <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
-            This record is open with unsaved changes in another tab — editing it here too may
-            overwrite them.
-          </p>
+          <Copy
+            className={cn(
+              'h-3.5 w-3.5 shrink-0',
+              tabNote.tone === 'both' ? 'text-amber-500' : 'text-muted-foreground/70'
+            )}
+            aria-hidden
+          />
+          <span className='min-w-0'>{tabNote.text}</span>
           <button
             type='button'
             onClick={tabs.focusOther}
-            className='h-7 shrink-0 rounded-md border border-amber-300 bg-white px-2.5 text-[11.5px] font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-500/10'
+            className='shrink-0 rounded font-medium underline decoration-dotted underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
           >
-            Switch to that tab
+            Switch to it
           </button>
-          <button
-            type='button'
-            onClick={() => setTabsDismissed(true)}
-            className='h-7 shrink-0 rounded-md px-2 text-[11.5px] text-amber-700 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-500/10'
-          >
-            Dismiss
-          </button>
-        </div>
+        </p>
       )}
       {importing && !gone && (
         <div

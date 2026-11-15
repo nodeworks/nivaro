@@ -14,6 +14,7 @@ export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/back-and-peek.js'
 export * from './sections/bulk-actions.js'
+export * from './sections/changed-by-others.js'
 export * from './sections/chaos.js'
 export * from './sections/chaos-ci.js'
 export * from './sections/chaos-client.js'
@@ -57,12 +58,14 @@ export * from './sections/live-attention.js'
 export * from './sections/live-coedit.js'
 export * from './sections/live-conflicts.js'
 export * from './sections/live-feeds.js'
+export * from './sections/live-forms.js'
 export * from './sections/live-lists.js'
 export * from './sections/live-ops.js'
 export * from './sections/live-outside.js'
 export * from './sections/live-progress.js'
 export * from './sections/live-records.js'
 export * from './sections/live-screens.js'
+export * from './sections/live-setting.js'
 export * from './sections/low-code.js'
 export * from './sections/mobile-app.js'
 export * from './sections/monitoring.js'
@@ -80,6 +83,7 @@ export * from './sections/quality-checks.js'
 export * from './sections/queues.js'
 export * from './sections/ready-to-send.js'
 export * from './sections/realtime-tier.js'
+export * from './sections/record-glance.js'
 export * from './sections/record-insights.js'
 export * from './sections/record-integrations.js'
 export * from './sections/release-image.js'
@@ -88,9 +92,11 @@ export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
 export * from './sections/security.js'
+export * from './sections/send-my-view.js'
 export * from './sections/sql-checks.js'
 export * from './sections/storage.js'
 export * from './sections/summary-mode.js'
+export * from './sections/team-board.js'
 export * from './sections/team-throughput.js'
 export * from './sections/tree-advanced.js'
 export * from './sections/trees.js'
@@ -131,6 +137,7 @@ import {
 import { attributesGuide } from './sections/attributes.js'
 import { collabBackAndPeek } from './sections/back-and-peek.js'
 import { bulkActionsGuide } from './sections/bulk-actions.js'
+import { collabChangedByOthers } from './sections/changed-by-others.js'
 import { chaosDocs } from './sections/chaos.js'
 import { chaosBuilderDocs } from './sections/chaos-builder.js'
 import { chaosCiDocs } from './sections/chaos-ci.js'
@@ -314,7 +321,8 @@ import { collabLiveTrace, collabTabCount } from './sections/live-attention.js'
 import { collabLiveCoedit } from './sections/live-coedit.js'
 import { collabLiveConflicts } from './sections/live-conflicts.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
-import { collabLiveCounts, collabLiveLists } from './sections/live-lists.js'
+import { liveFormsDocs } from './sections/live-forms.js'
+import { collabLiveConfig, collabLiveCounts, collabLiveLists } from './sections/live-lists.js'
 import {
   aiActionsDocs,
   flowMapReplayDocs,
@@ -326,6 +334,7 @@ import { liveOutsideDocs } from './sections/live-outside.js'
 import { collabLiveProgress } from './sections/live-progress.js'
 import { collabLiveOps, collabLiveRecords, collabPresence } from './sections/live-records.js'
 import { liveScreensDocs } from './sections/live-screens.js'
+import { collabLiveSetting } from './sections/live-setting.js'
 import { loadingFeelDocs } from './sections/loading-feel'
 import {
   lowCodeFormulaBuilder,
@@ -439,6 +448,7 @@ import { realtimeLoadTest } from './sections/realtime-load-test.js'
 import { realtimePresenceLoad } from './sections/realtime-presence-load.js'
 import { realtimeTierDocs } from './sections/realtime-tier.js'
 import { realtimeTransport } from './sections/realtime-transport.js'
+import { collabRecordGlance } from './sections/record-glance.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
 import { recordIntegrations } from './sections/record-integrations.js'
 import { releaseImageDocs } from './sections/release-image.js'
@@ -508,6 +518,7 @@ import {
   securityUserScopes,
   securityWorkspaceTemplates
 } from './sections/security.js'
+import { collabSendMyView } from './sections/send-my-view.js'
 import { sqlChecksDocs } from './sections/sql-checks.js'
 import {
   storageFileExpiry,
@@ -516,6 +527,7 @@ import {
   storageProviders
 } from './sections/storage.js'
 import { summaryMode } from './sections/summary-mode.js'
+import { collabTeamBoard } from './sections/team-board.js'
 import {
   managersTeamGuide,
   peoplePageGuide,
@@ -925,18 +937,25 @@ export const navSections: NavGroup[] = [
       collabReloadTrust,
       collabLiveConflicts,
       collabLiveCoedit,
+      collabRecordGlance,
       liveWidgetsDocs,
       liveOutsideDocs,
       collabLiveProgress,
+      liveFormsDocs,
       collabOfflinePopout,
       collabLiveLists,
+      collabChangedByOthers,
       liveScreensDocs,
       collabLiveCounts,
+      collabLiveConfig,
       collabBackAndPeek,
       collabLiveOps,
       collabPresence,
+      collabSendMyView,
       collabTabCount,
+      collabLiveSetting,
       collabLiveTrace,
+      collabTeamBoard,
       collabNotificationsCenter,
       collabUserActivityFeed,
       collabKeyboardShortcuts,

@@ -101,7 +101,14 @@ export interface RoomRecordData {
   id: string
   label: string
   state: { key: string; label: string; color: string | null } | null
-  sla: { status: string; elapsed_hours: number | null; due_hours: number | null } | null
+  sla: {
+    status: string
+    elapsed_hours: number | null
+    due_hours: number | null
+    /** Hours until the step is due; negative once overdue (older APIs omit it). */
+    remaining_hours?: number | null
+    business_hours?: boolean
+  } | null
   owners: Array<{ id: string; name: string }>
 }
 

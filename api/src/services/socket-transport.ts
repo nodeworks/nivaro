@@ -387,14 +387,18 @@ export function livePayload(entry: {
   event?: string
   payload: Record<string, unknown>
   rseq?: number
+  iseq?: number
 }): Record<string, unknown> {
   if (entry.seq == null) return entry.payload
-  if (typeof entry.rseq !== 'number') return { ...entry.payload, _seq: entry.seq }
+  // Realtime 23 — the record's own position (`_iseq`), on one record's change only.
+  const rec = typeof entry.iseq === 'number' ? { _iseq: entry.iseq } : {}
+  if (typeof entry.rseq !== 'number') return { ...entry.payload, _seq: entry.seq, ...rec }
   return {
     ...entry.payload,
     _seq: entry.seq,
     _rseq: entry.rseq,
-    _room: splitTenantRoom(entry.room).room
+    _room: splitTenantRoom(entry.room).room,
+    ...rec
   }
 }
 
@@ -469,6 +473,14 @@ export interface CoalescedUpdate {
   _room?: string
   /** #2477 — the delivery stamp of the newest event merged, when that one carried it. */
   _st?: number
+  /**
+   * Realtime 23 — per record, the range of its own counter the merged message covers
+   * (`id → [lowest, highest]`); only records whose every merged event carried one.
+   */
+  _iseqs?: Record<string, [number, number]>
+  /** Realtime round 2 (2026-11-14): every merged write came from an import run / a raw write
+   *  (#1826 / #1875), so a list can say "Import added 500 records". Absent when they differ. */
+  source?: 'import' | 'raw'
 }
 
 /** Collapse several `collection:update` payloads for one collection into one message. */
@@ -487,11 +499,22 @@ export function mergeUpdates(
   let rseq: number | undefined
   let rseqMin: number | undefined
   let room: string | undefined
+  const iseqs = new Map<string, [number, number] | null>()
+  const sources = new Set<unknown>()
   for (const p of list) {
+    sources.add(p.source)
     const id = p.item as string | number | null | undefined
     if (id != null && !seen.has(String(id))) {
       seen.add(String(id))
       ids.push(id)
+    }
+    if (id != null) {
+      const k = String(id)
+      const prev = iseqs.get(k)
+      const n = p._iseq
+      // One event of this record without a counter: its range cannot be judged.
+      if (typeof n !== 'number' || prev === null) iseqs.set(k, null)
+      else iseqs.set(k, prev ? [Math.min(prev[0], n), Math.max(prev[1], n)] : [n, n])
     }
     if (typeof p.action === 'string') actions.add(p.action)
     const cf = p.changed_fields
@@ -518,6 +541,8 @@ export function mergeUpdates(
     coalesced: true
   }
   if (actions.size === 1) out.action = [...actions][0] as CoalescedUpdate['action']
+  const source = sources.size === 1 ? [...sources][0] : undefined
+  if (source === 'import' || source === 'raw') out.source = source
   // A message with no field list means "anything may have changed" — the union stays open.
   if (!anyAllFields && fields.size) out.changed_fields = [...fields].slice(0, 50)
   if (seq != null) out._seq = seq
@@ -527,6 +552,16 @@ export function mergeUpdates(
     out._rseq = rseq
     out._rseq_min = rseqMin
     out._room = room
+  }
+  if (!many) {
+    const ranges: Record<string, [number, number]> = {}
+    let any = false
+    for (const [k, r] of iseqs)
+      if (r) {
+        ranges[k] = r
+        any = true
+      }
+    if (any) out._iseqs = ranges
   }
   return out
 }

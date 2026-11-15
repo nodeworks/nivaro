@@ -1,5 +1,6 @@
 import {
   AutofillRunsChip,
+  announceLocalPrefs,
   applyDisplayPrefs,
   configureTabSound,
   configureUserSync,
@@ -93,6 +94,7 @@ import {
   isRecordPopout,
   JobsTray,
   LiveAnnouncer,
+  LivePreferenceHost,
   NavigationContext,
   NivaroProvider,
   OfflineBanner,
@@ -104,6 +106,7 @@ import {
   recordNavigation,
   restoreTrailScroll,
   ScreenRefreshButton,
+  SentViewCards,
   SOMETHING_WENT_WRONG,
   scrollPathOf,
   scrollToRestore,
@@ -116,7 +119,7 @@ import {
 import { AskPanelHost } from '@/components/ask-panel-host'
 import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
-import { NotificationBell } from '@/components/notification-bell'
+import { NOTIF_ROUTES, NotificationBell } from '@/components/notification-bell'
 import { KeyboardShortcuts } from '@/components/shortcuts-overlay'
 import { TeamChatDock } from '@/components/team-chat'
 import { ThemeSwitcher } from '@/components/theme-switcher'
@@ -131,6 +134,7 @@ import { reportRenderCrash } from '@/lib/global-error-report'
 import { hubForPath, isPathDisabled } from '@/lib/hubs'
 import { useT } from '@/lib/i18n'
 import { openViewAsTab, readMasquerade } from '@/lib/masquerade'
+import { registerThemePersist, useTheme } from '@/lib/theme'
 import { usePagePresence } from '@/lib/use-page-presence'
 import { useSessionRecorder } from '@/lib/use-session-recorder'
 import { useSettings } from '@/lib/useSettings'
@@ -306,6 +310,26 @@ export function AppLayout() {
   // Timezone preference (#31): the shared formatters render in the user's
   // chosen zone once set; browser default otherwise.
   const { user: authUser } = useAuth()
+  // Theme follows the person across devices (rt4 #19): a choice made here is saved to their
+  // account, and one made elsewhere (authUser.preferences.theme, refetched on prefs:changed)
+  // is applied here. Other tabs of this browser follow through the storage event.
+  // A "View as" tab is someone else on this browser's storage: it neither saves nor adopts.
+  const viewingAs = !!readMasquerade()
+  const { adoptServerTheme } = useTheme()
+  useEffect(() => {
+    if (viewingAs) return
+    registerThemePersist((t) => {
+      void api
+        .patch('/users/me/preferences', { theme: t })
+        .then(() => announceLocalPrefs(['theme']))
+        .catch(() => {})
+    })
+    return () => registerThemePersist(null)
+  }, [viewingAs])
+  const serverTheme = (authUser?.preferences as Record<string, unknown> | undefined)?.theme
+  useEffect(() => {
+    if (!viewingAs) adoptServerTheme(serverTheme)
+  }, [serverTheme, adoptServerTheme, viewingAs])
   useEffect(() => {
     // Display prefs (#229/#230/#232/#411): the shared formatters honor them and
     // Text size scales the root — the same applyDisplayPrefs efp-new's shell runs.
@@ -999,6 +1023,7 @@ export function AppLayout() {
         <UserSyncHost />
         <OutboxHost userId={authUser?.id ?? null} />
         <HuddleCallHost />
+        <SentViewHost />
         {/* Realtime #17: one record sheet for the whole app (My Work, the bell, notifications,
             search, record links in comments open records in it). */}
         <RecordPeekHost wrapSheet={(sheet) => <PeekSheetProviders>{sheet}</PeekSheetProviders>} />
@@ -1227,6 +1252,8 @@ function UserSyncHost() {
   return (
     <NivaroProvider client={announcementsClient}>
       <UserSyncInner onPrefsChanged={() => void refetch()} />
+      {/* Realtime round 3 #24 — Profile → Display → Live updates (Normal / Calm / Off). */}
+      <LivePreferenceHost />
     </NivaroProvider>
   )
 }
@@ -1287,6 +1314,17 @@ function HuddleCallHost() {
   return (
     <NivaroProvider client={announcementsClient}>
       <HuddleCallLayer />
+    </NivaroProvider>
+  )
+}
+
+/** Send my view: a colleague's view arrives as a quiet card while this app is open. */
+function SentViewHost() {
+  const navigate = useNavigate()
+  if (readMasquerade()) return null
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <SentViewCards routes={NOTIF_ROUTES} onNavigate={(p) => navigate(p)} />
     </NivaroProvider>
   )
 }

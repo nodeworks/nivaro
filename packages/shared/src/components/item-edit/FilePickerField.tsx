@@ -19,6 +19,8 @@ import { useFileHealth } from '../../hooks/useFileHealth'
 import { del, get, post } from '../../lib/commands'
 import { cn, formatDateTime } from '../../lib/utils'
 import { FileDownloadCount, useFileDownloadStats } from './FileDownloadCount'
+import { FileUsageChip, useFileUsage, useOnceVisible } from './FileUsage'
+import { useFileDownload } from './file-download'
 import {
   noteOwnFileChange,
   OWN_FILE_CHANGE_MS,
@@ -27,9 +29,13 @@ import {
   RemovedFileRow,
   useLiveFileList
 } from './file-live'
+import {
+  chipThumbUrl,
+  FileProcessingBadge,
+  FileProcessingTile,
+  useFileProcessing
+} from './file-processing'
 import { liveRecordWrite } from './live-record-marks'
-import { FileUsageChip, useFileUsage, useOnceVisible } from './FileUsage'
-import { useFileDownload } from './file-download'
 import { useM2MStaging } from './M2MStagingContext'
 import type { CMSRelation } from './types'
 
@@ -99,23 +105,33 @@ function FileThumb({
   url,
   type,
   filename,
-  size = 'md'
+  size = 'md',
+  processing = false
 }: {
   url: string
   type: string | null
   filename: string
   size?: 'sm' | 'md' | 'lg'
+  /** rt3 #17 — the thumbnail is still being made: a quiet tile until it is ready. */
+  processing?: boolean
 }) {
   const dim = size === 'sm' ? 'h-10 w-10' : size === 'lg' ? 'h-20 w-20' : 'h-14 w-14'
+  // The small rendition the server prepares after upload; the original if that fails.
+  const [thumbFailed, setThumbFailed] = useState(false)
+  if (isImage(type) && processing) return <FileProcessingTile className={dim} />
   if (isImage(type)) {
     return (
       <img
-        src={url}
+        src={thumbFailed ? url : chipThumbUrl(url)}
         alt={filename}
         data-file-thumb
         className={cn(dim, 'object-cover rounded shrink-0')}
         loading='lazy'
         onError={(e) => {
+          if (!thumbFailed && chipThumbUrl(url) !== url) {
+            setThumbFailed(true)
+            return
+          }
           ;(e.target as HTMLImageElement).style.display = 'none'
         }}
       />
@@ -290,6 +306,11 @@ export function FilePickerField({
   // generated). Read once the chip is on screen; never on a new record.
   const parentDraft = useParentDraft()
   const recordId = parentDraft?.draft?.id != null ? String(parentDraft.draft.id) : null
+  // rt3 #17 — "Processing…" while a new file's thumbnail / text is made.
+  const processing = useFileProcessing(fileId ? [fileId] : [], {
+    collection: parentDraft?.collection,
+    itemId: recordId
+  })
   const [usageRef, usageVisible] = useOnceVisible<HTMLDivElement>(!!fileId)
   const usage = useFileUsage(
     parentDraft?.collection,
@@ -462,11 +483,15 @@ export function FilePickerField({
                 type={file?.type ?? null}
                 filename={file?.filename_download ?? ''}
                 size='sm'
+                processing={!!fileId && processing.isProcessing(fileId)}
               />
             </a>
           )}
           <div className='flex-1 min-w-0'>
             <div className='flex items-center gap-1'>
+              {!hasPending && !!fileId && processing.isProcessing(fileId) && (
+                <FileProcessingBadge />
+              )}
               {hasPending && <Clock className='h-3 w-3 text-amber-400 shrink-0' />}
               <p data-file-name className='text-[12px] font-medium text-slate-700 truncate'>
                 {hasPending ? pendingFile!.name : fileDisplayName(file) || fileId}
@@ -779,6 +804,11 @@ export function FileM2MField({
   // has no draft, so fall back to the relation's own parent side — otherwise the
   // "used in" and download chips never load there.
   const ownerCollection = parentDraft?.collection ?? relation.one_collection ?? null
+  // rt3 #17 — "Processing…" while a new file's thumbnail / text is made; updates in place.
+  const processing = useFileProcessing(isNew ? [] : committedIds, {
+    collection: ownerCollection,
+    itemId: isNew ? null : parentId
+  })
   const [usageRef, usageVisible] = useOnceVisible<HTMLDivElement>(committedIds.length > 0)
   const usage = useFileUsage(
     ownerCollection,
@@ -922,9 +952,15 @@ export function FileM2MField({
                     type={f?.type ?? null}
                     filename={f?.filename_download ?? id}
                     size='sm'
+                    processing={processing.isProcessing(id)}
                   />
                 </a>
                 <div className='flex-1 min-w-0'>
+                  {processing.isProcessing(id) && (
+                    <span className='float-right ml-1.5'>
+                      <FileProcessingBadge />
+                    </span>
+                  )}
                   <a
                     href={`${getUrl(id)}?download=1`}
                     download={f?.filename_download || true}

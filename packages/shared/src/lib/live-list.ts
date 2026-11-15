@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { get, post } from './commands'
 import { useLiveCollection } from './live'
+import { liveMotionAllowed, useLivePreference } from './live-preference'
 import { loadUserCard } from './user-cards'
 
 /**
@@ -57,11 +58,8 @@ export function flashRows(
   opts: { strong?: boolean } = {}
 ): void {
   if (!root || ids.length === 0 || typeof window === 'undefined') return
-  try {
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
-  } catch {
-    /* no matchMedia — flash anyway */
-  }
+  // Reduced motion, or live updates set to Calm/Off: no flash.
+  if (!liveMotionAllowed()) return
   const tint = opts.strong ? 0.34 : 0.22
   for (const id of ids) {
     const esc = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id.replace(/"/g, '\\"')
@@ -200,7 +198,12 @@ export function useRowChanges(): RowChanges {
     // names changing re-renders the list; tooltips are read at render time
     [names]
   )
-  const isNew = useCallback((id: string) => changesRef.current.get(id)?.kind === 'create', [])
+  // Calm/Off: no "new" dot (the row is simply there).
+  const { quiet } = useLivePreference()
+  const isNew = useCallback(
+    (id: string) => !quiet && changesRef.current.get(id)?.kind === 'create',
+    [quiet]
+  )
   const forget = useCallback((ids: string[]) => {
     for (const id of ids) changesRef.current.delete(id)
   }, [])
@@ -378,6 +381,8 @@ export function mayAffectMatch(
   const changed = event.changed_fields
   if (!changed || changed.length === 0) return true
   if (changed.every((f) => f.startsWith('$'))) return false
+  // "Changed by others" (`$changed`): any real edit can bring a record into the window.
+  if (fields.has('$changed')) return true
   if (fields.size === 0) return false
   return changed.some((f) => fields.has(f))
 }
@@ -390,23 +395,37 @@ export function mayAffectMatch(
  * stays on screen until the new arrives — nothing flashes or jumps). Bursts
  * coalesce; aspect-only notices (comments, locks…) never refetch a view that
  * draws columns; focus mode holds the feed back like every other list.
+ * `paused` (the list's "Pause live updates", live-list-flow.ts): changes wait and
+ * one refetch runs on resume.
  */
 export function useLiveQueryRefresh(
   collection: string | null | undefined,
   keys: unknown[][],
-  opts: { debounceMs?: number; enabled?: boolean } = {}
+  opts: { debounceMs?: number; enabled?: boolean; paused?: boolean } = {}
 ): void {
   const qc = useQueryClient()
   const keysRef = useRef(keys)
   keysRef.current = keys
+  const pausedRef = useRef(!!opts.paused)
+  pausedRef.current = !!opts.paused
+  const heldRef = useRef(false)
   useLiveCollection(
     collection,
     (batch) => {
       if (batch.aspectsOnly) return
+      if (pausedRef.current) {
+        heldRef.current = true
+        return
+      }
       for (const k of keysRef.current) void qc.invalidateQueries({ queryKey: k })
     },
     { debounceMs: opts.debounceMs ?? 600, enabled: opts.enabled, focusable: true }
   )
+  useEffect(() => {
+    if (opts.paused || !heldRef.current) return
+    heldRef.current = false
+    for (const k of keysRef.current) void qc.invalidateQueries({ queryKey: k })
+  }, [opts.paused, qc])
 }
 
 /**

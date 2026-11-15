@@ -34,6 +34,7 @@ import { openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../../lib/record-peek'
 import { cn, formatRelative } from '../../lib/utils'
 import { hasSnapshotView, offersChanges } from '../NotificationBell'
+import { RelativeTime } from '../RelativeTime'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { AsItWasSheet } from './AsItWasSheet'
 import {
@@ -46,7 +47,11 @@ import {
 } from './bundles'
 import { DeliveryChips } from './DeliveryChips'
 import { NotificationActions } from './NotificationActions'
-import { NotificationChangesList, NotificationDetailBits } from './NotificationDetailBits'
+import {
+  NotificationChangesList,
+  NotificationDetailBits,
+  ResolvedLine
+} from './NotificationDetailBits'
 
 /**
  * The full notifications inbox — lane tabs (Critical / Needs you / FYI),
@@ -539,7 +544,7 @@ export function NotificationCenterView({
             {n.subject ?? n.title ?? '—'}
           </span>
           <span className='shrink-0 text-[10.5px] text-slate-400'>
-            {formatRelative(n.created_at ?? new Date())}
+            <RelativeTime value={n.created_at ?? new Date()} />
           </span>
         </div>
         {n.message && (
@@ -547,6 +552,7 @@ export function NotificationCenterView({
             {n.message.replace(/<[^>]+>/g, '')}
           </p>
         )}
+        <ResolvedLine resolved={n.detail?.resolved} className='text-[11.5px]' />
       </>
     )
     return (
@@ -607,9 +613,11 @@ export function NotificationCenterView({
                       ? `${n.target_label}${n.item ? ` #${n.item}` : ''}`
                       : n.collection === '__chat__'
                         ? 'Chat'
-                        : n.collection
-                          ? `${n.collection}${n.item ? ` #${n.item}` : ''}`
-                          : 'Open'}
+                        : n.collection && !n.item
+                          ? 'See what changed'
+                          : n.collection
+                            ? `${n.collection} #${n.item}`
+                            : 'Open'}
               </button>
             )}
             {unread && !target && (
@@ -669,7 +677,7 @@ export function NotificationCenterView({
               )}
             </div>
           )}
-          {n.actions && n.actions.length > 0 && (
+          {n.actions && n.actions.length > 0 && !n.detail?.resolved && (
             <NotificationActions
               actions={unread ? n.actions : n.actions.filter((a) => !!a.input)}
               notificationId={n.id}
@@ -1252,7 +1260,7 @@ export function NotificationCenterView({
                         {g.subject.replace(/^critical:\s*/i, '')}
                       </span>
                       <span className='shrink-0 text-[10.5px] text-slate-400'>
-                        {formatRelative(g.created_at ?? new Date())}
+                        <RelativeTime value={g.created_at ?? new Date()} />
                       </span>
                       <span
                         className={cn(

@@ -39,6 +39,10 @@ export type RecordAspect =
   | '$related'
   /** rt2 #17 — the record's resolved owners moved (services/owner-change-live.ts). */
   | '$owners'
+  /** rt4 #8 — an approval chain on the record was started or a step decided (routes/approvals.ts). */
+  | '$approvals'
+  /** rt4 #6 — the record was hidden from or shown in pickers again (routes/picker-exclusions.ts). */
+  | '$picker'
 
 export function announceRecordAspect(
   collection: string | null | undefined,

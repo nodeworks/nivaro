@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { __resetSignedOutGate, noteSignedIn, noteUnauthorized } from './signed-out'
+import { livenessOf } from './socket-liveness'
 import { createSocketRealtime } from './socket-realtime'
 import {
   createWorkerSocket,
@@ -95,6 +96,29 @@ describe('createWorkerSocket (#2475)', () => {
   afterEach(() => {
     vi.useRealTimers()
     ;(window as any).SharedWorker = undefined
+  })
+
+  it("relays the worker's quiet repair and sends it the page's wake signals (realtime 24)", () => {
+    const { socket, port } = make()
+    port.answer({ t: 'ready', proto: WORKER_SOCKET_PROTO })
+    const live = livenessOf(socket)
+    expect(live?.repairing()).toBe(false)
+    const changes: Array<[boolean, string | undefined]> = []
+    live?.onRepairing((on, outcome) => changes.push([on, outcome]))
+    port.answer({ t: 'repair', on: true })
+    expect(live?.repairing()).toBe(true)
+    port.answer({ t: 'repair', on: false, outcome: 'repaired' })
+    expect(changes).toEqual([
+      [true, undefined],
+      [false, 'repaired']
+    ])
+    window.dispatchEvent(new Event('online'))
+    expect(port.sent('wake')).toEqual([{ t: 'wake', reason: 'online' }])
+    // the adapter over the facade reads the same handle
+    const rt = createSocketRealtime({ socket: () => socket })
+    rt.subscribeCollections(['orders'], () => {})
+    port.answer({ t: 'repair', on: true })
+    expect(rt.status().repair).toBe('silent')
   })
 
   it('attaches to the worker, says hello and mirrors its socket to listeners', async () => {

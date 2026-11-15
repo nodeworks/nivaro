@@ -16,6 +16,8 @@ export type OpsWriteTopic =
   | 'broadcasts'
   | 'integrations'
   | 'access-requests'
+  | 'webhooks'
+  | 'dead-letters'
 
 const RULES: Array<{ re: RegExp; topics: OpsWriteTopic[]; updateOnly?: boolean }> = [
   { re: /\bnivaro_issues\b/i, topics: ['issues'] },
@@ -32,7 +34,10 @@ const RULES: Array<{ re: RegExp; topics: OpsWriteTopic[]; updateOnly?: boolean }
     re: /\bnivaro_(?:integration_signal_(?:rows|runs|snoozes|settings)|outbound_log|external_api_logs|erp_submissions|integration_obligations)\b/i,
     topics: ['integrations']
   },
-  { re: /\bnivaro_access_requests\b/i, topics: ['access-requests'] }
+  { re: /\bnivaro_access_requests\b/i, topics: ['access-requests'] },
+  // Webhook delivery history (a webhook's Deliveries list) and failed flow runs (Dead letters).
+  { re: /\bnivaro_webhook_deliveries\b/i, topics: ['webhooks'] },
+  { re: /\bnivaro_flow_runs\b/i, topics: ['dead-letters'], updateOnly: true }
 ]
 
 const WRITE_RE = /^\s*(insert|update|delete|merge)\b/i
