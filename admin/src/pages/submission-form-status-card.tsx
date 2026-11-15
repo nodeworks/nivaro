@@ -161,60 +161,68 @@ export function StatusPageCard({
               {v.map.map((m, i) => (
                 <div
                   key={`${i}-${m.value}`}
-                  className='grid grid-cols-[1fr_7.5rem_1fr_auto] gap-1.5'
+                  className='space-y-1.5 rounded-md border border-border p-2'
                 >
-                  {valueOptions.length > 0 ? (
+                  <div className='flex items-center gap-1.5'>
+                    <div className='min-w-0 flex-1'>
+                      {valueOptions.length > 0 ? (
+                        <SimpleSelect
+                          value={m.value}
+                          onChange={(val) =>
+                            set({ map: v.map.map((x, j) => (j === i ? { ...x, value: val } : x)) })
+                          }
+                          options={[{ value: '', label: 'Step…' }, ...valueOptions]}
+                          ariaLabel='Pipeline step'
+                        />
+                      ) : (
+                        <Input
+                          value={m.value}
+                          placeholder='Value'
+                          aria-label='Field value'
+                          onChange={(e) =>
+                            set({
+                              map: v.map.map((x, j) =>
+                                j === i ? { ...x, value: e.target.value } : x
+                              )
+                            })
+                          }
+                        />
+                      )}
+                    </div>
+                    <button
+                      type='button'
+                      aria-label='Remove this step'
+                      onClick={() => set({ map: v.map.filter((_x, j) => j !== i) })}
+                      className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground'
+                    >
+                      <Trash2 className='h-3.5 w-3.5' />
+                    </button>
+                  </div>
+                  <div className='grid grid-cols-2 gap-1.5'>
                     <SimpleSelect
-                      value={m.value}
-                      onChange={(val) =>
-                        set({ map: v.map.map((x, j) => (j === i ? { ...x, value: val } : x)) })
+                      value={m.stage}
+                      onChange={(stage) =>
+                        set({
+                          map: v.map.map((x, j) =>
+                            j === i ? { ...x, stage: stage as PublicStage } : x
+                          )
+                        })
                       }
-                      options={[{ value: '', label: 'Step…' }, ...valueOptions]}
-                      ariaLabel='Pipeline step'
+                      options={STAGE_OPTIONS}
+                      ariaLabel='Public stage'
                     />
-                  ) : (
                     <Input
-                      value={m.value}
-                      placeholder='Value'
-                      aria-label='Field value'
+                      value={m.label ?? ''}
+                      placeholder='Label (e.g. Approved)'
+                      aria-label='Public label'
+                      maxLength={80}
                       onChange={(e) =>
                         set({
-                          map: v.map.map((x, j) => (j === i ? { ...x, value: e.target.value } : x))
+                          map: v.map.map((x, j) => (j === i ? { ...x, label: e.target.value } : x))
                         })
                       }
                     />
-                  )}
-                  <SimpleSelect
-                    value={m.stage}
-                    onChange={(stage) =>
-                      set({
-                        map: v.map.map((x, j) =>
-                          j === i ? { ...x, stage: stage as PublicStage } : x
-                        )
-                      })
-                    }
-                    options={STAGE_OPTIONS}
-                    ariaLabel='Public stage'
-                  />
-                  <Input
-                    value={m.label ?? ''}
-                    placeholder='Label (e.g. Approved)'
-                    aria-label='Public label'
-                    maxLength={80}
-                    onChange={(e) =>
-                      set({
-                        map: v.map.map((x, j) => (j === i ? { ...x, label: e.target.value } : x))
-                      })
-                    }
-                  />
-                  <button
-                    type='button'
-                    aria-label='Remove this row'
-                    onClick={() => set({ map: v.map.filter((_x, j) => j !== i) })}
-                    className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground'
-                  >
-                    <Trash2 className='h-3.5 w-3.5' />
-                  </button>
+                  </div>
                 </div>
               ))}
               <button
