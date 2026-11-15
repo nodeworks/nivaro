@@ -260,6 +260,7 @@ function MergeBody({
           onClose={onClose}
           onMerged={onMerged}
           onStale={() => planQuery.refetch()}
+          refreshing={planQuery.isFetching}
           onStep={setStep}
         />
       )}
@@ -297,7 +298,8 @@ function MergeEditor({
   onClose,
   onMerged,
   onStale,
-  onStep
+  onStep,
+  refreshing = false
 }: {
   collection: string
   plan: MergePlan
@@ -310,6 +312,8 @@ function MergeEditor({
   onStale: () => Promise<unknown>
   /** The step shown (the dialog header follows it). */
   onStep?: (step: Step) => void
+  /** The records are being read again (after a stale refusal). */
+  refreshing?: boolean
 }) {
   const client = useNivaroClient()
   const nav = useItemNavigation()
@@ -557,6 +561,7 @@ function MergeEditor({
                 fields={plan.fields
                   .filter((f) => changedCells.has(`${stale.record}\u0001${f.field}`))
                   .map((f) => f.label)}
+                refreshing={refreshing}
               />
             )}
             <RecordHeaders
@@ -711,7 +716,7 @@ function MergeEditor({
               <Button
                 type='button'
                 size='sm'
-                className='gap-1.5 bg-nvr-cyan text-white hover:bg-nvr-cyan-dark disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:bg-muted dark:disabled:text-muted-foreground'
+                className='gap-1.5 bg-nvr-cyan text-white hover:bg-nvr-cyan-dark disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:bg-transparent dark:disabled:text-slate-500 dark:disabled:ring-1 dark:disabled:ring-inset dark:disabled:ring-slate-700 dark:disabled:opacity-50'
                 disabled={!canReview}
                 onClick={() => {
                   setError(null)
@@ -726,7 +731,7 @@ function MergeEditor({
               <Button
                 type='button'
                 size='sm'
-                className='gap-1.5 bg-nvr-cyan text-white hover:bg-nvr-cyan-dark disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:bg-muted dark:disabled:text-muted-foreground'
+                className='gap-1.5 bg-nvr-cyan text-white hover:bg-nvr-cyan-dark disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:bg-transparent dark:disabled:text-slate-500 dark:disabled:ring-1 dark:disabled:ring-inset dark:disabled:ring-slate-700 dark:disabled:opacity-50'
                 disabled={busy || !canReview}
                 onClick={() => void apply()}
                 data-merge-apply
@@ -754,11 +759,13 @@ function MergeEditor({
 function StaleCallout({
   stale,
   record,
-  fields
+  fields,
+  refreshing
 }: {
   stale: { who: string | null; record: string | null; message: string }
   record: MergePlanRecord | null
   fields: string[]
+  refreshing: boolean
 }) {
   return (
     <div
@@ -781,8 +788,14 @@ function StaleCallout({
           <p>{stale.message}</p>
         )}
         <p className='mt-0.5 text-amber-800/90 dark:text-amber-200/80'>
-          The columns now show it as it is — changed values are marked. Your choices are kept
-          wherever that field did not change; review them and merge again.
+          {refreshing ? (
+            <span className='inline-flex items-center gap-1.5'>
+              <Loader2 className='h-3 w-3 animate-spin' aria-hidden />
+              Reading the records again…
+            </span>
+          ) : (
+            'The columns now show it as it is — changed values are marked. Your choices are kept wherever that field did not change; review them and merge again.'
+          )}
         </p>
       </div>
     </div>

@@ -218,7 +218,6 @@ export function MergePicker({
         .then((r) => r.data)
   })
   const max = 4
-  const noun = allowed.data?.noun ?? 'record'
   const plural = allowed.data?.plural ?? 'records'
   const toggle = (c: Candidate) =>
     setChosen((prev) =>
@@ -302,7 +301,7 @@ export function MergePicker({
           <DialogTitle className='flex min-w-0 items-center gap-2 pr-8 text-[15px] font-semibold text-slate-900 dark:text-foreground'>
             <GitMerge className='h-4 w-4 shrink-0 text-nvr-cyan' aria-hidden />
             <span className='truncate'>
-              Merge {cand.data?.self ?? itemLabel ?? `this ${noun}`} with…
+              Merge #{itemId} {cand.data?.self ?? itemLabel ?? ''} with…
             </span>
           </DialogTitle>
           <DialogDescription className='mt-1 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
@@ -371,7 +370,7 @@ export function MergePicker({
             type='button'
             size='sm'
             disabled={chosen.length === 0}
-            className='bg-nvr-cyan text-white hover:bg-nvr-cyan-dark disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:bg-muted dark:disabled:text-muted-foreground'
+            className='bg-nvr-cyan text-white hover:bg-nvr-cyan-dark disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:bg-transparent dark:disabled:text-slate-500 dark:disabled:ring-1 dark:disabled:ring-inset dark:disabled:ring-slate-700 dark:disabled:opacity-50'
             onClick={() => {
               onContinue(chosen.map((c) => c.id))
               setChosen([])
