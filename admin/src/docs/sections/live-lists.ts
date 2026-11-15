@@ -48,7 +48,7 @@ export const collabLiveLists: DocSection = {
         ],
         [
           'An import or bulk change (a dozen or more records within two seconds)',
-          'No row flashes. One quiet pill floats over the bottom of the list (the toolbar never moves) and says what happened — "Import added 500 records  Show", "Beth updated 40 rows  Show" — and Show re-reads the list once. The name comes from your own read of a few of the rows, so it only appears when you can see who changed them.'
+          'No row flashes. One quiet pill floats over the bottom of the list (the toolbar never moves) and says what happened — "Import added 500 records  Show", "Beth updated 40 records  Show" — and Show re-reads the list once. The name comes from your own read of a few of the rows, so it only appears when you can see who changed them.'
         ],
         [
           'Your pointer or keyboard is on a row',
