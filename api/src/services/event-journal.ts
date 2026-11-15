@@ -72,18 +72,26 @@ export function atomicEmitOn(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
- * KEYS: seq, room seq, journal, stream. ARGV: room, event, payload JSON, journal max, journal
- * TTL, room-seq TTL, ack every, floor stamp (1/0), now, stream on (1/0), stream max length,
- * node, self (1/0), ack stamp key prefix, ack stamp TTL. The entry JSON keeps JournalEntry's
- * field order. The XADD runs under pcall: a refused append leaves the journaled event to go
- * out on the adapter (streamed = 0), never half a script.
+ * KEYS: seq, room seq, journal, stream, and (a record's change only) the record's own counter.
+ * ARGV: room, event, payload JSON, journal max, journal TTL, room-seq TTL (the record counter
+ * keeps it too), ack every, floor stamp (1/0), now, stream on (1/0), stream max length, node,
+ * self (1/0), ack stamp key prefix, ack stamp TTL. The entry JSON keeps JournalEntry's field
+ * order. The XADD runs under pcall: a refused append leaves the journaled event to go out on
+ * the adapter (streamed = 0), never half a script.
  */
 export const EMIT_SCRIPT = `
 local seq = redis.call('INCR', KEYS[1])
 local rseq = redis.call('INCR', KEYS[2])
 redis.call('EXPIRE', KEYS[2], tonumber(ARGV[6]))
+local iseq = 0
+if #KEYS >= 5 then
+  iseq = redis.call('INCR', KEYS[5])
+  redis.call('EXPIRE', KEYS[5], tonumber(ARGV[6]))
+end
 local entry = '{"seq":' .. seq .. ',"room":' .. cjson.encode(ARGV[1]) .. ',"event":' ..
-  cjson.encode(ARGV[2]) .. ',"payload":' .. ARGV[3] .. ',"rseq":' .. rseq .. '}'
+  cjson.encode(ARGV[2]) .. ',"payload":' .. ARGV[3] .. ',"rseq":' .. rseq
+if iseq > 0 then entry = entry .. ',"iseq":' .. iseq end
+entry = entry .. '}'
 redis.call('ZADD', KEYS[3], seq, entry)
 redis.call('ZREMRANGEBYRANK', KEYS[3], 0, -(tonumber(ARGV[4]) + 1))
 redis.call('EXPIRE', KEYS[3], tonumber(ARGV[5]))
@@ -105,7 +113,7 @@ if ARGV[10] == '1' then
   end
   if ok then streamed = 1 end
 end
-return {seq, rseq, stamped, streamed}
+return {seq, rseq, stamped, streamed, iseq}
 `
 const EMIT_SHA = createHash('sha1').update(EMIT_SCRIPT).digest('hex')
 /** Set once the script failed 3 times where the plain steps then worked (a Redis or proxy
@@ -142,6 +150,28 @@ async function runEmitScript(
 /** #2462 — one counter per room (`nvr:ev:rseq:<room>`), dropped after an hour without events. */
 const ROOM_SEQ_PREFIX = 'nvr:ev:rseq:'
 const ROOM_SEQ_TTL_S = 3600
+/**
+ * Realtime 23 — one counter per record (`nvr:ev:iseq:<room>:<id>`, the room tenant-scoped like
+ * every journal room), taken in the same step as the global and room counters and dropped after
+ * an hour without changes to that record. A client that sees a record's counter skip re-reads
+ * that record alone (packages/shared lib/record-gaps.ts); clients that ignore `_iseq` see no
+ * difference.
+ */
+const RECORD_SEQ_PREFIX = 'nvr:ev:iseq:'
+
+/** The record counter key a journaled event takes, or null (not one record's change). */
+export function recordSeqKey(
+  room: string,
+  event: string,
+  payload: Record<string, unknown>
+): string | null {
+  if (event !== 'collection:update' || typeof payload.collection !== 'string') return null
+  const item = payload.item
+  if (typeof item !== 'string' && typeof item !== 'number') return null
+  const id = String(item)
+  if (!id || id === '*' || id.length > 200) return null
+  return `${RECORD_SEQ_PREFIX}${room}:${id}`
+}
 
 let _redis: Redis | null = null
 export function setJournalRedis(redis: Redis): void {
@@ -162,6 +192,8 @@ export interface JournalEntry {
   payload: Record<string, unknown>
   /** #2462 — the room's own sequence number (absent on entries written before it existed). */
   rseq?: number
+  /** Realtime 23 — the record's own sequence number (one record's change only). */
+  iseq?: number
 }
 
 export interface EmitResult {
@@ -197,6 +229,8 @@ export async function journaledEmit(
   if (!io) return { seq: null, path: 'none', room }
   let seq: number | null = null
   let rseq: number | null = null
+  let iseq: number | null = null
+  const ikey = recordSeqKey(room, event, payload)
   // #2477 — a sampled event carries the time it left (`_st`), for the clients' delivery
   // acknowledgements; the server keeps the stamp so an ack can only echo a real one.
   let st: number | null = null
@@ -220,9 +254,11 @@ export async function journaledEmit(
       const floorStamp = shouldStamp(1, { now, floor: !opts.selfViaStream && !opts.roomScoped })
       floorTaken = floorStamp
       const streamOn = streamActive()
-      const [s0, r0, stamped, streamed] = await runEmitScript(
+      const keys = [SEQ_KEY, `${ROOM_SEQ_PREFIX}${room}`, JOURNAL_KEY, STREAM_KEY]
+      if (ikey) keys.push(ikey)
+      const [s0, r0, stamped, streamed, i0] = await runEmitScript(
         _redis as unknown as ScriptRedis,
-        [SEQ_KEY, `${ROOM_SEQ_PREFIX}${room}`, JOURNAL_KEY, STREAM_KEY],
+        keys,
         [
           room,
           event,
@@ -244,6 +280,7 @@ export async function journaledEmit(
       seq = s0
       if (!Number.isFinite(seq) || seq <= 0) throw new Error('no sequence')
       if (Number.isFinite(r0) && r0 > 0) rseq = r0
+      if (ikey && Number.isFinite(i0) && i0 > 0) iseq = i0
       if (stamped === 1) {
         st = now
         // A sequence-sampled stamp restarts the floor clock too, as before.
@@ -257,6 +294,7 @@ export async function journaledEmit(
       scriptFailed = true
       seq = null
       rseq = null
+      iseq = null
       st = null
       streamedInScript = null
     }
@@ -267,17 +305,23 @@ export async function journaledEmit(
       // room sequence follows the global order. A connected client that sees a room's counter
       // skip knows it missed an event there and catches that room up alone.
       const rkey = `${ROOM_SEQ_PREFIX}${room}`
-      const counted = await _redis
-        .multi()
-        .incr(SEQ_KEY)
-        .incr(rkey)
-        .expire(rkey, ROOM_SEQ_TTL_S)
-        .exec()
+      const counting = _redis.multi().incr(SEQ_KEY).incr(rkey).expire(rkey, ROOM_SEQ_TTL_S)
+      if (ikey) counting.incr(ikey).expire(ikey, ROOM_SEQ_TTL_S)
+      const counted = await counting.exec()
       seq = Number(counted?.[0]?.[1])
       const r = Number(counted?.[1]?.[1])
       if (!Number.isFinite(seq) || seq <= 0) throw new Error('no sequence')
       if (Number.isFinite(r) && r > 0) rseq = r
-      const entry: JournalEntry = { seq, room, event, payload, ...(rseq ? { rseq } : {}) }
+      const i = ikey ? Number(counted?.[3]?.[1]) : Number.NaN
+      if (Number.isFinite(i) && i > 0) iseq = i
+      const entry: JournalEntry = {
+        seq,
+        room,
+        event,
+        payload,
+        ...(rseq ? { rseq } : {}),
+        ...(iseq ? { iseq } : {})
+      }
       const m = _redis
         .multi()
         .zadd(JOURNAL_KEY, seq, JSON.stringify(entry))
@@ -295,17 +339,18 @@ export async function journaledEmit(
     } catch {
       seq = null // Redis down — emit unjournaled (fail open)
       rseq = null
+      iseq = null
       st = null
       streamedInScript = null
     }
   }
   // `_room` is the room as the client joined it (tenant prefix off), so it can key its counter.
-  const live =
-    seq == null ? payload : livePayload({ seq, room, event, payload, ...(rseq ? { rseq } : {}) })
+  const counters = { ...(rseq ? { rseq } : {}), ...(iseq ? { iseq } : {}) }
+  const live = seq == null ? payload : livePayload({ seq, room, event, payload, ...counters })
   const out = st != null ? { ...live, _st: st } : live
   let path: EmitResult['path'] = 'adapter'
   if (seq != null) {
-    const entry: JournalEntry = { seq, room, event, payload, ...(rseq ? { rseq } : {}) }
+    const entry: JournalEntry = { seq, room, event, payload, ...counters }
     recordDurable(entry) // #1673 — buffered, never awaited
     // #1737 — stream first; the local emit only once the other replicas will hear it.
     // The stream entry's write time is the stamp, so other replicas send the same `_st`.

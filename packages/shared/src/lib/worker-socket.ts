@@ -1,5 +1,13 @@
 import { bindClientChaosSocket } from './client-chaos'
 import { isSignedOut, onSignedIn, signedOutBackoff } from './signed-out'
+import {
+  attachSocketLiveness,
+  type LivenessHandle,
+  type LivenessStats,
+  onWakeSignals,
+  type RepairOutcome,
+  registerLiveness
+} from './socket-liveness'
 import type { SocketLike } from './socket-realtime'
 
 /**
@@ -161,6 +169,35 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
   let tokenFailures = 0
   let tokenRetryAt = 0
   let stopSignedIn: (() => void) | null = null
+  // Realtime 24 — the worker repairs its socket quietly and says so (`repair`); on the fallback
+  // the tab's own socket is watched here. Either way the shared adapter reads it as one handle.
+  let workerRepairing = false
+  let fallbackLive: LivenessHandle | null = null
+  const repairListeners = new Set<(on: boolean, outcome?: RepairOutcome) => void>()
+  let lastRepairing = false
+  const noteRepairing = (_on?: boolean, outcome?: RepairOutcome) => {
+    const on = mode === 'fallback' ? !!fallbackLive?.repairing() : workerRepairing
+    if (on === lastRepairing) return
+    lastRepairing = on
+    for (const l of [...repairListeners]) {
+      try {
+        l(on, on ? undefined : (outcome ?? 'gave-up'))
+      } catch {
+        /* one listener must not stop the rest */
+      }
+    }
+  }
+  const noStats: LivenessStats = { probes: 0, failedProbes: 0, repairs: 0, repaired: 0, gaveUp: 0 }
+  const liveness: LivenessHandle = {
+    repairing: () => lastRepairing,
+    onRepairing(cb) {
+      repairListeners.add(cb)
+      return () => {
+        repairListeners.delete(cb)
+      }
+    },
+    stats: () => fallbackLive?.stats() ?? { ...noStats }
+  }
 
   const fire = (event: string, args: any[]) => {
     for (const cb of [...(listeners.get(event) ?? [])]) {
@@ -211,6 +248,10 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
     if (anyListeners.size) s.onAny?.((event, ...args) => fireAnyOnly(event, args))
     // A tab that was live through the worker hears the gap like a reconnect.
     if (wasConnected) fire('disconnect', ['worker-fallback'])
+    workerRepairing = false
+    fallbackLive = attachSocketLiveness(s as never)
+    fallbackLive?.onRepairing(noteRepairing)
+    noteRepairing()
     opts.onMode?.('fallback', reason)
   }
   function fireAnyOnly(event: string, args: any[]) {
@@ -292,6 +333,10 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
       case 'fallback':
         fallbackNow(String(msg.reason ?? 'worker'))
         return
+      case 'repair':
+        workerRepairing = msg.on === true
+        noteRepairing(workerRepairing, msg.outcome === 'repaired' ? 'repaired' : 'gave-up')
+        return
       default:
         return
     }
@@ -332,6 +377,11 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
       }
       document.addEventListener('visibilitychange', active)
       window.addEventListener('focus', active)
+      // Realtime 24 — online again, network changed, back in sight after a while: the worker
+      // checks its socket now (an older worker ignores the message).
+      onWakeSignals((reason) => {
+        if (mode === 'worker' && !closed) post({ t: 'wake', reason })
+      })
       window.addEventListener('pagehide', () => {
         if (mode === 'worker') post({ t: 'bye' })
       })
@@ -451,6 +501,7 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
 
   // Signed in again (here or in another tab): ask for a token now, not when the wait ends.
   stopSignedIn = onSignedIn(() => socket.signedIn())
+  registerLiveness(socket, liveness)
 
   start()
   bindClientChaosSocket(socket)

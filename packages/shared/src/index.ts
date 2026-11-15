@@ -1278,6 +1278,23 @@ export {
 } from './lib/request-gate'
 export { restoreSkippedNote } from './lib/restore-skipped'
 export { coarseCollectionUpdate, createRoomGapTracker, refetchEventsFor } from './lib/room-gaps'
+export {
+  createRecordGapTracker,
+  type RecordGapTracker,
+  type RecordRef,
+  recordRefetchEvent
+} from './lib/record-gaps'
+export {
+  attachSocketLiveness,
+  createLiveness,
+  HIDDEN_WAKE_MS,
+  type Liveness,
+  type LivenessHandle,
+  livenessOf,
+  onWakeSignals,
+  type RepairOutcome,
+  registerLiveness
+} from './lib/socket-liveness'
 export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from './lib/row-highlight'
 export { rumRouteChange, rumWidget, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'

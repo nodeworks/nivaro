@@ -61,6 +61,12 @@ export interface RealtimeStatus {
    * cursor, or no answer in time). Absent = unknown; the live-query bridge reconciles then.
    */
   resumed?: 'replayed' | 'reloaded' | 'unverified' | null
+  /**
+   * Realtime 24 — a dead connection is being repaired quietly (lib/socket-liveness.ts): the
+   * state may read `reconnecting`, but nothing is shown for it (no banner, no stale marks)
+   * unless the repair fails twice, when this clears.
+   */
+  repair?: 'silent' | null
 }
 
 export interface RealtimeAdapter {

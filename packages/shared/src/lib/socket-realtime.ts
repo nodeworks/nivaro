@@ -1,8 +1,10 @@
 import { bindClientChaosSocket, type ClientChaosSocket } from './client-chaos'
 import { deliveryAckFor } from './delivery-ack'
 import type { CollectionUpdateEvent, RealtimeAdapter, RealtimeStatus } from './realtime'
+import { createRecordGapTracker, recordRefetchEvent } from './record-gaps'
 import { forgetSettledReads } from './request-gate'
 import { createRoomGapTracker, refetchEventsFor } from './room-gaps'
+import { attachSocketLiveness, livenessOf } from './socket-liveness'
 
 /**
  * A RealtimeAdapter over one Socket.io connection the HOST already holds (#2027, #1751) — what a
@@ -31,6 +33,11 @@ import { createRoomGapTracker, refetchEventsFor } from './room-gaps'
  * - Missed events while connected (#2462): a room whose own counter (`_rseq`) skips is caught up
  *   alone (`catchup:room`); `realtime:stale` (#2460 — the server held this socket's broadcasts
  *   while it was too far behind) refetches the rooms it names and raises `nvr:realtime-stale`.
+ * - Missed changes per record (realtime 23): a record whose own counter (`_iseq`) skips is
+ *   re-read alone (record-gaps.ts) — also after a reconnect whose catch-up went unanswered.
+ * - Silent self-repair (realtime 24): a connection that says it is up but is dead is reopened
+ *   quietly (socket-liveness.ts; the shared worker runs its own); `status().repair` is
+ *   `'silent'` meanwhile, so the banner stays away unless the repair fails twice.
  *
  * The socket is duck-typed (socket.io-client's `Socket` fits), so this package takes no
  * dependency on socket.io-client. It never decides what a viewer may see: every room is gated by
@@ -164,7 +171,8 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
       next.state === status.state &&
       next.transport === status.transport &&
       next.refreshed === status.refreshed &&
-      next.resumed === status.resumed
+      next.resumed === status.resumed &&
+      (next.repair ?? null) === (status.repair ?? null)
     )
       return
     status = next
@@ -172,10 +180,18 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
   }
   const transportName = (): RealtimeStatus['transport'] =>
     (socket?.io?.engine?.transport?.name as RealtimeStatus['transport'] | undefined) ?? null
+  /** A quiet repair signed in again: the status stays quiet until its catch-up has answered. */
+  let repairEnding = false
+  const endRepair = () => {
+    if (!repairEnding) return
+    repairEnding = false
+    setStatus({ repair: null })
+  }
   const caughtUp = (refreshed: string | null, resumed: NonNullable<RealtimeStatus['resumed']>) => {
     if (catchupTimer) clearTimeout(catchupTimer)
     catchupTimer = null
     setStatus({ state: 'live', transport: transportName(), refreshed, resumed })
+    endRepair()
   }
   const dispatch = (name: string, detail: unknown) => {
     if (typeof window === 'undefined') return
@@ -189,23 +205,40 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
   const relay = (event: string, payload: Record<string, unknown>) => {
     for (const l of socket?.listeners?.(event) ?? []) l(payload)
   }
+  /** Realtime 23 — a record that skipped a change is re-read alone. */
+  const records = createRecordGapTracker({
+    refetch: (list) => {
+      for (const r of list) {
+        const ev = recordRefetchEvent(r)
+        relay(ev.event, ev.payload)
+      }
+    }
+  })
+  const collectionsOf = (rooms: string[]) =>
+    rooms.filter((r) => r.startsWith('collection:')).map((r) => r.slice(11))
   const refetchRooms = (rooms: string[]) => {
+    records.forget(collectionsOf(rooms))
     for (const ev of refetchEventsFor(rooms)) relay(ev.event, ev.payload)
     dispatch('nvr:realtime-stale', { rooms })
   }
   const gaps = createRoomGapTracker({
     request: (req) => send('catchup:room', req),
-    dispatch: relay,
+    dispatch: (event, payload) => {
+      records.observe(event, payload)
+      relay(event, payload)
+    },
     refetch: refetchRooms
   })
 
   const collections = new RoomRefs(
     (c) => {
       gaps.reset([`collection:${c}`])
+      records.forget([c])
       send('collection:join', { collection: c })
     },
     (c) => {
       gaps.reset([`collection:${c}`])
+      records.forget([c])
       send('collection:leave', { collection: c })
     }
   )
@@ -226,6 +259,16 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     socket = s
     // Browser chaos "socket gone" (#2840) reaches every host's socket from here.
     bindClientChaosSocket(s as ClientChaosSocket)
+    // Realtime 24 — quiet self-repair: the worker facade registered its own watch; a real
+    // socket.io socket gets one here (idempotent — a host may have attached it already).
+    const live = livenessOf(s) ?? attachSocketLiveness(s as never)
+    if (live) {
+      if (live.repairing()) status = { ...status, repair: 'silent' }
+      live.onRepairing((on, outcome) => {
+        repairEnding = !on && outcome === 'repaired'
+        if (!repairEnding) setStatus({ repair: on ? 'silent' : null })
+      })
+    }
     // Attached to a socket that is already up: its next auth:ok is a reconnect (catch up).
     everAuthed = s.connected
     s.on('auth:ok', () => {
@@ -249,6 +292,7 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
           refreshed: null,
           resumed: everAuthed && status.state === 'reconnecting' ? 'unverified' : null
         })
+        endRepair()
       }
       everAuthed = true
     })
@@ -260,13 +304,18 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     s.on('disconnect', () => {
       if (catchupTimer) clearTimeout(catchupTimer)
       catchupTimer = null
-      setStatus({ state: 'reconnecting', refreshed: null })
+      // A repair that signed in and dropped again before its catch-up: not quiet any more
+      // (unless a new repair is already running — its watch set the flag before this ran).
+      const quiet = !!live?.repairing()
+      repairEnding = false
+      setStatus({ state: 'reconnecting', refreshed: null, ...(quiet ? {} : { repair: null }) })
     })
     s.on('connect_error', () => setStatus({ state: 'reconnecting', refreshed: null }))
-    s.onAny?.((_event, payload) => {
+    s.onAny?.((event, payload) => {
       const seq = (payload as { _seq?: number } | undefined)?._seq
       if (typeof seq === 'number' && seq > lastSeq) lastSeq = seq
       gaps.observe(payload)
+      records.observe(event, payload)
       // #2477 — a sampled event asks for its receive time (the delivery SLO's real clients).
       const ack = deliveryAckFor(payload)
       if (ack) s.emit('rt:ack', ack)
@@ -275,6 +324,7 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     s.on('realtime:stale', (p: { rooms?: string[]; all?: boolean }) => {
       const rooms = Array.isArray(p?.rooms) ? p.rooms.filter((r) => typeof r === 'string') : []
       gaps.reset(rooms)
+      records.forget(p?.all ? undefined : collectionsOf(rooms))
       if (p?.all) {
         if (windowOn('catchupFull')) dispatch(WINDOW_EVENT_NAMES.catchupFull, {})
         dispatch('nvr:realtime-stale', { rooms, all: true })
@@ -282,16 +332,31 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     })
     s.on(
       'catchup:events',
-      (p: { events?: Array<{ seq: number; event: string; payload: Record<string, unknown> }> }) => {
+      (p: {
+        events?: Array<{
+          seq: number
+          event: string
+          payload: Record<string, unknown>
+          iseq?: number
+        }>
+      }) => {
         for (const ev of p?.events ?? []) {
           if (ev.seq > lastSeq) lastSeq = ev.seq
+          const payload = {
+            ...ev.payload,
+            _seq: ev.seq,
+            ...(typeof ev.iseq === 'number' ? { _iseq: ev.iseq } : {})
+          }
+          records.observe(ev.event, payload)
           // Into the same listeners, as if it had arrived live.
-          for (const l of s.listeners?.(ev.event) ?? []) l({ ...ev.payload, _seq: ev.seq })
+          for (const l of s.listeners?.(ev.event) ?? []) l(payload)
         }
         caughtUp(null, 'replayed')
       }
     )
     s.on('catchup:full', (p?: { reason?: string }) => {
+      // Every list and record on the page reloads: nothing left to judge per record.
+      records.forget()
       if (windowOn('catchupFull')) later('full', () => dispatch(WINDOW_EVENT_NAMES.catchupFull, {}))
       caughtUp(
         p?.reason === 'slow-consumer'

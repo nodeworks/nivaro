@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { RealtimeStatus } from './realtime'
+import { type LivenessHandle, type RepairOutcome, registerLiveness } from './socket-liveness'
 import { createSocketRealtime, type SocketLike } from './socket-realtime'
 
 /** A minimal socket.io-client stand-in: local listeners, an onAny tap and a log of emits. */
@@ -243,5 +245,95 @@ describe('createSocketRealtime', () => {
     s.serverSends('disconnect')
     s.serverSends('auth:ok')
     expect(s.sent.at(-1)).toEqual(['catchup', { cursor: 950 }])
+  })
+
+  it('re-reads just the record whose own counter skipped (realtime 23)', () => {
+    vi.useFakeTimers()
+    const s = fakeSocket()
+    const rt = createSocketRealtime({ socket: s })
+    const got: unknown[] = []
+    rt.subscribeCollections(['orders'], (ev) => got.push(ev))
+    s.serverSends('collection:update', { collection: 'orders', item: 7, _iseq: 1 })
+    s.serverSends('collection:update', { collection: 'orders', item: 7, _iseq: 3 })
+    expect(got).toHaveLength(2)
+    vi.advanceTimersByTime(4000)
+    expect(got.at(-1)).toEqual({ collection: 'orders', item: '7' })
+    // a counter that keeps going is quiet
+    s.serverSends('collection:update', { collection: 'orders', item: 7, _iseq: 4 })
+    vi.advanceTimersByTime(10_000)
+    expect(got).toHaveLength(4)
+  })
+
+  it('a replayed catch-up event fills a record gap (no extra read)', () => {
+    vi.useFakeTimers()
+    const s = fakeSocket()
+    const rt = createSocketRealtime({ socket: s })
+    const got: unknown[] = []
+    rt.subscribeCollections(['orders'], (ev) => got.push(ev))
+    s.serverSends('collection:update', { collection: 'orders', item: 7, _iseq: 1 })
+    s.serverSends('collection:update', { collection: 'orders', item: 7, _iseq: 3 })
+    s.serverSends('catchup:events', {
+      events: [
+        { seq: 10, event: 'collection:update', payload: { collection: 'orders', item: 7 }, iseq: 2 }
+      ]
+    })
+    expect(got.at(-1)).toMatchObject({ item: 7, _seq: 10, _iseq: 2 })
+    vi.advanceTimersByTime(10_000)
+    expect(got).toHaveLength(3)
+  })
+
+  it('a quiet repair keeps the status quiet through its catch-up (realtime 24)', () => {
+    const s = fakeSocket()
+    let on = false
+    const subs = new Set<(on: boolean, outcome?: RepairOutcome) => void>()
+    const handle: LivenessHandle = {
+      repairing: () => on,
+      onRepairing: (cb) => {
+        subs.add(cb)
+        return () => subs.delete(cb)
+      },
+      stats: () => ({ probes: 0, failedProbes: 0, repairs: 0, repaired: 0, gaveUp: 0 })
+    }
+    const set = (next: boolean, outcome?: RepairOutcome) => {
+      on = next
+      for (const cb of subs) cb(next, outcome)
+    }
+    registerLiveness(s, handle)
+    const rt = createSocketRealtime({ socket: s, reactionJitterMs: 0 })
+    const seen: RealtimeStatus[] = []
+    rt.onStatus((st) => seen.push(st))
+    s.serverSends('catchup:cursor', { seq: 5 })
+    set(true)
+    s.serverSends('disconnect', 'io client disconnect')
+    expect(rt.status()).toMatchObject({ state: 'reconnecting', repair: 'silent' })
+    set(false, 'repaired')
+    s.serverSends('auth:ok')
+    expect(rt.status().repair).toBe('silent') // still waiting for the catch-up
+    s.serverSends('catchup:full', {})
+    // the "reloaded" line and the quiet flag arrive together, then the flag clears
+    expect(seen.some((st) => st.refreshed && st.repair === 'silent')).toBe(true)
+    expect(rt.status()).toMatchObject({ state: 'live', repair: null })
+  })
+
+  it('a repair that gives up clears the quiet flag at once', () => {
+    const s = fakeSocket()
+    let on = false
+    const subs = new Set<(on: boolean, outcome?: RepairOutcome) => void>()
+    registerLiveness(s, {
+      repairing: () => on,
+      onRepairing: (cb) => {
+        subs.add(cb)
+        return () => subs.delete(cb)
+      },
+      stats: () => ({ probes: 0, failedProbes: 0, repairs: 0, repaired: 0, gaveUp: 0 })
+    })
+    const rt = createSocketRealtime({ socket: s })
+    rt.subscribeCollections(['orders'], () => {})
+    on = true
+    for (const cb of subs) cb(true)
+    s.serverSends('disconnect', 'io client disconnect')
+    on = false
+    for (const cb of subs) cb(false, 'gave-up')
+    expect(rt.status()).toMatchObject({ state: 'reconnecting', repair: null })
   })
 })
