@@ -1371,8 +1371,6 @@ export * from './lib/tab-attention'
 export * from './lib/attention-prefs'
 export * from './lib/waiting-count'
 export * from './lib/live-announcer'
-export { LiveAnnouncer } from './components/LiveAnnouncer'
-export { TabCountHost } from './components/TabCountHost'
 // Realtime round 3 #24 — Live updates: Normal / Calm / Off (Profile → Display, role defaults)
 export {
   __resetLivePreferenceForTests,
