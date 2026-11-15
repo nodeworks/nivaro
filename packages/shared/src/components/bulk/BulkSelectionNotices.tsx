@@ -77,13 +77,17 @@ function NoticeLine({
     <div
       {...{ [data]: '' }}
       role='status'
-      className='nvr-fade-in flex min-h-7 flex-wrap items-center gap-x-2 gap-y-1'
+      className='nvr-fade-in flex min-h-7 flex-wrap items-center gap-x-3 gap-y-1'
     >
-      <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${t.dot}`} />
-      <span aria-hidden className={`shrink-0 ${t.soft}`}>
-        {icon}
+      {/* Dot, icon and words stay together; on a narrow screen the words wrap beside the
+          icon and the buttons drop to their own line, right-aligned. */}
+      <span className='flex min-w-0 flex-1 basis-[15rem] items-start gap-2'>
+        <span aria-hidden className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${t.dot}`} />
+        <span aria-hidden className={`mt-[2px] shrink-0 ${t.soft}`}>
+          {icon}
+        </span>
+        <span className={`min-w-0 text-[12.5px] leading-5 ${t.line}`}>{text}</span>
       </span>
-      <span className={`min-w-0 text-[12.5px] ${t.line}`}>{text}</span>
       <span className='ml-auto flex shrink-0 items-center gap-1'>{children}</span>
     </div>
   )
@@ -208,11 +212,14 @@ export function BulkSelectionNotices({
         >
           {changed.map((c) => (
             <li key={c.key} className='flex min-w-0 items-baseline gap-2 py-0.5'>
-              <span className={`min-w-0 truncate font-medium ${t.line}`}>
-                {c.label ?? labelOf?.(c.key) ?? `#${c.id}`}
-              </span>
-              <span className={`min-w-0 truncate ${t.soft}`}>
-                {changeLineText(c)} · {formatRelative(c.at)}
+              {/* Side by side on a wide bar; the record above what happened on a phone. */}
+              <span className='flex min-w-0 flex-1 flex-col sm:flex-row sm:items-baseline sm:gap-2'>
+                <span className={`min-w-0 truncate font-medium ${t.line}`}>
+                  {c.label ?? labelOf?.(c.key) ?? `#${c.id}`}
+                </span>
+                <span className={`min-w-0 truncate ${t.soft}`}>
+                  {changeLineText(c)} · {formatRelative(c.at)}
+                </span>
               </span>
               {onOpenRecord && !c.deleted && (
                 <button
