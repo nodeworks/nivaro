@@ -1682,13 +1682,25 @@ export function QueueWorklist({
 
   // Who has each row open (#272 → #2486): pushed through the presence room when the host has
   // a realtime adapter, a 30 s count poll otherwise. Per-node data — a hint, never truth.
-  const presenceRows = useMemo(
-    () =>
-      (serverGrouped ? [] : (data?.data ?? []))
-        .slice(0, 100)
-        .map((r) => ({ collection: r.collection, item: r.item_id })),
-    [serverGrouped, data?.data]
-  )
+  // ── Bulk selection state (declared here so presence can watch the selected rows too) ──
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  // Selecting rows is an explicit mode, as on the CBV (Rob 2026-10-26): off =
+  // no checkboxes and no bulk bar; on = both, and each row's own Actions menu
+  // is disabled. Leaving it clears the selection.
+  const [bulkMode, setBulkMode] = useState(false)
+  // rt8: plus selected rows that are not on this page, so the bulk bar can say who has them
+  // open (≤ 200 watched in all; the server caps a socket at 300).
+  const presenceRows = useMemo(() => {
+    const onPage = (serverGrouped ? [] : (data?.data ?? []))
+      .slice(0, 100)
+      .map((r) => `${r.collection}:${r.item_id}`)
+    const seen = new Set(onPage)
+    const offPage = bulkMode ? selectedIds.filter((k) => !seen.has(k)).slice(0, 100) : []
+    return [...onPage, ...offPage].map((k) => {
+      const i = k.indexOf(':')
+      return { collection: k.slice(0, i), item: k.slice(i + 1) }
+    })
+  }, [serverGrouped, data?.data, bulkMode, selectedIds])
   const rowViewers = useRowPresence(presenceRows)
   const transitionNote = useTransitionNote()
   // Long-request honesty (#370)
@@ -2981,12 +2993,7 @@ export function QueueWorklist({
     }
   })
 
-  // ── Bulk actions ──
-  const [selectedIds, setSelectedIds] = useState<string[]>([])
-  // Selecting rows is an explicit mode, as on the CBV (Rob 2026-10-26): off =
-  // no checkboxes and no bulk bar; on = both, and each row's own Actions menu
-  // is disabled. Leaving it clears the selection.
-  const [bulkMode, setBulkMode] = useState(false)
+  // ── Bulk actions ── (selectedIds / bulkMode are declared above, beside presenceRows)
   const toggleBulkMode = () => {
     if (bulkMode) setSelectedIds([])
     setBulkMode(!bulkMode)
@@ -3034,9 +3041,14 @@ export function QueueWorklist({
     [selectionKeys]
   )
   const selMarks = useSelectionLiveMarks(selCollections, selPicks.picks)
+  // A bulk action was chosen: check every selected row, not only the ones a live event marked
+  // (live updates Off sends no marks) — the collection list does the same when a form opens.
+  // Held until the selection empties.
+  const [selCheckAll, setSelCheckAll] = useState(false)
+  if (selCheckAll && selectionKeys.length === 0) setSelCheckAll(false)
   const selCheckKeys = useMemo(
-    () => selectionKeys.filter((k) => selMarks.marked.has(k)),
-    [selectionKeys, selMarks.marked]
+    () => (selCheckAll ? selectionKeys : selectionKeys.filter((k) => selMarks.marked.has(k))),
+    [selCheckAll, selectionKeys, selMarks.marked]
   )
   const selChanges = useSelectionChanges(selCheckKeys, selPicks.picks)
   const selChangedRows = selChanges.rows.filter((r) => selPicks.picks.has(r.key))
@@ -5952,6 +5964,7 @@ export function QueueWorklist({
           }
           onTransition={(state) => runBulk('Transition', (row) => performTransition(row, state))}
           onClear={() => setSelectedIds([])}
+          onActionIntent={() => setSelCheckAll(true)}
           figures={
             <SelectionFigures
               tone='light'
