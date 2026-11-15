@@ -1892,6 +1892,17 @@ export async function buildServer() {
         },
         { quiet: true }
       )
+      // Outside-write watcher: the safety net for writers that never announce. Ticks every 5 s,
+      // looks once its interval setting has passed (default 10 s); off in cloud mode.
+      app.cron.schedule(
+        'outside-write-watch',
+        '*/5 * * * * *',
+        async () => {
+          const { outsideWriteTick } = await import('./services/outside-write-watch.js')
+          await outsideWriteTick()
+        },
+        { quiet: true }
+      )
       // Durable event journal (#1673): keep 24 hours.
       app.cron.schedule('event-journal-prune', '17 */1 * * *', async () => {
         const { pruneEventJournal } = await import('./services/event-journal-store.js')
@@ -2601,13 +2612,17 @@ export async function buildServer() {
         'ops-daily-report',
         '5 * * * *',
         async () => {
-          const [{ getOpsReportSettings }, { dayIn, hourIn, instanceZone }, store, { startOpsReport }] =
-            await Promise.all([
-              import('./services/ops-report/settings.js'),
-              import('./services/ops-report/window.js'),
-              import('./services/ops-report/store.js'),
-              import('./services/ops-report/run.js')
-            ])
+          const [
+            { getOpsReportSettings },
+            { dayIn, hourIn, instanceZone },
+            store,
+            { startOpsReport }
+          ] = await Promise.all([
+            import('./services/ops-report/settings.js'),
+            import('./services/ops-report/window.js'),
+            import('./services/ops-report/store.js'),
+            import('./services/ops-report/run.js')
+          ])
           if (!(await store.reportsTableReady())) return
           await store.failStaleRuns()
           const s = await getOpsReportSettings()
@@ -2626,7 +2641,7 @@ export async function buildServer() {
           heavy: true,
           idempotent: 'safe',
           description:
-            'Hourly at :05 — once the day\'s report window has closed (Health → Daily report settings; 6 AM–11 PM by default, so 11:05 PM), builds the daily operations report: the day\'s numbers from the request log, issues, jobs, partner sends, mail, work and security (read-only SQL), the bug tracker and the comparison with earlier days, then an AI investigation that drills into the rows behind them; stores it and tells administrators (in-app and email). Off until turned on in its settings.'
+            "Hourly at :05 — once the day's report window has closed (Health → Daily report settings; 6 AM–11 PM by default, so 11:05 PM), builds the daily operations report: the day's numbers from the request log, issues, jobs, partner sends, mail, work and security (read-only SQL), the bug tracker and the comparison with earlier days, then an AI investigation that drills into the rows behind them; stores it and tells administrators (in-app and email). Off until turned on in its settings."
         }
       )
       // #2801 — nightly restore drill: restores the newest database backup into a scratch

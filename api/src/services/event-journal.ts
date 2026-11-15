@@ -589,6 +589,34 @@ export async function flushJournal(): Promise<void> {
   await flushDurable()
 }
 
+/**
+ * The journal after `cursor` (at most `limit` entries, oldest first) and the sequence now — for a
+ * reader that follows what was already announced (the outside-write watcher's dedupe). Null
+ * without Redis. A null cursor only answers the sequence (where to start following).
+ */
+export async function journalTail(
+  cursor: number | null,
+  limit = 5000
+): Promise<{ seq: number; entries: JournalEntry[] } | null> {
+  if (!_redis) return null
+  try {
+    const seq = Number((await _redis.get(SEQ_KEY)) ?? 0)
+    if (cursor == null || seq <= cursor) return { seq, entries: [] }
+    const raw = await _redis.zrangebyscore(JOURNAL_KEY, `(${cursor}`, seq, 'LIMIT', 0, limit)
+    const entries: JournalEntry[] = []
+    for (const r of raw) {
+      try {
+        entries.push(JSON.parse(r) as JournalEntry)
+      } catch {
+        // skip corrupt entry
+      }
+    }
+    return { seq, entries }
+  } catch {
+    return null
+  }
+}
+
 /** Current sequence (diagnostics). */
 export async function currentSeq(): Promise<number | null> {
   try {

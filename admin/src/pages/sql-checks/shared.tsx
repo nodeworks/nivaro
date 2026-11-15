@@ -142,7 +142,11 @@ export interface FixRow {
 // ─── proposed fixes (#2563) ─────────────────────────────────────────────────
 
 /** Checks a fix can be proposed for (procedures and stored import bodies only). */
-export const FIXABLE_CHECKS = new Set(['tran-without-xact-abort', 'merge-null-key'])
+export const FIXABLE_CHECKS = new Set([
+  'tran-without-xact-abort',
+  'merge-null-key',
+  'write-unannounced'
+])
 
 export interface DiffLine {
   type: ' ' | '-' | '+'
@@ -159,8 +163,12 @@ export interface DiffHunk {
 export interface Proposal {
   finding_id: number
   proposable: boolean
-  class: 'xact-abort' | 'merge-null-safe' | null
+  class: 'xact-abort' | 'merge-null-safe' | 'announce' | null
   manual_reason?: string
+  /** announce: per collection, whether the ids or "many changed" are announced. */
+  plan?: AnnouncePlanItem[]
+  /** Shown but not applied from here (the procedure is not owned by app config). */
+  apply_refused?: string
   risky: boolean
   reasons: string[]
   /** Worth knowing, no extra confirmation needed. */
@@ -172,6 +180,23 @@ export interface Proposal {
   target: { type: ObjectType; label: string; kind: FixTargetKind }
   deploys: boolean
   note: string
+}
+
+export interface AnnouncePlanItem {
+  collection: string
+  statements: Array<{ verb: string; line: number; mode: 'ids' | 'whole'; why?: string }>
+  ids: boolean
+  whole: boolean
+}
+
+/** GET /sql-checks/announce/plan — one entry per procedure. */
+export interface AnnouncePlanEntry {
+  finding_id: number
+  sibling_ids: number[]
+  object: { type: ObjectType; schema: string | null; name: string; label: string }
+  collections: string[]
+  proposal: Proposal | null
+  error?: string
 }
 
 /** What a fix changes: the live procedure, an import definition's stored body, or the body an
@@ -305,7 +330,8 @@ export const CHECK_LABEL: Record<string, string> = {
   'not-in-subquery': 'NOT IN over a nullable column',
   'select-star-wide': 'SELECT * on a wide table',
   'import-body-drift': 'Import body differs from deployed',
-  sqlfluff: 'SQLFluff rule'
+  sqlfluff: 'SQLFluff rule',
+  'write-unannounced': 'Writes without announcing'
 }
 
 export const CHECK_WHY: Record<string, string> = {
@@ -325,7 +351,9 @@ export const CHECK_WHY: Record<string, string> = {
     'Every row carries the table’s large text or binary columns over the wire, even when nothing reads them.',
   'import-body-drift':
     'The import runs the procedure deployed in the database, not the body stored on its definition. When they differ, editing the definition changes nothing until it is deployed.',
-  sqlfluff: 'A correctness rule from SQLFluff (ambiguous references, unused CTEs and similar).'
+  sqlfluff: 'A correctness rule from SQLFluff (ambiguous references, unused CTEs and similar).',
+  'write-unannounced':
+    'Changes made in the app reach every open screen at once. This procedure writes records directly and never says so, so people looking at them keep seeing old values until they reload.'
 }
 
 export const TYPE_LABEL: Record<ObjectType, string> = {

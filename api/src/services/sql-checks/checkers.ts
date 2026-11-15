@@ -22,7 +22,8 @@ export const CHECK_KEYS = [
   'not-in-subquery',
   'select-star-wide',
   'import-body-drift',
-  'sqlfluff'
+  'sqlfluff',
+  'write-unannounced'
 ] as const
 export type CheckKey = (typeof CHECK_KEYS)[number]
 export type Severity = 'critical' | 'warning' | 'info'
@@ -58,6 +59,13 @@ export interface Catalog {
   isWide(schema: string | null, table: string): boolean
   /** Column sets (lower-cased) of the table's primary key and unique indexes. */
   uniqueSets(schema: string | null, table: string): string[][]
+  /**
+   * The registered collection (nivaro_collections) a base table backs, in its registered
+   * spelling, or null. Optional: a catalog without it never reports unannounced writes.
+   */
+  collectionOf?(schema: string | null, table: string): string | null
+  /** The table's primary key columns as written, in key order ([] when it has none). */
+  primaryKey?(schema: string | null, table: string): string[]
 }
 
 export interface RawFinding {
@@ -483,7 +491,9 @@ function checkWrites(ctx: CheckContext): RawFinding[] {
 // ─── transactions ───────────────────────────────────────────────────────────
 
 function checkTransactions(ctx: CheckContext): RawFinding[] {
-  const { sql, masked } = ctx
+  const { sql } = ctx
+  // the announce block a fix adds restores XACT_ABORT as it found it: that is not the procedure's
+  const masked = withoutAnnounceBlocks(sql, ctx.masked)
   const begin = /\bBEGIN\s+TRAN(?:SACTION)?\b/i.exec(masked)
   if (!begin) return []
   if (/\bSET\s+XACT_ABORT\s+ON\b/i.test(masked)) return []
@@ -595,6 +605,234 @@ function checkSelectStar(ctx: CheckContext): RawFinding[] {
   return out
 }
 
+// ─── writes that never announce (realtime) ──────────────────────────────────
+
+/**
+ * The markers around the announce block a "Propose fix" adds (announce-fix.ts). Other checks
+ * skip what sits between them where it would read as the procedure's own code.
+ */
+export const ANNOUNCE_BEGIN = '-- nivaro:announce begin'
+export const ANNOUNCE_END = '-- nivaro:announce end'
+
+/** The masked text with every announce block blanked (same length, same line breaks). */
+export function withoutAnnounceBlocks(sql: string, masked: string): string {
+  const lower = sql.toLowerCase()
+  let from = lower.indexOf(ANNOUNCE_BEGIN)
+  if (from < 0) return masked
+  const out = masked.split('')
+  while (from >= 0) {
+    const endAt = lower.indexOf(ANNOUNCE_END, from)
+    const to = endAt < 0 ? sql.length : endAt + ANNOUNCE_END.length
+    for (let k = from; k < to; k++) if (out[k] !== '\n' && out[k] !== '\r') out[k] = ' '
+    from = endAt < 0 ? -1 : lower.indexOf(ANNOUNCE_BEGIN, to)
+  }
+  return out.join('')
+}
+
+export type WriteVerb = 'INSERT' | 'UPDATE' | 'DELETE' | 'MERGE' | 'TRUNCATE'
+
+export interface FoundWrite {
+  verb: WriteVerb
+  /** Offset of the verb (masked offsets are the original's). */
+  start: number
+  /** Offset just past the target as written (INSERT / UPDATE / DELETE / TRUNCATE). */
+  targetEnd: number
+  /** The table written (an UPDATE / DELETE alias resolved through the statement's FROM list). */
+  table: { schema: string | null; name: string }
+  /** The target as written is an alias of `table`. */
+  aliased: boolean
+  /** The MERGE parse (MERGE only). */
+  merge?: ParsedMerge
+}
+
+/** Words before INSERT / UPDATE / DELETE that make it something other than a statement. */
+const NOT_A_WRITE_BEFORE = new Set(['THEN', 'FOR', 'OF', 'ON', 'BULK', 'GRANT', 'DENY', 'REVOKE'])
+
+/** Nivaro's own tables and SQL Server's diagram table (sp_*diagram procedures write it). */
+const isSystemTable = (name: string) => /^(nivaro_|directus_|sysdiagrams$)/i.test(name)
+
+/** `FROM <table> [AS] <alias>` / `JOIN …` inside one statement: the table an alias names. */
+function resolveAlias(stmt: string, alias: string): { schema: string | null; name: string } | null {
+  const re = new RegExp(
+    String.raw`(?:\bFROM|\bJOIN)\s+(${NAME})\s+(?:AS\s+)?(?:\[${esc(alias)}\]|${esc(alias)})(?![\w$#@])`,
+    'i'
+  )
+  const m = re.exec(stmt)
+  return m ? splitName(m[1]) : null
+}
+
+/** Every INSERT / UPDATE / DELETE / MERGE / TRUNCATE on a real table (not a #temp or @variable). */
+export function findWrites(masked: string, depth: Int16Array): FoundWrite[] {
+  const out: FoundWrite[] = []
+  const re = new RegExp(
+    String.raw`\b(INSERT|UPDATE|DELETE)\b(?:\s+TOP\s*\([^)]*\)\s*(?:PERCENT\s+)?)?(?:\s+(?:INTO|FROM))?\s+(${NAME})`,
+    'gi'
+  )
+  for (let m = re.exec(masked); m; m = re.exec(masked)) {
+    const verb = m[1].toUpperCase() as WriteVerb
+    const at = m.index
+    if (/[@.[#$\w]/.test(masked[at - 1] ?? '')) continue
+    if (NOT_A_WRITE_BEFORE.has(wordBefore(masked, at))) continue
+    if (verb === 'UPDATE' && /^\s*\(/.test(masked.slice(at + 6, at + 10))) continue // UPDATE(col)
+    const written = splitName(m[2])
+    if (/^(STATISTICS|SET)$/i.test(written.name) || isTemp(written.name)) continue
+    const targetEnd = at + m[0].length
+    let table = written
+    let aliased = false
+    if (verb !== 'INSERT' && !written.schema) {
+      let bodyFrom = targetEnd
+      if (verb === 'UPDATE') {
+        const setM = /\bSET\b/i.exec(masked.slice(bodyFrom, bodyFrom + 400))
+        if (!setM) continue
+        bodyFrom += setM.index + 3
+      }
+      const end = statementEnd(masked, depth, bodyFrom)
+      const real = resolveAlias(masked.slice(at, end), written.name)
+      if (real && real.name.toLowerCase() !== written.name.toLowerCase()) {
+        if (isTemp(real.name)) continue
+        table = real
+        aliased = true
+      }
+    }
+    out.push({ verb, start: at, targetEnd, table, aliased })
+  }
+  for (const mg of parseMerges(masked, depth)) {
+    if (isTemp(mg.target.name)) continue
+    out.push({
+      verb: 'MERGE',
+      start: mg.start,
+      targetEnd: mg.start,
+      table: mg.target,
+      aliased: false,
+      merge: mg
+    })
+  }
+  const tr = new RegExp(String.raw`\bTRUNCATE\s+TABLE\s+(${NAME})`, 'gi')
+  for (let m = tr.exec(masked); m; m = tr.exec(masked)) {
+    const t = splitName(m[1])
+    if (isTemp(t.name)) continue
+    out.push({
+      verb: 'TRUNCATE',
+      start: m.index,
+      targetEnd: m.index + m[0].length,
+      table: t,
+      aliased: false
+    })
+  }
+  return out.sort((a, b) => a.start - b.start)
+}
+
+/**
+ * The collections a definition already announces: an EXEC of nivaro_announce_writes or an INSERT
+ * into nivaro_raw_writes naming the collection in a literal. One whose collection is not a literal
+ * (a variable, dynamic SQL) counts as announcing everything — there is nothing to judge there.
+ */
+export function announcedCollections(
+  sql: string,
+  masked: string
+): { all: boolean; names: Set<string> } {
+  const lit = maskSql(sql, { literals: false })
+  const names = new Set<string>()
+  let all = false
+  const qual = String.raw`(?:(?:\[[^\]]*\]|[A-Za-z_]\w*)\s*\.\s*){0,2}`
+  const exec = new RegExp(
+    String.raw`\bEXEC(?:UTE)?\s+(?:@[\w@#$]+\s*=\s*)?${qual}\[?nivaro_announce_writes\]?(?![\w$#@])`,
+    'gi'
+  )
+  for (let m = exec.exec(masked); m; m = exec.exec(masked)) {
+    const from = m.index + m[0].length
+    const a = /^\s*(?:@Collection\s*=\s*)?N?'((?:[^']|'')*)'/i.exec(lit.slice(from, from + 400))
+    if (a) names.add(a[1].replace(/''/g, "'").trim().toLowerCase())
+    else all = true
+  }
+  const ins = new RegExp(
+    String.raw`\bINSERT\s+(?:INTO\s+)?${qual}\[?nivaro_raw_writes\]?(?![\w$#@])`,
+    'gi'
+  )
+  for (let m = ins.exec(masked); m; m = ins.exec(masked)) {
+    const semi = masked.indexOf(';', m.index)
+    const to = semi > 0 ? Math.min(semi, m.index + 1500) : m.index + 1500
+    const lits = [...lit.slice(m.index, to).matchAll(/N?'((?:[^']|'')*)'/g)].map((x) =>
+      x[1].replace(/''/g, "'").trim().toLowerCase()
+    )
+    if (!lits.length) all = true
+    for (const l of lits) names.add(l)
+  }
+  return { all, names }
+}
+
+export interface UnannouncedGroup {
+  collection: string
+  table: { schema: string | null; name: string }
+  writes: FoundWrite[]
+}
+
+/**
+ * Writes to registered collections the definition never announces, one group per collection in
+ * order of first write. Empty when the catalog does not know the collections.
+ */
+export function unannouncedWriteGroups(
+  sql: string,
+  masked: string,
+  depth: Int16Array,
+  catalog: Catalog
+): UnannouncedGroup[] {
+  if (!catalog.collectionOf) return []
+  const announced = announcedCollections(sql, masked)
+  if (announced.all) return []
+  const groups = new Map<string, UnannouncedGroup>()
+  for (const w of findWrites(masked, depth)) {
+    if (isSystemTable(w.table.name)) continue
+    const collection = catalog.collectionOf(w.table.schema, w.table.name)
+    if (!collection || announced.names.has(collection.toLowerCase())) continue
+    const key = collection.toLowerCase()
+    const g = groups.get(key) ?? { collection, table: w.table, writes: [] }
+    g.writes.push(w)
+    groups.set(key, g)
+  }
+  return [...groups.values()]
+}
+
+const VERB_WORD: Record<WriteVerb, string> = {
+  INSERT: 'adds',
+  UPDATE: 'changes',
+  DELETE: 'deletes',
+  MERGE: 'merges',
+  TRUNCATE: 'empties'
+}
+
+function checkAnnounce(ctx: CheckContext): RawFinding[] {
+  const { obj, sql, masked, depth, catalog } = ctx
+  if (obj.type !== 'procedure' && obj.type !== 'import_definition') return []
+  const out: RawFinding[] = []
+  for (const g of unannouncedWriteGroups(sql, masked, depth, catalog)) {
+    const first = g.writes[0]
+    const what = [...new Set(g.writes.map((w) => VERB_WORD[w.verb]))].join(' / ')
+    const pk = catalog.primaryKey?.(g.table.schema, g.table.name) ?? []
+    out.push({
+      check_key: 'write-unannounced',
+      severity: 'warning',
+      line: lineAt(sql, first.start),
+      snippet: snippetAt(sql, first.start, first.start + 300),
+      anchor: `unannounced:${g.collection.toLowerCase()}`,
+      message: `${what[0].toUpperCase()}${what.slice(1)} ${g.collection} records without announcing it, so screens that have them open stay stale`,
+      detail: {
+        collection: g.collection,
+        table_schema: g.table.schema,
+        table: g.table.name,
+        primary_key: pk,
+        statements: g.writes.slice(0, 50).map((w) => ({ verb: w.verb, line: lineAt(sql, w.start) }))
+      },
+      suggested_fix: [
+        `Changes made through the app reach every open screen at once. This procedure writes ${g.collection} directly, so people looking at those records keep seeing the old values until they reload.`,
+        `After the writes, announce them: EXEC dbo.nivaro_announce_writes @Collection = N'${g.collection}', @Ids = <comma list of the changed ids, or NULL for "many rows changed">, @Action = N'update'.`,
+        'Propose fix does it for you: it collects the changed ids with OUTPUT … INTO a table variable and announces them at the end of the procedure, wrapped so the announcement can never make the procedure fail.'
+      ].join('\n')
+    })
+  }
+  return out
+}
+
 // ─── all checks over one object ─────────────────────────────────────────────
 
 /** Every pattern check over one definition. */
@@ -609,7 +847,8 @@ export function checkObject(obj: SqlObject, catalog: Catalog): RawFinding[] {
     ...checkTransactions(ctx),
     ...checkLocalTime(ctx),
     ...checkNotIn(ctx),
-    ...checkSelectStar(ctx)
+    ...checkSelectStar(ctx),
+    ...checkAnnounce(ctx)
   ]
 }
 

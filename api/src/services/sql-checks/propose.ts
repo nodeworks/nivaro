@@ -1,7 +1,8 @@
 // api/src/services/sql-checks/propose.ts
 /**
  * Proposed fixes for SQL checks findings (#2563) — pure: definition text in, new text + diff out.
- * Only two mechanical classes are rewritten; everything else stays a manual fix:
+ * Only three mechanical classes are rewritten; everything else stays a manual fix (the third,
+ * `write-unannounced` → announce, lives in announce-fix.ts):
  *
  *  - `tran-without-xact-abort` (procedures): `SET XACT_ABORT ON;` becomes the first statement of
  *    the body — after `AS` / `AS BEGIN`, after a leading `SET NOCOUNT ON`.
@@ -12,11 +13,16 @@
  * Every offset comes from the masked text (tokenizer.ts), so an edit never lands inside a comment
  * or a string literal; the new text is the old one with those spans spliced, nothing else moved.
  */
-import { parseMerges } from './checkers.js'
+import { type AnnouncePlanItem, proposeAnnounce } from './announce-fix.js'
+import { type Catalog, parseMerges } from './checkers.js'
 import { depthMap, lineAt, maskSql, normaliseSql, splitName } from './tokenizer.js'
 
-export type FixClass = 'xact-abort' | 'merge-null-safe'
-export const FIXABLE_CHECKS = ['tran-without-xact-abort', 'merge-null-key'] as const
+export type FixClass = 'xact-abort' | 'merge-null-safe' | 'announce'
+export const FIXABLE_CHECKS = [
+  'tran-without-xact-abort',
+  'merge-null-key',
+  'write-unannounced'
+] as const
 
 export interface Edit {
   /** Offset in the original text. */
@@ -37,6 +43,8 @@ export interface ProposalResult {
   notes: string[]
   edits: Edit[]
   newDefinition: string | null
+  /** `announce`: per collection, which statements announce ids and which "many changed". */
+  plan?: AnnouncePlanItem[]
 }
 
 export interface FindingForFix {
@@ -335,7 +343,13 @@ export function mergeRisks(
 export function proposeFix(
   sql: string,
   finding: FindingForFix,
-  opts: { sourceDupes?: boolean } = {}
+  opts: {
+    sourceDupes?: boolean
+    /** `write-unannounced`: the catalog that knows the registered collections and keys. */
+    catalog?: Catalog
+    /** `write-unannounced`: who the announcement says wrote it ("procedure:dbo.x"). */
+    source?: string
+  } = {}
 ): ProposalResult {
   const type = finding.object_type
   if (type !== 'procedure' && type !== 'import_definition')
@@ -345,6 +359,21 @@ export function proposeFix(
     const p = proposeMergeNullSafe(sql, finding)
     if (!p.proposable) return p
     return { ...p, ...mergeRisks(finding, !!opts.sourceDupes) }
+  }
+  if (finding.check_key === 'write-unannounced') {
+    if (!opts.catalog) return manual('The database catalog could not be read.')
+    const a = proposeAnnounce(sql, opts.catalog, { source: opts.source ?? 'procedure' })
+    if (!a.ok) return manual(a.manual_reason ?? 'No fix can be proposed.')
+    return {
+      proposable: true,
+      class: 'announce',
+      risky: false,
+      reasons: [],
+      notes: a.notes,
+      edits: a.edits,
+      newDefinition: applyEdits(sql, a.edits),
+      plan: a.plan
+    }
   }
   return manual('This kind of finding needs a person to fix it.')
 }
