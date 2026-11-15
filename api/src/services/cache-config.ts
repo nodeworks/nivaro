@@ -125,6 +125,16 @@ export const CACHE_SETTINGS: CacheSettingDef[] = [
     max: 3_600_000
   },
   {
+    key: 'warm.on_change',
+    group: 'Cache warm',
+    label: 'Warm after data changes',
+    hint: 'When records change, recompute the most-viewed cached queries and widgets that read them (at most once per widget every 2 minutes). auto = follows Mode. Never in cloud mode.',
+    env: 'CACHE_WARM_ON_CHANGE',
+    kind: 'mode',
+    default: 'auto',
+    options: ['auto', 'on', 'off']
+  },
+  {
     key: 'list_total.ttl_ms',
     group: 'List reads',
     label: 'Approximate totals TTL (ms)',
@@ -198,6 +208,7 @@ export type CacheSettingKey =
   | 'metadata_l2.ttl_s'
   | 'warm.mode'
   | 'warm.budget_ms'
+  | 'warm.on_change'
   | 'list_total.ttl_ms'
   | 'label.ttl_ms'
   | 'identity.enabled'
@@ -307,7 +318,7 @@ function recompute(): Set<string> {
 }
 
 /** The effective value of one switch (sync, no I/O — safe on any hot path). */
-export function cacheSetting(key: 'warm.mode'): CacheWarmModeSetting
+export function cacheSetting(key: 'warm.mode' | 'warm.on_change'): CacheWarmModeSetting
 export function cacheSetting(
   key: 'permission.enabled' | 'metadata_l2.enabled' | 'identity.enabled' | 'layout_bundle.enabled'
 ): boolean

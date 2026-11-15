@@ -696,18 +696,94 @@ async function selectTargets(
   targets: WarmTarget[]
   ownerLoad: boolean
   paramSets: WarmParamSetRow[]
+  hits: SlugHits
 }> {
   const queries = await deps.loadQueries()
   const since = new Date(now - USAGE_DAYS * 86_400_000)
   const paramSets = await deps.loadParamSets()
   const usage = only ? null : await deps.loadHits(since, queries)
-  const targets = pickWarmTargets({
-    queries,
-    hits: usage?.hits ?? hitsFromParamSets(paramSets, since),
-    paramSets,
-    only
-  })
-  return { queries, targets, ownerLoad: !only && (usage?.ownerLoad ?? 0) > 0, paramSets }
+  const hits = usage?.hits ?? hitsFromParamSets(paramSets, since)
+  const targets = pickWarmTargets({ queries, hits, paramSets, only })
+  return { queries, targets, ownerLoad: !only && (usage?.ownerLoad ?? 0) > 0, paramSets, hits }
+}
+
+// ─── Change-driven warm (services/cache-warm-on-change.ts) ──────────────────
+
+/**
+ * The unrestricted caller the usage-ranked phase runs as, in the viewer runner's
+ * shape: scope injection is a no-op for it, so its key is the one every
+ * unrestricted viewer of the execute route reads (exactly what runCacheWarm's
+ * first phase writes). Its signature names no person.
+ */
+export const UNRESTRICTED_WARM_VIEWER: WarmViewer = { id: '', isAdmin: true, signature: '*' }
+
+/**
+ * Everything a change-driven warm may recompute, most used first, in ONE list for
+ * the viewer runner (runViewerTargets): the usage-ranked unrestricted execute
+ * runs (as UNRESTRICTED_WARM_VIEWER) and — never in cloud mode — the viewer
+ * phase's widget renders and scoped execute calls (as one recent viewer per
+ * scope signature). Only cached queries (cache_ttl > 0): the runner skips the rest.
+ */
+export async function selectChangeWarmTargets(
+  opts: Pick<CacheWarmOptions, 'deps' | 'viewers' | 'cloud'> = {}
+): Promise<{ queries: WarmQueryDef[]; targets: ViewerTarget[] }> {
+  const deps = { ...defaultDeps, ...opts.deps }
+  const now = deps.now()
+  const { queries, targets, paramSets, hits } = await selectTargets(deps, undefined, now)
+  const ttlOf = new Map(queries.map((q) => [q.slug, Number(q.cache_ttl) || 0]))
+  const out: ViewerTarget[] = targets
+    .filter((t) => (ttlOf.get(t.slug) ?? 0) > 0)
+    .map((t) => ({
+      surface: 'query' as const,
+      slug: t.slug,
+      params: t.incoming,
+      kind: t.kind,
+      as: UNRESTRICTED_WARM_VIEWER,
+      groupHits: hits.get(t.slug) ?? 0,
+      members: 0,
+      seen: 0
+    }))
+  if (opts.viewers !== false && !inCloudMode(opts.cloud)) {
+    const vdeps = { ...defaultViewerDeps, ...(opts.viewers || {}) }
+    const vt = await selectViewerTargets(vdeps, queries, paramSets, now).catch(() => [])
+    out.push(...vt)
+  }
+  return { queries, targets: out }
+}
+
+/**
+ * How one change-warm target runs: the unrestricted caller through the execute
+ * route's own path (buildFinalParams → key → execCustomQuerySql, flight key = the
+ * cache key, as the route's), every viewer target through the viewer phase's plan.
+ */
+export async function planChangeWarmTarget(
+  t: ViewerTarget,
+  query: ViewerQueryDef,
+  viewers: Partial<ViewerPhaseDeps> = {}
+): Promise<ViewerPlan> {
+  if (t.as.signature === UNRESTRICTED_WARM_VIEWER.signature && t.surface === 'query') {
+    const { buildFinalParams, execCustomQuerySql } = await import('./custom-query-exec.js')
+    const finalParams = buildFinalParams(
+      (parseJson<unknown[]>(query.params) ?? []) as never,
+      t.params
+    )
+    const key = customQueryCacheKey(query.slug, finalParams, query)
+    return {
+      cacheKey: key,
+      flightKey: key,
+      ttl: Number(query.cache_ttl) || 0,
+      run: (timeoutMs) => execCustomQuerySql(query.sql_text, finalParams, { timeoutMs })
+    }
+  }
+  return (viewers.plan ?? defaultViewerDeps.plan)(t, query)
+}
+
+/** The viewer phase's single-flight gate (sharedGatedRead under the request's own key). */
+export function changeWarmGate<T>(
+  flightKey: string,
+  fn: () => Promise<T>
+): Promise<{ value: T; shared: boolean }> {
+  return defaultViewerDeps.gate(flightKey, fn)
 }
 
 export interface CacheWarmPlan {
