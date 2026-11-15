@@ -6,6 +6,7 @@ import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
 import { OutsideWritesTab } from './realtime/OutsideWritesTab'
+import { MissedUpdatesTab } from './realtime/MissedUpdatesTab'
 import { SocketHealthTab } from './realtime/SocketHealthTab'
 import { AutoReloadControl, MinBuildControl, RememberedRefreshes } from './realtime/StickyRefresh'
 import { VerifyTab } from './realtime/VerifyTab'
@@ -28,6 +29,7 @@ type Tab =
   | 'pipeline'
   | 'outside'
   | 'verify'
+  | 'missed'
 
 const REALTIME_TABS: Array<[Tab, string]> = [
   ['sockets', 'Sockets & rooms'],
@@ -39,7 +41,8 @@ const REALTIME_TABS: Array<[Tab, string]> = [
   ['firehose', 'Firehose'],
   ['pipeline', 'Event pipeline'],
   ['outside', 'Outside writes'],
-  ['verify', 'Verification']
+  ['verify', 'Verification'],
+  ['missed', 'Missed updates']
 ]
 
 interface SocketRow {
@@ -181,6 +184,7 @@ export default function Realtime() {
         {tab === 'pipeline' && <PipelineTab />}
         {tab === 'outside' && <OutsideWritesTab />}
         {tab === 'verify' && <VerifyTab />}
+        {tab === 'missed' && <MissedUpdatesTab />}
       </div>
     </div>
   )

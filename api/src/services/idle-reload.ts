@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { type ClientVersion, judgeable } from './client-version.js'
 import type { BuildJudge } from './client-versions-cluster.js'
+import { DURABLE_RETENTION_HOURS } from './event-journal-store.js'
 import { instanceKey } from './instance-key.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -164,4 +165,20 @@ export function idleReloadVerdict(
   const target =
     (older === 'build' ? judge.current.get(app) : judge.api) ?? judge.current.get(app) ?? 'newer'
   return { older, target, id: `idle-${app}-${target}`.slice(0, 120), reason: 'old' }
+}
+
+/**
+ * Realtime idea 13 — when a returning tab refreshes its DATA in place (never a reload): the
+ * durable journal's replay window (a tab away longer cannot be caught up event by event) and how
+ * many idle hours make a tab's data worth re-reading anyway. IDLE_RESYNC_HOURS (1–48, default 4).
+ */
+export function dataResyncSettings(env: NodeJS.ProcessEnv = process.env): {
+  replay_window_s: number
+  idle_hours: number
+} {
+  const h = Number(env.IDLE_RESYNC_HOURS)
+  return {
+    replay_window_s: DURABLE_RETENTION_HOURS * 3600,
+    idle_hours: Number.isFinite(h) && h >= 1 ? Math.min(48, h) : 4
+  }
 }

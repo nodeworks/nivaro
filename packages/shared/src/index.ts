@@ -625,6 +625,7 @@ export { type ReadViewLayout, RecordReadView } from './components/RecordReadView
 export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
 export { RowPresence } from './components/RowPresence'
+export { ScreenRefreshButton } from './components/ScreenRefreshButton'
 export { SearchHighlight } from './components/SearchHighlight'
 export { SignOutNoteAfterSignIn, SignOutNoteBanner } from './components/SignOutNoteBanner'
 // #3229 shape-matched skeletons · #3231 slow-read reasons
@@ -924,9 +925,13 @@ export {
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
 export {
   type BuildStatus,
+  type DataResyncSettings,
   decideIdleReload,
+  decideIdleResync,
   type IdleReloadDecision,
-  type IdleReloadInput
+  type IdleReloadInput,
+  type IdleResyncDecision,
+  type IdleResyncInput
 } from './lib/idle-reload'
 export type { ChipSubmission, IntegrationChipSummary } from './lib/integration-chip'
 export { integrationChipSummary } from './lib/integration-chip'
@@ -945,6 +950,7 @@ export * from './lib/live-list'
 export * from './lib/live-ops'
 export * from './lib/live-queries'
 export * from './lib/live-screen'
+export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
 export * from './lib/live-widgets'
 export {
   isListTimeout,
@@ -966,6 +972,14 @@ export {
   startMetadataPersistence,
   wipeMetadataCache
 } from './lib/metadata-persist'
+export {
+  compareSnapshot,
+  hashValue,
+  type MissedRecord,
+  registerShownRecords,
+  type ShownRecord,
+  useShownRecords
+} from './lib/missed-updates'
 export { MONEY_INPUT_MAX, type MoneyParse, parseMoneyInput } from './lib/money-input'
 export {
   displayTrail,
@@ -1226,6 +1240,16 @@ export {
   statusTitle,
   userErrorMessage
 } from './lib/safe-error'
+export {
+  refreshScreenData,
+  registerScreenLoader,
+  type ScreenRefreshResult,
+  type ScreenRefreshState,
+  screenRefreshMatches,
+  setScreenRefreshClient,
+  useScreenLoader,
+  useScreenRefreshState
+} from './lib/screen-refresh'
 export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'
 export * from './lib/search-log'
 export {

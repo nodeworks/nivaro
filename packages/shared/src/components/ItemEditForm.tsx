@@ -110,6 +110,7 @@ import { currentViewport, quietHiddenSectionsOf } from '../lib/layout-resolve'
 import { extSlotKey } from '../lib/layout-slots'
 import { useLeaveLinkGuard } from '../lib/leave-guard'
 import { useLiveRefetchInterval } from '../lib/live-queries'
+import { useShownRecords } from '../lib/missed-updates'
 import { requestMoveState } from '../lib/move-state'
 import { lockedAfterMoveText, movedNoticeId, namedMovedNoticeRecent } from '../lib/moved-notice'
 import { ownersHeaderTile } from '../lib/owners-header-tile'
@@ -373,6 +374,7 @@ import { RecordIntegrityBanner, useRecordIntegrity } from './panels/RecordIntegr
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordGraphSheet } from './RecordGraph'
 import { type ReadViewLayout, RecordReadView } from './RecordReadView'
+import { ScreenRefreshButton } from './ScreenRefreshButton'
 import { SuggestFormChange } from './support/SuggestFormChange'
 import { SupportRequestDialog } from './support/SupportRequestDialog'
 
@@ -2341,6 +2343,7 @@ function ItemEditFormView({
   }, [collection, itemId])
   const {
     data: fetchedItemData,
+    dataUpdatedAt: itemDataUpdatedAt,
     isLoading: itemLoading,
     error: itemLoadError
   } = useQuery<Record<string, unknown>>({
@@ -2363,6 +2366,19 @@ function ItemEditFormView({
   })
   // Design mode: the preview record stands in for the fetched one.
   const itemData = designOn ? (design.record ?? undefined) : fetchedItemData
+  // Realtime idea 14: after a reload, was what this record showed actually stale? (hashes only)
+  useShownRecords(
+    !isNew && !designOn && fetchedItemData && itemId != null && itemDataUpdatedAt > 0
+      ? [
+          {
+            collection,
+            id: itemId as string | number,
+            values: fetchedItemData,
+            loadedAt: itemDataUpdatedAt
+          }
+        ]
+      : null
+  )
   // The heading's display template may read through links ("{{core_category.name}} -
   // {{sub_category.name}}" on categories): the record read carries only their ids, so those
   // fields come in one small read of their own (Rob 2026-11-13: "Categories (no number)").
@@ -13906,6 +13922,7 @@ function ItemEditFormView({
                                         )}
                                       </div>
                                       <div className='ml-auto flex items-center gap-1.5 [&_button]:whitespace-nowrap'>
+                                        {!isNew && !designOn && <ScreenRefreshButton />}
                                         {headerExtra}
                                         <HeaderTools>
                                           {isNew && (

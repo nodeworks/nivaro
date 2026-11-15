@@ -259,6 +259,7 @@ import { readinessRoutes } from './readiness.js'
 import { readyToSendRoutes } from './ready-to-send.js'
 import { realtimeBuildRoutes, realtimeRoutes, recordViewersRoutes } from './realtime.js'
 import { realtimeOutsideWritesRoutes } from './realtime-outside-writes.js'
+import { realtimeTrustRoutes } from './realtime-trust.js'
 import { realtimeVerifyRoutes } from './realtime-verify.js'
 import { realtimeWorkerRoutes } from './realtime-worker.js'
 import { recordGraphRoutes } from './record-graph.js'
@@ -566,6 +567,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(realtimeRoutes, { prefix: '/realtime' })
   // #2937 — sign-in only: is this tab on an old build (reload old tabs when idle).
   await app.register(realtimeBuildRoutes, { prefix: '/realtime' })
+  // Realtime ideas 14/15 — missed-update beacons (signed in) + their report (admin).
+  await app.register(realtimeTrustRoutes, { prefix: '/realtime' })
   // #2463 / #2477 / #2478 / #2760 — realtime verification tooling (admin).
   await app.register(realtimeVerifyRoutes, { prefix: '/realtime' })
   // Outside-write watcher setting + what it caught (admin).

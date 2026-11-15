@@ -134,6 +134,7 @@ import {
   writerOf
 } from '../lib/live-list'
 import { listLoadErrorText, loadErrorStatus } from '../lib/load-error'
+import { useShownRecords } from '../lib/missed-updates'
 import { listTrailDetail, setTrailDetail } from '../lib/nav-trail'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
@@ -5580,6 +5581,20 @@ export function CollectionBrowserView({
     if (out.page != null) setPage(out.page)
   }, [scopeGateOpen, itemsRes, isFetching, isPlaceholderData, page, effPageSize, error])
   const rows = aiResult ? aiResult.rows : (itemsRes?.data ?? [])
+  // Realtime idea 14: after a reload, were these rows really stale? (hashes only, first 200)
+  useShownRecords(() =>
+    !aiResult && collection && !isPlaceholderData && dataUpdatedAt > 0
+      ? rows
+          .slice(0, 200)
+          .filter((r) => r && r.id != null)
+          .map((r) => ({
+            collection,
+            id: r.id as string | number,
+            values: r as Record<string, unknown>,
+            loadedAt: dataUpdatedAt
+          }))
+      : null
+  )
   const total = aiResult ? aiResult.total : (itemsRes?.total ?? 0)
   // The rows are complete but the count gave up (200 + total_timed_out): no total to state.
   const totalUnknown =
