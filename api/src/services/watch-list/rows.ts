@@ -270,7 +270,7 @@ async function actorNames(ids: Set<string>): Promise<Record<string, string>> {
   return out
 }
 
-async function pickedInstances(
+export async function pickedInstances(
   collection: string,
   ids: string[]
 ): Promise<
@@ -382,13 +382,14 @@ async function visibleOf(
 export async function readWatchRows(
   list: WatchListPrefs,
   opts: WatchReadOptions
-): Promise<{ rows: WatchRow[]; changed: string[] }> {
+): Promise<{ rows: WatchRow[]; changed: string[]; others: Record<string, string> }> {
   const { user, isAdmin } = opts
   const now = opts.now ?? new Date()
   const selfId = String(user.id)
   const groups = byCollection(list.pins)
   const rowByKey = new Map<string, WatchRow>()
   const changed: string[] = []
+  const others: Record<string, string> = {}
   const medians = opts.summary ? new Map<string, number>() : await stepMedians()
   const { getCollection, getFields } = await import('../collections.js')
   const { readableName } = await import('../command-center/regions.js')
@@ -460,6 +461,13 @@ export async function readWatchRows(
       if (opts.summary) {
         for (const p of pins) {
           if (!visible.has(p.id)) continue
+          // Desktop alerts (rt6 #4) ask "did someone ELSE just change it?" — never the
+          // person's own write from another tab or device.
+          const other = newestOtherAt(
+            [events.edits.get(p.id), events.moves.get(p.id), events.comments.get(p.id)],
+            selfId
+          )
+          if (other) others[pinKey(p.c, p.id)] = other
           const ind = changeIndicator(
             [events.edits.get(p.id), events.moves.get(p.id), events.comments.get(p.id)],
             selfId,
@@ -606,5 +614,18 @@ export async function readWatchRows(
   // Pin order, not the order collections finished in.
   const order = new Map(list.pins.map((p, i) => [pinKey(p.c, p.id), i]))
   changed.sort((a, z) => (order.get(a) ?? 0) - (order.get(z) ?? 0))
-  return { rows, changed }
+  return { rows, changed, others }
+}
+
+/** The newest event by someone other than `selfId` (ISO), or null. Pure. */
+export function newestOtherAt(
+  events: Array<ChangeEvent | null | undefined>,
+  selfId: string
+): string | null {
+  let best: string | null = null
+  for (const e of events) {
+    if (!e?.at || (e.by && e.by.toLowerCase() === selfId.toLowerCase())) continue
+    if (!best || e.at > best) best = e.at
+  }
+  return best
 }

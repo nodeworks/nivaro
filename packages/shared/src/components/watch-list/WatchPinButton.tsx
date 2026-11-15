@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { useOptionalNivaroClient } from '../../context'
 import { useLiveRecord } from '../../lib/live'
 import { pinKeyOf, typingTarget, useWatchActions } from '../../lib/watch-list'
+import { WatchShareMenu } from './WatchExtras'
 
 /**
  * Pin a record to the watch list (rt5 #1) — beside a record's title, in the record sheet's
@@ -78,7 +79,7 @@ export function WatchPinButton({
   const label = pinned ? 'Remove from your watch list' : 'Add to your watch list'
   const full = !pinned && actions.full
   const icon = size === 'sm' ? 'h-3 w-3' : 'h-3.5 w-3.5'
-  return (
+  const pinButton = (
     <button
       type='button'
       aria-pressed={pinned}
@@ -111,5 +112,14 @@ export function WatchPinButton({
         <Pin className={icon} />
       )}
     </button>
+  )
+  // People on a shared list also get "put it on a shared list" beside the pin (rt6 #1).
+  const shared = actions.prefs.teams.some((t) => t.is_member || t.can_manage)
+  if (!shared) return pinButton
+  return (
+    <span className='inline-flex shrink-0 items-center'>
+      {pinButton}
+      <WatchShareMenu actions={actions} collection={collection} itemId={id} size={size} />
+    </span>
   )
 }

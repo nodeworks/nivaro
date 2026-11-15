@@ -1157,6 +1157,36 @@ export async function buildServer() {
         }
       )
 
+      // Watch list (rt6): "tell me when it's overdue" rules (only the records that have one),
+      // and the opt-in daily email of what changed on a person's pinned records.
+      app.cron.schedule(
+        'watch-list-overdue',
+        '*/5 * * * *',
+        async () => {
+          const { runOverdueAlerts } = await import('./services/watch-list/alerts.js')
+          await runOverdueAlerts(app)
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Tells people who set a “when it’s overdue” alert on a watched record that its step passed its due time — once per breach. Reads only records that have such an alert.'
+        }
+      )
+      app.cron.schedule(
+        'watch-list-digest',
+        '0 7 * * *',
+        async () => {
+          const { runWatchDigest } = await import('./services/watch-list/digest.js')
+          await runWatchDigest()
+        },
+        {
+          idempotent: 'safe',
+          description:
+            'Emails each person who turned it on what changed on their pinned records in the last day, read as them. Days with no change send nothing; one email per person per day.'
+        }
+      )
+
       // Cumulative flow (#2758): a year of daily state counts per pipeline
       // template + collection, so long ranges read a stored series.
       app.cron.schedule(

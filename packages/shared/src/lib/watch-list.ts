@@ -20,8 +20,46 @@ import { toastError } from './error-toast'
  */
 
 export type DockState = 'open' | 'minimized' | 'closed'
-export type DockTab = 'watching' | 'waiting' | 'mentions'
+/** A shared list's tab is `team:<list id>`. */
+export type DockTab = 'watching' | 'waiting' | 'mentions' | `team:${string}`
 export type DockSort = 'mine' | 'changed' | 'due'
+
+export interface WatchSettings {
+  desktop: boolean
+  auto_add: boolean
+  auto_remove: boolean
+  digest: boolean
+}
+
+export type WatchAlertKind = 'step' | 'field' | 'overdue'
+
+export interface WatchAlertRef {
+  id: string
+  /** "collection:id" of the record. */
+  key: string
+  kind: WatchAlertKind
+  step: string | null
+  field: string | null
+  label: string | null
+  repeat: boolean
+  fired_at: string | null
+}
+
+export interface WatchTeam {
+  id: string
+  name: string
+  owner: { id: string; name: string }
+  members: Array<{ id: string; name: string }>
+  pins: Array<{ key: string; collection: string; id: string; pinned_at: string; by: string }>
+  can_manage: boolean
+  is_member: boolean
+}
+
+export interface WatchAlertOptions {
+  steps: Array<{ key: string; label: string; color: string | null }>
+  fields: Array<{ field: string; label: string }>
+  has_deadline: boolean
+}
 
 export interface WatchDockPrefs {
   state: DockState
@@ -35,6 +73,8 @@ export interface WatchPinRef {
   collection: string
   id: string
   pinned_at: string
+  /** Added automatically (the record landed on the person's step). */
+  auto?: boolean
 }
 
 export interface WatchPrefs {
@@ -42,6 +82,13 @@ export interface WatchPrefs {
   dock: WatchDockPrefs
   replies_seen_at: string | null
   max: number
+  settings: WatchSettings
+  alerts: WatchAlertRef[]
+  teams: WatchTeam[]
+  /** How many direct reports the person has (a manager may add their team in one go). */
+  direct_reports?: number
+  /** The signed-in person (only on the prefs read). */
+  me?: { id: string; name: string }
 }
 
 export interface WatchChange {
@@ -116,7 +163,17 @@ export const watchKeys = {
   rows: (sig: string) => ['watch-list', 'rows', sig] as const,
   summary: (sig: string) => ['watch-list', 'summary', sig] as const,
   waiting: ['watch-list', 'waiting'] as const,
-  mentions: ['watch-list', 'mentions'] as const
+  mentions: ['watch-list', 'mentions'] as const,
+  team: (id: string, sig: string) => ['watch-list', 'team', id, sig] as const,
+  alertOptions: (collection: string, id: string) =>
+    ['watch-list', 'alert-options', collection, id] as const
+}
+
+export const WATCH_SETTINGS_DEFAULT: WatchSettings = {
+  desktop: false,
+  auto_add: false,
+  auto_remove: false,
+  digest: false
 }
 
 export const pinKeyOf = (collection: string, id: string | number) => `${collection}:${id}`
@@ -219,7 +276,28 @@ export const watchUi = {
 type Client = NonNullable<ReturnType<typeof useOptionalNivaroClient>>
 
 function emptyPrefs(): WatchPrefs {
-  return { pins: [], dock: WATCH_DOCK_DEFAULT, replies_seen_at: null, max: 50 }
+  return {
+    pins: [],
+    dock: WATCH_DOCK_DEFAULT,
+    replies_seen_at: null,
+    max: 50,
+    settings: WATCH_SETTINGS_DEFAULT,
+    alerts: [],
+    teams: []
+  }
+}
+
+/** Fill keys an older server (or a write answer) left out. Pure. */
+export function withPrefDefaults(p: Partial<WatchPrefs> | undefined): WatchPrefs {
+  const base = emptyPrefs()
+  if (!p) return base
+  return {
+    ...base,
+    ...p,
+    settings: { ...base.settings, ...(p.settings ?? {}) },
+    alerts: p.alerts ?? [],
+    teams: p.teams ?? []
+  }
 }
 
 /** The stored list (pins + dock). Null client (no provider) = an empty, inert list. */
@@ -236,7 +314,7 @@ export function useWatchPrefs(): { prefs: WatchPrefs; ready: boolean } {
     gcTime: 30 * 60_000,
     retry: 1
   })
-  return { prefs: q.data ?? emptyPrefs(), ready: q.isSuccess }
+  return { prefs: useMemo(() => withPrefDefaults(q.data), [q.data]), ready: q.isSuccess }
 }
 
 export interface WatchActions {
@@ -248,6 +326,28 @@ export interface WatchActions {
   reorder: (keys: string[]) => void
   markSeen: (keys?: string[]) => void
   full: boolean
+  setSettings: (patch: Partial<WatchSettings>) => Promise<void>
+  addAlert: (input: {
+    collection: string
+    id: string
+    kind: WatchAlertKind
+    step?: string
+    field?: string
+    label?: string
+    repeat: boolean
+  }) => Promise<void>
+  removeAlert: (alertId: string) => Promise<void>
+  createTeam: (input: {
+    name: string
+    members: string[]
+    reports?: boolean
+  }) => Promise<string | null>
+  editTeam: (id: string, patch: { name?: string; members?: string[] }) => Promise<void>
+  deleteTeam: (id: string) => Promise<void>
+  leaveTeam: (id: string) => Promise<void>
+  teamPin: (teamId: string, collection: string, id: string) => Promise<void>
+  teamUnpin: (teamId: string, collection: string, id: string) => Promise<void>
+  teamSeen: (teamId: string, keys?: string[]) => void
 }
 
 /** Pin / unpin / dock writes, applied to the cache first (the click lands at once). */
@@ -265,7 +365,11 @@ export function useWatchActions(): WatchActions & { prefs: WatchPrefs } {
   )
   const settle = useCallback(
     (r: { data: WatchPrefs } | undefined) => {
-      if (r?.data) qc.setQueryData(watchKeys.prefs, r.data)
+      // A write answer carries no direct_reports: keep the one we have.
+      if (r?.data)
+        qc.setQueryData<WatchPrefs>(watchKeys.prefs, (old) =>
+          withPrefDefaults({ direct_reports: old?.direct_reports, me: old?.me, ...r.data })
+        )
     },
     [qc]
   )
@@ -381,8 +485,144 @@ export function useWatchActions(): WatchActions & { prefs: WatchPrefs } {
     [client, qc, settle, prefs.pins]
   )
 
+  const setSettings = useCallback(
+    async (patchSettings: Partial<WatchSettings>) => {
+      apply((p) => {
+        const settings = { ...p.settings, ...patchSettings }
+        if (!settings.auto_add) settings.auto_remove = false
+        return { ...p, settings }
+      })
+      await run(patch('/watch-list/settings', patchSettings), 'Could not save the setting')
+    },
+    [apply, run]
+  )
+  const addAlert = useCallback<WatchActions['addAlert']>(
+    async (input) => {
+      await run(post('/watch-list/alerts', input), 'Could not add the alert')
+    },
+    [run]
+  )
+  const removeAlert = useCallback(
+    async (alertId: string) => {
+      apply((p) => ({ ...p, alerts: p.alerts.filter((a) => a.id !== alertId) }))
+      await run(
+        del(`/watch-list/alerts/${encodeURIComponent(alertId)}`),
+        'Could not remove the alert'
+      )
+    },
+    [apply, run]
+  )
+  const createTeam = useCallback<WatchActions['createTeam']>(
+    async (input) => {
+      if (!client) return null
+      try {
+        const r = await (client as Client).request<{ data: WatchPrefs & { created?: string } }>(
+          post('/watch-list/teams', input)
+        )
+        settle(r)
+        return r.data.created ?? null
+      } catch (err) {
+        toastError(err, 'Could not make the shared list')
+        throw err
+      }
+    },
+    [client, settle]
+  )
+  const editTeam = useCallback(
+    async (id: string, patchTeam: { name?: string; members?: string[] }) => {
+      await run(patch(teamPath(id), patchTeam), 'Could not save the shared list')
+    },
+    [run]
+  )
+  const deleteTeam = useCallback(
+    async (id: string) => {
+      apply((p) => ({ ...p, teams: p.teams.filter((t) => t.id !== id) }))
+      await run(del(teamPath(id)), 'Could not delete the shared list')
+    },
+    [apply, run]
+  )
+  const leaveTeam = useCallback(
+    async (id: string) => {
+      apply((p) => ({ ...p, teams: p.teams.filter((t) => t.id !== id) }))
+      await run(post(`${teamPath(id)}/leave`, {}), 'Could not leave the shared list')
+    },
+    [apply, run]
+  )
+  const teamPin = useCallback(
+    async (teamId: string, collection: string, id: string) => {
+      const key = pinKeyOf(collection, id)
+      apply((p) => ({
+        ...p,
+        teams: p.teams.map((t) =>
+          t.id === teamId && !t.pins.some((x) => x.key === key)
+            ? {
+                ...t,
+                pins: [
+                  { key, collection, id, pinned_at: new Date().toISOString(), by: '' },
+                  ...t.pins
+                ]
+              }
+            : t
+        )
+      }))
+      await run(
+        post(`${teamPath(teamId)}/pins`, { collection, id }),
+        'Could not add it to the shared list'
+      )
+    },
+    [apply, run]
+  )
+  const teamUnpin = useCallback(
+    async (teamId: string, collection: string, id: string) => {
+      const key = pinKeyOf(collection, id)
+      apply((p) => ({
+        ...p,
+        teams: p.teams.map((t) =>
+          t.id === teamId ? { ...t, pins: t.pins.filter((x) => x.key !== key) } : t
+        )
+      }))
+      await run(
+        del(`${teamPath(teamId)}/pins/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`),
+        'Could not remove it from the shared list'
+      )
+    },
+    [apply, run]
+  )
+  const teamSeen = useCallback(
+    (teamId: string, keys?: string[]) => {
+      qc.setQueriesData<{ rows?: WatchRowData[]; changed: string[] }>(
+        { queryKey: ['watch-list', 'team', teamId] },
+        (old) =>
+          old
+            ? {
+                ...old,
+                changed: keys ? old.changed.filter((k) => !keys.includes(k)) : [],
+                rows: old.rows?.map((r) =>
+                  r.change && (!keys || keys.includes(r.key))
+                    ? { ...r, change: { ...r.change, changed: false, unseen: 0 } }
+                    : r
+                )
+              }
+            : old
+      )
+      if (!client) return
+      void client.request(post(`${teamPath(teamId)}/seen`, keys ? { keys } : {})).catch(() => {})
+    },
+    [client, qc]
+  )
+
   return {
     prefs,
+    setSettings,
+    addAlert,
+    removeAlert,
+    createTeam,
+    editTeam,
+    deleteTeam,
+    leaveTeam,
+    teamPin,
+    teamUnpin,
+    teamSeen,
     isPinned: (c, id) => pinned.has(pinKeyOf(c, id)),
     pin,
     unpin,
@@ -393,6 +633,8 @@ export function useWatchActions(): WatchActions & { prefs: WatchPrefs } {
     full: prefs.pins.length >= prefs.max
   }
 }
+
+const teamPath = (id: string) => `/watch-list/teams/${encodeURIComponent(id)}`
 
 /** Is the event target a place where a typed letter is text, not a shortcut? */
 export function typingTarget(t: EventTarget | null): boolean {

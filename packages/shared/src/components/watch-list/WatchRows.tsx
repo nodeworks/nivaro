@@ -203,13 +203,19 @@ export function WatchRow({
   list,
   sortable,
   onUnpin,
-  onSeen
+  onSeen,
+  rowActions,
+  unpinLabel = 'Unpin'
 }: {
   row: WatchRowData
   list: PeekTarget[]
   sortable: boolean
   onUnpin: (row: WatchRowData) => void
   onSeen: (key: string) => void
+  /** Extra buttons beside the unpin cross (the alert bell). */
+  rowActions?: (row: WatchRowData) => ReactNode
+  /** What the cross says: "Unpin", "Remove from this list". */
+  unpinLabel?: string
 }) {
   const open = usePeekOrOpen()
   useDeadlineNow(true) // the "2 m" on the change line moves with the page clock
@@ -285,7 +291,9 @@ export function WatchRow({
                   open({ collection: row.collection, itemId: row.id, title }, null, { list })
                 }
               }}
-              className='block cursor-pointer py-2.5 pl-4 pr-8 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan/60'
+              className={`block cursor-pointer py-2.5 pl-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan/60 ${
+                rowActions ? 'pr-14' : 'pr-8'
+              }`}
             >
               <div className='flex items-baseline gap-2'>
                 <span className='min-w-0 flex-1 truncate text-[12.5px] font-medium text-slate-800 dark:text-slate-100'>
@@ -337,18 +345,21 @@ export function WatchRow({
               )}
             </div>
           </RecordHoverCard>
-          <button
-            type='button'
-            aria-label={`Unpin ${title}`}
-            data-tip='Unpin'
-            onClick={(e) => {
-              e.stopPropagation()
-              onUnpin(row)
-            }}
-            className='invisible absolute right-1.5 top-2 flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 focus-visible:visible group-hover/row:visible dark:text-slate-500 dark:hover:bg-white/[0.08] dark:hover:text-slate-200'
-          >
-            <X className='h-3.5 w-3.5' />
-          </button>
+          <div className='absolute right-1.5 top-2 flex items-center gap-0.5'>
+            {rowActions?.(row)}
+            <button
+              type='button'
+              aria-label={`${unpinLabel}: ${title}`}
+              data-tip={unpinLabel}
+              onClick={(e) => {
+                e.stopPropagation()
+                onUnpin(row)
+              }}
+              className='invisible flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 focus-visible:visible group-hover/row:visible dark:text-slate-500 dark:hover:bg-white/[0.08] dark:hover:text-slate-200'
+            >
+              <X className='h-3.5 w-3.5' />
+            </button>
+          </div>
         </li>
       )}
     </RowShell>
@@ -360,13 +371,19 @@ export function WatchRowList({
   sortable,
   onReorder,
   onUnpin,
-  onSeen
+  onSeen,
+  rowActions,
+  unpinLabel,
+  label = 'Watched records'
 }: {
   rows: WatchRowData[]
   sortable: boolean
   onReorder: (keys: string[]) => void
   onUnpin: (row: WatchRowData) => void
   onSeen: (key: string) => void
+  rowActions?: (row: WatchRowData) => ReactNode
+  unpinLabel?: string
+  label?: string
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -388,10 +405,7 @@ export function WatchRowList({
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
       <SortableContext items={rows.map((r) => r.key)} strategy={verticalListSortingStrategy}>
-        <ul
-          className='divide-y divide-slate-100 dark:divide-white/[0.05]'
-          aria-label='Watched records'
-        >
+        <ul className='divide-y divide-slate-100 dark:divide-white/[0.05]' aria-label={label}>
           {rows.map((r) => (
             <WatchRow
               key={r.key}
@@ -400,6 +414,8 @@ export function WatchRowList({
               sortable={sortable}
               onUnpin={onUnpin}
               onSeen={onSeen}
+              rowActions={rowActions}
+              unpinLabel={unpinLabel}
             />
           ))}
         </ul>

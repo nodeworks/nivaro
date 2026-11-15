@@ -126,6 +126,58 @@ describe('watch list routes', () => {
     expect(writes).toHaveLength(0)
   })
 
+  it('saves settings; removing automatically needs adding automatically', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/watch-list/settings',
+      payload: { desktop: true, auto_remove: true, digest: 'yes' }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.settings).toEqual({
+      desktop: true,
+      auto_add: false,
+      auto_remove: false,
+      digest: false
+    })
+    expect(JSON.parse(stored as string).theme_accent).toBe('teal')
+  })
+
+  it('adds an alert only on a pinned, readable record and removes it again', async () => {
+    const notPinned = await app.inject({
+      method: 'POST',
+      url: '/watch-list/alerts',
+      payload: { collection: 'orders', id: '5', kind: 'overdue' }
+    })
+    expect(notPinned.statusCode).toBe(409)
+    expect(notPinned.json().code).toBe('NOT_PINNED')
+    const hidden = await app.inject({
+      method: 'POST',
+      url: '/watch-list/alerts',
+      payload: { collection: 'orders', id: '7', kind: 'overdue' }
+    })
+    expect(hidden.statusCode).toBe(404)
+
+    stored = JSON.stringify({ watch_list: { pins: [{ c: 'orders', id: '5', at: '2026-11-01' }] } })
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/watch-list/alerts',
+      payload: { collection: 'orders', id: '5', kind: 'step', step: 'approved', label: 'Approved' }
+    })
+    expect(ok.statusCode).toBe(200)
+    const alerts = ok.json().data.alerts
+    expect(alerts).toEqual([
+      expect.objectContaining({ key: 'orders:5', kind: 'step', step: 'approved', repeat: false })
+    ])
+    expect(JSON.parse(stored as string).watch_list.wl_alerts).toBe(true)
+    const del = await app.inject({ method: 'DELETE', url: `/watch-list/alerts/${alerts[0].id}` })
+    expect(del.json().data.alerts).toEqual([])
+  })
+
+  it('answers 404 for a shared list that does not exist (never says whose it is)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/watch-list/teams/nope/rows' })
+    expect(res.statusCode).toBe(404)
+  })
+
   it('saves the dock within its bounds', async () => {
     const res = await app.inject({
       method: 'PATCH',

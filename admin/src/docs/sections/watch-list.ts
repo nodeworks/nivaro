@@ -66,6 +66,46 @@ export const collabWatchList: DocSection = {
         'Click one to look at the record and mark it read. “Mark all read” clears the tab.'
       ]
     },
+    { type: 'h3', id: 'watch-list-alerts', text: 'Alerts on a pinned record' },
+    {
+      type: 'p',
+      text: 'Hover a pinned row and click the bell to be told when something happens to that record. The bell stays lit while the record has an alert.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'It reaches a step: pick the step. You are told when the record arrives there (not when you moved it yourself).',
+        'A field changes: pick one of the fields you can see. You are told when someone else changes it.',
+        'It’s overdue: you are told when its current step passes its due time, once per step it runs late on.',
+        'Choose Once (the alert switches itself off after it fires) or Every time.',
+        'Alerts arrive as notifications under “Watch list alerts”, so Profile → Notification rules decides whether they also push or email. Unpinning a record removes its alerts.'
+      ]
+    },
+    { type: 'h3', id: 'watch-list-settings', text: 'Settings' },
+    {
+      type: 'p',
+      text: 'The settings button (the sliders, at the top of the list) holds switches that are yours alone. All of them start off.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Desktop alerts: a notice from your computer when someone else changes a pinned record while the page is in the background. Your browser asks for permission the first time you turn it on (never before). One notice per burst of changes, never for your own changes, and only one even with several tabs open.',
+        'Daily email: one email each morning listing what changed on your pinned records in the last day, by someone other than you. Nothing is sent on a quiet day.',
+        'Records that land on my step: when a record moves to a step you own, it is pinned for you.',
+        'Unpin them when they leave my step: a record pinned that way goes again when it moves on. A record you pinned yourself always stays.'
+      ]
+    },
+    { type: 'h3', id: 'watch-list-shared', text: 'Shared lists for a team' },
+    {
+      type: 'ul',
+      items: [
+        'Settings → New shared list: give it a name and add people. You are on it; a manager or an administrator can also make one for a team they are not on (“Add my direct reports” adds yours in one go).',
+        'Everyone on the list sees it as its own tab in the watch list, and can add records to it from a record page: the people icon beside the pin.',
+        'Each person only sees the records on it they are allowed to open. A record someone else cannot open is simply not in their tab.',
+        'Changes by others light rows the same way as your own list; your “seen” marks are yours alone.',
+        'The person who made it (or an administrator) can rename it, change its people or delete it. Anyone else can leave it.'
+      ]
+    },
     {
       type: 'note',
       text: 'Everything in the list is read as you: only records, fields and comments you may see. Nothing in it polls; it follows the records over the live connection and refreshes at most once a second, however many changes arrive.'

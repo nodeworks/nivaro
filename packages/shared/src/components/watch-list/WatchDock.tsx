@@ -8,6 +8,7 @@ import {
   Hourglass,
   Minus,
   Pin,
+  Users,
   X
 } from 'lucide-react'
 import { type KeyboardEvent, type PointerEvent, useEffect, useMemo, useRef, useState } from 'react'
@@ -16,6 +17,14 @@ import { get, post } from '../../lib/commands'
 import { describeError } from '../../lib/error-message'
 import { useLiveCollection, useLiveEvent } from '../../lib/live'
 import { usePeekOrOpen } from '../../lib/record-peek'
+import {
+  claimBurst,
+  desktopPermission,
+  desktopText,
+  keysToNotify,
+  pageOutOfSight,
+  showDesktop
+} from '../../lib/watch-desktop'
 import {
   changedKeys,
   type DockSort,
@@ -31,12 +40,15 @@ import {
   type WaitingRowData,
   type WatchPrefs,
   type WatchRowData,
+  type WatchTeam,
   watchKeys,
   watchUi,
   withLocalSeen
 } from '../../lib/watch-list'
+import { ConfirmButton } from '../profile/primitives'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
+import { AlertButton, TeamEditor, WatchSettingsMenu } from './WatchExtras'
 import { agoText, StepChip, WatchRowList } from './WatchRows'
 
 /**
@@ -139,6 +151,32 @@ export function WatchDock() {
   const collections = useMemo(() => [...new Set(prefs.pins.map((p) => p.collection))], [prefs.pins])
   const visibleRef = useRef(visible)
   visibleRef.current = visible
+  // Desktop alerts (rt6 #4): one per burst, only while the page is out of sight, only for a
+  // change someone ELSE made (the server's `others` answer), one tab per burst.
+  const told = useRef(new Map<string, string>())
+  const desktopRef = useRef(prefs.settings.desktop)
+  desktopRef.current = prefs.settings.desktop
+  const notifyDesktop = (keys: string[]) => {
+    if (!client || !desktopRef.current || keys.length === 0) return
+    if (desktopPermission() !== 'granted' || !pageOutOfSight()) return
+    void client
+      .request<{ data: { others?: Record<string, string> } }>(get('/watch-list', { summary: '1' }))
+      .then((r) => {
+        const fresh = keysToNotify(keys, r.data.others ?? {}, told.current, Date.now())
+        if (fresh.length === 0 || !claimBurst(fresh)) return
+        for (const k of fresh) told.current.set(k, r.data.others?.[k] ?? '')
+        const titles: Record<string, string> = {}
+        for (const [, d] of qc.getQueriesData<RowsAnswer>({ queryKey: ['watch-list', 'rows'] }))
+          for (const row of d?.rows ?? []) if (row.title) titles[row.key] = row.title
+        showDesktop(desktopText(fresh, titles), () => {
+          watchUi.openSheet()
+          actions.setDock({ state: 'open', tab: 'watching' })
+        })
+      })
+      .catch(() => {})
+  }
+  const notifyRef = useRef(notifyDesktop)
+  notifyRef.current = notifyDesktop
   useLiveCollection(
     collections,
     (batch) => {
@@ -159,6 +197,7 @@ export function WatchDock() {
         keys.add(k)
       }
       if (keys.size === 0) return
+      notifyRef.current([...keys].filter((k) => !k.startsWith('~')))
       if (visibleRef.current) {
         void qc.invalidateQueries({ queryKey: ['watch-list', 'rows'] })
         void qc.invalidateQueries({ queryKey: watchKeys.waiting })
@@ -186,6 +225,23 @@ export function WatchDock() {
     {
       debounceMs: 1500,
       match: (ev) => waitingIds.has(`${ev.collection}:${ev.item}`)
+    }
+  )
+  // Shared lists: their records' collections, while the dock is in sight.
+  const teamKeys = useMemo(
+    () => new Set(prefs.teams.flatMap((t) => t.pins.map((p) => p.key))),
+    [prefs.teams]
+  )
+  const teamCollections = useMemo(
+    () => [...new Set(prefs.teams.flatMap((t) => t.pins.map((p) => p.collection)))],
+    [prefs.teams]
+  )
+  useLiveCollection(
+    visible ? teamCollections : null,
+    () => void qc.invalidateQueries({ queryKey: ['watch-list', 'team'] }),
+    {
+      debounceMs: 1000,
+      match: (ev) => ev.item === '*' || teamKeys.has(`${ev.collection}:${ev.item}`)
     }
   )
   useLiveEvent(
@@ -495,14 +551,58 @@ function DockPanel({
   inSheet?: boolean
 }) {
   const { prefs } = actions
-  const tab = prefs.dock.tab
+  // A shared list that is gone (deleted, or they were taken off) falls back to Watching.
+  const team = prefs.dock.tab.startsWith('team:')
+    ? (prefs.teams.find((t) => `team:${t.id}` === prefs.dock.tab) ?? null)
+    : null
+  const tab: DockTab = prefs.dock.tab.startsWith('team:') && !team ? 'watching' : prefs.dock.tab
   const sort = prefs.dock.sort
   const waitingCount = data.waiting.data?.length
-  const tabs: Array<{ key: DockTab; label: string; count: number | null; dot: boolean }> = [
+  // null = no editor; 'new' = making a list; otherwise the list being changed.
+  const [editing, setEditing] = useState<'new' | WatchTeam | null>(null)
+  const tabs: Array<{
+    key: DockTab
+    label: string
+    count: number | null
+    dot: boolean
+    team?: boolean
+  }> = [
     { key: 'watching', label: 'Watching', count: prefs.pins.length, dot: changed.length > 0 },
+    ...prefs.teams.map((t) => ({
+      key: `team:${t.id}` as DockTab,
+      label: t.name,
+      count: t.pins.length || null,
+      dot: false,
+      team: true
+    })),
     { key: 'waiting', label: 'Waiting', count: waitingCount ?? null, dot: false },
     { key: 'mentions', label: 'Mentions', count: unreadMentions || null, dot: unreadMentions > 0 }
   ]
+  // More tabs than fit (shared lists): the strip scrolls sideways and fades at its right edge
+  // while there is more to see.
+  const stripRef = useRef<HTMLDivElement>(null)
+  const [stripMore, setStripMore] = useState(false)
+  const measureStrip = () => {
+    const el = stripRef.current
+    if (!el) return
+    setStripMore(el.scrollWidth - el.scrollLeft - el.clientWidth > 2)
+  }
+  const tabSig = tabs.map((t) => `${t.key}:${t.count ?? ''}`).join('|')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when the tabs change
+  useEffect(() => {
+    measureStrip()
+    const el = stripRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measureStrip)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [tabSig])
+  // The chosen tab is always fully in view (a shared list opened from the settings menu).
+  useEffect(() => {
+    const el = stripRef.current?.querySelector(`[data-tab="${CSS.escape(tab)}"]`)
+    if (el && typeof (el as HTMLElement).scrollIntoView === 'function')
+      (el as HTMLElement).scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [tab])
   const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
     const i = tabs.findIndex((t) => t.key === tab)
@@ -526,6 +626,14 @@ function DockPanel({
             <CheckCheck className='h-3.5 w-3.5' />
           </IconButton>
         )}
+        <WatchSettingsMenu
+          actions={actions}
+          onOpenTeam={(id) => {
+            setEditing(null)
+            actions.setDock({ tab: `team:${id}` })
+          }}
+          onNewTeam={() => setEditing('new')}
+        />
         {!inSheet && (
           <>
             <IconButton label='Minimize' onClick={() => actions.setDock({ state: 'minimized' })}>
@@ -544,7 +652,15 @@ function DockPanel({
         role='tablist'
         aria-label='Watch list views'
         onKeyDown={onTabKey}
-        className='flex shrink-0 gap-4 border-b border-border px-4'
+        ref={stripRef}
+        onScroll={measureStrip}
+        className={`flex shrink-0 overflow-x-auto border-b border-border px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+          prefs.teams.length > 0 ? 'gap-3' : 'gap-4'
+        } ${
+          stripMore
+            ? '[mask-image:linear-gradient(to_right,#000_calc(100%_-_28px),transparent)]'
+            : ''
+        }`}
       >
         {tabs.map((t) => {
           const on = t.key === tab
@@ -556,14 +672,19 @@ function DockPanel({
               data-tab={t.key}
               aria-selected={on}
               tabIndex={on ? 0 : -1}
-              onClick={() => actions.setDock({ tab: t.key })}
-              className={`relative -mb-px flex items-center gap-1.5 border-b-2 pb-2 pt-0.5 text-[12px] font-medium transition-colors rounded-t-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 ${
+              onClick={() => {
+                setEditing(null)
+                actions.setDock({ tab: t.key })
+              }}
+              data-tip={t.team ? `Shared list · ${t.label}` : undefined}
+              className={`relative -mb-px flex shrink-0 items-center gap-1.5 border-b-2 pb-2 pt-0.5 text-[12px] font-medium transition-colors rounded-t-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 ${
                 on
                   ? 'border-nvr-cyan text-slate-900 dark:text-slate-50'
                   : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
               }`}
             >
-              {t.label}
+              {t.team && <Users aria-hidden className='h-3 w-3 shrink-0 opacity-70' />}
+              <span className={t.team ? 'max-w-[96px] truncate' : undefined}>{t.label}</span>
               {t.count != null && t.count > 0 && (
                 <span
                   className={`rounded-full px-1.5 text-[10.5px] font-semibold tabular-nums ${
@@ -582,10 +703,39 @@ function DockPanel({
           )
         })}
       </div>
-      <div className='min-h-0 flex-1 overflow-y-auto' role='tabpanel' aria-label={tab}>
-        {tab === 'watching' && <WatchingTab actions={actions} data={data} />}
-        {tab === 'waiting' && <WaitingTab data={data} />}
-        {tab === 'mentions' && <MentionsTab data={data} />}
+      <div
+        className='min-h-0 flex-1 overflow-y-auto'
+        role='tabpanel'
+        aria-label={team ? team.name : tab}
+      >
+        {editing ? (
+          <TeamEditor
+            key={editing === 'new' ? 'new' : editing.id}
+            actions={actions}
+            team={editing === 'new' ? null : editing}
+            meId={prefs.me?.id ?? null}
+            meName={prefs.me?.name ?? ''}
+            onClose={() => setEditing(null)}
+            onCreated={(id) => {
+              setEditing(null)
+              actions.setDock({ tab: `team:${id}` })
+            }}
+          />
+        ) : (
+          <>
+            {tab === 'watching' && <WatchingTab actions={actions} data={data} />}
+            {team && (
+              <TeamTab
+                actions={actions}
+                team={team}
+                meId={prefs.me?.id ?? null}
+                onEdit={() => setEditing(team)}
+              />
+            )}
+            {tab === 'waiting' && <WaitingTab data={data} />}
+            {tab === 'mentions' && <MentionsTab data={data} />}
+          </>
+        )}
       </div>
     </div>
   )
@@ -695,12 +845,146 @@ function WatchingTab({
         onSeen={(key) => {
           if (rows.find((r) => r.key === key)?.change?.changed) actions.markSeen([key])
         }}
+        rowActions={(r) => <AlertButton row={r} actions={actions} />}
       />
       {missing > 0 && <LoadingRows n={Math.min(3, missing)} />}
       <p className='px-4 py-3 text-[11px] text-slate-500 dark:text-slate-400'>
         {prefs.pins.length} of {prefs.max} pinned
       </p>
     </>
+  )
+}
+
+function membersText(team: WatchTeam, meId: string | null): string {
+  const me = meId?.toLowerCase()
+  const names = team.members.map((m) => (m.id.toLowerCase() === me ? 'you' : m.name))
+  // "you" first: the reader finds themselves at once.
+  names.sort((a, z) => (a === 'you' ? -1 : z === 'you' ? 1 : 0))
+  if (names.length === 0) return 'Nobody else is on it yet'
+  if (names.length === 1) return names[0] === 'you' ? 'Only you' : `${names[0]}`
+  if (names.length <= 3)
+    return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`.replace(/^you/, 'You')
+  return `${names.slice(0, 2).join(', ')} and ${names.length - 2} others`.replace(/^you/, 'You')
+}
+
+function TeamTab({
+  actions,
+  team,
+  meId,
+  onEdit
+}: {
+  actions: ReturnType<typeof useWatchActions>
+  team: WatchTeam
+  meId: string | null
+  onEdit: () => void
+}) {
+  const client = useOptionalNivaroClient()
+  const sig = team.pins.map((p) => p.key).join('|')
+  const rowsQ = useQuery({
+    queryKey: watchKeys.team(team.id, sig),
+    queryFn: () =>
+      (client as Client)
+        .request<{ data: RowsAnswer }>(get(`/watch-list/teams/${encodeURIComponent(team.id)}/rows`))
+        .then((r) => r.data),
+    enabled: !!client && team.pins.length > 0,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev
+  })
+  const isOwner = !!meId && team.owner.id.toLowerCase() === meId.toLowerCase()
+  const mayChangeRecords = team.is_member || team.can_manage
+  const rows = useMemo(() => {
+    const byKey = new Map((rowsQ.data?.rows ?? []).map((r) => [r.key, r]))
+    return team.pins.map((p) => byKey.get(p.key)).filter((r): r is WatchRowData => !!r)
+  }, [rowsQ.data, team.pins])
+  const changedHere = rows.filter((r) => r.change?.changed).map((r) => r.key)
+  return (
+    <div data-watch-team={team.id}>
+      <div className='flex items-start gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-white/[0.05]'>
+        <div className='min-w-0 flex-1'>
+          <p className='truncate text-[11.5px] text-slate-600 dark:text-slate-300'>
+            {membersText(team, meId)}
+          </p>
+          <p className='truncate text-[11px] text-slate-500 dark:text-slate-400'>
+            {isOwner ? 'Your shared list' : `Made by ${team.owner.name}`}
+          </p>
+        </div>
+        <div className='flex shrink-0 items-center gap-0.5'>
+          {changedHere.length > 0 && (
+            <IconButton label='Mark all as seen' onClick={() => actions.teamSeen(team.id)}>
+              <CheckCheck className='h-3.5 w-3.5' />
+            </IconButton>
+          )}
+          {team.can_manage && (
+            <button
+              type='button'
+              onClick={onEdit}
+              className='rounded-md px-2 py-1 text-[11.5px] font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+            >
+              Change
+            </button>
+          )}
+          {team.can_manage ? (
+            <ConfirmButton
+              onConfirm={() => {
+                actions.setDock({ tab: 'watching' })
+                void actions.deleteTeam(team.id).catch(() => {})
+              }}
+              title='Delete this shared list'
+              confirmLabel='Delete?'
+              className='rounded-md px-2 py-1 text-[11.5px] font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+              armedClassName='rounded-md bg-red-50 px-2 py-1 text-[11.5px] font-semibold text-red-700 dark:bg-red-500/15 dark:text-red-300'
+            >
+              Delete
+            </ConfirmButton>
+          ) : (
+            team.is_member && (
+              <ConfirmButton
+                onConfirm={() => {
+                  actions.setDock({ tab: 'watching' })
+                  void actions.leaveTeam(team.id).catch(() => {})
+                }}
+                title='Leave this shared list'
+                confirmLabel='Leave?'
+                className='rounded-md px-2 py-1 text-[11.5px] font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+                armedClassName='rounded-md bg-amber-50 px-2 py-1 text-[11.5px] font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-200'
+              >
+                Leave
+              </ConfirmButton>
+            )
+          )}
+        </div>
+      </div>
+      {team.pins.length === 0 ? (
+        <Empty icon={<Users className='h-4 w-4' />} title='No records on this list yet'>
+          <p>
+            Add a record from its page: the people icon beside the pin puts it on a shared list.
+            Everyone here sees it, each as far as they can open it.
+          </p>
+        </Empty>
+      ) : rowsQ.isError && !rowsQ.data ? (
+        <LoadError error={rowsQ.error} onRetry={() => void rowsQ.refetch()} />
+      ) : !rowsQ.data ? (
+        <LoadingRows n={Math.min(5, team.pins.length)} />
+      ) : rows.length === 0 ? (
+        <Empty icon={<Users className='h-4 w-4' />} title='Nothing here you can open'>
+          <p>The records on this list are outside what you can see.</p>
+        </Empty>
+      ) : (
+        <WatchRowList
+          rows={rows}
+          sortable={false}
+          label={`Records on ${team.name}`}
+          onReorder={() => {}}
+          unpinLabel='Take off this list'
+          onUnpin={(r) =>
+            mayChangeRecords && void actions.teamUnpin(team.id, r.collection, r.id).catch(() => {})
+          }
+          onSeen={(key) => {
+            if (rows.find((r) => r.key === key)?.change?.changed) actions.teamSeen(team.id, [key])
+          }}
+        />
+      )}
+    </div>
   )
 }
 

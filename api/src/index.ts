@@ -19,6 +19,7 @@ import { registerPipelineAutostartHooks } from './hooks/pipeline-autostart.js'
 import { registerQueueMaterializationHooks } from './hooks/queue-materialization.js'
 import { registerRecordIntegrityHooks } from './hooks/record-integrity.js'
 import { registerTaskDoneWhenHooks } from './hooks/task-done-when.js'
+import { registerWatchListHooks } from './hooks/watch-list.js'
 import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
 import { buildRealtimeServer } from './realtime-server.js'
 import { loadEventFlows } from './routes/flows.js'
@@ -76,6 +77,7 @@ async function main() {
   if (!process.env.CLOUD_META_DB_URL && !realtime) {
     registerActivityHooks()
     registerFieldWatchHooks()
+    registerWatchListHooks()
     registerInactivePeopleHooks()
     registerNotificationSubscriptionHooks()
     registerPipelineAutostartHooks()
