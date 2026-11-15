@@ -1,4 +1,5 @@
 import { ChevronRight, CirclePause, CirclePlay, RefreshCw } from 'lucide-react'
+import { useLayoutEffect, useRef, useState } from 'react'
 
 /**
  * Small controls for live lists (realtime round 2): the Pause button (#11) and the burst
@@ -65,9 +66,35 @@ export function LivePauseButton({
 }
 
 /**
+ * Where the pill sits: `gap` px above the bottom edge of the rows' scroll area and above a
+ * sticky totals row (`tfoot`) when there is one, measured inside the positioned `host`.
+ * null = no table found (the caller's class decides). Exported for tests.
+ */
+export function burstPillBottom(host: HTMLElement, gap = 8): number | null {
+  const table = host.querySelector('table')
+  if (!table) return null
+  let scroller: HTMLElement | null = table.parentElement
+  while (scroller && scroller !== host) {
+    const oy = getComputedStyle(scroller).overflowY
+    if (oy === 'auto' || oy === 'scroll') break
+    scroller = scroller.parentElement
+  }
+  const edge = (scroller && scroller !== host ? scroller : table).getBoundingClientRect()
+  const hostRect = host.getBoundingClientRect()
+  const foot = table.querySelector('tfoot')
+  const footH = foot ? foot.getBoundingClientRect().height : 0
+  return Math.max(
+    gap,
+    Math.round(hostRect.bottom - Math.min(edge.bottom, hostRect.bottom) + footH + gap)
+  )
+}
+
+/**
  * One quiet pill for an import or bulk change: "Import added 500 records  Show ›". It floats
  * centred over the list (the host's list container is `relative`), so it never pushes the
- * toolbar; `className` positions it vertically for the host.
+ * toolbar, and it sits just above the last visible row's bottom edge — above the totals row
+ * when the list shows one — so it never straddles a border. `className` is the fallback
+ * position before it has measured.
  */
 export function LiveBurstPill({
   label,
@@ -78,15 +105,30 @@ export function LiveBurstPill({
   onShow: () => void
   className?: string
 }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [bottom, setBottom] = useState<number | null>(null)
+  useLayoutEffect(() => {
+    const host = ref.current?.parentElement
+    if (!host) return
+    const measure = () => setBottom(burstPillBottom(host))
+    measure()
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    ro?.observe(host)
+    const foot = host.querySelector('tfoot')
+    if (foot) ro?.observe(foot)
+    return () => ro?.disconnect()
+  }, [])
   return (
     <div
-      className={`pointer-events-none absolute inset-x-0 z-[8] flex justify-center px-4 ${className ?? 'bottom-16'}`}
+      ref={ref}
+      style={bottom != null ? { bottom } : undefined}
+      className={`pointer-events-none absolute inset-x-0 z-[8] flex justify-center px-4 ${bottom != null ? '' : (className ?? 'bottom-16')}`}
     >
       <button
         type='button'
         onClick={onShow}
         data-live-burst
-        className='nvr-pop-in group pointer-events-auto inline-flex h-8 min-w-0 max-w-full items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-white px-3 text-[12px] text-slate-700 shadow-[0_4px_14px_-4px_rgba(15,23,42,0.25)] transition-colors hover:border-nvr-cyan/70 hover:bg-[#f2fcff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-nvr-cyan/40 dark:bg-[#0f2530] dark:text-slate-200 dark:shadow-[0_4px_14px_-4px_rgba(0,0,0,0.6)] dark:hover:bg-[#123140]'
+        className='nvr-pop-in group pointer-events-auto inline-flex h-8 min-w-0 max-w-full items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-white px-3 text-[12px] text-slate-700 shadow-[0_8px_22px_-6px_rgba(15,23,42,0.32),0_2px_6px_-2px_rgba(15,23,42,0.16)] transition-colors hover:border-nvr-cyan/70 hover:bg-[#f2fcff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-nvr-cyan/50 dark:bg-[#0f2530] dark:text-slate-100 dark:shadow-[0_10px_28px_-6px_rgba(0,0,0,0.9),0_3px_8px_-2px_rgba(0,0,0,0.7),0_0_0_1px_rgba(255,255,255,0.06)] dark:hover:bg-[#123140]'
       >
         <RefreshCw className='h-3 w-3 shrink-0 text-[#007a99] dark:text-nvr-cyan' aria-hidden />
         <span className='min-w-[5rem] truncate'>{label}</span>

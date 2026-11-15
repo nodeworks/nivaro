@@ -33,7 +33,7 @@ export function LiveRowMark({
       className={`inline-flex h-4 w-4 shrink-0 items-center justify-center ${hang ? '-ml-[22px]' : ''}`}
     >
       {gone ? (
-        <EyeOff className='h-3 w-3 text-slate-500 dark:text-slate-400' aria-label={tip} />
+        <EyeOff className='h-3 w-3 text-slate-700 dark:text-slate-100' aria-label={tip} />
       ) : lock ? (
         <Lock
           className={`h-3 w-3 ${lock.is_mine ? 'text-slate-400' : 'text-amber-500'}`}
