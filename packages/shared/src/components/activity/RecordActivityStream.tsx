@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { Activity, ChevronUp } from 'lucide-react'
+import { Activity, ChevronDown, ChevronUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useItemNavigation, useNivaroClient } from '../../context'
 import { type ActivityEntryInput, groupActivity } from '../../lib/activity-sentence'
 import { post } from '../../lib/commands'
-import { liveQueryMeta } from '../../lib/live-queries'
+import { useLiveCollection } from '../../lib/live'
 import { slideIn, useTopInserts } from '../../lib/live-screen'
 import { cn, titleCase } from '../../lib/utils'
 import { ActivityEntry, useActivityLabels } from '../ActivityEntry'
@@ -19,8 +19,9 @@ import { activityLinkable } from '../profile/ActivityFeedCard'
  * record they cannot open. Rows are the shared activity sentences (groupActivity folds a burst or
  * a link-table write into one line, labels read as the viewer). The type chips filter it.
  *
- * Live and quiet: another person's save refetches the newest page through the live-query bridge
- * (coalesced, spread, at most every 20 s). New rows slide in at the top only while the person is
+ * Live and quiet: no timer. A live write to one of the records the stream follows (or a new
+ * record of a followed type) refetches the newest page, after a 2 s quiet window and never more
+ * than one read at a time. New rows slide in at the top only while the person is
  * scrolled to the top; otherwise they wait behind a "3 new" pill and nothing on screen moves.
  * Older rows load on request and are kept, so the head refreshing never drops what was read.
  */
@@ -34,7 +35,12 @@ interface FeedType {
   collection: string
   records: number
   truncated: boolean
+  /** The record ids followed (visible to the viewer). */
+  ids?: string[]
 }
+
+/** Quiet window before a live write refetches the stream. */
+export const STREAM_QUIET_MS = 2000
 interface FeedAnswer {
   data: FeedEntry[]
   next: number | null
@@ -100,10 +106,50 @@ export function RecordActivityStream({
   const head = useQuery({
     queryKey: ['record-activity-feed', view],
     queryFn: () => read(),
-    staleTime: 15_000,
+    staleTime: 30_000,
     placeholderData: (prev) => prev,
-    meta: live ? liveQueryMeta({ reads, minGapMs: 20_000, jitterMs: 4_000 }) : undefined
+    // Never on a timer or a window focus: only a live write to a followed record refetches it.
+    refetchInterval: false,
+    refetchOnWindowFocus: false
   })
+
+  // Which records the stream follows, as the server resolved them for this viewer.
+  const typesRef = useRef<FeedType[]>([])
+  if (head.data?.types?.length) typesRef.current = head.data.types
+  const types = typesRef.current
+  const followed = useMemo(() => {
+    const m = new Map<string, Set<string>>()
+    for (const t of types) m.set(t.collection, new Set(t.ids ?? []))
+    return m
+  }, [types])
+
+  // A live write to a followed record (a bulk write, or a new record of a followed type) =>
+  // one refetch, at most one in flight; a write that lands while it reads is read right after.
+  const dirty = useRef(false)
+  const fetchingRef = useRef(false)
+  fetchingRef.current = head.isFetching
+  const refetchHead = head.refetch
+  useLiveCollection(
+    live ? reads : null,
+    () => {
+      if (fetchingRef.current) dirty.current = true
+      else void refetchHead()
+    },
+    {
+      debounceMs: STREAM_QUIET_MS,
+      includeOwn: true,
+      match: (ev) => {        const ids = followed.get(String(ev.collection))
+        if (!ids) return false
+        return ev.item === '*' || ev.action === 'create' || ids.has(String(ev.item))
+      }
+    }
+  )
+  useEffect(() => {
+    if (!head.isFetching && dirty.current) {
+      dirty.current = false
+      void refetchHead()
+    }
+  }, [head.isFetching, refetchHead])
 
   // Every row ever shown for this view: the head refreshing never drops what was read.
   const [seen, setSeen] = useState<{ view: string; rows: Map<number, FeedEntry> }>({
@@ -125,10 +171,6 @@ export function RecordActivityStream({
       return { view, rows }
     })
   }, [head.data, head.isPlaceholderData, view])
-
-  const typesRef = useRef<FeedType[]>([])
-  if (head.data?.types?.length) typesRef.current = head.data.types
-  const types = typesRef.current
 
   const merged = useMemo(() => {
     if (seen.view !== view) return undefined
@@ -204,9 +246,8 @@ export function RecordActivityStream({
         <Activity className='h-4 w-4 shrink-0 text-nvr-navy dark:text-nvr-cyan' aria-hidden />
         <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Activity</h3>
         {types.length > 1 && (
-          <div
-            className='ml-auto flex min-w-0 flex-wrap items-center gap-1'
-            role='group'
+          <fieldset
+            className='m-0 ml-auto flex min-w-0 flex-wrap items-center gap-1 border-0 p-0'
             aria-label='Filter by type'
           >
             <TypeChip active={picked.length === 0} onClick={() => setPicked([])}>
@@ -224,7 +265,7 @@ export function RecordActivityStream({
                 {typeLabels?.[t.collection] ?? titleCase(t.collection)}
               </TypeChip>
             ))}
-          </div>
+          </fieldset>
         )}
       </header>
 
@@ -283,8 +324,9 @@ export function RecordActivityStream({
                   type='button'
                   onClick={loadOlder}
                   disabled={loadingOlder}
-                  className='rounded-md px-3 py-1 text-[12px] font-medium text-nvr-navy hover:bg-slate-50 disabled:opacity-60 dark:text-nvr-cyan dark:hover:bg-white/[0.05]'
+                  className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3.5 text-[12px] font-medium text-slate-700 transition-colors hover:border-nvr-cyan/50 hover:bg-nvr-cyan/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan disabled:opacity-60 dark:border-border dark:bg-transparent dark:text-slate-200 dark:hover:bg-white/[0.05]'
                 >
+                  <ChevronDown className='h-3.5 w-3.5' aria-hidden />
                   {loadingOlder ? 'Loading…' : 'Show earlier'}
                 </button>
               )}

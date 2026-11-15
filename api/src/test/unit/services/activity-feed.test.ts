@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  _resetFeedScopeCacheForTests,
+  cachedFeedScope,
   FEED_LIMIT_DEFAULT,
   FEED_LIMIT_MAX,
+  FEED_SCOPE_TTL_MS,
   FEED_SOURCES_MAX,
   narrowToTypes,
   parseFeedBody,
@@ -105,7 +108,9 @@ describe('resolveFeedScope — judged as the caller', () => {
       recordVisible: async () => true
     })
     expect(scope.groups.get('workflows')).toEqual(['1', '2'])
-    expect(scope.types).toEqual([{ collection: 'workflows', records: 2, truncated: true }])
+    expect(scope.types).toEqual([
+      { collection: 'workflows', records: 2, truncated: true, ids: ['1', '2'] }
+    ])
   })
 
   it('keeps every type listed when the feed is narrowed to one', async () => {
@@ -119,5 +124,37 @@ describe('resolveFeedScope — judged as the caller', () => {
     expect(scope.types).toHaveLength(2)
     expect([...narrowToTypes(scope.groups, ['invoices']).keys()]).toEqual(['invoices'])
     expect(narrowToTypes(scope.groups, []).size).toBe(2)
+  })
+})
+
+describe('cachedFeedScope — one resolution per viewer per minute', () => {
+  const scope = () => Promise.resolve({ groups: new Map([['workflows', ['1']]]), types: [] })
+
+  it("reuses a viewer's answer inside the window and reads again after it", async () => {
+    _resetFeedScopeCacheForTests()
+    const load = vi.fn(scope)
+    await cachedFeedScope('t|u1|k', load, 1000)
+    await cachedFeedScope('t|u1|k', load, 1000 + FEED_SCOPE_TTL_MS - 1)
+    expect(load).toHaveBeenCalledTimes(1)
+    await cachedFeedScope('t|u1|k', load, 1000 + FEED_SCOPE_TTL_MS + 1)
+    expect(load).toHaveBeenCalledTimes(2)
+  })
+
+  it('never shares an answer between people, and shares concurrent callers', async () => {
+    _resetFeedScopeCacheForTests()
+    const load = vi.fn(scope)
+    await Promise.all([cachedFeedScope('t|u1|k', load), cachedFeedScope('t|u1|k', load)])
+    expect(load).toHaveBeenCalledTimes(1)
+    await cachedFeedScope('t|u2|k', load)
+    expect(load).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not keep a failed resolution', async () => {
+    _resetFeedScopeCacheForTests()
+    await expect(cachedFeedScope('t|u1|k', () => Promise.reject(new Error('x')))).rejects.toThrow()
+    await Promise.resolve()
+    const load = vi.fn(scope)
+    await cachedFeedScope('t|u1|k', load)
+    expect(load).toHaveBeenCalledTimes(1)
   })
 })

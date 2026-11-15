@@ -12,7 +12,9 @@
 
 export const FEED_SOURCES_MAX = 8
 export const FEED_RECORDS_MAX = 50
-export const FEED_IDS_PER_SOURCE = 500
+export const FEED_IDS_PER_SOURCE = 200
+/** How long one viewer's resolved record ids are reused (the stream refetches on live events). */
+export const FEED_SCOPE_TTL_MS = 60_000
 export const FEED_LIMIT_DEFAULT = 30
 export const FEED_LIMIT_MAX = 50
 
@@ -106,6 +108,8 @@ export interface FeedType {
   records: number
   /** More records matched than the feed follows (the newest are kept). */
   truncated: boolean
+  /** The record ids the feed follows (viewer-visible only) — the client refetches on writes to them. */
+  ids: string[]
 }
 
 export interface FeedScope {
@@ -123,8 +127,8 @@ export async function resolveFeedScope(req: FeedRequest, deps: FeedDeps): Promis
   const sets = new Map<string, Set<string>>()
   const truncated = new Set<string>()
   const add = (collection: string, ids: Iterable<string>) => {
-    let s = sets.get(collection)
-    if (!s) sets.set(collection, (s = new Set()))
+    const s = sets.get(collection) ?? new Set<string>()
+    sets.set(collection, s)
     for (const id of ids) s.add(String(id))
   }
   await Promise.all([
@@ -145,7 +149,12 @@ export async function resolveFeedScope(req: FeedRequest, deps: FeedDeps): Promis
   for (const [collection, ids] of sets) {
     if (ids.size === 0) continue
     groups.set(collection, [...ids])
-    types.push({ collection, records: ids.size, truncated: truncated.has(collection) })
+    types.push({
+      collection,
+      records: ids.size,
+      truncated: truncated.has(collection),
+      ids: [...ids]
+    })
   }
   types.sort((a, b) => b.records - a.records || a.collection.localeCompare(b.collection))
   return { groups, types }
@@ -159,4 +168,42 @@ export function narrowToTypes(
   if (collections.length === 0) return groups
   const keep = new Set(collections)
   return new Map([...groups].filter(([c]) => keep.has(c)))
+}
+
+// ── Per-viewer scope cache ─────────────────────────────────────────────────
+
+interface CacheEntry {
+  at: number
+  scope: Promise<FeedScope>
+}
+const scopeCache = new Map<string, CacheEntry>()
+const SCOPE_CACHE_MAX = 500
+
+/**
+ * One viewer's resolved scope, reused for FEED_SCOPE_TTL_MS and shared by concurrent callers
+ * (single flight). The key is the tenant + the person (their read policy, row filter and User
+ * Scopes decide the ids, so nobody ever reuses another person's) + the request's sources/records.
+ * A failed resolution is never kept.
+ */
+export function cachedFeedScope(
+  key: string,
+  load: () => Promise<FeedScope>,
+  now = Date.now()
+): Promise<FeedScope> {
+  const hit = scopeCache.get(key)
+  if (hit && now - hit.at < FEED_SCOPE_TTL_MS) return hit.scope
+  if (scopeCache.size >= SCOPE_CACHE_MAX) {
+    for (const [k, v] of scopeCache) if (now - v.at >= FEED_SCOPE_TTL_MS) scopeCache.delete(k)
+    if (scopeCache.size >= SCOPE_CACHE_MAX) scopeCache.clear()
+  }
+  const scope = load()
+  scopeCache.set(key, { at: now, scope })
+  scope.catch(() => {
+    if (scopeCache.get(key)?.scope === scope) scopeCache.delete(key)
+  })
+  return scope
+}
+
+export function _resetFeedScopeCacheForTests(): void {
+  scopeCache.clear()
 }

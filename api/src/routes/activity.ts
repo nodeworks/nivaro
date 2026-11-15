@@ -5,6 +5,7 @@ import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
+  cachedFeedScope,
   FEED_IDS_PER_SOURCE,
   narrowToTypes,
   parseFeedBody,
@@ -33,6 +34,7 @@ import { getAllowedFields } from '../services/permissions.js'
 import { withReadGate } from '../services/read-gate.js'
 import { isStatementTimeout } from '../services/request-trace.js'
 import { recordVisibleTo } from '../services/revision-access.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { hideViewAsActor } from '../services/view-as-attribution.js'
 import type { User } from '../types.js'
 import { registerActivityUndoRoutes } from './activity-undo.js'
@@ -301,45 +303,65 @@ export async function activityRoutes(app: FastifyInstance) {
     const feed = parsed.value
     const workspaceId = req.workspaceId ?? undefined
     let badFilter: string | null = null
-    const scope = await withReadGate(user.id, async () => {
-      const { readItems, ForbiddenError, CollectionNotFoundError } = await import(
-        '../services/items.js'
-      )
-      return resolveFeedScope(feed, {
-        sourceIds: async (collection, filter) => {
-          try {
-            const res = (await readItems(
-              user,
-              collection,
-              {
-                fields: ['id'],
-                ...(filter ? { filter } : {}),
-                sort: ['-id'],
-                limit: FEED_IDS_PER_SOURCE + 1,
-                count: false
-              },
-              req,
-              workspaceId
-            )) as { data?: Array<{ id?: unknown }> }
-            const rows = res.data ?? []
-            return {
-              ids: rows.slice(0, FEED_IDS_PER_SOURCE).map((r) => String(r.id)),
-              truncated: rows.length > FEED_IDS_PER_SOURCE
+    // The ids are resolved once per person per minute (their read policy, row filter and User
+    // Scopes decide them, so the key carries the person); the stream refetches on live events,
+    // so a repeat read of the same sources reuses them. A bad filter is never cached.
+    const scopeKey = [
+      currentTenantKey(),
+      user.id,
+      workspaceId ?? '',
+      JSON.stringify([feed.sources, feed.records])
+    ].join('|')
+    const loadScope = () =>
+      withReadGate(user.id, async () => {
+        const { readItems, ForbiddenError, CollectionNotFoundError } = await import(
+          '../services/items.js'
+        )
+        const resolved = await resolveFeedScope(feed, {
+          sourceIds: async (collection, filter) => {
+            try {
+              const res = (await readItems(
+                user,
+                collection,
+                {
+                  fields: ['id'],
+                  ...(filter ? { filter } : {}),
+                  sort: ['-id'],
+                  limit: FEED_IDS_PER_SOURCE + 1,
+                  count: false
+                },
+                req,
+                workspaceId
+              )) as { data?: Array<{ id?: unknown }> }
+              const rows = res.data ?? []
+              return {
+                ids: rows.slice(0, FEED_IDS_PER_SOURCE).map((r) => String(r.id)),
+                truncated: rows.length > FEED_IDS_PER_SOURCE
+              }
+            } catch (err) {
+              if (err instanceof ForbiddenError || err instanceof CollectionNotFoundError)
+                return null
+              const status = (err as { statusCode?: number }).statusCode
+              if (status === 400 || status === 422) {
+                badFilter = (err as Error).message
+                return null
+              }
+              throw err
             }
-          } catch (err) {
-            if (err instanceof ForbiddenError || err instanceof CollectionNotFoundError) return null
-            const status = (err as { statusCode?: number }).statusCode
-            if (status === 400 || status === 422) {
-              badFilter = (err as Error).message
-              return null
-            }
-            throw err
-          }
-        },
-        recordVisible: (collection, id) => recordVisibleTo(req, collection, id)
+          },
+          recordVisible: (collection, id) => recordVisibleTo(req, collection, id)
+        })
+        if (badFilter) throw Object.assign(new Error(badFilter), { feedBadFilter: true })
+        return resolved
       })
-    })
-    if (badFilter) return reply.code(400).send({ error: badFilter, code: 'BAD_FEED_FILTER' })
+    let scope: Awaited<ReturnType<typeof loadScope>>
+    try {
+      scope = await cachedFeedScope(scopeKey, loadScope)
+    } catch (err) {
+      if ((err as { feedBadFilter?: boolean }).feedBadFilter)
+        return reply.code(400).send({ error: (err as Error).message, code: 'BAD_FEED_FILTER' })
+      throw err
+    }
 
     const groups = narrowToTypes(scope.groups, feed.collections)
     if (groups.size === 0) return reply.send({ data: [], next: null, types: scope.types })
@@ -362,7 +384,13 @@ export async function activityRoutes(app: FastifyInstance) {
     if (feed.before) pageIds.where('a.id', '<', feed.before)
     let ids: number[]
     try {
-      ids = ((await pageIds) as Array<{ id: number }>).map((r) => Number(r.id))
+      ids = (
+        (await withReadGate(user.id, () => Promise.resolve(pageIds), {
+          label: 'activity-feed'
+        })) as Array<{
+          id: number
+        }>
+      ).map((r) => Number(r.id))
     } catch (err) {
       if (!isStatementTimeout(err)) throw err
       req.log.warn({ err }, 'activity feed: statement timed out')

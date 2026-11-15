@@ -4,6 +4,7 @@ import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { describe, expect, it, vi } from 'vitest'
 import { NavigationContext, NivaroProvider } from '../../context'
+import { type RealtimeAdapter, RealtimeContext } from '../../lib/realtime'
 import { RecordActivityStream } from './RecordActivityStream'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -22,7 +23,12 @@ const row = (id: number, collection: string, item: string, over: Record<string, 
   ...over
 })
 
-function mount(ui: ReactNode, respond: (cmd: Cmd) => unknown, navigate = vi.fn()) {
+function mount(
+  ui: ReactNode,
+  respond: (cmd: Cmd) => unknown,
+  navigate = vi.fn(),
+  rt?: RealtimeAdapter
+) {
   const calls: Cmd[] = []
   const client = {
     url: 'http://localhost',
@@ -40,7 +46,9 @@ function mount(ui: ReactNode, respond: (cmd: Cmd) => unknown, navigate = vi.fn()
     root.render(
       <QueryClientProvider client={qc}>
         <NivaroProvider client={client as never}>
-          <NavigationContext.Provider value={{ navigate }}>{ui}</NavigationContext.Provider>
+          <RealtimeContext.Provider value={rt ?? null}>
+            <NavigationContext.Provider value={{ navigate }}>{ui}</NavigationContext.Provider>
+          </RealtimeContext.Provider>
         </NivaroProvider>
       </QueryClientProvider>
     )
@@ -162,4 +170,70 @@ describe('RecordActivityStream', () => {
     expect(navigate).toHaveBeenCalledWith('/collections/workflows/5')
     cleanup()
   })
+})
+
+describe('RecordActivityStream — live without a timer', () => {
+  function adapter() {
+    let handler: ((ev: unknown) => void) | null = null
+    const rt = {
+      subscribeCollections: (_c: string[], cb: (ev: unknown) => void) => {
+        handler = cb
+        return () => {}
+      },
+      on: () => () => {},
+      emit: () => {},
+      joinWatch: () => () => {}
+    } as unknown as RealtimeAdapter
+    return { rt, fire: (ev: unknown) => handler?.(ev) }
+  }
+  const answer = (cmd: Cmd) =>
+    cmd._path === '/activity/feed'
+      ? {
+          data: [row(9, 'workflows', '5')],
+          next: null,
+          types: [{ collection: 'workflows', records: 1, truncated: false, ids: ['5'] }]
+        }
+      : { data: {} }
+  const reads = (calls: Cmd[]) => calls.filter((c) => c._path === '/activity/feed').length
+
+  it('reads once, then only when a followed record is written (after a quiet window)', async () => {
+    const { rt, fire } = adapter()
+    const { calls, cleanup } = mount(
+      <RecordActivityStream sources={SOURCES} />,
+      answer,
+      vi.fn(),
+      rt
+    )
+    await flush()
+    expect(reads(calls)).toBe(1)
+    // another record of the same collection: not this stream's business
+    fire({ collection: 'workflows', item: '99', action: 'update', changed_fields: ['name'] })
+    await act(async () => await new Promise((r) => setTimeout(r, 2400)))
+    expect(reads(calls)).toBe(1)
+    // a followed record, written twice in a burst: one read
+    fire({ collection: 'workflows', item: '5', action: 'update', changed_fields: ['name'] })
+    fire({ collection: 'workflows', item: '5', action: 'update', changed_fields: ['note'] })
+    await act(async () => await new Promise((r) => setTimeout(r, 300)))
+    expect(reads(calls)).toBe(1)
+    await act(async () => await new Promise((r) => setTimeout(r, 2400)))
+    await flush()
+    expect(reads(calls)).toBe(2)
+    cleanup()
+  }, 20_000)
+
+  it('a new record of a followed type is read too', async () => {
+    const { rt, fire } = adapter()
+    const { calls, cleanup } = mount(
+      <RecordActivityStream sources={SOURCES} />,
+      answer,
+      vi.fn(),
+      rt
+    )
+    await flush()
+    fire({ collection: 'workflows', item: '100', action: 'create' })
+    await act(async () => await new Promise((r) => setTimeout(r, 2400)))
+    await flush()
+    expect(reads(calls)).toBe(2)
+    cleanup()
+  }, 20_000)
 })
