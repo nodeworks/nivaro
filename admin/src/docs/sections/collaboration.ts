@@ -1221,7 +1221,7 @@ export const collabChangeProposals: DocSection = {
         '**Accept and apply** writes the new values as the person accepting: their permissions, row access and the record’s validation all apply; only the post-approval lock is set aside for that one save. If they could not change one of the fields, or a field changed since the proposal was made, nothing is written and they are told why.',
         '**When it expires**: a proposal can no longer be accepted once the record has moved to another step, is no longer locked (then it is simply edited), or proposals have been turned off for the collection — decline it or ask for a new one.',
         '**Decline** needs a short note, which the proposer sees.',
-        'The proposer is notified either way (Workflow notifications — mute or route them in Profile → Notification rules).'
+        '**Notifications** have their own category, **Change proposals**: the step’s owners are told when a proposal waits on them (the administrators when nobody owns the step), and the proposer when it is accepted or declined. It is on by default on the same channels as Workflow; mute or route it in Profile → Notification rules. A sample of each is on the Notification Bench.'
       ]
     },
     { type: 'h2', id: 'change-proposals-history', text: 'History' },

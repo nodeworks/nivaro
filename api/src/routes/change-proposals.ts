@@ -111,10 +111,13 @@ export async function changeProposalRoutes(app: FastifyInstance) {
     if (body.values != null && (typeof body.values !== 'object' || Array.isArray(body.values)))
       return reply.code(400).send({ error: 'values must be an object of field → value' })
     try {
-      const out = await createProposal(req, collection, item, {
-        values: body.values ?? {},
-        reason: String(body.reason ?? '')
-      })
+      const out = await createProposal(
+        req,
+        collection,
+        item,
+        { values: body.values ?? {}, reason: String(body.reason ?? '') },
+        app
+      )
       return reply.code(201).send({ data: out })
     } catch (err) {
       return refuse(reply, err)

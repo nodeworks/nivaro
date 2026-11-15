@@ -340,7 +340,8 @@ export async function createProposal(
   req: FastifyRequest,
   collection: string,
   item: string,
-  input: CreateProposalInput
+  input: CreateProposalInput,
+  app?: FastifyInstance
 ): Promise<{ id: number; fields: string[] }> {
   const user = req.user!
   const isAdmin = !!req.isAdmin || (await isAdminRole(user))
@@ -444,6 +445,16 @@ export async function createProposal(
   )) as Array<{ id: number } | number>
   const first = inserted[0]
   const id = Number(typeof first === 'object' ? first.id : first)
+  if (app)
+    await notifyReviewers(app, {
+      id,
+      collection,
+      item: String(item),
+      created_by: String(user.id),
+      run,
+      fields: changes.map((c) => c.field),
+      reason
+    })
   return { id, fields: changes.map((c) => c.field) }
 }
 
@@ -517,8 +528,8 @@ async function notifyProposer(
             ? `Reason: ${note}`
             : 'No reason was given.',
       sender: actorId,
-      // Workflow: people mute or route it with their other workflow notices.
-      category: 'workflow',
+      // Its own category: people mute or route proposal notices on their own.
+      category: 'proposals',
       collection: p.collection,
       item: String(p.item),
       why: 'you proposed this change',
@@ -541,6 +552,84 @@ export function isPending(
   if (r.status !== 'accepting') return false
   const at = r.decided_at ? new Date(r.decided_at).getTime() : 0
   return !Number.isFinite(at) || now - at > ACCEPTING_STALE_MS
+}
+
+/**
+ * Who reviews a new proposal: the owners of the record's current step, never
+ * the proposer; when the step resolves nobody, the administrators (who may
+ * always decide). Exported for the tests.
+ */
+export async function proposalReviewers(
+  collection: string,
+  item: string,
+  proposerId: string,
+  run: { id: string; current_state: string } | null
+): Promise<string[]> {
+  let ids: string[] = []
+  if (run) {
+    const { resolveStateOwnersBatch } = await import('./pipeline-engine.js')
+    const owners = await resolveStateOwnersBatch([
+      { key: 'r', stateId: run.current_state, instanceId: run.id, collection, itemId: item }
+    ]).catch(() => new Map())
+    ids = ((owners.get('r') ?? []) as Array<{ id: string | null }>)
+      .map((o) => (o.id != null ? String(o.id) : ''))
+      .filter(Boolean)
+  }
+  ids = ids.filter((id) => !sameId(id, proposerId))
+  if (ids.length === 0) {
+    const { supportAudience } = await import('./support-tickets.js')
+    ids = (await supportAudience(null).catch(() => [] as string[])).filter(
+      (id) => !sameId(id, proposerId)
+    )
+  }
+  const seen = new Set<string>()
+  return ids.filter((id) => {
+    const k = id.toLowerCase()
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+}
+
+/** Tell the reviewers a proposal waits on them (category Change proposals). */
+async function notifyReviewers(
+  app: FastifyInstance,
+  p: {
+    id: number
+    collection: string
+    item: string
+    created_by: string
+    run: { id: string; current_state: string } | null
+    fields: string[]
+    reason: string
+  }
+): Promise<void> {
+  try {
+    const reviewers = await proposalReviewers(p.collection, p.item, p.created_by, p.run)
+    if (reviewers.length === 0) return
+    const { notifyUser } = await import('./notification-channels.js')
+    const [label, names, labels] = await Promise.all([
+      recordLabel(p.collection, p.item),
+      userNames([p.created_by]),
+      fieldLabels(p.collection)
+    ])
+    const who = nameFrom(names, p.created_by) ?? 'Someone'
+    const fieldText = p.fields.map((f) => labels.get(f) ?? f).join(', ')
+    for (const uid of reviewers) {
+      await notifyUser(app, uid, {
+        subject: `Change proposed on ${label} — review it`,
+        message: `${who} proposed new values for ${fieldText}: ${p.reason}`.slice(0, 500),
+        sender: p.created_by,
+        category: 'proposals',
+        collection: p.collection,
+        item: p.item,
+        why: 'you own the step this record is at',
+        source: { kind: 'change-proposal', label: 'Change proposal', id: p.id }
+      }).catch(() => undefined)
+    }
+  } catch {
+    // A failed notice never undoes the proposal: it waits in My Work anyway.
+  }
 }
 
 /** Claim a pending proposal for the accept write (one decision wins). */

@@ -1,6 +1,8 @@
 export type NotifyCategory =
   | 'mentions'
   | 'workflow'
+  /** Proposed changes on records locked after approval: to review, and their outcome. */
+  | 'proposals'
   | 'sla'
   | 'watch'
   | 'alerts'
