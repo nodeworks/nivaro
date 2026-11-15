@@ -1309,6 +1309,23 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.font_size = body.font_size
     }
+    if ('theme' in body) {
+      // rt4 #19 — light / dark / system follows the person to every browser and device
+      // (null = no pick yet: each device keeps its own).
+      const v = body.theme
+      if (v !== null && v !== 'light' && v !== 'dark' && v !== 'system')
+        return reply.code(400).send({ error: "theme must be 'light', 'dark', 'system' or null" })
+      patch.theme = v
+    }
+    if ('table_density' in body) {
+      // rt4 #19 — row density of every list and table (the Compact / Comfortable toggle).
+      const v = body.table_density
+      if (v !== null && v !== 'compact' && v !== 'comfortable')
+        return reply
+          .code(400)
+          .send({ error: "table_density must be 'compact', 'comfortable' or null" })
+      patch.table_density = v
+    }
     if ('timezone' in body) {
       // Per-user display timezone (#31). null = browser default.
       const tz = body.timezone

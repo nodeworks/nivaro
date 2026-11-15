@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 
 type Theme = 'light' | 'dark' | 'system'
 
@@ -6,13 +6,25 @@ interface ThemeContextValue {
   theme: Theme
   resolvedTheme: 'light' | 'dark'
   setTheme: (t: Theme) => void
+  /** The theme the person's account holds (set on another device): applied here without
+   *  being saved back. Ignored for a few seconds after this tab's own choice. */
+  adoptServerTheme: (t: unknown) => void
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
   theme: 'system',
   resolvedTheme: 'light',
-  setTheme: () => {}
+  setTheme: () => {},
+  adoptServerTheme: () => {}
 })
+
+// A choice made here is saved to the person's account (rt4 #19) by whoever is signed in: the
+// app shell registers the saver, so this provider never depends on auth.
+let persistTheme: ((t: Theme) => void) | null = null
+export function registerThemePersist(fn: ((t: Theme) => void) | null): void {
+  persistTheme = fn
+}
+const OWN_CHANGE_GRACE_MS = 5000
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => {
@@ -58,15 +70,29 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, [resolvedTheme])
 
+  const ownChangeAt = useRef(0)
+
   function setTheme(t: Theme) {
+    ownChangeAt.current = Date.now()
     setThemeState(t)
     try {
       localStorage.setItem('nivaro-theme', t)
     } catch {}
+    persistTheme?.(t)
   }
 
+  // Another device of this person chose a theme: follow it (nothing to save back).
+  const adoptServerTheme = useCallback((t: unknown) => {
+    if (t !== 'light' && t !== 'dark' && t !== 'system') return
+    if (Date.now() - ownChangeAt.current < OWN_CHANGE_GRACE_MS) return
+    setThemeState((cur) => (cur === t ? cur : t))
+    try {
+      localStorage.setItem('nivaro-theme', t)
+    } catch {}
+  }, [])
+
   return (
-    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme }}>
+    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme, adoptServerTheme }}>
       {children}
     </ThemeContext.Provider>
   )

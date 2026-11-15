@@ -399,6 +399,7 @@ export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
 export { ListLoadError } from './components/ListLoadError'
+export { LiveAnnouncer } from './components/LiveAnnouncer'
 export { LiveCount, type LiveCountProps } from './components/LiveCount'
 export { LiveNewMatchesPill } from './components/LiveNewMatchesPill'
 export { LiveRowMark } from './components/LiveRowMark'
@@ -527,6 +528,7 @@ export type {
   QueryWidgetConfig
 } from './components/PageRenderer'
 export { PageRenderer, QueryWidgetView, RecordGridWidgetBody } from './components/PageRenderer'
+export { PresenceDot } from './components/PresenceDot'
 export {
   commonPretendDownOptions,
   dashboardPretendDownOptions,
@@ -632,6 +634,7 @@ export type { RecordGridEditorConfig } from './components/RecordGridEditor'
 export { RecordGridEditor } from './components/RecordGridEditor'
 export { RecordPeekHost } from './components/RecordPeekHost'
 export { type ReadViewLayout, RecordReadView } from './components/RecordReadView'
+export { RelativeTime } from './components/RelativeTime'
 export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
 export { RowPresence } from './components/RowPresence'
@@ -666,6 +669,7 @@ export type {
   SupportTicket,
   SupportTicketDetail
 } from './components/support/types'
+export { TabCountHost } from './components/TabCountHost'
 export { Term } from './components/Term'
 export { TickerNumber } from './components/TickerNumber'
 export { TipLayer, useOverflowTip } from './components/TipLayer'
@@ -755,6 +759,7 @@ export {
   startApiVersionWatch,
   useApiUpdate
 } from './lib/api-version'
+export * from './lib/attention-prefs'
 export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
 export {
@@ -974,16 +979,17 @@ export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
 export * from './lib/list-return'
 export * from './lib/live'
+export * from './lib/live-announcer'
 export * from './lib/live-counts'
+export * from './lib/live-data-changed'
+export * from './lib/live-findings'
 export * from './lib/live-list'
 export * from './lib/live-moves'
 export * from './lib/live-ops'
 export * from './lib/live-queries'
 export * from './lib/live-screen'
-export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
-export * from './lib/live-data-changed'
-export * from './lib/live-findings'
 export * from './lib/live-search'
+export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
 export * from './lib/live-views'
 export * from './lib/live-widgets'
 export {
@@ -1162,6 +1168,12 @@ export {
 } from './lib/record-popout'
 export * from './lib/record-ref'
 export { announceRecordTabs, useRecordTabs, useRecordTabsSignal } from './lib/record-tabs'
+export {
+  relativeTickSubscribers,
+  subscribeRelativeTick,
+  tickRelativeNow,
+  useRelativeText
+} from './lib/relative-ticker'
 export { registerReloadHold, reloadHoldLabels } from './lib/reload-holds'
 export {
   captureReplayClip,
@@ -1415,7 +1427,11 @@ export {
   translateScopeValues,
   useMyScopes
 } from './lib/use-my-scopes'
-export { useOnlineUsers } from './lib/use-online-users'
+export {
+  type PresenceState,
+  useOnlineUsers,
+  usePresenceStates
+} from './lib/use-online-users'
 export { pageAtPayload, usePageAt } from './lib/use-page-at'
 export {
   announceLocalPrefs,
@@ -1433,6 +1449,7 @@ export {
   viewAs,
   viewAsPath
 } from './lib/view-as'
+export * from './lib/waiting-count'
 export {
   buildWidgetImageLabel,
   describeDateRangeFilter,

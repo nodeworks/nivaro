@@ -56,6 +56,7 @@ import { useHeaderFold } from '../item-edit/HeaderTools'
 import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
 import { UserChip } from '../item-edit/UserChip'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
+import { RelativeTime } from '../RelativeTime'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
 import {
@@ -1132,7 +1133,7 @@ function SendBackNotice({ entry }: { entry: PipelineHistoryEntry }) {
           {entry.comment}
         </p>
         <p className='mt-0.5 text-[11.5px] text-amber-800/80 dark:text-amber-300/80'>
-          Sent back by {withBehalf(who, entry)} · {formatRelative(entry.timestamp)}
+          Sent back by {withBehalf(who, entry)} · <RelativeTime value={entry.timestamp} />
         </p>
       </div>
     </div>
@@ -1721,7 +1722,7 @@ function StateTrack({
                                 {entryInitials(h)}
                               </span>
                               <span className='text-[8.5px] leading-none text-slate-400'>
-                                {formatRelative(h.timestamp)}
+                                <RelativeTime value={h.timestamp} />
                               </span>
                             </div>
                           </TooltipTrigger>
@@ -1817,7 +1818,7 @@ function HistoryTimeline({
               >
                 {machine && <Zap className='mr-1 inline h-3 w-3' aria-hidden />}
                 {userName}
-                {detail ? ` · ${detail}` : ''} · {formatRelative(h.timestamp)}
+                {detail ? ` · ${detail}` : ''} · <RelativeTime value={h.timestamp} />
               </p>
               {visit && (
                 <p

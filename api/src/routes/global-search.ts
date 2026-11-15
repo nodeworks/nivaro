@@ -77,6 +77,7 @@ import {
 import { searchPhrases } from '../services/search-synonyms.js'
 import { systemReadableColumns } from '../services/system-collections.js'
 import { applyDirectoryListingRules } from '../services/user-directory-cols.js'
+import { announceMineChanged } from '../services/user-sync.js'
 import type { CMSField, Policy, Role, User } from '../types.js'
 
 // ─── Static admin page registry ───────────────────────────────────────────────
@@ -2609,6 +2610,7 @@ export async function globalSearchRoutes(app: FastifyInstance) {
         String(req.user!.id),
         (req.body ?? {}) as Record<string, unknown>
       )
+      announceMineChanged(String(req.user!.id), 'saved-searches')
       return reply.code(201).send({ data: entry })
     } catch (e) {
       if (e instanceof SavedSearchError) return reply.code(e.status).send({ error: e.message })
@@ -2620,6 +2622,7 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     if (!id) return reply.code(400).send({ error: 'id is required' })
     const ok = await deleteSavedSearch(userId, id.slice(0, 64))
     if (!ok) return reply.code(404).send({ error: 'Not found' })
+    announceMineChanged(userId, 'saved-searches')
     return reply.send({ data: { ok: true } })
   }
   app.delete('/saved/:id', async (req, reply) =>

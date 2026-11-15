@@ -12,6 +12,7 @@ import {
   savePins
 } from '../services/collection-pins.js'
 import { can } from '../services/permissions.js'
+import { announcePinsChanged } from '../services/user-sync.js'
 import type { User } from '../types.js'
 
 /**
@@ -61,6 +62,7 @@ export async function collectionPinRoutes(app: FastifyInstance) {
           comment: change,
           req
         })
+        announcePinsChanged()
       }
       return reply.send({ data: { collections: next } })
     }

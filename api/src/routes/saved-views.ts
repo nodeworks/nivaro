@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
 import { forgetListWeightReport } from '../services/list-weight.js'
 import { writeRevision } from '../services/revisions.js'
+import { announceMineChanged } from '../services/user-sync.js'
 
 interface SavedViewRow {
   id: number
@@ -72,6 +73,18 @@ async function claimRoleDefault(
 
 export async function savedViewsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
+  // The caller's other tabs and devices show a saved or removed view at once (rt4 #20). Sent from
+  // onSend: a client that left right after the write still gets its devices told.
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (
+      req.user &&
+      ['POST', 'PATCH', 'DELETE'].includes(req.method) &&
+      reply.statusCode < 300 &&
+      !/\/opened(?:[?/]|$)/.test(req.url)
+    )
+      announceMineChanged(String(req.user.id), 'saved-views')
+    return payload
+  })
 
   // GET /?collection= — own views + shared views (optionally role-matched)
   app.get('/', async (req, reply) => {

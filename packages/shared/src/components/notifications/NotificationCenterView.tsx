@@ -34,6 +34,7 @@ import { openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../../lib/record-peek'
 import { cn, formatRelative } from '../../lib/utils'
 import { hasSnapshotView, offersChanges } from '../NotificationBell'
+import { RelativeTime } from '../RelativeTime'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { AsItWasSheet } from './AsItWasSheet'
 import {
@@ -543,7 +544,7 @@ export function NotificationCenterView({
             {n.subject ?? n.title ?? '—'}
           </span>
           <span className='shrink-0 text-[10.5px] text-slate-400'>
-            {formatRelative(n.created_at ?? new Date())}
+            <RelativeTime value={n.created_at ?? new Date()} />
           </span>
         </div>
         {n.message && (
@@ -1257,7 +1258,7 @@ export function NotificationCenterView({
                         {g.subject.replace(/^critical:\s*/i, '')}
                       </span>
                       <span className='shrink-0 text-[10.5px] text-slate-400'>
-                        {formatRelative(g.created_at ?? new Date())}
+                        <RelativeTime value={g.created_at ?? new Date()} />
                       </span>
                       <span
                         className={cn(
