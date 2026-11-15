@@ -678,6 +678,13 @@ export {
   type ReportProblemPayload
 } from './components/support/ReportProblem'
 export { SupportRequestDialog } from './components/support/SupportRequestDialog'
+export {
+  LiveScreenViewer,
+  ScreenShareBar,
+  ScreenShareHost,
+  type ScreenShareHostProps,
+  ScreenSharePanel
+} from './components/support/ScreenShare'
 export { SupportView } from './components/support/SupportView'
 export {
   StatusPill as SupportStatusPill,
@@ -1383,6 +1390,18 @@ export {
   useScreenLoader,
   useScreenRefreshState
 } from './lib/screen-refresh'
+export {
+  createFrameAssembler as createScreenShareAssembler,
+  packBatch as packScreenShareBatch,
+  registerScreenShareRuntime,
+  type ScreenShareInfo,
+  type ScreenShareRuntime,
+  type ScreenShareStatus,
+  screenShareRunning,
+  startScreenShare,
+  stopScreenShare,
+  useScreenShareStatus
+} from './lib/screen-share'
 export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'
 export * from './lib/search-log'
 export {

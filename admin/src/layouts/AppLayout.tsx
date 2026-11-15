@@ -107,6 +107,8 @@ import {
   restoreTrailScroll,
   ScreenRefreshButton,
   SentViewCards,
+  ScreenShareHost,
+  type ScreenShareRuntime,
   SOMETHING_WENT_WRONG,
   scrollPathOf,
   scrollToRestore,
@@ -641,6 +643,8 @@ export function AppLayout() {
           </NivaroProvider>
           <IncidentBannerHost />
           <DrillBannerHost />
+          {/* Realtime idea 24 — "Sharing with … · Stop" while a support screen share runs. */}
+          <ScreenShareHost runtime={screenShareRuntime} />
           <div className='flex min-h-0 flex-1 overflow-hidden'>
             <a
               href='#main-content'
@@ -1259,6 +1263,12 @@ function UserSyncHost() {
 }
 
 /** #2846 — the "Drill running" strip while a chaos fault is armed (Stop link for admins → /chaos). */
+/** rrweb, loaded only when a screen share starts or a support person opens one. */
+const screenShareRuntime: ScreenShareRuntime = {
+  loadRecord: async () => (await import('rrweb')).record as never,
+  loadReplayer: async () => (await import('rrweb')).Replayer as never
+}
+
 function DrillBannerHost() {
   const navigate = useNavigate()
   const { user } = useAuth()

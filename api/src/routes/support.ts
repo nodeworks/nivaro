@@ -31,6 +31,7 @@ import {
 } from '../services/support-tickets.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { resolveFriendlyId, resolveFriendlyIds } from '../services/workflow-transitions.js'
+import { screenShareTicketChanged, supportScreenShareRoutes } from './support-screen-share.js'
 
 /**
  * /api/support — support tickets (#999) on the Tasks system.
@@ -948,6 +949,8 @@ export async function supportRoutes(app: FastifyInstance) {
       .update({ assignee: req.user!.id, status: 'in_progress', updated_at: new Date() })
     const me = (await nameOf(req.user!.id)) ?? 'Someone'
     await logTicketEvent(t.id, req.user!.id, `Picked up by ${me} · In progress`, req)
+    // A live screen share goes to whoever it was started with: taken over = it ends.
+    await screenShareTicketChanged(app, t.id)
     const updated = (await loadTicket(t.id))!
     await notifyTicket(app, updated, [t.created_by], {
       subject: `Your request is in progress: ${t.title}`,
@@ -1052,6 +1055,8 @@ export async function supportRoutes(app: FastifyInstance) {
       })
     }
     await logTicketEvent(t.id, req.user!.id, events.join(' · '), req)
+    if (patch.assignee !== undefined || patch.team_id !== undefined || patch.status !== undefined)
+      await screenShareTicketChanged(app, t.id)
     const updated = (await loadTicket(t.id))!
     const statusMoved = patch.status !== undefined
     const recipients = [t.created_by, updated.assignee]
@@ -1066,4 +1071,7 @@ export async function supportRoutes(app: FastifyInstance) {
     })
     return reply.send({ data: (await serializeTickets([updated]))[0] })
   })
+
+  // Share my screen with support (realtime idea 24): start / read / stop a live screen share.
+  await app.register(supportScreenShareRoutes)
 }
