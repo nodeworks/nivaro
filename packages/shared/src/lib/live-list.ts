@@ -395,23 +395,37 @@ export function mayAffectMatch(
  * stays on screen until the new arrives — nothing flashes or jumps). Bursts
  * coalesce; aspect-only notices (comments, locks…) never refetch a view that
  * draws columns; focus mode holds the feed back like every other list.
+ * `paused` (the list's "Pause live updates", live-list-flow.ts): changes wait and
+ * one refetch runs on resume.
  */
 export function useLiveQueryRefresh(
   collection: string | null | undefined,
   keys: unknown[][],
-  opts: { debounceMs?: number; enabled?: boolean } = {}
+  opts: { debounceMs?: number; enabled?: boolean; paused?: boolean } = {}
 ): void {
   const qc = useQueryClient()
   const keysRef = useRef(keys)
   keysRef.current = keys
+  const pausedRef = useRef(!!opts.paused)
+  pausedRef.current = !!opts.paused
+  const heldRef = useRef(false)
   useLiveCollection(
     collection,
     (batch) => {
       if (batch.aspectsOnly) return
+      if (pausedRef.current) {
+        heldRef.current = true
+        return
+      }
       for (const k of keysRef.current) void qc.invalidateQueries({ queryKey: k })
     },
     { debounceMs: opts.debounceMs ?? 600, enabled: opts.enabled, focusable: true }
   )
+  useEffect(() => {
+    if (opts.paused || !heldRef.current) return
+    heldRef.current = false
+    for (const k of keysRef.current) void qc.invalidateQueries({ queryKey: k })
+  }, [opts.paused, qc])
 }
 
 /**
