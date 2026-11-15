@@ -722,6 +722,9 @@ export interface PredicateOpts {
   kinds: Record<string, TextKind>
   /** Refusing copies: exact predicates only. */
   exactOnly?: boolean
+  /** The caller's read gate per line collection (shared-lines rules); null = nothing
+   *  restricts them there. A line collection missing here = the rule answers nothing. */
+  childAccess?: ReadonlyMap<string, AccessClause | null>
 }
 
 /** The folded comparison (`col` and the value both folded). */
@@ -775,9 +778,13 @@ export function rulePredicate(rule: PlannedRule, draft: unknown, opts: Predicate
       const values = lineValues(draft, rule.line_field)
       const need = rule.amount ?? 1
       if (values.length < need) return null
+      // Only lines the caller may read count (security review 2026-11-14): a match must
+      // never tell them which records have lines they cannot see.
+      if (!opts.childAccess?.has(rule.child)) return null
+      const gate = onIdExpr(opts.childAccess.get(rule.child) ?? null, 'l.[id]')
       return {
-        sql: `t.[id] IN (SELECT l.[${rule.fk}] FROM [${rule.child}] AS l WHERE l.[${rule.line_field}] IN (SELECT [value] FROM OPENJSON(?)) GROUP BY l.[${rule.fk}] HAVING COUNT(DISTINCT l.[${rule.line_field}]) >= ?)`,
-        bindings: [JSON.stringify(values), need]
+        sql: `t.[id] IN (SELECT l.[${rule.fk}] FROM [${rule.child}] AS l WHERE l.[${rule.line_field}] IN (SELECT [value] FROM OPENJSON(?))${gate ? ` AND (${gate.sql})` : ''} GROUP BY l.[${rule.fk}] HAVING COUNT(DISTINCT l.[${rule.line_field}]) >= ?)`,
+        bindings: [JSON.stringify(values), ...(gate?.bindings ?? []), need]
       }
     }
   }

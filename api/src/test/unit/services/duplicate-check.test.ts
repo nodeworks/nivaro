@@ -4,6 +4,7 @@ import {
   type DuplicateDeps,
   findDuplicates,
   groupStatements,
+  groupsFor,
   importDriver,
   importDuplicateScan
 } from '../../../services/duplicate-check.js'
@@ -457,7 +458,7 @@ describe('rulePredicate / groupStatement', () => {
         fk: 'unit_type'
       }),
       [{ item: 5 }, { item: { id: 6 } }, { item: 5 }],
-      P
+      { ...P, childAccess: new Map([['unit_lines', null]]) }
     )
     expect(lines?.sql).toContain(
       'FROM [unit_lines] AS l WHERE l.[item] IN (SELECT [value] FROM OPENJSON(?)) GROUP BY l.[unit_type] HAVING COUNT(DISTINCT l.[item]) >= ?'
@@ -741,5 +742,59 @@ describe('importDuplicateScan — import preview uses the same criteria', () => 
       }
     )
     expect(out?.skipped?.[0]).toMatch(/compares lines/)
+  })
+})
+
+// ─── Shared lines, as the caller (security review 2026-11-14) ──────────────
+
+describe('shared lines are judged as the caller', () => {
+  const linesCfg = () =>
+    cfgFor({
+      setting: withRules([
+        { field: 'vendor', match: 'same' },
+        { field: 'lines', match: 'shared', line_field: 'item', amount: 2 }
+      ])
+    })
+  const lineRule = (): PlannedRule => linesCfg().groups[0].rules[1]
+  const zoneGate = { sql: '[id] IN (SELECT id FROM unit_lines WHERE zone = ?)', bindings: ['Z1'] }
+
+  it('no read gate known for the line collection → the rule compares nothing', () => {
+    expect(rulePredicate(lineRule(), [1, 2], P)).toBeNull()
+  })
+  it('a row-filtered line collection: hidden lines are never counted', () => {
+    const s = rulePredicate(lineRule(), [{ item: 1 }, { item: 2 }], {
+      ...P,
+      childAccess: new Map([['unit_lines', zoneGate]])
+    })
+    expect(s?.sql).toContain(
+      'WHERE l.[item] IN (SELECT [value] FROM OPENJSON(?)) AND (l.[id] IN (SELECT id FROM unit_lines WHERE zone = ?)) GROUP BY l.[unit_type]'
+    )
+    expect(s?.bindings).toEqual(['["1","2"]', 'Z1', 2])
+  })
+  it('the set is dropped unless the caller may read the link back and the line field', () => {
+    const c = linesCfg()
+    expect(groupsFor(c, null)).toEqual([])
+    expect(groupsFor(c, null, new Map([['unit_lines', []]]))).toEqual([])
+    expect(groupsFor(c, null, new Map([['unit_lines', ['id', 'item']]]))).toEqual([])
+    expect(groupsFor(c, null, new Map([['unit_lines', ['unit_type', 'item']]]))).toHaveLength(1)
+    expect(groupsFor(c, null, new Map([['unit_lines', null]]))).toHaveLength(1)
+  })
+  it('findDuplicates: unreadable line collection → no check, no SQL', async () => {
+    const { d, sqls } = deps({
+      config: async () => linesCfg(),
+      allowed: async (_u, c) => (c === 'unit_lines' ? [] : null)
+    })
+    const out = await findDuplicates(user, 'unit_types', { vendor: 4, lines: [1, 2] }, {}, d)
+    expect(out.enabled).toBe(false)
+    expect(sqls).toEqual([])
+  })
+  it('findDuplicates: the line collection gate rides inside the lines subquery', async () => {
+    const { d, sqls } = deps({
+      config: async () => linesCfg(),
+      access: async (_u, c) => (c === 'unit_lines' ? zoneGate : null)
+    })
+    await findDuplicates(user, 'unit_types', { vendor: 4, lines: [1, 2] }, {}, d)
+    expect(sqls).toHaveLength(1)
+    expect(sqls[0]).toContain('AND (l.[id] IN (SELECT id FROM unit_lines WHERE zone = ?))')
   })
 })
