@@ -68,7 +68,7 @@ export const mergeDocs: DocSection = {
       type: 'ul',
       items: [
         'One column per record and a Result column. Click a value in any column to use it; Combine joins long text line by line, rich text by paragraph, and tags or multi-selects as a union; Edit lets you type a new value.',
-        'Per record: Keep (one record — it keeps its id, number, history and pipeline step), Discard (it goes to the trash with a “Merged into …” note and can be restored) or Not in this merge (it only lends values).',
+        'Per record: Keep (one record — it keeps its id, number, history and pipeline step), Discard (it goes to the trash with a “Merged into …” note and can be restored) or Not in this merge (it is left out: it stays as it is and lends no values).',
         'Lines, links from other lists, many-to-many links and files, comments, tasks and related-record links on the discarded records are counted. Each one moves to the kept record by default; choose Leave to keep it with the discarded record.',
         'Review lists every field that changes (now → after, and where the value came from) and every move before anything is saved.'
       ]

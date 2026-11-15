@@ -755,6 +755,7 @@ describe('stale guard', () => {
       statusCode: 409,
       code: 'MERGE_STALE',
       record: 'B',
+      changedBy: 'Beth Ortiz',
       message: 'Beth Ortiz changed #B (PO B) while you were merging — review it again.'
     })
     expect(w.writes).toEqual([])

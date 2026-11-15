@@ -34,11 +34,20 @@ export class MergeRefusal extends Error {
   statusCode: number
   code: string
   record?: string
-  constructor(status: number, code: string, message: string, record?: string) {
+  /** MERGE_STALE: who changed the record (a name), for the screen to set off. */
+  changedBy?: string | null
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    record?: string,
+    changedBy?: string | null
+  ) {
     super(message)
     this.statusCode = status
     this.code = code
     this.record = record
+    this.changedBy = changedBy
   }
 }
 
