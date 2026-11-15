@@ -7382,6 +7382,23 @@ function ItemEditFormView({
     [allFields]
   )
 
+  // The Clone dialog lists fields in the order the form shows them: section by
+  // section (groups in layout order), then the ungrouped ones, then the rest.
+  const cloneFields = useMemo<CMSField[]>(() => {
+    const out: CMSField[] = []
+    const seen = new Set<string>()
+    const add = (f: CMSField) => {
+      if (seen.has(f.field)) return
+      seen.add(f.field)
+      out.push(f)
+    }
+    for (const g of groups) for (const f of groupedMap[g.key] ?? []) add(f)
+    for (const f of ungroupedFields) add(f)
+    for (const f of allFields) add(f)
+    for (const f of fieldConfig ?? []) add(f)
+    return out
+  }, [groups, groupedMap, ungroupedFields, allFields, fieldConfig])
+
   const containerGroups = useMemo(() => groups.filter((g) => g.type === 'container'), [groups])
   // Legacy orphan tabs (no container) — used for layout-level tabs/steps mode
   // Conditional wizard steps (#139): a group's visible_when rules
@@ -15353,7 +15370,7 @@ function ItemEditFormView({
                                                     <CloneDialog
                                                       collection={collection}
                                                       itemId={itemId}
-                                                      fields={fieldConfig ?? []}
+                                                      fields={cloneFields}
                                                       relations={relations}
                                                       currentValues={itemData ?? {}}
                                                       onSuccess={(newId) =>

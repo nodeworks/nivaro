@@ -1,5 +1,6 @@
+import { fieldTitle, groupNeverCopied } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
-import { Check, Plus, X } from 'lucide-react'
+import { Check, ChevronDown, Plus, X } from 'lucide-react'
 import { useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -12,7 +13,7 @@ import {
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
-import { cn, titleCase } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 
 /**
  * `browser_config.never_copy` (Rob 2026-11-14) — fields a copy of a record never
@@ -20,16 +21,6 @@ import { cn, titleCase } from '@/lib/utils'
  * pipeline's state field, generated ids, read-only, hidden and "do not
  * duplicate" fields. Used by Clone, More → Duplicate and Save as template.
  */
-const REASON_WORDS: Record<string, string> = {
-  'pipeline-state': 'workflow step',
-  generated: 'generated id',
-  calculated: 'calculated',
-  rollup: 'total from lines',
-  'read-only': 'read-only',
-  'do-not-duplicate': 'marked do not duplicate',
-  hidden: 'hidden'
-}
-
 const LIST_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'files'])
 
 export function NeverCopySetting({
@@ -39,13 +30,16 @@ export function NeverCopySetting({
   onChange
 }: {
   collection: string
-  fields: Array<{ field: string; type: string }>
+  fields: Array<{ field: string; type: string; label?: string | null }>
   value: string[] | null | undefined
   onChange: (next: string[] | undefined) => void
 }) {
   const id = useId()
   const [open, setOpen] = useState(false)
+  const [showAuto, setShowAuto] = useState(false)
   const picked = (value ?? []).filter((f) => fields.some((x) => x.field === f))
+  const labelOf = (name: string) =>
+    fields.find((f) => f.field === name)?.label?.trim() || fieldTitle(name)
   // What the server leaves out on its own (field → reason), shown so nobody adds them twice.
   const rules = useQuery({
     queryKey: ['copy-rules', collection],
@@ -55,10 +49,10 @@ export function NeverCopySetting({
         .then((r) => r.data.data.skip ?? {}),
     staleTime: 0
   })
-  const automatic = Object.entries(rules.data ?? {}).filter(
-    ([f, why]) => REASON_WORDS[why] && fields.some((x) => x.field === f)
-  )
-  const autoSet = new Set(automatic.map(([f]) => f))
+  // Grouped by reason; the collection's own list is the chips above, never repeated here.
+  const automatic = groupNeverCopied(rules.data, fields).filter((g) => g.reason !== 'never-copy')
+  const autoCount = automatic.reduce((n, g) => n + g.fields.length, 0)
+  const autoSet = new Set(automatic.flatMap((g) => g.fields.map((f) => f.field)))
   const choosable = fields.filter(
     (f) => !LIST_TYPES.has(f.type) && f.field !== 'id' && !autoSet.has(f.field)
   )
@@ -74,7 +68,7 @@ export function NeverCopySetting({
           id={`nc-title-${id}`}
           className='text-[12.5px] font-medium text-slate-700 dark:text-foreground'
         >
-          Never copied when duplicating
+          Never copied (Clone, Duplicate, Save as template)
         </p>
         <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
           A copy is a new record: it starts at the first workflow step and leaves these fields
@@ -90,11 +84,11 @@ export function NeverCopySetting({
             key={f}
             className='inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 pl-2 pr-1 text-[12px] text-slate-700 dark:border-border dark:bg-muted/40 dark:text-foreground'
           >
-            {titleCase(f)}
+            {labelOf(f)}
             <button
               type='button'
               onClick={() => toggle(f)}
-              aria-label={`Copy ${titleCase(f)} again`}
+              aria-label={`Copy ${labelOf(f)} again`}
               className='ml-0.5 rounded p-0.5 text-slate-500 hover:bg-slate-200 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
             >
               <X className='h-3 w-3' />
@@ -126,7 +120,7 @@ export function NeverCopySetting({
                   {choosable.map((f) => (
                     <CommandItem
                       key={f.field}
-                      value={`${titleCase(f.field)} ${f.field}`}
+                      value={`${labelOf(f.field)} ${f.field}`}
                       onSelect={() => toggle(f.field)}
                       className='text-[12.5px]'
                     >
@@ -136,7 +130,7 @@ export function NeverCopySetting({
                           picked.includes(f.field) ? 'opacity-100' : 'opacity-0'
                         )}
                       />
-                      {titleCase(f.field)}
+                      {labelOf(f.field)}
                       <span className='ml-auto font-mono text-[10.5px] text-muted-foreground'>
                         {f.field}
                       </span>
@@ -148,20 +142,33 @@ export function NeverCopySetting({
           </PopoverContent>
         </Popover>
       </fieldset>
-      {automatic.length > 0 && (
-        <p
-          className='text-[11.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'
-          data-never-copy-automatic
-        >
-          Always left out:{' '}
-          {automatic.map(([f, why], i) => (
-            <span key={f}>
-              {i > 0 && ', '}
-              <span className='text-slate-700 dark:text-foreground'>{titleCase(f)}</span> (
-              {REASON_WORDS[why]})
-            </span>
-          ))}
-        </p>
+      {autoCount > 0 && (
+        <div data-never-copy-automatic>
+          <button
+            type='button'
+            aria-expanded={showAuto}
+            onClick={() => setShowAuto((v) => !v)}
+            className='inline-flex items-center gap-1 rounded text-[11.5px] text-slate-500 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-muted-foreground dark:hover:text-foreground'
+            data-never-copy-automatic-toggle
+          >
+            {autoCount === 1 ? '1 field is' : `${autoCount} fields are`} always left out
+            <ChevronDown className={cn('h-3 w-3 transition-transform', showAuto && 'rotate-180')} />
+          </button>
+          {showAuto && (
+            <dl className='mt-1.5 space-y-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] dark:border-border dark:bg-muted/40'>
+              {automatic.map((g) => (
+                <div key={g.label} className='flex gap-2'>
+                  <dt className='w-40 shrink-0 text-slate-500 dark:text-muted-foreground'>
+                    {g.label}
+                  </dt>
+                  <dd className='min-w-0 text-slate-700 dark:text-foreground'>
+                    {g.fields.map((f) => f.label).join(', ')}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </div>
       )}
     </div>
   )
