@@ -1468,6 +1468,7 @@ export function DataTable<T = Record<string, unknown>>({
                         return (
                           <React.Fragment key={group.key}>
                             <TableRow
+                              data-group-key={group.key}
                               className='nvr-row-enter cursor-pointer border-slate-200 bg-slate-50/80 transition-colors hover:bg-slate-100/80 dark:bg-muted/40'
                               onClick={() => onToggleGroup?.(group.key)}
                             >

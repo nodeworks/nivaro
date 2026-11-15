@@ -62,6 +62,7 @@ export * from './sections/live-conflicts.js'
 export * from './sections/live-editing.js'
 export * from './sections/live-feeds.js'
 export * from './sections/live-forms.js'
+export * from './sections/live-groups-drags.js'
 export * from './sections/live-lists.js'
 export * from './sections/live-ops.js'
 export * from './sections/live-outside.js'
@@ -337,6 +338,7 @@ import { liveEditingDocs } from './sections/live-editing.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { liveFormsDocs } from './sections/live-forms.js'
 import { liveSavesDocs } from './sections/live-saves.js'
+import { collabLiveGroupsDrags } from './sections/live-groups-drags.js'
 import { collabLiveConfig, collabLiveCounts, collabLiveLists } from './sections/live-lists.js'
 import {
   aiActionsDocs,
@@ -979,6 +981,7 @@ export const navSections: NavGroup[] = [
       collabOfflinePopout,
       collabLiveLists,
       liveSelectionDocs,
+      collabLiveGroupsDrags,
       collabChangedByOthers,
       collabChangedAfterApproval,
       liveScreensDocs,

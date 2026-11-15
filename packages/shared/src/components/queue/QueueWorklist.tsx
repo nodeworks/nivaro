@@ -98,6 +98,7 @@ import {
   takeListAway
 } from '../../lib/list-return'
 import { expandCoalesced, LIVE_ASPECTS, useLiveEvent } from '../../lib/live'
+import { movingRowTitle, useRowGlide, useSteadyGroups } from '../../lib/live-groups'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
 import {
   type BurstEvent,
@@ -903,6 +904,10 @@ export function QueueWorklist({
   const selectedCountRef = useRef(0)
   const viewRef = useRef<'table' | 'kanban' | 'workload'>('table')
   viewRef.current = view
+  // A grouped table (round 9 #16) shows the whole set's group counts: any write may move one,
+  // so it re-reads like the kanban does (one coalesced read per burst, as the viewer).
+  const groupedRef = useRef(false)
+  groupedRef.current = view === 'table' && !!groupBy
   // Realtime round 2 (2026-11-14, lib/live-list-flow.ts): an import or bulk change is one
   // quiet pill (#10); the list can be paused, and Resume applies what waited in one go (#11).
   const liveBurst = useLiveBurst()
@@ -1195,7 +1200,10 @@ export function QueueWorklist({
           if (fields.includes(LIVE_ASPECTS.owners) && visible) refresh = true
           if (fields.includes(LIVE_ASPECTS.state)) {
             // Off screen = the pill (a record entering by a pipeline start, army 4 a06-1).
-            const fx = stateAspectEffect(visible, viewRef.current === 'kanban')
+            const fx = stateAspectEffect(
+              visible,
+              viewRef.current === 'kanban' || groupedRef.current
+            )
             stats = true
             if (fx.refresh) refresh = true
             pill += fx.pill
@@ -1210,7 +1218,10 @@ export function QueueWorklist({
         }
         stats = true
         const own = ev?.collection != null && isOwnWrite(ev.collection, ev.item as string)
-        if (key && (visible || ev?.action === 'create' || viewRef.current === 'kanban')) {
+        if (
+          key &&
+          (visible || ev?.action === 'create' || viewRef.current === 'kanban' || groupedRef.current)
+        ) {
           refresh = true
           if (!own) livePendingRef.current.push({ key, by: null })
         } else pill += 1
@@ -1833,7 +1844,14 @@ export function QueueWorklist({
       placeholderData: (prev: { key: string; rows: QueueItemRow[] } | undefined) => prev
     }))
   })
-  const groupRowsStamp = groupRowQueries.map((q) => q.dataUpdatedAt).join(',')
+  // The open groups re-read together after a live change; their rows are drawn once every one
+  // has landed, so a record moving from one group to another never blinks out between the two
+  // reads (and can glide, lib/live-groups.ts).
+  const anyGroupFetching = groupRowQueries.some((q) => q.isFetching)
+  const settledGroupStampRef = useRef('')
+  if (!anyGroupFetching || !settledGroupStampRef.current)
+    settledGroupStampRef.current = groupRowQueries.map((q) => q.dataUpdatedAt).join(',')
+  const groupRowsStamp = settledGroupStampRef.current
   // biome-ignore lint/correctness/useExhaustiveDependencies: the stamp string is the dependency (useQueries results are a fresh array each render)
   const groupRows = useMemo(() => {
     const byKey = new Map<string, QueueItemRow[]>()
@@ -3073,9 +3091,49 @@ export function QueueWorklist({
     return key
   }
 
-  const rowGroups = groups?.map((g) => ({
+  // Grouped table (round 9 #16): counts follow the data; a row whose group changed glides
+  // there, or — while the pointer or focus rests in the table — holds and says where it goes.
+  const steadyGroups = useSteadyGroups(
+    (groups ?? []).map((g) => ({ ...g, rows: collapsedGroups.has(g.key) ? [] : g.rows })),
+    rowId,
+    rowChanges.rootRef,
+    {
+      enabled: view === 'table' && !!groupBy,
+      resetKey: JSON.stringify([
+        queueId,
+        scope,
+        sort,
+        debouncedFilterValues,
+        groupBy,
+        [...collapsedGroups],
+        groupPages
+      ])
+    }
+  )
+  useRowGlide(
+    rowChanges.rootRef,
+    steadyGroups.groups
+      .map((g) => `\u00a7${g.key}\u0002${g.rows.map(rowId).join('\u0001')}`)
+      .join('\u0003'),
+    {
+      enabled: view === 'table' && !!groupBy,
+      resetKey: JSON.stringify([queueId, scope, sort, debouncedFilterValues, groupBy])
+    }
+  )
+  const rowGone = (k: string) => steadyItems.isGone(k) || steadyGroups.isGone(k)
+  const rowMovingTo = (k: string) => {
+    const to = steadyGroups.movingTo(k)
+    return to == null ? null : groupKeyLabel(to)
+  }
+  const steadyRowsOf = new Map(steadyGroups.groups.map((sg) => [sg.key, sg.rows]))
+  const shownGroups: DisplayGroup[] | null = groups
+    ? steadyGroups.groups.map(
+        (sg) => sg.group ?? { key: sg.key, rows: [], breached: 0, atRisk: 0, count: 0, sums: {} }
+      )
+    : null
+  const rowGroups = shownGroups?.map((g) => ({
     key: g.key,
-    rows: g.rows,
+    rows: steadyRowsOf.get(g.key) ?? [],
     header: (
       <>
         <span>{groupKeyLabel(g.key)}</span>
@@ -3162,11 +3220,13 @@ export function QueueWorklist({
             stay aligned with each other and with the header. */}
           {rowLocks.get(rowId(row)) ||
           rowChanges.isNew(rowId(row)) ||
-          steadyItems.isGone(rowId(row)) ? (
+          rowGone(rowId(row)) ||
+          rowMovingTo(rowId(row)) != null ? (
             <LiveRowMark
               lock={rowLocks.get(rowId(row))}
               isNew={rowChanges.isNew(rowId(row))}
-              gone={steadyItems.isGone(rowId(row))}
+              gone={rowGone(rowId(row))}
+              movingTo={rowMovingTo(rowId(row))}
               dataAttr='data-queue-live-mark'
               hang
             />
@@ -5693,7 +5753,10 @@ export function QueueWorklist({
                   rowTitle={(row) => {
                     const lock = rowLocks.get(rowId(row))
                     return (
-                      (steadyItems.isGone(rowId(row)) ? GONE_ROW_TITLE : undefined) ??
+                      (rowGone(rowId(row)) ? GONE_ROW_TITLE : undefined) ??
+                      (rowMovingTo(rowId(row)) != null
+                        ? movingRowTitle(rowMovingTo(rowId(row)) as string)
+                        : undefined) ??
                       rowChanges.titleFor(rowId(row)) ??
                       (lock && !lock.is_mine ? lockLabel(lock) : undefined) ??
                       (isPickerExcluded(row.collection, row.item_id)
@@ -5705,7 +5768,7 @@ export function QueueWorklist({
                     cn(
                       rowHighlight(row),
                       isPickerExcluded(row.collection, row.item_id) && PICKER_EXCLUDED_ROW_CLASS,
-                      steadyItems.isGone(rowId(row)) && GONE_ROW_CLASS
+                      rowGone(rowId(row)) && GONE_ROW_CLASS
                     )
                   }
                   emptyMessage={

@@ -29,6 +29,7 @@ import {
 } from '../services/client-versions-cluster.js'
 import { ownUserRoom, scopeUserRoomsPerTenant } from '../services/cloud-user-rooms.js'
 import { defaultCoeditDeps, registerCoedit } from '../services/coedit-socket.js'
+import { createDragThrottle, parseDragMessage } from '../services/drag-relay.js'
 import {
   fieldChangeDelivery,
   relayableValue,
@@ -2313,6 +2314,32 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       }
     }
     socket.on('presence:watch', inSocketTenant(socket, onPresenceWatch))
+
+    // Round 9 #17 — a calendar entry / Gantt bar being dragged: passed on to the sockets that
+    // watch that record's row (services/drag-relay.ts). The dragger must watch the row itself
+    // (read gate) and may update the collection; ids, view and days only.
+    const dragThrottle = createDragThrottle()
+    const dragMayUpdate = new Map<string, Promise<boolean>>()
+    socket.on(
+      'record:drag',
+      inSocketTenant(socket, async (raw: unknown) => {
+        const user = authenticatedUser
+        const msg = parseDragMessage(raw)
+        if (!user || !msg) return
+        const watch = rowsRoomName(recordRoom(msg.collection, msg.item))
+        if (!watchedRows.has(watch)) return
+        if (!dragThrottle(`${msg.collection}:${msg.item}`, msg.phase, Date.now())) return
+        let allowed = dragMayUpdate.get(msg.collection)
+        if (!allowed) {
+          allowed = import('../services/permissions.js')
+            .then((m) => m.can(user, 'update', msg.collection))
+            .catch(() => false)
+          if (dragMayUpdate.size < 50) dragMayUpdate.set(msg.collection, allowed)
+        }
+        if (!(await allowed)) return
+        socket.to(watch).emit('record:drag', { ...msg, user_id: user.id })
+      })
+    )
     socket.on('presence:unwatch', (payload?: { collection?: string; items?: unknown }) => {
       const collection = payload?.collection
       if (typeof collection !== 'string' || !collection) {

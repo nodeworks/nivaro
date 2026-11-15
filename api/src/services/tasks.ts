@@ -321,6 +321,8 @@ export async function notifyAssignee(
     collection: task.collection,
     item: task.item,
     sender: actorId,
+    // Round 9 #14 — an urgent task may chime for a person who asked for it.
+    ...(task.priority === 'urgent' && !agentName ? { urgent: true } : {}),
     target: {
       kind: 'record',
       collection: task.collection,

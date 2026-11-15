@@ -7532,6 +7532,8 @@ interface BrowserConfig {
   bulk_actions?: string[] | null
   /** #2490 — live record events: on (default), batched id lists, or off (lists poll). */
   live_events?: 'on' | 'batched' | 'off'
+  /** Round 9 #14 — a yes/no field that marks a record urgent (api notification-urgent.ts). */
+  urgent_field?: string
   /** List search (`?search=`) only over these columns; absent = every string/text field. */
   search_fields?: string[]
   /** Search item 23 — extra text fields a labels-only global search also matches. */
@@ -7783,6 +7785,47 @@ function LiveEventsSetting({
   )
 }
 
+/**
+ * Round 9 #14 — which yes/no field marks a record of this collection urgent. A person who asked
+ * for it (Profile → "Play a sound for urgent items") hears one short chime when such a record
+ * lands on them; nothing else changes. Off (no field) by default.
+ */
+function UrgentFieldSetting({
+  fields,
+  value,
+  onChange
+}: {
+  fields: Array<{ field: string; type?: string | null; label?: string | null }>
+  value: string
+  onChange: (v: string) => void
+}) {
+  const flags = fields.filter((f) => String(f.type) === 'boolean')
+  return (
+    <div className='flex items-start justify-between gap-4' data-urgent-field={value || 'none'}>
+      <div className='min-w-0'>
+        <p className='text-[12.5px] font-medium text-slate-700 dark:text-foreground'>Urgent flag</p>
+        <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          {flags.length === 0
+            ? 'Needs a yes/no field. People who turned on the urgent sound hear a chime when a record with it on lands on them'
+            : 'A record with this yes/no field on counts as urgent: people who turned on the urgent sound hear a chime when it lands on them'}
+        </p>
+      </div>
+      <div className='w-44 shrink-0'>
+        <SimpleSelect
+          value={value}
+          onChange={onChange}
+          options={[
+            { value: '', label: 'None' },
+            ...flags.map((f) => ({ value: f.field, label: f.label || titleCase(f.field) }))
+          ]}
+          disabled={flags.length === 0}
+          ariaLabel='Urgent flag'
+        />
+      </div>
+    </div>
+  )
+}
+
 function BrowserSettingsSection({ tableName }: { tableName: string }) {
   const qc = useQueryClient()
   const { data: col } = useQuery({
@@ -7836,6 +7879,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
       'catalog_notice',
       'bulk_actions',
       'live_events',
+      'urgent_field',
       'search_fields',
       'label_search_fields',
       'inline_edit'
@@ -7859,6 +7903,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (Array.isArray(next.bulk_actions)) clean.bulk_actions = next.bulk_actions
     if (next.live_events === 'batched' || next.live_events === 'off')
       clean.live_events = next.live_events
+    if (next.urgent_field?.trim()) clean.urgent_field = next.urgent_field.trim()
     if (next.search_fields?.length) clean.search_fields = next.search_fields
     if (next.label_search_fields?.length) clean.label_search_fields = next.label_search_fields
     if (next.inline_edit) {
@@ -7963,6 +8008,11 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
         <LiveEventsSetting
           value={cfg.live_events ?? 'on'}
           onChange={(v) => void patch({ live_events: v })}
+        />
+        <UrgentFieldSetting
+          fields={col?.fields ?? []}
+          value={cfg.urgent_field ?? ''}
+          onChange={(v) => void patch({ urgent_field: v || undefined })}
         />
         <SearchFieldsSetting
           fields={col?.fields ?? []}

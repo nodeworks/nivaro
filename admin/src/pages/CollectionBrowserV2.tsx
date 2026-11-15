@@ -71,7 +71,7 @@ export function CollectionBrowserV2Page() {
   const extraViews = useMemo(() => {
     const dateFields = (meta?.fields ?? [])
       .filter((f) => ['date', 'datetime', 'timestamp'].includes(String(f.type)))
-      .map((f) => ({ field: f.field, label: f.label || f.field }))
+      .map((f) => ({ field: f.field, label: f.label || f.field, type: f.type ?? null }))
     const template = meta?.display_template ?? null
     const views = [
       {

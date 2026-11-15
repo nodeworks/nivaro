@@ -70,7 +70,9 @@ export const LIVE_PRESENCE_EVENTS: ReadonlySet<string> = new Set([
   // rt8 #21 — "Claude (for Rob) is updating this record".
   'record:agents',
   // Who is editing a budget / planning grid (round 8 item 22, lib/grid-presence.ts).
-  'grid:editing'
+  'grid:editing',
+  // Round 9 #17 — ghosts of others' calendar / Gantt drags.
+  'record:drag'
 ])
 
 /**

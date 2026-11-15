@@ -444,6 +444,7 @@ export {
 export { LiveNewMatchesPill } from './components/LiveNewMatchesPill'
 export { LIVE_OFF_TIP, LiveOffNote } from './components/LiveOffNote'
 export { LivePreferenceHost } from './components/LivePreferenceHost'
+export { DragClashNotice } from './components/DragClashNotice'
 export { LiveRowMark } from './components/LiveRowMark'
 export { LoadErrorNote } from './components/LoadErrorNote'
 export * from './components/layout-editor'
@@ -1081,7 +1082,34 @@ export * from './lib/live-data-changed'
 export * from './lib/live-deltas'
 export * from './lib/live-findings'
 export * from './lib/live-list'
+export {
+  addDays as dragAddDays,
+  applyDragMessage,
+  clashSentence,
+  clashWriter,
+  type DragGhost,
+  type DragPosition,
+  type DropResult,
+  dayKey as dragDayKey,
+  dayLabel as dragDayLabel,
+  dayOf as dragDayOf,
+  daysBetween as dragDaysBetween,
+  dragBaseRevision,
+  type KeyMove,
+  keyboardMove,
+  keyMoveAnnouncement,
+  type LiveDrag,
+  saveDrop,
+  spanLabel as dragSpanLabel,
+  TOUCH_LONG_PRESS_MS,
+  TOUCH_SLOP_PX,
+  useDragBaseBook,
+  useLiveDrag,
+  valueOnDay
+} from './lib/live-drag'
+export * from './lib/live-groups'
 export * from './lib/live-list-flow'
+export * from './lib/urgent-chime'
 export * from './lib/live-moves'
 export * from './lib/live-ops'
 export * from './lib/config-watch'

@@ -141,6 +141,7 @@ import {
 import { expandCoalesced, LIVE_ASPECTS, useLiveEvent } from '../lib/live'
 import { createCoalescer } from '../lib/live-counts'
 import { useLiveLinkLabels } from '../lib/live-link-labels'
+import { movingRowTitle, useRowGlide, useSteadyGroups } from '../lib/live-groups'
 import {
   conditionFields,
   flashRows,
@@ -304,8 +305,8 @@ import { usePickerExclusion } from './item-edit/RecordGrantTools'
 import { invalidateRecordQueries } from './item-edit/RecordLiveSync'
 import { relatedMissing } from './item-edit/related-missing'
 import { UserChip, UserRosterCluster } from './item-edit/UserChip'
-import { LiveBurstPill, LivePauseButton } from './LiveListControls'
 import { LiveCount } from './LiveCount'
+import { LiveBurstPill, LivePauseButton } from './LiveListControls'
 import { LiveRowMark } from './LiveRowMark'
 import { CopyListLinkButton } from './list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from './list/InlineEdit'
@@ -5971,13 +5972,16 @@ export function CollectionBrowserView({
     conditions: conditionsParam,
     search: appliedSearch,
     page,
-    grouped: !!groupBy
+    grouped: !!groupBy,
+    allLoaded: false
   })
   liveCtxRef.current = {
     conditions: conditionsParam,
     search: appliedSearch,
     page,
-    grouped: !!groupBy
+    grouped: !!groupBy,
+    // A grouped list holding every row (≤ 500): a new record can join its group in place.
+    allLoaded: !!groupBy && !aiResult && total <= 500
   }
   const liveOwner = useRef({}).current
   // rt2 #17 — owners of this collection's records may have moved without a write to them
@@ -6206,7 +6210,7 @@ export function CollectionBrowserView({
       }
       if (disposed) return
       const condFields = conditionFields(ctx.conditions)
-      const canPlace = ctx.page === 1 && !ctx.grouped
+      const canPlace = (ctx.page === 1 && !ctx.grouped) || ctx.allLoaded
       const patches = new Map<string, Record<string, unknown>>()
       const removed: string[] = []
       const added: Array<{ row: Record<string, unknown>; ev: CollectionUpdateEvent }> = []
@@ -8150,8 +8154,11 @@ export function CollectionBrowserView({
   type CbvEntry =
     | { kind: 'header'; gkey: string; label: string; count: number }
     | { kind: 'row'; row: Record<string, unknown> }
-  const renderList: CbvEntry[] = (() => {
-    if (!groupBy) return steadyRows.rows.map((row) => ({ kind: 'row' as const, row }))
+  // Grouped (round 9 #16): the counts follow the data at once; a row whose grouping field
+  // changed glides to its new group — unless the pointer or focus rests in the list, then the
+  // arrangement holds (lib/live-groups.ts) and the row says where it is going.
+  const groupedNext = (() => {
+    if (!groupBy) return []
     const buckets = new Map<string, Array<Record<string, unknown>>>()
     for (const row of rows) {
       const g = groupValueOf(row)
@@ -8164,14 +8171,33 @@ export function CollectionBrowserView({
       if (b === '(empty)') return -1
       return a.localeCompare(b, undefined, { numeric: true })
     })
-    const out: CbvEntry[] = []
-    for (const g of keys) {
+    return keys.map((g) => {
       const bucket = buckets.get(g) ?? []
-      out.push({ kind: 'header', gkey: g, label: g, count: bucket.length })
-      if (!collapsedGroups.has(g)) for (const row of bucket) out.push({ kind: 'row', row })
+      return { key: g, count: bucket.length, rows: collapsedGroups.has(g) ? [] : bucket }
+    })
+  })()
+  const groupsResetKey = `${JSON.stringify(itemsKeyRef.current)}|${groupBy}|${[...collapsedGroups].join('\u0001')}`
+  const steadyGroups = useSteadyGroups(groupedNext, (r) => String(r.id), rowChanges.rootRef, {
+    enabled: !!groupBy && !aiResult,
+    resetKey: groupsResetKey
+  })
+  const rowGone = (k: string) => steadyRows.isGone(k) || steadyGroups.isGone(k)
+  const renderList: CbvEntry[] = (() => {
+    if (!groupBy) return steadyRows.rows.map((row) => ({ kind: 'row' as const, row }))
+    const out: CbvEntry[] = []
+    for (const g of steadyGroups.groups) {
+      out.push({ kind: 'header', gkey: g.key, label: g.key, count: g.group?.count ?? 0 })
+      for (const row of g.rows) out.push({ kind: 'row', row })
     }
     return out
   })()
+  useRowGlide(
+    rowChanges.rootRef,
+    renderList
+      .map((e) => (e.kind === 'header' ? `\u00a7${e.gkey}` : String(e.row.id)))
+      .join('\u0001'),
+    { enabled: !!groupBy && !aiResult, resetKey: groupsResetKey }
+  )
   // The row that holds the list's one tab stop: the last row focused while it is still
   // listed, else the first row (army8 review M9: every row was a Tab stop, 50 before the pager).
   const [rowFocusKey, setRowFocusKey] = useState<string | null>(null)
@@ -10856,6 +10882,7 @@ export function CollectionBrowserView({
                         return (
                           <tr
                             key={`__group__${entry.gkey}`}
+                            data-group-key={entry.gkey}
                             onClick={() =>
                               setCollapsedGroups((prev) => {
                                 const next = new Set(prev)
@@ -10918,19 +10945,22 @@ export function CollectionBrowserView({
                           {...rowOpenProps(id)}
                           data-row-key={String(id)}
                           title={
-                            (steadyRows.isGone(String(id)) ? GONE_ROW_TITLE : undefined) ??
+                            (rowGone(String(id)) ? GONE_ROW_TITLE : undefined) ??
+                            (steadyGroups.movingTo(String(id)) != null
+                              ? movingRowTitle(steadyGroups.movingTo(String(id)) as string)
+                              : undefined) ??
                             rowChanges.titleFor(String(id)) ??
                             (rowLock && !rowLock.is_mine ? lockLabel(rowLock) : undefined) ??
                             (risk ? `At risk — ${risk.rule}` : undefined) ??
                             (pickerExcluded ? PICKER_EXCLUDED_TITLE : undefined)
                           }
                           data-picker-excluded={pickerExcluded ? '' : undefined}
-                          data-row-gone={steadyRows.isGone(String(id)) ? '' : undefined}
+                          data-row-gone={rowGone(String(id)) ? '' : undefined}
                           style={enterStyle}
                           className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-nvr-cyan/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan dark:border-slate-800 dark:hover:bg-nvr-cyan/[0.08] ${
                             isSelected ? 'bg-nvr-cyan/[0.08]' : (riskTint ?? '')
                           } ${pickerExcluded ? PICKER_EXCLUDED_ROW_CLASS : ''} ${
-                            steadyRows.isGone(String(id)) ? GONE_ROW_CLASS : ''
+                            rowGone(String(id)) ? GONE_ROW_CLASS : ''
                           }`}
                         >
                           {/* stopPropagation only — the checkbox's own onChange
@@ -10943,11 +10973,13 @@ export function CollectionBrowserView({
                               <span className='flex items-center gap-1'>
                                 {rowLock ||
                                 rowChanges.isNew(String(id)) ||
-                                steadyRows.isGone(String(id)) ? (
+                                rowGone(String(id)) ||
+                                steadyGroups.movingTo(String(id)) != null ? (
                                   <LiveRowMark
                                     lock={rowLock}
                                     isNew={rowChanges.isNew(String(id))}
-                                    gone={steadyRows.isGone(String(id))}
+                                    gone={rowGone(String(id))}
+                                    movingTo={steadyGroups.movingTo(String(id))}
                                     dataAttr='data-cbv-live-mark'
                                   />
                                 ) : rowViewers[rowPresenceKey(collection, String(id))] ? (
