@@ -17,13 +17,16 @@ export function QueueBulkBar({
   onClear,
   children,
   figures,
-  notices
+  notices,
+  onActionIntent
 }: {
   count: number
   /** rt8 — the selection's live count + sums (replaces "N selected"). */
   figures?: ReactNode
   /** rt8 — "open by Beth" / "changed since you picked them", drawn above the bar. */
   notices?: ReactNode
+  /** rt8 — the person reached for one of the bar's actions (pointer or keyboard). */
+  onActionIntent?: () => void
   states: Array<{ value: string; label: string }>
   busy: boolean
   claimsEnabled?: boolean
@@ -47,7 +50,16 @@ export function QueueBulkBar({
     // line (white-space inherits) and a bar wider than the window scrolls sideways instead.
     <div className='nvr-slide-up-centered fixed bottom-6 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2'>
       {notices}
-      <div className='flex max-w-full items-center gap-1 overflow-x-auto whitespace-nowrap rounded-full border border-slate-200 bg-white px-4 py-2 shadow-lg dark:border-border dark:bg-card [&>*]:shrink-0'>
+      <div
+        onPointerDownCapture={(e) => {
+          if ((e.target as Element | null)?.closest?.('button')) onActionIntent?.()
+        }}
+        onKeyDownCapture={(e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          if ((e.target as Element | null)?.closest?.('button')) onActionIntent?.()
+        }}
+        className='flex max-w-full items-center gap-1 overflow-x-auto whitespace-nowrap rounded-full border border-slate-200 bg-white px-4 py-2 shadow-lg dark:border-border dark:bg-card [&>*]:shrink-0'
+      >
         <span className='mr-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
           {figures ?? `${count} selected`}
         </span>
