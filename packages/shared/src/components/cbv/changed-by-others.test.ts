@@ -5,6 +5,8 @@ import {
   changedCondition,
   changedFilterEntry,
   changedPhrase,
+  changedTip,
+  changedWindowShort,
   changedWindowText,
   customChangedValue,
   isChangedFilter,
@@ -52,6 +54,15 @@ describe('changed by others chip', () => {
     expect(changedPhrase(changedFilterEntry('1h'))).toBe('changed by others in the last hour')
     expect(changedPhrase({ value: '7d', not: true })).toBe(
       'not changed by others in the last 7 days'
+    )
+  })
+
+  it('keeps the chip short and the tooltip explanatory', () => {
+    expect(changedWindowShort('24h')).toBe('24 hours')
+    expect(changedWindowShort('1h')).toBe('1 hour')
+    expect(changedWindowShort(customChangedValue('2026-11-12T09:00', '')!)).toMatch(/– now$/)
+    expect(changedTip({ value: '2d' })).toBe(
+      'Records someone else created, edited or moved in the last 2 days. Click to change the period.'
     )
   })
 

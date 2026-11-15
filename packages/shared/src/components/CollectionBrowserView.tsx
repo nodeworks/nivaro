@@ -3378,8 +3378,7 @@ function FilterBar({
     // applied chips follow. No basis / responsive width pairs here: hosts load their own CSS after
     // full.css, so a host's plain flex-1 or w-full would win over them.
     <div className='flex min-w-[min(19rem,100%)] flex-1 flex-wrap items-center gap-2'>
-      {/* 12rem floor: chips after the pair wrap to a new line instead of squeezing search away. */}
-      <div className='flex min-w-[min(12rem,100%)] max-w-[24rem] flex-1 items-center gap-2'>
+      <div className='flex min-w-0 max-w-[24rem] flex-1 items-center gap-2'>
         {/* Search */}
         <div className='relative min-w-0 flex-1'>
           <Search
@@ -3682,16 +3681,8 @@ function FilterBar({
         </div>
       </div>
 
-      {/* Changed by others — its own chip with a period picker (realtime 2026-11-14) */}
-      <ChangedByOthersChip
-        filter={filters.find(isChangedFilter)}
-        onChange={(next) => {
-          const rest = filters.filter((x) => !isChangedFilter(x))
-          onFiltersChange(next ? [...rest, next] : rest)
-        }}
-      />
-
-      {/* Applied chips — click to edit in place */}
+      {/* Applied chips — click to edit in place ("Changed by others" is a toolbar pill of its
+          own, beside the quick filters). */}
       {filters
         .filter((f) => !isChangedFilter(f))
         .map((f) => {
@@ -4544,6 +4535,11 @@ const CBV_KIND_SHAPE: Partial<Record<string, CellShape>> = {
 
 /** Rows changed since the person last opened the active view: opaque, so pinned cells match. */
 const VIEW_CHANGED_ROW_CLASS = 'bg-[#f4fcfe] dark:bg-[#10232b]'
+/** …and on its pinned cells: the same tint, and on hover the colour the row's own hover wash
+ *  comes to over the table (cyan 4% light / 8% dark, flattened and measured), so a hovered
+ *  changed row never looks split at the pinned edge. */
+const VIEW_CHANGED_STICKY_CLASS =
+  'bg-[#f4fcfe] group-hover:bg-[#f5fdff] dark:bg-[#10232b] dark:group-hover:bg-[#233741]'
 
 /** The leading mark for such a row (the unseen dot's slot; a hollow ring, quieter than it). */
 function ViewChangedMark() {
@@ -8128,14 +8124,18 @@ export function CollectionBrowserView({
   // labels the list already has (field labels, option lists in the query
   // cache). Never a fetch per filter: an unlabelled pick reads "one of 2 picked".
   const sentenceNarrowed = !!(appliedSearch || conditionsParam || activeViewId != null)
-  const { data: grandTotal } = useQuery({
-    queryKey: ['cbv-grand-total', collection],
+  // `approx`: the unfiltered total came from the approximate count, so the sentence says
+  // "1 of about 85,607" — the same words the pager uses for that figure.
+  const { data: grandTotalRes } = useQuery({
+    queryKey: ['cbv-grand-total', collection, 'with-approx'],
     queryFn: () =>
       client
-        .request<{ total?: number | null }>(
+        .request<{ total?: number | null; total_approx?: boolean }>(
           get(`/items/${collection}`, { limit: 1, fields: 'id', count: 'approx' })
         )
-        .then((r) => (typeof r.total === 'number' ? r.total : null)),
+        .then((r) =>
+          typeof r.total === 'number' ? { n: r.total, approx: r.total_approx === true } : null
+        ),
     enabled: !!collection && scopeGateOpen && !aiResult && sentenceNarrowed,
     staleTime: 5 * 60_000,
     retry: false
@@ -8332,7 +8332,8 @@ export function CollectionBrowserView({
       search: appliedSearch,
       clauses,
       shown: totalUnknown ? null : total,
-      of: grandTotal ?? null,
+      of: grandTotalRes?.n ?? null,
+      ofApprox: grandTotalRes?.approx === true,
       approx: totalApprox
     })
   })()
@@ -8560,6 +8561,16 @@ export function CollectionBrowserView({
           filters={filters}
           onFiltersChange={(f) => {
             setFilters(f)
+            setPage(1)
+          }}
+        />
+        {/* Changed by others (realtime 2026-11-14): a pill with a period picker, kept in the
+            list's filters so saved views and links carry it. */}
+        <ChangedByOthersChip
+          filter={filters.find(isChangedFilter)}
+          onChange={(next) => {
+            const rest = filters.filter((x) => !isChangedFilter(x))
+            setFilters(next ? [...rest, next] : rest)
             setPage(1)
           }}
         />
@@ -10551,8 +10562,10 @@ export function CollectionBrowserView({
                       // into their sticky cells so pinned columns match the row.
                       const stickyBg = isSelected
                         ? 'bg-[#e6fafe] dark:bg-[#0c2a33]'
-                        : (riskTint ??
-                          'bg-white group-hover:bg-[#f2fcff] dark:bg-slate-900 dark:group-hover:bg-[#0e2d3a]')
+                        : !risk && viewChangedRow
+                          ? VIEW_CHANGED_STICKY_CLASS
+                          : (riskTint ??
+                            'bg-white group-hover:bg-[#f2fcff] dark:bg-slate-900 dark:group-hover:bg-[#0e2d3a]')
                       return (
                         <tr
                           key={String(id)}

@@ -80,6 +80,33 @@ export function changedWindowText(value: unknown): string {
   return CHANGED_PERIODS.find((p) => p.value === v)?.short ?? 'last 24 hours'
 }
 
+const SHORT: Record<string, string> = {
+  '1h': '1 hour',
+  '24h': '24 hours',
+  '2d': '2 days',
+  '5d': '5 days',
+  '7d': '7 days'
+}
+
+/** The chip's short form: "24 hours" / "Nov 12 – Nov 13" / "Nov 12 – now". */
+export function changedWindowShort(value: unknown): string {
+  const v = String(value ?? '')
+  const custom = parseCustomChanged(v)
+  if (custom) {
+    const md = (iso: string) =>
+      new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    return `${md(custom.since)} – ${custom.until ? md(custom.until) : 'now'}`
+  }
+  return SHORT[v] ?? '24 hours'
+}
+
+/** The chip's tooltip: what the filter keeps (the chip itself is short). */
+export function changedTip(f: { value: unknown; not?: boolean }): string {
+  const w = changedWindowText(f.value)
+  const when = parseCustomChanged(String(f.value ?? '')) ? w : `in the ${w}`
+  return `Records someone else ${f.not ? 'did not change' : 'created, edited or moved'} ${when}. Click to change the period.`
+}
+
 /** The filter-sentence phrase. */
 export function changedPhrase(f: { value: unknown; not?: boolean }): string {
   const w = changedWindowText(f.value)
@@ -146,23 +173,27 @@ export function ChangedByOthersChip({
       {filter ? (
         <span
           data-cbv-changed-chip='on'
-          className='nvr-pop-in inline-flex h-8 min-w-0 max-w-full items-center gap-1 overflow-hidden whitespace-nowrap rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 pl-2 pr-1 text-[12px] text-slate-700 dark:text-slate-100'
+          className='nvr-pop-in inline-flex h-8 min-w-0 max-w-full items-center gap-1 overflow-hidden whitespace-nowrap rounded-full border border-nvr-cyan/50 bg-nvr-cyan/10 pl-2.5 pr-1 text-[12px] font-medium text-slate-700 dark:text-slate-100'
         >
           <PopoverTrigger asChild>
             <button
               type='button'
-              aria-label={`${CHANGED_LABEL}: ${changedWindowText(current)}. Change the period`}
-              className='inline-flex min-w-0 items-center gap-1.5'
+              aria-label={`${filter.not ? 'Not changed' : 'Changed'} by others, ${changedWindowText(current)}. Change the period`}
+              data-tip={changedTip(filter)}
+              className='inline-flex min-w-0 items-center gap-1'
             >
               <History
                 aria-hidden
                 className='h-3.5 w-3.5 shrink-0 text-[#0089a8] dark:text-nvr-cyan'
               />
-              <span className='min-w-0 shrink-[10] truncate'>
-                {filter.not ? 'Not changed by others' : CHANGED_LABEL}
+              {/* "Changed" always stays; "by others" gives way first on a narrow toolbar. */}
+              <span className='ml-0.5 shrink-0'>{filter.not ? 'Not changed' : 'Changed'}</span>
+              <span className='min-w-0 truncate'>by others</span>
+              <span aria-hidden className='shrink-0 text-slate-400'>
+                ·
               </span>
-              <span className='min-w-0 truncate font-semibold text-[#04516b] dark:text-nvr-cyan'>
-                {changedWindowText(current)}
+              <span className='shrink-0 font-semibold text-[#04516b] dark:text-nvr-cyan'>
+                {changedWindowShort(current)}
               </span>
             </button>
           </PopoverTrigger>
@@ -181,14 +212,19 @@ export function ChangedByOthersChip({
             type='button'
             data-cbv-changed-chip='off'
             data-tip='Show only records other people changed recently'
-            className='inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-dashed border-slate-300 px-2.5 text-[12.5px] text-slate-500 hover:border-slate-400 hover:text-slate-700 dark:border-slate-600 dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-200'
+            className='inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed border-slate-300 px-2.5 text-[12.5px] text-slate-500 hover:border-slate-400 hover:text-slate-700 dark:border-slate-600 dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-200'
           >
             <History aria-hidden className='h-3.5 w-3.5' />
             {CHANGED_LABEL}
           </button>
         </PopoverTrigger>
       )}
-      <PopoverContent align='start' className='w-64 p-1' data-cbv-changed-picker=''>
+      <PopoverContent
+        align='start'
+        collisionPadding={16}
+        className='w-64 max-w-[calc(100vw-32px)] p-1'
+        data-cbv-changed-picker=''
+      >
         <p className='px-2 pb-1 pt-1.5 text-[11px] text-slate-500 dark:text-slate-400'>
           Records someone else created, edited or moved
         </p>
@@ -231,7 +267,7 @@ export function ChangedByOthersChip({
               />
             </label>
             <label className='block text-[11px] text-slate-500 dark:text-slate-400'>
-              To <span className='text-slate-400'>(empty = now)</span>
+              To
               <input
                 type='datetime-local'
                 value={to}
@@ -239,6 +275,9 @@ export function ChangedByOthersChip({
                 className='mt-0.5 h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[12.5px] text-slate-800 outline-none focus:border-nvr-cyan/50 focus:ring-2 focus:ring-nvr-cyan/30 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:[color-scheme:dark]'
               />
             </label>
+            <p className='text-[11px] text-slate-500 dark:text-slate-400'>
+              Leave To empty to look up to now.
+            </p>
             {from && !customValue && (
               <p className='text-[11px] text-amber-700 dark:text-amber-400'>
                 The end must come after the start.
