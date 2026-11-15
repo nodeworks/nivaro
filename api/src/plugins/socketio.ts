@@ -29,8 +29,8 @@ import {
 import { ownUserRoom, scopeUserRoomsPerTenant } from '../services/cloud-user-rooms.js'
 import {
   fieldChangeDelivery,
-  type RelayViewer,
-  relayableValue
+  relayableValue,
+  relayViewers
 } from '../services/field-change-relay.js'
 import { fieldFocusTracker } from '../services/field-focus.js'
 import {
@@ -93,6 +93,7 @@ import {
   boardStats,
   boardUsersOnPath,
   boardUsersOnPathPrefix,
+  boardViewerEntry,
   isGateRoom,
   type LocalBoard,
   onPeerBoardChange,
@@ -533,13 +534,23 @@ export function localBoardCollector(io: SocketIOServer | null = _ioRef): BoardCo
   return { live: () => collectLocalLive(io), stats: () => collectLocalStats(io) }
 }
 
+/** What signed a local socket in (SocketBind kind), or undefined when not known. */
+function socketBindKind(io: SocketIOServer | null, socketId: string): string | undefined {
+  const kind = (io?.sockets.sockets.get(socketId)?.data?.nvrBind as { kind?: unknown } | undefined)
+    ?.kind
+  return typeof kind === 'string' ? kind : undefined
+}
+
 /** The live part (every second): counts, viewers, page pings, gate rooms, topic viewers. */
 function collectLocalLive(io: SocketIOServer | null): LocalBoard['live'] {
   const users = new Set<string>()
   for (const m of socketMeta.values()) if (m.user) users.add(m.user.id)
   const viewers: LocalBoard['live']['viewers'] = {}
+  // The bind kind lets another process's keystroke relay keep values from API-key sockets.
   for (const [room, map] of recordViewers)
-    viewers[room] = [...map].map(([socket, v]) => ({ socket, id: v.id, name: v.name }))
+    viewers[room] = [...map].map(([socket, v]) =>
+      boardViewerEntry(socket, v, socketBindKind(io, socket))
+    )
   const rooms: Record<string, number> = {}
   for (const [room, set] of io?.sockets.adapter.rooms ?? [])
     if (isGateRoom(room)) rooms[room] = set.size
@@ -2283,16 +2294,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           const record = recordOf(room)
           const base = { ...record, field, user: { id: user.id, name: displayName(user) } }
           const me = String(user.id).toLowerCase()
-          const bindKind = (sid: string) =>
-            (io.sockets.sockets.get(sid)?.data?.nvrBind as { kind?: string } | undefined)?.kind
-          const viewers: RelayViewer[] = [
-            ...[...(recordViewers.get(room)?.entries() ?? [])].map(([sid, v]) => ({
-              socket: sid,
-              id: String(v.id),
-              kind: bindKind(sid)
-            })),
-            ...boardPeerViewers(room).map((v) => ({ socket: v.socket, id: String(v.id) }))
-          ].filter((v) => !!v.socket && v.socket !== socket.id && v.id.toLowerCase() !== me)
+          const viewers = relayViewers(
+            recordViewers.get(room)?.entries() ?? [],
+            (sid) => socketBindKind(io, sid),
+            boardPeerViewers(room)
+          ).filter((v) => v.socket !== socket.id && v.id.toLowerCase() !== me)
           if (viewers.length === 0 || !record.collection) return
           const namesOnly = { valueTo: [] as string[], nameTo: viewers.map((v) => v.socket) }
           let delivery = namesOnly

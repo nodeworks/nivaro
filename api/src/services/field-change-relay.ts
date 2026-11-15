@@ -19,7 +19,9 @@ import { currentTenantKey } from './tenant-rooms.js'
  *    the record read (`readOne`) projects with, `getAllowedFields(user, 'read', collection)`.
  *    A View-as socket is signed in as the viewed person, so it is judged as that person.
  *    A socket signed in with an API key is never sent the value (its key may narrow what the
- *    person reads, and that narrowing is not re-judged here).
+ *    person reads, and that narrowing is not re-judged here), and neither is a socket whose
+ *    sign-in kind is not known — sockets on other processes carry the kind their process
+ *    published on the realtime board; an older process publishes none (fail closed).
  *
  * Everyone else in the room gets the same event without `value` ("Beth is editing Amount").
  * Answers are sent to socket ids, never to `user:` rooms — a person's other tabs and devices
@@ -55,6 +57,35 @@ export interface RelayViewer {
   socket: string
   id: string
   kind?: string
+}
+
+/**
+ * Sign-in kinds whose socket is exactly its person, so the person's field list decides.
+ * `apikey` is left out (a key may narrow what the person reads); a missing or unknown kind —
+ * a board entry from an older process, a socket not yet bound — is never sent a value.
+ */
+const VALUE_KINDS = new Set(['session', 'masq', 'token', 'device'])
+
+/**
+ * The sockets viewing one record room: this process's (`local`, kind read from the socket) and
+ * the other processes' from the realtime board (`peers`, kind as that process published it).
+ */
+export function relayViewers(
+  local: Iterable<[string, { id: string }]>,
+  localKind: (socketId: string) => string | undefined,
+  peers: ReadonlyArray<{ socket: string; id: string; kind?: string }>
+): RelayViewer[] {
+  const out: RelayViewer[] = []
+  for (const [sid, v] of local)
+    if (sid) out.push({ socket: sid, id: String(v.id), kind: localKind(sid) })
+  for (const p of peers)
+    if (p?.socket)
+      out.push({
+        socket: String(p.socket),
+        id: String(p.id),
+        kind: typeof p.kind === 'string' ? p.kind : undefined
+      })
+  return out
 }
 
 const MASKING_SPECIAL = new Set(['hash', 'conceal', 'password', 'secret'])
@@ -165,7 +196,7 @@ export async function fieldChangeDelivery(
   await Promise.all(
     sockets.map(async (v) => {
       const sid = String(v.socket)
-      if (v.kind === 'apikey') {
+      if (!v.kind || !VALUE_KINDS.has(v.kind)) {
         nameTo.push(sid)
         return
       }
