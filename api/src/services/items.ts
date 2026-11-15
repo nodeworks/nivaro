@@ -6545,8 +6545,14 @@ async function applyAliasO2MWrites(
           m.id,
           { [m.fk]: m.from, _change_reason: 'Move undone: a later row was refused' },
           req,
-          workspaceId
+          workspaceId,
+          { callerPayload }
         )
+        const back = (await db(m.collection).where({ id: m.id }).first(m.fk)) as
+          | Record<string, unknown>
+          | undefined
+        if (String(back?.[m.fk] ?? '').toLowerCase() !== String(m.from ?? '').toLowerCase())
+          throw new Error('the link was not put back')
       } catch {
         try {
           await db(m.collection)
@@ -6611,7 +6617,12 @@ async function applyAliasO2MWrites(
           const from = before[w.fk] ?? null
           if (from != null && String(from).toLowerCase() === String(parentId).toLowerCase())
             continue
-          await updateOne(user, w.collection, mid, { [w.fk]: parentId }, req, workspaceId)
+          // As the caller's own write (callerPayload): a link field this caller
+          // may not set (read-only, admin-only edit, outside their field list)
+          // is dropped, and the check below refuses the move.
+          await updateOne(user, w.collection, mid, { [w.fk]: parentId }, req, workspaceId, {
+            callerPayload
+          })
           moved.push({ collection: w.collection, fk: w.fk, id: mid, from })
           // The link may be a field this caller's write drops (read-only, a
           // locked row rule): a move that did not land is a refusal, never a

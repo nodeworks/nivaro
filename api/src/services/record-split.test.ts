@@ -20,7 +20,8 @@ const state = {
   createThrows: null as Error | null,
   created: [] as Array<{ collection: string; data: Record<string, unknown>; opts: unknown }>,
   junction: [] as Array<Record<string, unknown>>,
-  activity: [] as Array<Record<string, unknown>>
+  activity: [] as Array<Record<string, unknown>>,
+  allowedCreate: ['*'] as string[] | null
 }
 
 const RELS = [
@@ -87,7 +88,8 @@ const FIELDS: Array<{
   { field: 'lines', special: ['o2m'] },
   { field: 'zones', special: ['m2m'] },
   { field: 'files', special: ['files'] },
-  { field: 'split_from' }
+  { field: 'split_from' },
+  { field: 'priority', options: { admin_only_edit: true } }
 ]
 
 function chain(rows: () => unknown) {
@@ -128,7 +130,8 @@ vi.mock('./permissions.js', () => ({
       : action === 'update' && collection === 'request_lines'
         ? state.canUpdateChild
         : true,
-  getAllowedFields: async () => ['*']
+  getAllowedFields: async (_u: unknown, action: string) =>
+    action === 'create' ? state.allowedCreate : ['*']
 }))
 vi.mock('./edit-lock.js', () => {
   class EditLockedError extends Error {
@@ -190,7 +193,8 @@ const {
   splitNoteText,
   splitOverrideValues,
   splitRecord,
-  splitSkipReason
+  splitSkipReason,
+  notWritableByCaller
 } = await import('./record-split.js')
 
 const ON = { line_split: { enabled: true, relations: ['request_lines.request'] } }
@@ -205,6 +209,7 @@ beforeEach(() => {
     title: 'Node build',
     warehouse: 7,
     partner_status: 'shipped',
+    priority: 'high',
     order_number: 'SO-1',
     external_id: 'X9',
     total: 12,
@@ -228,6 +233,7 @@ beforeEach(() => {
   state.created = []
   state.junction = [{ zones_id: 3 }, { zones_id: 4 }]
   state.activity = []
+  state.allowedCreate = ['*']
 })
 
 describe('the per-collection switch', () => {
@@ -271,9 +277,11 @@ describe('the header copy (the Duplicate rules)', () => {
   const skip = new Set(['state', 'partner_status'])
 
   it('copies only fields people see and type', () => {
+    // admin-only edit is about who may WRITE it (notWritableByCaller), not the copy rules.
     expect(splitHeaderValues(state.source as Record<string, unknown>, FIELDS, skip)).toEqual({
       title: 'Node build',
-      warehouse: 7
+      warehouse: 7,
+      priority: 'high'
     })
   })
 
@@ -358,7 +366,8 @@ describe('splitRecord', () => {
       zones: [3, 4],
       lines: { move: ['L2', 'L3'] }
     })
-    expect(opts).toMatchObject({ scopeGuard: true })
+    // Judged as the caller's own payload, like POST /items (read-only, admin-only dropped).
+    expect(opts).toMatchObject({ scopeGuard: true, callerPayload: true })
     // Both records name each other; the comment carries ids, never labels.
     expect(state.activity.map((a) => [a.action, a.item])).toEqual([
       ['split-out', 'R1'],
@@ -501,5 +510,75 @@ describe('the Notes entry', () => {
     expect(splitNoteText({ direction: 'in', lines: 3 })).toBe(
       'Created from another record — 3 lines moved here'
     )
+  })
+})
+
+describe('only what the caller could write on a create', () => {
+  it('leaves out unlisted, read-only and admin-only fields for non-admins', () => {
+    const f = [
+      { field: 'title' },
+      { field: 'warehouse' },
+      { field: 'locked', readonly: true },
+      { field: 'priority', options: { admin_only_edit: true } }
+    ]
+    expect([...notWritableByCaller(f, ['title', 'locked', 'priority'], false)]).toEqual([
+      'warehouse',
+      'locked',
+      'priority'
+    ])
+    expect([...notWritableByCaller(f, ['*'], false)]).toEqual(['locked', 'priority'])
+    expect([...notWritableByCaller(f, null, false)]).toEqual(['locked', 'priority'])
+    expect([...notWritableByCaller(f, ['title'], true)]).toEqual([])
+  })
+
+  it('does not copy an admin-only field for a non-admin, but does for an admin', async () => {
+    await splitRecord(req(), 'requests', 'R1', {
+      relation: 'request_lines.request',
+      line_ids: ['L1']
+    })
+    expect(state.created[0].data).not.toHaveProperty('priority')
+    state.created = []
+    await splitRecord(req({ isAdmin: true }), 'requests', 'R1', {
+      relation: 'request_lines.request',
+      line_ids: ['L1']
+    })
+    expect(state.created[0].data).toMatchObject({ priority: 'high' })
+  })
+
+  it("drops fields outside the caller's create list and the caller's own values for them", async () => {
+    state.allowedCreate = ['title', 'lines', 'zones']
+    await splitRecord(req(), 'requests', 'R1', {
+      relation: 'request_lines.request',
+      line_ids: ['L1'],
+      values: { warehouse: 11 }
+    })
+    expect(state.created[0].data).toEqual({
+      title: 'Node build',
+      zones: [3, 4],
+      lines: { move: ['L1'] }
+    })
+  })
+
+  it('refuses when the caller may not write the lines list on a new record', async () => {
+    state.allowedCreate = ['title']
+    await expect(
+      splitRecord(req(), 'requests', 'R1', { relation: 'request_lines.request', line_ids: ['L1'] })
+    ).rejects.toMatchObject({ statusCode: 403, code: 'FORBIDDEN' })
+    expect(state.created).toHaveLength(0)
+  })
+
+  it('moves each line as the caller (items.ts passes callerPayload to the move and its undo)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('./items.ts', import.meta.url), 'utf8')
+    const move = src.slice(src.indexOf('for (const mid of w.moves)'))
+    expect(move.slice(0, 2000)).toMatch(
+      /updateOne\(user, w\.collection, mid, \{ \[w\.fk\]: parentId \}, req, workspaceId, \{\s*callerPayload\s*\}\)/
+    )
+    expect(move.slice(0, 2500)).toContain('NESTED_MOVE_REFUSED')
+    const undo = src.slice(
+      src.indexOf("'Move undone: a later row was refused'"),
+      src.indexOf("'Move undone: a later row was refused'") + 300
+    )
+    expect(undo).toMatch(/\{ callerPayload \}/)
   })
 })

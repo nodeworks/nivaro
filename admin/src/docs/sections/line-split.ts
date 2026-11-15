@@ -29,7 +29,7 @@ export const lineSplitDocs: DocSection = {
     { type: 'h2', id: 'line-split-copy', text: 'What is copied' },
     {
       type: 'p',
-      text: 'The same fields More → Duplicate copies: what people see and type on the form. Never copied: the id, created/updated stamps, generated ids (they get a new number), calculated values, hidden fields (integration ids and status mirrors), read-only fields, fields marked “do not duplicate”, the pipeline state, and the record’s files. Many-to-many lists (zones, years, people) are copied unless the setting is off.'
+      text: 'The same fields More → Duplicate copies: what people see and type on the form. Never copied: the id, created/updated stamps, generated ids (they get a new number), calculated values, hidden fields (integration ids and status mirrors), read-only fields, fields marked “do not duplicate”, the pipeline state, and the record’s files. Many-to-many lists (zones, years, people) are copied unless the setting is off. Only what the person could set on a new record copies: fields outside their field permissions and admin-only fields (for non-administrators) take their defaults, and each line moves as their own change, so a link they may not change refuses the move.'
     },
     { type: 'h2', id: 'line-split-setup', text: 'Turning it on (administrators)' },
     {

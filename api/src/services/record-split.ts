@@ -187,6 +187,28 @@ export function splitOverrideValues(
   return out
 }
 
+/**
+ * The fields this caller may not write on a create, as the create route judges
+ * a caller's own payload (items.ts dropServerSetFields): outside their create
+ * field list, or marked admin-only edit, for anyone but an administrator.
+ * (Read-only fields never copy anyway.) The copy leaves them out, so the new
+ * record gets their defaults, exactly as if the person had filled the form.
+ */
+export function notWritableByCaller(
+  fields: FieldMeta[],
+  allowedCreate: string[] | null,
+  isAdmin: boolean
+): Set<string> {
+  const out = new Set<string>()
+  if (isAdmin) return out
+  const listed = allowedCreate && !allowedCreate.includes('*') ? new Set(allowedCreate) : null
+  for (const f of fields) {
+    if (listed && !listed.has(f.field)) out.add(f.field)
+    else if (f.readonly || optionsOf(f).admin_only_edit === true) out.add(f.field)
+  }
+  return out
+}
+
 /** A refusal said in plain words, with the status and code the route answers. */
 export class SplitRefusal extends Error {
   constructor(
@@ -494,11 +516,29 @@ export async function splitRecord(
     alias
   ])
   if (cfg.link_field) skip.add(cfg.link_field)
+  // Only what this person could set on a normal create: the rest takes its
+  // default on the new record (the create below is judged as their own payload).
+  const notWritable = notWritableByCaller(
+    fields,
+    req.isAdmin ? null : await getAllowedFields(user, 'create', collection).catch(() => []),
+    !!req.isAdmin
+  )
+  if (notWritable.has(alias))
+    throw new SplitRefusal(
+      403,
+      'FORBIDDEN',
+      'You cannot add lines to a new record of this kind, so lines cannot be moved to one.'
+    )
+  for (const f of notWritable) skip.add(f)
   const header: Record<string, unknown> = {
     ...splitHeaderValues(source, fields, skip),
     ...splitOverrideValues(body.values, fields, skip)
   }
-  if (cfg.link_field && fields.some((f) => f.field === cfg.link_field))
+  if (
+    cfg.link_field &&
+    !notWritable.has(cfg.link_field) &&
+    fields.some((f) => f.field === cfg.link_field)
+  )
     header[cfg.link_field] = source.id ?? id
   const links = cfg.copy_links ? await linkSetsToCopy(user, collection, id, rels, fields, skip) : {}
 
@@ -512,7 +552,9 @@ export async function splitRecord(
       { ...header, ...links, [alias]: { move: picked } },
       req,
       workspaceId,
-      { outcome, scopeGuard: true }
+      // The caller's own payload, like POST /items: read-only, admin-only and
+      // unlisted fields are dropped, and each moved line is judged the same way.
+      { outcome, scopeGuard: true, callerPayload: true }
     )) as Record<string, unknown> | null
   } catch (err) {
     if (err instanceof items.ForbiddenError)
