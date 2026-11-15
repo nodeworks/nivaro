@@ -55,6 +55,7 @@ import { InlineEditSetting } from '@/components/inline-edit-setting'
 import { LabelSearchFieldsSetting } from '@/components/label-search-fields-setting'
 import { LineSplitCard } from '@/components/line-split-card'
 import { PagePresence } from '@/components/page-presence'
+import { PickerBadgesCard } from '@/components/picker-badges-card'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -4370,6 +4371,7 @@ function SettingsTab({
       <ItemLockingSection tableName={tableName} />
       <AddendumsSection tableName={tableName} />
       <PickerFilterSection tableName={tableName} />
+      <PickerBadgesCard tableName={tableName} />
       <HeavyListColumnsCard collection={tableName} />
       <BrowserSettingsSection tableName={tableName} />
       <DuplicateCheckCard tableName={tableName} />

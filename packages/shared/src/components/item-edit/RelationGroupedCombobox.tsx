@@ -7,6 +7,7 @@ import { pickerOptionsMeta } from '../../lib/live-pickers'
 import { cn, matchesAllTokens } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
 import { NAMELESS_LABEL } from './option-disambiguate'
+import { RecordPickerBadges } from './PickerBadges'
 import { useStaleTip } from './RelationCombobox'
 
 type Item = Record<string, unknown>
@@ -406,6 +407,7 @@ export function RelationGroupedCombobox({
           >
             {isStale && <AlertTriangle className='h-3.5 w-3.5 shrink-0 text-amber-500' />}
             <span className='truncate'>{triggerLabel ?? placeholder ?? 'Select…'}</span>
+            {!!value && !!selectedItem && <RecordPickerBadges collection={collection} id={value} />}
           </span>
         )}
         <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />

@@ -27,6 +27,7 @@ function labelInitials(label: string): string {
 }
 
 import { pickerOptionsMeta } from '../../lib/live-pickers'
+import { useOptionBadges } from '../../lib/picker-badges'
 import { queryKeys } from '../../lib/query-keys'
 import { cn, matchesAllTokens, userOptionFilter } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
@@ -36,6 +37,7 @@ import {
   isNamelessLabel,
   NAMELESS_LABEL
 } from './option-disambiguate'
+import { PickerBadgeList, RecordPickerBadges } from './PickerBadges'
 import { type PickerMissPlacement, usePickerMissReport } from './picker-miss'
 import {
   labelOnlyMatches,
@@ -722,6 +724,13 @@ export function RelationCombobox({
         ),
     [shownOptions, serverSort, tmpl, query, optionSort, pinnedId, value, anyNamed]
   )
+  // rt6 #12 — status badges beside the options (On hold, Closed, Inactive…), as the viewer.
+  // People pickers have their own marks (avatar, online dot).
+  const optionBadges = useOptionBadges(
+    collection,
+    listOptions.map((item) => item.id as string | number),
+    open && !isUserCollection
+  )
   // The pinned (Default) row is offered while the box is empty, and while
   // typing only when the text matches it — otherwise it sat at index 0 above
   // the match and Enter wrote the default (army8 review H1).
@@ -965,6 +974,9 @@ export function RelationCombobox({
                 </>
               )}
               <span className='truncate'>{selectedLabel ?? placeholder ?? 'Select…'}</span>
+              {!!value && !!selected && !isUserCollection && (
+                <RecordPickerBadges collection={collection} id={value} />
+              )}
             </span>
           )}
           <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
@@ -1185,6 +1197,7 @@ export function RelationCombobox({
                         )}
                         {/* The typed words marked in the label (lib/search-text.ts). */}
                         <SearchHighlight text={label} query={query} />
+                        <PickerBadgeList badges={optionBadges[String(item.id)]} />
                         {dupDetail.has(String(item.id)) && (
                           <span
                             className='ml-auto max-w-[45%] shrink-0 truncate pl-2 text-[11.5px] text-muted-foreground'

@@ -5169,6 +5169,9 @@ export function CollectionBrowserView({
         label={columnLabel(key)}
         choices={f ? inlineChoices(f) : undefined}
         target={kind === 'm2o' ? inlineM2oTarget(relations, collection, key) : null}
+        collection={collection}
+        itemId={row.id as string | number}
+        field={key}
         onCommit={(v, dir) => commitInlineCell(row, key, kind, v, dir)}
       >
         {node}

@@ -43,6 +43,9 @@ export type RecordAspect =
   | '$approvals'
   /** rt4 #6 — the record was hidden from or shown in pickers again (routes/picker-exclusions.ts). */
   | '$picker'
+  /** rt6 #15 — someone started or stopped editing a list cell of the record in place
+   *  (services/cell-locks.ts; lists re-read who holds which cell). */
+  | '$cells'
 
 export function announceRecordAspect(
   collection: string | null | undefined,

@@ -61,6 +61,7 @@ import { bulkActionsRoutes } from './bulk-actions.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { cacheConfigRoutes } from './cache-config.js'
 import { catalogRelatedRoutes } from './catalog-related.js'
+import { cellLockRoutes } from './cell-locks.js'
 import { changeProposalRoutes } from './change-proposals.js'
 import { changeSetsRoutes } from './change-sets.js'
 import { changesRoutes } from './changes.js'
@@ -235,6 +236,7 @@ import { payloadTemplateRoutes } from './payload-templates.js'
 import { pdfTemplatesRoutes } from './pdf-templates.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
 import { personSummaryRoutes } from './person-summary.js'
+import { pickerBadgeRoutes } from './picker-badges.js'
 import { pickerExclusionRoutes } from './picker-exclusions.js'
 import { pickerMissRoutes } from './picker-misses.js'
 import { pickerNarrowingRoutes } from './picker-narrowing.js'
@@ -825,6 +827,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(scimRoutes, { prefix: '/scim/v2' })
   await app.register(pdfTemplatesRoutes, { prefix: '/pdf-templates' })
   await app.register(pickerExclusionRoutes, { prefix: '/picker-exclusions' })
+  // rt6 — status badges in pickers + soft locks on list cells being edited in place.
+  await app.register(pickerBadgeRoutes, { prefix: '/picker-badges' })
+  await app.register(cellLockRoutes, { prefix: '/cell-locks' })
   await app.register(erpSubmissionsRoutes, { prefix: '/erp-submissions' })
   await app.register(syncJobsRoutes, { prefix: '/sync-jobs' })
   await app.register(workflowsRoutes, { prefix: '/workflows' })
