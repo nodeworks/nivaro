@@ -13,6 +13,7 @@
 
 import { startMissedUpdateDetector } from './missed-updates'
 import { isSignedOut, isSignedOutError, noteUnauthorized } from './signed-out'
+import { startWriteToScreen } from './write-to-screen'
 
 interface RumEvent {
   route: string
@@ -343,6 +344,11 @@ export function startRum(opts?: {
   startMissedUpdateDetector({
     routePattern: (p) => toPattern(p),
     send: (body) => sendTelemetry('/realtime/missed-updates', body)
+  })
+  // rt5 item 25: how long others' saves take to show on this tab (sampled, batched).
+  startWriteToScreen({
+    screen: () => toPattern(window.location.pathname),
+    send: (samples) => sendTelemetry('/rum/screen-timing', { app: appName, samples })
   })
 
   const nav = performance.getEntriesByType('navigation')[0] as

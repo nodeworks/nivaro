@@ -93,6 +93,7 @@ export * from './sections/security.js'
 export * from './sections/sql-checks.js'
 export * from './sections/storage.js'
 export * from './sections/summary-mode.js'
+export * from './sections/team-board.js'
 export * from './sections/team-throughput.js'
 export * from './sections/tree-advanced.js'
 export * from './sections/trees.js'
@@ -520,6 +521,7 @@ import {
   storageProviders
 } from './sections/storage.js'
 import { summaryMode } from './sections/summary-mode.js'
+import { collabTeamBoard } from './sections/team-board.js'
 import {
   managersTeamGuide,
   peoplePageGuide,
@@ -943,6 +945,7 @@ export const navSections: NavGroup[] = [
       collabTabCount,
       collabLiveSetting,
       collabLiveTrace,
+      collabTeamBoard,
       collabNotificationsCenter,
       collabUserActivityFeed,
       collabKeyboardShortcuts,

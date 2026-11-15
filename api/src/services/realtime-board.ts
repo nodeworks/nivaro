@@ -568,6 +568,17 @@ export function boardUsersOnPath(
   return [...seen.values()]
 }
 
+/** Page pings of one tenant held by OTHER realtime processes (one entry per socket) — the
+ *  admin team board (rt5) merges them with this process's own. */
+export function boardPeerPages(tenant: string): Array<PageAtData & { socket: string }> {
+  const out: Array<PageAtData & { socket: string }> = []
+  for (const b of liveView()) {
+    if (b.node === INSTANCE_ID) continue
+    for (const p of b.pages ?? []) if (p.user && p.tenant === tenant) out.push(p)
+  }
+  return out
+}
+
 /** Users whose latest page ping sits under any of `prefixes`. */
 export function boardUsersOnPathPrefix(prefixes: string[], tenant: string): string[] {
   const ids = new Set<string>()

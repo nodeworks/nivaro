@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { liveCollectionEventPasses, liveEventQuiet } from './live-preference'
 import { noteLiveSeen } from './live-seen'
+import { noteWriteToScreenEvent } from './write-to-screen'
 
 /**
  * Realtime sprint client contract. A HOST (admin, a portal app) owns the actual
@@ -107,6 +108,8 @@ export function withLiveSeenTap(adapter: RealtimeAdapter): RealtimeAdapter {
       // The person's live-updates setting (lib/live-preference.ts): Off drops others' writes
       // here, once, for every surface that reads through the adapter.
       if (!liveCollectionEventPasses(ev as never)) return
+      // rt5 item 25: a sampled event starts a write-to-screen timing (deduped per event).
+      noteWriteToScreenEvent(ev)
       cb(ev)
     })
   // Named events the setting quiets (presence in Calm/Off, data notices in Off).

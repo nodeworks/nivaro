@@ -13,6 +13,7 @@ import {
   liveCollectionEventPasses,
   liveEventQuiet,
   measureClockOffset,
+  noteWriteToScreenEvent,
   parseSignOutNote,
   type RealtimeAdapter,
   type RealtimeStatus,
@@ -704,7 +705,10 @@ export const adminRealtime: RealtimeAdapter = {
     // Live updates Off (Profile → Display): others' writes stop here for the admin's direct
     // subscribers too (the shared tap filters what reads through the context).
     const cb: typeof deliver = (ev) => {
-      if (liveCollectionEventPasses(ev as never)) deliver(ev)
+      if (!liveCollectionEventPasses(ev as never)) return
+      // rt5 item 25: admin pages subscribed here time others' saves too (deduped per event).
+      noteWriteToScreenEvent(ev)
+      deliver(ev)
     }
     const w = viaWorker()
     if (w) return w.subscribeCollections(collections, cb)

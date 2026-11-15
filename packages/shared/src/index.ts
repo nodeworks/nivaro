@@ -993,6 +993,14 @@ export * from './lib/live-queries'
 export * from './lib/live-screen'
 export * from './lib/live-search'
 export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
+export {
+  createWriteToScreenSampler,
+  noteWriteToScreenEvent,
+  startWriteToScreen,
+  type W2SDeps,
+  type W2SSample,
+  type W2SSampler
+} from './lib/write-to-screen'
 export * from './lib/live-views'
 export * from './lib/live-widgets'
 export {

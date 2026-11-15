@@ -322,6 +322,7 @@ import { supportRoutes } from './support.js'
 import { syncJobsRoutes } from './sync-jobs.js'
 import { tasksRoutes } from './tasks.js'
 import { teamMiscRoutes, teamUserRoutes } from './team.js'
+import { teamBoardRoutes } from './team-board.js'
 import { teamsBotRoutes } from './teams-bot.js'
 import { telemetryRoutes } from './telemetry.js'
 import { testDataRoutes } from './test-data.js'
@@ -345,6 +346,7 @@ import { buildWidgetScript, widgetRoutes } from './widget.js'
 import { widgetsInternalRoutes } from './widgets-internal.js'
 import { workflowsRoutes } from './workflows.js'
 import { workspacesRoutes } from './workspaces.js'
+import { writeToScreenAdminRoutes, writeToScreenBeaconRoutes } from './write-to-screen.js'
 import { zapierRoutes } from './zapier.js'
 
 export async function registerRoutes(app: FastifyInstance) {
@@ -577,6 +579,11 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(realtimeBuildRoutes, { prefix: '/realtime' })
   // Realtime ideas 14/15 — missed-update beacons (signed in) + their report (admin).
   await app.register(realtimeTrustRoutes, { prefix: '/realtime' })
+  // rt5 — admin team board (who is on which record now) + write-to-screen times (admin) and
+  // their beacon (signed in, under /rum so it rides the RUM telemetry rules).
+  await app.register(teamBoardRoutes, { prefix: '/realtime' })
+  await app.register(writeToScreenAdminRoutes, { prefix: '/realtime' })
+  await app.register(writeToScreenBeaconRoutes, { prefix: '/rum' })
   // #2463 / #2477 / #2478 / #2760 — realtime verification tooling (admin).
   await app.register(realtimeVerifyRoutes, { prefix: '/realtime' })
   // Outside-write watcher setting + what it caught (admin).
