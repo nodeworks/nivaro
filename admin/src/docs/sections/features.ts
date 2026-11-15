@@ -336,7 +336,7 @@ export const userComments: DocSection = {
     },
     {
       type: 'p',
-      text: 'In the posted comment the image shows inline. Click it to open it full size. Anyone who can open the record can see the picture, and nobody else can. Notifications and previews show it as a short "[image]" note.'
+      text: 'In the posted comment the image shows inline. Click it to open it full size. Anyone who can open the record can see the picture, and nobody else can. For a comment on a single field, only people who can read that field see the picture. Notifications and previews show it as a short "[image]" note.'
     },
     { type: 'h3', text: 'Mentions' },
     { type: 'p', text: 'When a user is mentioned they receive:' },

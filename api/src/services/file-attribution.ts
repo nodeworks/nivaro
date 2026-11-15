@@ -49,8 +49,10 @@ import { currentTenantKey } from './tenant-rooms.js'
 
 export type AttributionTrust = 'table' | 'author' | 'owner'
 
+// A record use's `field` is set when it is a comment on ONE field: it then reads only for
+// people who may read that field (file-access.ts), like the comment itself.
 export type FileAttribution = (
-  | { kind: 'record'; collection: string; id: string }
+  | { kind: 'record'; collection: string; id: string; field?: string }
   | { kind: 'room'; room: string }
   | { kind: 'ticket'; id: number }
   | { kind: 'poster'; of: string }
@@ -178,7 +180,7 @@ function naming(q: any, column: string, only: string[] | undefined, prefix = '')
 }
 
 /** The live sources (built lazily); with `only`, just the rows naming those file ids. */
-function liveQueries(only?: string[]) {
+function liveQueries(only?: string[], fieldComments = false) {
   return {
     chat: () =>
       naming(
@@ -208,7 +210,7 @@ function liveQueries(only?: string[]) {
           ),
         'text',
         only
-      ).select('collection', 'item', 'user', 'text'),
+      ).select('collection', 'item', 'user', 'text', ...(fieldComments ? ['field'] : [])),
     posters: () =>
       naming(db('nivaro_files').where('tags', 'like', '%poster:%'), 'tags', only, 'poster:').select(
         'id',
@@ -222,7 +224,8 @@ async function readLive(only?: string[]): Promise<Index> {
   const index: Index = new Map()
   const failed = new Set<string>()
   index.failed = failed
-  const q = liveQueries(only)
+  const { hasFieldCommentColumns } = await import('./field-comments.js')
+  const q = liveQueries(only, await hasFieldCommentColumns().catch(() => false))
   const read = (name: keyof typeof q) => rows<LiveRow>(q[name], () => failed.add(name))
   const [chat, tickets, addendums, comments, posters] = await Promise.all([
     read('chat'),
@@ -251,8 +254,15 @@ async function readLive(only?: string[]): Promise<Index> {
   for (const r of comments) {
     const collection = String(r.collection ?? '')
     if (!collection || isSystemCollection(collection) || r.item == null) continue
+    const field = r.field ? String(r.field) : undefined
     for (const id of idsIn(r.text))
-      addTo(index, id, { kind: 'record', collection, id: String(r.item), ...byAuthor(r.user) })
+      addTo(index, id, {
+        kind: 'record',
+        collection,
+        id: String(r.item),
+        ...(field ? { field } : {}),
+        ...byAuthor(r.user)
+      })
   }
   for (const r of posters) {
     // Record editors may re-tag a clip, so who wrote the tag can't be told:

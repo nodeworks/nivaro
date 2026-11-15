@@ -32,7 +32,8 @@ const state = vi.hoisted(() => ({
   logged: [] as unknown[],
   incomplete: new Set<string>(),
   refsFail: false,
-  attrsThrow: false
+  attrsThrow: false,
+  fieldReaders: new Set<string>()
 }))
 
 vi.mock('../../../db/index.js', () => ({
@@ -72,6 +73,12 @@ vi.mock('../../../services/file-attribution.js', () => ({
     }
     return out
   })
+}))
+vi.mock('../../../services/field-comments.js', () => ({
+  fieldCommentGate: vi.fn(
+    async (user: { id: string }, isAdmin: boolean) => (f: string | null) =>
+      isAdmin || !f || state.fieldReaders.has(String(user.id))
+  )
 }))
 vi.mock('../../../services/chat.js', () => ({
   parseRoom: (room: string) =>
@@ -157,6 +164,7 @@ beforeEach(() => {
   state.incomplete = new Set()
   state.refsFail = false
   state.attrsThrow = false
+  state.fieldReaders = new Set()
 })
 
 describe('reading a record attachment', () => {
@@ -279,6 +287,48 @@ describe('reading a file used without a foreign key', () => {
     // …and reads once its record does.
     state.readable.add('372786')
     expect(await mayReadFile(file, req('MEMBER'))).toBe(true)
+  })
+})
+
+describe('an image pasted into a FIELD comment follows that field', () => {
+  const use = (extra: Record<string, unknown> = {}) => ({
+    kind: 'record',
+    collection: 'workflows',
+    id: '99',
+    by: 'ADMIN-1',
+    trust: 'author',
+    adminIf: ['ADMIN-1'],
+    ...extra
+  })
+  beforeEach(() => {
+    state.refs = []
+    state.readable.add('99')
+  })
+
+  it('reads for someone who can read the field, 404s for a record-only reader, and admins read', async () => {
+    state.attrs.set(FILE.toUpperCase(), [use({ field: 'amount' })])
+    state.fieldReaders.add('FIELDREADER')
+    expect(await mayReadFile(file, req('FIELDREADER'))).toBe(true)
+    expect(await mayReadFile(file, req('RECORDONLY'))).toBe(false)
+    expect((await readableFileIds([file], req('RECORDONLY'))).size).toBe(0)
+    expect(await mayReadFile(file, req('ADMIN', true))).toBe(true)
+  })
+
+  it('a record-wide comment still reads for any record reader', async () => {
+    state.attrs.set(FILE.toUpperCase(), [use()])
+    expect(await mayReadFile(file, req('RECORDONLY'))).toBe(true)
+  })
+
+  it('the same file also used in a normal comment follows the normal rules', async () => {
+    state.attrs.set(FILE.toUpperCase(), [use({ field: 'amount' }), use()])
+    expect(await mayReadFile(file, req('RECORDONLY'))).toBe(true)
+  })
+
+  it('a field reader who cannot open the record still gets nothing', async () => {
+    state.readable.delete('99')
+    state.attrs.set(FILE.toUpperCase(), [use({ field: 'amount' })])
+    state.fieldReaders.add('FIELDREADER')
+    expect(await mayReadFile(file, req('FIELDREADER'))).toBe(false)
   })
 })
 

@@ -235,6 +235,21 @@ async function grantedWithoutFkInner(
     user,
     of('record').map((a) => ({ collection: a.collection, id: a.id }))
   )
+  // A use that is only a comment on one field reads like that field: the reader must
+  // also be allowed to read it (record-wide comments and every other use skip this).
+  const fieldGates = new Map<string, (field: string | null | undefined) => boolean>()
+  const fieldCollections = [
+    ...new Set(
+      of('record')
+        .filter((a) => a.field)
+        .map((a) => a.collection)
+    )
+  ]
+  if (fieldCollections.length > 0) {
+    const { fieldCommentGate } = await import('./field-comments.js')
+    for (const c of fieldCollections)
+      fieldGates.set(c, await fieldCommentGate(user, !!req.isAdmin, c))
+  }
   const rooms = new Set<string>()
   const roomList = [...new Set(of('room').map((a) => a.room))]
   if (roomList.length > 0) {
@@ -266,7 +281,9 @@ async function grantedWithoutFkInner(
       case 'shared':
         return true
       case 'record':
-        return records.has(refKey(a))
+        return (
+          records.has(refKey(a)) && (!a.field || (fieldGates.get(a.collection)?.(a.field) ?? false))
+        )
       case 'room':
         return rooms.has(a.room)
       case 'ticket':
