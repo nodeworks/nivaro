@@ -177,6 +177,54 @@ export function changedWidgetIds(
   return out
 }
 
+// ── Their version beside yours (rt4 #14) ─────────────────────────────────────
+
+export interface ConfigFieldDiff {
+  key: string
+  label: string
+  theirs: string
+  mine: string
+}
+
+function shown(v: unknown): string {
+  if (v == null || v === '') return '—'
+  if (typeof v === 'string') return v.length > 300 ? `${v.slice(0, 300)}…` : v
+  if (typeof v === 'boolean') return v ? 'On' : 'Off'
+  let s: string
+  try {
+    s = JSON.stringify(v)
+  } catch {
+    s = String(v)
+  }
+  return s.length > 300 ? `${s.slice(0, 300)}…` : s
+}
+
+const canon = (v: unknown): string => {
+  if (v == null || v === '') return ''
+  try {
+    return JSON.stringify(v)
+  } catch {
+    return String(v)
+  }
+}
+
+/**
+ * The fields where someone else's saved copy differs from the form being edited, in the order
+ * `labels` lists them (pure; exported for tests). Values are shown as short text, never edited.
+ */
+export function diffConfigFields(
+  mine: Record<string, unknown>,
+  theirs: Record<string, unknown>,
+  labels: Record<string, string>
+): ConfigFieldDiff[] {
+  const out: ConfigFieldDiff[] = []
+  for (const [key, label] of Object.entries(labels)) {
+    if (canon(mine[key]) === canon(theirs[key])) continue
+    out.push({ key, label, theirs: shown(theirs[key]), mine: shown(mine[key]) })
+  }
+  return out
+}
+
 // ── No silent overwrite ──────────────────────────────────────────────────────
 
 /** The header a whole-object save carries: the `updated_at` the editor loaded. */

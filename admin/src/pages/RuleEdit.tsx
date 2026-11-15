@@ -3,7 +3,9 @@ import {
   type AudiencePreview,
   audienceConfirmFromError,
   ConfigChangeStrip,
+  ConfigTheirsPanel,
   configBaseRevHeaders,
+  diffConfigFields,
   isConfigStale,
   useConfigWatch
 } from '@nivaro/shared'
@@ -89,6 +91,29 @@ type Rule = {
   conditions: unknown
   actions: RuleAction[] | null
   updated_at?: string | null
+}
+
+/** The parts of a rule the editor saves, in the form's shape (rt4 #14 diff + dirty check). */
+function ruleBody(r: Rule) {
+  return {
+    name: r.name ?? '',
+    collection: r.collection ?? '',
+    trigger: r.trigger ?? 'before_create',
+    enabled: r.enabled ?? true,
+    sort: r.sort ?? 0,
+    conditions: serializeConditions(parseConditions(r.conditions)),
+    actions: r.actions ?? []
+  }
+}
+
+const RULE_FIELD_LABELS: Record<string, string> = {
+  name: 'Name',
+  collection: 'Collection',
+  trigger: 'Trigger',
+  enabled: 'Enabled',
+  sort: 'Order',
+  conditions: 'Conditions',
+  actions: 'Actions'
 }
 
 function isGroup(node: ConditionLeaf | ConditionGroup): node is ConditionGroup {
@@ -1140,29 +1165,29 @@ export function RuleEditPage() {
     meId: user?.id
   })
   const [stale, setStale] = useState(false)
-  const loadedBody = useMemo(
-    () =>
-      data
-        ? JSON.stringify({
-            name: data.name ?? '',
-            collection: data.collection ?? '',
-            trigger: data.trigger ?? 'before_create',
-            enabled: data.enabled ?? true,
-            sort: data.sort ?? 0,
-            conditions: serializeConditions(parseConditions(data.conditions)),
-            actions: data.actions ?? []
-          })
-        : null,
-    [data]
-  )
-  const ruleDirty =
-    loadedBody != null &&
-    loadedBody !==
-      JSON.stringify({ ...form, conditions: serializeConditions(conditionGroup), actions })
-  const showTheirs = () => {
-    void queryClient.invalidateQueries({ queryKey: ['rules', id] })
+  // Their saved copy, opened beside the form (never into it) while there are unsaved edits.
+  const [theirs, setTheirs] = useState<Rule | null>(null)
+  // "Keep mine" after seeing theirs: the next save goes over the copy they saw.
+  const [baseOverride, setBaseOverride] = useState<string | null>(null)
+  const loadedBody = useMemo(() => (data ? JSON.stringify(ruleBody(data)) : null), [data])
+  const mineBody = { ...form, conditions: serializeConditions(conditionGroup), actions }
+  const ruleDirty = loadedBody != null && loadedBody !== JSON.stringify(mineBody)
+  const takeTheirs = (fresh: Rule) => {
+    setTheirs(null)
+    setBaseOverride(null)
     clearChange()
     setStale(false)
+    // Re-seeds the form (the load effect) from their copy — only on this explicit choice.
+    queryClient.setQueryData(['rules', id], fresh)
+  }
+  const showTheirs = async () => {
+    const fresh = await api
+      .get(`/rules/${id}`)
+      .then((r) => r.data.data as Rule)
+      .catch(() => null)
+    if (!fresh) return
+    if (!ruleDirty) takeTheirs(fresh)
+    else setTheirs(fresh)
   }
   const save = useMutation({
     mutationFn: (body: Record<string, unknown> & { __force?: boolean }) => {
@@ -1171,7 +1196,7 @@ export function RuleEditPage() {
         ? api.post('/rules', rest).then((r) => r.data)
         : api
             .patch(`/rules/${id}`, rest, {
-              headers: __force ? {} : configBaseRevHeaders(data?.updated_at)
+              headers: __force ? {} : configBaseRevHeaders(baseOverride ?? data?.updated_at)
             })
             .then((r) => r.data)
     },
@@ -1286,18 +1311,31 @@ export function RuleEditPage() {
             onCancel={() => setAudienceAsk(null)}
           />
         )}
-        {(change || stale) && (
+        {(change || stale) && !theirs && (
           <ConfigChangeStrip
             className='-mx-8 -mb-4 mt-3 border-b-0 border-t'
             change={change}
             stale={stale}
             dirty={ruleDirty}
-            showDiscards
-            onShow={showTheirs}
+            onShow={() => void showTheirs()}
             onSaveAnyway={() => {
               if (lastBody.current) save.mutate({ ...lastBody.current, __force: true })
             }}
             onDismiss={() => {
+              clearChange()
+              setStale(false)
+            }}
+          />
+        )}
+        {theirs && (
+          <ConfigTheirsPanel
+            className='-mx-8 -mb-4 mt-3 border-b-0 border-t'
+            who={change?.by?.name ?? 'Their'}
+            rows={diffConfigFields(mineBody, ruleBody(theirs), RULE_FIELD_LABELS)}
+            onTakeTheirs={() => takeTheirs(theirs)}
+            onKeepMine={() => {
+              setBaseOverride(theirs.updated_at ?? null)
+              setTheirs(null)
               clearChange()
               setStale(false)
             }}

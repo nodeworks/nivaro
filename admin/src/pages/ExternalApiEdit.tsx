@@ -1,6 +1,8 @@
 import {
   ConfigChangeStrip,
+  ConfigTheirsPanel,
   configBaseRevHeaders,
+  diffConfigFields,
   isConfigStale,
   queryKeys,
   useConfigWatch
@@ -21,7 +23,7 @@ import {
   Trash2,
   Workflow
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { ConfigHistoryButton } from '@/components/config-history'
@@ -124,6 +126,81 @@ function withoutBodySecrets<T extends Record<string, unknown>>(cfg: T): T {
   return rest as T
 }
 
+/** The editor's form as a saved API reads (the load seed; rt4 #14 also diffs against it). */
+function formFromApi(data: ExternalApi): FormState {
+  return {
+    name: data.name,
+    base_url: data.base_url,
+    description: data.description ?? '',
+    auth_type: data.auth_type,
+    auth_config: (data.auth_config ?? {}) as Record<string, string>,
+    headers: Object.entries(data.headers ?? {}).map(([key, value]) => ({
+      key,
+      value: String(value)
+    })),
+    enabled: data.enabled,
+    integration_type: data.integration_type ?? '',
+    owner_user: data.owner_user ?? null,
+    ack_grace_minutes: data.ack_grace_minutes != null ? String(data.ack_grace_minutes) : '',
+    skip_grace_minutes: data.skip_grace_minutes != null ? String(data.skip_grace_minutes) : '',
+    agreed_p95_ms: data.agreed_targets?.p95_ms != null ? String(data.agreed_targets.p95_ms) : '',
+    agreed_uptime_pct:
+      data.agreed_targets?.uptime_pct != null ? String(data.agreed_targets.uptime_pct) : '',
+    ...(() => {
+      try {
+        const rp = (data as { retry_policy?: string | Record<string, unknown> | null }).retry_policy
+        const parsed = (typeof rp === 'string' ? JSON.parse(rp) : rp) as {
+          max_attempts?: number
+          backoff_minutes?: number
+          inline_retries?: number
+          inline_backoff_ms?: number
+          retry_on?: string[]
+        } | null
+        return {
+          retry_max: parsed?.max_attempts != null ? String(parsed.max_attempts) : '',
+          retry_backoff: parsed?.backoff_minutes != null ? String(parsed.backoff_minutes) : '',
+          inline_retries: parsed?.inline_retries ? String(parsed.inline_retries) : '',
+          inline_backoff_ms:
+            parsed?.inline_backoff_ms != null ? String(parsed.inline_backoff_ms) : '',
+          retry_on:
+            Array.isArray(parsed?.retry_on) && parsed.retry_on.length
+              ? parsed.retry_on
+              : ['network', '5xx', '429']
+        }
+      } catch {
+        return {
+          retry_max: '',
+          retry_backoff: '',
+          inline_retries: '',
+          inline_backoff_ms: '',
+          retry_on: ['network', '5xx', '429']
+        }
+      }
+    })()
+  }
+}
+
+const API_FIELD_LABELS: Record<string, string> = {
+  name: 'Name',
+  base_url: 'Base URL',
+  description: 'Description',
+  auth_type: 'Authentication',
+  auth_config: 'Auth settings',
+  headers: 'Headers',
+  enabled: 'Enabled',
+  integration_type: 'Integration type',
+  retry_max: 'Retry attempts',
+  retry_backoff: 'Retry backoff',
+  inline_retries: 'Inline retries',
+  inline_backoff_ms: 'Inline backoff',
+  retry_on: 'Retry on',
+  owner_user: 'Owner',
+  ack_grace_minutes: 'Acknowledge grace',
+  skip_grace_minutes: 'Skip grace',
+  agreed_p95_ms: 'Agreed p95',
+  agreed_uptime_pct: 'Agreed uptime'
+}
+
 export function ExternalApiEditPage() {
   const { id } = useParams<{ id: string }>()
   const isNew = id === 'new'
@@ -139,60 +216,7 @@ export function ExternalApiEditPage() {
   })
 
   useEffect(() => {
-    if (data) {
-      setForm({
-        name: data.name,
-        base_url: data.base_url,
-        description: data.description ?? '',
-        auth_type: data.auth_type,
-        auth_config: (data.auth_config ?? {}) as Record<string, string>,
-        headers: Object.entries(data.headers ?? {}).map(([key, value]) => ({
-          key,
-          value: String(value)
-        })),
-        enabled: data.enabled,
-        integration_type: data.integration_type ?? '',
-        owner_user: data.owner_user ?? null,
-        ack_grace_minutes: data.ack_grace_minutes != null ? String(data.ack_grace_minutes) : '',
-        skip_grace_minutes: data.skip_grace_minutes != null ? String(data.skip_grace_minutes) : '',
-        agreed_p95_ms:
-          data.agreed_targets?.p95_ms != null ? String(data.agreed_targets.p95_ms) : '',
-        agreed_uptime_pct:
-          data.agreed_targets?.uptime_pct != null ? String(data.agreed_targets.uptime_pct) : '',
-        ...(() => {
-          try {
-            const rp = (data as { retry_policy?: string | Record<string, unknown> | null })
-              .retry_policy
-            const parsed = (typeof rp === 'string' ? JSON.parse(rp) : rp) as {
-              max_attempts?: number
-              backoff_minutes?: number
-              inline_retries?: number
-              inline_backoff_ms?: number
-              retry_on?: string[]
-            } | null
-            return {
-              retry_max: parsed?.max_attempts != null ? String(parsed.max_attempts) : '',
-              retry_backoff: parsed?.backoff_minutes != null ? String(parsed.backoff_minutes) : '',
-              inline_retries: parsed?.inline_retries ? String(parsed.inline_retries) : '',
-              inline_backoff_ms:
-                parsed?.inline_backoff_ms != null ? String(parsed.inline_backoff_ms) : '',
-              retry_on:
-                Array.isArray(parsed?.retry_on) && parsed.retry_on.length
-                  ? parsed.retry_on
-                  : ['network', '5xx', '429']
-            }
-          } catch {
-            return {
-              retry_max: '',
-              retry_backoff: '',
-              inline_retries: '',
-              inline_backoff_ms: '',
-              retry_on: ['network', '5xx', '429']
-            }
-          }
-        })()
-      })
-    }
+    if (data) setForm(formFromApi(data))
   }, [data])
 
   // rt4 #14 — another administrator saved this API: a quiet line; a save from the older copy is
@@ -203,22 +227,27 @@ export function ExternalApiEditPage() {
     meId: user?.id
   })
   const [stale, setStale] = useState(false)
-  const seeded = useRef<{ pending: boolean; json: string | null }>({ pending: false, json: null })
-  // Runs before the marker below in the same commit, so it stores the form the seed produced.
-  useEffect(() => {
-    if (seeded.current.pending) {
-      seeded.current = { pending: false, json: JSON.stringify(form) }
-    }
-  }, [form])
-  // Marks the next form as the seed.
-  useEffect(() => {
-    if (data) seeded.current.pending = true
-  }, [data])
-  const apiDirty = seeded.current.json != null && JSON.stringify(form) !== seeded.current.json
-  const showTheirs = () => {
-    void queryClient.invalidateQueries({ queryKey: ['external-api', id] })
+  // Their saved copy, opened beside the form (never into it) while there are unsaved edits.
+  const [theirs, setTheirs] = useState<ExternalApi | null>(null)
+  // "Keep mine" after seeing theirs: the next save goes over the copy they saw.
+  const [baseOverride, setBaseOverride] = useState<string | null>(null)
+  const apiDirty = !!data && JSON.stringify(form) !== JSON.stringify(formFromApi(data))
+  const takeTheirs = (fresh: ExternalApi) => {
+    setTheirs(null)
+    setBaseOverride(null)
     clearChange()
     setStale(false)
+    // Re-seeds the form (the load effect) from their copy — only on this explicit choice.
+    queryClient.setQueryData(['external-api', id], fresh)
+  }
+  const showTheirs = async () => {
+    const fresh = await api
+      .get<{ data: ExternalApi }>(`/external-apis/${id}`)
+      .then((r) => r.data.data)
+      .catch(() => null)
+    if (!fresh) return
+    if (!apiDirty) takeTheirs(fresh)
+    else setTheirs(fresh)
   }
   const save = useMutation({
     mutationFn: (opts?: { force?: boolean }) => {
@@ -274,7 +303,7 @@ export function ExternalApiEditPage() {
         ? api.post<{ data: ExternalApi }>('/external-apis', payload).then((r) => r.data.data)
         : api
             .patch<{ data: ExternalApi }>(`/external-apis/${id}`, payload, {
-              headers: opts?.force ? {} : configBaseRevHeaders(data?.updated_at)
+              headers: opts?.force ? {} : configBaseRevHeaders(baseOverride ?? data?.updated_at)
             })
             .then((r) => r.data.data)
     },
@@ -344,16 +373,33 @@ export function ExternalApiEditPage() {
           </Button>
         </div>
       </div>
-      {(change || stale) && (
+      {(change || stale) && !theirs && (
         <ConfigChangeStrip
           className='mb-4 rounded-lg border'
           change={change}
           stale={stale}
           dirty={apiDirty}
-          showDiscards
-          onShow={showTheirs}
+          onShow={() => void showTheirs()}
           onSaveAnyway={() => save.mutate({ force: true })}
           onDismiss={() => {
+            clearChange()
+            setStale(false)
+          }}
+        />
+      )}
+      {theirs && (
+        <ConfigTheirsPanel
+          className='mb-4 overflow-hidden rounded-lg border'
+          who={change?.by?.name ?? 'Their'}
+          rows={diffConfigFields(
+            form as unknown as Record<string, unknown>,
+            formFromApi(theirs) as unknown as Record<string, unknown>,
+            API_FIELD_LABELS
+          )}
+          onTakeTheirs={() => takeTheirs(theirs)}
+          onKeepMine={() => {
+            setBaseOverride(theirs.updated_at ?? null)
+            setTheirs(null)
             clearChange()
             setStale(false)
           }}

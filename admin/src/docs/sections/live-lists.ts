@@ -168,7 +168,7 @@ export const collabLiveConfig: DocSection = {
       rows: [
         [
           'Another administrator saves the pipeline, flow, rule, external API or payload template you have open',
-          'A quiet line appears under the header: "Beth changed a state 1 min ago · Show". Show re-reads the editor. Nothing re-reads by itself. Pipeline and flow editors keep what you were typing. Rule, external API and payload editors say "Show replaces your unsaved edits" when you have some.'
+          'A quiet line appears under the header: "Beth changed a state 1 min ago · Show". Nothing re-reads by itself. With no unsaved edits, Show loads their version. Pipeline and flow editors keep what you were typing. In the rule and external API editors, Show opens their saved version above your form when you have unsaved edits: only the fields that differ, theirs beside yours. Your form changes only if you press Take theirs. Keep mine closes it, and your next save goes over theirs. The payload editor says "Show replaces your unsaved edits" when you have some.'
         ],
         [
           'You save a flow, rule or external API after someone else saved it',

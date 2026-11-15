@@ -4,6 +4,7 @@ import {
   configAgoText,
   configBaseRevHeaders,
   configChangeText,
+  diffConfigFields,
   foldConfigChange,
   isConfigStale
 } from './config-watch'
@@ -54,5 +55,16 @@ describe('config watch (rt4 #14 / #18)', () => {
     expect(isConfigStale({ status: 409, response: { code: 'CONFIG_STALE' } })).toBe(true)
     expect(isConfigStale({ response: { status: 409, data: { code: 'PROC_STALE' } } })).toBe(false)
     expect(isConfigStale(null)).toBe(false)
+  })
+
+  it('lists only the fields where their saved copy differs from the form', () => {
+    const rows = diffConfigFields(
+      { name: 'Mine', enabled: true, headers: [{ key: 'a', value: '1' }], note: '' },
+      { name: 'Theirs', enabled: true, headers: [{ key: 'a', value: '2' }], note: null },
+      { name: 'Name', enabled: 'Enabled', headers: 'Headers', note: 'Note' }
+    )
+    expect(rows.map((r) => r.key)).toEqual(['name', 'headers'])
+    expect(rows[0]).toEqual({ key: 'name', label: 'Name', theirs: 'Theirs', mine: 'Mine' })
+    expect(rows[1].theirs).toBe('[{"key":"a","value":"2"}]')
   })
 })
