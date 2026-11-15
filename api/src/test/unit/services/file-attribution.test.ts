@@ -19,6 +19,7 @@ const NOWHERE = id(10)
 const AVATAR = id(11)
 const DASH = id(12)
 const NO_AUTHOR = id(13)
+const FIELD_PIC = id(14)
 
 type Rec = { table: string; likes: string[] }
 const data = vi.hoisted(() => ({
@@ -55,6 +56,9 @@ vi.mock('../../../db/index.js', () => {
 })
 vi.mock('../../../db/pool-context.js', () => ({ runInBackgroundPool: (fn: () => unknown) => fn() }))
 vi.mock('../../../services/tenant-rooms.js', () => ({ currentTenantKey: () => 't1' }))
+vi.mock('../../../services/field-comments.js', () => ({
+  hasFieldCommentColumns: vi.fn(async () => true)
+}))
 vi.mock('../../../services/file-usage.js', () => ({ getFileRefColumns: vi.fn(async () => []) }))
 vi.mock('../../../services/collections.js', () => ({
   getCollection: vi.fn(async (c: string) => (c === 'workflows' ? { collection: c } : undefined)),
@@ -129,6 +133,28 @@ beforeEach(() => {
 })
 
 describe('fileAttributions', () => {
+  it('marks a use that is a comment on one field with that field', async () => {
+    data.tables.nivaro_comments.push({
+      collection: 'workflows',
+      item: '8',
+      user: 'u-kim',
+      field: 'amount',
+      text: `![shot.png](/api/files/${FIELD_PIC.toLowerCase()})`
+    })
+    const got = await fileAttributions([{ id: FIELD_PIC, uploaded_on: old }])
+    expect(got.get(FIELD_PIC)).toEqual([
+      {
+        kind: 'record',
+        collection: 'workflows',
+        id: '8',
+        field: 'amount',
+        by: 'U-KIM',
+        trust: 'author',
+        adminIf: ['U-KIM']
+      }
+    ])
+  })
+
   it('names where each file is used without a foreign key', async () => {
     const got = await fileAttributions(
       [CHAT, TICKET, ADDENDUM, COMMENT, POSTER, RICH, LOGO, AVATAR, DASH, NO_AUTHOR, NOWHERE].map(
