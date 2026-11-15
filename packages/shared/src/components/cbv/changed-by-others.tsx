@@ -276,7 +276,7 @@ export function ChangedByOthersChip({
               />
             </label>
             <p className='text-[11px] text-slate-500 dark:text-slate-400'>
-              Leave To empty to look up to now.
+              Leave To empty to include everything up to now.
             </p>
             {from && !customValue && (
               <p className='text-[11px] text-amber-700 dark:text-amber-400'>
