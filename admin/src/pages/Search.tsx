@@ -1,5 +1,11 @@
-import { openAskPanel, TipLayer } from '@nivaro/shared'
-import { useQuery } from '@tanstack/react-query'
+import {
+  LiveNewMatchesPill,
+  openAskPanel,
+  searchRowKey,
+  TipLayer,
+  useLiveSearchResults
+} from '@nivaro/shared'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
   Bookmark,
@@ -15,7 +21,7 @@ import {
   UserRound,
   X
 } from 'lucide-react'
-import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import {
@@ -145,7 +151,8 @@ export function SearchPage() {
     set({ q: draft.trim(), tab: null, page: null })
   }
 
-  const { data, isFetching, isError, refetch } = useQuery({
+  const qc = useQueryClient()
+  const { data, isFetching, isError, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['global-search', q],
     queryFn: () =>
       api
@@ -172,7 +179,10 @@ export function SearchPage() {
     return c ? collectionLabel(c) : titleCase(scope)
   }
 
-  const records = live ? withExactFirst(data?.records ?? [], data?.exact) : []
+  const records = useMemo(
+    () => (live ? withExactFirst(data?.records ?? [], data?.exact) : []),
+    [live, data]
+  )
   const people: SearchPerson[] = live ? (data?.people ?? []) : []
   // Config search in plain words (search item 24): an administrator's question
   // ("where is the Fusion push for IRs set up") also asks the config index,
@@ -237,8 +247,60 @@ export function SearchPage() {
     staleTime: 15_000,
     placeholderData: (prev) => prev
   })
-  const tabRows = sortRecords(tabQuery.data?.data ?? [], sort)
+  const tabRowsBase = useMemo(
+    () => sortRecords(tabQuery.data?.data ?? [], sort),
+    [tabQuery.data, sort]
+  )
   const tabTotal = tabQuery.data?.total ?? null
+
+  // Live results (realtime item 14): others' writes update rows in place, a result that stops
+  // matching dims, a newly matching record is only counted ("N new matches · Show"). Every
+  // re-ask is this search run again as the viewer (fresh=1 skips the 20 s answer cache).
+  const resultsRef = useRef<HTMLDivElement>(null)
+  const allLive = useLiveSearchResults<SearchRecord>({
+    rows: records,
+    collections: [...new Set(records.map((r) => r.collection))].slice(0, 30),
+    enabled: live && !collectionTab && !!data,
+    resetKey: `all|${q}|${dataUpdatedAt}`,
+    rootRef: resultsRef,
+    fetchFresh: () =>
+      api
+        .get<{ data: GlobalSearchResponse }>('/global-search', { params: { q, fresh: '1' } })
+        .then((r) => withExactFirst(r.data.data.records ?? [], r.data.data.exact)),
+    onShow: () =>
+      void api
+        .get<{ data: GlobalSearchResponse }>('/global-search', { params: { q, fresh: '1' } })
+        .then((r) => {
+          qc.setQueryData(['global-search', q], r.data.data)
+          void qc.invalidateQueries({ queryKey: ['global-search-counts'] })
+        })
+        .catch(() => void refetch())
+  })
+  const tabLive = useLiveSearchResults<SearchRecord>({
+    rows: tabRowsBase,
+    collections: collectionTab ? [collectionTab] : [],
+    enabled: live && !!collectionTab && !!tabQuery.data,
+    detectNew: page === 0,
+    resetKey: `tab|${q}|${collectionTab}|${sort}|${page}|${tabQuery.dataUpdatedAt}`,
+    rootRef: resultsRef,
+    fetchFresh: () =>
+      api
+        .get<{ data: SearchRecord[] }>('/global-search/records', {
+          params: {
+            q,
+            collection: collectionTab,
+            offset: page * PAGE_SIZE,
+            limit: PAGE_SIZE,
+            ...(sort === 'newest' ? { sort: 'newest' } : {})
+          }
+        })
+        .then((r) => sortRecords(r.data.data ?? [], sort)),
+    onShow: () => {
+      void tabQuery.refetch()
+      void qc.invalidateQueries({ queryKey: ['global-search-counts'] })
+    }
+  })
+  const tabRows = tabLive.rows
 
   // Alt/Option+1…9 picks a tab, "/" jumps to the box (re-bound every render: it reads
   // the current tab order).
@@ -566,7 +628,11 @@ export function SearchPage() {
         )}
       </header>
 
-      <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
+      <div ref={resultsRef} className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
+        <LiveNewMatchesPill
+          count={collectionTab ? tabLive.newCount : tab ? 0 : allLive.newCount}
+          onShow={collectionTab ? tabLive.show : allLive.show}
+        />
         <div className='space-y-5 px-6 py-5'>
           {!live && (
             <StartPanel
@@ -611,6 +677,7 @@ export function SearchPage() {
             <section aria-label={scopeLabel(collectionTab)}>
               <RecordsTable
                 rows={tabRows}
+                dimmed={tabLive.dimmed}
                 q={q}
                 loading={tabQuery.isFetching && !tabQuery.data}
                 showCollection={false}
@@ -642,7 +709,8 @@ export function SearchPage() {
 
           {live && data && !nothing && !tab && (
             <AllResults
-              records={sortRecords(records, sort)}
+              records={sortRecords(allLive.rows, sort)}
+              dimmed={allLive.dimmed}
               tabs={tabs}
               people={people}
               extras={extras}
@@ -673,6 +741,7 @@ export function SearchPage() {
 
 function AllResults({
   records,
+  dimmed,
   tabs,
   people,
   extras,
@@ -682,6 +751,7 @@ function AllResults({
   onOpen
 }: {
   records: SearchRecord[]
+  dimmed?: ReadonlySet<string>
   tabs: Array<{ collection: string; label: string; count: string }>
   people: SearchPerson[]
   extras: ReturnType<typeof extraTabs>
@@ -736,6 +806,7 @@ function AllResults({
           </div>
           <RecordsTable
             rows={g.rows}
+            dimmed={dimmed}
             q={q}
             showCollection={false}
             onOpen={(r) => onOpen(r, records.indexOf(r))}
@@ -884,12 +955,14 @@ function ZeroResults({
 
 function RecordsTable({
   rows,
+  dimmed,
   q,
   loading,
   showCollection,
   onOpen
 }: {
   rows: SearchRecord[]
+  dimmed?: ReadonlySet<string>
   q: string
   loading?: boolean
   showCollection: boolean
@@ -926,7 +999,14 @@ function RecordsTable({
             return (
               <tr
                 key={`${r.collection}-${r.id}`}
-                className='hover:bg-slate-50 dark:hover:bg-muted/60'
+                data-row-key={searchRowKey(r)}
+                data-search-dimmed={dimmed?.has(searchRowKey(r)) ? '' : undefined}
+                data-tip={
+                  dimmed?.has(searchRowKey(r)) ? 'No longer matches this search' : undefined
+                }
+                className={`transition-opacity hover:bg-slate-50 dark:hover:bg-muted/60 ${
+                  dimmed?.has(searchRowKey(r)) ? 'opacity-50' : ''
+                }`}
               >
                 <td className='px-3 py-1.5'>
                   <Link

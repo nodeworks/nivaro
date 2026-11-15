@@ -9,7 +9,7 @@ import { recordWriteRefusal } from '../services/edit-lock.js'
 import { readOne, updateOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import { recordCacheOutcome, recordSharedRun } from '../services/query-cache-stats.js'
-import { queryFreshness } from '../services/query-freshness.js'
+import { liveReadSources, queryFreshness } from '../services/query-freshness.js'
 import { clientGoneSignal, gateServerTiming, sharedGatedRead } from '../services/read-gate.js'
 import {
   type DateRange,
@@ -644,6 +644,20 @@ async function renderWidget(
           freshness_sources: fresh?.sources ?? [],
           stale: false
         }
+      } else {
+        // Uncached: no stamp to show, but the page still learns which collections the query
+        // reads so it can raise "data changed since run" live.
+        const sources = await liveReadSources(cq).catch(() => [])
+        if (sources.length > 0)
+          cacheInfo = {
+            cached: false,
+            cached_at: null,
+            executed_at: cachedAt,
+            age_seconds: 0,
+            cache_ttl: 0,
+            freshness_sources: sources,
+            stale: false
+          }
       }
     }
     const valueFields = config.value_fields as

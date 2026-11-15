@@ -82,7 +82,7 @@ export function flashRows(
 }
 
 /** Display name of a user id, from the (authenticated) contact-card route. */
-function useActorNames(ids: string[]): Map<string, string> {
+export function useActorNames(ids: string[]): Map<string, string> {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [names, setNames] = useState<Map<string, string>>(() => new Map())

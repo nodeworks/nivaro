@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
 
 function parseJson<T>(raw: string | null): T | null {
@@ -233,4 +234,85 @@ export async function queryFreshness(query: {
   for (const f of facts)
     if (f.changed_at && (!latest || f.changed_at > latest)) latest = f.changed_at
   return { data_changed_at: latest, sources: facts }
+}
+
+// ─── Live sources: the collections a query reads, cached or not ─────────────
+
+const COLLECTION_NAMES_TTL = 60_000
+let collectionNames: { at: number; value: Promise<Map<string, string>> } | null = null
+
+/** Registered collections by lower-case name (60 s cache). */
+async function registeredCollections(): Promise<Map<string, string>> {
+  if (collectionNames && Date.now() - collectionNames.at < COLLECTION_NAMES_TTL)
+    return collectionNames.value
+  const value = (async () => {
+    const map = new Map<string, string>()
+    try {
+      const rows = (await db('nivaro_collections').select('collection')) as Array<{
+        collection: string
+      }>
+      for (const r of rows) map.set(String(r.collection).toLowerCase(), r.collection)
+    } catch {
+      /* no registry read: nothing maps, so no chip */
+    }
+    return map
+  })()
+  collectionNames = { at: Date.now(), value }
+  return value
+}
+
+const liveInferred = new Map<string, { at: number; value: Promise<string[]> }>()
+const LIVE_TTL = 10 * 60_000
+
+/** Short stable stamp of what decides a query's tables: its SQL and its declared sources. */
+export function definitionHash(query: {
+  sql_text?: string | null
+  freshness_sources?: string | null
+}): string {
+  return createHash('sha1')
+    .update(`${query.sql_text ?? ''}|${query.freshness_sources ?? ''}`)
+    .digest('hex')
+    .slice(0, 12)
+}
+
+/**
+ * The registered collections a custom query reads, for the live "data changed since run" chip.
+ * Declared `freshness_sources` win; else inferred from the SQL and the procedures it EXECs.
+ * Computed once per query DEFINITION (memoized by id + definition hash, so an edited query
+ * re-infers and a run never does) and needs no timestamp column and no probe, so it serves
+ * uncached queries too. Tables that are not registered collections are left out: no live
+ * event can ever name them. Shaped like freshness facts without a clock.
+ */
+export async function liveReadSources(query: {
+  id: unknown
+  sql_text?: string | null
+  freshness_sources?: string | null
+}): Promise<Array<{ table: string; column: string; changed_at: null }>> {
+  const key = `${String(query.id)}:${definitionHash(query)}`
+  let hit = liveInferred.get(key)
+  if (!hit || Date.now() - hit.at >= LIVE_TTL) {
+    const value = (async () => {
+      const declared = parseFreshnessSources(query.freshness_sources)
+      if (declared?.length) return declared.map((s) => s.table)
+      return tablesReadBy(query.sql_text ?? '')
+    })().catch(() => [] as string[])
+    hit = { at: Date.now(), value }
+    if (liveInferred.size > 500) liveInferred.clear()
+    liveInferred.set(key, hit)
+  }
+  const tables = await hit.value
+  const registry = await registeredCollections()
+  const out: Array<{ table: string; column: string; changed_at: null }> = []
+  for (const t of tables) {
+    const name = registry.get(t.toLowerCase())
+    if (name && !out.some((o) => o.table === name))
+      out.push({ table: name, column: '', changed_at: null })
+  }
+  return out.slice(0, MAX_SOURCES)
+}
+
+/** Test seam: forget memoized definitions and the collection registry. */
+export function __resetLiveSources(): void {
+  liveInferred.clear()
+  collectionNames = null
 }
