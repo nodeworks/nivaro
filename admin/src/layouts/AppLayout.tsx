@@ -91,6 +91,7 @@ import {
   isCodeError,
   isRecordPopout,
   JobsTray,
+  LiveAnnouncer,
   NavigationContext,
   NivaroProvider,
   OfflineBanner,
@@ -104,6 +105,7 @@ import {
   scrollPathOf,
   scrollToRestore,
   setTrailScroll,
+  TabCountHost,
   TipLayer,
   useClientChaosGate,
   useLiveQueryBridge
@@ -981,6 +983,10 @@ export function AppLayout() {
         <KeyboardShortcuts />
         <ForceRefreshBanner />
         <LiveQueryBridge />
+        {/* Realtime round 2: the waiting-on-you count in the tab title + icon (#20) and one
+            polite screen-reader region for live changes (#22). Both honour Profile → Display. */}
+        <TabCountHost />
+        <LiveAnnouncer />
         <SystemBusy />
         <AutofillChips />
         <JobsTrayHost />

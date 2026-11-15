@@ -1283,6 +1283,11 @@ export { registerStagedRowLabel, stagedRowLabel } from './lib/staged-row-labels'
 export * from './lib/stale-chunk'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
+export * from './lib/attention-prefs'
+export * from './lib/waiting-count'
+export * from './lib/live-announcer'
+export { LiveAnnouncer } from './components/LiveAnnouncer'
+export { TabCountHost } from './components/TabCountHost'
 export { configureTabSound, pickSoundTab, shouldPlayHere } from './lib/tab-sound'
 export {
   BRAND_ACCENT,

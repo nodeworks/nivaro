@@ -1,15 +1,27 @@
-// Unread attention count in the browser tab title — "(3) CR26-76773 · Nivaro"
-// — so a person working in another tab sees that something needs them. One
-// module-level controller: the bell can be mounted more than once (admin
-// shows a compact and a full one), and several pages rewrite document.title
-// as they mount, so the prefix is re-applied whenever the title changes
-// instead of being set once. The favicon is left alone on purpose.
+// Attention count in the browser tab — the title ("(3) CR26-76773 · Nivaro") and,
+// for callers that ask for it, a small numbered dot on the favicon — so a
+// person working in another tab sees that something needs them. One
+// module-level controller: several components can ask (the My Work count, chat
+// unread), and several pages rewrite document.title as they mount, so the
+// prefix is re-applied whenever the title changes instead of being set once.
+//
+// The favicon is the host's own (a white-label icon included): the badge is
+// drawn over whatever icon the page carries, the original href is kept on the
+// link as data-nvr-icon and restored at zero, and an icon the host swaps in
+// later (a white-label load) becomes the new base.
 
 import { useEffect, useRef } from 'react'
 
 const PREFIX = /^\(\d+\+?\) /
-const owners = new Map<symbol, number>()
+interface Owner {
+  count: number
+  favicon: boolean
+}
+const owners = new Map<symbol, Owner>()
 let observer: MutationObserver | null = null
+let iconRequest = 0
+/** The data URL this module last put on the icon links (to tell it from a host's own change). */
+let ownIcon = ''
 
 /** "(3) " / "(99+) " / "" — what goes in front of the title. */
 export function tabTitlePrefix(count: number): string {
@@ -22,27 +34,171 @@ export function withTitlePrefix(title: string, count: number): string {
   return tabTitlePrefix(count) + title.replace(PREFIX, '')
 }
 
-function current(): number {
+/** What the favicon dot says: "3", "9+" (a 16 px tab icon has room for one digit). */
+export function faviconBadgeText(count: number): string {
+  if (!(count > 0)) return ''
+  return count > 9 ? '9+' : String(Math.floor(count))
+}
+
+/** Where the dot sits on an icon of `size` px: top right, a white ring around it. */
+export function faviconBadgeLayout(
+  text: string,
+  size: number
+): { cx: number; cy: number; r: number; ring: number; font: number } {
+  const wide = text.length > 1
+  const r = Math.round(size * (wide ? 0.33 : 0.28))
+  return {
+    cx: size - r,
+    cy: r,
+    r,
+    ring: Math.max(1, Math.round(size * 0.05)),
+    font: Math.round(size * (wide ? 0.34 : 0.44))
+  }
+}
+
+function currentCount(): number {
   let count = 0
-  for (const c of owners.values()) count = Math.max(count, c)
+  for (const o of owners.values()) count = Math.max(count, o.count)
   return count
 }
 
+function wantsFavicon(): boolean {
+  for (const o of owners.values()) if (o.favicon && o.count > 0) return true
+  return false
+}
+
 function applyTitle() {
-  const want = withTitlePrefix(document.title, current())
+  const want = withTitlePrefix(document.title, currentCount())
   if (document.title !== want) document.title = want
+}
+
+function iconLinks(): HTMLLinkElement[] {
+  return [...document.querySelectorAll<HTMLLinkElement>('link[rel~="icon"]')]
+}
+
+/** The icon the host intends to show (not our badged copy). */
+function baseIcon(links: HTMLLinkElement[]): string {
+  for (const l of links) {
+    if (l.href && l.href !== ownIcon) return l.href
+  }
+  return links.find((l) => l.dataset.nvrIcon)?.dataset.nvrIcon ?? ''
+}
+
+function restoreFavicon() {
+  iconRequest++
+  for (const l of iconLinks()) {
+    if (l.dataset.nvrIcon !== undefined) {
+      if (l.dataset.nvrIcon) l.href = l.dataset.nvrIcon
+      delete l.dataset.nvrIcon
+    }
+  }
+  ownIcon = ''
+}
+
+function drawBadge(ctx: CanvasRenderingContext2D, size: number, count: number) {
+  const text = faviconBadgeText(count)
+  const g = faviconBadgeLayout(text, size)
+  ctx.beginPath()
+  ctx.arc(g.cx, g.cy, g.r + g.ring, 0, Math.PI * 2)
+  ctx.fillStyle = '#ffffff'
+  ctx.fill()
+  ctx.beginPath()
+  ctx.arc(g.cx, g.cy, g.r, 0, Math.PI * 2)
+  ctx.fillStyle = '#dc2626'
+  ctx.fill()
+  ctx.fillStyle = '#ffffff'
+  ctx.font = `bold ${g.font}px system-ui, -apple-system, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(text, g.cx, g.cy + size * 0.02)
+}
+
+function applyFavicon() {
+  const links = iconLinks()
+  if (links.length === 0) return
+  if (!wantsFavicon()) {
+    restoreFavicon()
+    return
+  }
+  const source = baseIcon(links)
+  for (const l of links) if (l.dataset.nvrIcon === undefined) l.dataset.nvrIcon = source
+  const count = currentCount()
+  const request = ++iconRequest
+  const put = (canvas: HTMLCanvasElement) => {
+    if (request !== iconRequest) return // a newer count won the race
+    let url = ''
+    try {
+      url = canvas.toDataURL('image/png')
+    } catch {
+      return
+    }
+    ownIcon = url
+    for (const l of iconLinks()) {
+      if (l.dataset.nvrIcon === undefined) l.dataset.nvrIcon = source
+      l.href = url
+    }
+  }
+  const size = 64
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  let ctx: CanvasRenderingContext2D | null = null
+  try {
+    ctx = canvas.getContext('2d')
+  } catch {
+    ctx = null
+  }
+  if (!ctx) return
+  const c = ctx
+  const img = new Image()
+  img.onload = () => {
+    c.drawImage(img, 0, 0, size, size)
+    drawBadge(c, size, count)
+    put(canvas)
+  }
+  // A cross-origin icon without CORS taints the canvas: the dot alone is better than no signal.
+  img.onerror = () => {
+    drawBadge(c, size, count)
+    put(canvas)
+  }
+  if (!source) {
+    drawBadge(c, size, count)
+    put(canvas)
+    return
+  }
+  img.src = source
 }
 
 function ensureObserver() {
   if (observer || typeof MutationObserver === 'undefined') return
-  observer = new MutationObserver(() => {
-    if (owners.size > 0) applyTitle()
+  observer = new MutationObserver((records) => {
+    if (owners.size === 0) return
+    applyTitle()
+    // The host changed its icon (a white-label load): the new one is the base now.
+    const swapped = records.some(
+      (r) =>
+        r.type === 'attributes' &&
+        r.target instanceof HTMLLinkElement &&
+        r.target.href !== ownIcon &&
+        r.target.rel.includes('icon')
+    )
+    if (swapped && wantsFavicon()) {
+      for (const l of iconLinks()) delete l.dataset.nvrIcon
+      applyFavicon()
+    }
   })
-  observer.observe(document.head, { subtree: true, childList: true, characterData: true })
+  observer.observe(document.head, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ['href']
+  })
 }
 
 function apply() {
   applyTitle()
+  applyFavicon()
   if (owners.size === 0 && observer) {
     observer.disconnect()
     observer = null
@@ -51,11 +207,16 @@ function apply() {
 
 /**
  * Show `count` in front of the tab title while the calling component is
- * mounted; 0 clears it. Several callers combine (largest count wins).
+ * mounted; 0 clears it. `favicon: true` also draws the count on the tab icon.
+ * Several callers combine (largest count wins).
  */
-export function useTabAttention(count: number, options: { enabled?: boolean } = {}) {
+export function useTabAttention(
+  count: number,
+  options: { enabled?: boolean; favicon?: boolean } = {}
+) {
   const key = useRef<symbol>(Symbol('tab-attention'))
   const enabled = options.enabled ?? true
+  const favicon = options.favicon === true
   useEffect(() => {
     if (typeof document === 'undefined') return
     const k = key.current
@@ -63,11 +224,12 @@ export function useTabAttention(count: number, options: { enabled?: boolean } = 
       if (owners.delete(k)) apply()
       return
     }
-    if (owners.get(k) === count) return
-    owners.set(k, count)
+    const prev = owners.get(k)
+    if (prev && prev.count === count && prev.favicon === favicon) return
+    owners.set(k, { count, favicon })
     ensureObserver()
     apply()
-  }, [count, enabled])
+  }, [count, enabled, favicon])
   useEffect(() => {
     const k = key.current
     return () => {

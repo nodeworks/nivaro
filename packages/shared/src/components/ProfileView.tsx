@@ -2436,6 +2436,31 @@ export function DisplayPrefsCard() {
             })}
           </span>
         </div>
+        {/* #20 — what is waiting on you, in the browser tab's title and icon. */}
+        <label htmlFor='pref-tab-count' className='flex cursor-pointer items-center gap-1.5'>
+          <input
+            id='pref-tab-count'
+            type='checkbox'
+            aria-label='Show what is waiting on me in the browser tab'
+            checked={prefs?.tab_count !== 'off'}
+            onChange={(e) => save.mutate({ tab_count: e.target.checked ? 'on' : 'off' })}
+            className='rounded'
+          />
+          Count in the browser tab
+        </label>
+        {/* #22 — screen-reader notices of live changes. */}
+        <label className='flex items-center gap-1.5'>
+          Live changes (screen readers)
+          <SimpleSelectXs
+            value={String(prefs?.live_announce ?? 'full')}
+            onChange={(v) => save.mutate({ live_announce: v })}
+            options={[
+              { value: 'full', label: 'Say what changed' },
+              { value: 'brief', label: 'Brief' },
+              { value: 'off', label: 'Off' }
+            ]}
+          />
+        </label>
         <label className='flex items-center gap-1.5'>
           Text size
           <SimpleSelectXs
