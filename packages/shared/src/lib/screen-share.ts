@@ -426,3 +426,61 @@ export function __resetScreenShare(): void {
   runtime = null
   emitChange()
 }
+
+// ── Ticket history: one line per share ───────────────────────────────────────
+
+export interface ShareHistoryRow {
+  id: number | string
+  action?: string | null
+  text: string
+  user_name: string | null
+  at: string
+}
+
+function endedWord(text: string): string | null {
+  if (/^Stopped sharing/i.test(text)) return null
+  if (/page closed/i.test(text)) return 'page closed'
+  if (/30 minutes/i.test(text)) return 'time limit'
+  if (/moved/i.test(text)) return 'request moved'
+  if (/request closed/i.test(text)) return 'request closed'
+  if (/restarted/i.test(text)) return 'restarted'
+  return 'ended'
+}
+
+/**
+ * Fold each screen share's start / first-look / stop rows (actions screen-share-start,
+ * -watch, -stop) into ONE history line: "Shared their screen with Beth · 4 min · watched by
+ * Beth · page closed". Every other row passes through untouched, in order.
+ */
+export function foldShareHistory<T extends ShareHistoryRow>(rows: T[]): T[] {
+  const out: T[] = []
+  let open: { at: number; row: T; to: string; watchers: string[] } | null = null
+  const finish = (dur: string | null, why: string | null, running: boolean) => {
+    if (!open) return
+    const { to, watchers } = open
+    const parts = [
+      running ? `Sharing their screen with ${to} now` : `Shared their screen with ${to}`
+    ]
+    if (dur) parts.push(dur)
+    parts.push(watchers.length ? `watched by ${watchers.join(', ')}` : 'not watched')
+    if (why) parts.push(why)
+    out[open.at] = { ...open.row, text: parts.join(' · ') }
+    open = null
+  }
+  for (const r of rows) {
+    if (r.action === 'screen-share-start') {
+      finish(null, 'restarted', false)
+      const to = /with (.+)$/.exec(r.text)?.[1] ?? 'support'
+      open = { at: out.length, row: r, to, watchers: [] }
+      out.push(r)
+    } else if (r.action === 'screen-share-watch' && open) {
+      const name = r.user_name ?? 'someone'
+      if (!open.watchers.includes(name)) open.watchers.push(name)
+    } else if (r.action === 'screen-share-stop' && open) {
+      const dur = /\(([^)]+)\)\s*$/.exec(r.text)?.[1] ?? null
+      finish(dur, endedWord(r.text), false)
+    } else out.push(r)
+  }
+  finish(null, null, true)
+  return out
+}

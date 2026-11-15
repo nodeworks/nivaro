@@ -630,6 +630,7 @@ export async function supportRoutes(app: FastifyInstance) {
       .limit(200)
       .select(
         'a.id',
+        'a.action',
         'a.comment',
         'a.user',
         'a.timestamp',
@@ -659,6 +660,8 @@ export async function supportRoutes(app: FastifyInstance) {
         })),
         history: history.map((h) => ({
           id: h.id,
+          // Lets the sheet fold one screen share's start / watch / stop rows into one line.
+          action: h.action,
           text: h.comment,
           user: h.user,
           user_name: userName(h as never),

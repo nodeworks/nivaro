@@ -7,6 +7,7 @@ import { useLiveFade } from '../../lib/live-screen'
 import { useBackgroundArm } from '../../lib/live-views'
 import { signalSentence, useTopicPresence } from '../../lib/presence-signals'
 import { replayHref } from '../../lib/replay-capture'
+import { foldShareHistory } from '../../lib/screen-share'
 import { TaskDoButton } from '../ai/TaskDo'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -490,17 +491,23 @@ export function TicketDetailSheet({
                 <h3 className='mb-2 text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
                   History
                 </h3>
-                <ol className='space-y-2 border-l border-slate-200 pl-3.5 dark:border-border'>
-                  {t.history.map((h) => (
-                    <li key={h.id} className='text-[12px] text-slate-600 dark:text-slate-300'>
-                      <span className='text-slate-800 dark:text-slate-100'>{h.text}</span>
-                      <span className='text-slate-500 dark:text-slate-400'>
-                        {' '}
-                        · {h.user_name ?? 'System'} · {when(h.at)}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
+                {t.history.length === 0 ? (
+                  <p className='text-[12.5px] text-slate-500 dark:text-slate-400'>
+                    No history yet.
+                  </p>
+                ) : (
+                  <ol className='space-y-2 border-l border-slate-200 pl-3.5 dark:border-border'>
+                    {foldShareHistory(t.history).map((h) => (
+                      <li key={h.id} className='text-[12px] text-slate-600 dark:text-slate-300'>
+                        <span className='text-slate-800 dark:text-slate-100'>{h.text}</span>
+                        <span className='text-slate-500 dark:text-slate-400'>
+                          {' '}
+                          · {h.user_name ?? 'System'} · {when(h.at)}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                )}
               </section>
             </div>
           </>

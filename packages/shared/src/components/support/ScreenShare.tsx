@@ -147,7 +147,7 @@ export function ScreenShareBar() {
     >
       {/* The app's page area (both hosts use #main-content) keeps clear of the bar too. */}
       <style>
-        {'html[data-screen-sharing] #main-content{padding-bottom:var(--nvr-share-bar)}'}
+        {'html[data-screen-sharing] [data-page-scroll]>*{padding-bottom:var(--nvr-share-bar)}'}
       </style>
       <div className='pointer-events-auto flex max-w-full items-center gap-3 rounded-full border border-white/10 bg-[#111827] py-1.5 pl-3.5 pr-1.5 text-[12.5px] text-slate-100 shadow-[0_8px_24px_-6px_rgba(15,23,42,0.45)]'>
         {ended ? (
@@ -221,8 +221,10 @@ export function ScreenSharePanel({
   useEffect(() => {
     if (!rt) return
     const refetch = (p: { ticket?: unknown } | null) => {
-      if (Number(p?.ticket) === ticketId)
-        void qc.invalidateQueries({ queryKey: shareKey(ticketId) })
+      if (Number(p?.ticket) !== ticketId) return
+      void qc.invalidateQueries({ queryKey: shareKey(ticketId) })
+      // The ticket's history gains a "shared / stopped" line.
+      void qc.invalidateQueries({ queryKey: ['support-ticket', ticketId] })
     }
     const onEnded = (p: { ticket?: unknown; reason?: unknown } | null) => {
       if (Number(p?.ticket) === ticketId && typeof p?.reason === 'string') setEndedWhy(p.reason)
@@ -360,6 +362,7 @@ function StartCard({ ticketId, answer }: { ticketId: number; answer: ShareAnswer
     } finally {
       setBusy(false)
       void qc.invalidateQueries({ queryKey: shareKey(ticketId) })
+      void qc.invalidateQueries({ queryKey: ['support-ticket', ticketId] })
     }
   }
 
@@ -424,6 +427,7 @@ const REPLAYER_STYLE = `
   transition: left .05s linear, top .05s linear; pointer-events: none; z-index: 2; }
 [data-screen-view] .replayer-mouse.active { background: rgba(0, 206, 255, 0.7); }
 [data-screen-view] .replayer-mouse-tail { display: none; }
+[data-screen-view] .replayer-mouse:not([style*="left"]) { display: none; }
 `
 
 /** Rules the replay frame gets (admin replay-player/live.ts: paused frames keep animations still). */
@@ -453,8 +457,14 @@ export function LiveScreenViewer({
 
   const fitToBox = useCallback(() => {
     const box = boxRef.current
-    const size = sizeRef.current
     const wrapper = replayerRef.current?.wrapper
+    // The page as the replay actually laid it out (rrweb sizes its iframe to each snapshot's
+    // viewport); the Meta event's size only until the iframe has one.
+    const iframe = replayerRef.current?.iframe
+    const iw = Number(iframe?.getAttribute('width')) || iframe?.offsetWidth || 0
+    const ih = Number(iframe?.getAttribute('height')) || iframe?.offsetHeight || 0
+    if (iw > 0 && ih > 0) sizeRef.current = { width: iw, height: ih }
+    const size = sizeRef.current
     if (!box || !size || !wrapper) return
     // Fill the frame's width at the recording's aspect ratio (up or down), the frame's height
     // follows, and the page is centred should it ever come out narrower than the frame.
@@ -516,7 +526,14 @@ export function LiveScreenViewer({
       // The page as it is now: everything up to the newest event, then live.
       rep.play(ts.length ? Math.max(0, ts[ts.length - 1] - ts[0]) : 0)
       replayerRef.current = rep
+      // Refit once the snapshot is built and again after it painted: the first frame is never
+      // cut off by a size read too early.
+      rep.on?.('fullsnapshot-rebuilded', () => {
+        fitToBox()
+        requestAnimationFrame(() => fitToBox())
+      })
       fitToBox()
+      requestAnimationFrame(() => requestAnimationFrame(() => fitToBox()))
       setPhase('live')
     }
 
