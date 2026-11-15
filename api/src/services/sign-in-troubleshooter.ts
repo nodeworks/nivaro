@@ -328,6 +328,59 @@ export function currentProblem(
   return since ? { ...newest, since_success: true } : null
 }
 
+// ─── Who may read it ───────────────────────────────────────────────────────────
+
+/**
+ * `admin` = the full view; `desk` = a support-desk member (canWorkDesk: on a team an active
+ * support category routes to) — same reasons and advice, no network details; null = refused.
+ */
+export type SignInHelpAudience = 'admin' | 'desk'
+
+/** The rule, given whether the viewer works the desk (pure — tested on its own). */
+export function audienceFor(isAdmin: boolean, worksDesk: boolean): SignInHelpAudience | null {
+  if (isAdmin) return 'admin'
+  return worksDesk ? 'desk' : null
+}
+
+export async function signInHelpAudience(viewer: {
+  id: string
+  isAdmin: boolean
+}): Promise<SignInHelpAudience | null> {
+  if (viewer.isAdmin) return 'admin'
+  const { canWorkDesk } = await import('./support-tickets.js')
+  const desk = await canWorkDesk({ id: String(viewer.id).toUpperCase(), isAdmin: false }).catch(
+    () => false
+  )
+  return audienceFor(false, desk)
+}
+
+/**
+ * The answer a support-desk member gets: every IP address removed. "Probably them" was already
+ * decided on the server from address + browser; the browser shows only as its plain name
+ * ("Chrome on Windows"), which is all `browser` ever carries.
+ */
+export function forAudience(
+  t: SignInTroubleshooter,
+  audience: SignInHelpAudience
+): SignInTroubleshooter {
+  if (audience === 'admin') return t
+  const strip = <A extends { ip: string | null }>(a: A): A => ({ ...a, ip: null })
+  return {
+    ...t,
+    last_success: t.last_success ? strip(t.last_success) : null,
+    attempts: t.attempts.map((a) => {
+      const { new_ip: _n, ...rest } = strip(a)
+      return rest
+    }),
+    current: t.current
+      ? (() => {
+          const { new_ip: _n, ...rest } = strip(t.current)
+          return rest
+        })()
+      : null
+  }
+}
+
 export async function readSignInTroubleshooter(
   redis: Redis | null | undefined,
   userId: string,

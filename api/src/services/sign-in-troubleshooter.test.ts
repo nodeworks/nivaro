@@ -1,8 +1,21 @@
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../db/index.js', () => ({ db: vi.fn() }))
+const desk = vi.hoisted(() => ({ members: new Set<string>() }))
+vi.mock('./support-tickets.js', () => ({
+  canWorkDesk: async (v: { id: string; isAdmin: boolean }) =>
+    v.isAdmin || desk.members.has(v.id.toUpperCase())
+}))
 
-import { accountChecks, currentProblem, type TroubleAttempt } from './sign-in-troubleshooter.js'
+import {
+  accountChecks,
+  audienceFor,
+  currentProblem,
+  forAudience,
+  type SignInTroubleshooter,
+  signInHelpAudience,
+  type TroubleAttempt
+} from './sign-in-troubleshooter.js'
 
 const NOW = Date.parse('2026-11-14T12:00:00Z')
 
@@ -94,5 +107,69 @@ describe('currentProblem', () => {
   })
   it('never signed in: the newest failure counts', () => {
     expect(currentProblem([attempt({ id: 'only' })], null)?.since_success).toBe(true)
+  })
+})
+
+describe('who may read it', () => {
+  it('admins get the full view, desk members the desk view, everyone else nothing', () => {
+    expect(audienceFor(true, false)).toBe('admin')
+    expect(audienceFor(true, true)).toBe('admin')
+    expect(audienceFor(false, true)).toBe('desk')
+    expect(audienceFor(false, false)).toBeNull()
+  })
+
+  it('asks the support desk check for non-admins only', async () => {
+    desk.members = new Set(['DESK-1'])
+    expect(await signInHelpAudience({ id: 'admin-1', isAdmin: true })).toBe('admin')
+    expect(await signInHelpAudience({ id: 'desk-1', isAdmin: false })).toBe('desk')
+    expect(await signInHelpAudience({ id: 'someone', isAdmin: false })).toBeNull()
+  })
+})
+
+describe('forAudience', () => {
+  const sample: SignInTroubleshooter = {
+    window_days: 30,
+    checks: [],
+    last_success: {
+      at: '2026-11-14T09:00:00.000Z',
+      method: 'oidc',
+      browser: 'Chrome on Windows',
+      ip: '10.1.2.3',
+      app: 'admin'
+    },
+    apps: [{ app: 'admin', at: '2026-11-14T09:00:00.000Z' }],
+    phones: [],
+    attempts: [
+      attempt({ id: 'f', ip: '10.1.2.3', browser: 'Chrome on Windows', match: 'browser' }),
+      attempt({ id: 's', outcome: 'signed_in', ip: '10.9.9.9', new_ip: true })
+    ],
+    by_reason: [],
+    current: {
+      ...attempt({ id: 'f', ip: '10.1.2.3', match: 'browser' }),
+      since_success: true
+    }
+  }
+
+  it('admins see addresses', () => {
+    const out = forAudience(sample, 'admin')
+    expect(out.attempts[0].ip).toBe('10.1.2.3')
+    expect(out.last_success?.ip).toBe('10.1.2.3')
+  })
+
+  it('the desk never receives an address, keeps the plain browser name and the match', () => {
+    const out = forAudience(sample, 'desk')
+    const text = JSON.stringify(out)
+    expect(text).not.toContain('10.1.2.3')
+    expect(text).not.toContain('10.9.9.9')
+    expect(text).not.toContain('new_ip')
+    expect(out.attempts[0]).toMatchObject({
+      ip: null,
+      browser: 'Chrome on Windows',
+      match: 'browser'
+    })
+    expect(out.current).toMatchObject({ ip: null, match: 'browser', since_success: true })
+    expect(out.last_success).toMatchObject({ ip: null, browser: 'Chrome on Windows' })
+    // The admin answer is left untouched.
+    expect(sample.attempts[0].ip).toBe('10.1.2.3')
   })
 })

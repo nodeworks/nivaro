@@ -68,6 +68,9 @@ export interface PersonProfile {
   open_tasks: number
   /** When they are usually around (UTC hours, 10th–90th percentile of their actions). */
   typical_hours_utc?: { start: number; end: number; samples: number } | null
+  /** Idea 32 — the viewer may open the sign-in troubleshooter (admins; support-desk members
+   *  without network details). */
+  sign_in_help?: boolean
   admin: {
     account_kind: string | null
     city: string | null
