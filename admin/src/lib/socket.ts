@@ -509,7 +509,9 @@ export function getSocket(): Socket {
     // rt4 #20 — the person's own lists (saved views, searches, Overview pins) and the shared
     // collection pins moved.
     'mine:changed',
-    'pins:changed'
+    'pins:changed',
+    // rt7 #8 — "Saving 320/500 lines…" for this person's own big save (counts only).
+    'save:progress'
   ]) {
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   }
@@ -520,7 +522,14 @@ export function getSocket(): Socket {
   // Record rooms ride this connection in both modes (use-record-presence joins them here), so the
   // record notices are relayed once here for every record page. `access:changed` reaches the live
   // hooks the same way on a per-tab socket; on the shared one the adapter hands it over.
-  for (const ev of ['record:integrity', 'record:automation', 'owners:changed', 'record:signal'])
+  for (const ev of [
+    'record:integrity',
+    'record:automation',
+    'owners:changed',
+    'record:signal',
+    // rt7 #9 — a big save is recalculating this record's totals (field names only).
+    'record:recalc'
+  ])
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   if (!usesWorkerSocket())
     socket.on('access:changed', (payload: unknown) => relayLiveEvent('access:changed', payload))

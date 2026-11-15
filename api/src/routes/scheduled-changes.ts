@@ -6,8 +6,35 @@ import { getFields, getPhysicalColumns } from '../services/collections.js'
 import { recordWriteRefusal } from '../services/edit-lock.js'
 import { canUpdateItem, describeWriteRefusal, readOne, updateOne } from '../services/items.js'
 import { can, getAllowedFields, isAdminRole } from '../services/permissions.js'
+import { announceRecordAspect } from '../services/record-events.js'
 import { recordToolRefusal } from '../services/record-tool-gate.js'
 import type { User } from '../types.js'
+
+/**
+ * rt7 #12 — a record page counts down to its pending scheduled changes. Every change to a
+ * schedule (created, rescheduled, cancelled, applied) tells the record's open pages with the
+ * `$scheduled` aspect (a notice: no values); they re-read the list as the viewer.
+ */
+function announceScheduled(collection: unknown, item: unknown): void {
+  if (typeof collection !== 'string' || item == null) return
+  announceRecordAspect(collection, String(item), '$scheduled')
+}
+
+/** First + last name of each scheduler (directory columns only; never an email). */
+async function schedulerNames(ids: unknown[]): Promise<Map<string, string>> {
+  const uniq = [...new Set(ids.filter((i) => typeof i === 'string' && i).map(String))]
+  const out = new Map<string, string>()
+  if (uniq.length === 0) return out
+  const rows = (await db('nivaro_users')
+    .whereIn('id', uniq)
+    .select('id', 'first_name', 'last_name')
+    .catch(() => [])) as Array<Record<string, unknown>>
+  for (const r of rows) {
+    const name = [r.first_name, r.last_name].filter(Boolean).join(' ').trim()
+    if (name) out.set(String(r.id).toUpperCase(), name)
+  }
+  return out
+}
 
 function parseJsonSafe(val: unknown): unknown {
   if (typeof val !== 'string') return val
@@ -156,11 +183,24 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       readable = fields === null || fields.includes('*') ? null : new Set(fields)
     }
 
-    const rows = (await db('nivaro_scheduled_changes')
+    const { status } = req.query as { status?: string }
+    let q = db('nivaro_scheduled_changes')
       .where({ collection, item_id: itemId })
-      .orderBy('scheduled_at', 'asc')) as Record<string, unknown>[]
-
-    return reply.send({ data: rows.map((r) => formatChange(r, readable)) })
+      .orderBy('scheduled_at', 'asc')
+    if (status === 'pending') q = q.where({ status: 'pending' })
+    const rows = (await q) as Record<string, unknown>[]
+    const names = await schedulerNames(rows.map((r) => r.created_by))
+    const me = String(req.user?.id ?? '').toUpperCase()
+    const isAdmin = req.isAdmin ?? false
+    return reply.send({
+      data: rows.map((r) => ({
+        ...formatChange(r, readable),
+        created_by_name: names.get(String(r.created_by ?? '').toUpperCase()) ?? null,
+        // Who may cancel or move it: its scheduler (still able to update the record — checked
+        // again on the write) or an administrator.
+        can_manage: isAdmin || (!!me && String(r.created_by ?? '').toUpperCase() === me)
+      }))
+    })
   })
 
   // POST /scheduled-changes — create
@@ -263,6 +303,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       .returning('id')
 
     const insertedId = typeof row === 'object' ? row.id : row
+    announceScheduled(body.collection, body.item_id)
     await logActivity({
       action: 'schedule-change-create',
       user: req.user?.id,
@@ -310,6 +351,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
     await db('nivaro_scheduled_changes')
       .where({ id })
       .update({ status: 'cancelled', updated_at: new Date() })
+    announceScheduled(existing.collection, existing.item_id)
 
     await logActivity({
       action: 'schedule-change-cancel',
@@ -321,6 +363,50 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
     })
 
     return reply.code(204).send()
+  })
+
+  // PATCH /scheduled-changes/:id — move a pending change to another time (rt7 #12). The same
+  // gate as cancelling it: its scheduler while they can still see and update the record, or an
+  // administrator. Only `scheduled_at` moves; what the change writes stays as scheduled.
+  app.patch('/:id', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = (req.body ?? {}) as { scheduled_at?: unknown }
+    const at = typeof body.scheduled_at === 'string' ? new Date(body.scheduled_at) : null
+    if (!at || Number.isNaN(at.getTime())) {
+      return reply.code(400).send({ error: 'scheduled_at is not a valid date' })
+    }
+    const existing = await db('nivaro_scheduled_changes').where({ id }).first()
+    if (!existing) return reply.code(404).send({ error: 'Not found' })
+    if (!(req.isAdmin ?? false)) {
+      if (String(existing.created_by ?? '').toUpperCase() !== String(req.user!.id).toUpperCase()) {
+        return reply.code(403).send({ error: 'Only the person who scheduled it can move it' })
+      }
+      const workspaceId = req.workspaceId ?? undefined
+      const itemId = String(existing.item_id)
+      const visible = await readOne(req.user!, existing.collection, itemId, workspaceId).catch(
+        () => null
+      )
+      if (!visible) return reply.code(404).send({ error: 'Not found' })
+      if (!(await canUpdateItem(req.user!, existing.collection, itemId, workspaceId))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+    }
+    if (existing.status !== 'pending') {
+      return reply.code(409).send({ error: `Change is already ${existing.status}` })
+    }
+    await db('nivaro_scheduled_changes')
+      .where({ id, status: 'pending' })
+      .update({ scheduled_at: at, updated_at: new Date() })
+    await logActivity({
+      action: 'schedule-change-move',
+      user: req.user?.id,
+      collection: existing.collection,
+      item: existing.item_id,
+      comment: `${existing.change_type} moved to ${at.toISOString()}`,
+      req
+    })
+    announceScheduled(existing.collection, existing.item_id)
+    return reply.send({ data: { id, status: 'pending', scheduled_at: at.toISOString() } })
   })
 
   // POST /scheduled-changes/:id/execute — manually execute now (admin)
@@ -344,6 +430,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       await db('nivaro_scheduled_changes')
         .where({ id })
         .update({ status: 'failed', error_message: error.slice(0, 500), updated_at: now })
+      announceScheduled(change.collection, change.item_id)
       return reply.code(status).send({ error, status: 'failed', ...extra })
     }
     if (!changesData) return fail(400, 'The stored change is not a set of field values')
@@ -360,6 +447,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
     await db('nivaro_scheduled_changes')
       .where({ id })
       .update({ status: 'executed', executed_at: now, updated_at: now })
+    announceScheduled(change.collection, change.item_id)
 
     await logActivity({
       action: 'execute_scheduled_change',

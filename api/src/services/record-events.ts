@@ -43,6 +43,9 @@ export type RecordAspect =
   | '$approvals'
   /** rt4 #6 — the record was hidden from or shown in pickers again (routes/picker-exclusions.ts). */
   | '$picker'
+  /** rt7 #12 — a scheduled change on the record was made, moved, cancelled or applied
+   *  (routes/scheduled-changes.ts). */
+  | '$scheduled'
 
 export function announceRecordAspect(
   collection: string | null | undefined,
