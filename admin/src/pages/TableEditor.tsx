@@ -55,6 +55,7 @@ import { InlineEditSetting } from '@/components/inline-edit-setting'
 import { LabelSearchFieldsSetting } from '@/components/label-search-fields-setting'
 import { LineSplitCard } from '@/components/line-split-card'
 import { MergeRecordsSetting } from '@/components/merge-records-setting'
+import { NeverCopySetting } from '@/components/never-copy-setting'
 import { PagePresence } from '@/components/page-presence'
 import { PickerBadgesCard } from '@/components/picker-badges-card'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
@@ -7492,6 +7493,8 @@ interface BrowserConfig {
   /** Duplicate warnings on create (DuplicateCheckCard; api services/duplicate-rules.ts);
    *  absent = on with the default criteria. Edited by its own card, kept as is here. */
   duplicate_check?: DuplicateCheckValue
+  /** Fields a copy (Clone, Duplicate, Save as template) never carries (api services/copy-rules.ts). */
+  never_copy?: string[]
   /** Keys edited elsewhere (export_filename, fulfilment, …) ride along untouched. */
   [key: string]: unknown
 }
@@ -7923,6 +7926,16 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           displayTemplate={col?.display_template}
           value={cfg.label_search_fields}
           onChange={(v) => void patch({ label_search_fields: v })}
+        />
+        <NeverCopySetting
+          collection={tableName}
+          fields={col?.fields ?? []}
+          value={cfg.never_copy}
+          onChange={(v) =>
+            void patch({ never_copy: v }).then(() =>
+              qc.invalidateQueries({ queryKey: ['copy-rules', tableName] })
+            )
+          }
         />
         <div className='flex items-center justify-between gap-4'>
           <div>

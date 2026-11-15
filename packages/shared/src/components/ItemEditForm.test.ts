@@ -568,6 +568,13 @@ describe('Duplicate (child rows and do-not-duplicate fields)', () => {
       shipped_qty: 4
     })
   })
+
+  it("a copied line also leaves out its collection's copy rule (state field, partner ids)", () => {
+    const line = { id: 3, ir: 1, material: 'M-1', line_state: 'shipped', partner_ref: 'P-9' }
+    expect(duplicateChildRow(line, 'ir', null, new Set(['line_state', 'partner_ref']))).toEqual({
+      material: 'M-1'
+    })
+  })
 })
 
 // army9 b01: re-picking Billing Location kept the Org Code the first pick's

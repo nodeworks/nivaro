@@ -2465,59 +2465,57 @@ export async function itemsRoutes(app: FastifyInstance) {
       )) as Record<string, unknown> | null
       if (!original) return reply.code(404).send({ error: 'Not found' })
 
-      // Never copied: the id and protected columns, the server's own fields
-      // (creator + stamps, read-only fields such as rollup totals and state
-      // mirrors) and auto-ids — the create numbers and stamps the copy itself.
-      const PROTECTED_FIELDS = new Set([
-        'id',
-        'created_at',
-        'created_by',
-        'updated_at',
-        'updated_by',
-        '_status',
-        'workspace_id',
-        'is_redacted'
-      ])
+      // Never copied — the one copy rule every clone path uses (services/copy-rules.ts):
+      // id + audit stamps, the pipeline's state field, auto-ids, calculated values and
+      // stored rollups, read-only and hidden fields (partner statuses, external ids,
+      // integration triggers), "do not duplicate" fields and the collection's own
+      // never-copy list. The copy is a NEW record: the create below starts its
+      // pipeline at the start state, resolves owners and starts SLA clocks fresh.
       const { getCollection, getFields } = await import('../services/collections.js')
+      const { copyRulesFor, copyableValues, linkSetsToCopy } = await import(
+        '../services/copy-rules.js'
+      )
       const colMeta = await getCollection(collection)
       if (!colMeta) throw new CollectionNotFoundError(collection)
       const registered = await getFields(collection)
-      const autoIds = new Set((await autoIdFieldsFor(db, collection)).map((f) => f.field))
-      const serverSet = new Set(
-        registered
-          .filter(
-            (f) =>
-              f.readonly ||
-              autoIds.has(f.field) ||
-              (f.special ?? []).some((sp) => /^(user|date)-(created|updated)$/.test(sp))
-          )
-          .map((f) => f.field)
-      )
-      // A copy has none of the original's children: its own stored rollups (and
-      // the fields their parent_filter reads) start fresh, never as a copied total.
-      const { cloneDerivedFields } = await import('../services/rollups.js')
-      for (const f of await cloneDerivedFields(collection)) serverSet.add(f)
-      const clone: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(original)) {
-        if (!PROTECTED_FIELDS.has(k) && !serverSet.has(k)) clone[k] = v
-      }
+      const skip = await copyRulesFor(collection)
+      const clone = copyableValues(original, skip)
 
-      // Apply caller-supplied field overrides — restricted to registered CMS fields only.
-      // Never allow overwriting system/protected columns.
+      // Caller-supplied overrides: registered fields that may copy only — a person
+      // cannot use a clone to write a state, read-only, generated or partner field.
       if (body.field_overrides) {
         const allowedSet = new Set(registered.map((f) => f.field))
         for (const [field, value] of Object.entries(body.field_overrides)) {
-          if (allowedSet.has(field) && !PROTECTED_FIELDS.has(field)) {
-            clone[field] = value
-          }
+          if (allowedSet.has(field) && !skip.has(field)) clone[field] = value
         }
       }
 
-      // Drop excluded fields — guard against removing id or other protected columns
+      // The many-to-many lists (Zone, Project Sub Type…) follow the copy like
+      // More → Duplicate's, under the same rule. Each link is written by the create
+      // as the caller; a list the caller may not set, or a link refused there, is
+      // left out quietly and named in the answer (`not_copied`, field names only).
+      const notCopied: Array<{ field: string; reason: string }> = []
+      const linkCopy = await linkSetsToCopy(req.user!, collection, id, {
+        isAdmin: req.isAdmin
+      }).catch(() => ({ links: {}, notCopied: [] }))
+      const links: Record<string, unknown> = linkCopy.links
+      notCopied.push(...linkCopy.notCopied)
+      if (Object.keys(links).length > 0 && !req.isAdmin) {
+        // Fail closed: a field list we could not get means no list may be set.
+        const allowed = await getAllowedFields(req.user!, 'create', collection).catch(
+          () => [] as string[]
+        )
+        if (allowed && !allowed.includes('*'))
+          for (const f of Object.keys(links))
+            if (!allowed.includes(f)) {
+              delete links[f]
+              notCopied.push({ field: f, reason: 'no-access' })
+            }
+      }
+      Object.assign(clone, links)
+
       if (body.exclude_fields) {
-        for (const field of body.exclude_fields) {
-          if (!PROTECTED_FIELDS.has(field)) delete clone[field]
-        }
+        for (const field of body.exclude_fields) delete clone[field]
       }
 
       // A copy holding the original's natural key would be routed onto the
@@ -2549,6 +2547,11 @@ export async function itemsRoutes(app: FastifyInstance) {
         req.workspaceId ?? undefined
       )
       const newId = made.id
+      for (const failure of made.linkFailures) {
+        const field = failure.split(':')[0]?.trim()
+        if (field && !notCopied.some((n) => n.field === field))
+          notCopied.push({ field, reason: 'refused' })
+      }
 
       // Clone sub-rows for requested fields
       if (body.include_sub_rows?.length) {
@@ -2580,7 +2583,9 @@ export async function itemsRoutes(app: FastifyInstance) {
         req
       })
 
-      return reply.code(201).send({ data: { id: newId } })
+      return reply
+        .code(201)
+        .send({ data: { id: newId, ...(notCopied.length ? { not_copied: notCopied } : {}) } })
     } catch (err) {
       return handleError(err, reply)
     }

@@ -541,6 +541,7 @@
           <a class="docs-nav-item" data-section="duplicate-warnings" href="#duplicate-warnings">Duplicate Warnings</a>
           <a class="docs-nav-item" data-section="partner-needs" href="#partner-needs">Partner Needs on the Form</a>
           <a class="docs-nav-item" data-section="line-split" href="#line-split">Move Lines to a New Record</a>
+          <a class="docs-nav-item" data-section="copying-records" href="#copying-records">Copying Records</a>
           <a class="docs-nav-item" data-section="list-signals" href="#list-signals">Fulfilment, Send-backs &amp; Back to Queue</a>
           <a class="docs-nav-item" data-section="import-from-url" href="#import-from-url">Bulk Import from URL</a>
           <a class="docs-nav-item" data-section="ai-field-mapping" href="#ai-field-mapping">AI Field Mapping</a>
@@ -18538,11 +18539,9 @@ GET /api/duplicates/unit_types/test?record=&lt;id&gt;&amp;config=&lt;JSON&gt;   
             <li>Only fields the person may read are named. Read-only, calculated and generated fields are never badged.</li>
           </ul>
           <h2 class="doc-h2" id="partner-needs-which">Which steps count</h2>
-          <ul class="doc-ul">
             <li>Partner pushes on steps out of the record’s current step and out of every step it can reach by moving forward (to a step with a higher order). A new record starts at its pipeline’s first step. When the pipeline’s steps have no order, only the next steps count. Steps a person presses and automatic steps both count.</li>
             <li>A push counts only when its own conditions pass for the current values: the lookup that must find a row (<code class="doc-code">skip_when_empty</code>), the any-of check (<code class="doc-code">skip_unless_any</code>) and the guard rules. These are the same checks the push itself runs.</li>
             <li>What a push needs is read from its payload template: a value it always sends with no fallback. A value with a fallback, one sent only when it is not empty, or one inside an <code class="doc-code">if</code> in Liquid is not badged.</li>
-          </ul>
           <h2 class="doc-h2" id="partner-needs-setting">Turning it on</h2>
           <p class="doc-p">**Data Model → Settings → Form UX → Partner needs on the form**, per collection, off by default. Stored as <code class="doc-code">browser_config.partner_badges</code> on the collection (no migration):</p>
           <pre class="doc-pre"><code>PATCH /api/collections/stock_requests
@@ -18570,14 +18569,12 @@ GET /api/duplicates/unit_types/test?record=&lt;id&gt;&amp;config=&lt;JSON&gt;   
           <h1 class="doc-h1" id="line-split">Move Lines to a New Record</h1>
           <p class="doc-p">Sometimes part of a request ships now and the rest later, or some lines need a different warehouse. Instead of deleting lines and typing a second request by hand, people tick the lines and move them to a new record. The details are copied, the ticked lines move (they keep their history), and both records say where the lines went.</p>
           <h2 class="doc-h2" id="line-split-use">On a record</h2>
-          <ul class="doc-ul">
             <li>In the line grid, press **Select rows**, tick the lines to move, then **Move N to a new …**. A short panel says what will happen; **Move N lines** does it.</li>
             <li>The new record gets this record’s details and starts at the first step of its pipeline, like any new record. The ticked lines move onto it; the others stay.</li>
             <li>Both records get a note in their Notes thread — “Moved 3 lines to a new record” and “Created from another record — 3 lines moved here” — with a link to the other one. History shows the same.</li>
             <li>A message offers **Open the new …**. The record you were on stays open, without the moved lines.</li>
             <li>At least one line must stay and one must move. To take every line, use More → Duplicate instead.</li>
             <li>Only saved lines can move: save new lines and line changes first.</li>
-          </ul>
           <h2 class="doc-h2" id="line-split-who">Who may do it</h2>
           <p class="doc-p">The person must be able to change the record and its lines, and to create records of that kind. A record someone else is editing, or one locked while it waits on approvers (or locked for administrators after approval), refuses the move with the reason in plain words. Nothing is changed when any line is refused: the new record and every moved line are put back.</p>
           <h2 class="doc-h2" id="line-split-copy">What is copied</h2>
@@ -18587,6 +18584,34 @@ GET /api/duplicates/unit_types/test?record=&lt;id&gt;&amp;config=&lt;JSON&gt;   
           <h2 class="doc-h2" id="line-split-api">API</h2>
           <p class="doc-p"><code class="doc-code">POST /api/record-split/:collection/:id</code> with <code class="doc-code">{relation: "&lt;line collection&gt;.&lt;link field&gt;", line_ids: [...], values?: {...}}</code> answers <code class="doc-code">201 {data: {id, readable, moved, relation, field, link_failures}}</code>. <code class="doc-code">values</code> sets details of the new record that differ (only fields the copy itself could carry). Refusals answer a plain <code class="doc-code">error</code> and a <code class="doc-code">code</code>: <code class="doc-code">SPLIT_OFF</code>, <code class="doc-code">SPLIT_RELATION</code>, <code class="doc-code">SPLIT_NO_LINES</code>, <code class="doc-code">SPLIT_KEEP_ONE</code>, <code class="doc-code">SPLIT_LINE_NOT_ON_RECORD</code>, <code class="doc-code">EDIT_LOCKED</code>, <code class="doc-code">RECORD_LOCKED</code>. It is one write: the record is created with <code class="doc-code">{&lt;lines field&gt;: {move: [ids]}}</code>, the nested one-to-many shape any create or update can use to move existing rows onto a record.</p>
           <!-- /SYNC:line-split -->
+        <div class="doc-section" id="s-copying-records" data-toc='[{"id":"copying-records","label":"Copying Records"},{"id":"copying-records-paths","label":"Where people copy records"},{"id":"copying-records-never","label":"What is never copied"},{"id":"copying-records-setting","label":"Adding fields to the list"},{"id":"copying-records-api","label":"API"}]'>
+          <!-- SYNC:copying-records -->
+          <h1 class="doc-h1" id="copying-records">Copying Records</h1>
+          <p class="doc-p">A copy of a record is a new record. It starts at the first step of its workflow, like any record someone creates by hand: its owners are worked out again, its deadline clocks start now, and none of the original’s history, approvals or notes come along. Only the values a person would type again are copied.</p>
+          <h2 class="doc-h2" id="copying-records-paths">Where people copy records</h2>
+            <li>**Clone** on the record page (More menu, admin and efp-new) — a dialog to change or leave out fields, then <code class="doc-code">POST /api/items/:collection/:id/clone</code>; the copy opens at once, so nobody mistakes the original (still at its step) for the copy. Linked lists (Zone, Project Sub Type…) copy too; a list you may not set stays behind and the message names it.</li>
+            <li>**More → Duplicate** on the record page (admin and efp-new) — opens a new, filled-in form; nothing is saved until the person saves it.</li>
+            <li>**Save as template** — the template keeps the same values a copy would.</li>
+            <li>Lines copied with a record (a grid’s child rows) follow the same rule for their own collection.</li>
+          <h2 class="doc-h2" id="copying-records-never">What is never copied</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Kind of field</th><th>Why</th></tr></thead>
+            <tbody><tr><tr><td>The workflow step field (the pipeline’s state field)</td><td>The copy starts at the first step.</td></tr>
+              <tr><td>Id, created / changed stamps, creator, last step change</td><td>The copy gets its own.</td></tr>
+              <tr><td>Generated ids (auto-id fields)</td><td>A new number is given on save.</td></tr>
+              <tr><td>Calculated fields and totals from lines</td><td>Worked out again for the copy.</td></tr>
+              <tr><td>Read-only fields</td><td>Written by the system: partner statuses, shipped quantities.</td></tr>
+              <tr><td>Hidden fields</td><td>Integration and system state: external ids, triggers.</td></tr>
+              <tr><td>Fields marked “do not duplicate”</td><td>Partner numbers such as an order number.</td></tr>
+              <tr><td>Fields on the collection’s “Never copied” list</td><td>Anything else that belongs to the original only.</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="copying-records-setting">Adding fields to the list</h2>
+          <p class="doc-p">**Table Editor → Settings → Collection Browser → Never copied when duplicating**: pick the fields. Stored as <code class="doc-code">browser_config.never_copy</code> (a list of field names) on the collection; no migration. The card also lists the fields that are always left out and why.</p>
+          <h2 class="doc-h2" id="copying-records-api">API</h2>
+          <pre class="doc-pre"><code>GET /api/copy-rules/:collection
+→ { "data": { "skip": { "request_state": "pipeline-state", "order_number": "do-not-duplicate", … } } }</code></pre>
+          <p class="doc-p">Signed in, and only for collections the caller may read. Field names and reasons only, never values. The clone endpoint applies the same rule, so <code class="doc-code">field_overrides</code> cannot set a field that never copies. It also copies the many-to-many lists under the same rule, each link written as the caller; a list the caller may not set or a refused link comes back as <code class="doc-code">not_copied: [{ field, reason }]</code> (<code class="doc-code">no-access</code> | <code class="doc-code">refused</code>).</p>
+          <!-- /SYNC:copying-records -->
         </div>
 
         <div class="doc-section" id="s-list-signals" data-toc='[{"id":"list-signals","label":"Fulfilment, Send-backs &amp; Back to Queue"},{"id":"list-signals-fulfilment","label":"Shipped n / m on lists"},{"id":"list-signals-send-backs","label":"Sent back"},{"id":"list-signals-back","label":"Back to the queue"},{"id":"list-signals-open-tabs","label":"Open in tabs"},{"id":"list-signals-recent","label":"Recently viewed"},{"id":"list-signals-owner-load","label":"Owner load"},{"id":"list-signals-saved-view-widget","label":"Dashboard widgets from a saved view"},{"id":"list-signals-sla-presets","label":"SLA duration presets"},{"id":"list-signals-row-flags","label":"Row flags on a catalog picker"},{"id":"list-signals-facet-builder","label":"Facet builders on a catalog picker"},{"id":"list-signals-unseen","label":"Changed since you looked"},{"id":"list-signals-formula-columns","label":"Formula columns"},{"id":"list-signals-role-default","label":"Default view per role"},{"id":"list-signals-heavy-columns","label":"Heavy list columns"},{"id":"list-signals-tree","label":"Tree view and hierarchy scope"}]'>

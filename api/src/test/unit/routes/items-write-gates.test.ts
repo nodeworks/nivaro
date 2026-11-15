@@ -21,22 +21,26 @@ vi.mock('../../../services/activity.js', async (orig) => ({
   ...(await orig<object>()),
   logActivity: vi.fn(async () => null)
 }))
-const raw = vi.hoisted(() => ({ tables: [] as string[] }))
+const raw = vi.hoisted(() => ({
+  tables: [] as string[],
+  rows: {} as Record<string, unknown[]>
+}))
 vi.mock('../../../db/index.js', () => {
-  const chain = (): unknown =>
+  const chain = (table?: string): unknown =>
     new Proxy(() => undefined, {
       get(_t, prop) {
         if (prop === 'then')
-          return (res: (v: unknown) => unknown) => Promise.resolve([{ ok: 1 }]).then(res)
+          return (res: (v: unknown) => unknown) =>
+            Promise.resolve((table && raw.rows[table]) || [{ ok: 1 }]).then(res)
         if (prop === 'first') return () => Promise.resolve(undefined)
-        return () => chain()
+        return () => chain(table)
       },
-      apply: () => chain()
+      apply: () => chain(table)
     })
   const db = Object.assign(
     (table: string) => {
       raw.tables.push(table)
-      return chain()
+      return chain(table)
     },
     { raw: async () => [{ ok: 1 }] }
   )
@@ -99,18 +103,37 @@ const svc = vi.hoisted(() => ({
     offset: 0
   })),
   created: [] as Array<Record<string, unknown>>,
-  updated: [] as Array<{ id: string; data: Record<string, unknown> }>
+  updated: [] as Array<{ id: string; data: Record<string, unknown> }>,
+  /** Junction rows the CALLER reads (row filter / scopes already applied); 'throw' = refused. */
+  junction: {} as Record<string, Array<Record<string, unknown>> | 'throw'>,
+  junctionReads: [] as Array<{ user: unknown; collection: string }>
+}))
+// Which linked records the caller can see (record-access visibleIds); null = all.
+const gate = vi.hoisted(() => ({ visible: null as Set<string> | null }))
+vi.mock('../../../services/record-access.js', async (orig) => ({
+  ...(await orig<object>()),
+  compileAccessGates: vi.fn(async (user: unknown, collection: string) => ({ user, collection })),
+  visibleIds: vi.fn(
+    async (_g: unknown, ids: string[]) =>
+      new Set(gate.visible ? ids.filter((i) => gate.visible!.has(i)) : ids)
+  )
 }))
 vi.mock('../../../services/items.js', async (orig) => ({
   ...(await orig<object>()),
   readOne: vi.fn(async () => svc.row),
-  readItems: vi.fn(
-    async (_u: unknown, _c: string, q: { filter?: { id?: { _in?: string[] } } }) => ({
+  readItems: vi.fn(async (u: unknown, c: string, q: { filter?: { id?: { _in?: string[] } } }) => {
+    const j = svc.junction[c]
+    if (j) {
+      svc.junctionReads.push({ user: u, collection: c })
+      if (j === 'throw') throw new Error('Forbidden')
+      return { data: j }
+    }
+    return {
       data: (q.filter?.id?._in ?? [])
         .filter((id) => svc.readable.includes(id))
         .map((id) => ({ id }))
-    })
-  ),
+    }
+  }),
   aggregateItems: svc.aggregate,
   // /distinct checks the column through the column cache (2026-10-27).
   actualColumnName: vi.fn(async (_t: string, c: string) => c),
@@ -142,6 +165,8 @@ vi.mock('../../../services/item-lock-guard.js', async (orig) => ({
 
 import { draftPublishRoutes } from '../../../routes/draft-publish.js'
 import { itemsRoutes } from '../../../routes/items.js'
+import { getCollection, getFields, getRelations } from '../../../services/collections.js'
+import { createOneReported } from '../../../services/items.js'
 import { getAllowedFields } from '../../../services/permissions.js'
 
 async function app() {
@@ -153,6 +178,10 @@ async function app() {
 
 beforeEach(() => {
   raw.tables = []
+  raw.rows = {}
+  svc.junction = {}
+  svc.junctionReads = []
+  gate.visible = null
   svc.row = null
   svc.readable = ['W-SEEN']
   svc.created = []
@@ -196,6 +225,203 @@ describe('POST /items/:collection/:id/clone', () => {
     expect(res.statusCode).toBe(201)
     expect(res.json().data).toEqual({ id: 99 })
     expect(svc.created).toEqual([{ name: 'Line' }])
+  })
+
+  // Rob 2026-11-14: a copy carried the original's progress (partner status, order
+  // number, state mirror). The copy is a NEW record — its pipeline starts fresh.
+  it('never copies the pipeline state field, partner fields or the never-copy list', async () => {
+    raw.rows.nivaro_workflow_bindings = [{ state_field: 'request_state' }]
+    vi.mocked(getCollection).mockImplementation(
+      async (c: string) =>
+        ({
+          collection: c,
+          browser_config: JSON.stringify({ never_copy: ['ship_date'] })
+        }) as never
+    )
+    vi.mocked(getFields).mockImplementation(
+      async () =>
+        [
+          { field: 'name', special: null, readonly: false },
+          { field: 'request_state', special: null, readonly: false },
+          {
+            field: 'order_number',
+            special: null,
+            readonly: false,
+            options: { no_duplicate: true }
+          },
+          { field: 'trigger_push', special: null, readonly: false, hidden: true },
+          { field: 'partner_status', special: null, readonly: true },
+          { field: 'ship_date', special: null, readonly: false },
+          { field: 'last_state_change', special: null, readonly: false },
+          {
+            field: 'request_id',
+            special: null,
+            readonly: false,
+            options: { auto_id: { pattern: 'X' } }
+          }
+        ] as never
+    )
+    svc.row = {
+      id: 7,
+      name: 'Request',
+      request_state: 5,
+      order_number: 'SO-1',
+      trigger_push: true,
+      partner_status: 'shipped',
+      ship_date: '2026-11-01',
+      last_state_change: '2026-11-02',
+      request_id: 'REQ-1'
+    }
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/items/inventory_request/7/clone',
+      payload: { field_overrides: { request_state: 3, order_number: 'SO-2', name: 'Copy' } }
+    })
+    vi.mocked(getCollection).mockImplementation(async (c: string) => ({ collection: c }) as never)
+    vi.mocked(getFields).mockImplementation(
+      async () =>
+        [
+          { field: 'name', special: null, readonly: false },
+          { field: 'creator', special: ['user-created'], readonly: false },
+          { field: 'line_total', special: null, readonly: true }
+        ] as never
+    )
+    expect(res.statusCode).toBe(201)
+    expect(svc.created).toEqual([{ name: 'Copy' }])
+  })
+
+  // Clone copies the many-to-many lists (Zone, sub types) like Duplicate does — read AS
+  // THE CALLER; one they may not read or set, or a link refused by the create, is named
+  // in `not_copied`.
+  const LEG = (junction: string, alias: string, fk: string, target: string) => [
+    {
+      many_collection: junction,
+      many_field: 'workflows_id',
+      one_collection: 'workflows',
+      one_field: alias,
+      junction_field: fk
+    },
+    {
+      many_collection: junction,
+      many_field: fk,
+      one_collection: target,
+      one_field: null,
+      junction_field: 'workflows_id'
+    }
+  ]
+  const withLinks = async (run: () => Promise<void>) => {
+    const zones = LEG('workflows_regions', 'regions', 'regions_id', 'regions')
+    const sub = LEG('workflows_sub_types', 'sub_types', 'sub_types_id', 'sub_types')
+    const files = LEG('workflows_files', 'files', 'directus_files_id', 'directus_files')
+    const prevRelations = vi.mocked(getRelations).getMockImplementation()
+    vi.mocked(getRelations).mockImplementation(
+      async (c?: string) =>
+        (c === 'workflows'
+          ? [zones[0], sub[0], files[0]]
+          : c === 'workflows_regions'
+            ? zones
+            : c === 'workflows_sub_types'
+              ? sub
+              : c === 'workflows_files'
+                ? files
+                : []) as never
+    )
+    svc.junction.workflows_regions = [{ regions_id: 2 }, { regions_id: 5 }]
+    svc.junction.workflows_sub_types = [{ sub_types_id: 9 }]
+    svc.junction.workflows_files = [{ directus_files_id: 'F-1' }]
+    svc.row = { id: 7, name: 'Line' }
+    svc.created = []
+    svc.junctionReads = []
+    try {
+      await run()
+    } finally {
+      vi.mocked(getAllowedFields).mockImplementation(async () => null)
+      if (prevRelations) vi.mocked(getRelations).mockImplementation(prevRelations)
+    }
+  }
+  const cloneSeven = async () =>
+    (await app()).inject({ method: 'POST', url: '/api/items/workflows/7/clone', payload: {} })
+
+  it('copies link sets read as the caller, leaving out what they may not set', async () => {
+    await withLinks(async () => {
+      vi.mocked(getAllowedFields).mockImplementation(async (_u, action) =>
+        action === 'create' ? ['name', 'regions'] : null
+      )
+      const res = await cloneSeven()
+      expect(res.statusCode).toBe(201)
+      expect(svc.created).toEqual([{ name: 'Line', regions: [2, 5] }])
+      expect(res.json().data.not_copied).toEqual([{ field: 'sub_types', reason: 'no-access' }])
+      // Junction rows are read through the items service as the caller; files never are.
+      expect(svc.junctionReads.map((r) => r.collection).sort()).toEqual([
+        'workflows_regions',
+        'workflows_sub_types'
+      ])
+      expect(svc.junctionReads.every((r) => (r.user as { id?: string }).id === 'U-PAUL')).toBe(true)
+    })
+  })
+
+  it('never copies a link to a record the caller cannot read', async () => {
+    await withLinks(async () => {
+      gate.visible = new Set(['2', '9'])
+      const res = await cloneSeven()
+      expect(svc.created).toEqual([{ name: 'Line', regions: [2], sub_types: [9] }])
+      expect(res.json().data.not_copied).toEqual([{ field: 'regions', reason: 'no-read' }])
+    })
+  })
+
+  it('never copies a junction row the caller cannot read', async () => {
+    await withLinks(async () => {
+      // The caller's row filter hides the row linking zone 5; the list itself is refused.
+      svc.junction.workflows_regions = [{ regions_id: 2 }]
+      svc.junction.workflows_sub_types = 'throw'
+      const res = await cloneSeven()
+      expect(svc.created).toEqual([{ name: 'Line', regions: [2] }])
+      expect(res.json().data.not_copied).toEqual([{ field: 'sub_types', reason: 'no-read' }])
+    })
+  })
+
+  it('fails closed when the field lists cannot be read', async () => {
+    await withLinks(async () => {
+      vi.mocked(getAllowedFields).mockImplementation(async (_u, action) => {
+        if (action === 'create') throw new Error('policy store down')
+        return null
+      })
+      const res = await cloneSeven()
+      expect(svc.created).toEqual([{ name: 'Line' }])
+      expect(res.json().data.not_copied).toEqual([
+        { field: 'regions', reason: 'no-access' },
+        { field: 'sub_types', reason: 'no-access' }
+      ])
+    })
+    await withLinks(async () => {
+      vi.mocked(getAllowedFields).mockImplementation(async () => {
+        throw new Error('policy store down')
+      })
+      await cloneSeven()
+      expect(svc.created).toEqual([{ name: 'Line' }])
+      expect(svc.junctionReads).toEqual([])
+    })
+  })
+
+  it('names a link the create refused', async () => {
+    vi.mocked(createOneReported).mockImplementationOnce(async (_u, _c, data) => {
+      svc.created.push(data)
+      return {
+        id: 99,
+        item: { id: 99 },
+        readable: true,
+        linkFailures: ['regions: Forbidden'],
+        upserted: false
+      }
+    })
+    svc.row = { id: 7, name: 'Line' }
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/items/workflows/7/clone',
+      payload: {}
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json().data.not_copied).toEqual([{ field: 'regions', reason: 'refused' }])
   })
 })
 

@@ -59,6 +59,7 @@ import { useSlowReason } from '../hooks/useSlowReason'
 import { formatApiPayload } from '../lib/api-payload'
 import { del, get, getActiveLayout, patch, post, put } from '../lib/commands'
 import type { FieldSource } from '../lib/config-sentences'
+import { childCopySkip, fetchCopySkip, headerCopySkip } from '../lib/copy-rules'
 import {
   deleteDraft,
   draftCreatedAs,
@@ -1297,11 +1298,14 @@ const DUPLICATE_CHILD_SKIP = new Set([
 export function duplicateChildRow(
   row: Record<string, unknown>,
   parentField: string,
-  childConfig: Array<{ field: string; readonly?: boolean | null; options?: unknown }> | null
+  childConfig: Array<{ field: string; readonly?: boolean | null; options?: unknown }> | null,
+  /** The child collection's copy rule (lib/copy-rules.ts childCopySkip). */
+  extraSkip?: ReadonlySet<string>
 ): Record<string, unknown> {
   const blocked = new Set(
     (childConfig ?? []).filter((f) => f.readonly || isNoDuplicate(f)).map((f) => f.field)
   )
+  for (const f of extraSkip ?? []) blocked.add(f)
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(row)) {
     if (DUPLICATE_CHILD_SKIP.has(k) || k === parentField || blocked.has(k)) continue
@@ -14514,7 +14518,16 @@ function ItemEditFormView({
                                                     // are integration/system state (external ids, status
                                                     // mirrors) that must not follow the record.
                                                     const copyable = new Set<string>()
-                                                    const skip = new Set<string>(AUDIT)
+                                                    // The one copy rule (api services/copy-rules.ts): the
+                                                    // pipeline's state field, partner statuses / external
+                                                    // ids, the collection's never-copy list — a copy starts
+                                                    // fresh, never at the original's step.
+                                                    const skip = new Set<string>([
+                                                      ...AUDIT,
+                                                      ...headerCopySkip(
+                                                        await fetchCopySkip(client, qc, collection)
+                                                      )
+                                                    ])
                                                     for (const fc of fieldConfig ?? []) {
                                                       const opts = fc.options as Record<
                                                         string,
@@ -14730,12 +14743,22 @@ function ItemEditFormView({
                                                               })
                                                               .catch(() => null)
                                                           ])
+                                                        // The line's copy rule (its state field,
+                                                        // generated ids, partner columns).
+                                                        const childSkip = childCopySkip(
+                                                          await fetchCopySkip(
+                                                            client,
+                                                            qc,
+                                                            rel.many_collection
+                                                          )
+                                                        )
                                                         const childRows = (res.data ?? []).map(
                                                           (r0) =>
                                                             duplicateChildRow(
                                                               r0,
                                                               rel.many_field as string,
-                                                              childConfig
+                                                              childConfig,
+                                                              childSkip
                                                             )
                                                         )
                                                         if (childRows.length) rows[key] = childRows
@@ -15075,13 +15098,27 @@ function ItemEditFormView({
                                                           'creator',
                                                           'last_state_change'
                                                         ])
+                                                        // A template never carries what a copy
+                                                        // leaves behind (lib/copy-rules.ts): the
+                                                        // state field, partner statuses, ids.
+                                                        const copySkip = headerCopySkip(
+                                                          await fetchCopySkip(
+                                                            client,
+                                                            qc,
+                                                            collection
+                                                          )
+                                                        )
                                                         const values: Record<string, unknown> = {}
                                                         for (const fc of fieldConfig ?? []) {
                                                           const opts = fc.options as Record<
                                                             string,
                                                             unknown
                                                           > | null
-                                                          if (AUDIT.has(fc.field)) continue
+                                                          if (
+                                                            AUDIT.has(fc.field) ||
+                                                            copySkip.has(fc.field)
+                                                          )
+                                                            continue
                                                           if (
                                                             opts &&
                                                             typeof opts === 'object' &&
