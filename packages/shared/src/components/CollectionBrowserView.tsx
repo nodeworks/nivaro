@@ -132,6 +132,17 @@ import {
   viewerMatches,
   writerOf
 } from '../lib/live-list'
+import {
+  burstWriter,
+  createCoalescer,
+  GONE_ROW_CLASS,
+  GONE_ROW_TITLE,
+  resumeAsRefetch,
+  totalsMayMove,
+  useLiveBurst,
+  useLivePause,
+  useSteadyRows
+} from '../lib/live-list-flow'
 import { listLoadErrorText, loadErrorStatus } from '../lib/load-error'
 import { listTrailDetail, setTrailDetail } from '../lib/nav-trail'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
@@ -244,6 +255,7 @@ import { usePickerExclusion } from './item-edit/RecordGrantTools'
 import { invalidateRecordQueries } from './item-edit/RecordLiveSync'
 import { relatedMissing } from './item-edit/related-missing'
 import { UserChip, UserRosterCluster } from './item-edit/UserChip'
+import { LiveBurstPill, LivePauseButton } from './LiveListControls'
 import { LiveRowMark } from './LiveRowMark'
 import { CopyListLinkButton } from './list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from './list/InlineEdit'
@@ -5855,9 +5867,42 @@ export function CollectionBrowserView({
   // count into a pill the viewer clicks to refresh — a paging table that
   // silently reshuffles rows under the cursor reads as a glitch, not freshness.
   const [pendingLive, setPendingLive] = useState(0)
+  // Realtime round 2 (2026-11-14, lib/live-list-flow.ts): an import or bulk change is one
+  // quiet pill (#10), the list can be paused (#11), totals follow the rows (#13).
+  const liveBurst = useLiveBurst()
+  const liveBurstRef = useRef(liveBurst)
+  liveBurstRef.current = liveBurst
+  const liveApplyRef = useRef<((evs: CollectionUpdateEvent[]) => void) | null>(null)
+  const totalFieldsRef = useRef<Set<string>>(new Set())
+  totalFieldsRef.current = new Set(totalReads.map((r) => r.key))
+  const refreshTotals = () => void qc.invalidateQueries({ queryKey: ['cbv-col-total', collection] })
+  const livePause = useLivePause<CollectionUpdateEvent>(
+    collection ? `cbv:${collection}` : null,
+    (held) => {
+      // Resume applies what waited in one go: record by record when it is a few, else one read.
+      if (!resumeAsRefetch(held) && liveApplyRef.current) return liveApplyRef.current(held)
+      liveBurstRef.current.clear()
+      setPendingLive(0)
+      void refetch()
+      refreshTotals()
+    }
+  )
+  const livePauseGate = livePause.gate
+  /** Show (burst pill) / Refresh: one re-read of the rows and their totals. */
+  const showLiveChanges = () => {
+    liveBurst.clear()
+    livePause.dropHeld()
+    setPendingLive(0)
+    void refetch()
+    refreshTotals()
+  }
   useEffect(() => {
     if (!realtime || !collection) return
     const countPill = (n = 1) => setPendingLive((c) => c + n)
+    // Totals rows (#13): re-asked as the viewer at most every 2 s while changes keep coming.
+    const totals = createCoalescer(
+      () => void qc.invalidateQueries({ queryKey: ['cbv-col-total', collection] })
+    )
     // Aspect notices (#1874/#1873/#1825/#1824 — `$tasks`, `$addendums`, …)
     // say a row's related counts/badges moved, not its columns: refresh just
     // those per-page reads, coalesced, and never count them into the pill.
@@ -5912,6 +5957,30 @@ export function CollectionBrowserView({
           countsTimer = null
           void qc.invalidateQueries({ queryKey: ['cbv-view-count', collection] })
         }, 1500)
+      // An import or bulk change (#10): no row patches or flashes — one pill, Show = one read.
+      // The writer comes from ONE viewer read of a few of its rows, once per burst.
+      const burst = liveBurstRef.current
+      if (burst.tracker.push(events as never)) {
+        burst.publish()
+        const sample = burst.tracker.current()?.sample ?? []
+        if (sample.length > 0 && burst.claimWriterRead())
+          void viewerMatches(client, collection, sample, undefined)
+            .then((rows) => {
+              const w = burstWriter(rows.values())
+              const self = !!w && !!selfUserId && w.toUpperCase() === selfUserId.toUpperCase()
+              if (!disposed && w && !self) liveBurstRef.current.setWriter(w)
+            })
+            .catch(() => {})
+        return
+      }
+      if (
+        totalsMayMove(
+          events,
+          totalFieldsRef.current,
+          conditionFields(liveCtxRef.current.conditions)
+        )
+      )
+        totals.poke()
       const latest = new Map<string, CollectionUpdateEvent>()
       let bulk = false
       for (const ev of events) {
@@ -6056,23 +6125,32 @@ export function CollectionBrowserView({
       if (buf.length > 0 && !flushTimer) flushTimer = setTimeout(() => void flush(), 300)
     }
 
-    const unsub = realtime.subscribeCollections([collection], (ev) =>
-      deliverLive(liveOwner, [ev], handle)
-    )
+    // Paused (#11): held per list until Resume; then focus mode decides as before.
+    const apply = (evs: CollectionUpdateEvent[]) => deliverLive(liveOwner, evs, handle)
+    liveApplyRef.current = apply
+    const unsub = realtime.subscribeCollections([collection], (ev) => livePauseGate([ev], apply))
     return () => {
       disposed = true
       unsub()
+      liveApplyRef.current = null
       releaseLiveOwner(liveOwner)
+      totals.cancel()
       if (aspectTimer) clearTimeout(aspectTimer)
       if (flushTimer) clearTimeout(flushTimer)
       if (countsTimer) clearTimeout(countsTimer)
     }
-  }, [realtime, collection, qc, client, selfUserId, rowChanges, liveOwner])
+  }, [realtime, collection, qc, client, selfUserId, rowChanges, liveOwner, livePauseGate])
   const rowLocks = useRowLocks(
     collection,
     rows.map((r) => String(r.id)),
     lockTick
   )
+  // Rows never move under the pointer or keyboard focus (#12): a reorder waits until the
+  // pointer leaves the list (≤ 10 s); values still update in place.
+  const steadyRows = useSteadyRows(rows, (r) => String(r.id), rowChanges.rootRef, {
+    enabled: !groupBy && !aiResult,
+    resetKey: JSON.stringify(itemsKeyRef.current)
+  })
 
   // ── At-risk row highlighting (nivaro_at_risk_rules) ───────────────────────
   // One rules probe per collection; when any active rule exists, the visible
@@ -7614,7 +7692,7 @@ export function CollectionBrowserView({
     | { kind: 'header'; gkey: string; label: string; count: number }
     | { kind: 'row'; row: Record<string, unknown> }
   const renderList: CbvEntry[] = (() => {
-    if (!groupBy) return rows.map((row) => ({ kind: 'row' as const, row }))
+    if (!groupBy) return steadyRows.rows.map((row) => ({ kind: 'row' as const, row }))
     const buckets = new Map<string, Array<Record<string, unknown>>>()
     for (const row of rows) {
       const g = groupValueOf(row)
@@ -8277,13 +8355,18 @@ export function CollectionBrowserView({
         })}
         <RealtimeStaleMark className='h-8' />
         <FocusModeToggle />
-        {pendingLive > 0 && (
+        {realtime && collection && (
+          <LivePauseButton
+            paused={livePause.paused}
+            held={livePause.held}
+            onToggle={livePause.toggle}
+          />
+        )}
+        {liveBurst.label && <LiveBurstPill label={liveBurst.label} onShow={showLiveChanges} />}
+        {pendingLive > 0 && !liveBurst.label && (
           <button
             type='button'
-            onClick={() => {
-              setPendingLive(0)
-              void refetch()
-            }}
+            onClick={showLiveChanges}
             className='flex h-8 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2.5 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
           >
             {pendingLive} update{pendingLive === 1 ? '' : 's'} · Refresh
@@ -8291,10 +8374,7 @@ export function CollectionBrowserView({
         )}
         <button
           type='button'
-          onClick={() => {
-            setPendingLive(0)
-            void refetch()
-          }}
+          onClick={showLiveChanges}
           aria-label='Refresh'
           title='Refresh'
           className='flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
@@ -10204,16 +10284,20 @@ export function CollectionBrowserView({
                           {...rowOpenProps(id)}
                           data-row-key={String(id)}
                           title={
+                            (steadyRows.isGone(String(id)) ? GONE_ROW_TITLE : undefined) ??
                             rowChanges.titleFor(String(id)) ??
                             (rowLock && !rowLock.is_mine ? lockLabel(rowLock) : undefined) ??
                             (risk ? `At risk — ${risk.rule}` : undefined) ??
                             (pickerExcluded ? PICKER_EXCLUDED_TITLE : undefined)
                           }
                           data-picker-excluded={pickerExcluded ? '' : undefined}
+                          data-row-gone={steadyRows.isGone(String(id)) ? '' : undefined}
                           style={enterStyle}
                           className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-nvr-cyan/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan dark:border-slate-800 dark:hover:bg-nvr-cyan/[0.08] ${
                             isSelected ? 'bg-nvr-cyan/[0.08]' : (riskTint ?? '')
-                          } ${pickerExcluded ? PICKER_EXCLUDED_ROW_CLASS : ''}`}
+                          } ${pickerExcluded ? PICKER_EXCLUDED_ROW_CLASS : ''} ${
+                            steadyRows.isGone(String(id)) ? GONE_ROW_CLASS : ''
+                          }`}
                         >
                           {/* stopPropagation only — the checkbox's own onChange
                             toggles; toggling here too would double-toggle. */}

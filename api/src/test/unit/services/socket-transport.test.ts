@@ -114,6 +114,22 @@ describe('mergeUpdates (#1681)', () => {
       _seq: 9
     })
   })
+  it('keeps the import / raw source only when every merged write had it', () => {
+    const imp = { collection: 'o', action: 'create', source: 'import' }
+    expect(
+      mergeUpdates('o', [
+        { ...imp, item: 1 },
+        { ...imp, item: 2 }
+      ]).source
+    ).toBe('import')
+    expect(
+      mergeUpdates('o', [
+        { ...imp, item: 1 },
+        { collection: 'o', item: 2, action: 'create' }
+      ]).source
+    ).toBeUndefined()
+    expect(mergeUpdates('o', [{ collection: 'o', item: 1 }]).source).toBeUndefined()
+  })
   it('says "many" past the cap and leaves the field list open when one event had none', () => {
     const list = Array.from({ length: 5 }, (_, i) => ({
       collection: 'o',

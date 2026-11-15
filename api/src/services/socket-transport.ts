@@ -469,6 +469,9 @@ export interface CoalescedUpdate {
   _room?: string
   /** #2477 — the delivery stamp of the newest event merged, when that one carried it. */
   _st?: number
+  /** Realtime round 2 (2026-11-14): every merged write came from an import run / a raw write
+   *  (#1826 / #1875), so a list can say "Import added 500 records". Absent when they differ. */
+  source?: 'import' | 'raw'
 }
 
 /** Collapse several `collection:update` payloads for one collection into one message. */
@@ -487,7 +490,9 @@ export function mergeUpdates(
   let rseq: number | undefined
   let rseqMin: number | undefined
   let room: string | undefined
+  const sources = new Set<unknown>()
   for (const p of list) {
+    sources.add(p.source)
     const id = p.item as string | number | null | undefined
     if (id != null && !seen.has(String(id))) {
       seen.add(String(id))
@@ -518,6 +523,8 @@ export function mergeUpdates(
     coalesced: true
   }
   if (actions.size === 1) out.action = [...actions][0] as CoalescedUpdate['action']
+  const source = sources.size === 1 ? [...sources][0] : undefined
+  if (source === 'import' || source === 'raw') out.source = source
   // A message with no field list means "anything may have changed" — the union stays open.
   if (!anyAllFields && fields.size) out.changed_fields = [...fields].slice(0, 50)
   if (seq != null) out._seq = seq

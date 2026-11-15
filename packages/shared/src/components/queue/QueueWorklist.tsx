@@ -87,6 +87,15 @@ import {
 import { arrivedByListReturn, ensureHistoryKey, historyKey } from '../../lib/list-page-memory'
 import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
+import {
+  type BurstEvent,
+  GONE_ROW_CLASS,
+  GONE_ROW_TITLE,
+  resumeAsRefetch,
+  useLiveBurst,
+  useLivePause,
+  useSteadyRows
+} from '../../lib/live-list-flow'
 import { listTrailDetail, setTrailDetail } from '../../lib/nav-trail'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isOwnWrite } from '../../lib/own-writes'
@@ -142,6 +151,7 @@ import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/In
 import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { queueReturnApplies, readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { ListLoadError } from '../ListLoadError'
+import { LiveBurstPill, LivePauseButton } from '../LiveListControls'
 import { LiveRowMark } from '../LiveRowMark'
 import { CopyListLinkButton } from '../list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from '../list/InlineEdit'
@@ -827,6 +837,17 @@ export function QueueWorklist({
   const selectedCountRef = useRef(0)
   const viewRef = useRef<'table' | 'kanban' | 'workload'>('table')
   viewRef.current = view
+  // Realtime round 2 (2026-11-14, lib/live-list-flow.ts): an import or bulk change is one
+  // quiet pill (#10); the list can be paused, and Resume applies what waited in one go (#11).
+  const liveBurst = useLiveBurst()
+  const liveBurstRef = useRef(liveBurst)
+  liveBurstRef.current = liveBurst
+  const liveApplyRef = useRef<((evs: BurstEvent[]) => void) | null>(null)
+  const livePause = useLivePause<BurstEvent>(queueId ? `queue:${queueId}` : null, (held) => {
+    if (!resumeAsRefetch(held) && liveApplyRef.current) return liveApplyRef.current(held)
+    showLiveChanges()
+  })
+  const livePauseGate = livePause.gate
   const limit = 25
 
   const { data: queue, error: queueError } = useQuery<QueueMeta>({
@@ -1074,10 +1095,26 @@ export function QueueWorklist({
       const flat = evs.flatMap((e) =>
         e ? (expandCoalesced(e as never) as unknown as LiveEv[]) : [e]
       )
+      const aspectOnly = (ev: LiveEv | undefined) =>
+        !!ev &&
+        !ev.action &&
+        !!ev.changed_fields?.length &&
+        ev.changed_fields.every((f) => f.startsWith('$'))
+      // An import or bulk change (#10): its rows wait for the pill's Show (one re-read) —
+      // no refetch, flashes or stats ticks per batch. Records key by collection + id.
+      const writes = flat
+        .filter((ev) => ev && !aspectOnly(ev))
+        .map((ev) => ({
+          ...ev,
+          item: String(ev?.item ?? '*') === '*' ? '*' : `${ev?.collection}:${String(ev?.item)}`
+        }))
+      const inBurst = writes.length > 0 && liveBurstRef.current.tracker.push(writes as never)
+      if (inBurst) liveBurstRef.current.publish()
       for (const ev of flat) {
         const fields = ev?.changed_fields
         const key = ev?.collection != null ? `${ev.collection}:${String(ev.item)}` : null
         const visible = key != null && visibleKeysRef.current.has(key)
+        if (inBurst && !aspectOnly(ev)) continue
         if (ev && !ev.action && fields?.length && fields.every((f) => f.startsWith('$'))) {
           if (fields.includes(LIVE_ASPECTS.tasks)) aspectKeys.add('queue-task-counts')
           if (fields.includes(LIVE_ASPECTS.integrations))
@@ -1110,15 +1147,19 @@ export function QueueWorklist({
       if (refresh) scheduleRefetch()
       if (stats) scheduleStats()
     }
-    const unsub = subscribe(collections, (ev) => deliverLive(liveOwner, [ev ?? {}], handle))
+    // Paused (#11): held per queue until Resume; then focus mode decides as before.
+    const apply = (held: BurstEvent[]) => deliverLive(liveOwner, held as LiveEv[], handle)
+    liveApplyRef.current = apply
+    const unsub = subscribe(collections, (ev) => livePauseGate([(ev ?? {}) as BurstEvent], apply))
     return () => {
       unsub()
+      liveApplyRef.current = null
       releaseLiveOwner(liveOwner)
       if (aspectTimer) clearTimeout(aspectTimer)
       if (refetchTimer) clearTimeout(refetchTimer)
       if (statsTimer) clearTimeout(statsTimer)
     }
-  }, [ctxRealtime, realtime, queue?.sources, qc, queueId, userId, liveOwner])
+  }, [ctxRealtime, realtime, queue?.sources, qc, queueId, userId, liveOwner, livePauseGate])
 
   // Inputs stay bound to filterValues (instant UI); the items query keys off
   // this trailing copy so text filters don't fire a request per keystroke.
@@ -1745,15 +1786,20 @@ export function QueueWorklist({
     stats: QueueStats
     filtered_stats: QueueStats | null
     state_counts?: Record<string, number>
+    totals?: QueueTotalsAnswer
+    totals_partial?: boolean
   }>({
     queryKey: ['queue-live-stats', queueId, scope, debouncedFilterValues, statsTick],
+    // The totals row ticks with the tiles (#13): the same read totals the whole result as the
+    // viewer (it reads every row for the stats already), coalesced by the stats tick.
     queryFn: () =>
       client.request(
         get(`/queues/${queueId}/items`, {
           scope,
           filters: JSON.stringify(apiFilters),
           page: 1,
-          limit: 1
+          limit: 1,
+          ...(totalPaths.length ? { totals: totalPaths.join(',') } : {})
         })
       ),
     enabled: statsTick > 0 && !!data,
@@ -1819,6 +1865,17 @@ export function QueueWorklist({
     items.map((r) => ({ collection: r.collection, id: r.item_id })),
     lockTick
   )
+  // Rows never move under the pointer or keyboard focus (#12): a reorder from a live refetch
+  // waits until the pointer leaves the table (≤ 10 s); values still update in place.
+  const steadyItems = useSteadyRows(
+    items,
+    (r) => `${r.collection}:${r.item_id}`,
+    rowChanges.rootRef,
+    {
+      enabled: view === 'table' && !serverGrouped,
+      resetKey: JSON.stringify([queueId, scope, page, sort, debouncedFilterValues])
+    }
+  )
   // A stable enter key through live refetches, so rows that did not change
   // do not replay their enter animation.
   const enterKeyRef = useRef(dataUpdatedAt)
@@ -1858,12 +1915,19 @@ export function QueueWorklist({
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on each completed read
   useEffect(() => {
     setPendingUpdates(0)
+    liveBurstRef.current.clear()
   }, [dataUpdatedAt])
 
   function refreshPendingUpdates() {
     qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
     qc.invalidateQueries({ queryKey: ['queue-workload', queueId] })
     setPendingUpdates(0)
+  }
+  /** Show (burst pill) / a big Resume: one re-read of the rows, stats and totals. */
+  function showLiveChanges() {
+    liveBurstRef.current.clear()
+    livePause.dropHeld()
+    refreshPendingUpdates()
   }
 
   // ── Trends (daily snapshots → sparklines + deltas on the global tiles) ──
@@ -3623,8 +3687,15 @@ export function QueueWorklist({
     ...(claimsEnabled ? [claimColumn] : []),
     actionsColumn
   ]
-  // The footer: one figure per visible column with a total on, over the whole result.
-  const totalsAnswer = data?.totals
+  // The footer: one figure per visible column with a total on, over the whole result. The
+  // newer of the list read and the live stats read (#13) wins, per column.
+  const liveTotalsNewer = liveStatsNewer && !!liveStats?.totals
+  const totalsAnswer: QueueTotalsAnswer | undefined = liveTotalsNewer
+    ? { ...data?.totals, ...liveStats?.totals }
+    : data?.totals
+  const totalsPartial = liveTotalsNewer
+    ? liveStats?.totals_partial === true
+    : data?.totals_partial === true
   const totalsRow = (() => {
     if (!totalsOn) return undefined
     const cells: Record<string, React.ReactNode> = {}
@@ -3654,7 +3725,7 @@ export function QueueWorklist({
               sup.kind === 'server' ? totalsAnswer?.[sup.path]?.by_collection : undefined,
             collectionLabel,
             format,
-            partial: data?.totals_partial === true,
+            partial: totalsPartial,
             derivedText: sup.kind === 'derived' ? derivedText(sup.terms) : undefined
           })
       cells[c.key] = (
@@ -3667,7 +3738,7 @@ export function QueueWorklist({
           ) : (
             <span className='text-slate-700 dark:text-slate-200'>
               {value == null ? '—' : format(value)}
-              {data?.totals_partial ? '*' : ''}
+              {totalsPartial ? '*' : ''}
             </span>
           )}
         </span>
@@ -4463,7 +4534,15 @@ export function QueueWorklist({
           )}
           <RealtimeStaleMark className='h-8' />
           <FocusModeToggle />
-          {pendingUpdates > 0 && (
+          {(ctxRealtime || realtime) && queueId && (
+            <LivePauseButton
+              paused={livePause.paused}
+              held={livePause.held}
+              onToggle={livePause.toggle}
+            />
+          )}
+          {liveBurst.label && <LiveBurstPill label={liveBurst.label} onShow={showLiveChanges} />}
+          {pendingUpdates > 0 && !liveBurst.label && (
             <button
               type='button'
               onClick={refreshPendingUpdates}
@@ -5323,7 +5402,7 @@ export function QueueWorklist({
                   density={density}
                   minBodyHeight={360}
                   columns={columns}
-                  rows={items}
+                  rows={steadyItems.rows}
                   rowKey={(row) => `${row.collection}:${row.item_id}`}
                   total={data?.total ?? 0}
                   page={page}
@@ -5347,6 +5426,7 @@ export function QueueWorklist({
                   rowTitle={(row) => {
                     const lock = rowLocks.get(rowId(row))
                     return (
+                      (steadyItems.isGone(rowId(row)) ? GONE_ROW_TITLE : undefined) ??
                       rowChanges.titleFor(rowId(row)) ??
                       (lock && !lock.is_mine ? lockLabel(lock) : undefined) ??
                       (isPickerExcluded(row.collection, row.item_id)
@@ -5357,7 +5437,8 @@ export function QueueWorklist({
                   rowClassName={(row) =>
                     cn(
                       rowHighlight(row),
-                      isPickerExcluded(row.collection, row.item_id) && PICKER_EXCLUDED_ROW_CLASS
+                      isPickerExcluded(row.collection, row.item_id) && PICKER_EXCLUDED_ROW_CLASS,
+                      steadyItems.isGone(rowId(row)) && GONE_ROW_CLASS
                     )
                   }
                   emptyMessage={

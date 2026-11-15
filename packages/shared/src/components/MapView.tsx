@@ -3,6 +3,7 @@ import { useMemo } from 'react'
 import { useNivaroClient } from '../context'
 import { get } from '../lib/commands'
 import { useLiveQueryRefresh } from '../lib/live-list'
+import { useListPaused } from '../lib/live-list-flow'
 import { BaseMap, type BaseMapPin } from './BaseMap'
 
 /**
@@ -47,8 +48,9 @@ export function MapView({
         .then((r) => r.data ?? []),
     staleTime: 30_000
   })
-  // Pins others add or move appear in place (#2124).
-  useLiveQueryRefresh(collection, [['map-view', collection]])
+  // Pins others add or move appear in place (#2124); the list's Pause holds them too.
+  const paused = useListPaused(`cbv:${collection}`)
+  useLiveQueryRefresh(collection, [['map-view', collection]], { paused })
 
   const pins: BaseMapPin[] = useMemo(
     () =>

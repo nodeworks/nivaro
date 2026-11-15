@@ -45,8 +45,25 @@ export const collabLiveLists: DocSection = {
         [
           'Calendar, Gantt and map views',
           'Records others add, move or reschedule appear in place without a flash.'
+        ],
+        [
+          'An import or bulk change (a dozen or more records within two seconds)',
+          'No row flashes. One quiet pill says what happened — "Import added 500 records · Show", "Beth updated 40 rows · Show" — and Show re-reads the list once. The name comes from your own read of a few of the rows, so it only appears when you can see who changed them.'
+        ],
+        [
+          'Your pointer or keyboard is on a row',
+          'Rows at and above it never move. A record that would slide in above it waits, a record that left the list stays in place faded with "No longer in this list" on hover, and values still update. The new order is drawn when the pointer leaves the list or focus moves elsewhere (at most about 10 seconds).'
+        ],
+        [
+          'A totals row is on',
+          'The Sum / Average / Min / Max / Count figures re-count as you, at most every couple of seconds while changes keep coming, and only when a change could move them (a new or removed record, or a totalled or filtered field). On a queue they tick with the stat tiles.'
         ]
       ]
+    },
+    { type: 'h3', id: 'live-lists-pause', text: 'Pause live updates' },
+    {
+      type: 'p',
+      text: 'The pause button in a list or queue toolbar stops that one list from changing while you work through it. While paused it turns amber and counts the changes waiting; click it again to resume and they are applied in one go (a few records are updated in place, a lot are re-read at once). Each list remembers being paused until you close the browser tab. Focus mode still works on top of it and applies to every list.'
     },
     { type: 'h3', id: 'live-lists-focus', text: 'Focus mode' },
     {
@@ -60,7 +77,9 @@ export const collabLiveLists: DocSection = {
         '`collection:update` now also carries `by` (the writer’s user id) when a person made the change; system writes omit it. Clients still ignore their own writes.',
         '`POST /api/item-locks/:collection/active {ids}` (signed in) returns `[{item, locked_by, locked_by_name, is_mine}]` for the records in `ids` that are locked and that the caller can read through the items service. Collections with locking off, and system tables, return nothing.',
         'A lock taken or released sends a payload-free `$lock` notice on the collection feed (`LIVE_ASPECTS.lock`).',
-        'In `@nivaro/shared`: `useRowChanges`, `useRowLocks` / `useRowLocksByCollection`, `viewerMatches`, `useLiveQueryRefresh` (query-backed views) and `FocusModeToggle` / `deliverLive` for focus mode. `useLiveCollection(…, { focusable: true })` holds its batches while focus mode is on.'
+        'In `@nivaro/shared`: `useRowChanges`, `useRowLocks` / `useRowLocksByCollection`, `viewerMatches`, `useLiveQueryRefresh` (query-backed views) and `FocusModeToggle` / `deliverLive` for focus mode. `useLiveCollection(…, { focusable: true })` holds its batches while focus mode is on.',
+        'lib/live-list-flow.ts: `createBurstTracker` / `useLiveBurst` + `LiveBurstPill` (bursts), `useLivePause` + `LivePauseButton` (pause, kept in sessionStorage `nvr:live-paused` per list key such as `cbv:<collection>` or `queue:<id>`; `useLiveQueryRefresh(…, { paused })` for query-backed views), `useSteadyRows` / `planRowOrder` (rows carry `data-row-key`), `totalsMayMove` + `createCoalescer` (totals re-reads).',
+        "A merged (coalesced or batched) `collection:update` keeps `source: 'import' | 'raw'` when every write in it had the same one."
       ]
     }
   ]
