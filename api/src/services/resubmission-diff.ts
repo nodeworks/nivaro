@@ -479,7 +479,20 @@ export async function buildResubmissionDiff(
   const [allowed, relsRaw] = await Promise.all([
     allowedFor(caller, collection),
     db('nivaro_relations')
-      .where((q) => q.where('many_collection', collection).orWhere('one_collection', collection))
+      .where((q) =>
+        q
+          .where('many_collection', collection)
+          .orWhere('one_collection', collection)
+          // A junction's other leg (workflows_files.file → nivaro_files) names neither side as
+          // this collection; without it a files junction is never recognised as file links.
+          .orWhereIn(
+            'many_collection',
+            db('nivaro_relations')
+              .where('one_collection', collection)
+              .whereNotNull('junction_field')
+              .select('many_collection')
+          )
+      )
       .select('many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field')
       .catch(() => []) as Promise<Rel[]>
   ])

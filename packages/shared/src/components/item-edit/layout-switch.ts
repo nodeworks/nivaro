@@ -56,6 +56,25 @@ const same = (a: unknown, b: unknown) => {
 }
 
 /**
+ * The new form's field list as the form shows it (pure; exported for tests): the field config
+ * lists every field of the collection, but a grouped form shows only the fields it places. A
+ * field the new form does not place (or places hidden) reads as hidden, so its unsaved value is
+ * held in the chip instead of riding the save into a field the person can no longer see. A form
+ * that places nothing (a legacy form showing every field) leaves the list as it is.
+ */
+export function placedFields(
+  fields: CMSField[] | null | undefined,
+  layout: Pick<ActiveLayoutData, 'assignments'> | null | undefined
+): CMSField[] | null | undefined {
+  const assignments = layout?.assignments ?? []
+  if (!fields || assignments.length === 0) return fields
+  const shown = new Set(
+    assignments.filter((a) => a.is_visible !== false && a.is_visible !== 0).map((a) => a.field)
+  )
+  return fields.map((f) => (shown.has(f.field) || f.hidden ? f : { ...f, hidden: true }))
+}
+
+/**
  * Which unsaved values stay in the form and which are held back for the new form (pure;
  * exported for tests). Unsaved = the draft differs from what is saved.
  */

@@ -425,6 +425,23 @@ export async function recordsCarryingFile(
           if (id != null) out.push({ collection, id })
         }
     }
+    // A record's comment that shows the file (a pasted image): the record's file preview opens
+    // from there, so its "newer version" notice needs the record to hear `$files` too.
+    if (/^[0-9a-f-]{36}$/i.test(fileId)) {
+      const rows = (await db('nivaro_comments')
+        .whereNull('deleted_at')
+        .where('text', 'like', `%${fileId}%`)
+        .distinct('collection', 'item')
+        .limit(RELATED_ID_CAP)
+        .catch(() => [])) as Array<{ collection?: unknown; item?: unknown }>
+      for (const row of rows) {
+        const collection = String(row.collection ?? '')
+        const id = idOf(row.item)
+        if (!collection || isSystemCollection(collection) || id == null) continue
+        if (!out.some((o) => o.collection === collection && o.id === id))
+          out.push({ collection, id })
+      }
+    }
   } catch {
     /* best-effort */
   }

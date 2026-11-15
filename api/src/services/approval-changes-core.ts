@@ -160,8 +160,56 @@ export function approvalMomentOf(
   return { at: steps[i].at, state: steps[i].to_key, approvers: approvers.slice(0, 10) }
 }
 
+/**
+ * Rich text as its words: a legacy EditorJS document (object or JSON text) and the Tiptap HTML it
+ * was converted to read the same, so the conversion is never "a change after approval". Null when
+ * the value is neither.
+ */
+export function richPlain(v: unknown): string | null {
+  let doc: unknown = v
+  if (typeof v === 'string') {
+    const s = v.trim()
+    if (s.startsWith('{') && /"blocks"\s*:/.test(s)) {
+      try {
+        doc = JSON.parse(s)
+      } catch {
+        return null
+      }
+    } else if (/^<[a-z][\s\S]*>$/i.test(s)) return plainWords(s)
+    else return null
+  }
+  if (!doc || typeof doc !== 'object' || !Array.isArray((doc as { blocks?: unknown }).blocks))
+    return null
+  const parts: string[] = []
+  for (const b of (doc as { blocks: Array<{ data?: Record<string, unknown> }> }).blocks) {
+    const d = b?.data ?? {}
+    if (typeof d.text === 'string') parts.push(d.text)
+    else if (Array.isArray(d.items))
+      for (const it of d.items as unknown[])
+        parts.push(
+          typeof it === 'string' ? it : String((it as { content?: unknown })?.content ?? '')
+        )
+  }
+  return plainWords(parts.join(' '))
+}
+
+function plainWords(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function norm(v: unknown): unknown {
   if (v === undefined || v === null || v === '') return null
+  const rich = richPlain(v)
+  if (rich !== null) return rich === '' ? null : rich
   if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString()
   if (typeof v === 'boolean') return v
   if (typeof v === 'number') return Number.isFinite(v) ? v : null

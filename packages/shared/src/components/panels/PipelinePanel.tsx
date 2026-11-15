@@ -3769,7 +3769,9 @@ function PipelinePanelInner({
           <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>
             {title || 'Pipeline'}
           </span>
-          <div className='flex items-center gap-1.5'>
+          {/* Wraps instead of squeezing: on a phone "for 3 d 4 h" and the chips drop under the
+              step badge rather than folding its label into a tall blob. */}
+          <div className='flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1'>
             {addendumView && (
               <span className='flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400'>
                 Addendum workflow

@@ -117,6 +117,13 @@ describe('value equality', () => {
     expect(sameValue('a', 'b')).toBe(false)
     expect(sameValue(5, 6)).toBe(false)
   })
+  it('a legacy rich-text document and the HTML it was converted to are the same words', () => {
+    const doc = { time: 1, blocks: [{ type: 'paragraph', data: { text: 'C2085.024' } }] }
+    expect(sameValue(doc, '<p>C2085.024</p>')).toBe(true)
+    expect(sameValue(JSON.stringify(doc), '<p>C2085.024</p>')).toBe(true)
+    expect(sameValue({ blocks: [{ data: { text: '' } }] }, '<p></p>')).toBe(true)
+    expect(sameValue(doc, '<p>C2085.025</p>')).toBe(false)
+  })
 })
 
 describe('diff since approval', () => {

@@ -318,6 +318,7 @@ import {
   type LayoutSwitch,
   layoutMayChange,
   linkChangeText,
+  placedFields,
   splitStagedLinks,
   splitUnsaved,
   useSmoothLayout
@@ -6454,9 +6455,11 @@ function ItemEditFormView({
   // rest come out of the save and wait in the "not on this form" chip.
   const [heldEdits, setHeldEdits] = useState<HeldEdit[]>([])
   const [formNote, setFormNote] = useState<{ text: string; n: number } | null>(null)
-  onLayoutSwitchRef.current = (sw, fields) => {
+  onLayoutSwitchRef.current = (sw, allFields) => {
     setFormNote({ text: formUpdatedText(layoutStepRef.current), n: sw.n })
     if (isNew) return
+    // Judged against what the new form shows: a field it does not place is hidden there.
+    const fields = placedFields(allFields, sw.to)
     const { held } = splitUnsaved(draftRef.current, initialDataRef.current, fields)
     // Staged picks / removals on a many-to-many field follow the same rule (they never pass
     // through the draft): a field the new form hides or locks gives them up to the chip.
@@ -6514,7 +6517,7 @@ function ItemEditFormView({
   }, [collection, itemId])
   const putBackHeld = (field: string) => {
     const h = heldEdits.find((x) => x.field === field)
-    if (!h || fieldStatus(fieldConfig, field) !== 'editable') return
+    if (!h || fieldStatus(placedFields(fieldConfig, activeLayoutData), field) !== 'editable') return
     if (h.links) {
       // Back into staging exactly as they were; saving sends them with the record.
       const { stagingKey, add, remove } = h.links
@@ -16964,8 +16967,10 @@ function ItemEditFormView({
                                           <HeldEditsChip
                                             edits={heldEdits}
                                             canPutBack={(f) =>
-                                              fieldStatus(fieldConfig, f) === 'editable' &&
-                                              !lockReasons[f]
+                                              fieldStatus(
+                                                placedFields(fieldConfig, activeLayoutData),
+                                                f
+                                              ) === 'editable' && !lockReasons[f]
                                             }
                                             onPutBack={putBackHeld}
                                             onDiscard={(f) =>

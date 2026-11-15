@@ -71,6 +71,12 @@ describe('linkLabelsAsUser', () => {
     expect(labels['vendors:1']).not.toContain('99')
   })
 
+  it('a dropped linked placeholder leaves no stray separator', async () => {
+    const d = deps({ template: async () => '{{parent.code}} · Line {{code}}' })
+    const labels = await linkLabelsAsUser(ASKER, byTarget('vendors', ['1']), d)
+    expect(labels['vendors:1']).toBe('Line A1')
+  })
+
   it('no readable label column: no label', async () => {
     const d = deps({ allowedFields: async () => ['id', 'code'] })
     expect(await linkLabelsAsUser(ASKER, byTarget('vendors', ['1']), d)).toEqual({})

@@ -6,6 +6,7 @@ import { get } from '../../lib/commands'
 import { useLivePreference, useLiveRecordQueries } from '../../lib/live'
 import { cn, formatDateTime, formatRelative, toLocalDateString } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { richTextToPlain } from './helpers'
 
 /**
  * "Changed after approval" (round 7, item 21; api services/approval-changes.ts): a badge in the
@@ -61,6 +62,13 @@ export function approvalValueText(
   if (value == null || value === '') return 'Empty'
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
   if (typeof value === 'number') return value.toLocaleString('en-US', { maximumFractionDigits: 4 })
+  // Rich text (Tiptap HTML or a legacy EditorJS document) reads as its words, never markup.
+  const rich = richTextToPlain(
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? JSON.stringify(value)
+      : value
+  )
+  if (rich !== null) return rich === '' ? 'Empty' : clip(rich)
   if (typeof value === 'object') return Array.isArray(value) ? `${value.length} items` : 'Changed'
   const s = String(value)
   const t = String(type ?? '').toLowerCase()
@@ -69,8 +77,10 @@ export function approvalValueText(
   if (t === 'boolean' && (s === '1' || s === '0')) return s === '1' ? 'Yes' : 'No'
   if (/^-?\d+(\.\d+)?$/.test(s) && (t === 'decimal' || t === 'float' || t === 'integer'))
     return Number(s).toLocaleString('en-US', { maximumFractionDigits: 4 })
-  return s.length > 80 ? `${s.slice(0, 77)}…` : s
+  return clip(s)
 }
+
+const clip = (s: string) => (s.length > 80 ? `${s.slice(0, 77)}…` : s)
 
 function whoText(c: ApprovalChangeRow): string {
   if (c.by.via === 'outside') return 'Changed outside the app'
