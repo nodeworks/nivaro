@@ -11,6 +11,7 @@ import {
   isListPaused,
   type LivePause,
   planRowOrder,
+  RELAYOUT_MAX_ROWS,
   relayoutRows,
   resumeAsRefetch,
   setListPaused,
@@ -396,12 +397,43 @@ describe('useKeptEntries (labels of a held row)', () => {
 })
 
 describe('relayoutRows', () => {
-  it('re-lays the body in place and leaves its display as it was', () => {
+  const build = (rows: number) => {
     const root = document.createElement('div')
-    root.innerHTML =
-      '<table><tbody style="display: table-row-group"><tr><td>a</td></tr></tbody></table>'
-    relayoutRows(root)
-    expect((root.querySelector('tbody') as HTMLElement).style.display).toBe('table-row-group')
-    relayoutRows(null)
+    const table = document.createElement('table')
+    table.style.borderCollapse = 'separate'
+    const body = document.createElement('tbody')
+    for (let i = 0; i < rows; i++) {
+      const tr = document.createElement('tr')
+      const td = document.createElement('td')
+      const input = document.createElement('input')
+      td.appendChild(input)
+      tr.appendChild(td)
+      body.appendChild(tr)
+    }
+    table.appendChild(body)
+    root.appendChild(table)
+    document.body.appendChild(root)
+    return { root, table, body }
+  }
+
+  it('re-lays in place and leaves the table as it was', () => {
+    const { root, table, body } = build(3)
+    expect(relayoutRows(root)).toBe(true)
+    expect(table.style.borderCollapse).toBe('separate')
+    expect(body.style.display).toBe('')
+    expect(relayoutRows(null)).toBe(false)
+    root.remove()
+  })
+
+  it('never runs while something in the body has focus, or for very long lists', () => {
+    const focused = build(3)
+    const input = focused.body.querySelector('input') as HTMLInputElement
+    input.focus()
+    expect(relayoutRows(focused.root)).toBe(false)
+    expect(document.activeElement).toBe(input)
+    focused.root.remove()
+    const long = build(RELAYOUT_MAX_ROWS + 1)
+    expect(relayoutRows(long.root)).toBe(false)
+    long.root.remove()
   })
 })

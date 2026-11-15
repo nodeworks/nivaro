@@ -579,18 +579,23 @@ export function useSteadyRows<T>(
     }
     gone = new Set(plan.gone)
   }
-  // A row left the screen (a held row released, or a live removal): re-lay the rows once,
-  // before paint. Chrome otherwise kept painting the pinned (sticky) cells of the rows that
-  // moved up at their old offsets — dividers and text 2–3 px out of step with the row, while
-  // their layout boxes were already right (design review 2026-11-15, measured in the browser).
+  // A row left the screen while the person was on the list (a held row released, or a live
+  // removal under the pointer): re-lay the table once, before paint. Chrome otherwise kept
+  // painting the pinned (sticky) cells of the rows that moved up at their old offsets —
+  // dividers and text 2–3 px out of step with the row, while their layout boxes were already
+  // right (design review 2026-11-15, measured in the browser). A removal with the pointer
+  // elsewhere paints correctly and is left alone.
   const shownKeysRef = useRef<string[]>([])
+  const wasHoldingRef = useRef(false)
   useLayoutEffect(() => {
     const before = shownKeysRef.current
+    const released = wasHoldingRef.current && !holding
     shownKeysRef.current = order
+    wasHoldingRef.current = holding
     if (!enabled || before.length === 0) return
     const now = new Set(order)
     if (!before.some((k) => !now.has(k))) return
-    relayoutRows(rootRef.current)
+    if (released || pointerRef.current != null) relayoutRows(rootRef.current)
   })
   // What is on screen now: the next render plans against it.
   useEffect(() => {
@@ -629,18 +634,28 @@ export function useKeptEntries<V>(
   }, [current, prev])
 }
 
+/** Lists longer than this skip the re-lay (its cost grows with the rows). */
+export const RELAYOUT_MAX_ROWS = 200
+
 /**
- * Re-lay a list's table rows in place (no visible change): hiding and showing the body inside
- * one task makes the browser recompute the rows and their pinned cells together. Exported for
- * tests.
+ * Re-lay a list's table in place with no visible change: flipping `border-collapse` and back
+ * inside one task makes the browser recompute the rows and their pinned cells together.
+ * Nothing is hidden, so focus, caret, scroll position, selection and open menus stay as they
+ * are; it is skipped while anything in the table body has focus and for lists longer than
+ * RELAYOUT_MAX_ROWS. Returns whether it ran. Exported for tests.
  */
-export function relayoutRows(root: HTMLElement | null | undefined): void {
+export function relayoutRows(root: HTMLElement | null | undefined): boolean {
   const body = root?.querySelector('tbody')
-  if (!body) return
-  const prev = body.style.display
-  body.style.display = 'none'
-  void body.offsetHeight
-  body.style.display = prev
+  const table = body?.closest('table') as HTMLElement | null | undefined
+  if (!body || !table) return false
+  if (typeof document !== 'undefined' && body.contains(document.activeElement)) return false
+  if (body.rows.length > RELAYOUT_MAX_ROWS) return false
+  const prev = table.style.borderCollapse
+  const flipped = getComputedStyle(table).borderCollapse === 'collapse' ? 'separate' : 'collapse'
+  table.style.borderCollapse = flipped
+  void table.offsetHeight
+  table.style.borderCollapse = prev
+  return true
 }
 
 // ── Totals rows follow the rows (#13) ────────────────────────────────────
