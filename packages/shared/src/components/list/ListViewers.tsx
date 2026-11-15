@@ -48,7 +48,7 @@ export function ListViewers({
       <span aria-hidden className={cn('h-8 shrink-0', INLINE_SLOT, className)} />
     ) : null
   const sentence = viewersSentence(viewers)
-  const tip = `${sentence}: ${viewers.map((v) => v.name).join(', ')}`
+  const tip = `Viewing now: ${viewers.map((v) => v.name).join(', ')}`
   return (
     <span
       data-list-viewers={viewers.length}

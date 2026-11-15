@@ -821,94 +821,98 @@ function EntityRoomCard({ room }: { room: string }) {
         ? 'bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
         : 'bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300'
   return (
+    // Two lines: what the record is and where it stands, then its clock (left) and who owns
+    // it + Open (right) — the step always keeps its whole name, even in a narrow chat dock.
     <div
-      // Wraps rather than cutting the step short: in a narrow chat dock the clock, owners and
-      // Open move to a second line and the step keeps its whole name.
-      className={cn(
-        'flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-1.5',
-        th.divider
-      )}
+      className={cn('flex shrink-0 flex-col gap-1 border-b px-3 py-1.5', th.divider)}
       data-chat-room-card
     >
-      <span className='shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
-        {card.type_label}
-      </span>
-      {recordName && (
-        <span
-          className='min-w-0 flex-1 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'
-          data-tip={recordName}
-        >
-          {recordName}
+      <div className='flex min-w-0 items-center gap-2'>
+        <span className='shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+          {card.type_label}
         </span>
-      )}
-      {stepLabel && (
-        <span
-          key={stepLabel}
-          data-chat-room-state={stepLabel}
-          data-tip={stepLabel}
-          className={cn(
-            'nvr-fade-in max-w-full truncate rounded-full px-2 py-0.5 text-[10px] font-semibold'
-          )}
-          style={{
-            backgroundColor: stepColor ? `${stepColor}26` : 'rgba(100,116,139,.15)',
-            color: stepColor ?? undefined
-          }}
-        >
-          {stepLabel}
-        </span>
-      )}
-      {sla && (
-        <span
-          key={slaStatus ?? 'none'}
-          className={cn(
-            'nvr-fade-in shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
-            slaTone
-          )}
-          title={
-            sla.due_hours != null
-              ? `${Math.round(sla.elapsed_hours ?? 0)}h in this step of ${sla.due_hours}h allowed${sla.business_hours ? ' (business hours)' : ''}`
-              : undefined
-          }
-          data-chat-room-sla={slaStatus}
-        >
-          {due ??
-            (slaStatus === 'breached'
-              ? 'Past SLA'
-              : slaStatus === 'warning'
-                ? 'SLA soon'
-                : 'On time')}
-        </span>
-      )}
-      {/* Owners and Open stay together at the end, whichever line they land on. */}
-      <span className='ml-auto flex shrink-0 items-center gap-2'>
-        {facts && facts.owners.length > 0 && (
+        {recordName && (
           <span
-            className='flex shrink-0 -space-x-1.5'
-            data-tip={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
-            aria-label={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
-            role='img'
-            data-chat-room-owners={facts.owners.length}
+            className='min-w-0 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'
+            data-tip={recordName}
           >
-            {facts.owners.slice(0, 4).map((o) => (
-              <Avatar key={o.id} id={o.id} name={o.name} size={18} presence={false} />
-            ))}
-            {facts.owners.length > 4 && (
-              <span className='flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-slate-200 px-1 text-[9px] font-semibold text-slate-600 dark:bg-muted dark:text-slate-300'>
-                +{facts.owners.length - 4}
-              </span>
-            )}
+            {recordName}
           </span>
         )}
-        {href && (
-          <button
-            type='button'
-            onClick={() => cfg.navigate?.(href)}
-            className='shrink-0 text-[11px] font-semibold text-[#007a99] underline-offset-2 hover:underline dark:text-nvr-cyan'
+        {stepLabel && (
+          // The list's State pill: a tint of the step colour with a dot of it, the words in the
+          // neutral text colour (a 10 px label in the step's own colour fails AA on its tint).
+          <span
+            key={stepLabel}
+            data-chat-room-state={stepLabel}
+            data-tip={stepLabel}
+            className='nvr-fade-in inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full py-0.5 pl-2 pr-2.5 text-[10.5px] font-semibold text-slate-700 dark:text-slate-200'
+            style={{ backgroundColor: `${stepColor ?? '#6b7280'}1f` }}
           >
-            Open
-          </button>
+            <span
+              aria-hidden
+              className='h-1.5 w-1.5 shrink-0 rounded-full'
+              style={{ backgroundColor: stepColor ?? '#6b7280' }}
+            />
+            <span className='truncate'>{stepLabel}</span>
+          </span>
         )}
-      </span>
+      </div>
+      {(sla || (facts && facts.owners.length > 0) || href) && (
+        <div className='flex min-w-0 items-center gap-2'>
+          {sla && (
+            <span
+              key={slaStatus ?? 'none'}
+              className={cn(
+                'nvr-fade-in shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
+                slaTone
+              )}
+              title={
+                sla.due_hours != null
+                  ? `${Math.round(sla.elapsed_hours ?? 0)}h in this step of ${sla.due_hours}h allowed${sla.business_hours ? ' (business hours)' : ''}`
+                  : undefined
+              }
+              data-chat-room-sla={slaStatus}
+            >
+              {due ??
+                (slaStatus === 'breached'
+                  ? 'Past SLA'
+                  : slaStatus === 'warning'
+                    ? 'SLA soon'
+                    : 'On time')}
+            </span>
+          )}
+          <span className='ml-auto flex shrink-0 items-center gap-2'>
+            {facts && facts.owners.length > 0 && (
+              <span
+                className='flex shrink-0 -space-x-1.5'
+                data-tip={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
+                aria-label={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
+                role='img'
+                data-chat-room-owners={facts.owners.length}
+              >
+                {facts.owners.slice(0, 4).map((o) => (
+                  <Avatar key={o.id} id={o.id} name={o.name} size={18} presence={false} />
+                ))}
+                {facts.owners.length > 4 && (
+                  <span className='flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-slate-200 px-1 text-[9px] font-semibold text-slate-600 dark:bg-muted dark:text-slate-300'>
+                    +{facts.owners.length - 4}
+                  </span>
+                )}
+              </span>
+            )}
+            {href && (
+              <button
+                type='button'
+                onClick={() => cfg.navigate?.(href)}
+                className='shrink-0 text-[11px] font-semibold text-[#007a99] underline-offset-2 hover:underline dark:text-nvr-cyan'
+              >
+                Open
+              </button>
+            )}
+          </span>
+        </div>
+      )}
     </div>
   )
 }

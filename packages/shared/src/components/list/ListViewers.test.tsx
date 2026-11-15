@@ -86,7 +86,7 @@ describe('ListViewers (admins only)', () => {
     )
     const el = v.container.querySelector('[data-list-viewers]')
     expect(el?.getAttribute('data-list-viewers')).toBe('3')
-    expect(el?.getAttribute('aria-label')).toContain('Ana and 2 others are viewing this too')
+    expect(el?.getAttribute('aria-label')).toBe('Viewing now: Ana Ruiz, Beth Ames, Cy Doe')
     expect(el?.getAttribute('aria-label')).not.toContain('Me Myself')
     // Another list's names never land here.
     act(() => rt.fire('ops:changed', { topic: 'list-view:orders', viewers: [] }))
