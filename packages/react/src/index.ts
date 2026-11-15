@@ -943,6 +943,7 @@ export {
   withGetCoalescing,
   workerSocketPreference
 } from '@nivaro/shared'
+export { ScreenShareHost } from './components/ScreenShareHost'
 export { BooleanField } from './components/fields/BooleanField'
 export { DateField } from './components/fields/DateField'
 export { FileField } from './components/fields/FileField'

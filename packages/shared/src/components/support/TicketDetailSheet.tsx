@@ -11,6 +11,7 @@ import { TaskDoButton } from '../ai/TaskDo'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet'
+import { ScreenSharePanel } from './ScreenShare'
 import { isSupportContextFile } from './support-context'
 import { TicketSlowScreens } from './TicketSlowScreens'
 import { TicketTraffic } from './TicketTraffic'
@@ -68,6 +69,8 @@ export function TicketDetailSheet({
   const nav = useNavigation()
   const [reply, setReply] = useState('')
   const [err, setErr] = useState<string | null>(null)
+  // The live screen view asks for a wide sheet while it is enlarged.
+  const [wide, setWide] = useState(false)
   // #1882 / #2026 — who else has this ticket open, and who is writing a reply.
   const presence = useTopicPresence(
     ticketId != null && Number.isSafeInteger(ticketId) && ticketId > 0 ? `ticket:${ticketId}` : null
@@ -143,7 +146,7 @@ export function TicketDetailSheet({
       <SheetContent
         side='right'
         ref={fadeRef}
-        className='flex w-[560px] max-w-[96vw] flex-col gap-0 p-0 sm:max-w-[560px] dark:bg-card'
+        className={`flex max-w-[96vw] flex-col gap-0 p-0 transition-[width] duration-300 ease-out dark:bg-card ${wide ? 'w-[min(1280px,96vw)] sm:max-w-[min(1280px,96vw)]' : 'w-[560px] sm:max-w-[560px]'}`}
         data-support-ticket={ticketId ?? ''}
       >
         {!validId || isError ? (
@@ -290,6 +293,10 @@ export function TicketDetailSheet({
                     </div>
                   </div>
                 </div>
+              )}
+
+              {(t.status === 'open' || t.status === 'in_progress') && (
+                <ScreenSharePanel ticketId={t.id} onWideChange={setWide} />
               )}
 
               <section>

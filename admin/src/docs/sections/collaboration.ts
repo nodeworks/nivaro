@@ -1342,6 +1342,25 @@ GET   /api/tasks/requested               // tasks I asked others to do`
   "route": "/records/orders/42", "app": "portal", "context": "…",
   "replay": { "recording_id": "<own recording>", "offset_ms": 8600 } }
 → { "data": { "ticket": { … }, "issue_id": 501 } }`
+    },
+    { type: 'h3', id: 'support-screen-share', text: 'Share my screen with support' },
+    {
+      type: 'p',
+      text: 'The person who asked for help can show the support person their screen, live. On their own open request they press Share my screen with Beth. Beth (the person the request is assigned to, or the request type’s team while nobody has picked it up) sees the app as they use it, inside the request, and can only watch. Only this app is shared — not other tabs or anything else on their computer.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'What is hidden is exactly what screen recordings hide: everything typed, record field values (unless an administrator allowed a field under Session replay masking), rich text, file names and anything marked not to record.',
+        'While sharing, a bar on every screen says “Sharing this app with Beth” with a Stop button and the time left.',
+        'Sharing stops when they press Stop, close or reload the page, after 30 minutes, or when the request is closed or handed to someone else.',
+        'Nobody can start it for them: not an administrator, not View as, not an API key. Being an administrator does not let you watch either — only the request’s support person or team can.',
+        'Starting, stopping and each person’s first look are written to the request’s history.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Hosts: admin shows it already. A portal mounts `<ScreenShareHost />` from `@nivaro/react` once in its shell (needs `rrweb` installed, as for session recording). Set `SCREEN_SHARE=off` to turn the feature off for an instance.'
     }
   ]
 }

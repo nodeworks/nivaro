@@ -590,6 +590,9 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       state.stop =
         record({
           emit(event: unknown) {
+            // A live screen share with support rides the full recording too (it is not gated
+            // by sampling or idle: the person asked to show their screen now).
+            emitReplayTap(event)
             const idleAction = noteReplayIdle(idle, event)
             if (!state.sampled) return
             if (idleAction !== 'keep') {

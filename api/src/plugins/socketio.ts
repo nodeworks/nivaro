@@ -103,6 +103,8 @@ import {
 import { emitToSignedIn, TENANT_ALL_ROOM } from '../services/record-events.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
 import { noteRealtimeEmit } from '../services/request-trace.js'
+import type { ShareRedis } from '../services/screen-share.js'
+import { defaultScreenShareDeps, registerScreenShare } from '../services/screen-share-socket.js'
 import {
   canJoinTicketTopic,
   canSeeRecordRoom,
@@ -152,6 +154,7 @@ import {
 } from '../services/socket-transport.js'
 import { attachSocketVerification } from '../services/socket-verify.js'
 import { type RefreshPayload, refreshOwedOnConnect } from '../services/sticky-refresh.js'
+import { logTicketEvent } from '../services/support-tickets.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 import { registerWidgetLive } from '../services/widget-live.js'
 
@@ -1814,6 +1817,16 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     )
     // #1399 — watch a session replay together (admin-only replay:<key> rooms).
     registerReplayWatch(io, socket, () => authenticatedUser)
+    // Realtime idea 24 — a support ticket's live screen share: frames judged per watcher socket.
+    registerScreenShare(
+      io,
+      socket,
+      () => authenticatedUser,
+      { tenantNow },
+      defaultScreenShareDeps(app.redis as unknown as ShareRedis, (ticket, user, text, action) =>
+        logTicketEvent(ticket, user, text, undefined, action)
+      )
+    )
     // #1675 — pushed dashboard/report widgets, computed as this socket's sign-in, sent to it alone.
     registerWidgetLive(socket, () => authenticatedUser)
 
