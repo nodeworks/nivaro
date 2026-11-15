@@ -3,6 +3,7 @@ export { CommentPanel } from './CommentPanel'
 export { OwnersSlot } from './OwnersSlot'
 export type { LockHolder, LockQueueEntry } from './ItemLockBanner'
 export { AccessDeniedPanel } from './AccessDeniedPanel'
+export { AccessGrantedNote, useAccessRegained } from './AccessGrantedNote'
 export {
   deniedToastAction,
   isAccessRefusal,

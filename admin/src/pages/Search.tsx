@@ -162,7 +162,8 @@ export function SearchPage() {
         .get<{ data: GlobalSearchResponse }>('/global-search', { params: { q } })
         .then((r) => r.data.data),
     enabled: live,
-    staleTime: 15_000
+    // rt4 #9: short — the server drops its answer when a searched collection is written.
+    staleTime: 5_000
   })
   useEffect(() => {
     if (live) pushRecentSearch(q)

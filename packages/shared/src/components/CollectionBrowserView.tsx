@@ -274,10 +274,12 @@ import {
   usePickerExcludedRows
 } from './PickerExcludedRows'
 import {
+  AccessGrantedNote,
   ItemActionChoiceList,
   type ItemActionChoiceOption,
   itemActionChoiceStep,
-  RevisionsPanel
+  RevisionsPanel,
+  useAccessRegained
 } from './panels'
 import { ConfirmButton } from './profile/primitives'
 import { pruneQuickSelection, type QuickFilterDef } from './quick-filters/config'
@@ -5544,6 +5546,13 @@ export function CollectionBrowserView({
     refetchInterval: bc.live_events === 'off' ? 30_000 : false,
     retry: false
   })
+  // rt4 #11: the list answered 403 and now reads (an access request granted while it stayed
+  // open — access:changed refetched it): the rows appear with one quiet line saying so.
+  const listAccessRegained = useAccessRegained(
+    (error as { status?: number } | null)?.status === 403 && !isFilterRefusal(error),
+    !!itemsRes && !error,
+    collection
+  )
   // Live collections keep a slow, quiet safety read for writes nothing announces (a procedure
   // or a script that wrote set-based). It never runs while the person has rows selected, a field
   // focused in the table, or the pointer over it, so rows never move under them; a hidden tab
@@ -9661,6 +9670,9 @@ export function CollectionBrowserView({
         )}
       </div>
 
+      {listAccessRegained && !error && (
+        <AccessGrantedNote collection={collection} className='mx-4 mt-3' />
+      )}
       {/* Error — a permission wall offers the access-request path (#55). */}
       {error != null && (
         <div className='mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700 dark:border-red-900/40 dark:bg-red-900/10 dark:text-red-400'>

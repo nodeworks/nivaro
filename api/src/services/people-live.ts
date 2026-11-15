@@ -1,4 +1,5 @@
 import { onPeopleWrite, type PeopleWriteKind } from '../db/people-signal.js'
+import { noteCollectionWrite } from './read-caches.js'
 import { emitToSignedIn } from './record-events.js'
 import { currentRequestHint, currentTraceMeta } from './request-trace.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -114,6 +115,8 @@ export function notePeopleChanged(
   opts: { created?: boolean; tenant?: string } = {}
 ): void {
   const tenant = opts.tenant ?? currentTenantKey()
+  // rt4 #9: a cached global search (its people part) is stale from now on in this process.
+  noteCollectionWrite('nivaro_users', tenant)
   let p = pending.get(tenant)
   if (!p) {
     p = { ids: new Set(), any: false, created: false, timer: null, lastAt: 0 }

@@ -420,6 +420,7 @@ import {
 } from './layout-editor/summary-pref'
 import {
   AccessDeniedPanel,
+  AccessGrantedNote,
   AddendumPanel,
   CommentPanel,
   CustomActionButtons,
@@ -436,6 +437,7 @@ import {
   RelatedRecordsPanel,
   RevisionsPanel,
   TaskPanel,
+  useAccessRegained,
   useExternalRequestsShown,
   useItemLock,
   WhyDeniedButton,
@@ -2450,6 +2452,13 @@ function ItemEditFormView({
       (itemLoadError as { response?: { status?: number } })?.response?.status
     return status === 403 || status === 404
   })()
+  // rt4 #11: refused, then readable on this same page (an access request granted while it
+  // stayed open — access:changed refetched the record): the form appears with one quiet line.
+  const accessRegained = useAccessRegained(
+    itemLoadDenied && !fetchedItemData,
+    !!fetchedItemData && !itemLoadError,
+    `${collection}:${String(itemId ?? '')}`
+  )
   // The record read said 403/404 and nothing is showing: every read about the
   // record itself (lines, links, lock, addendums, paths, checks, previews)
   // would answer the same refusal — they stay off (army 9 b14: a missing
@@ -16417,6 +16426,12 @@ function ItemEditFormView({
                                           dirty={isDirty}
                                           loadDenied={itemLoadDenied}
                                           onGoneChange={setRecordGone}
+                                        />
+                                      )}
+                                      {accessRegained && !isNew && itemId != null && (
+                                        <AccessGrantedNote
+                                          collection={collection}
+                                          itemId={String(itemId)}
                                         />
                                       )}
                                       {staleBy && staleMode !== 'auto-refresh' && (
