@@ -884,3 +884,37 @@ const { data: tx } = await nivaro.request(
     }
   ]
 }
+
+export const pipelineOwnerOpened: DocSection = {
+  id: 'pipeline-owner-opened',
+  label: 'Has the Owner Opened It?',
+  content: [
+    { type: 'h1', id: 'pipeline-owner-opened', text: 'Has the Owner Opened It?' },
+    {
+      type: 'p',
+      text: 'Under the Owners list on a record\'s pipeline panel, people who are not an owner of the current step — the person who asked for it, above all — see one line saying whether anyone who owns that step has opened the record since it got there. It answers "should I chase?" without asking anyone.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '"Jane Smith (Finance) opened this 2h ago" — an owner of the step opened the record after it arrived on the step. The department (or job title) is shown when the person has one. "· 1 other owner too" counts any other owners who opened it.',
+        '"Not opened yet by the owners of this step · arrived 3h ago" — nobody who owns the step has opened it since it got there. Hover the line for the exact time.',
+        'Owners of the step never see the line: it is their move. Administrators see the same line as everyone else.'
+      ]
+    },
+    { type: 'h3', text: 'What counts as opened' },
+    {
+      type: 'ul',
+      items: [
+        'An owner of the step as the record stands now opened the record at or after the moment it entered the step. An open before that (on an earlier step, or before a send back) does not count.',
+        'The person who moved the record onto the step was on the record when they moved it. If they also own the step, only a later visit counts.',
+        'An administrator using View as someone does not open the record as that person: those visits are never counted, and the person\'s own "since you last looked" strip is left as it was.',
+        'Names follow the people directory: an owner whose account is suspended, removed or not a person is shown as "An owner of this step", never by name.'
+      ]
+    },
+    {
+      type: 'note',
+      text: "The line reads what the app already keeps (when each person last opened the record, the step history and the step's owners), and only while the pipeline panel shows it."
+    }
+  ]
+}

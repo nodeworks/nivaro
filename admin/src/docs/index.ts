@@ -532,6 +532,7 @@ import {
   pipelineNoOwnerSteps,
   pipelineOverview,
   pipelineOwnerMatrix,
+  pipelineOwnerOpened,
   pipelineSpecificity,
   userWorkflows,
   workflowsApi
@@ -593,6 +594,7 @@ export const navSections: NavGroup[] = [
       pipelineDimensions,
       pipelineOwnerMatrix,
       pipelineNoOwnerSteps,
+      pipelineOwnerOpened,
       pipelineSpecificity,
       pipelineBranching,
       queuesGuide,
