@@ -840,7 +840,7 @@ function HistoryRow({
               </button>
             </p>
           )}
-          <p className='mt-0.5 text-[11px] text-slate-400'>
+          <p className='mt-0.5 text-[11px] text-slate-500 dark:text-slate-400'>
             {(a.channels ?? []).join(' + ')}
             {a.delivered_count != null && ` · reached ${a.delivered_count}`}
             {/* Quiet live figures: they tick up in place as people read and dismiss. Each says
