@@ -117,19 +117,38 @@ export const QUERY_CAP = 500
 
 /**
  * Query parameter names that carry a credential although their name does not say so: the
- * Command Center wallboard link token rides `?kiosk=` (CC-23).
+ * Command Center wallboard link token rides `?kiosk=` (CC-23), a help-video media ticket
+ * `?st=` (stream / captions / poster), and the signed stream tickets of the SSE routes
+ * (`?ticket=` on /api/events, /api/view-stream, /api/graphql/stream).
  */
-export const SENSITIVE_QUERY_NAMES = new Set(['kiosk'])
+export const SENSITIVE_QUERY_NAMES = new Set(['kiosk', 'st', 'ticket'])
 
-const isSensitiveQueryName = (name: string) =>
-  isSensitiveKey(name) || SENSITIVE_QUERY_NAMES.has(name.toLowerCase())
+/**
+ * Names too short or too common to mask everywhere that carry a credential on ONE route: the
+ * Teams bot's account-link page takes its signed link token as `?t=` (/api/teams/connect).
+ * Matched against the request path (query string dropped, /api prefix optional).
+ */
+const PATH_SENSITIVE_QUERY_NAMES: Array<{ path: RegExp; names: Set<string> }> = [
+  { path: /^(?:\/api)?\/teams\/connect\/?$/i, names: new Set(['t']) }
+]
+
+const isSensitiveQueryName = (name: string, path?: string | null) => {
+  const lk = name.toLowerCase()
+  if (isSensitiveKey(name) || SENSITIVE_QUERY_NAMES.has(lk)) return true
+  if (!path) return false
+  return PATH_SENSITIVE_QUERY_NAMES.some((r) => r.names.has(lk) && r.path.test(path))
+}
 
 /**
  * A request's query string for the log: values under credential-looking names
  * become `••••••`, the rest is kept as sent. Cut at QUERY_CAP with a trailing
- * `…`. Returns null for no query.
+ * `…`. Returns null for no query. `path` (the request path the query rode on) also masks
+ * the per-route credential names (PATH_SENSITIVE_QUERY_NAMES).
  */
-export function maskQueryString(raw: string | null | undefined): string | null {
+export function maskQueryString(
+  raw: string | null | undefined,
+  path?: string | null
+): string | null {
   if (!raw) return null
   const q = raw.startsWith('?') ? raw.slice(1) : raw
   if (!q) return null
@@ -146,7 +165,7 @@ export function maskQueryString(raw: string | null | undefined): string | null {
       } catch {
         /* keep the raw name */
       }
-      return isSensitiveQueryName(plain) && part.length > eq + 1 ? `${name}=${MASK}` : part
+      return isSensitiveQueryName(plain, path) && part.length > eq + 1 ? `${name}=${MASK}` : part
     })
     .join('&')
   return out.length > QUERY_CAP ? `${out.slice(0, QUERY_CAP - 1)}…` : out
@@ -166,21 +185,46 @@ const FORM_STATUS_PATH_RE = /(\/form-status\/)[^/?#]+/gi
 const SHARE_PATH_RE = /(\/share\/)[^/?#]+/gi
 /** A shared session-replay link (`/api/session-replay-shares/view/<token>`). */
 const REPLAY_SHARE_PATH_RE = /(\/session-replay-shares\/view\/)[^/?#]+/gi
+/** Published-by-token reads: a public dashboard link (`/api/dashboard-links/public/<token>`),
+ *  a public custom query (`/api/custom-queries/public/<token>`) and a submission form's
+ *  public read/submit (`/api/submission-forms/public/<token>`). */
+const PUBLIC_TOKEN_PATH_RE =
+  /(\/(?:dashboard-links|custom-queries|submission-forms)\/public\/)[^/?#]+/gi
+/** An embeddable widget feed (`/api/widget/public/feed/<token>`, its `/stream`). */
+const WIDGET_FEED_PATH_RE = /(\/widget\/public\/feed\/)[^/?#]+/gi
+/** The hosted public form page (`/form/<token>`, root level, outside /api). */
+const PUBLIC_FORM_PATH_RE = /^(\/form\/)[^/?#]+/i
+/** A layout preview link (`/api/form-preview/<token>`, its `/comments`). */
+const FORM_PREVIEW_PATH_RE = /(\/form-preview\/)[^/?#]+/gi
+/** A help-video package download link (`/api/help-videos/packages/<token>`, single use). */
+const HELP_VIDEO_PACKAGE_PATH_RE = /(\/help-videos\/packages\/)[^/?#]+/gi
+
+/** Every path whose segment IS the access (a link token): the segment becomes `••••••`. */
+const TOKEN_PATH_RES = [
+  KIOSK_PATH_RE,
+  FORM_STATUS_PATH_RE,
+  SHARE_PATH_RE,
+  REPLAY_SHARE_PATH_RE,
+  PUBLIC_TOKEN_PATH_RE,
+  WIDGET_FEED_PATH_RE,
+  PUBLIC_FORM_PATH_RE,
+  FORM_PREVIEW_PATH_RE,
+  HELP_VIDEO_PACKAGE_PATH_RE
+]
 
 export function maskUrlPath(path: string): string {
-  return path
-    .replace(KIOSK_PATH_RE, `$1${MASK}`)
-    .replace(FORM_STATUS_PATH_RE, `$1${MASK}`)
-    .replace(SHARE_PATH_RE, `$1${MASK}`)
-    .replace(REPLAY_SHARE_PATH_RE, `$1${MASK}`)
+  let out = path
+  for (const re of TOKEN_PATH_RES) out = out.replace(re, `$1${MASK}`)
+  return out
 }
 
 /** A URL (path + query) with its path credential and query string masked — for logs and traces. */
 export function maskUrlQuery(url: string): string {
   const mark = url.indexOf('?')
   if (mark < 0) return maskUrlPath(url)
-  const q = maskQueryString(url.slice(mark + 1))
-  const path = maskUrlPath(url.slice(0, mark))
+  const rawPath = url.slice(0, mark)
+  const q = maskQueryString(url.slice(mark + 1), rawPath)
+  const path = maskUrlPath(rawPath)
   return q ? `${path}?${q}` : path
 }
 

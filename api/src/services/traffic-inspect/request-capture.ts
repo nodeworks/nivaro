@@ -15,7 +15,7 @@
  */
 import type { Redis } from 'ioredis'
 import { type KeepNextInfo, keepNext } from '../request-trace.js'
-import { maskBodySecrets, maskQueryString } from '../secret-mask.js'
+import { maskBodySecrets, maskQueryString, maskUrlPath } from '../secret-mask.js'
 import { callerKeyFor, classifyRequest, entityKey, routeTemplate } from '../traffic-entities.js'
 import {
   type Arm,
@@ -151,7 +151,9 @@ export function inspectKeepNext(info: KeepNextInfo): boolean {
     info.request && typeof info.request === 'object' ? info.request : null
   ) as ReqLike | null
   const mark = info.url.indexOf('?')
-  const path = mark < 0 ? info.url : info.url.slice(0, mark)
+  const rawPath = mark < 0 ? info.url : info.url.slice(0, mark)
+  // A link token riding the path never reaches a kept entry (the Traffic Map inspector).
+  const path = maskUrlPath(rawPath)
 
   // The root /graphql alias: remember the inner request's chain (cheap, GraphQL only).
   if (path === '/api/graphql' && req?.chainId) {
@@ -177,7 +179,7 @@ export function inspectKeepNext(info: KeepNextInfo): boolean {
     path,
     status: info.status,
     node: nodeId,
-    query: mark < 0 ? null : maskQueryString(info.url.slice(mark + 1))
+    query: mark < 0 ? null : maskQueryString(info.url.slice(mark + 1), rawPath)
   }
   let captured: { body: string | null; note: string | null } | null = null
   for (const arm of hits) {

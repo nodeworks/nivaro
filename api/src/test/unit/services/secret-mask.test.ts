@@ -14,6 +14,7 @@ import {
   isSensitiveKey,
   MASK,
   maskBodySecrets,
+  maskQueryString,
   maskUrlPath,
   maskUrlQuery,
   sameLoggedBody
@@ -116,5 +117,68 @@ describe('maskUrlPath — tokens that ride the path (security review I8)', () =>
     expect(maskUrlPath('/api/share-links/12')).toBe('/api/share-links/12')
     expect(maskUrlPath('/form-status/abc.def')).toBe(`/form-status/${MASK}`)
     expect(maskUrlPath('/command/kiosk/xyz')).toBe(`/command/kiosk/${MASK}`)
+  })
+})
+
+describe('maskUrlPath / maskQueryString — every public link token (follow-ups 2026-11-15)', () => {
+  const T = 'Zx81kQp0aLmN3vB7'
+  it('masks the public dashboard, custom query and submission form tokens', () => {
+    expect(maskUrlPath(`/api/dashboard-links/public/${T}`)).toBe(
+      `/api/dashboard-links/public/${MASK}`
+    )
+    expect(maskUrlPath(`/api/custom-queries/public/${T}`)).toBe(
+      `/api/custom-queries/public/${MASK}`
+    )
+    expect(maskUrlPath(`/api/submission-forms/public/${T}`)).toBe(
+      `/api/submission-forms/public/${MASK}`
+    )
+    expect(maskUrlQuery(`/api/custom-queries/public/${T}?region=4`)).toBe(
+      `/api/custom-queries/public/${MASK}?region=4`
+    )
+  })
+
+  it('masks widget feeds, the public form page, form previews and help-video packages', () => {
+    expect(maskUrlPath(`/api/widget/public/feed/${T}`)).toBe(`/api/widget/public/feed/${MASK}`)
+    expect(maskUrlPath(`/api/widget/public/feed/${T}/stream`)).toBe(
+      `/api/widget/public/feed/${MASK}/stream`
+    )
+    expect(maskUrlPath(`/form/${T}`)).toBe(`/form/${MASK}`)
+    expect(maskUrlPath(`/api/form-preview/${T}`)).toBe(`/api/form-preview/${MASK}`)
+    expect(maskUrlPath(`/api/form-preview/${T}/comments`)).toBe(
+      `/api/form-preview/${MASK}/comments`
+    )
+    expect(maskUrlPath(`/api/help-videos/packages/${T}`)).toBe(`/api/help-videos/packages/${MASK}`)
+  })
+
+  it('leaves the admin routes of the same features alone', () => {
+    for (const p of [
+      '/api/dashboard-links',
+      '/api/dashboard-links/12',
+      '/api/custom-queries/7/execute',
+      '/api/submission-forms/3',
+      '/api/widget/feeds',
+      '/api/help-videos/packages',
+      '/api/items/form/12',
+      '/forms/abc'
+    ])
+      expect(maskUrlPath(p)).toBe(p)
+  })
+
+  it('masks the help-video media ticket, stream tickets and decision-link tokens', () => {
+    expect(maskQueryString(`st=${T}&v=2`)).toBe(`st=${MASK}&v=2`)
+    expect(maskQueryString(`collections=a,b&ticket=${T}`)).toBe(`collections=a,b&ticket=${MASK}`)
+    expect(maskUrlQuery(`/api/message-actions/callback?token=${T}`)).toBe(
+      `/api/message-actions/callback?token=${MASK}`
+    )
+    expect(maskUrlQuery(`/api/help-videos/9/stream?st=${T}`)).toBe(
+      `/api/help-videos/9/stream?st=${MASK}`
+    )
+  })
+
+  it('masks `t` only on the Teams connect page', () => {
+    expect(maskUrlQuery(`/api/teams/connect?t=${T}`)).toBe(`/api/teams/connect?t=${MASK}`)
+    expect(maskQueryString(`t=${T}`, '/api/teams/connect')).toBe(`t=${MASK}`)
+    expect(maskQueryString('t=1700000000', '/api/items/workflows')).toBe('t=1700000000')
+    expect(maskQueryString('t=1700000000')).toBe('t=1700000000')
   })
 })
