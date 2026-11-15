@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { sourceSentence } from './FieldSourceBadge'
 import {
+  cleanLineLabel,
   nextLineAfter,
   removedLineText,
   restorableLine,
@@ -45,6 +46,12 @@ describe('a line removed under you (rt7 #6)', () => {
       'You removed this line in another tab'
     )
     expect(removedLineText(null)).toBe('This line was removed')
+  })
+
+  it('drops the separators an empty display template leaves', () => {
+    expect(cleanLineLabel('· Line')).toBe('Line')
+    expect(cleanLineLabel(' · Line 2 ·  · Dock')).toBe('Line 2 · Dock')
+    expect(cleanLineLabel(null)).toBe('')
   })
 
   it('restores as a flat new line and copies as text', () => {
