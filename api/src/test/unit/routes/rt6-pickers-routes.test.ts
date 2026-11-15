@@ -16,7 +16,8 @@ const state = vi.hoisted(() => ({
   refusal: null as null | { status: number; body: { error: string } },
   auth: {} as Record<string, unknown>,
   userExtra: {} as Record<string, unknown>,
-  gateCalls: 0
+  gateCalls: 0,
+  gateOpts: [] as unknown[]
 }))
 
 vi.mock('../../../db/index.js', () => {
@@ -54,7 +55,8 @@ vi.mock('../../../services/revision-access.js', () => ({
   recordVisibleTo: vi.fn(async () => state.visible)
 }))
 vi.mock('../../../services/record-access.js', () => ({
-  compileAccessGates: vi.fn(async () => {
+  compileAccessGates: vi.fn(async (_u: unknown, _c: string, opts?: unknown) => {
+    state.gateOpts.push(opts)
     state.gateCalls++
     return {}
   }),
@@ -103,6 +105,7 @@ beforeEach(() => {
   state.auth = {}
   state.userExtra = {}
   state.gateCalls = 0
+  state.gateOpts = []
   resetPickerBadgeFacts()
   resetCellLockCaches()
 })
@@ -280,6 +283,7 @@ describe('cell locks routes', () => {
         url: '/api/cell-locks/read',
         payload: { collection: 'orders', ids: ['7'], fields: ['qty'] }
       })
+    state.gateCalls = 0 // the take judged visibility once (as another caller identity)
     state.auth = { authMethod: 'session' }
     expect((await read()).json().data).toHaveLength(1)
     expect(state.gateCalls).toBe(1)
@@ -294,6 +298,25 @@ describe('cell locks routes', () => {
     state.userExtra = {}
     await read()
     expect(state.gateCalls).toBe(3)
+  })
+
+  it('an administrator with a Restrict User Scope cannot take a cell out of scope', async () => {
+    const app = await lockApp()
+    state.admin = true
+    state.visibleIds = []
+    const res = await app.inject({ method: 'POST', url: '/api/cell-locks/take', payload: cell })
+    expect(res.statusCode).toBe(404)
+    expect(state.gateOpts[0]).toEqual({ actingAdmin: true })
+    expect(state.announced).toHaveLength(0)
+  })
+
+  it('an API key scoped away from the collection cannot take a cell', async () => {
+    const app = await lockApp()
+    state.auth = { authMethod: 'api_key', apiKeyId: 7 }
+    state.canUpdate = false // the key's scopes narrow can(update) to false
+    const res = await app.inject({ method: 'POST', url: '/api/cell-locks/take', payload: cell })
+    expect(res.statusCode).toBe(403)
+    expect(state.announced).toHaveLength(0)
   })
 
   it('refuses bad cell names', async () => {

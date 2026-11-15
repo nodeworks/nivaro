@@ -141,6 +141,10 @@ export async function cellLockRoutes(app: FastifyInstance, opts: { store?: CellL
       return reply.code(403).send({ error: 'You cannot change these records' })
     if ((await allowedOf(req, 'update', cell.collection, [cell.field])).length === 0)
       return reply.code(403).send({ error: 'You cannot change this field' })
+    // In view for the caller — Restrict User Scopes and key scope restrictions bind
+    // administrators too (recordWriteRefusal lets an admin past its read).
+    const inView = await visibleRowIds(req, cell.collection, [cell.id])
+    if (!inView.has(cell.id.toUpperCase())) return reply.code(404).send({ error: 'Not found' })
     // The record itself, as the caller: readable, updatable, not locked against them.
     const refusal = await recordWriteRefusal(req, cell.collection, cell.id, {
       fields: [cell.field]
