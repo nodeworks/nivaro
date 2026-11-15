@@ -521,6 +521,7 @@ async function applyApiKey(
       path === '/api/users/cards' ||
       path === '/api/batch-get' ||
       path === '/api/activity/labels' ||
+      /^\/api\/partner-needs\/[^/]+$/.test(path) ||
       /^\/api\/field-config\/[^/]+\/project$/.test(path) ||
       // MCP protocol messages; the tool calls inside are judged one by one
       path === '/api/mcp'

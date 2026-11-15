@@ -304,6 +304,11 @@ import {
   type StagedRelationsCtx,
   type StagedRelOps
 } from './item-edit/O2MStagingContext'
+import {
+  PartnerNeedsContext,
+  type PartnerNeedsCtx,
+  usePartnerNeedsForm
+} from './item-edit/partner-needs'
 import { makePersonalDefaultChecks } from './item-edit/personal-default-checks'
 import {
   confirmChangeFields,
@@ -1904,12 +1909,14 @@ function FieldContexts({
   personalDefaults,
   sources,
   fieldComments,
+  partnerNeeds,
   children
 }: {
   affordances: FieldAffordances | null
   personalDefaults: PersonalDefaultsApi
   sources?: Record<string, FieldSource> | null
   fieldComments: FieldCommentsApi | null
+  partnerNeeds?: PartnerNeedsCtx | null
   children: ReactNode
 }) {
   return (
@@ -1917,7 +1924,9 @@ function FieldContexts({
       <PersonalDefaultsContext.Provider value={personalDefaults}>
         <FieldSourcesContext.Provider value={sources ?? null}>
           <FieldCommentsContext.Provider value={fieldComments}>
-            {children}
+            <PartnerNeedsContext.Provider value={partnerNeeds ?? null}>
+              {children}
+            </PartnerNeedsContext.Provider>
           </FieldCommentsContext.Provider>
         </FieldSourcesContext.Provider>
       </PersonalDefaultsContext.Provider>
@@ -2172,7 +2181,7 @@ function ItemEditFormView({
     addendum_allowed_states?: string | null
     read_mode_toggle?: boolean
     summary_mode_rules?: SummaryModeRules | null
-    browser_config?: { copy_as?: boolean } | null
+    browser_config?: { copy_as?: boolean; partner_badges?: boolean } | null
   }>({
     queryKey: ['col-meta', collection],
     queryFn: () =>
@@ -2188,7 +2197,7 @@ function ItemEditFormView({
             addendum_allowed_states?: string | null
             read_mode_toggle?: boolean
             summary_mode_rules?: SummaryModeRules | null
-            browser_config?: { copy_as?: boolean } | null
+            browser_config?: { copy_as?: boolean; partner_badges?: boolean } | null
           }
         }>(get(`/collections/${collection}`))
         .then((r) => r.data),
@@ -11489,6 +11498,13 @@ function ItemEditFormView({
   // Likely duplicates of a new record's label fields (Rob 2026-11-13): an inline
   // notice under the field, never a block here (the server refuses where configured).
   const duplicateHints = useDuplicateCheck({ collection, enabled: isNew && !designOn, draft })
+  // Idea 43: "Needed by <partner>" badges, judged on the values the form holds now.
+  const partnerNeeds = usePartnerNeedsForm({
+    collection,
+    itemId: isNew ? null : itemId,
+    enabled: colMeta?.browser_config?.partner_badges === true && !designOn,
+    draft
+  })
   const fieldAffordancesRaw = {
     remoteChanges,
     dismissRemoteChange: (field: string) => {
@@ -13399,6 +13415,7 @@ function ItemEditFormView({
                                 personalDefaults={personalDefaults.context}
                                 sources={fieldSources}
                                 fieldComments={fieldComments}
+                                partnerNeeds={partnerNeeds}
                               >
                                 {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a

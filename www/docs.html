@@ -533,6 +533,7 @@
           <a class="docs-nav-item" data-section="saved-views" href="#saved-views">Saved Views</a>
           <a class="docs-nav-item" data-section="form-collaboration" href="#form-collaboration">Form Collaboration &amp; Drafts</a>
           <a class="docs-nav-item" data-section="duplicate-warnings" href="#duplicate-warnings">Duplicate Warnings</a>
+          <a class="docs-nav-item" data-section="partner-needs" href="#partner-needs">Partner Needs on the Form</a>
           <a class="docs-nav-item" data-section="list-signals" href="#list-signals">Fulfilment, Send-backs &amp; Back to Queue</a>
           <a class="docs-nav-item" data-section="import-from-url" href="#import-from-url">Bulk Import from URL</a>
           <a class="docs-nav-item" data-section="ai-field-mapping" href="#ai-field-mapping">AI Field Mapping</a>
@@ -18212,6 +18213,11 @@ GET /api/duplicates/unit_types/check?values={"name":"mx480"}&amp;exclude=&lt;id&
           <p class="doc-p">The import preview (<code class="doc-code">POST /api/imports/preview</code>) checks every row the import would CREATE against the same fields and answers <code class="doc-code">duplicates: { fields, exact_rows, close_rows, in_file_rows, close, rows[] }</code> (the first 50 rows with what they copy). The confirm step shows “3 new rows would create a duplicate — 2 copy an existing record, 1 repeats an earlier row”. Choose a match field to update the existing records instead, or remove the rows from the file. Exact and punctuation-only matches are checked; the typo check does not run on imports.</p>
           <div class="doc-note">The form in efp-new uses the same shared record form, so it gets the same notice with no host change.</div>
           <!-- /SYNC:duplicate-warnings -->
+        </div>
+
+        <div class="doc-section" id="s-partner-needs" data-toc='[]'>
+          <!-- SYNC:partner-needs -->
+          <!-- /SYNC:partner-needs -->
         </div>
 
         <div class="doc-section" id="s-list-signals" data-toc='[{"id":"list-signals","label":"Fulfilment, Send-backs &amp; Back to Queue"},{"id":"list-signals-fulfilment","label":"Shipped n / m on lists"},{"id":"list-signals-send-backs","label":"Sent back"},{"id":"list-signals-back","label":"Back to the queue"},{"id":"list-signals-open-tabs","label":"Open in tabs"},{"id":"list-signals-recent","label":"Recently viewed"},{"id":"list-signals-owner-load","label":"Owner load"},{"id":"list-signals-saved-view-widget","label":"Dashboard widgets from a saved view"},{"id":"list-signals-sla-presets","label":"SLA duration presets"},{"id":"list-signals-row-flags","label":"Row flags on a catalog picker"},{"id":"list-signals-facet-builder","label":"Facet builders on a catalog picker"},{"id":"list-signals-unseen","label":"Changed since you looked"},{"id":"list-signals-formula-columns","label":"Formula columns"},{"id":"list-signals-role-default","label":"Default view per role"},{"id":"list-signals-heavy-columns","label":"Heavy list columns"},{"id":"list-signals-tree","label":"Tree view and hierarchy scope"}]'>

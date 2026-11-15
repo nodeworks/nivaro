@@ -4717,6 +4717,7 @@ function FormUxSection({
           data: {
             read_mode_toggle?: boolean
             summary_mode_rules?: SummaryModeRulesDraft | null
+            browser_config?: Record<string, unknown> | null
             fields?: Array<{
               field: string
               type?: string | null
@@ -4743,9 +4744,12 @@ function FormUxSection({
     mutationFn: (patch: {
       read_mode_toggle?: boolean
       summary_mode_rules?: SummaryModeRulesDraft
+      browser_config?: Record<string, unknown> | null
     }) => api.patch(`/collections/${tableName}`, patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['collection-meta-read-mode', tableName] })
+      qc.invalidateQueries({ queryKey: queryKeys.collectionMeta(tableName) })
+      qc.invalidateQueries({ queryKey: ['col-meta', tableName] })
       toast.success('Form UX setting saved')
     },
     onError: (e: unknown) => {
@@ -4810,6 +4814,21 @@ function FormUxSection({
   )
   const busy = saveMut.isPending || meta === undefined
   const toggleOn = meta?.read_mode_toggle === true
+  // Idea 43: "Needed by <partner>" badges ride browser_config (the other keys kept as they are).
+  const partnerBadges = meta?.browser_config?.partner_badges === true
+  const setPartnerBadges = async (on: boolean) => {
+    // Read browser_config fresh: the Collection Browser card writes the same object.
+    const fresh = await api
+      .get<{ data: { browser_config?: Record<string, unknown> | null } }>(
+        `/collections/${tableName}`
+      )
+      .then((r) => r.data.data.browser_config ?? null)
+      .catch(() => meta?.browser_config ?? null)
+    const next: Record<string, unknown> = { ...(fresh ?? {}) }
+    if (on) next.partner_badges = true
+    else delete next.partner_badges
+    saveMut.mutate({ browser_config: Object.keys(next).length > 0 ? next : null })
+  }
 
   const ModeSeg = ({
     value,
@@ -4959,6 +4978,23 @@ function FormUxSection({
             onCheckedChange={(v) => saveMut.mutate({ read_mode_toggle: v })}
             disabled={busy}
             data-summary-mode-switch
+          />
+        </div>
+        {/* Idea 43: "Needed by <partner>" badges */}
+        <div className='flex items-center justify-between gap-4 px-4 py-3'>
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>Partner needs on the form</p>
+            <p className='mt-0.5 text-[12px] text-slate-500'>
+              Mark fields a partner system will need at a later step (“Needed by …”), so people fill
+              them before that step stops on them. Follows the record's current values, line by
+              line. Off by default.
+            </p>
+          </div>
+          <Switch
+            checked={partnerBadges}
+            onCheckedChange={(v) => void setPartnerBadges(v)}
+            disabled={busy}
+            data-partner-badges-switch
           />
         </div>
         {/* Opening-mode rules */}

@@ -228,6 +228,7 @@ import { overviewRoutes } from './overview.js'
 import { overviewPageRoutes } from './overview-page.js'
 import { pagesRoutes } from './pages.js'
 import { partnerDependencyRoutes } from './partner-dependencies.js'
+import { partnerNeedsRoutes } from './partner-needs.js'
 import { payloadTemplateRoutes } from './payload-templates.js'
 import { pdfTemplatesRoutes } from './pdf-templates.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
@@ -481,6 +482,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(catalogRelatedRoutes)
   // What the record form shows about partner integrations (#609 #615 #616 #617).
   await app.register(recordIntegrationsRoutes)
+  await app.register(partnerNeedsRoutes, { prefix: '/partner-needs' })
   await app.register(recordViewRoutes)
   // #3227 — role starter sidebar layouts (a person's own rides preferences.nav_layout)
   await app.register(navLayoutRoutes, { prefix: '/nav-layout' })
