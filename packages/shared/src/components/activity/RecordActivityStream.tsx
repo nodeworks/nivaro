@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Activity, ChevronDown, ChevronUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useItemNavigation, useNivaroClient } from '../../context'
-import { type ActivityEntryInput, groupActivity } from '../../lib/activity-sentence'
+import { type ActivityEntryInput, groupActivity, recordPhrase } from '../../lib/activity-sentence'
 import { post } from '../../lib/commands'
 import { useLiveCollection } from '../../lib/live'
 import { slideIn, useTopInserts } from '../../lib/live-screen'
@@ -58,7 +58,8 @@ export function RecordActivityStream({
   live = true,
   empty,
   className,
-  maxHeightClass = 'max-h-[30rem]',
+  // On a phone the page scrolls and the list grows (no scroll box inside the scrolling page).
+  maxHeightClass = 'md:max-h-[30rem]',
   onOpenRecord
 }: {
   sources: FeedSourceInput[]
@@ -183,6 +184,16 @@ export function RecordActivityStream({
   const groups = useMemo(() => groupActivity(rows), [rows])
   const labelsOn = rows.length > 0
   const labels = useActivityLabels(rows, { enabled: labelsOn })
+  // The stream's own record(s) are the page: their phrase is left out of every sentence.
+  const omitPhrases = useMemo(
+    () =>
+      (records ?? [])
+        .map((r) => recordPhrase(r.collection, String(r.id), labels))
+        .filter((p): p is string => !!p),
+    [records, labels]
+  )
+  // A soft fade under the header while the list is scrolled, so a cut row reads as scrolled content.
+  const [scrolled, setScrolled] = useState(false)
   const listRef = useRef<HTMLDivElement | null>(null)
   const setList = useCallback(
     (el: HTMLDivElement | null) => {
@@ -297,7 +308,17 @@ export function RecordActivityStream({
           {empty ?? 'Nothing has changed here yet.'}
         </p>
       ) : (
-        <div className={cn('relative overflow-y-auto', maxHeightClass)}>
+        <div
+          className={cn('relative md:overflow-y-auto', maxHeightClass)}
+          onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 2)}
+        >
+          {scrolled && (
+            <div
+              aria-hidden
+              data-activity-scroll-fade
+              className='pointer-events-none sticky top-0 z-10 -mb-4 h-4 bg-gradient-to-b from-white to-transparent dark:from-card'
+            />
+          )}
           <div
             ref={setList}
             data-activity-stream-list
@@ -310,6 +331,8 @@ export function RecordActivityStream({
                   group={g.entries.length > 1 ? g.entries : undefined}
                   labels={labels}
                   onOpen={open}
+                  omitPhrases={omitPhrases}
+                  reserveChevron
                 />
               </div>
             ))}

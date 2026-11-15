@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ActivityEntryInput, ActivityLabels } from '../lib/activity-sentence'
-import { ActivityEntry, ActivityFeed } from './ActivityEntry'
+import { ActivityEntry, ActivityFeed, omitRecordPhrases } from './ActivityEntry'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -78,5 +78,19 @@ describe('ActivityEntry', () => {
       'Flow “Clean up” deleted Invoice INV-1',
       'Flow “Clean up” deleted Invoice INV-2'
     ])
+  })
+})
+
+describe("omitRecordPhrases (a record's own stream leaves its name out)", () => {
+  it('cuts "on <record>" and "<record>" from the sentence', () => {
+    const p = 'Project RT6 – zz'
+    expect(omitRecordPhrases(`Review User changed Objective on ${p}`, [p])).toBe(
+      'Review User changed Objective'
+    )
+    expect(omitRecordPhrases(`Review Admin updated ${p} 12 times: Objective`, [p])).toBe(
+      'Review Admin updated 12 times: Objective'
+    )
+    expect(omitRecordPhrases('Ada moved Workflow 5', [p])).toBe('Ada moved Workflow 5')
+    expect(omitRecordPhrases('Ada moved Workflow 5', undefined)).toBe('Ada moved Workflow 5')
   })
 })

@@ -2323,7 +2323,7 @@ function StateCensusChips({
         const body = (
           <>
             <b className='font-semibold text-slate-800'>{c.count.toLocaleString('en-US')}</b>
-            {many.length > 1 || system ? ` ${name}` : c.count === 1 ? ' record' : ' records'}
+            {` ${name}`}
             {hint ? <span className='text-slate-400'> · {hint}</span> : null}
           </>
         )
