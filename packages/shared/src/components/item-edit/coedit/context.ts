@@ -80,3 +80,16 @@ export function sharedTextUnderLock(o: {
   const open = o.sharedFields.size > 0 && o.heldByOther && !o.recordGone && !o.stepLocked
   return { onlySharedUnsaved, open, saveOk: open && onlySharedUnsaved }
 }
+
+/**
+ * Which fields Save checks in the form (required, rules, limits). A save of shared text alone
+ * under someone else's record lock checks only the fields it sends — every other field is
+ * read-only to this person, so its gaps are not theirs to fill (the server still judges the
+ * write). Otherwise: null = every field, as always.
+ */
+export function saveValidationScope(
+  sharedTextSaveOk: boolean,
+  unsavedFields: readonly string[]
+): ReadonlySet<string> | null {
+  return sharedTextSaveOk ? new Set(unsavedFields) : null
+}
