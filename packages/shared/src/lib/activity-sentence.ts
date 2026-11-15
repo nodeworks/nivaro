@@ -1134,6 +1134,22 @@ export function activityPredicate(
       const onRecord = collection === 'nivaro_files' ? '' : on
       return `${opened ? 'opened' : 'downloaded'} ${what}${onRecord}`
     }
+    case 'split-out':
+    case 'split-in': {
+      // Idea 4: a record's lines moved to a new record. The comment is
+      // {to|from, field, lines} as JSON; the other record is named by the
+      // record's Notes thread (as its reader), never stored here.
+      let n = 0
+      try {
+        n = Number((JSON.parse(comment) as { lines?: unknown }).lines) || 0
+      } catch {
+        /* an unreadable comment still says what happened */
+      }
+      const lines = n > 0 ? `${n} ${n === 1 ? 'line' : 'lines'}` : 'lines'
+      return action === 'split-out'
+        ? `moved ${lines}${record ? ` of ${record}` : ''} to a new record`
+        : `created ${record ?? aNoun} from ${lines} of another record`
+    }
     case 'picker-exclude':
       return `hid ${record ?? aNoun} from pickers`
     case 'picker-include':

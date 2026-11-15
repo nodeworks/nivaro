@@ -6343,6 +6343,9 @@ interface AliasO2MWrite {
   updates: Array<{ id: string | number; patch: Record<string, unknown> }>
   /** Rows to remove. */
   deletes: Array<string | number>
+  /** Existing rows (of any parent) to MOVE onto this parent — the row keeps its
+   *  id and history, only its link to the parent changes. */
+  moves: Array<string | number>
   /** True: the parent's child set becomes exactly `rows` + `updates`. */
   set: boolean
 }
@@ -6373,6 +6376,11 @@ function idOf(e: unknown): string | number | null {
  *   {set: [...]}                    the child set becomes exactly these rows:
  *                                   rows with an id are changed, rows without
  *                                   one created, every other child removed
+ *   {move: [ids]}                   existing rows (of another parent) are moved
+ *                                   onto this one — each through updateOne as
+ *                                   the caller, so it is judged like a PATCH of
+ *                                   its link; the row keeps its id and history
+ *                                   (record split, services/record-split.ts)
  * Bare ids in a plain array are ignored: a client echoing the children it
  * just read must never turn into a wave of child updates.
  *
@@ -6405,6 +6413,7 @@ async function extractAliasO2MWrites(
     let entries: unknown[] = []
     let explicitUpdates: unknown[] = []
     let deleteEntries: unknown[] = []
+    let moveEntries: unknown[] = []
     let set = false
     if (Array.isArray(raw)) entries = raw
     else if (raw && typeof raw === 'object') {
@@ -6412,10 +6421,16 @@ async function extractAliasO2MWrites(
       if (Array.isArray(o.set)) {
         entries = o.set
         set = true
-      } else if (Array.isArray(o.create) || Array.isArray(o.update) || Array.isArray(o.delete)) {
+      } else if (
+        Array.isArray(o.create) ||
+        Array.isArray(o.update) ||
+        Array.isArray(o.delete) ||
+        Array.isArray(o.move)
+      ) {
         entries = Array.isArray(o.create) ? o.create : []
         explicitUpdates = Array.isArray(o.update) ? o.update : []
         deleteEntries = Array.isArray(o.delete) ? o.delete : []
+        moveEntries = Array.isArray(o.move) ? o.move : []
       } else if (!('id' in o)) entries = [raw]
     }
     const isRow = (e: unknown): e is Record<string, unknown> =>
@@ -6428,13 +6443,20 @@ async function extractAliasO2MWrites(
         return { id: id as string | number, patch }
       })
     const deletes = deleteEntries.map(idOf).filter((v): v is string | number => v != null)
+    const moves = [
+      ...new Map(
+        moveEntries
+          .map(idOf)
+          .filter((v): v is string | number => v != null)
+          .map((v) => [String(v).toLowerCase(), v] as const)
+      ).values()
+    ]
     delete payload[key]
-    if (rows.length === 0 && updates.length === 0 && deletes.length === 0 && !set) continue
-    if (rows.length + updates.length + deletes.length > NESTED_O2M_ROW_CAP) {
+    const total = rows.length + updates.length + deletes.length + moves.length
+    if (total === 0 && !set) continue
+    if (total > NESTED_O2M_ROW_CAP) {
       throw Object.assign(
-        new Error(
-          `"${key}" carries ${rows.length + updates.length + deletes.length} rows — at most ${NESTED_O2M_ROW_CAP} per write`
-        ),
+        new Error(`"${key}" carries ${total} rows — at most ${NESTED_O2M_ROW_CAP} per write`),
         { statusCode: 400, code: 'NESTED_ROWS_LIMIT' }
       )
     }
@@ -6445,6 +6467,7 @@ async function extractAliasO2MWrites(
       rows,
       updates,
       deletes,
+      moves,
       set
     })
   }
@@ -6460,6 +6483,9 @@ function mergeO2MWrites(a: AliasO2MWrite[], b: AliasO2MWrite[]): AliasO2MWrite[]
       hit.rows.push(...w.rows)
       hit.updates.push(...w.updates)
       hit.deletes.push(...w.deletes)
+      for (const m of w.moves)
+        if (!hit.moves.some((x) => String(x).toLowerCase() === String(m).toLowerCase()))
+          hit.moves.push(m)
       hit.set = hit.set || w.set
     } else out.push(w)
   }
@@ -6496,6 +6522,8 @@ async function applyAliasO2MWrites(
     id: string | number
     prior: Record<string, unknown>
   }> = []
+  // Rows moved onto this parent, with the parent each came from, for the undo.
+  const moved: Array<{ collection: string; fk: string; id: string | number; from: unknown }> = []
   const nestedError = (err: unknown, w: AliasO2MWrite, where: string) => {
     const e = err as Error & { nested?: unknown }
     e.message = `${where}: ${nestedReason(e)}`
@@ -6505,6 +6533,34 @@ async function applyAliasO2MWrites(
   const undo = async (): Promise<string> => {
     const stuck = await undoNestedCreates(user, created, req)
     const stuckUpdates: string[] = []
+    // A moved row goes back to the parent it came from. Through the items
+    // service first (history, rollups); a lock that refuses the way back must
+    // not strand the row on a parent that is about to vanish, so the link is
+    // then put back directly and both parents' rollups recalculated.
+    for (const m of [...moved].reverse()) {
+      try {
+        await updateOne(
+          user,
+          m.collection,
+          m.id,
+          { [m.fk]: m.from, _change_reason: 'Move undone: a later row was refused' },
+          req,
+          workspaceId
+        )
+      } catch {
+        try {
+          await db(m.collection)
+            .where({ id: m.id })
+            .update({ [m.fk]: m.from })
+          const row = (await db(m.collection).where({ id: m.id }).first()) as
+            | Record<string, unknown>
+            | undefined
+          if (row) await recalcAffectedRollups(m.collection, row, { ...row, [m.fk]: parentId })
+        } catch {
+          stuckUpdates.push(`${m.collection} ${m.id}`)
+        }
+      }
+    }
     for (const c of changed.reverse()) {
       if (Object.keys(c.prior).length === 0) continue
       try {
@@ -6537,6 +6593,40 @@ async function applyAliasO2MWrites(
             code: 'NESTED_ROW_NOT_OWNED',
             nested: { field: w.field, id }
           })
+        }
+      }
+      // Moves first: a row moved onto this parent is one of its rows for
+      // everything after (a create that reads its siblings, a rollup).
+      for (const mid of w.moves) {
+        try {
+          const before = (await db(w.collection).where({ id: mid }).first('id', w.fk)) as
+            | Record<string, unknown>
+            | undefined
+          if (!before) {
+            throw Object.assign(new Error(`row ${mid} was not found`), {
+              statusCode: 422,
+              code: 'NESTED_ROW_NOT_FOUND'
+            })
+          }
+          const from = before[w.fk] ?? null
+          if (from != null && String(from).toLowerCase() === String(parentId).toLowerCase())
+            continue
+          await updateOne(user, w.collection, mid, { [w.fk]: parentId }, req, workspaceId)
+          moved.push({ collection: w.collection, fk: w.fk, id: mid, from })
+          // The link may be a field this caller's write drops (read-only, a
+          // locked row rule): a move that did not land is a refusal, never a
+          // silent no-op.
+          const after = (await db(w.collection).where({ id: mid }).first(w.fk)) as
+            | Record<string, unknown>
+            | undefined
+          if (String(after?.[w.fk] ?? '').toLowerCase() !== String(parentId).toLowerCase()) {
+            throw Object.assign(new Error(`row ${mid} could not be moved`), {
+              statusCode: 422,
+              code: 'NESTED_MOVE_REFUSED'
+            })
+          }
+        } catch (err) {
+          throw nestedError(err, w, `${w.field} move ${mid}`)
         }
       }
       // Changes first (a create that reads a sibling sees the change), then
@@ -7303,6 +7393,10 @@ export async function createOne(
     if (nestedWrites.length > 0)
       notes.push(
         'Child rows were checked against the parent as it would be stored; hooks that read the stored parent record did not run for them.'
+      )
+    if (nestedWrites.some((w) => w.moves.length > 0))
+      notes.push(
+        'Rows to move onto the new record were not rehearsed: a move is judged when it runs.'
       )
     const childFailed = Object.values(nested).some((l) => l.some((r) => !r.ok))
     const filled = Object.keys(writable).filter(

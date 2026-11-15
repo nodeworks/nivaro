@@ -51,6 +51,7 @@ export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
 export * from './sections/layout-editor.js'
+export * from './sections/line-split.js'
 export * from './sections/live-feeds.js'
 export * from './sections/live-lists.js'
 export * from './sections/live-ops.js'
@@ -295,6 +296,7 @@ import {
 } from './sections/integrations.js'
 import { integrationsConsole } from './sections/integrations-console.js'
 import { layoutEditor, layoutPersonalDefaults } from './sections/layout-editor.js'
+import { lineSplitDocs } from './sections/line-split.js'
 import { listEditing } from './sections/list-editing'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { collabLiveLists } from './sections/live-lists.js'
@@ -929,6 +931,7 @@ export const navSections: NavGroup[] = [
       adminUxSavedViews,
       adminUxFormCollaboration,
       duplicateWarningsDocs,
+      lineSplitDocs,
       adminUxListSignals,
       adminUxImportFromUrl,
       adminUxAiMapping,

@@ -56,6 +56,7 @@ import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
 import { HeavyListColumnsCard } from '@/components/heavy-list-columns-card'
 import { InlineEditSetting } from '@/components/inline-edit-setting'
 import { LabelSearchFieldsSetting } from '@/components/label-search-fields-setting'
+import { LineSplitCard } from '@/components/line-split-card'
 import { PagePresence } from '@/components/page-presence'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { Badge } from '@/components/ui/badge'
@@ -4379,6 +4380,7 @@ function SettingsTab({
       <AuditDepthSection tableName={tableName} />
       <IntegrityBadgeSection tableName={tableName} />
       <FormUxSection tableName={tableName} onGoToLayouts={onGoToLayouts} />
+      <LineSplitCard tableName={tableName} />
       <DataProtectionSection tableName={tableName} />
       <CastCheckSection tableName={tableName} />
       <GenerateTestDataCard tableName={tableName} />

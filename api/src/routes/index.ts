@@ -263,6 +263,7 @@ import { recordLinkRoutes } from './record-links.js'
 import { recordMergeRoutes } from './record-merge.js'
 import { recordMetaRoutes } from './record-meta.js'
 import { recordPromotionRoutes } from './record-promotion.js'
+import { recordSplitRoutes } from './record-split.js'
 import { recordTemplatesRoutes } from './record-templates.js'
 import { recordViewRoutes } from './record-views.js'
 import { referencedByRoutes } from './referenced-by.js'
@@ -728,6 +729,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(collectionPresetsRoutes, { prefix: '/collection-presets' })
   await app.register(fieldTranslationsRoutes, { prefix: '/field-translations' })
   await app.register(subRowsRoutes, { prefix: '/sub-rows' })
+  // Idea 4: move a record's ticked lines to a new record (browser_config.line_split).
+  await app.register(recordSplitRoutes, { prefix: '/record-split' })
   await app.register(addendumsRoutes, { prefix: '/addendums' })
   await app.register(tasksRoutes, { prefix: '/tasks' })
   await app.register(supportRoutes, { prefix: '/support' })
