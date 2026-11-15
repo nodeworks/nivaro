@@ -509,6 +509,7 @@
           <a class="docs-nav-item" data-section="approval-chains" href="#approval-chains">Approval Chains</a>
           <a class="docs-nav-item" data-section="collab-chat" href="#collab-chat">Chat &amp; Channels</a>
           <a class="docs-nav-item" data-section="item-locking" href="#item-locking">Item Locking &amp; Presence</a>
+          <a class="docs-nav-item" data-section="send-my-view" href="#send-my-view">Send My View</a>
           <a class="docs-nav-item" data-section="live-conflicts" href="#live-conflicts">Working on the same record</a>
           <a class="docs-nav-item" data-section="notifications-center" href="#notifications-center">Notifications Center</a>
           <a class="docs-nav-item" data-section="user-activity-feed" href="#user-activity-feed">User Activity Feed</a>
@@ -17425,6 +17426,32 @@ PATCH /api/item-locks/config/:collection
           <!-- /SYNC:item-locking -->
         </div>
 
+        <!-- SEND MY VIEW -->
+        <div class="doc-section" id="s-send-my-view" data-toc='[{"id":"send-my-view","label":"Send my view"},{"id":"send-my-view-recipient","label":"What the other person gets"},{"id":"send-my-view-api","label":"API"},{"id":"list-viewers","label":"Who else is viewing this list"},{"id":"record-room-chip","label":"Live state chip in record chat rooms"}]'>
+          <!-- SYNC:send-my-view -->
+          <h1 class="doc-h1" id="send-my-view">Send my view</h1>
+          <p class="doc-p">Show a colleague exactly what you are looking at. On a record, a list or a queue worklist, press the paper-plane button, pick the person, add a note if you like, and press Send. A list keeps its filters, sort, columns and page size; a record opens on the same tab.</p>
+          <h3 class="doc-h3" id="send-my-view-recipient">What the other person gets</h3>
+          <ul class="doc-ul">
+            <li>If they have the app open, a small card appears in the corner: "Rob sent you: Workflows — Region: NER". Open takes them there; Later puts it in their notifications instead.</li>
+            <li>If they do not have the app open, it arrives as an ordinary notification in the "Views sent to you" category, which they can mute under Profile → Notification rules.</li>
+            <li>They see the screen with their OWN access. A list shows the rows they may read; a record they cannot read shows the usual no-access page. Nothing of what you can see is sent — only where to go and how the view is set up.</li>
+          </ul>
+          <div class="doc-note">Sending is for people on their own sign-in: API keys, connected apps and View-as cannot send. Each person can send a few views a minute.</div>
+          <h3 class="doc-h3" id="send-my-view-api">API</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td>POST /api/send-view</td><td><code class="doc-code">{to, view: {kind: record | list | queue, collection?, item?, queue?, lv?, tab?, summary?}, note?}</code> → <code class="doc-code">{id, mode: live | notification}</code>. 429 RATE_LIMITED, 403 SEND_VIEW_PEOPLE_ONLY.</td></tr>
+              <tr><td>GET /api/send-view/:id</td><td>The recipient only (404 for anyone else): the view described as THEY may see it, with the target to open.</td></tr>
+              <tr><td>POST /api/send-view/:id/later</td><td>The recipient keeps it as a notification instead of the card.</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="list-viewers">Who else is viewing this list</h2>
+          <p class="doc-p">Administrators see small avatars on a list or queue toolbar when other people have the same list open ("Beth and 2 others are viewing this too"). Hover for the names. Everyone else sees nothing, and their browser is never sent the names. Someone using View-as is never counted.</p>
+          <h2 class="doc-h2" id="record-room-chip">Live state chip in record chat rooms</h2>
+          <p class="doc-p">The top of a record's chat room shows the record's current step, its owners and when the step is due ("Due in 5h", "3h overdue"). It updates by itself when the record moves or its owners change. It only shows for people who can see the room and read the record.</p>
+          <!-- /SYNC:send-my-view -->
+        </div>
+
         <!-- WORKING ON THE SAME RECORD -->
         <div class="doc-section" id="s-live-conflicts" data-toc='[{"id":"live-conflicts","label":"Working on the same record"},{"id":"live-conflicts-quiet","label":"Fields you have not touched"},{"id":"live-conflicts-yours","label":"Fields you are changing"},{"id":"live-conflicts-see-changes","label":"See changes"},{"id":"live-conflicts-lines","label":"Lines: one person per line"},{"id":"live-conflicts-cursors","label":"Cursors in grids"}]'>
           <!-- SYNC:live-conflicts -->
@@ -17464,7 +17491,7 @@ PATCH /api/item-locks/config/:collection
         </div>
 
         <!-- NOTIFICATIONS CENTER -->
-        <div class="doc-section" id="s-notifications-center" data-toc='[{"id":"notifications-center","label":"Notifications Center"},{"id":"notification-role-defaults","label":"Default notification rules by role"},{"id":"notification-why","label":"Why did I get this?"},{"id":"notification-changes","label":"What changed, in the notification"}]'>
+        <div class="doc-section" id="s-notifications-center" data-toc='[{"id":"notifications-center","label":"Notifications Center"},{"id":"notification-role-defaults","label":"Default notification rules by role"},{"id":"notification-why","label":"Why did I get this?"},{"id":"notification-changes","label":"What changed, in the notification"},{"id":"notification-done-by-itself","label":"Done by itself when someone handles it"},{"id":"notification-fold","label":"Several updates, one notification"},{"id":"record-panel-new-count","label":"\"2 new\" on Comments and Tasks"}]'>
           <!-- SYNC:notifications-center -->
           <h1 class="doc-h1" id="notifications-center">Notifications Center</h1>
           <p class="doc-p">Beyond the bell dropdown, the /notifications page is a full paginated inbox of every notification — filter by status, jump to the related record, and mark all as read in one click.</p>
@@ -17542,6 +17569,25 @@ POST /api/notifications/test-my-rules  { "category": "workflow", "email": true, 
     changes: [{ field, label, type, old, new, old_label?, new_label?, diff?: { lead, removed, added, trail } }] }</code></pre>
           <h3 class="doc-h3">Record bundles in the bell</h3>
           <p class="doc-p">Unread rows that name the same record fold into one bell entry — "3 things on REQ-1042" — with the categories as chips and the most urgent lane colouring the row. The chevron expands the rows (each keeps its own actions), clicking the bundle opens the record, and the check marks the whole bundle read in one call. The Notifications page does the same behind "Group by record" (on by default). <code class="doc-code">GET /api/notifications?bundle=record</code> returns <code class="doc-code">bundles</code> ([{collection, item, label, count, unread, lane, categories, newest, url, ids, rows}]) beside <code class="doc-code">data</code>, which then holds only the rows that stayed single; a lone row about a record is never bundled. <code class="doc-code">total</code>, <code class="doc-code">/count</code> and <code class="doc-code">/unread-count</code> are unchanged — a bundle presents rows, it does not reduce them. The label is never a bare id: the friendly id, else the display label, else — for a record deleted since — its trash snapshot's label with a "deleted" chip (<code class="doc-code">deleted: true</code>, no Open link), else "&lt;Singular&gt; #&lt;id&gt;"; <code class="doc-code">collection_label</code> carries the singular name for the chip beside it. Collection-wide subscription rows name the record the same way ("updated PRB1 (regions)").</p>
+          <h3 class="doc-h3" id="notification-done-by-itself">Done by itself when someone handles it</h3>
+          <p class="doc-p">A notification that asked you to do something turns done on its own once it is handled, by you or by anyone else. It keeps its place, counts as read (the bell number drops), and shows one quiet line with a tick: "Approved by Beth · 10:42 AM", "Moved to Review by Beth", "Done by you". Its action buttons go away. Your open tabs update at once.</p>
+          <ul class="doc-ul">
+            <li>A request to act on a record step (you own the step, or a workflow or SLA ask) is done when the record moves to another step. If you made the move and still own the new step, yours stays open.</li>
+            <li>A task notification (assigned, team, reminder, overdue) is done when the task is completed.</li>
+            <li>An approval request is done when someone decides that step: "Approved by …" or "Rejected by …".</li>
+            <li>A support request notification is done when the request is closed or cancelled.</li>
+            <li>A notification that asks you to acknowledge it is never closed for you, and FYIs, mentions and messages are never touched.</li>
+          </ul>
+          <p class="doc-p">The daily summary email checks again just before it goes out: anything handled since it was queued is left out, and a summary with nothing left in it is not sent.</p>
+          <h3 class="doc-h3" id="notification-fold">Several updates, one notification</h3>
+          <p class="doc-p">When updates about one record arrive close together, they fold into one notification instead of stacking up: "3 updates on CM26-79704: moved to Review, 2 comments". While the newest unread update about a record is less than 10 minutes old, the next one rewrites it: it moves to the top, the bell still counts one, and no second phone alert goes out. "3 updates" under the row lists each of them, newest first. Only FYI updates fold; anything that asks you to act, a mention, or an acknowledgement always stays its own notification. Once you have read it, the next update starts a new one.</p>
+          <h3 class="doc-h3" id="record-panel-new-count">"2 new" on Comments and Tasks</h3>
+          <p class="doc-p">On a record, a folded Comments or Tasks panel shows "2 new" beside its name when other people added comments, or added or finished tasks, since you last had that panel open on that record. It updates live and clears when you open the panel. The mark is kept in your browser per record; the first time you see a record it starts from that moment, so an old record never opens on a pile of "new".</p>
+          <pre class="doc-pre"><code>GET /api/notifications → each row carries
+  resolved:   { on: step|task|approval|ticket, by, by_name, at, text } | null
+  fold_count: number | null          (detail.fold.items = the folded updates, newest first)
+Socket (your own room only, ids, never text):
+  notification:retired { ids, resolved: true, collection?, item? }  +  read:changed { kind: 'notifications' }</code></pre>
           <h3 class="doc-h3">As it was — what they saw when notified</h3>
           <p class="doc-p">A notification about a record remembers the record's revision current at send time (<code class="doc-code">revision_id</code>, stamped by notifyUser). "As it was" on a bell or inbox row opens a sheet with the record as it stood then beside the record now; fields that changed since are marked with an amber dot and listed first. Older rows (or a purged revision) fall back to the newest revision written before the notification; a record with no revision from that time says "No snapshot from that time" and shows the current values. <code class="doc-code">GET /api/notifications/:id/as-it-was</code> answers <code class="doc-code">{snapshot, current, changed_fields, fields, labels, revision_id, at}</code> for the caller's own row; <code class="doc-code">current</code> is read as the caller, so a record they can no longer open answers 403/404 and the snapshot is never shown without it. Scalar and link fields only — related sets are not compared.</p>
           <h3 class="doc-h3">Sending a notification (user to user)</h3>
@@ -18868,7 +18914,7 @@ POST /api/search/semantic/reindex
         <!-- ════ OBSERVABILITY ════ -->
 
         <!-- API ANALYTICS -->
-        <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"},{"id":"api-analytics-traces","label":"Slow requests: round trips, N+1s, the real plan"},{"id":"config-read-cache","label":"Configuration read cache"},{"id":"config-read-cache-shared","label":"Shared across processes (Redis)"},{"id":"cache-epoch","label":"Caches across processes"},{"id":"cache-switches","label":"Cache switches (Database, Caches)"},{"id":"permission-cache","label":"Permission cache"},{"id":"api-analytics-hooks","label":"Hook timings"},{"id":"api-analytics-replay","label":"Replaying a logged request"},{"id":"api-analytics-index-advisor","label":"Index advisor"},{"id":"api-analytics-inbound","label":"Inbound integrations"},{"id":"api-analytics-dependencies","label":"Partner dependencies"},{"id":"api-analytics-dead-clicks","label":"Dead and rage clicks"},{"id":"api-analytics-widget-timing","label":"Per-widget timing on dashboards"}]'>
+        <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"},{"id":"api-analytics-traces","label":"Slow requests: round trips, N+1s, the real plan"},{"id":"config-read-cache","label":"Configuration read cache"},{"id":"config-read-cache-shared","label":"Shared across processes (Redis)"},{"id":"cache-epoch","label":"Caches across processes"},{"id":"cache-switches","label":"Cache switches (Database, Caches)"},{"id":"cache-warm-on-change","label":"Warms after data changes"},{"id":"permission-cache","label":"Permission cache"},{"id":"api-analytics-hooks","label":"Hook timings"},{"id":"api-analytics-replay","label":"Replaying a logged request"},{"id":"api-analytics-index-advisor","label":"Index advisor"},{"id":"api-analytics-inbound","label":"Inbound integrations"},{"id":"api-analytics-dependencies","label":"Partner dependencies"},{"id":"api-analytics-dead-clicks","label":"Dead and rage clicks"},{"id":"api-analytics-widget-timing","label":"Per-widget timing on dashboards"}]'>
           <!-- SYNC:api-analytics -->
           <h1 class="doc-h1" id="api-analytics">API Analytics</h1>
           <p class="doc-p">Every API request is sampled into <code class="doc-code">nivaro_api_logs</code>, a ring buffer retaining 14 days of traffic. The /analytics/api page visualises it: request volume timeseries, p50/p95 latency, error rate, and the slowest/most-hit endpoints.</p>
@@ -18925,6 +18971,7 @@ POST /api/search/semantic/reindex
               <tr><td>metadata_l2.ttl_s</td><td><code class="doc-code">METADATA_L2_TTL_S</code></td><td>600</td></tr>
               <tr><td>warm.mode</td><td><code class="doc-code">CACHE_WARM</code> (on, off, auto)</td><td>auto</td></tr>
               <tr><td>warm.budget_ms</td><td><code class="doc-code">CACHE_WARM_BUDGET_MS</code></td><td>240000</td></tr>
+              <tr><td>warm.on_change</td><td><code class="doc-code">CACHE_WARM_ON_CHANGE</code> (on, off, auto = follows warm.mode)</td><td>auto</td></tr>
               <tr><td>list_total.ttl_ms</td><td><code class="doc-code">LIST_TOTAL_CACHE_MS</code> (0 = off)</td><td>30000</td></tr>
               <tr><td>label.ttl_ms</td><td><code class="doc-code">LABEL_CACHE_MS</code> (0 = off)</td><td>30000</td></tr>
               <tr><td>identity.enabled</td><td><code class="doc-code">IDENTITY_CACHE</code></td><td>on</td></tr>
@@ -18937,6 +18984,17 @@ POST /api/search/semantic/reindex
             <li>Identity rows: the active user row a request signs in with is shared by the requests of the next few seconds (at most 5). A write to <code class="doc-code">nivaro_users</code> through the app forgets them in that process at once; a suspension or role change made on another replica shows within the lifetime. Inactive accounts are always read fresh.</li>
             <li>Record form layouts: the sections and field assignments behind <code class="doc-code">/collection-layouts/active</code>, <code class="doc-code">/summary</code> and <code class="doc-code">/detail</code> are kept per layout and configuration number. Which form a person gets is still decided on every request. A layout edit clears them at once in the process that made it and on every other process when the number moves.</li>
             <li>Cache warm, list totals and label rows read the switch each time they run, so a change applies to the next run.</li>
+          </ul>
+          <h2 class="doc-h2" id="cache-warm-on-change">Warms after data changes</h2>
+          <p class="doc-p">A cached query or widget used to show what it worked out until its cache ran out, however much the records under it changed. With Warm after data changes on, a change to a collection (a save, a pipeline move, an import, or a write a procedure announces) marks every cached query that reads that collection as out of date, and the most-viewed answers of those queries are worked out again in the background, so the next person who opens the dashboard gets the new figure at once.</p>
+          <ul class="doc-ul">
+            <li>Which queries read a collection: the freshness sources a query declares, else the tables its SQL and the procedures it runs name.</li>
+            <li>What is worked out again: the answers people actually opened in the last 7 days, for each widget and each query up to four of them (one person per set of User Scopes, as that person). A Warm daily query nobody opened is left to the 06:00 run.</li>
+            <li>How often: a burst of changes (an import of 500 rows) is gathered for a few seconds and handled once. Each widget, and each query’s own answers, is worked out at most once every 2 minutes across all servers; a change inside that gap is handled when the gap ends, so the last change always lands. An answer already worked out after the change is left alone.</li>
+            <li>Load: it runs on the background database connections, takes a slot of the heavy-read gate like any expensive read, and a person who opens the same answer while it runs shares the run instead of starting another.</li>
+            <li>An answer that was not worked out again says so: its stamp names the collection that changed after it ("regions changed 2m ago, newer than this figure"), and a click refreshes it.</li>
+            <li>Database, Caches shows the last 24 hours across every server: changes heard, queries marked, warms, answers worked out again (and how many a viewer shared), answers left alone, failures and the queries worked out most.</li>
+            <li>Default <code class="doc-code">auto</code> follows the cache warm Mode, so it runs where scheduled jobs run (deployed servers) and not on a development machine. It never runs in cloud mode and needs Redis.</li>
           </ul>
           <h2 class="doc-h2" id="permission-cache">Permission cache</h2>
           <p class="doc-p">Every list read asks the same permission questions: may this person read the collection, which fields, under which row filter, inside which User Scopes. Without the cache each answer is rebuilt from the role's policies on every call, several database round trips per collection and again for every expanded relation. With the cache on (<code class="doc-code">PERMISSION_CACHE=on</code>, or Permission cache, Enabled on Database, Caches) each person's answers are kept in the process for a short time. It is off by default; turn it on for one environment (staging) first.</p>
@@ -20001,6 +20059,7 @@ await ctx.sql.announceWrites?.('forecasts', ids, { action: 'update', changed_fie
           <h2 class="doc-h2" id="realtime-pipeline-outside">Writes nobody announced</h2>
           <p class="doc-p">The outside-write watcher is the safety net for writers that never announce. Every 10 seconds (Realtime → Outside writes sets it, 5 seconds to 5 minutes), on the server that runs scheduled jobs, it looks at the collections people have open right now (or a list you choose) for rows whose changed-at time moved since the last look, and announces them like any other raw write. Rows the app itself announced a moment earlier are skipped, so no screen re-reads them twice.</p>
           <ul class="doc-ul">
+            <li>Where SQL Server change tracking is on for the table, the watcher reads the tracked changes since the last version it saw instead: no changed-at column or index needed, and removals are seen too (announced as deletes). It stays one look behind, so a procedure that announces its own writes is never announced twice. If the kept history (2 days) no longer reaches the last version, one “many records changed” goes out and it starts again from now. Change tracking is set up per database with api/src/scripts/change-tracking-setup.ts. The Outside writes tab shows per collection which way it is watched.</li>
             <li>A collection is watched on its changed-at column: the field marked “date updated”, else date_updated, updated_at, modified and similar names. It needs an index that starts with that column and a one-column primary key; without them it is refused (the Outside writes tab says why), so the watcher never reads a whole table every few seconds.</li>
             <li>Each look reads a small window by the database’s own clock, in UTC and in local time (procedures often stamp GETDATE()), reaching two minutes back for transactions that commit late, and skips rows other transactions hold locked until a later look.</li>
             <li>More than 500 changed rows in one look become one “many records changed” announcement.</li>

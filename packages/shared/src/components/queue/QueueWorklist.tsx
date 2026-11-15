@@ -123,6 +123,7 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { copyIdText } from '../../lib/record-ref'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { userErrorMessage } from '../../lib/safe-error'
+import { listViewInput } from '../../lib/send-view'
 import { useTableDensity } from '../../lib/table-density'
 import { matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
@@ -168,6 +169,7 @@ import { LiveBurstPill, LivePauseButton } from '../LiveListControls'
 import { LiveRowMark } from '../LiveRowMark'
 import { CopyListLinkButton } from '../list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from '../list/InlineEdit'
+import { ListViewers } from '../list/ListViewers'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
   PICKER_EXCLUDED_TITLE,
@@ -177,6 +179,7 @@ import { RealtimeStaleMark } from '../RealtimeStatusBanner'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
 import { RowPresence } from '../RowPresence'
+import { SendViewButton } from '../send-view/SendViewButton'
 import { UnseenDot } from '../UnseenDot'
 import { Badge } from '../ui/badge'
 import { Checkbox } from '../ui/checkbox'
@@ -244,6 +247,9 @@ export interface QueueWorklistProps {
    *  everywhere; a list hides them only when every collection the queue can
    *  create in is on it (the header covers those, not the rest). */
   hideCreateActions?: boolean | string[]
+  /** The host's header row shows who else has this queue open (admin queue page), so the
+   *  toolbar keeps no slot for it. */
+  viewersInHeader?: boolean
   /** Hosts with an Ask AI page pass this: the toolbar gains "Ask about this
    *  queue" (#1276), which hands the queue over so the host can open Ask AI
    *  with the question seeded. Absent = no button. */
@@ -803,6 +809,7 @@ export function QueueWorklist({
   realtime,
   renderError,
   hideCreateActions = false,
+  viewersInHeader = false,
   onAsk
 }: QueueWorklistProps) {
   const qc = useQueryClient()
@@ -2794,6 +2801,17 @@ export function QueueWorklist({
     if (views.data.some((v) => v.id === want)) setActiveViewId(want)
   }, [views, displayReady])
   /** What "Copy link" puts in the URL — the worklist as on screen. */
+  // Send my view: the tab and how many filters — the sender's settings, never row values.
+  const queueViewSummary = (): string | null => {
+    const parts: string[] = []
+    const tab = SCOPE_TABS.find((t) => t.value === scope)?.label
+    if (tab) parts.push(tab)
+    const n = Object.values(filterValues).filter((v) =>
+      Array.isArray(v) ? v.length > 0 : v !== '' && v != null
+    ).length
+    if (n > 0) parts.push(`${n} filter${n === 1 ? '' : 's'}`)
+    return parts.length ? parts.join(', ') : null
+  }
   const listLinkState = (): QueueLinkState => ({
     scope,
     filters: filterValues,
@@ -4830,6 +4848,23 @@ export function QueueWorklist({
               </button>
             )}
             <CopyListLinkButton listKey={`queue:${queueId}`} getState={listLinkState} />
+            <SendViewButton
+              getView={() =>
+                listViewInput(
+                  'queue',
+                  queueId,
+                  `queue:${queueId}`,
+                  listLinkState() as unknown as Record<string, unknown>,
+                  queueViewSummary()
+                )
+              }
+              describe={() => {
+                const s = queueViewSummary()
+                const name = queue?.name ?? 'This queue'
+                return s ? `${name} — ${s}` : name
+              }}
+            />
+            {!viewersInHeader && <ListViewers kind='queue' id={queueId} />}
             {view === 'table' && (
               <button
                 type='button'

@@ -665,6 +665,8 @@ const RELAYED_EVENTS = new Set([
   'presence:changed',
   'read:changed',
   'prefs:changed',
+  // Send my view: a poke on the person's own room (the card reads the view as them).
+  'view:sent',
   // rt4 #20 — a person's own lists and the shared pins, to follower tabs too (the same notice
   // reaching a tab twice inside 150 ms is delivered once by useLiveEvent).
   'mine:changed',

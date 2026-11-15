@@ -406,6 +406,8 @@ export { LiveCount, type LiveCountProps } from './components/LiveCount'
 export { ConfigChangeStrip } from './components/ConfigChangeStrip'
 export { ConfigTheirsPanel } from './components/ConfigTheirsPanel'
 export { LiveNewMatchesPill } from './components/LiveNewMatchesPill'
+export { LIVE_OFF_TIP, LiveOffNote } from './components/LiveOffNote'
+export { LivePreferenceHost } from './components/LivePreferenceHost'
 export { LiveRowMark } from './components/LiveRowMark'
 export { LoadErrorNote } from './components/LoadErrorNote'
 export * from './components/layout-editor'
@@ -416,6 +418,7 @@ export {
   type InlineEditController,
   useInlineEdit
 } from './components/list/InlineEdit'
+export { ListViewers } from './components/list/ListViewers'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export {
@@ -665,6 +668,8 @@ export {
 export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
 export { SlowNotice, SlowNoticeView } from './components/SlowNotice'
 export { type StaleBuild, StaleBuildChip } from './components/StaleBuildChip'
+export { SendViewButton } from './components/send-view/SendViewButton'
+export { SentViewCards } from './components/send-view/SentViewCards'
 export {
   buildReportPayload,
   ReportProblemButton,
@@ -773,6 +778,7 @@ export {
   useApiUpdate
 } from './lib/api-version'
 export * from './lib/approval-progress'
+export * from './lib/attention-prefs'
 export * from './lib/attention-prefs'
 export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
@@ -993,7 +999,9 @@ export * from './lib/list-inline-edit'
 export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
 export * from './lib/list-return'
+export * from './lib/list-viewers'
 export * from './lib/live'
+export * from './lib/live-announcer'
 export * from './lib/live-announcer'
 export * from './lib/live-counts'
 export * from './lib/live-data-changed'
@@ -1003,6 +1011,25 @@ export * from './lib/live-list-flow'
 export * from './lib/live-moves'
 export * from './lib/live-ops'
 export * from './lib/config-watch'
+// Realtime round 3 #24 — Live updates: Normal / Calm / Off (Profile → Display, role defaults)
+export {
+  __resetLivePreferenceForTests,
+  LIVE_CALM_PAUSE_MS,
+  LIVE_DATA_EVENTS,
+  LIVE_MODE_LABELS,
+  LIVE_MODES,
+  LIVE_PRESENCE_EVENTS,
+  type LiveModeSource,
+  type LivePreference,
+  liveCollectionEventPasses,
+  liveEventQuiet,
+  livePausedAt,
+  livePreferenceOf,
+  parseLiveMode,
+  resolveLiveMode,
+  setLiveMode,
+  subscribeLiveMode
+} from './lib/live-preference'
 export * from './lib/live-queries'
 export * from './lib/live-screen'
 export * from './lib/live-search'
@@ -1360,6 +1387,7 @@ export {
   tokenize
 } from './lib/search-text'
 export * from './lib/send-status'
+export * from './lib/send-view'
 export {
   type ClockSample,
   measureClockOffset,
@@ -1411,30 +1439,6 @@ export { registerStagedRowLabel, stagedRowLabel } from './lib/staged-row-labels'
 export * from './lib/stale-chunk'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
-export * from './lib/attention-prefs'
-export * from './lib/waiting-count'
-export * from './lib/live-announcer'
-// Realtime round 3 #24 — Live updates: Normal / Calm / Off (Profile → Display, role defaults)
-export {
-  __resetLivePreferenceForTests,
-  LIVE_CALM_PAUSE_MS,
-  LIVE_DATA_EVENTS,
-  LIVE_MODE_LABELS,
-  LIVE_MODES,
-  LIVE_PRESENCE_EVENTS,
-  type LiveModeSource,
-  type LivePreference,
-  liveCollectionEventPasses,
-  liveEventQuiet,
-  livePausedAt,
-  livePreferenceOf,
-  parseLiveMode,
-  resolveLiveMode,
-  setLiveMode,
-  subscribeLiveMode
-} from './lib/live-preference'
-export { LIVE_OFF_TIP, LiveOffNote } from './components/LiveOffNote'
-export { LivePreferenceHost } from './components/LivePreferenceHost'
 export { configureTabSound, pickSoundTab, shouldPlayHere } from './lib/tab-sound'
 export {
   BRAND_ACCENT,
@@ -1490,6 +1494,7 @@ export {
   viewAs,
   viewAsPath
 } from './lib/view-as'
+export * from './lib/waiting-count'
 export * from './lib/waiting-count'
 export {
   buildWidgetImageLabel,

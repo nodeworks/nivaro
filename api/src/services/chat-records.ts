@@ -111,14 +111,26 @@ export async function roomForRecord(
   return { room: `${type.prefix}:${token}`, type }
 }
 
-/** Record header facts: state, SLA, owners (#985). */
+/** The record's step clock, as the room's state chip shows it ("Due in 5h", "3h overdue"). */
+export interface RoomRecordSla {
+  status: string
+  elapsed_hours: number | null
+  due_hours: number | null
+  /** Hours left before the step is due; negative once it is overdue. */
+  remaining_hours: number | null
+  /** The clock counts business hours only. */
+  business_hours: boolean
+}
+
+/** Record header facts: state, SLA, owners (#985). Gated: canSeeRoom + reading the record as
+ *  the person (resolveRoomRecord answers null otherwise, and so does this). */
 export async function roomRecordFacts(
   user: User,
   room: string
 ): Promise<
   | (RoomRecord & {
       state: { key: string; label: string; color: string | null } | null
-      sla: { status: string; elapsed_hours: number | null; due_hours: number | null } | null
+      sla: RoomRecordSla | null
       owners: Array<{ id: string; name: string }>
     })
   | null
@@ -127,7 +139,7 @@ export async function roomRecordFacts(
   if (!rec) return null
   let state: { key: string; label: string; color: string | null } | null = null
   let owners: Array<{ id: string; name: string }> = []
-  let sla: { status: string; elapsed_hours: number | null; due_hours: number | null } | null = null
+  let sla: RoomRecordSla | null = null
   try {
     const inst = (await db('nivaro_workflow_instances as i')
       .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
@@ -165,7 +177,9 @@ export async function roomRecordFacts(
       sla = {
         status: String(e.status),
         elapsed_hours: e.elapsed_hours != null ? Number(e.elapsed_hours) : null,
-        due_hours: e.duration_hours != null ? Number(e.duration_hours) : null
+        due_hours: e.duration_hours != null ? Number(e.duration_hours) : null,
+        remaining_hours: e.remaining_hours != null ? Number(e.remaining_hours) : null,
+        business_hours: !!e.business_hours_only
       }
     }
   } catch {

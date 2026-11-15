@@ -161,6 +161,7 @@ import {
   ThreadPane,
   WelcomeNote
 } from './RoomParts'
+import { dueText } from './room-due'
 import { ClipPlayer, clipInfo } from './ScreenClip'
 
 /**
@@ -782,10 +783,28 @@ function EntityRoomCard({ room }: { room: string }) {
   })
 
   const facts = useRoomRecord(room, isEntity && !!card)
+  // Live state chip: the step, its owners and its clock follow the record. The socket only
+  // says THAT it moved (`$state` / `$owners`); both reads re-run as this person, so someone
+  // who lost access sees the card disappear rather than a stale step.
+  useLiveRecord(
+    card?.collection,
+    card?.id,
+    (batch) => {
+      if (!batchTouches(batch, LIVE_ASPECTS.state, LIVE_ASPECTS.owners)) return
+      void roomTypesQc.invalidateQueries({ queryKey: ['nvr-chat-room-card', room] })
+      void roomTypesQc.invalidateQueries({ queryKey: ['nvr-chat-room-record', room] })
+    },
+    { includeOwn: true, debounceMs: 600 }
+  )
   if (!isEntity || !card) return null
   const build = cfg.recordUrl ?? ((c: string, id: string | number) => `/collections/${c}/${id}`)
   const href = build(card.collection, card.id)
   const sla = facts?.sla ?? null
+  // The record-facts read carries the step too; prefer it once it is in (one source for
+  // step + owners + clock), the card's own read until then.
+  const stepLabel = facts?.state?.label ?? card.state
+  const stepColor = facts?.state ? facts.state.color : card.color
+  const due = dueText(sla)
   const slaTone =
     sla?.status === 'breached'
       ? 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300'
@@ -797,44 +816,59 @@ function EntityRoomCard({ room }: { room: string }) {
       className={cn('flex shrink-0 items-center gap-2 border-b px-3 py-1.5', th.divider)}
       data-chat-room-card
     >
-      <span className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+      <span className='shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
         {card.type_label}
       </span>
-      <span className='truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+      {/* The record's own name keeps its room (~12 characters) — the step pill shrinks
+          first, so the chip always says WHICH record it is. */}
+      <span
+        className='min-w-[12ch] max-w-[18ch] shrink-0 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'
+        data-tip={token ?? undefined}
+      >
         {token}
       </span>
-      {card.state && (
+      {stepLabel && (
         <span
-          className='rounded-full px-2 py-0.5 text-[10px] font-semibold'
+          key={stepLabel}
+          data-chat-room-state={stepLabel}
+          data-tip={stepLabel}
+          className='nvr-fade-in min-w-0 truncate rounded-full px-2 py-0.5 text-[10px] font-semibold'
           style={{
-            backgroundColor: card.color ? `${card.color}26` : 'rgba(100,116,139,.15)',
-            color: card.color ?? undefined
+            backgroundColor: stepColor ? `${stepColor}26` : 'rgba(100,116,139,.15)',
+            color: stepColor ?? undefined
           }}
         >
-          {card.state}
+          {stepLabel}
         </span>
       )}
       {sla && (
         <span
-          className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-semibold', slaTone)}
+          key={`${sla.status}|${due ?? ''}`}
+          className={cn(
+            'nvr-fade-in shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
+            slaTone
+          )}
           title={
             sla.due_hours != null
-              ? `${Math.round(sla.elapsed_hours ?? 0)}h in this state of ${sla.due_hours}h allowed`
+              ? `${Math.round(sla.elapsed_hours ?? 0)}h in this step of ${sla.due_hours}h allowed${sla.business_hours ? ' (business hours)' : ''}`
               : undefined
           }
           data-chat-room-sla={sla.status}
         >
-          {sla.status === 'breached'
-            ? 'Past SLA'
-            : sla.status === 'warning'
-              ? 'SLA soon'
-              : 'On time'}
+          {due ??
+            (sla.status === 'breached'
+              ? 'Past SLA'
+              : sla.status === 'warning'
+                ? 'SLA soon'
+                : 'On time')}
         </span>
       )}
       {facts && facts.owners.length > 0 && (
         <span
-          className='ml-auto flex -space-x-1.5'
-          title={`Owners: ${facts.owners.map((o) => o.name).join(', ')}`}
+          className='ml-auto flex shrink-0 -space-x-1.5'
+          data-tip={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
+          aria-label={`${facts.owners.length === 1 ? 'Owner' : 'Owners'}: ${facts.owners.map((o) => o.name).join(', ')}`}
+          role='img'
           data-chat-room-owners={facts.owners.length}
         >
           {facts.owners.slice(0, 4).map((o) => (
@@ -852,9 +886,8 @@ function EntityRoomCard({ room }: { room: string }) {
           type='button'
           onClick={() => cfg.navigate?.(href)}
           className={cn(
-            'text-[11px] font-medium hover:underline',
-            facts?.owners.length ? 'ml-1.5' : 'ml-auto',
-            th.accentText
+            'shrink-0 text-[11px] font-semibold text-[#007a99] underline-offset-2 hover:underline dark:text-nvr-cyan',
+            facts?.owners.length ? 'ml-1.5' : 'ml-auto'
           )}
         >
           Open

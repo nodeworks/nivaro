@@ -106,6 +106,7 @@ import {
   recordNavigation,
   restoreTrailScroll,
   ScreenRefreshButton,
+  SentViewCards,
   SOMETHING_WENT_WRONG,
   scrollPathOf,
   scrollToRestore,
@@ -118,7 +119,7 @@ import {
 import { AskPanelHost } from '@/components/ask-panel-host'
 import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
-import { NotificationBell } from '@/components/notification-bell'
+import { NOTIF_ROUTES, NotificationBell } from '@/components/notification-bell'
 import { KeyboardShortcuts } from '@/components/shortcuts-overlay'
 import { TeamChatDock } from '@/components/team-chat'
 import { ThemeSwitcher } from '@/components/theme-switcher'
@@ -1022,6 +1023,7 @@ export function AppLayout() {
         <UserSyncHost />
         <OutboxHost userId={authUser?.id ?? null} />
         <HuddleCallHost />
+        <SentViewHost />
         {/* Realtime #17: one record sheet for the whole app (My Work, the bell, notifications,
             search, record links in comments open records in it). */}
         <RecordPeekHost wrapSheet={(sheet) => <PeekSheetProviders>{sheet}</PeekSheetProviders>} />
@@ -1312,6 +1314,17 @@ function HuddleCallHost() {
   return (
     <NivaroProvider client={announcementsClient}>
       <HuddleCallLayer />
+    </NivaroProvider>
+  )
+}
+
+/** Send my view: a colleague's view arrives as a quiet card while this app is open. */
+function SentViewHost() {
+  const navigate = useNavigate()
+  if (readMasquerade()) return null
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <SentViewCards routes={NOTIF_ROUTES} onNavigate={(p) => navigate(p)} />
     </NivaroProvider>
   )
 }

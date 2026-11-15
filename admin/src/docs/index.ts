@@ -91,6 +91,7 @@ export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
 export * from './sections/security.js'
+export * from './sections/send-my-view.js'
 export * from './sections/sql-checks.js'
 export * from './sections/storage.js'
 export * from './sections/summary-mode.js'
@@ -515,6 +516,7 @@ import {
   securityUserScopes,
   securityWorkspaceTemplates
 } from './sections/security.js'
+import { collabSendMyView } from './sections/send-my-view.js'
 import { sqlChecksDocs } from './sections/sql-checks.js'
 import {
   storageFileExpiry,
@@ -946,6 +948,7 @@ export const navSections: NavGroup[] = [
       collabBackAndPeek,
       collabLiveOps,
       collabPresence,
+      collabSendMyView,
       collabTabCount,
       collabLiveSetting,
       collabLiveTrace,

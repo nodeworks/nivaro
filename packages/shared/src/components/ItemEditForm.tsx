@@ -141,6 +141,7 @@ import { announceRecordTabs } from '../lib/record-tabs'
 import { invalidateRecordTasks } from '../lib/record-tasks'
 import { reimportAllowed } from '../lib/reimport-visibility'
 import { reportCodeError, userErrorMessage } from '../lib/safe-error'
+import { currentRecordTab } from '../lib/send-view'
 import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
 import { stagedRowLabel } from '../lib/staged-row-labels'
 import {
@@ -385,6 +386,7 @@ import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordGraphSheet } from './RecordGraph'
 import { type ReadViewLayout, RecordReadView } from './RecordReadView'
 import { ScreenRefreshButton } from './ScreenRefreshButton'
+import { SendViewButton } from './send-view/SendViewButton'
 import { SuggestFormChange } from './support/SuggestFormChange'
 import { SupportRequestDialog } from './support/SupportRequestDialog'
 
@@ -14314,6 +14316,18 @@ function ItemEditFormView({
                                                 compact
                                                 collection={collection}
                                                 itemId={String(itemId)}
+                                              />
+                                              <SendViewButton
+                                                compact
+                                                getView={() => ({
+                                                  kind: 'record',
+                                                  collection,
+                                                  item: String(itemId),
+                                                  tab: currentRecordTab()
+                                                })}
+                                                describe={() =>
+                                                  `This ${singularTitle.toLowerCase()}`
+                                                }
                                               />
                                               <RecordInsightsButton
                                                 compact
