@@ -522,7 +522,7 @@ export function NotificationCenterView({
     const target = resolveNotificationTargetFor(n, routes)
     const head = (
       <>
-        <div className='flex items-baseline gap-2'>
+        <div className='flex flex-wrap items-baseline gap-x-2 sm:flex-nowrap'>
           {n.lane === 'critical' && (
             <span className='shrink-0 rounded bg-red-500/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-red-600 dark:text-red-400'>
               Critical
@@ -535,7 +535,8 @@ export function NotificationCenterView({
           )}
           <span
             className={cn(
-              'truncate text-[13px]',
+              // Wraps on a phone so the sender and what changed stay readable; one line on wider screens.
+              'min-w-0 break-words text-[13px] sm:truncate',
               unread
                 ? 'font-medium text-slate-900 dark:text-slate-100'
                 : 'font-normal text-slate-600 dark:text-slate-400'
@@ -548,7 +549,7 @@ export function NotificationCenterView({
           </span>
         </div>
         {n.message && (
-          <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
+          <p className='mt-0.5 line-clamp-3 text-[12px] text-slate-500'>
             {n.message.replace(/<[^>]+>/g, '')}
           </p>
         )}
@@ -614,7 +615,7 @@ export function NotificationCenterView({
                       : n.collection === '__chat__'
                         ? 'Chat'
                         : n.collection && !n.item
-                          ? 'See what changed'
+                          ? `See what changed in ${titleWords(n.collection)}`
                           : n.collection
                             ? `${n.collection} #${n.item}`
                             : 'Open'}
@@ -1432,4 +1433,10 @@ export function NotificationCenterView({
       />
     </div>
   )
+}
+
+/** "workflow_lines" → "Workflow lines" (a collection's readable name when no label came with the row). */
+function titleWords(collection: string): string {
+  const t = collection.replace(/_/g, ' ').trim()
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : collection
 }
