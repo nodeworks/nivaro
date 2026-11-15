@@ -70,8 +70,10 @@ export async function partnerNeedsRoutes(app: FastifyInstance) {
 
     const data = await partnerNeeds(
       { collection, item, values, lines },
-      { user: req.user ?? null, isAdmin: !!req.isAdmin }
+      { user: req.user ?? null, isAdmin: !!req.isAdmin, workspaceId: req.workspaceId ?? undefined }
     )
+    // Read as the caller: a record they cannot read is not there.
+    if (!data) return reply.code(404).send({ error: 'Not found' })
     return reply.send({ data })
   })
 }

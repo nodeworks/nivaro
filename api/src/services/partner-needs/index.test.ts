@@ -99,7 +99,10 @@ const M = vi.hoisted(() => {
       junction_field: 'depots_id'
     }
   ]
-  const perm: { allowed: Record<string, string[] | null> } = { allowed: {} }
+  const perm: { allowed: Record<string, string[] | null>; hidden: Set<string> } = {
+    allowed: {},
+    hidden: new Set()
+  }
   return { fieldsOf, relations, perm }
 })
 const perm = M.perm
@@ -119,6 +122,48 @@ vi.mock('../collections.js', async (orig) => ({
   getRelations: async (c: string) =>
     M.relations.filter((r) => r.many_collection === c || r.one_collection === c)
 }))
+// The record and lookups are read AS THE CALLER: field policy (perm.allowed) and rows the
+// caller cannot see (perm.hidden, `<collection>:<id>`) apply, like readOne / readItems.
+vi.mock('../items.js', async (orig) => {
+  type R = Record<string, unknown>
+  const pick = (c: string, row: R, fields?: string[]) => {
+    const allowed = M.perm.allowed[c]
+    const out: R = {}
+    for (const [k, v] of Object.entries(row)) {
+      if (allowed && !allowed.includes(k)) continue
+      if (fields && !fields.includes(k)) continue
+      out[k] = v
+    }
+    return out
+  }
+  const seen = (c: string, r: R) => !M.perm.hidden.has(`${c}:${r.id}`)
+  const eq = (a: unknown, b: unknown) =>
+    String(a ?? '').toUpperCase() === String(b ?? '').toUpperCase()
+  return {
+    ...((await orig()) as object),
+    readOne: async (_u: unknown, c: string, id: unknown) => {
+      const row = (H.tables[c] ?? []).find((r) => eq(r.id, id))
+      return row && seen(c, row) ? pick(c, row) : null
+    },
+    readItems: async (
+      _u: unknown,
+      c: string,
+      q: { filter?: R; fields?: string[]; limit?: number }
+    ) => {
+      const rows = (H.tables[c] ?? []).filter((r) => {
+        if (!seen(c, r)) return false
+        for (const [f, cond] of Object.entries(q.filter ?? {})) {
+          const op = cond as R
+          if ('_eq' in op && !eq(r[f], op._eq)) return false
+          if ('_null' in op && r[f] != null) return false
+          if ('_in' in op && !(op._in as unknown[]).some((x) => eq(r[f], x))) return false
+        }
+        return true
+      })
+      return { data: rows.slice(0, q.limit ?? 1000).map((r) => pick(c, r, q.fields)) }
+    }
+  }
+})
 vi.mock('../permissions.js', async (orig) => ({
   ...((await orig()) as object),
   can: async () => true,
@@ -187,7 +232,11 @@ vi.mock('../payload-templates/index.js', async (orig) => ({
     key === 'alpha-order' ? { mode: 'map', body: JSON.stringify(alphaSpec) } : null
 }))
 
-import { partnerNeeds } from './index.js'
+import { type PartnerNeedsAnswer, partnerNeeds as partnerNeedsOrNull } from './index.js'
+
+// Null only for a record the caller cannot read (its own test checks that); typed as an answer.
+const partnerNeeds = async (...args: Parameters<typeof partnerNeedsOrNull>) =>
+  (await partnerNeedsOrNull(...args)) as PartnerNeedsAnswer
 
 const T = 'TPL-1'
 const S = { draft: 'S-DRAFT', review: 'S-REVIEW', ready: 'S-READY', sent: 'S-SENT' }
@@ -320,6 +369,7 @@ describe('partnerNeeds', () => {
   beforeEach(() => {
     seed()
     perm.allowed = {}
+    perm.hidden = new Set()
   })
 
   it('badges follow the deciding field: depot 1 → Alpha fields, depot 2 → Beta fields', async () => {
@@ -426,6 +476,106 @@ describe('partnerNeeds', () => {
     perm.allowed = { orders: ['id', 'ref'] }
     const c = await partnerNeeds({ collection: 'orders', item: null, values: {} }, reader)
     expect(c.hints).toEqual({})
+  })
+
+  it('a record the caller cannot read answers nothing (route: 404)', async () => {
+    tables.orders = [{ id: 10, depot: 1 }]
+    perm.hidden = new Set(['orders:10'])
+    const reader = { user: { id: 'U2', role: 'R2' } as never, isAdmin: false }
+    expect(await partnerNeeds({ collection: 'orders', item: '10', values: {} }, reader)).toBeNull()
+  })
+
+  it('a hidden deciding field decides nothing: no badge, no hint, whatever it holds', async () => {
+    tables.nivaro_workflow_instances = [
+      {
+        collection: 'orders',
+        item: '10',
+        template: T,
+        current_state: S.ready,
+        completed_at: null,
+        started_at: 1
+      }
+    ]
+    // depot = 1 picks Alpha, but this reader may not read depot.
+    tables.orders = [{ id: 10, ref: null, depot: 1, site: null }]
+    perm.allowed = { orders: ['id', 'ref', 'site', 'contacts'], order_lines: ['id', 'sku', 'bin'] }
+    const reader = { user: { id: 'U2', role: 'R2' } as never, isAdmin: false }
+    const a = await partnerNeeds({ collection: 'orders', item: '10', values: {} }, reader)
+    expect(a?.fields).toEqual({})
+    expect(a?.hints).toEqual({})
+    // Sending a value for it does not help either.
+    const b = await partnerNeeds({ collection: 'orders', item: '10', values: { depot: 2 } }, reader)
+    expect(b?.fields).toEqual({})
+  })
+
+  it('a lookup on a collection the caller cannot read never counts the push', async () => {
+    perm.allowed = { orders: null, depots: [] }
+    const reader = { user: { id: 'U2', role: 'R2' } as never, isAdmin: false }
+    const a = await partnerNeeds({ collection: 'orders', item: null, values: { depot: 1 } }, reader)
+    expect(a?.fields.ref).toBeUndefined()
+    expect(a?.fields.due_date).toBeUndefined()
+  })
+
+  it('reported lines count only as new rows or as readable saved children of the record', async () => {
+    tables.nivaro_workflow_instances = [
+      {
+        collection: 'orders',
+        item: '10',
+        template: T,
+        current_state: S.ready,
+        completed_at: null,
+        started_at: 1
+      }
+    ]
+    tables.orders = [{ id: 10, depot: 1 }]
+    tables.order_lines = [
+      { id: 102, order: 10, depot: 3, qty: 1 },
+      { id: 900, order: 11, depot: 3, qty: 1 },
+      { id: 103, order: 10, depot: 3, qty: 1 }
+    ]
+    perm.hidden = new Set(['order_lines:103'])
+    const a = await partnerNeeds(
+      {
+        collection: 'orders',
+        item: '10',
+        values: {},
+        lines: {
+          'order_lines.order': [
+            { key: '102', values: { depot: 3 } },
+            { key: '900', values: { depot: 3 } }, // another record's line
+            { key: '103', values: { depot: 3 } }, // a line this caller cannot see
+            { key: 'pending:0', values: { depot: 3 } },
+            { key: 'pending:x', values: { depot: 3 } },
+            { key: "1' OR 1=1", values: { depot: 3 } }
+          ]
+        }
+      },
+      admin
+    )
+    expect(Object.keys(a?.lines['order_lines.order'].rows ?? {}).sort()).toEqual([
+      '102',
+      'pending:0'
+    ])
+  })
+
+  it('lines are not judged on a column the caller may not read', async () => {
+    tables.nivaro_workflow_instances = [
+      {
+        collection: 'orders',
+        item: '10',
+        template: T,
+        current_state: S.ready,
+        completed_at: null,
+        started_at: 1
+      }
+    ]
+    tables.orders = [{ id: 10, depot: 1 }]
+    tables.order_lines = [{ id: 102, order: 10, depot: 3, qty: 1 }]
+    // bin is readable, but Gamma picks its lines by depot, which is not.
+    perm.allowed = { orders: null, order_lines: ['id', 'bin', 'sku'] }
+    const reader = { user: { id: 'U2', role: 'R2' } as never, isAdmin: false }
+    const a = await partnerNeeds({ collection: 'orders', item: '10', values: {} }, reader)
+    expect(a?.lines['order_lines.order']?.rows['102']?.bin).toBeUndefined()
   })
 
   it('is off unless the collection turned it on', async () => {
