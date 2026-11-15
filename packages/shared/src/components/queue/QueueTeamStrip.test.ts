@@ -24,7 +24,7 @@ describe('team strip', () => {
       ['C', 'idle' as const]
     ])
     const rows = teamRows([m('A'), m('B'), m('C'), m('D', { out_of_office: true })], states)
-    expect(rows.map((r) => r.member.id)).toEqual(['B', 'C', 'A', 'D'])
+    expect(rows.map((r) => r.member.id)).toEqual(['B', 'C', 'D', 'A'])
     expect(teamSummary(rows)).toBe('1 online · 1 away · 1 out')
     expect(teamSummary(teamRows([m('A')], new Map()))).toBe('No one online')
   })

@@ -1,6 +1,6 @@
 import { readOnlinePresence } from '@nivaro/sdk'
 import { useQuery } from '@tanstack/react-query'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useLiveEvent } from '../../lib/live'
@@ -40,7 +40,7 @@ export const TEAM_STATUS_LABEL: Record<TeamStatus, string> = {
   offline: 'Not online'
 }
 
-const STATUS_RANK: Record<TeamStatus, number> = { online: 0, away: 1, offline: 2, out: 3 }
+const STATUS_RANK: Record<TeamStatus, number> = { online: 0, away: 1, out: 2, offline: 3 }
 
 /** One person's status: out of office beats presence; idle or "appear away" reads as away. */
 export function teamStatus(m: TeamMember, state: PresenceState | undefined): TeamStatus {
@@ -98,7 +98,14 @@ const DOT: Record<TeamStatus, string> = {
   online: 'bg-emerald-500',
   away: 'bg-amber-500',
   offline: 'bg-slate-300 dark:bg-slate-600',
-  out: 'border border-slate-400 bg-white dark:border-slate-500 dark:bg-slate-900'
+  out: 'border border-slate-400 bg-background dark:border-slate-500'
+}
+
+const GROUP_LABEL: Record<TeamStatus, string> = {
+  online: 'Online',
+  away: 'Away',
+  out: 'Out of office',
+  offline: 'Not online'
 }
 
 function initialsOf(name: string): string {
@@ -108,22 +115,41 @@ function initialsOf(name: string): string {
     .slice(0, 2)
 }
 
-function Face({ row, size = 24 }: { row: TeamRow; size?: number }) {
+/**
+ * One face. `surface` names what it sits on, so the ring around the face and the cut-out around
+ * its status dot match that surface in both themes (no halo). `z` stacks earlier faces on top,
+ * so a status dot is never covered by the next face.
+ */
+function Face({
+  row,
+  size = 24,
+  surface = 'background',
+  z
+}: {
+  row: TeamRow
+  size?: number
+  surface?: 'background' | 'popover'
+  z?: number
+}) {
   const { member, status } = row
   const px = `${size}px`
+  const ring = surface === 'popover' ? 'ring-popover' : 'ring-background'
   return (
     <span
       className={cn('relative inline-flex shrink-0', status === 'out' && 'opacity-60')}
-      style={{ width: px, height: px }}
+      style={{ width: px, height: px, zIndex: z }}
     >
       <UserAvatar
         userId={member.id}
         alt={member.name}
-        className='rounded-full object-cover'
+        className={cn('rounded-full object-cover ring-2', ring)}
         style={{ width: px, height: px }}
         fallback={
           <span
-            className='inline-flex select-none items-center justify-center rounded-full bg-slate-200 text-[10px] font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200'
+            className={cn(
+              'inline-flex select-none items-center justify-center rounded-full bg-slate-200 font-semibold text-[10px] text-slate-700 ring-2 dark:bg-slate-700 dark:text-slate-200',
+              ring
+            )}
             style={{ width: px, height: px }}
           >
             {initialsOf(member.name)}
@@ -133,7 +159,8 @@ function Face({ row, size = 24 }: { row: TeamRow; size?: number }) {
       <span
         aria-hidden
         className={cn(
-          '-bottom-px -right-px absolute h-2 w-2 rounded-full ring-2 ring-white dark:ring-slate-900',
+          '-bottom-px -right-px absolute h-2.5 w-2.5 rounded-full ring-2',
+          ring,
           DOT[status]
         )}
       />
@@ -141,8 +168,80 @@ function Face({ row, size = 24 }: { row: TeamRow; size?: number }) {
   )
 }
 
-const INLINE_FACES = 7
+const INLINE_FACES = 6
+const GROUP_ORDER: TeamStatus[] = ['online', 'away', 'out', 'offline']
 const EMPTY: Map<string, PresenceState> = new Map()
+
+function Roster({ rows, more, note }: { rows: TeamRow[]; more: number; note: string | null }) {
+  const [showOffline, setShowOffline] = useState(false)
+  const by = (st: TeamStatus) => rows.filter((r) => r.status === st)
+  return (
+    <>
+      <div className='max-h-[340px] overflow-y-auto'>
+        {GROUP_ORDER.map((st) => {
+          const list = by(st)
+          if (list.length === 0) return null
+          const folded = st === 'offline' && !showOffline
+          return (
+            <section key={st} data-team-group={st}>
+              {folded ? (
+                <button
+                  type='button'
+                  onClick={() => setShowOffline(true)}
+                  className='flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left font-semibold text-[11px] text-slate-500 uppercase tracking-wide hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-800'
+                >
+                  <span>
+                    {GROUP_LABEL[st]} · {list.length}
+                  </span>
+                  <span className='font-medium normal-case tracking-normal'>Show</span>
+                </button>
+              ) : (
+                <h4 className='sticky top-0 z-10 bg-popover px-2 py-1.5 font-semibold text-[11px] text-slate-500 uppercase tracking-wide dark:text-slate-400'>
+                  {GROUP_LABEL[st]} · {list.length}
+                </h4>
+              )}
+              {!folded && (
+                <ul>
+                  {list.map((r) => (
+                    <li
+                      key={r.member.id}
+                      className='flex items-center gap-2.5 rounded-md px-2 py-1.5'
+                    >
+                      <Face row={r} size={26} surface='popover' />
+                      <span className='min-w-0 flex-1'>
+                        <span className='block truncate font-medium text-[13px] text-slate-800 dark:text-slate-100'>
+                          {r.member.name}
+                        </span>
+                        {r.status === 'out' && (
+                          <span className='block text-[11px] text-slate-500 dark:text-slate-400'>
+                            {outLine(r.member)}
+                          </span>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )
+        })}
+      </div>
+      {more > 0 && (
+        <p className='px-2 py-1.5 text-[11px] text-slate-500 dark:text-slate-400'>
+          and {more} more on this team
+        </p>
+      )}
+      {note && (
+        <p
+          data-team-snapshot
+          className='border-t px-2 py-1.5 text-[11px] text-slate-500 dark:text-slate-400'
+        >
+          {note}
+        </p>
+      )}
+    </>
+  )
+}
 
 export function QueueTeamStrip({ queueId }: { queueId: string }) {
   const client = useNivaroClient()
@@ -195,9 +294,20 @@ export function QueueTeamStrip({ queueId }: { queueId: string }) {
 
   const shown = rows.slice(0, INLINE_FACES)
   const rest = rows.length - shown.length + more
+  // Calm / Off: the dots are a snapshot — say when it was taken.
+  const asOf =
+    pref.quiet && frozen.dataUpdatedAt
+      ? new Date(frozen.dataUpdatedAt).toLocaleTimeString(undefined, {
+          hour: 'numeric',
+          minute: '2-digit'
+        })
+      : null
+  const note = pref.quiet
+    ? `${asOf ? `As of ${asOf} · ` : ''}live updates are off in ${pref.calm ? 'Calm' : 'Off'} mode`
+    : null
   return (
     <div
-      className='flex shrink-0 items-center gap-3 border-slate-100 border-b bg-white px-4 py-1.5 text-[12px] dark:border-slate-800 dark:bg-slate-900'
+      className='flex shrink-0 items-center gap-3 border-slate-100 border-b bg-background px-4 py-1.5 text-[12px] dark:border-slate-800'
       data-queue-team
       data-live-quiet={pref.quiet ? '' : undefined}
     >
@@ -206,46 +316,34 @@ export function QueueTeamStrip({ queueId }: { queueId: string }) {
         <PopoverTrigger asChild>
           <button
             type='button'
-            className='flex min-w-0 items-center gap-2.5 rounded-md px-1 py-0.5 hover:bg-slate-50 dark:hover:bg-slate-800'
+            className='flex min-w-0 items-center gap-3 rounded-md px-1 py-0.5 hover:bg-slate-50 dark:hover:bg-slate-800'
             aria-label={`Team availability: ${teamSummary(rows)}. Show everyone`}
           >
-            <span className='flex items-center -space-x-1.5'>
-              {shown.map((r) => (
+            <span className='shrink-0 whitespace-nowrap text-slate-700 dark:text-slate-200'>
+              {teamSummary(rows)}
+              {asOf && <span className='text-slate-400 dark:text-slate-500'> · as of {asOf}</span>}
+            </span>
+            <span className='flex shrink-0 items-center -space-x-1'>
+              {shown.map((r, i) => (
                 <span
                   key={r.member.id}
+                  className='relative'
+                  style={{ zIndex: shown.length - i }}
                   data-tip={`${r.member.name} · ${TEAM_STATUS_LABEL[r.status]}`}
                 >
-                  <Face row={r} />
+                  <Face row={r} z={shown.length - i} />
                 </span>
               ))}
             </span>
             {rest > 0 && (
-              <span className='text-slate-500 tabular-nums dark:text-slate-400'>+{rest}</span>
+              <span className='shrink-0 whitespace-nowrap text-slate-500 tabular-nums dark:text-slate-400'>
+                +{rest} more
+              </span>
             )}
-            <span className='truncate text-slate-600 dark:text-slate-300'>{teamSummary(rows)}</span>
           </button>
         </PopoverTrigger>
         <PopoverContent align='start' className='w-[340px] p-1'>
-          <ul className='max-h-[320px] overflow-y-auto'>
-            {rows.map((r) => (
-              <li key={r.member.id} className='flex items-center gap-2.5 rounded-md px-2 py-1.5'>
-                <Face row={r} size={26} />
-                <span className='min-w-0 flex-1'>
-                  <span className='block truncate font-medium text-[13px] text-slate-800 dark:text-slate-100'>
-                    {r.member.name}
-                  </span>
-                  <span className='block text-[11px] text-slate-500 dark:text-slate-400'>
-                    {r.status === 'out' ? outLine(r.member) : TEAM_STATUS_LABEL[r.status]}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
-          {more > 0 && (
-            <p className='px-2 py-1.5 text-[11px] text-slate-500 dark:text-slate-400'>
-              and {more} more on this team
-            </p>
-          )}
+          <Roster rows={rows} more={more} note={note} />
         </PopoverContent>
       </Popover>
     </div>
