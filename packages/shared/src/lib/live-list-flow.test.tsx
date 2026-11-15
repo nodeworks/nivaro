@@ -11,6 +11,7 @@ import {
   isListPaused,
   type LivePause,
   planRowOrder,
+  relayoutRows,
   resumeAsRefetch,
   setListPaused,
   totalsMayMove,
@@ -103,8 +104,8 @@ describe('burstLabel', () => {
     expect(burstLabel(info({ count: 500, creates: 500, source: 'import' }))).toBe(
       'Import added 500 records'
     )
-    expect(burstLabel(info({ count: 40, updates: 40 }), 'Beth')).toBe('Beth updated 40 rows')
-    expect(burstLabel(info({ count: 1200, updates: 1200 }))).toBe('1,200 rows updated')
+    expect(burstLabel(info({ count: 40, updates: 40 }), 'Beth')).toBe('Beth updated 40 records')
+    expect(burstLabel(info({ count: 1200, updates: 1200 }))).toBe('1,200 records updated')
     expect(burstLabel(info({ count: 30, deletes: 30 }))).toBe('30 records removed')
     expect(burstLabel(info({ count: 30, creates: 10, updates: 20 }), 'Beth')).toBe(
       'Beth changed 30 records'
@@ -391,5 +392,16 @@ describe('useKeptEntries (labels of a held row)', () => {
     act(() => root.render(<Probe m={{ a: 'Zone 3' }} />))
     expect(out).toEqual({ a: 'Zone 3', b: 'Zone 2' })
     act(() => root.unmount())
+  })
+})
+
+describe('relayoutRows', () => {
+  it('re-lays the body in place and leaves its display as it was', () => {
+    const root = document.createElement('div')
+    root.innerHTML =
+      '<table><tbody style="display: table-row-group"><tr><td>a</td></tr></tbody></table>'
+    relayoutRows(root)
+    expect((root.querySelector('tbody') as HTMLElement).style.display).toBe('table-row-group')
+    relayoutRows(null)
   })
 })
