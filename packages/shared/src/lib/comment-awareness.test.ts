@@ -4,6 +4,8 @@ import {
   type MentionDelivery,
   mentionChannelText,
   mentionHeadline,
+  mentionReceiptLine,
+  mentionReceiptSummary,
   newRepliesSince,
   repliesWhileTypingText,
   seenByText
@@ -39,12 +41,14 @@ describe('replies while typing', () => {
 
 describe('seen by', () => {
   const p = (name: string) => ({ id: name, name, seen_at: '2026-11-15T10:00:00Z' })
-  it('first names, folded past two', () => {
+  it('full names: three listed in full, more as two and +N', () => {
     expect(seenByText([])).toBeNull()
-    expect(seenByText([p('Beth Ames')])).toBe('Seen by Beth')
-    expect(seenByText([p('Beth Ames'), p('Mark Ode')])).toBe('Seen by Beth and Mark')
+    expect(seenByText([p('Beth Ames')])).toBe('Seen by Beth Ames')
+    expect(seenByText([p('Beth Ames'), p('Mark Ode'), p('Jo Park')])).toBe(
+      'Seen by Beth Ames, Mark Ode and Jo Park'
+    )
     expect(seenByText([p('Beth'), p('Mark'), p('Kim'), p('Jo')], 'Also seen by')).toBe(
-      'Also seen by Beth, Mark and 2 others'
+      'Also seen by Beth, Mark +2'
     )
   })
 })
@@ -61,8 +65,17 @@ describe('mention delivery wording', () => {
   }
   it('headlines', () => {
     expect(mentionHeadline(base).text).toBe('In their notifications, not seen yet')
-    expect(mentionHeadline({ ...base, headline: 'muted' }).text).toBe('Muted — won’t be told')
-    expect(mentionHeadline({ ...base, headline: 'not_told' }).tone).toBe('muted')
+    expect(
+      mentionHeadline({
+        ...base,
+        headline: 'muted',
+        reason: 'turned off in-app alerts for Mentions'
+      }).text
+    ).toBe('Muted — turned off in-app alerts for Mentions')
+    expect(mentionHeadline({ ...base, headline: 'not_told' })).toEqual({
+      text: 'Won’t be told',
+      tone: 'warn'
+    })
     expect(
       mentionHeadline({ ...base, headline: 'seen', seen_at: '2026-11-15T10:00:00Z' }).text
     ).toMatch(/^Seen in app /)
@@ -81,6 +94,53 @@ describe('mention delivery wording', () => {
         base,
         { ...base, headline: 'muted', channels: [{ key: 'email', status: 'bounced', at: null }] }
       ])
-    ).toBe('1 seen · 1 not seen yet · 1 not told · 1 bounced')
+    ).toBe('1 won’t be told · 1 bounced · 1 seen · 1 not seen yet')
+  })
+})
+
+describe('mention receipts agree with Delivery', () => {
+  const rel = () => '5m ago'
+  const m = (extra: Record<string, unknown>) => ({
+    id: 'u',
+    first_name: 'Kim',
+    last_name: 'Lowe',
+    ...extra
+  })
+  it('uses the server status when the reader may see delivery', () => {
+    expect(mentionReceiptLine(m({ seen_at: '2026-11-15T10:00:00Z', status: 'seen' }), rel)).toEqual(
+      {
+        text: 'Kim Lowe saw this 5m ago',
+        tone: 'ok'
+      }
+    )
+    expect(mentionReceiptLine(m({ status: 'in_inbox' }), rel).text).toBe(
+      'Kim Lowe has not seen this yet'
+    )
+    expect(mentionReceiptLine(m({ status: 'not_told' }), rel)).toEqual({
+      text: 'Kim Lowe won’t be told',
+      tone: 'warn'
+    })
+    expect(
+      mentionReceiptLine(
+        m({ status: 'muted', reason: 'turned off in-app alerts for Mentions' }),
+        rel
+      ).text
+    ).toBe('Kim Lowe: muted — turned off in-app alerts for Mentions')
+  })
+  it('promises nothing about delivery to other readers', () => {
+    expect(mentionReceiptLine(m({}), rel)).toEqual({
+      text: 'Kim Lowe · not seen yet',
+      tone: 'neutral'
+    })
+  })
+  it('Calm summarises', () => {
+    expect(
+      mentionReceiptSummary([
+        m({ status: 'seen', seen_at: 'x' }),
+        m({ status: 'in_inbox' }),
+        m({ status: 'not_told' })
+      ])
+    ).toEqual({ text: '3 mentioned · 1 seen · 1 won’t be told', tone: 'warn' })
+    expect(mentionReceiptSummary([m({}), m({ seen_at: 'x' })]).text).toBe('2 mentioned · 1 seen')
   })
 })

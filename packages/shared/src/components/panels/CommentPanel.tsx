@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  BellOff,
   Check,
   ChevronDown,
   ClipboardPlus,
@@ -16,8 +17,15 @@ import { toast } from 'sonner'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post } from '../../lib/commands'
-import { useRepliesWhileTyping } from '../../lib/comment-awareness'
+import {
+  type MentionReceipt,
+  mentionReceiptLine,
+  mentionReceiptSummary,
+  type ReceiptTone,
+  useRepliesWhileTyping
+} from '../../lib/comment-awareness'
 import { stripCommentImages } from '../../lib/comment-images'
+import { useLivePreference } from '../../lib/live-preference'
 import { usePresenceOnlinePoll } from '../../lib/presence-live'
 import {
   signalSentence,
@@ -28,7 +36,7 @@ import {
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { type SeenEntry, useNewSince } from '../../lib/seen-since'
 import { useStartsOpen } from '../../lib/use-starts-open'
-import { formatDateTime, formatRelative, titleCase } from '../../lib/utils'
+import { cn, formatDateTime, formatRelative, titleCase } from '../../lib/utils'
 import { AgentBadge } from '../AgentBadge'
 import { AutolinkedText } from '../AutolinkedText'
 import { InboundRequestPopover } from '../integrations/InboundRequest'
@@ -58,14 +66,9 @@ interface Comment {
   text: string
   created_at: string
   updated_at: string
-  /** People mentioned; `seen_at` (#2117) is when they opened the record or read the mention. */
-  mentions: Array<{
-    id?: string
-    first_name?: string | null
-    last_name?: string | null
-    email?: string | null
-    seen_at?: string | null
-  }>
+  /** People mentioned; `seen_at` (#2117) is when they opened the record or read the mention;
+   *  `status` (+ `reason` for administrators) only for the author and administrators. */
+  mentions: MentionReceipt[]
   reactions?: Array<{ emoji: string; count: number; mine: boolean }>
   /** Soft-deleted (the server keeps a tombstone for history). */
   deleted?: boolean
@@ -91,6 +94,19 @@ function initials(u: Comment['user']): string {
   return i || u.email?.[0]?.toUpperCase() || '?'
 }
 
+/** Receipt tones — AA on the card in both themes (11px text). */
+const RECEIPT_TONE: Record<ReceiptTone, string> = {
+  ok: 'text-emerald-700 dark:text-emerald-400',
+  neutral: 'text-slate-500 dark:text-slate-400',
+  warn: 'text-amber-700 dark:text-amber-400'
+}
+
+function ReceiptIcon({ tone }: { tone: ReceiptTone }) {
+  if (tone === 'ok') return <Check aria-hidden className='h-3 w-3 shrink-0' />
+  if (tone === 'warn') return <BellOff aria-hidden className='h-3 w-3 shrink-0' />
+  return null
+}
+
 /** The mentioned people a receipt line names (never the author). */
 function mentionedOthers(comment: Comment) {
   return (comment.mentions ?? []).filter(
@@ -109,28 +125,42 @@ function MentionReceipts({
   collection: string
   item: string
 }) {
+  const live = useLivePreference()
   const people = mentionedOthers(comment)
   if (people.length === 0) return null
+  const lines = people.map((m) => ({ m, ...mentionReceiptLine(m, formatRelative) }))
+  const summary = mentionReceiptSummary(people)
   return (
     <p
       className='mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]'
       data-mention-receipts
     >
-      {people.map((m) => {
-        const name = [m.first_name, m.last_name].filter(Boolean).join(' ') || m.email || 'Someone'
-        return (
+      {live.quiet ? (
+        // Calm / Off: one summary; the per-person sentences are one hover away.
+        <button
+          type='button'
+          data-mention-receipts-summary
+          data-tip={lines.map((l) => l.text).join(' · ')}
+          aria-label={lines.map((l) => l.text).join('. ')}
+          className={cn('inline-flex items-center gap-1 rounded', RECEIPT_TONE[summary.tone])}
+        >
+          <ReceiptIcon tone={summary.tone} />
+          {summary.text}
+        </button>
+      ) : (
+        lines.map(({ m, text, tone }) => (
           <span
             key={m.id}
-            data-mention-seen={m.seen_at ? 'seen' : 'unseen'}
-            title={m.seen_at ? `Seen ${formatDateTime(m.seen_at)}` : 'Not seen yet'}
-            className={m.seen_at ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}
+            data-mention-seen={tone === 'ok' ? 'seen' : 'unseen'}
+            data-mention-status={m.status ?? undefined}
+            data-tip={m.seen_at ? `Seen ${formatDateTime(m.seen_at)}` : undefined}
+            className={cn('inline-flex items-center gap-1', RECEIPT_TONE[tone])}
           >
-            {m.seen_at ? '✓ ' : ''}
-            {name}
-            {m.seen_at ? ` saw this ${formatRelative(m.seen_at)}` : ' has not seen this yet'}
+            <ReceiptIcon tone={tone} />
+            {text}
           </span>
-        )
-      })}
+        ))
+      )}
       {comment.delivery_visible && (
         <MentionDeliveryButton collection={collection} item={item} commentId={comment.id} />
       )}
@@ -1333,7 +1363,7 @@ export function CommentPanel({
                           className='h-8 w-8'
                           fallback={
                             <Avatar className='h-8 w-8 shrink-0'>
-                              <AvatarFallback className='bg-nvr-cyan/15 text-[11px] font-bold text-nvr-navy'>
+                              <AvatarFallback className='bg-nvr-cyan/15 text-[11px] font-bold text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'>
                                 {initials(c.user)}
                               </AvatarFallback>
                             </Avatar>

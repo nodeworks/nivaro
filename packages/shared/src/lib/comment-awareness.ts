@@ -94,10 +94,71 @@ export interface SeenPerson {
   seen_at: string
 }
 
-/** "Seen by Beth", "Seen by Beth and Mark", "Seen by Beth, Mark and 3 others" (pure). */
+/**
+ * Full names, the way the receipt line names people: up to three listed in full ("Seen by Beth
+ * Ames, Jo Park and Kim Lowe"), more than three as the first two and "+N" (pure).
+ */
 export function seenByText(people: readonly SeenPerson[], prefix = 'Seen by'): string | null {
-  const who = whoText(people.map((p) => p.name.split(' ')[0] || p.name))
-  return who ? `${prefix} ${who}` : null
+  const names = people.map((p) => p.name)
+  if (names.length === 0) return null
+  if (names.length > 3) return `${prefix} ${names[0]}, ${names[1]} +${names.length - 2}`
+  if (names.length === 3) return `${prefix} ${names[0]}, ${names[1]} and ${names[2]}`
+  return `${prefix} ${whoText(names)}`
+}
+
+// ── Mention receipts (the line under a comment) ───────────────────────────
+
+export interface MentionReceipt {
+  id?: string
+  first_name?: string | null
+  last_name?: string | null
+  email?: string | null
+  seen_at?: string | null
+  /** From the server only for the comment's author and administrators. */
+  status?: 'seen' | 'in_inbox' | 'not_told' | 'muted'
+  /** Administrators only: why a muted person will not be told. */
+  reason?: string | null
+}
+
+export type ReceiptTone = 'ok' | 'neutral' | 'warn'
+
+/** The name a receipt shows. */
+export function receiptName(m: MentionReceipt): string {
+  return [m.first_name, m.last_name].filter(Boolean).join(' ') || m.email || 'Someone'
+}
+
+/**
+ * One person's receipt sentence (pure). With a server status (author / admin) it says the same
+ * as the Delivery panel: seen, not seen yet, won't be told, or (administrators) muted and why.
+ * Without one it promises nothing about delivery: seen, or just "not seen yet".
+ */
+export function mentionReceiptLine(
+  m: MentionReceipt,
+  relative: (iso: string) => string
+): { text: string; tone: ReceiptTone } {
+  const name = receiptName(m)
+  if (m.seen_at || m.status === 'seen')
+    return { text: `${name} saw this${m.seen_at ? ` ${relative(m.seen_at)}` : ''}`, tone: 'ok' }
+  if (m.status === 'muted')
+    return { text: `${name}: muted — ${m.reason || 'won’t be told'}`, tone: 'warn' }
+  if (m.status === 'not_told') return { text: `${name} won’t be told`, tone: 'warn' }
+  if (m.status === 'in_inbox') return { text: `${name} has not seen this yet`, tone: 'neutral' }
+  return { text: `${name} · not seen yet`, tone: 'neutral' }
+}
+
+/** Calm / Off: one summary instead of a sentence per person — "3 mentioned · 1 seen" (pure). */
+export function mentionReceiptSummary(people: readonly MentionReceipt[]): {
+  text: string
+  tone: ReceiptTone
+} {
+  const seen = people.filter((m) => m.seen_at || m.status === 'seen').length
+  const silent = people.filter((m) => m.status === 'not_told' || m.status === 'muted').length
+  const parts = [`${people.length} mentioned`, `${seen} seen`]
+  if (silent) parts.push(`${silent} won’t be told`)
+  return {
+    text: parts.join(' · '),
+    tone: silent ? 'warn' : seen === people.length ? 'ok' : 'neutral'
+  }
 }
 
 // ── Mention delivery ──────────────────────────────────────────────────────
@@ -154,9 +215,10 @@ export function mentionHeadline(
     case 'in_inbox':
       return { text: 'In their notifications, not seen yet', tone: 'pending' }
     case 'muted':
-      return { text: 'Muted — won’t be told', tone: 'muted' }
+      // Administrators only (the server sends `muted` to no one else), with why in plain words.
+      return { text: `Muted — ${p.reason || 'won’t be told'}`, tone: 'warn' }
     default:
-      return { text: 'Not told', tone: 'muted' }
+      return { text: 'Won’t be told', tone: 'warn' }
   }
 }
 
@@ -187,7 +249,7 @@ export function channelTone(c: MentionChannel): DeliveryTone {
   return 'ok'
 }
 
-/** The one-line summary on the comment: "2 seen · 1 waiting · 1 bounced" (pure). */
+/** The panel's summary, the outcomes that need attention first: "1 won't be told · 1 seen" (pure). */
 export function deliverySummary(people: readonly MentionDelivery[]): string {
   const seen = people.filter((p) => p.headline === 'seen').length
   const waiting = people.filter((p) => p.headline === 'in_inbox').length
@@ -196,9 +258,9 @@ export function deliverySummary(people: readonly MentionDelivery[]): string {
     p.channels.some((c) => c.key === 'email' && c.status === 'bounced')
   ).length
   const parts: string[] = []
+  if (silent) parts.push(`${silent} won’t be told`)
+  if (bounced) parts.push(`${bounced} bounced`)
   if (seen) parts.push(`${seen} seen`)
   if (waiting) parts.push(`${waiting} not seen yet`)
-  if (silent) parts.push(`${silent} not told`)
-  if (bounced) parts.push(`${bounced} bounced`)
   return parts.join(' · ')
 }
