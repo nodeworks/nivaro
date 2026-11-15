@@ -4,6 +4,11 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { recordVisibleTo } from '../services/revision-access.js'
 import { viewAsAdminOf } from '../services/view-as-attribution.js'
 import { addAlert, alertOptions, removeAlert } from '../services/watch-list/alerts.js'
+import {
+  dueRemovals,
+  restoreRemoved,
+  restoreTeamRemoved
+} from '../services/watch-list/completed.js'
 import { readMentions } from '../services/watch-list/mentions.js'
 import { readWatchRows } from '../services/watch-list/rows.js'
 import {
@@ -13,6 +18,8 @@ import {
   normalizeSettings,
   pinKey,
   pinnable,
+  REMOVED_KEEP_MS,
+  type RemovedPin,
   removePin,
   reorderPins,
   TEAM_ID,
@@ -82,9 +89,25 @@ interface PublicTeam {
   name: string
   owner: { id: string; name: string }
   members: Array<{ id: string; name: string }>
-  pins: Array<{ key: string; collection: string; id: string; pinned_at: string; by: string }>
+  pins: Array<{
+    key: string
+    collection: string
+    id: string
+    pinned_at: string
+    by: string
+    done_at: string | null
+  }>
   can_manage: boolean
   is_member: boolean
+  remove_completed: boolean
+  removed: Array<{
+    key: string
+    collection: string
+    id: string
+    title: string | null
+    done_at: string
+    removed_at: string
+  }>
   /** The person who made it can no longer sign in: read-only until an administrator takes it. */
   owner_gone: boolean
   can_take_over: boolean
@@ -110,8 +133,18 @@ async function publicTeams(teams: TeamList[], user: User, isAdmin: boolean): Pro
           collection: p.c,
           id: p.id,
           pinned_at: p.at,
-          by: p.by
+          by: p.by,
+          done_at: p.done ?? null
         })),
+        remove_completed: t.remove_completed,
+        removed: await removedAnswer(
+          (await readablePins(
+            { ...t, pins: t.removed.map((r) => ({ ...r, by: r.by ?? t.owner })) },
+            user,
+            isAdmin
+          ).catch(() => [])) as unknown as RemovedPin[],
+          user
+        ),
         can_manage: mayManage(t, userId, isAdmin) && !gone,
         is_member: isMember(t, userId),
         owner_gone: gone,
@@ -119,6 +152,31 @@ async function publicTeams(teams: TeamList[], user: User, isAdmin: boolean): Pro
       }
     })
   )
+}
+
+/** "Recently removed" for the dock: names read as the viewer (a record they cannot open: none). */
+async function removedAnswer(removed: RemovedPin[], user: User) {
+  const now = Date.now()
+  const live = removed.filter((r) => now - new Date(r.gone).getTime() < REMOVED_KEEP_MS)
+  if (live.length === 0) return []
+  let labels: Record<string, string> = {}
+  try {
+    const { recordLabelsAsViewer } = await import('../services/record-labels-as-viewer.js')
+    labels = await recordLabelsAsViewer(
+      user,
+      live.map((r) => ({ collection: r.c, id: r.id }))
+    )
+  } catch {
+    /* names fall back to the collection and id */
+  }
+  return live.map((r) => ({
+    key: pinKey(r.c, r.id),
+    collection: r.c,
+    id: r.id,
+    title: labels[pinKey(r.c, r.id)] ?? null,
+    done_at: r.done,
+    removed_at: r.gone
+  }))
 }
 
 async function answer(req: FastifyRequest, list: WatchListPrefs) {
@@ -131,8 +189,10 @@ async function answer(req: FastifyRequest, list: WatchListPrefs) {
       collection: p.c,
       id: p.id,
       pinned_at: p.at,
-      ...(p.auto ? { auto: true } : {})
+      ...(p.auto ? { auto: true } : {}),
+      done_at: p.done ?? null
     })),
+    removed: await removedAnswer(list.removed, req.user!),
     dock: list.dock,
     replies_seen_at: list.replies_seen_at,
     max: WATCH_PINS_MAX,
@@ -314,8 +374,11 @@ export async function watchListRoutes(app: FastifyInstance): Promise<void> {
     if (viewAsAdminOf(req)) return reply.send({ data: await answer(req, list) })
     const keys = Array.isArray(req.body?.keys) ? req.body.keys.map(String).slice(0, 100) : null
     const res = markSeen(list, keys)
-    if (res.changed) await saveWatchList(userId, res.list)
-    return reply.send({ data: await answer(req, res.list) })
+    // Seen after it was completed = it leaves now (to "Recently removed", 7 days to undo).
+    const tidied = res.changed ? dueRemovals(res.list) : null
+    const next = tidied ?? res.list
+    if (res.changed) await saveWatchList(userId, next)
+    return reply.send({ data: await answer(req, next) })
   })
 
   app.get<{ Querystring: { fresh?: string } }>('/waiting', async (req) => {
@@ -336,6 +399,43 @@ export async function watchListRoutes(app: FastifyInstance): Promise<void> {
     await saveWatchList(userId, next)
     return reply.send({ data: await answer(req, next) })
   })
+
+  // ── Recently removed (completed records): put one back ───────────────────────
+  app.post<{ Body: { collection?: unknown; id?: unknown } }>(
+    '/removed/restore',
+    async (req, reply) => {
+      if (refusedWrite(req, reply)) return
+      const c = req.body?.collection
+      const rid = req.body?.id
+      if (!pinnable(c, rid)) return reply.code(400).send({ error: 'Name a record' })
+      const userId = String(req.user!.id)
+      const { list } = await loadWatchList(userId)
+      const next = restoreRemoved(list, String(c), String(rid))
+      if (!next) return reply.code(404).send({ error: 'Not found' })
+      await saveWatchList(userId, next)
+      return reply.send({ data: await answer(req, next) })
+    }
+  )
+
+  app.post<{ Params: { id: string }; Body: { collection?: unknown; id?: unknown } }>(
+    '/teams/:id/removed/restore',
+    async (req, reply) => {
+      if (refusedWrite(req, reply)) return
+      const team = await teamFor(req, reply, req.params.id, 'member')
+      if (!team) return
+      const c = req.body?.collection
+      const rid = req.body?.id
+      if (!pinnable(c, rid)) return reply.code(400).send({ error: 'Name a record' })
+      // Only a record the person can open comes back by their hand.
+      if (!(await recordVisibleTo(req, String(c), String(rid))))
+        return reply.code(404).send({ error: 'Not found' })
+      const next = restoreTeamRemoved(team, String(c), String(rid))
+      if (!next) return reply.code(404).send({ error: 'Not found' })
+      await saveTeam(team, next)
+      const { list } = await loadWatchList(String(req.user!.id))
+      return reply.send({ data: await answer(req, list) })
+    }
+  )
 
   // ── Settings (desktop alerts, auto-add / remove, daily email) ────────────────
   app.patch<{ Body: Record<string, unknown> }>('/settings', async (req, reply) => {
@@ -396,65 +496,69 @@ export async function watchListRoutes(app: FastifyInstance): Promise<void> {
   })
 
   // ── Shared lists for a team ──────────────────────────────────────────────────
-  app.post<{ Body: { name?: unknown; members?: unknown; reports?: unknown } }>(
-    '/teams',
-    async (req, reply) => {
-      if (refusedWrite(req, reply)) return
-      if (refusedListManage(req, reply)) return
-      const userId = String(req.user!.id)
-      const name = teamName(req.body?.name)
-      if (!name) return reply.code(400).send({ error: 'Give the list a name' })
-      const reports = await directReports(userId).catch(() => [] as string[])
-      const asked = memberIds(req.body?.members)
-      const wanted = memberIds([...asked, ...(req.body?.reports === true ? reports : [])])
-      const people = await listablePeople(wanted)
-      const team = newTeam({
-        owner: userId,
-        name,
-        members: people,
-        // An administrator or a manager may make a list for a team they are not on.
-        creatorMayStayOff: !!req.isAdmin || reports.length > 0,
-        now: new Date()
-      })
-      const res = await createTeam(team)
-      if (!res.ok) return reply.code(409).send({ error: res.message, code: 'TEAM_LISTS_FULL' })
-      const { list } = await loadWatchList(userId)
-      return reply.send({ data: { ...(await answer(req, list)), created: team.id } })
-    }
-  )
+  app.post<{
+    Body: { name?: unknown; members?: unknown; reports?: unknown; remove_completed?: unknown }
+  }>('/teams', async (req, reply) => {
+    if (refusedWrite(req, reply)) return
+    if (refusedListManage(req, reply)) return
+    const userId = String(req.user!.id)
+    const name = teamName(req.body?.name)
+    if (!name) return reply.code(400).send({ error: 'Give the list a name' })
+    const reports = await directReports(userId).catch(() => [] as string[])
+    const asked = memberIds(req.body?.members)
+    const wanted = memberIds([...asked, ...(req.body?.reports === true ? reports : [])])
+    const people = await listablePeople(wanted)
+    const team = newTeam({
+      owner: userId,
+      name,
+      members: people,
+      // An administrator or a manager may make a list for a team they are not on.
+      creatorMayStayOff: !!req.isAdmin || reports.length > 0,
+      now: new Date()
+    })
+    // New lists remove completed records unless the maker turned it off.
+    if (req.body?.remove_completed === false) team.remove_completed = false
+    const res = await createTeam(team)
+    if (!res.ok) return reply.code(409).send({ error: res.message, code: 'TEAM_LISTS_FULL' })
+    const { list } = await loadWatchList(userId)
+    return reply.send({ data: { ...(await answer(req, list)), created: team.id } })
+  })
 
-  app.patch<{ Params: { id: string }; Body: { name?: unknown; members?: unknown } }>(
-    '/teams/:id',
-    async (req, reply) => {
-      if (refusedWrite(req, reply)) return
-      if (refusedListManage(req, reply)) return
-      const team = await teamFor(req, reply, req.params.id, 'manage')
-      if (!team) return
-      let name: string | null = null
-      if (req.body?.name !== undefined) {
-        name = teamName(req.body.name)
-        if (!name) return reply.code(400).send({ error: 'Give the list a name' })
-      }
-      const wanted = req.body?.members !== undefined ? memberIds(req.body.members) : null
-      // New people must be listable (asked once, before the write).
-      const listable = wanted ? await listablePeople(wanted) : []
-      // Applied to the list as it is stored at write time: a pin added meanwhile is kept.
-      await updateTeam(team.id, (cur) => {
-        let next: TeamList = name ? { ...cur, name } : cur
-        if (wanted) {
-          // People already on it stay even if their account changed.
-          const keep = wanted.filter(
-            (w) =>
-              cur.members.some((m) => m.u.toLowerCase() === w.toLowerCase()) || listable.includes(w)
-          )
-          next = withMembers(next, keep, new Date())
-        }
-        return next
-      })
-      const { list } = await loadWatchList(String(req.user!.id))
-      return reply.send({ data: await answer(req, list) })
+  app.patch<{
+    Params: { id: string }
+    Body: { name?: unknown; members?: unknown; remove_completed?: unknown }
+  }>('/teams/:id', async (req, reply) => {
+    if (refusedWrite(req, reply)) return
+    if (refusedListManage(req, reply)) return
+    const team = await teamFor(req, reply, req.params.id, 'manage')
+    if (!team) return
+    let name: string | null = null
+    if (req.body?.name !== undefined) {
+      name = teamName(req.body.name)
+      if (!name) return reply.code(400).send({ error: 'Give the list a name' })
     }
-  )
+    const removeCompleted =
+      typeof req.body?.remove_completed === 'boolean' ? req.body.remove_completed : null
+    const wanted = req.body?.members !== undefined ? memberIds(req.body.members) : null
+    // New people must be listable (asked once, before the write).
+    const listable = wanted ? await listablePeople(wanted) : []
+    // Applied to the list as it is stored at write time: a pin added meanwhile is kept.
+    await updateTeam(team.id, (cur) => {
+      let next: TeamList = name ? { ...cur, name } : cur
+      if (removeCompleted != null) next = { ...next, remove_completed: removeCompleted }
+      if (wanted) {
+        // People already on it stay even if their account changed.
+        const keep = wanted.filter(
+          (w) =>
+            cur.members.some((m) => m.u.toLowerCase() === w.toLowerCase()) || listable.includes(w)
+        )
+        next = withMembers(next, keep, new Date())
+      }
+      return next
+    })
+    const { list } = await loadWatchList(String(req.user!.id))
+    return reply.send({ data: await answer(req, list) })
+  })
 
   app.delete<{ Params: { id: string } }>('/teams/:id', async (req, reply) => {
     if (refusedWrite(req, reply)) return

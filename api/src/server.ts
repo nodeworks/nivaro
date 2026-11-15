@@ -1179,6 +1179,20 @@ export async function buildServer() {
         }
       )
       app.cron.schedule(
+        'watch-list-completed',
+        '*/10 * * * *',
+        async () => {
+          const { runCompletedSweep } = await import('./services/watch-list/completed.js')
+          await runCompletedSweep()
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Takes completed records off watch lists that remove them (24 hours after completion, or once the person has seen them) and forgets “recently removed” records after 7 days. Notifies nobody.'
+        }
+      )
+      app.cron.schedule(
         'watch-list-digest',
         '0 * * * *',
         async () => {

@@ -36,7 +36,13 @@ describe('watch list store — round 2 keys', () => {
       digest_sent_on: '2026-11-13'
     })
     expect(l.pins[0].auto).toBe(true)
-    expect(l.settings).toEqual({ desktop: true, auto_add: false, auto_remove: false, digest: true })
+    expect(l.settings).toEqual({
+      desktop: true,
+      auto_add: false,
+      auto_remove: false,
+      digest: true,
+      remove_completed: false
+    })
     expect(l.alerts.map((a) => a.id)).toEqual(['abcd1234'])
     expect(l.alerts[0].repeat).toBe(true)
     expect(l.teams).toHaveLength(1)
