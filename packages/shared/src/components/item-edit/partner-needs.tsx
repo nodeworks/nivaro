@@ -8,7 +8,7 @@ import { cn } from '../../lib/utils'
 
 /**
  * "Needed by <partner>" (idea 43). The server (`POST /api/partner-needs/:collection`,
- * services/partner-needs) says which fields a partner push at a later manual move will need,
+ * services/partner-needs) says which fields a partner push at a later step will need,
  * for the values the form holds NOW — unsaved edits and lines included. A badge sits on each
  * such field while it is empty; the field that picks the partner (a supporting warehouse)
  * gets a quiet hint while it is empty instead. Lines are judged one by one.

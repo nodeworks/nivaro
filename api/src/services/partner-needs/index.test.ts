@@ -334,16 +334,14 @@ function seed() {
       actions: JSON.stringify([alpha, beta, gamma]),
       auto_trigger: false
     },
-    // Automatic pushes never count.
+    // An automatic step counts too, through its own gates (Beta's depot).
     {
       id: 'T4',
       template: T,
       label: 'Auto resend',
       from_state: S.ready,
       to_state: S.sent,
-      actions: JSON.stringify([
-        { ...beta, skip_when_empty: undefined, payload_template: '{"x":"{{ record.ref }}"}' }
-      ]),
+      actions: JSON.stringify([{ ...beta, payload_template: '{"x":"{{ record.ref }}"}' }]),
       auto_trigger: true
     }
   ]
@@ -387,8 +385,17 @@ describe('partnerNeeds', () => {
     expect(a.inputs.record).toContain('depot')
 
     const b = await partnerNeeds({ collection: 'orders', item: null, values: { depot: 2 } }, admin)
-    expect(Object.keys(b.fields)).toEqual(['due_date'])
+    expect(Object.keys(b.fields).sort()).toEqual(['due_date', 'ref'])
     expect(b.fields.due_date.partners).toEqual(['Beta'])
+  })
+
+  it('an automatic step counts when its gates pass, and not when they fail', async () => {
+    // depot 2 = Beta: the automatic "Auto resend" push sends ref.
+    const b = await partnerNeeds({ collection: 'orders', item: null, values: { depot: 2 } }, admin)
+    expect(b.fields.ref).toEqual({ partners: ['Beta'], steps: ['Auto resend'] })
+    // depot 1 = Alpha: the automatic step's Beta gate fails, so only Alpha's manual step names ref.
+    const a = await partnerNeeds({ collection: 'orders', item: null, values: { depot: 1 } }, admin)
+    expect(a.fields.ref).toEqual({ partners: ['Alpha'], steps: ['Send to depot'] })
   })
 
   it('an empty deciding field shows a hint on it and no partner badges', async () => {
@@ -602,6 +609,20 @@ describe('countedTransitions', () => {
     const r = countedTransitions(states, ts, 'A')
     expect(r.depth).toBe('next')
     expect(r.transitions.map((t) => t.id)).toEqual(['1'])
+  })
+
+  it('automatic steps are counted like steps a person presses', async () => {
+    const { countedTransitions } = await import('./index.js')
+    const states = [
+      { id: 'A', key: 'a', label: 'A', sort: 1, is_initial: true },
+      { id: 'B', key: 'b', label: 'B', sort: 2, is_initial: false },
+      { id: 'C', key: 'c', label: 'C', sort: 3, is_initial: false }
+    ]
+    const ts = [
+      { id: 'ab', label: '', from_state: 'A', to_state: 'B', actions: '', auto_trigger: true },
+      { id: 'bc', label: '', from_state: 'B', to_state: 'C', actions: '', auto_trigger: 1 }
+    ]
+    expect(countedTransitions(states, ts, 'A').transitions.map((t) => t.id)).toEqual(['ab', 'bc'])
   })
 
   it('a send-back further on is not counted; one from the current state is', async () => {

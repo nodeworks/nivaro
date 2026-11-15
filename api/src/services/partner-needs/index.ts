@@ -1,10 +1,10 @@
 /**
- * "Needed by <partner>" (idea 43): which fields a partner push at a LATER manual move will
- * need, judged on the record's CURRENT values (unsaved form edits included), so people fill
+ * "Needed by <partner>" (idea 43): which fields a partner push at a LATER step will need, judged on the record's CURRENT values (unsaved form edits included), so people fill
  * them before the move fails at the end.
  *
- *   1. Which pushes count: every erp_submit action on a MANUAL transition out of the current
- *      state, and out of every state reachable from it by moving forward (a transition to a
+ *   1. Which pushes count: every erp_submit action on a transition — pressed by a person or
+ *      automatic (Rob 2026-11-14) — out of the current state, and out of every state reachable
+ *      from it by moving forward (a transition to a
  *      state with a higher `sort`). When the pipeline's states carry no order (all `sort`
  *      equal) only the next moves count. A new record starts in its binding's start state.
  *   2. A push counts only when its gates pass for those values — the same gate function the
@@ -74,7 +74,7 @@ export interface NeedMark {
 
 export interface PartnerNeedsAnswer {
   enabled: boolean
-  /** 'forward' = every forward-reachable manual move; 'next' = the next moves only. */
+  /** 'forward' = every forward-reachable move; 'next' = the next moves only. */
   depth: 'forward' | 'next' | null
   state: { key: string; label: string } | null
   /** Record fields a counted push needs. `filled` is set for M2M fields (links saved). */
@@ -142,7 +142,8 @@ const up = (v: unknown) => String(v ?? '').toUpperCase()
 const truthy = (v: unknown) => v === true || v === 1 || v === '1'
 
 /**
- * The manual transitions whose pushes count, from `currentId`. Pure (exported for tests).
+ * The transitions whose pushes count, from `currentId` — manual and automatic alike: an
+ * automatic step's push stops on an empty field just the same. Pure (exported for tests).
  * Forward = to a state with a higher sort; when every state has the same sort there is no
  * forward, so only the moves out of the current state count.
  */
@@ -172,7 +173,6 @@ export function countedTransitions(
     }
   }
   const out = transitions.filter((t) => {
-    if (truthy(t.auto_trigger)) return false
     const from = t.from_state == null ? null : up(t.from_state)
     // The next moves (any direction, "from any state" included) …
     if (from === null || from === cur) return true
