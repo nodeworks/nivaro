@@ -41,6 +41,10 @@ describe('oldestHint', () => {
   const now = Date.parse('2026-11-14T12:00:00.000Z')
   it('reads whole days', () => {
     expect(oldestHint('2026-11-02T11:00:00.000Z', now)).toBe('oldest 12 d')
+    // past 60 days: months; past a year: years with one decimal
+    expect(oldestHint('2026-08-12T11:00:00.000Z', now)).toBe('oldest 3 mo')
+    expect(oldestHint('2025-05-29T11:00:00.000Z', now)).toBe('oldest 1.5 yr')
+    expect(oldestHint('2022-02-20T11:00:00.000Z', now)).toBe('oldest 4.7 yr')
     expect(oldestHint('2026-11-13T11:00:00.000Z', now)).toBe('oldest 1 d')
     expect(oldestHint('2026-11-14T08:00:00.000Z', now)).toBe('oldest today')
   })

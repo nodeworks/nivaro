@@ -65,13 +65,19 @@ export function censusByState(
   return out
 }
 
-/** "oldest 12 d" — whole days from 2 d, "oldest 1 d", "oldest today" under a day. */
+/**
+ * How long the longest wait has been: days up to 60 ("oldest 12 d"), then months ("oldest 17 mo"),
+ * then years past 365 days with one decimal ("oldest 4.7 yr"); "oldest today" under a day.
+ */
 export function oldestHint(oldestAt: string | null | undefined, now = Date.now()): string | null {
   if (!oldestAt) return null
   const t = Date.parse(oldestAt)
   if (!Number.isFinite(t)) return null
   const days = Math.floor(Math.max(0, now - t) / 86_400_000)
-  return days < 1 ? 'oldest today' : `oldest ${days.toLocaleString('en-US')} d`
+  if (days < 1) return 'oldest today'
+  if (days > 365) return `oldest ${(days / 365.25).toFixed(1)} yr`
+  if (days > 60) return `oldest ${Math.round(days / 30.4)} mo`
+  return `oldest ${days} d`
 }
 
 /** The list a step's chip opens: the bound collection filtered to that step's key. */

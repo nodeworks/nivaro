@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Activity, ChevronDown, ChevronUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useItemNavigation, useNivaroClient } from '../../context'
-import { type ActivityEntryInput, groupActivity } from '../../lib/activity-sentence'
+import { type ActivityEntryInput, groupActivity, recordPhrase } from '../../lib/activity-sentence'
 import { post } from '../../lib/commands'
 import { useLiveCollection } from '../../lib/live'
 import { slideIn, useTopInserts } from '../../lib/live-screen'
@@ -58,7 +58,8 @@ export function RecordActivityStream({
   live = true,
   empty,
   className,
-  maxHeightClass = 'max-h-[30rem]',
+  // On a phone the page scrolls and the list grows (no scroll box inside the scrolling page).
+  maxHeightClass = 'md:max-h-[30rem]',
   onOpenRecord
 }: {
   sources: FeedSourceInput[]
@@ -138,7 +139,8 @@ export function RecordActivityStream({
     {
       debounceMs: STREAM_QUIET_MS,
       includeOwn: true,
-      match: (ev) => {        const ids = followed.get(String(ev.collection))
+      match: (ev) => {
+        const ids = followed.get(String(ev.collection))
         if (!ids) return false
         return ev.item === '*' || ev.action === 'create' || ids.has(String(ev.item))
       }
@@ -182,6 +184,16 @@ export function RecordActivityStream({
   const groups = useMemo(() => groupActivity(rows), [rows])
   const labelsOn = rows.length > 0
   const labels = useActivityLabels(rows, { enabled: labelsOn })
+  // The stream's own record(s) are the page: their phrase is left out of every sentence.
+  const omitPhrases = useMemo(
+    () =>
+      (records ?? [])
+        .map((r) => recordPhrase(r.collection, String(r.id), labels))
+        .filter((p): p is string => !!p),
+    [records, labels]
+  )
+  // A soft fade under the header while the list is scrolled, so a cut row reads as scrolled content.
+  const [scrolled, setScrolled] = useState(false)
   const listRef = useRef<HTMLDivElement | null>(null)
   const setList = useCallback(
     (el: HTMLDivElement | null) => {
@@ -245,6 +257,18 @@ export function RecordActivityStream({
       <header className='flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
         <Activity className='h-4 w-4 shrink-0 text-nvr-navy dark:text-nvr-cyan' aria-hidden />
         <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Activity</h3>
+        {feed.held > 0 && (
+          // In the header, never over the rows: it takes no room from the list and covers no text.
+          <button
+            type='button'
+            data-activity-new-pill={feed.held}
+            onClick={feed.reveal}
+            className='inline-flex h-6 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-2.5 text-[11.5px] font-medium text-nvr-navy transition-colors hover:bg-nvr-cyan/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:text-nvr-cyan'
+          >
+            <ChevronUp className='h-3.5 w-3.5' aria-hidden />
+            {feed.held} new
+          </button>
+        )}
         {types.length > 1 && (
           <fieldset
             className='m-0 ml-auto flex min-w-0 flex-wrap items-center gap-1 border-0 p-0'
@@ -284,20 +308,16 @@ export function RecordActivityStream({
           {empty ?? 'Nothing has changed here yet.'}
         </p>
       ) : (
-        <div className={cn('relative overflow-y-auto', maxHeightClass)}>
-          {feed.held > 0 && (
-            // Zero-height and sticky: floats over the list, never pushes it.
-            <div className='sticky top-2 z-10 flex h-0 justify-center overflow-visible'>
-              <button
-                type='button'
-                data-activity-new-pill={feed.held}
-                onClick={feed.reveal}
-                className='mt-1 inline-flex h-7 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-white px-3 text-[12px] font-medium text-nvr-navy shadow-sm transition-colors hover:bg-nvr-cyan/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:bg-card dark:text-nvr-cyan'
-              >
-                <ChevronUp className='h-3.5 w-3.5' aria-hidden />
-                {feed.held} new
-              </button>
-            </div>
+        <div
+          className={cn('relative md:overflow-y-auto', maxHeightClass)}
+          onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 2)}
+        >
+          {scrolled && (
+            <div
+              aria-hidden
+              data-activity-scroll-fade
+              className='pointer-events-none sticky top-0 z-10 -mb-4 h-4 bg-gradient-to-b from-white to-transparent dark:from-card'
+            />
           )}
           <div
             ref={setList}
@@ -311,6 +331,8 @@ export function RecordActivityStream({
                   group={g.entries.length > 1 ? g.entries : undefined}
                   labels={labels}
                   onOpen={open}
+                  omitPhrases={omitPhrases}
+                  reserveChevron
                 />
               </div>
             ))}
