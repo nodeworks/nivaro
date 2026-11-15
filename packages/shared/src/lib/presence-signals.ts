@@ -10,7 +10,7 @@ import { useOptionalRealtime } from './realtime'
  * never content, sent only to people already admitted to the same room (the record read gate,
  * the ticket gate):
  *
- *   note        "Beth is writing a note"          (#1721, record rooms)
+ *   note        "Beth is replying"                (#1721, record rooms; `field` = one field thread)
  *   transition  "Kim is approving"                 (#1722, record rooms)
  *   reply       "Kim is replying"                  (#2026, ticket pages)
  *   viewers     "Kim is looking at this"           (#1882, ticket and issue pages)
@@ -37,10 +37,16 @@ export interface SignalPayload {
   kind?: string
   state?: string
   user?: SignalPerson | null
+  /** A note typed on ONE field's comment thread (#3232); the server sends it only to people
+   *  who may read that field. Absent = the record's own thread. */
+  field?: string | null
 }
 
-/** user id (upper-cased) → who and until when. */
-export type SignalPeers = Map<string, { name: string; until: number }>
+/** user id (upper-cased) [+ '|' + field] → who, on which field, and until when. */
+export type SignalPeers = Map<string, { name: string; until: number; field?: string | null }>
+
+/** Who typing goes quiet after: no keystroke for this long sends `stop` (realtime round 2). */
+export const TYPING_IDLE_MS = 6_000
 
 /** Fold one incoming signal into the peers (pure — returns a new map). */
 export function applySignal(
@@ -51,11 +57,18 @@ export function applySignal(
 ): SignalPeers {
   const user = payload.user
   if (!user?.id) return peers
-  const id = String(user.id).toUpperCase()
-  if (selfId && id === selfId.toUpperCase()) return peers
+  const uid = String(user.id).toUpperCase()
+  if (selfId && uid === selfId.toUpperCase()) return peers
+  const field = typeof payload.field === 'string' && payload.field ? payload.field : null
+  const id = field ? `${uid}|${field}` : uid
   const next = new Map(peers)
   if (payload.state === 'stop') next.delete(id)
-  else next.set(id, { name: String(user.name || 'Someone'), until: now + SIGNAL_TTL_MS })
+  else
+    next.set(id, {
+      name: String(user.name || 'Someone'),
+      until: now + SIGNAL_TTL_MS,
+      ...(field ? { field } : {})
+    })
   return next
 }
 
@@ -72,7 +85,34 @@ export function expirePeers(peers: SignalPeers, now: number): SignalPeers {
 }
 
 export function peerNames(peers: SignalPeers): string[] {
-  return [...peers.values()].map((p) => p.name)
+  return [...new Set([...peers.values()].map((p) => p.name))]
+}
+
+/**
+ * Note typists grouped by thread: the record's own (`field` null) first, then one group per
+ * field, each with its people's names. Pure — exported for tests.
+ */
+export function typistsByThread(
+  peers: SignalPeers
+): Array<{ field: string | null; names: string[] }> {
+  const groups = new Map<string, { field: string | null; names: string[] }>()
+  for (const p of peers.values()) {
+    const k = p.field ?? ''
+    const g = groups.get(k) ?? { field: p.field ?? null, names: [] }
+    if (!g.names.includes(p.name)) g.names.push(p.name)
+    groups.set(k, g)
+  }
+  return [...groups.values()].sort((a, b) =>
+    a.field === b.field
+      ? 0
+      : a.field == null
+        ? -1
+        : b.field == null
+          ? 1
+          : a.field < b.field
+            ? -1
+            : 1
+  )
 }
 
 /** "Beth", "Beth and Kim", "Beth, Kim and 2 others" — the subject of a presence sentence. */
@@ -122,12 +162,34 @@ function usePeerClock(
 
 // ── Record rooms ────────────────────────────────────────────────────────────
 
-/** Names of the OTHER people currently signalling `kind` on this record. */
+/** Names of the OTHER people currently signalling `kind` on this record. `field`: only the
+ *  signals about that field's comment thread (null = only the record's own thread); omitted =
+ *  every signal of the kind this viewer receives. */
 export function useRecordSignalPeers(
   collection: string | null | undefined,
   item: string | number | null | undefined,
-  kind: RecordSignalKind
+  kind: RecordSignalKind,
+  opts: { field?: string | null } = {}
 ): string[] {
+  const peers = useRecordSignalPeerMap(collection, item, kind)
+  if (opts.field === undefined) return peerNames(peers)
+  const only = new Map([...peers].filter(([, p]) => (p.field ?? null) === opts.field))
+  return peerNames(only)
+}
+
+/** The note typists on this record, grouped by thread (record first, then per field). */
+export function useNoteTypists(
+  collection: string | null | undefined,
+  item: string | number | null | undefined
+): Array<{ field: string | null; names: string[] }> {
+  return typistsByThread(useRecordSignalPeerMap(collection, item, 'note'))
+}
+
+function useRecordSignalPeerMap(
+  collection: string | null | undefined,
+  item: string | number | null | undefined,
+  kind: RecordSignalKind
+): SignalPeers {
   const me = useMyUserId()
   const [peers, setPeers] = useState<SignalPeers>(() => new Map())
   const id = item == null ? '' : String(item)
@@ -149,26 +211,72 @@ export function useRecordSignalPeers(
     }
   )
   usePeerClock(peers, setPeers)
-  return peerNames(peers)
+  return peers
 }
 
-/** Send a record signal through the host's record-room socket(s). */
+/** Send a record signal through the host's record-room socket(s). `field`: a note on that
+ *  field's comment thread (the server tells only people who may read the field). */
 export function useRecordSignalSender(
   collection: string | null | undefined,
   item: string | number | null | undefined,
-  kind: RecordSignalKind
+  kind: RecordSignalKind,
+  field?: string | null
 ): (state: 'start' | 'stop') => void {
   const realtime = useOptionalRealtime()
   const id = item == null ? '' : String(item)
   return useCallback(
     (state) => {
       if (!collection || !id || id === 'new') return
-      const payload = { collection, item: id, kind, state }
+      const payload = { collection, item: id, kind, state, ...(field ? { field } : {}) }
       realtime?.emit('record:signal', payload)
       if (typeof window !== 'undefined')
         window.dispatchEvent(new CustomEvent('nvr:record-signal-out', { detail: payload }))
     },
-    [realtime, collection, id, kind]
+    [realtime, collection, id, kind, field]
+  )
+}
+
+/**
+ * "Beth is replying…" from a composer's draft (realtime round 2): `start` as the draft changes
+ * (at most every SIGNAL_THROTTLE_MS), `stop` after TYPING_IDLE_MS with no keystroke, when the
+ * draft empties (sent or cleared) and when the composer goes away.
+ */
+export const SIGNAL_THROTTLE_MS = 2_500
+
+export function useDraftTypingSignal(
+  collection: string | null | undefined,
+  item: string | number | null | undefined,
+  draft: string,
+  field?: string | null
+): void {
+  const send = useRecordSignalSender(collection, item, 'note', field)
+  const lastOut = useRef(0)
+  const idle = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (idle.current) clearTimeout(idle.current)
+    idle.current = null
+    if (!draft.trim()) {
+      if (lastOut.current) send('stop')
+      lastOut.current = 0
+      return
+    }
+    const now = Date.now()
+    if (now - lastOut.current >= SIGNAL_THROTTLE_MS) {
+      lastOut.current = now
+      send('start')
+    }
+    idle.current = setTimeout(() => {
+      idle.current = null
+      if (lastOut.current) send('stop')
+      lastOut.current = 0
+    }, TYPING_IDLE_MS)
+  }, [draft, send])
+  useEffect(
+    () => () => {
+      if (idle.current) clearTimeout(idle.current)
+      send('stop')
+    },
+    [send]
   )
 }
 

@@ -110,7 +110,9 @@ export const RECORD_QUERY_HEADS = [
   'record-integrity',
   // Per-state extension actions (Push to Fusion): someone else's move changes them (army 11 F-12).
   'item-actions',
-  'ext-item-actions'
+  'ext-item-actions',
+  // The SLA clock (SlaClock.tsx slaStatusKey).
+  'sla-breach'
 ] as const
 
 /** Remove every cached query about one record (any id spelling). */
@@ -369,6 +371,12 @@ export function RecordLiveSync({
         q.queryKey[1] === collection &&
         String(q.queryKey[2]) === String(itemId)
     })
+    // Realtime round 2: a child row (a line) of this record moved — the grids and captions
+    // that read them refresh; the record's own columns did not change.
+    if (batch.changedFields?.includes(LIVE_ASPECTS.related))
+      void qc.invalidateQueries({
+        predicate: (q) => q.queryKey[0] === 'o2m-rows' && String(q.queryKey[3]) === String(itemId)
+      })
     // A `$` aspect says a related surface moved, not the record's columns.
     if (batch.aspectsOnly) return
     // A raw bulk write (#1875, item '*') may include this record: refetch it

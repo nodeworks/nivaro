@@ -40,6 +40,7 @@ import {
 } from './queue-totals.js'
 import type { QueueGroupSummary, QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
 import { atRiskWeight, normalizeDisplayConfig } from './queues.js'
+import { deadlinesJson, slaDeadlines } from './sla-deadline.js'
 
 // Returns true when the requested sort/filters touch a field this SQL-pushdown
 // path cannot (or intentionally does not) serve correctly: sla_status/
@@ -428,6 +429,35 @@ export function computeSla(
   const pctUsed = (elapsed / row.sla_duration_hours) * 100
   const status = pctUsed >= 100 ? 'breached' : pctUsed >= row.sla_warning_pct ? 'warning' : 'ok'
   return { status, aging_hours, sla_elapsed_hours }
+}
+
+/**
+ * When a cached row's SLA clock turns amber / red (ISO), for the page to count down to —
+ * only for the rows a page shows (never the count / sort scans, which stay on computeSla).
+ */
+export function slaRowDeadlines(row: {
+  entered_state_at: Date | null
+  sla_duration_hours: number | null
+  sla_warning_pct: number | null
+  sla_business_hours_only: boolean
+  sla_timezone?: string | null
+}): { sla_warning_at: string | null; sla_due_at: string | null } {
+  if (!row.entered_state_at || row.sla_duration_hours == null)
+    return { sla_warning_at: null, sla_due_at: null }
+  const d = deadlinesJson(
+    slaDeadlines({
+      enteredAt: row.entered_state_at,
+      durationHours: row.sla_duration_hours,
+      warningPct: row.sla_warning_pct,
+      businessHoursOnly: !!row.sla_business_hours_only,
+      schedule: row.sla_business_hours_only
+        ? row.sla_timezone
+          ? { ...getSlaScheduleSync(), timeZone: row.sla_timezone }
+          : getSlaScheduleSync()
+        : undefined
+    })
+  )
+  return { sla_warning_at: d.warning_at, sla_due_at: d.due_at }
 }
 
 /**
@@ -1526,6 +1556,7 @@ export async function fetchMaterializedQueueItems(
       predicted_note: prediction.note,
       aging_hours: sla.aging_hours,
       sla_elapsed_hours: sla.sla_elapsed_hours,
+      ...slaRowDeadlines(r),
       state_entered_at: r.entered_state_at ? new Date(r.entered_state_at).toISOString() : null,
       claimed_by: r.claimed_by
         ? { id: r.claimed_by, name: claimantNameById.get(r.claimed_by) ?? '' }

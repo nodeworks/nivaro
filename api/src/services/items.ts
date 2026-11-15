@@ -139,6 +139,7 @@ import {
   sensitiveColumns,
   systemReadableColumns
 } from './system-collections.js'
+import { currentTenantKey } from './tenant-rooms.js'
 import { writeTrashRow } from './trash.js'
 import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
@@ -2124,6 +2125,7 @@ async function broadcastJunctionParents(
   const legs = rels.filter(
     (r) => r.many_collection === collection && r.junction_field && r.one_collection && r.one_field
   )
+  announceOneToManyParents(collection, rels, rows)
   if (legs.length === 0) return
   const sent = new Set<string>()
   for (const leg of legs) {
@@ -2139,6 +2141,54 @@ async function broadcastJunctionParents(
       })
     }
   }
+}
+
+/** Realtime round 2: one `$related` per parent per window, whatever the burst of child writes. */
+const RELATED_PARENT_WINDOW_MS = 800
+const relatedParentTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+/**
+ * A child row's write (a line on an order, a forecast on a workflow — a one-to-many the parent
+ * shows) tells the PARENT record's viewers that something under it moved: the `$related`
+ * aspect, ids only, coalesced per parent (a 500-line import is one notice per parent per
+ * window). Open records refresh what reads their children — header totals, record widgets,
+ * which moves are available — through their own permission-checked reads. List pages treat
+ * `$`-only notices as "not my columns" and never refetch for it.
+ */
+function announceOneToManyParents(
+  collection: string,
+  rels: CMSRelation[],
+  rows: Array<Record<string, unknown> | null | undefined>
+): void {
+  if (isSystemName(collection)) return
+  for (const leg of rels) {
+    if (leg.many_collection !== collection || leg.junction_field) continue
+    const parentCollection = leg.one_collection
+    if (!parentCollection || !leg.one_field || isSystemName(parentCollection)) continue
+    for (const row of rows) {
+      const parent = row?.[leg.many_field]
+      if (parent == null || parent === '' || typeof parent === 'object') continue
+      const key = `${currentTenantKey()}\u0001${parentCollection}\u0001${String(parent)}`
+      if (relatedParentTimers.has(key)) continue
+      const id = String(parent)
+      const t = setTimeout(() => {
+        relatedParentTimers.delete(key)
+        try {
+          broadcastCollectionUpdate(undefined, parentCollection, id, {
+            changed_fields: ['$related']
+          })
+        } catch {
+          /* best-effort */
+        }
+      }, RELATED_PARENT_WINDOW_MS)
+      t.unref?.()
+      relatedParentTimers.set(key, t)
+    }
+  }
+}
+
+function isSystemName(collection: string): boolean {
+  return collection.startsWith('nivaro_') || collection.startsWith('directus_')
 }
 
 function clearRelCache() {

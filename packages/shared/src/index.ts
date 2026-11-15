@@ -835,6 +835,7 @@ export {
   isCrashWorthy,
   scrubCrashText
 } from './lib/crash-report'
+export * from './lib/deadline-ticker'
 export { useAfterIdle } from './lib/defer'
 export { deliveryAckFor } from './lib/delivery-ack'
 export {
@@ -933,6 +934,7 @@ export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
 export * from './lib/live'
 export * from './lib/live-list'
+export * from './lib/live-moves'
 export * from './lib/live-ops'
 export * from './lib/live-queries'
 export * from './lib/live-widgets'
@@ -1048,7 +1050,11 @@ export {
   type SignalPeers,
   signalSentence,
   type TopicPresence,
+  TYPING_IDLE_MS,
+  typistsByThread,
+  useDraftTypingSignal,
   useMyUserId,
+  useNoteTypists,
   useRecordSignalPeers,
   useRecordSignalSender,
   useRecordSignalWhile,

@@ -8,6 +8,7 @@ import {
   slaClockText,
   slaStatusKey,
   stepAgeText,
+  useLiveSlaStatus,
   useSlaStatus
 } from './SlaClock'
 
@@ -27,6 +28,8 @@ export function SlaBreachBanner({ collection, itemId }: { collection: string; it
   const [ackOpen, setAckOpen] = useState(false)
 
   const { data } = useSlaStatus(collection, itemId)
+  // Realtime round 2: turns red the moment the clock passes its line, no reload.
+  const live = useLiveSlaStatus(collection, itemId, data)
 
   const ack = useMutation({
     mutationFn: () =>
@@ -42,7 +45,7 @@ export function SlaBreachBanner({ collection, itemId }: { collection: string; it
   if (!data) return null
 
   // Not breached: only an adjusted clock earns a strip.
-  if (data.status !== 'breached') {
+  if ((live.status ?? data.status) !== 'breached') {
     if (!data.override || !data.status || data.status === 'none') return null
     return (
       <div
@@ -70,7 +73,14 @@ export function SlaBreachBanner({ collection, itemId }: { collection: string; it
     <div className='nvr-expand-in flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-500/30 dark:bg-red-500/10'>
       <p className='min-w-[min(16rem,100%)] flex-1 text-[12.5px] text-red-800 dark:text-red-300'>
         <span className='font-semibold'>SLA breached</span>
-        {data.sla_rule?.name && ` — ${data.sla_rule.name}`} · {slaClockText(data)}
+        {data.sla_rule?.name && ` — ${data.sla_rule.name}`} ·{' '}
+        {live.dueText ? (
+          <span className='tabular-nums' data-sla-due-in>
+            {live.dueText}
+          </span>
+        ) : (
+          slaClockText(data)
+        )}
         {age && ` · ${age}`}
         {data.acknowledged
           ? ` · acknowledged by ${data.acknowledged.by || 'someone'}`

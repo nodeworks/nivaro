@@ -463,6 +463,10 @@ export interface QueueItem {
   /** The SLA clock's elapsed hours (business hours for a business-hours rule)
    *  — what sla_status was judged on. Absent on sources with no SLA batch. */
   sla_elapsed_hours?: number | null
+  /** When the SLA clock turns amber / red (ISO) — lists count down to them live
+   *  (services/sla-deadline.ts). Absent on sources with no SLA batch. */
+  sla_warning_at?: string | null
+  sla_due_at?: string | null
   /** 'due_date' = sla_status comes from a task's due date, not an SLA rule (#1011). */
   sla_basis?: 'due_date'
   /** When the record entered its current state (ISO). */
@@ -3185,6 +3189,8 @@ export async function resolveCollectionSource(
       aging_hours:
         calendarAgingHours(slaMap[id]?.entered_at, now) ?? slaMap[id]?.elapsed_hours ?? null,
       sla_elapsed_hours: slaMap[id]?.elapsed_hours ?? null,
+      sla_warning_at: slaMap[id]?.warning_at ?? null,
+      sla_due_at: slaMap[id]?.due_at ?? null,
       state_entered_at: slaMap[id]?.entered_at
         ? new Date(slaMap[id].entered_at as unknown as string).toISOString()
         : null,
@@ -3366,6 +3372,8 @@ export async function resolveAddendumsSource(
       at_risk_color: null,
       aging_hours: calendarAgingHours(sla?.entered_at) ?? sla?.elapsed_hours ?? null,
       sla_elapsed_hours: sla?.elapsed_hours ?? null,
+      sla_warning_at: sla?.warning_at ?? null,
+      sla_due_at: sla?.due_at ?? null,
       state_entered_at: sla?.entered_at
         ? new Date(sla.entered_at as unknown as string).toISOString()
         : null,

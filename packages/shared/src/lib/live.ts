@@ -87,7 +87,11 @@ export const LIVE_ASPECTS = {
   integrations: '$integrations',
   owners: '$owners',
   /** An edit lock was taken or released (list rows show the lock icon). */
-  lock: '$lock'
+  lock: '$lock',
+  /** The SLA clock crossed its warning / breach line with no write (server flip pass). */
+  sla: '$sla',
+  /** A child row (one-to-many) of the record was added, changed or removed. */
+  related: '$related'
 } as const
 
 export { isOwnWrite, noteOwnWrite, noteOwnWriteFromCommand } from './own-writes'

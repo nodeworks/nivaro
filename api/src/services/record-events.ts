@@ -31,6 +31,10 @@ export type RecordAspect =
   | '$tasks'
   | '$integrations'
   | '$lock'
+  /** The SLA clock crossed its warning or breach line with no write (services/sla-flips.ts). */
+  | '$sla'
+  /** A child row (one-to-many) of this record was added, changed or removed (items.ts). */
+  | '$related'
 
 export function announceRecordAspect(
   collection: string | null | undefined,
