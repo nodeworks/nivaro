@@ -76,6 +76,50 @@ export function splitUnsaved(
   return { keep, held }
 }
 
+export interface HeldLinks {
+  field: string
+  stagingKey: string
+  status: FieldStatus
+  /** Records the person linked and has not saved. */
+  links: unknown[]
+  /** Link rows the person removed and has not saved. */
+  unlinks: unknown[]
+}
+
+/**
+ * Staged link changes (a many-to-many field's picks and removals) the new form cannot take —
+ * the same rule as plain values: they stay only on a field the new form shows and lets the
+ * person edit (pure; exported for tests).
+ */
+export function splitStagedLinks(
+  links: ReadonlyMap<string, unknown[]>,
+  unlinks: ReadonlyMap<string, ReadonlySet<unknown>>,
+  keyToField: ReadonlyMap<string, string>,
+  newFields: CMSField[] | null | undefined
+): HeldLinks[] {
+  const keys = new Set([...links.keys(), ...unlinks.keys()])
+  const held: HeldLinks[] = []
+  for (const key of keys) {
+    const l = links.get(key) ?? []
+    const u = [...(unlinks.get(key) ?? [])]
+    if (l.length === 0 && u.length === 0) continue
+    const field = keyToField.get(key)
+    if (!field) continue
+    const status = fieldStatus(newFields, field)
+    if (status === 'editable') continue
+    held.push({ field, stagingKey: key, status, links: [...l], unlinks: u })
+  }
+  return held
+}
+
+/** "2 links added · 1 link removed" — a held link change in words (pure; exported for tests). */
+export function linkChangeText(links: number, unlinks: number): string {
+  const parts: string[] = []
+  if (links > 0) parts.push(`${links} link${links === 1 ? '' : 's'} added`)
+  if (unlinks > 0) parts.push(`${unlinks} link${unlinks === 1 ? '' : 's'} removed`)
+  return parts.join(' · ') || 'No change'
+}
+
 /** "Form updated for Finance review" / "Form updated" (pure; exported for tests). */
 export function formUpdatedText(stepLabel: string | null | undefined): string {
   const step = stepLabel?.trim()

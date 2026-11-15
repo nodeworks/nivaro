@@ -316,6 +316,8 @@ import {
   formUpdatedText,
   type LayoutSwitch,
   layoutMayChange,
+  linkChangeText,
+  splitStagedLinks,
   splitUnsaved,
   useSmoothLayout
 } from './item-edit/layout-switch'
@@ -6455,19 +6457,47 @@ function ItemEditFormView({
     setFormNote({ text: formUpdatedText(layoutStepRef.current), n: sw.n })
     if (isNew) return
     const { held } = splitUnsaved(draftRef.current, initialDataRef.current, fields)
-    if (held.length === 0) return
+    // Staged picks / removals on a many-to-many field follow the same rule (they never pass
+    // through the draft): a field the new form hides or locks gives them up to the chip.
+    const heldLinks = splitStagedLinks(m2mLinks, m2mUnlinks, stagingKeyToFieldRef.current, fields)
+    if (held.length === 0 && heldLinks.length === 0) return
     const labelOf = (k: string) =>
       (fieldConfig ?? []).find((f) => f.field === k)?.label ||
       k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-    const next = { ...draftRef.current }
     const add: HeldEdit[] = []
-    for (const h of held) {
-      add.push({ field: h.field, label: labelOf(h.field), value: next[h.field], status: h.status })
-      next[h.field] = initialDataRef.current[h.field] ?? null
+    if (held.length > 0) {
+      const next = { ...draftRef.current }
+      for (const h of held) {
+        add.push({
+          field: h.field,
+          label: labelOf(h.field),
+          value: next[h.field],
+          status: h.status
+        })
+        next[h.field] = initialDataRef.current[h.field] ?? null
+      }
+      draftRef.current = next
+      setDraft(next)
+      setIsDirty(draftDiffers(next, initialDataRef.current))
     }
-    draftRef.current = next
-    setDraft(next)
-    setIsDirty(draftDiffers(next, initialDataRef.current))
+    if (heldLinks.length > 0) {
+      const gone = new Set(heldLinks.map((h) => h.stagingKey))
+      setM2mLinks((prev) => new Map([...prev].filter(([k]) => !gone.has(k))))
+      setM2mUnlinks((prev) => new Map([...prev].filter(([k]) => !gone.has(k))))
+      for (const h of heldLinks)
+        add.push({
+          field: h.field,
+          label: labelOf(h.field),
+          value: null,
+          status: h.status,
+          links: {
+            stagingKey: h.stagingKey,
+            add: h.links,
+            remove: h.unlinks,
+            text: linkChangeText(h.links.length, h.unlinks.length)
+          }
+        })
+    }
     setHeldEdits((prev) => [...prev.filter((p) => !add.some((a) => a.field === p.field)), ...add])
   }
   useEffect(() => {
@@ -6484,7 +6514,22 @@ function ItemEditFormView({
   const putBackHeld = (field: string) => {
     const h = heldEdits.find((x) => x.field === field)
     if (!h || fieldStatus(fieldConfig, field) !== 'editable') return
-    handleFieldChange(field, h.value)
+    if (h.links) {
+      // Back into staging exactly as they were; saving sends them with the record.
+      const { stagingKey, add, remove } = h.links
+      if (add.length > 0)
+        setM2mLinks((prev) => {
+          const next = new Map(prev)
+          next.set(stagingKey, [...new Set([...(prev.get(stagingKey) ?? []), ...add])])
+          return next
+        })
+      if (remove.length > 0)
+        setM2mUnlinks((prev) => {
+          const next = new Map(prev)
+          next.set(stagingKey, new Set([...(prev.get(stagingKey) ?? []), ...remove]))
+          return next
+        })
+    } else handleFieldChange(field, h.value)
     setHeldEdits((prev) => prev.filter((x) => x.field !== field))
   }
 
@@ -11971,7 +12016,11 @@ function ItemEditFormView({
   // "Merge…" on the notice: the draft folds into an existing record (merge records).
   const [dupMerge, setDupMerge] = useState<DuplicateHint | null>(null)
   const hasDuplicateHints = Object.keys(duplicateHints).length > 0
-  const mergeAllowedHere = useMergeAllowed(collection, null, isNew && !designOn && hasDuplicateHints)
+  const mergeAllowedHere = useMergeAllowed(
+    collection,
+    null,
+    isNew && !designOn && hasDuplicateHints
+  )
   const duplicateMergeApi = useMemo<DuplicateMergeApi | null>(
     () => (mergeAllowedHere.data?.allowed ? { open: (hint) => setDupMerge(hint) } : null),
     [mergeAllowedHere.data?.allowed]

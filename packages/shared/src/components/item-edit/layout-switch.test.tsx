@@ -2,7 +2,12 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { type LayoutSwitch, useSmoothLayout } from './layout-switch'
+import {
+  type LayoutSwitch,
+  linkChangeText,
+  splitStagedLinks,
+  useSmoothLayout
+} from './layout-switch'
 import type { ActiveLayoutData, CMSField } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -36,6 +41,75 @@ afterEach(() => {
 
 const render = (p: Parameters<typeof Harness>[0]) =>
   act(() => root.render(createElement(Harness, p)))
+
+describe('staged link changes on a form switch (rt8 #18)', () => {
+  const f = (field: string, extra: Partial<CMSField> = {}) =>
+    ({ field, hidden: false, readonly: false, ...extra }) as CMSField
+  const keyToField = new Map([
+    ['wf_regions.workflow', 'regions'],
+    ['wf_zones.workflow', 'zones'],
+    ['wf_tags.workflow', 'tags'],
+    ['wf_sites.workflow', 'sites']
+  ])
+
+  it('holds picks and removals on a field the new form hides, locks or lacks; keeps the rest', () => {
+    const links = new Map<string, unknown[]>([
+      ['wf_regions.workflow', ['r1', 'r2']],
+      ['wf_zones.workflow', ['z9']],
+      ['wf_tags.workflow', []],
+      ['wf_sites.workflow', ['s1']]
+    ])
+    const unlinks = new Map<string, Set<unknown>>([
+      ['wf_regions.workflow', new Set(['j7'])],
+      ['wf_tags.workflow', new Set(['j3'])]
+    ])
+    const fields = [f('regions', { readonly: true }), f('zones'), f('tags', { hidden: true })]
+    const held = splitStagedLinks(links, unlinks, keyToField, fields)
+    const byField = (a: { field: string }, b: { field: string }) => a.field.localeCompare(b.field)
+    expect([...held].sort(byField)).toEqual([
+      {
+        field: 'regions',
+        stagingKey: 'wf_regions.workflow',
+        status: 'readonly',
+        links: ['r1', 'r2'],
+        unlinks: ['j7']
+      },
+      {
+        field: 'sites',
+        stagingKey: 'wf_sites.workflow',
+        status: 'absent',
+        links: ['s1'],
+        unlinks: []
+      },
+      {
+        field: 'tags',
+        stagingKey: 'wf_tags.workflow',
+        status: 'hidden',
+        links: [],
+        unlinks: ['j3']
+      }
+    ])
+  })
+
+  it('ignores empty staging and keys with no field', () => {
+    const held = splitStagedLinks(
+      new Map([
+        ['wf_regions.workflow', []],
+        ['unknown.key', ['x']]
+      ]),
+      new Map(),
+      keyToField,
+      []
+    )
+    expect(held).toEqual([])
+  })
+
+  it('words a held link change', () => {
+    expect(linkChangeText(2, 1)).toBe('2 links added · 1 link removed')
+    expect(linkChangeText(0, 3)).toBe('3 links removed')
+    expect(linkChangeText(1, 0)).toBe('1 link added')
+  })
+})
 
 describe('useSmoothLayout (rt8 #18)', () => {
   it('shows the first form at once and a refreshed same form straight through', () => {
