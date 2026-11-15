@@ -84,7 +84,9 @@ export const LIVE_DATA_EVENTS: ReadonlySet<string> = new Set([
   'bulk:rows',
   'widget:data',
   'widget:stale',
-  'ops:changed'
+  'ops:changed',
+  // rt7 #9 — someone's big save is recalculating this record's totals.
+  'record:recalc'
 ])
 
 /** Should this named event be dropped before it reaches a screen? (pure for a given mode) */

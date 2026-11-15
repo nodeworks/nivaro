@@ -104,7 +104,9 @@ export const LIVE_ASPECTS = {
   picker: '$picker',
   /** Someone started or stopped editing a list cell of the record in place (rt6 #15): lists
    *  with inline editing re-read who holds which cell. */
-  cells: '$cells'
+  cells: '$cells',
+  /** A scheduled change on the record was made, moved, cancelled or applied (rt7 #12). */
+  scheduled: '$scheduled'
 } as const
 
 // The person's live-updates setting (Normal / Calm / Off): the transport tap and the hooks

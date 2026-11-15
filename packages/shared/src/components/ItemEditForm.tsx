@@ -118,6 +118,7 @@ import {
   linkedChangeSentence,
   useLinkedRecordWatch
 } from '../lib/linked-changes'
+import { useLiveEvent } from '../lib/live'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useShownRecords } from '../lib/missed-updates'
 import { requestMoveState } from '../lib/move-state'
@@ -142,8 +143,16 @@ import { isRecordPopout, openRecordPopout } from '../lib/record-popout'
 import { announceRecordTabs } from '../lib/record-tabs'
 import { invalidateRecordTasks } from '../lib/record-tasks'
 import { reimportAllowed } from '../lib/reimport-visibility'
+import { useRollupRecalc } from '../lib/rollup-recalc'
 import { reportCodeError, userErrorMessage } from '../lib/safe-error'
 import { currentRecordTab } from '../lib/send-view'
+import {
+  newSaveId,
+  SAVE_PROGRESS_MIN_ROWS,
+  type SaveProgressEvent,
+  saveProgressText,
+  withSaveId
+} from '../lib/save-progress'
 import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
 import { stagedRowLabel } from '../lib/staged-row-labels'
 import {
@@ -346,7 +355,9 @@ import { endQuickCreateFollows } from './item-edit/QuickCreateButton'
 import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
+import { RecalcValue } from './item-edit/RecalcValue'
 import { PickerExclusionToggle, ScheduleChangeButton } from './item-edit/RecordGrantTools'
+import { ScheduledChangeChip } from './item-edit/ScheduledChangeChip'
 import {
   RecordHeaderActionButtons,
   RecordHeaderActionDialog,
@@ -559,8 +570,8 @@ function GridContainer({ children }: { children: (containerWidth: number) => Rea
 /** The "can't save yet" toast — one at a time however often Save is pressed. */
 const VALIDATION_TOAST_ID = 'nvr-form-validation'
 
-type SaveStepStatus = 'pending' | 'running' | 'done' | 'error'
-interface SaveStepItem {
+export type SaveStepStatus = 'pending' | 'running' | 'done' | 'error'
+export interface SaveStepItem {
   id: string
   label: string
   status: SaveStepStatus
@@ -585,7 +596,8 @@ function SaveStepIcon({ status }: { status: SaveStepStatus }) {
   )
 }
 
-function SaveProgressDialog({
+/** Exported for the design harness and tests; the form is its only caller. */
+export function SaveProgressDialog({
   open,
   steps,
   onClose,
@@ -738,7 +750,7 @@ function SaveProgressDialog({
                         </button>
                       )}
                       {step.status === 'running' && rowPct !== null && (
-                        <div className='mt-1.5 h-1 rounded-full bg-slate-200 overflow-hidden'>
+                        <div className='mt-1.5 h-1 rounded-full bg-slate-200 dark:bg-muted overflow-hidden'>
                           <div
                             className='h-full rounded-full bg-nvr-cyan transition-all duration-200'
                             style={{ width: `${rowPct}%` }}
@@ -6745,6 +6757,19 @@ function ItemEditFormView({
     return out
   }, [fieldConfig, liveRowsByRelation, stagedRowsByRelation, addendumRollupKeys, draft])
 
+  // rt7 #9 — totals the server is recalculating after line writes (this tab's or a big save's):
+  // shown dimmed with "Updating…" until the re-read lands, then faded in once.
+  const recalc = useRollupRecalc({
+    collection,
+    itemId: isNew ? null : itemId,
+    fields: fieldConfig,
+    dataUpdatedAt: itemDataUpdatedAt,
+    queryKey: ['item', collection, itemId],
+    enabled: !isNew && !designOn && addendumViewId === 'original'
+  })
+  const recalcOf = (field: string): 'pending' | 'landed' | null =>
+    recalc.pending.has(field) ? 'pending' : recalc.landed.has(field) ? 'landed' : null
+
   const effectiveDraft = useMemo(
     () => (addendumViewData ? { ...draft, ...addendumViewData } : draft),
     [draft, addendumViewData]
@@ -9586,6 +9611,25 @@ function ItemEditFormView({
         .catch(() => {})
     }
   }
+  // rt7 #8 — a create that carries many lines names itself (?save_progress=) and the server
+  // reports "320 of 500 lines" over this person's own socket (lib/save-progress.ts). Without a
+  // socket nothing arrives and the step keeps its spinner and "Saving 500 lines…".
+  const activeSaveRef = useRef<{ id: string; total: number } | null>(null)
+  useLiveEvent(
+    'save:progress',
+    (p: SaveProgressEvent) => {
+      const a = activeSaveRef.current
+      if (!a || !p || p.save !== a.id) return
+      const total = typeof p.total === 'number' && p.total > 0 ? p.total : a.total
+      const done = Math.min(total, Math.max(0, Number(p.done) || 0))
+      updateStep('main', (prev) =>
+        prev.status !== 'running'
+          ? {}
+          : { progress: { done, total }, detail: saveProgressText(p, a.total) }
+      )
+    },
+    { includeOwn: true }
+  )
   const saveMut = useMutation({
     mutationFn: async () => {
       if (isNew) draftSpentRef.current = true
@@ -9895,14 +9939,35 @@ function ItemEditFormView({
       }
       lastSavePayloadRef.current = payload
       let savedId: string
+      // Many lines in this create: name the save so its progress can be shown.
+      const nestedRows = isNew
+        ? Object.values(rowBody).reduce<number>((n, v) => n + (Array.isArray(v) ? v.length : 0), 0)
+        : 0
+      const saveId = nestedRows >= SAVE_PROGRESS_MIN_ROWS ? newSaveId() : null
+      if (saveId) {
+        activeSaveRef.current = { id: saveId, total: nestedRows }
+        updateStep('main', {
+          detail: saveProgressText(null, nestedRows),
+          progress: { done: 0, total: nestedRows }
+        })
+      }
       try {
         if (isNew) {
-          const r = await client.request<WriteAnswer>(post(`/items/${collection}`, payload))
+          const r = await client
+            .request<WriteAnswer>(post(withSaveId(`/items/${collection}`, saveId), payload))
+            .finally(() => {
+              activeSaveRef.current = null
+            })
           // The id comes from the answer even when the creator cannot read
           // the record back (data {id} + meta.readable false); an older server
           // answered data null — the record exists, but its id is unknown.
           const newId = r?.data?.id ?? r?.meta?.id
           noteWriteAnswer(r)
+          if (saveId)
+            updateStep('main', {
+              detail: `${mainDetail} · ${nestedRows.toLocaleString()} lines saved`,
+              progress: { done: nestedRows, total: nestedRows }
+            })
           if (newId == null) throw new CreatedOutOfViewError()
           savedId = String(newId)
         } else if (Object.keys(payload).some((k) => !k.startsWith('_'))) {
@@ -12583,7 +12648,26 @@ function ItemEditFormView({
     // A rollup whose live total has moved away from the stored one shows both
     // figures and the difference — on an addendum that difference IS the
     // amendment, and replacing the old number with the new one hides it.
-    const groupFields = baseFields.map((f) => {
+    const groupFields = baseFields.map((f0) => {
+      const rc = recalcOf(f0.field)
+      const f = rc
+        ? {
+            ...f0,
+            options: {
+              // Options arrive parsed; a raw JSON string (older rows) is read first.
+              ...(typeof f0.options === 'string'
+                ? (() => {
+                    try {
+                      return JSON.parse(f0.options) as Record<string, unknown>
+                    } catch {
+                      return {}
+                    }
+                  })()
+                : ((f0.options as Record<string, unknown> | null) ?? {})),
+              __recalc: rc
+            }
+          }
+        : f0
       const live = liveRollupValues.get(f.field)
       if (live === undefined) return f
       const original = draft[f.field]
@@ -14036,6 +14120,15 @@ function ItemEditFormView({
                                                 userName={provenance.user_name}
                                                 timestamp={provenance.timestamp}
                                                 api={provenance.api}
+                                              />
+                                            )}
+                                            {/* rt7 #12: the soonest pending scheduled change, counted down. */}
+                                            {!isNew && itemId && !designOn && (
+                                              <ScheduledChangeChip
+                                                collection={collection}
+                                                itemId={String(itemId)}
+                                                fields={fieldConfig}
+                                                relations={relations}
                                               />
                                             )}
                                             {/* Admin-only: the route 403s everyone else anyway. */}
@@ -16149,7 +16242,7 @@ function ItemEditFormView({
                                                               />
                                                             )
                                                           }
-                                                          const inner = f.cmsField ? (
+                                                          const inner0 = f.cmsField ? (
                                                             <>
                                                               <StripFieldValue
                                                                 field={f.cmsField}
@@ -16187,6 +16280,16 @@ function ItemEditFormView({
                                                                 f.displayFormat
                                                               )}
                                                             </span>
+                                                          )
+                                                          // rt7 #9: a total being recalculated stays dimmed
+                                                          // with "Updating…" until the new figure lands.
+                                                          const inner = (
+                                                            <RecalcValue
+                                                              state={recalcOf(f.field)}
+                                                              inline
+                                                            >
+                                                              {inner0}
+                                                            </RecalcValue>
                                                           )
                                                           // Configured link template ({{value}} + any {{field}} from
                                                           // the draft) turns the header value into an external link

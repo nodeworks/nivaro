@@ -46,6 +46,9 @@ export type RecordAspect =
   /** rt6 #15 — someone started or stopped editing a list cell of the record in place
    *  (services/cell-locks.ts; lists re-read who holds which cell). */
   | '$cells'
+  /** rt7 #12 — a scheduled change on the record was made, moved, cancelled or applied
+   *  (routes/scheduled-changes.ts). */
+  | '$scheduled'
 
 export function announceRecordAspect(
   collection: string | null | undefined,

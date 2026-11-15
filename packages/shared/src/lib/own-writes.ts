@@ -189,3 +189,44 @@ export function noteOwnWriteFromCommand(
       noteOwnWrite(b.parent_collection, b.parent_id as string, OWN_WRITE_TTL_MS, aspects)
   }
 }
+
+// ── Write observers (rt7 #9) ────────────────────────────────────────────────
+
+/**
+ * A write this tab sent, as it starts and as it ends (answered or failed). Fed by the
+ * transport wrapper (request-gate.ts) for every non-GET that is not a rehearsal; read by
+ * surfaces that must know a write is IN FLIGHT, not only that it happened — the record page
+ * shows "Updating…" on the totals a line write re-derives until the server's answer and the
+ * re-read after it land (lib/rollup-recalc.ts). Path and method only, never the body.
+ */
+export interface WriteCommandNote {
+  phase: 'start' | 'end'
+  method: string
+  path: string
+}
+
+const writeObservers = new Set<(n: WriteCommandNote) => void>()
+
+export function onWriteCommand(listener: (n: WriteCommandNote) => void): () => void {
+  writeObservers.add(listener)
+  return () => {
+    writeObservers.delete(listener)
+  }
+}
+
+export function announceWriteCommand(
+  phase: WriteCommandNote['phase'],
+  method: string | undefined,
+  path: string | undefined
+): void {
+  if (writeObservers.size === 0 || !path) return
+  const m = (method ?? 'GET').toUpperCase()
+  if (m === 'GET') return
+  for (const l of [...writeObservers]) {
+    try {
+      l({ phase, method: m, path })
+    } catch {
+      /* an observer never breaks a write */
+    }
+  }
+}
