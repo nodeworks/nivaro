@@ -3,6 +3,7 @@ import { AlertTriangle, Check, ChevronDown, ChevronRight, Loader2, Search, X } f
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { pickerOptionsMeta } from '../../lib/live-pickers'
 import { cn, matchesAllTokens } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
 import { NAMELESS_LABEL } from './option-disambiguate'
@@ -178,7 +179,9 @@ export function RelationGroupedCombobox({
         )
         .then((r) => r.data ?? []),
     enabled: open,
-    staleTime: filterStr ? 0 : 30_000
+    staleTime: filterStr ? 0 : 30_000,
+    // Someone else's new / changed / removed record: re-read on the next open (live-pickers.ts).
+    meta: pickerOptionsMeta(collection)
   })
 
   const { data: selectedItem, isLoading: isLoadingSelected } = useQuery<Item | null>({

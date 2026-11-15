@@ -23,6 +23,7 @@ import { userErrorMessage } from '../../lib/safe-error'
 import { formatRelative } from '../../lib/utils'
 import { CollectionImportBanner } from '../CollectionImportBanner'
 import { markLiveRecordWrite } from './live-record-marks'
+import { fileQueryOfRecord, relatedQueryOfRecord, wideSpreadDelay } from './live-related'
 
 /** Why an open record can no longer be saved (#1871 deleted, #1925 access). */
 export interface RecordGone {
@@ -227,6 +228,7 @@ export function RecordLiveSync({
   const [importing, setImporting] = useState(false)
   const importTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const relatedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const openedAt = useRef(Date.now())
   const lastMoveToast = useRef<number | null>(null)
   const onGoneRef = useRef(onGoneChange)
@@ -360,6 +362,23 @@ export function RecordLiveSync({
         ['erp-submissions', collection, itemId],
         ['record-integrations', collection, itemId]
       ])
+    // Realtime 3: the record's files changed (a file linked, renamed, replaced or removed by
+    // someone else) — its Files panels and file fields re-read as the viewer, quietly.
+    if (touched(LIVE_ASPECTS.files)) {
+      const isFiles = fileQueryOfRecord(collection, String(itemId))
+      void qc.invalidateQueries({ predicate: (q) => isFiles(q.queryKey) })
+    }
+    // Realtime 18: a child or linked record changed — line grids, link lists, the related
+    // panel and record widgets re-read. A collection-wide notice ('*', a burst past the
+    // server's cap) waits a random moment so every open record does not ask at once.
+    if (touched(LIVE_ASPECTS.related)) {
+      const isRelated = relatedQueryOfRecord(collection, String(itemId))
+      const run = () => void qc.invalidateQueries({ predicate: (q) => isRelated(q.queryKey) })
+      if (batch.ids.length > 0 && batch.ids.every((id) => id === '*')) {
+        if (relatedTimer.current) clearTimeout(relatedTimer.current)
+        relatedTimer.current = setTimeout(run, wideSpreadDelay())
+      } else run()
+    }
     // Header figures and "= 5 lines · …" captions are sums over this record's
     // lines and links: a remote write to the record OR its lines (a `$` aspect)
     // leaves them stale until the next reload (b09-N1 / b06-N10 / b01-N7).
@@ -439,6 +458,7 @@ export function RecordLiveSync({
     () => () => {
       if (flashTimer.current) clearTimeout(flashTimer.current)
       if (importTimer.current) clearTimeout(importTimer.current)
+      if (relatedTimer.current) clearTimeout(relatedTimer.current)
     },
     []
   )

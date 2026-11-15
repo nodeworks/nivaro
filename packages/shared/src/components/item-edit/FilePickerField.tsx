@@ -19,6 +19,15 @@ import { useFileHealth } from '../../hooks/useFileHealth'
 import { del, get, post } from '../../lib/commands'
 import { cn, formatDateTime } from '../../lib/utils'
 import { FileDownloadCount, useFileDownloadStats } from './FileDownloadCount'
+import {
+  noteOwnFileChange,
+  OWN_FILE_CHANGE_MS,
+  REMOVED_FADE_MS,
+  REMOVED_SHOW_MS,
+  RemovedFileRow,
+  useLiveFileList
+} from './file-live'
+import { liveRecordWrite } from './live-record-marks'
 import { FileUsageChip, useFileUsage, useOnceVisible } from './FileUsage'
 import { useFileDownload } from './file-download'
 import { useM2MStaging } from './M2MStagingContext'
@@ -331,10 +340,50 @@ export function FilePickerField({
     staleTime: 60_000
   })
 
+  // Realtime 3: the value moved because someone else changed the record (a live write mark for
+  // this record, and not this person's own pick) — the new file fades in; a removed one stays
+  // a moment as a quiet "Removed" row.
+  const ownPickAt = useRef(0)
+  const prevFileId = useRef(fileId)
+  const lastName = useRef<string | null>(null)
+  const [freshFile, setFreshFile] = useState(false)
+  const [removed, setRemoved] = useState<{ name: string; leaving: boolean } | null>(null)
+  const liveTimers = useRef<Array<ReturnType<typeof setTimeout>>>([])
+  if (file) lastName.current = fileDisplayName(file) || lastName.current
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reacts to the value only
+  useEffect(() => {
+    const prev = prevFileId.current
+    prevFileId.current = fileId
+    if (prev === fileId || pendingFile) return
+    const own = Date.now() - ownPickAt.current < OWN_FILE_CHANGE_MS
+    const coll = parentDraft?.collection
+    if (own || !coll || !recordId || !liveRecordWrite(coll, recordId)) return
+    const later = (fn: () => void, ms: number) => liveTimers.current.push(setTimeout(fn, ms))
+    if (fileId) {
+      setRemoved(null)
+      setFreshFile(true)
+      later(() => setFreshFile(false), 2000)
+    } else if (prev) {
+      setRemoved({ name: lastName.current ?? 'A file', leaving: false })
+      later(
+        () => setRemoved((r) => (r ? { ...r, leaving: true } : r)),
+        REMOVED_SHOW_MS - REMOVED_FADE_MS
+      )
+      later(() => setRemoved(null), REMOVED_SHOW_MS)
+    }
+  }, [fileId])
+  useEffect(() => {
+    const timers = liveTimers.current
+    return () => {
+      for (const t of timers) clearTimeout(t)
+    }
+  }, [])
+
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
     if (!f) return
     if (uploadRef.current) uploadRef.current.value = ''
+    ownPickAt.current = Date.now()
     if (flush) {
       setPendingFile(f)
     } else {
@@ -358,12 +407,14 @@ export function FilePickerField({
   }
 
   function handlePickExisting(id: string) {
+    ownPickAt.current = Date.now()
     setPendingFile(null)
     onChange(id)
     setOpen(false)
   }
 
   function handleRemove() {
+    ownPickAt.current = Date.now()
     setPendingFile(null)
     onChange(null)
   }
@@ -373,10 +424,20 @@ export function FilePickerField({
 
   return (
     <div className='relative'>
+      {!hasFile && removed && (
+        <div className='mb-1.5'>
+          <RemovedFileRow name={removed.name} leaving={removed.leaving} />
+        </div>
+      )}
       {hasFile ? (
         <div
           ref={usageRef}
-          className='flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50'
+          key={fileId ?? 'pending'}
+          data-file-fresh={freshFile ? '' : undefined}
+          className={cn(
+            'flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50',
+            freshFile && 'nvr-row-enter'
+          )}
         >
           {hasPending ? (
             <FileThumb
@@ -597,6 +658,10 @@ export function FileM2MField({
   // pending-save mode: track local adds/removes without hitting API until parent saves
   const [localAdds, setLocalAdds] = useState<string[]>([])
   const [localRemovals, setLocalRemovals] = useState<Set<string>>(new Set())
+  // Realtime 3: this person's own adds/removes (no fade, no "Removed" row for them).
+  const ownFiles = useRef(new Map<string, number>())
+  // Last known names, so a file someone else removed still reads by name for a moment.
+  const knownNames = useRef(new Map<string, string>())
 
   const junctionField = relation.junction_field ?? ''
   const manyField = relation.many_field ?? ''
@@ -652,6 +717,7 @@ export function FileM2MField({
       }
       // commit adds
       for (const fileId of [...snapshotAdds, ...uploadedIds]) {
+        noteOwnFileChange(ownFiles, fileId)
         await client.request(
           post(`/items/${relation.many_collection}`, {
             [manyField]: parentId,
@@ -661,6 +727,7 @@ export function FileM2MField({
       }
       // commit removes
       for (const fileId of snapshotRemovals) {
+        noteOwnFileChange(ownFiles, fileId)
         const junction = junctionItems.find((j) => String(j[junctionField]) === fileId)
         if (junction?.id) {
           await client.request(del(`/items/${relation.many_collection}/${junction.id}`))
@@ -677,7 +744,9 @@ export function FileM2MField({
     return () => flush.unregister(pendingSaveFlushKey)
   }, [flush, pendingSave, localAdds, localRemovals, pendingFiles, pendingSaveFlushKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { data: junctionItems = [] } = useQuery<Record<string, unknown>[]>({
+  const { data: junctionItems = [], isFetched: junctionFetched } = useQuery<
+    Record<string, unknown>[]
+  >({
     queryKey: ['m2m-items', relation.many_collection, manyField, parentId],
     queryFn: () =>
       client
@@ -700,6 +769,8 @@ export function FileM2MField({
     : pendingSave
       ? [...committedIds.filter((id) => !localRemovals.has(id)), ...localAdds]
       : committedIds
+  // Someone else's file arriving fades in; one they removed stays a moment as "Removed".
+  const live = useLiveFileList(isNew || !junctionFetched ? null : committedIds, ownFiles)
 
   // #1288 — what carried each committed file on the record; one read for the
   // whole list once the rows are on screen, never on a new record.
@@ -743,10 +814,20 @@ export function FileM2MField({
       return map
     },
     enabled: allFileIds.length > 0,
-    staleTime: 60_000
+    staleTime: 60_000,
+    // A changed id list keeps the names already known on screen while the new read runs.
+    placeholderData: (prev) => prev
   })
+  for (const [id, f] of Object.entries(filesMap)) {
+    const name = fileDisplayName(f)
+    if (name) knownNames.current.set(id.toLowerCase(), name)
+  }
+  const removedRows = live.removed.filter(
+    (id) => !allFileIds.some((a) => a.toLowerCase() === id.toLowerCase())
+  )
 
   async function removeFile(fileId: string) {
+    noteOwnFileChange(ownFiles, fileId)
     if (isNew && staging) {
       staging.unstageLink(stagingKey, fileId)
       return
@@ -767,6 +848,7 @@ export function FileM2MField({
 
   async function addFile(fileId: string) {
     if (allFileIds.includes(fileId)) return
+    noteOwnFileChange(ownFiles, fileId)
     if (isNew && staging) {
       staging.stageLink(stagingKey, fileId)
       return
@@ -811,14 +893,21 @@ export function FileM2MField({
 
   return (
     <div className='space-y-2'>
-      {(allFileIds.length > 0 || pendingFiles.length > 0) && (
+      {(allFileIds.length > 0 || pendingFiles.length > 0 || removedRows.length > 0) && (
         <div ref={usageRef} className='flex flex-col gap-1.5'>
           {allFileIds.map((id) => {
             const f = filesMap[id]
+            const fresh = live.fresh.has(id)
+            // Someone else's new file waits for its name, then fades in — never a bare id.
+            if (fresh && !f) return null
             return (
               <div
                 key={id}
-                className='flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50'
+                data-file-fresh={fresh ? '' : undefined}
+                className={cn(
+                  'flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50',
+                  fresh && 'nvr-row-enter'
+                )}
               >
                 {/* Every file click downloads (2026-11-08): no in-app preview. */}
                 <a
@@ -900,6 +989,13 @@ export function FileM2MField({
               </div>
             )
           })}
+          {removedRows.map((id) => (
+            <RemovedFileRow
+              key={`removed-${id}`}
+              name={knownNames.current.get(id.toLowerCase()) ?? 'A file'}
+              leaving={live.leaving.has(id)}
+            />
+          ))}
           {pendingFiles.map((pf) => (
             <div
               key={pf.url}

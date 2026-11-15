@@ -42,6 +42,7 @@ import {
 } from '../services/files.js'
 import { helpVideoFileIds, isHelpVideoFile, isUuid } from '../services/help-video-files.js'
 import { viewerMaySeeFile } from '../services/private-files.js'
+import { announceFileCarriers, recordsCarryingFile } from '../services/related-announce.js'
 import { getStorage } from '../services/storage/index.js'
 import {
   bustStorageDriverCache,
@@ -676,6 +677,8 @@ export async function filesRoutes(app: FastifyInstance) {
       user: req.user?.id,
       req
     })
+    // Realtime 3: open records carrying the file show its new name (`$files`, ids only).
+    void recordsCarryingFile(String(existing.id)).then(announceFileCarriers)
     return reply.send({ data: file })
   })
 
@@ -712,6 +715,7 @@ export async function filesRoutes(app: FastifyInstance) {
       comment: `${existing.filename_download} → ${multipart.filename} (${buffer.length} bytes)`,
       req
     })
+    void recordsCarryingFile(String(existing.id)).then(announceFileCarriers)
     return reply.send({ data: file })
   })
 
@@ -723,7 +727,10 @@ export async function filesRoutes(app: FastifyInstance) {
     if (!file) return reply.code(404).send({ error: 'Not found' })
     const verdict = await mayChangeFile(file, req)
     if (!verdict.ok) return reply.code(403).send({ error: verdict.message, code: verdict.code })
+    // Who carried it, read before it goes: their open Files panels show it as removed.
+    const carriers = await recordsCarryingFile(String(file.id))
     await deleteFile(String(file.id))
+    announceFileCarriers(carriers)
     await logActivity({
       action: 'delete',
       collection: 'nivaro_files',
