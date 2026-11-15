@@ -3571,6 +3571,9 @@ export function QueueWorklist({
         label={aliasFor(`extra.${field}`, formatColumnHeader(field))}
         choices={f ? inlineChoices(f) : undefined}
         target={kind === 'm2o' && m ? inlineM2oTarget(m.relations, row.collection, field) : null}
+        collection={row.collection}
+        itemId={row.item_id}
+        field={field}
         onCommit={(v, dir) => commitQueueCell(row, field, kind, v, dir)}
       >
         {node}

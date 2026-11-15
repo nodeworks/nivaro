@@ -76,6 +76,7 @@ export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
 export * from './sections/partner-needs.js'
 export * from './sections/payload-templates.js'
+export * from './sections/picker-badges.js'
 export * from './sections/platform.js'
 export * from './sections/platform-additions.js'
 export * from './sections/quality-checks.js'
@@ -410,6 +411,7 @@ import { overviewPageDocs } from './sections/overview-page'
 import { overviewSectionsDocs } from './sections/overview-sections'
 import { partnerNeedsDocs } from './sections/partner-needs.js'
 import { payloadTemplates } from './sections/payload-templates.js'
+import { pickerBadgesDocs } from './sections/picker-badges.js'
 import {
   aiContentValidation,
   aiDuplicateDetection,
@@ -939,6 +941,7 @@ export const navSections: NavGroup[] = [
       liveOutsideDocs,
       collabLiveProgress,
       liveFormsDocs,
+      pickerBadgesDocs,
       collabOfflinePopout,
       collabLiveLists,
       collabChangedByOthers,

@@ -998,6 +998,16 @@ export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket
 export { LineLockContext, lineLockView, useLineLocks } from './lib/line-locks'
 export { linkedChangeSentence, useLinkedRecordWatch } from './lib/linked-changes'
 export * from './lib/list-inline-edit'
+// rt6 — status badges in pickers + soft locks on list cells.
+export * from './lib/cell-locks'
+export {
+  forgetPickerBadgeRules,
+  type PickerBadge,
+  type PickerBadgeTone,
+  useOptionBadges,
+  useRecordBadges
+} from './lib/picker-badges'
+export { PickerBadgeList, RecordPickerBadges } from './components/item-edit/PickerBadges'
 export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
 export * from './lib/list-return'
