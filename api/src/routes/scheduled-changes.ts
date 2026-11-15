@@ -13,9 +13,10 @@ import {
   autoApplyOn,
   claimChange,
   type ChangeRow,
-  decodeMeta,
   defaultApplyDeps,
   encodeMeta,
+  readMeta,
+  SCHEDULE_LEGACY_META_COLUMN,
   SCHEDULE_META_COLUMN,
   sameValue
 } from '../services/scheduled-apply.js'
@@ -58,7 +59,7 @@ function parseJsonSafe(val: unknown): unknown {
 
 function formatChange(row0: Record<string, unknown>, readable: Set<string> | null = null) {
   // The bookkeeping column holds field values (before / when scheduled): never sent.
-  const { [SCHEDULE_META_COLUMN]: _meta, ...row } = row0
+  const { [SCHEDULE_META_COLUMN]: _meta, [SCHEDULE_LEGACY_META_COLUMN]: _legacy, ...row } = row0
   const changes = parseJsonSafe(row.changes)
   if (!readable) return { ...row, changes }
   // A stored value that is not a field map can't be filtered, so it never
@@ -220,7 +221,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
     const autoApply = await autoApplyOn(collection)
     return reply.send({
       data: rows.map((r) => {
-        const meta = decodeMeta(r[SCHEDULE_META_COLUMN])
+        const meta = readMeta(r)
         const canManage = isAdmin || (!!me && String(r.created_by ?? '').toUpperCase() === me)
         const undoUntil =
           r.status === 'executed' && meta.before && meta.undo_until ? meta.undo_until : null
@@ -476,7 +477,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       String(change.created_by ?? '').toUpperCase() === String(req.user!.id).toUpperCase()
     if (!isAdmin && !mine)
       return reply.code(403).send({ error: 'Only the person who scheduled it can undo it' })
-    const meta = decodeMeta(change[SCHEDULE_META_COLUMN])
+    const meta = readMeta(change)
     if (change.status !== 'executed' || !meta.before || !meta.undo_until)
       return reply.code(409).send({ error: 'This change can no longer be undone' })
     if (Date.parse(meta.undo_until) <= Date.now())

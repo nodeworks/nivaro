@@ -446,7 +446,7 @@ describe('POST /scheduled-changes/:id/undo', () => {
     item_id: '7',
     status: 'executed',
     changes: '{"status":"closed"}',
-    inngest_event_id: JSON.stringify({
+    apply_meta: JSON.stringify({
       v: 1,
       before: { status: 'open' },
       undo_until: new Date(Date.now() + 3600_000).toISOString(),
@@ -482,7 +482,7 @@ describe('POST /scheduled-changes/:id/undo', () => {
 
   it('refuses after the day to undo has passed', async () => {
     state.existing = executed({
-      inngest_event_id: JSON.stringify({
+      apply_meta: JSON.stringify({
         v: 1,
         before: { status: 'open' },
         undo_until: new Date(Date.now() - 1000).toISOString()
@@ -491,6 +491,15 @@ describe('POST /scheduled-changes/:id/undo', () => {
     state.record = { status: 'closed' }
     expect((await run()).statusCode).toBe(409)
     expect(state.updateCalls).toHaveLength(0)
+  })
+
+  it('reads a change applied before migration 528 from the old column', async () => {
+    const { apply_meta, ...legacy } = executed()
+    state.existing = { ...legacy, apply_meta: null, inngest_event_id: apply_meta }
+    state.record = { status: 'closed' }
+    const res = await run()
+    expect(res.statusCode).toBe(200)
+    expect(state.updateCalls[0]).toMatchObject({ data: { status: 'open' } })
   })
 
   it('refuses someone who neither scheduled it nor administers', async () => {

@@ -64,6 +64,7 @@ import {
   conflictReason,
   decodeMeta,
   encodeMeta,
+  readMeta,
   runScheduledChanges,
   sameValue
 } from './scheduled-apply.js'
@@ -100,7 +101,7 @@ const change = (over: Record<string, unknown> = {}) => ({
   executed_at: null,
   error_message: null,
   created_by: 'U5',
-  inngest_event_id: encodeMeta({ v: 1, at: { status: 'open' } }),
+  apply_meta: encodeMeta({ v: 1, at: { status: 'open' } }),
   ...over
 })
 
@@ -117,7 +118,7 @@ describe('runScheduledChanges', () => {
     expect(writes).toEqual([{ status: 'closed' }])
     const row = store.tables.nivaro_scheduled_changes[0]
     expect(row.status).toBe('executed')
-    const meta = decodeMeta(row.inngest_event_id)
+    const meta = decodeMeta(row.apply_meta)
     expect(meta.before).toEqual({ status: 'open' })
     expect(meta.applied_by).toBe('schedule')
     expect(Date.parse(meta.undo_until as string)).toBe(NOW.getTime() + 24 * 3600_000)
@@ -213,11 +214,18 @@ describe('pure parts', () => {
     expect(conflictReason({ a: 1 }, { a: 0 }, { a: 1 }, label)).toBeNull()
     expect(conflictReason({ a: 1 }, { a: 0 }, { a: 2 }, label)).toMatch(/^a was changed/)
   })
-  it('keeps the bookkeeping inside the column, dropping what does not fit', () => {
-    const big = { v: 1 as const, at: { x: 'y'.repeat(300) }, before: { x: 'z'.repeat(300) } }
-    const s = encodeMeta(big) as string
-    expect(s.length).toBeLessThanOrEqual(500)
-    expect(decodeMeta(s).before).toBeDefined()
+  it('keeps large bookkeeping whole (apply_meta has no size cap)', () => {
+    const big = { v: 1 as const, at: { x: 'y'.repeat(3000) }, before: { x: 'z'.repeat(3000) } }
+    const back = decodeMeta(encodeMeta(big))
+    expect(back.at).toEqual(big.at)
+    expect(back.before).toEqual(big.before)
     expect(decodeMeta('not json')).toEqual({ v: 1 })
+  })
+  it('reads rows from before migration 528 out of the old column', () => {
+    const legacy = JSON.stringify({ v: 1, at: { status: 'open' } })
+    expect(readMeta({ apply_meta: null, inngest_event_id: legacy }).at).toEqual({ status: 'open' })
+    const now = encodeMeta({ v: 1, applied_by: 'schedule' })
+    expect(readMeta({ apply_meta: now, inngest_event_id: legacy }).applied_by).toBe('schedule')
+    expect(readMeta(null)).toEqual({ v: 1 })
   })
 })
