@@ -253,7 +253,7 @@ export function MergePicker({
               'flex h-4 w-4 shrink-0 items-center justify-center rounded border',
               on
                 ? 'border-nvr-cyan bg-nvr-cyan text-white'
-                : 'border-slate-300 bg-white dark:border-border dark:bg-card'
+                : 'border-slate-400 bg-white dark:border-slate-500 dark:bg-card'
             )}
             aria-hidden
           >
@@ -298,9 +298,9 @@ export function MergePicker({
         data-merge-picker
       >
         <div className='shrink-0 px-5 pb-3 pt-5'>
-          <DialogTitle className='flex min-w-0 items-center gap-2 pr-8 text-[15px] font-semibold text-slate-900 dark:text-foreground'>
-            <GitMerge className='h-4 w-4 shrink-0 text-nvr-cyan' aria-hidden />
-            <span className='truncate'>
+          <DialogTitle className='flex min-w-0 items-start gap-2 pr-8 text-[15px] font-semibold leading-snug text-slate-900 dark:text-foreground'>
+            <GitMerge className='mt-0.5 h-4 w-4 shrink-0 text-nvr-cyan' aria-hidden />
+            <span className='line-clamp-2 break-words'>
               Merge #{itemId} {cand.data?.self ?? itemLabel ?? ''} with…
             </span>
           </DialogTitle>

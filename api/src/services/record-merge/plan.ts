@@ -25,6 +25,7 @@ import {
   type MoveChoice,
   mergeSettingOf,
   SYSTEM_COLLECTION,
+  singularOf,
   UNDO_WINDOW_MS
 } from './rules.js'
 
@@ -171,10 +172,9 @@ export async function mergeCollection(collection: string): Promise<{
     | undefined
   if (!col) throw new MergeRefusal(404, 'NOT_FOUND', 'This list does not exist.')
   const words = collection.replace(/_/g, ' ')
+  // One record of the list: the configured singular, else the list's name made singular.
   const noun = (
-    String(col.singular ?? '').trim() ||
-    String(col.display_name ?? '').trim() ||
-    words
+    String(col.singular ?? '').trim() || singularOf(String(col.display_name ?? '').trim() || words)
   ).toLowerCase()
   const plural = (
     String(col.plural ?? '').trim() ||

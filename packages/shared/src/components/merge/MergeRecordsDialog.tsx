@@ -903,14 +903,14 @@ function RecordHeader({
         >
           {record.label}
         </span>
-        {record.draft && (
-          <span className='shrink-0 rounded bg-amber-100 px-1.5 py-px text-[10.5px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'>
-            Not saved
-          </span>
-        )}
       </div>
-      {(record.created_at || record.state) && (
+      {(record.created_at || record.state || record.draft) && (
         <div className='mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-slate-500 dark:text-muted-foreground'>
+          {record.draft && (
+            <span className='shrink-0 rounded bg-amber-100 px-1.5 text-[10.5px] font-medium leading-4 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'>
+              Not saved
+            </span>
+          )}
           {record.created_at && (
             <span className='tabular-nums'>Created {formatDate(record.created_at)}</span>
           )}
@@ -1313,7 +1313,7 @@ function RelationsSection({
               <div
                 role='radiogroup'
                 aria-label={r.label}
-                className='inline-flex rounded-md border border-slate-200 bg-slate-100/70 p-0.5 dark:border-border dark:bg-muted/60'
+                className='grid w-full grid-cols-2 rounded-md border border-slate-200 bg-slate-100/70 p-0.5 dark:border-border dark:bg-muted/60 sm:w-[28rem]'
               >
                 {(['move', 'leave'] as const).map((v) => {
                   const on = choice === v
@@ -1328,7 +1328,7 @@ function RelationsSection({
                       disabled={disabled}
                       onClick={() => onMove(r.key, v)}
                       className={cn(
-                        'h-7 whitespace-nowrap rounded px-2.5 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-40',
+                        'min-h-7 truncate rounded px-2.5 py-1 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-40',
                         on
                           ? 'bg-white font-semibold text-slate-900 shadow-sm ring-1 ring-slate-300 dark:bg-slate-700 dark:text-white dark:ring-slate-500'
                           : 'text-slate-600 hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
@@ -1517,7 +1517,7 @@ function ReviewView({
               const move = (moves[r.key] ?? r.default) === 'move'
               return (
                 <li key={r.key} className='flex items-baseline gap-2'>
-                  <span className='tabular-nums text-slate-500 dark:text-muted-foreground'>
+                  <span className='w-8 shrink-0 text-right tabular-nums text-slate-500 dark:text-muted-foreground'>
                     {n.toLocaleString()}
                   </span>
                   <span>
