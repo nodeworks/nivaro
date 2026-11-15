@@ -54,6 +54,7 @@ import { HeavyListColumnsCard } from '@/components/heavy-list-columns-card'
 import { InlineEditSetting } from '@/components/inline-edit-setting'
 import { LabelSearchFieldsSetting } from '@/components/label-search-fields-setting'
 import { LineSplitCard } from '@/components/line-split-card'
+import { MergeRecordsSetting } from '@/components/merge-records-setting'
 import { PagePresence } from '@/components/page-presence'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { Badge } from '@/components/ui/badge'
@@ -4373,6 +4374,7 @@ function SettingsTab({
       <HeavyListColumnsCard collection={tableName} />
       <BrowserSettingsSection tableName={tableName} />
       <DuplicateCheckCard tableName={tableName} />
+      <MergeRecordsSetting tableName={tableName} />
       <EmptyStateSlugSection tableName={tableName} />
       <RenameCollectionSection tableName={tableName} />
       <AuditDepthSection tableName={tableName} />

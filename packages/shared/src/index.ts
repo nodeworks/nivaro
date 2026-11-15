@@ -429,6 +429,16 @@ export {
   type McpAdminTab,
   McpConnectionsAdminView
 } from './components/McpConnectionsAdminView'
+export {
+  type MergeDoneInfo,
+  MergeRecordsDialog
+} from './components/merge/MergeRecordsDialog'
+export {
+  MergePicker,
+  MergeRecordMenuItems,
+  MergeWithFlow,
+  useMergeAllowed
+} from './components/merge/MergeWithFlow'
 export { MyWorkView } from './components/MyWorkView'
 export {
   type ApiCaller,

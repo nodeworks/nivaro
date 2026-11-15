@@ -215,7 +215,12 @@ import {
 import { columnLengthError } from './item-edit/column-length'
 import { configUpdateReaction } from './item-edit/config-update'
 import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
-import { useDuplicateCheck } from './item-edit/DuplicateNotice'
+import {
+  type DuplicateHint,
+  type DuplicateMergeApi,
+  DuplicateMergeContext,
+  useDuplicateCheck
+} from './item-edit/DuplicateNotice'
 import {
   type CopiedLineChange,
   copiedLineLabel,
@@ -387,6 +392,8 @@ import { type ReadViewLayout, RecordReadView } from './RecordReadView'
 import { ScreenRefreshButton } from './ScreenRefreshButton'
 import { SuggestFormChange } from './support/SuggestFormChange'
 import { SupportRequestDialog } from './support/SupportRequestDialog'
+import { MergeRecordsDialog } from './merge/MergeRecordsDialog'
+import { MergeRecordMenuItems, MergeWithFlow, useMergeAllowed } from './merge/MergeWithFlow'
 
 let formulaCtxHydrated = false
 
@@ -1930,8 +1937,11 @@ function FieldContexts({
   fieldComments,
   partnerNeeds,
   lineLocks = false,
+  duplicateMerge = null,
   children
 }: {
+  /** The duplicate notice's "Merge…" (new records where merging is allowed). */
+  duplicateMerge?: DuplicateMergeApi | null
   affordances: FieldAffordances | null
   personalDefaults: PersonalDefaultsApi
   sources?: Record<string, FieldSource> | null
@@ -1947,7 +1957,11 @@ function FieldContexts({
         <FieldSourcesContext.Provider value={sources ?? null}>
           <FieldCommentsContext.Provider value={fieldComments}>
             <PartnerNeedsContext.Provider value={partnerNeeds ?? null}>
-              <LineLockContext.Provider value={lineLocks}>{children}</LineLockContext.Provider>
+              <LineLockContext.Provider value={lineLocks}>
+                <DuplicateMergeContext.Provider value={duplicateMerge}>
+                  {children}
+                </DuplicateMergeContext.Provider>
+              </LineLockContext.Provider>
             </PartnerNeedsContext.Provider>
           </FieldCommentsContext.Provider>
         </FieldSourcesContext.Provider>
@@ -8483,6 +8497,8 @@ function ItemEditFormView({
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
   // Request a change (#999) — a support ticket about this record.
   const [supportOpen, setSupportOpen] = useState(false)
+  // Merge records (2026-11-14): "Merge with…" in the ⋯ menu opens the picker, then the merge.
+  const [mergeWithOpen, setMergeWithOpen] = useState(false)
   // Suggest a form change (#2609) — about the form, not this record's data.
   const [suggestOpen, setSuggestOpen] = useState(false)
   // The More (or folded tools) button the suggestion was picked from: its popover sits there.
@@ -11628,6 +11644,14 @@ function ItemEditFormView({
     draft,
     stagedLines: pendingO2MRows
   })
+  // "Merge…" on the notice: the draft folds into an existing record (merge records).
+  const [dupMerge, setDupMerge] = useState<DuplicateHint | null>(null)
+  const hasDuplicateHints = Object.keys(duplicateHints).length > 0
+  const mergeAllowedHere = useMergeAllowed(collection, null, isNew && !designOn && hasDuplicateHints)
+  const duplicateMergeApi = useMemo<DuplicateMergeApi | null>(
+    () => (mergeAllowedHere.data?.allowed ? { open: (hint) => setDupMerge(hint) } : null),
+    [mergeAllowedHere.data?.allowed]
+  )
   // Idea 43: "Needed by <partner>" badges, judged on the values the form holds now.
   const partnerNeeds = usePartnerNeedsForm({
     collection,
@@ -13602,6 +13626,7 @@ function ItemEditFormView({
                                 fieldComments={fieldComments}
                                 partnerNeeds={partnerNeeds}
                                 lineLocks={lineLocksOn}
+                                duplicateMerge={duplicateMergeApi}
                               >
                                 {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a
@@ -14870,6 +14895,18 @@ function ItemEditFormView({
                                                   )}
                                                 </>
                                               )}
+                                              {!isNew && itemId && (
+                                                <MergeRecordMenuItems
+                                                  collection={collection}
+                                                  itemId={String(itemId)}
+                                                  onMergeWith={() => setMergeWithOpen(true)}
+                                                  onUndone={() =>
+                                                    void qc.invalidateQueries({
+                                                      queryKey: ['item', collection]
+                                                    })
+                                                  }
+                                                />
+                                              )}
                                               {moreMenuItems}
                                               {canDelete && <div data-nvr-menu-divider />}
                                               {canDelete &&
@@ -15509,6 +15546,30 @@ function ItemEditFormView({
                                       saveMut.mutate()
                                     }}
                                   />
+                                  {isNew && dupMerge && (
+                                    <MergeRecordsDialog
+                                      collection={collection}
+                                      ids={dupMerge.matches.slice(0, 4).map((m) => m.id)}
+                                      draft={{ values: draft }}
+                                      open
+                                      onOpenChange={(o) => {
+                                        if (!o) setDupMerge(null)
+                                      }}
+                                    />
+                                  )}
+                                  {!isNew && itemId && mergeWithOpen && (
+                                    <MergeWithFlow
+                                      collection={collection}
+                                      itemId={String(itemId)}
+                                      open={mergeWithOpen}
+                                      onOpenChange={setMergeWithOpen}
+                                      onMerged={() =>
+                                        void qc.invalidateQueries({
+                                          queryKey: ['item', collection]
+                                        })
+                                      }
+                                    />
+                                  )}
                                   {!isNew && itemId && (
                                     <SupportRequestDialog
                                       open={supportOpen}

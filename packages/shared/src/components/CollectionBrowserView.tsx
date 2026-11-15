@@ -270,6 +270,8 @@ import { LiveRowMark } from './LiveRowMark'
 import { CopyListLinkButton } from './list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from './list/InlineEdit'
 import { MapView } from './MapView'
+import { MergeRecordsDialog } from './merge/MergeRecordsDialog'
+import { useMergeAllowed } from './merge/MergeWithFlow'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
   PICKER_EXCLUDED_TITLE,
@@ -3793,116 +3795,6 @@ function RelatedColumnRoot({
   )
 }
 
-/** Bulk-bar merge form (#63): two selected duplicates — pick the survivor,
- *  preview reference counts (dry run), confirm. Every FK repoints, the
- *  duplicate deletes through trash. Admin-only (the server enforces too). */
-function RecordMergeForm({
-  collection,
-  ids,
-  onDone,
-  onCancel
-}: {
-  collection: string
-  ids: Array<string | number>
-  onDone: (msg: string) => void
-  onCancel: () => void
-}) {
-  const client = useNivaroClient()
-  const [survivor, setSurvivor] = useState<string | number>(ids[0])
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  const [preview, setPreview] = useState<{ references: Record<string, number> } | null>(null)
-  const merged = ids.find((x) => String(x) !== String(survivor))!
-
-  useEffect(() => {
-    setPreview(null)
-    let alive = true
-    void client
-      .request<{ data: { references: Record<string, number> } }>(
-        post(`/record-merge/${collection}`, {
-          survivor_id: survivor,
-          merged_id: merged,
-          dry_run: true
-        })
-      )
-      .then((r) => {
-        if (alive) setPreview(r.data)
-      })
-      .catch(() => {
-        if (alive) setPreview({ references: {} })
-      })
-    return () => {
-      alive = false
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [survivor])
-
-  const refTotal = preview ? Object.values(preview.references).reduce((a, b) => a + b, 0) : null
-  const run = async () => {
-    setBusy(true)
-    setErr(null)
-    try {
-      const r = await client.request<{ data: { delete_error: string | null } }>(
-        post(`/record-merge/${collection}`, { survivor_id: survivor, merged_id: merged })
-      )
-      onDone(
-        r.data.delete_error
-          ? `Merged — references repointed, but the duplicate was not deleted: ${r.data.delete_error}`
-          : `Merged ${merged} into ${survivor}`
-      )
-    } catch (e) {
-      setErr(
-        (e as { response?: { error?: string } })?.response?.error ??
-          userErrorMessage(e, 'Merge failed')
-      )
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <span className='flex flex-wrap items-center gap-2'>
-      <span className='text-[12px] text-slate-300 dark:text-muted-foreground'>Keep</span>
-      {ids.map((id) => (
-        <button
-          key={String(id)}
-          type='button'
-          onClick={() => setSurvivor(id)}
-          className={cn(
-            'h-8 rounded-md border px-3 font-mono text-[12px]',
-            String(survivor) === String(id)
-              ? 'border-nvr-cyan bg-nvr-cyan/[0.13] text-[#7fe7ff]'
-              : 'border-white/20 dark:border-border text-slate-300 dark:text-muted-foreground hover:bg-white/10 dark:hover:bg-muted'
-          )}
-        >
-          {String(id)}
-        </button>
-      ))}
-      <span className='text-[11.5px] text-slate-300 dark:text-muted-foreground'>
-        {refTotal == null
-          ? 'Scanning references…'
-          : `${refTotal.toLocaleString()} reference(s) will repoint · ${merged} goes to trash`}
-      </span>
-      {err && <span className='text-[11.5px] text-red-300'>{err}</span>}
-      <button
-        type='button'
-        disabled={busy || refTotal == null}
-        onClick={() => void run()}
-        className='h-8 rounded-md bg-red-500 px-3 text-[12.5px] font-semibold text-white dark:text-foreground disabled:opacity-50'
-      >
-        {busy ? 'Merging…' : 'Merge'}
-      </button>
-      <button
-        type='button'
-        onClick={onCancel}
-        className='h-8 px-2 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:text-white dark:hover:text-foreground'
-      >
-        Cancel
-      </button>
-    </span>
-  )
-}
-
 // ─── Bulk bar (admin components/bulk-action-bar.tsx port) ─────────────────────
 
 function BulkBar({
@@ -3940,9 +3832,13 @@ function BulkBar({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const itemNav = useItemNavigation()
-  const [mode, setMode] = useState<
-    'actions' | 'transition' | 'message' | 'confirm-delete' | 'merge'
-  >('actions')
+  const [mode, setMode] = useState<'actions' | 'transition' | 'message' | 'confirm-delete'>(
+    'actions'
+  )
+  // Merge records (2026-11-14): 2–5 selected records → the merge screen.
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const mergedRef = useRef(false)
+  const mergeAllowed = useMergeAllowed(collection, null, selectedIds.length >= 2)
   // Built-in operations are registry entries too (Data Model → Settings →
   // Bulk actions): a collection can switch them off or restrict who sees them.
   const builtin = useBuiltinGate([collection], registryKeys)
@@ -4217,16 +4113,20 @@ function BulkBar({
               className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
             />
           )}
-          {builtin('merge') && selectedIds.length === 2 && auth.isAdmin && (
-            <button
-              type='button'
-              onClick={() => setMode('merge')}
-              title='Merge these two duplicates into one — every reference repoints to the survivor'
-              className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
-            >
-              Merge…
-            </button>
-          )}
+          {builtin('merge') &&
+            mergeAllowed.data?.may_merge &&
+            selectedIds.length >= 2 &&
+            selectedIds.length <= 5 && (
+              <button
+                type='button'
+                onClick={() => setMergeOpen(true)}
+                data-tip='Merge these into one record: pick each value, keep one, discard the rest'
+                className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
+                data-bulk-merge
+              >
+                Merge…
+              </button>
+            )}
           {/* Registry bulk actions (Data Model → Settings → Bulk actions):
               On Hold / Cancel / … — access + guards enforced server-side. */}
           <BulkActionButtons
@@ -4283,17 +4183,25 @@ function BulkBar({
           )}
         </span>
       )}
-      {mode === 'merge' && (
-        <RecordMergeForm
+      {mergeOpen && (
+        <MergeRecordsDialog
           collection={collection}
-          ids={selectedIds.slice(0, 2)}
-          onDone={(msg) => {
-            setNote(msg)
-            onSuccess()
-            onClear()
-            setMode('actions')
+          ids={selectedIds.slice(0, 5)}
+          open
+          onOpenChange={(o) => {
+            if (o) return
+            setMergeOpen(false)
+            // The selection (and this bar) stays until the dialog closes, so its Done
+            // step and Undo stay on screen.
+            if (mergedRef.current) {
+              mergedRef.current = false
+              onSuccess()
+              onClear()
+            }
           }}
-          onCancel={() => setMode('actions')}
+          onMerged={() => {
+            mergedRef.current = true
+          }}
         />
       )}
       {mode === 'message' && (

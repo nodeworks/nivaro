@@ -367,7 +367,7 @@
           <a class="docs-nav-item" data-section="trash" href="#trash">Trash &amp; Restore</a>
           <a class="docs-nav-item" data-section="time-travel" href="#time-travel">Time-Travel Restore</a>
           <a class="docs-nav-item" data-section="audit-levels" href="#audit-levels">Audit Levels</a>
-          <a class="docs-nav-item" data-section="record-merge" href="#record-merge">Record Merge</a>
+          <a class="docs-nav-item" data-section="record-merge" href="#record-merge">Merge Records</a>
           <a class="docs-nav-item" data-section="spreadsheet-mode" href="#spreadsheet-mode">Spreadsheet Mode</a>
           <a class="docs-nav-item" data-section="layout-forms" href="#layout-forms">Layout-Backed Forms</a>
           <a class="docs-nav-item" data-section="content-ops-draft-publish" href="#content-ops-draft-publish">Draft / Publish</a>
@@ -13255,18 +13255,42 @@ PATCH /api/collections/chat_messages
           <!-- /SYNC:audit-levels -->
         </div>
 
-        <div class="doc-section" id="s-record-merge" data-toc='[{"id":"record-merge","label":"Record Merge"}]'>
+        <div class="doc-section" id="s-record-merge" data-toc='[{"id":"record-merge","label":"Merge Records"},{"id":"record-merge-start","label":"Where to start"},{"id":"record-merge-screen","label":"The merge screen"},{"id":"record-merge-rules","label":"What is checked"},{"id":"record-merge-setting","label":"Allow merging"},{"id":"record-merge-api","label":"API"}]'>
           <!-- SYNC:record-merge -->
-          <h1 class="doc-h1" id="record-merge">Record Merge</h1>
-          <p class="doc-p">Combine duplicate records into one survivor. Administrators select 2–5 rows in the collection browser and hit Merge: a side-by-side sheet shows every differing field, you pick the surviving record (defaults to the most-referenced) and which value wins per field.</p>
-          <pre class="doc-pre"><code>GET  /api/merge/preview?collection=&amp;ids=a,b   # field values + inbound reference counts
-POST /api/merge  { collection, survivor_id, loser_ids, field_choices }</code></pre>
+          <h1 class="doc-h1" id="record-merge">Merge Records</h1>
+          <p class="doc-p">Two or more records that are really the same thing become one. You choose each value from any of them — or combine or type it — which record survives, and what happens to everything linked to the others.</p>
+          <h2 class="doc-h2" id="record-merge-start">Where to start</h2>
           <ul class="doc-ul">
-            <li>Every inbound reference repoints to the survivor: M2O foreign keys in bulk, M2M junction rows individually (rows that would duplicate an existing pairing are dropped).</li>
-            <li>Chosen field values apply through the normal update path — hooks, validation and row security run.</li>
-            <li>Losers are deleted through the items service, so they land in Trash and stay restorable.</li>
-            <li>Administrators only — both routes (preview and merge) answer 403 to everyone else.</li>
+            <li>A list: select 2 to 5 records, then Merge… in the selection bar.</li>
+            <li>A record: ⋯ → Merge with… — likely duplicates are offered first, or search for the others.</li>
+            <li>The duplicate warning on a new record: Merge… folds what you typed into the existing record instead of saving a copy.</li>
           </ul>
+          <h2 class="doc-h2" id="record-merge-screen">The merge screen</h2>
+          <ul class="doc-ul">
+            <li>One column per record and a Result column. Click a value in any column to use it; Combine joins long text line by line, rich text by paragraph, and tags or multi-selects as a union; Edit lets you type a new value.</li>
+            <li>Per record: Keep (one record — it keeps its id, number, history and pipeline step), Discard (it goes to the trash with a “Merged into …” note and can be restored) or Leave alone (it only lends values).</li>
+            <li>Lines, links from other lists, many-to-many links and files, comments, tasks and related-record links on the discarded records are counted. Each one moves to the kept record by default; choose Leave to keep it with the discarded record.</li>
+            <li>Review lists every field that changes (now → after, and where the value came from) and every move before anything is saved.</li>
+          </ul>
+          <h2 class="doc-h2" id="record-merge-rules">What is checked</h2>
+          <ul class="doc-ul">
+            <li>Everything is judged as you: you must be able to change the kept record and delete the discarded ones. Someone else editing a record, a post-approval lock or a record already sent along its process refuses with the plain reason.</li>
+            <li>Rows you cannot see or change are never moved by you — the move is offered only when you can move all of them.</li>
+            <li>A discarded record that was sent to a partner (it holds an id there) shows a warning; only an administrator can discard it.</li>
+            <li>Open approvals on the discarded records are closed and their open tasks closed with a merge note (moved tasks stay open on the kept record).</li>
+            <li>If any step fails, what was already done is put back and nothing stays half-merged.</li>
+            <li>Undo is offered for 24 hours (on the done screen and in the kept record’s ⋯ menu): the discarded records come back from the trash, moved rows go back, and the kept record’s fields go back — a field someone changed after the merge keeps the newer value.</li>
+          </ul>
+          <h2 class="doc-h2" id="record-merge-setting">Allow merging</h2>
+          <p class="doc-p">Data Model → a collection → Settings → Allow merging. Without a setting it follows the duplicate warning: merging is offered wherever duplicate warnings are on. Turn it off where people must never merge records; scripts/merge-records-mode.mjs does it for several collections at once (dry run first, then --execute).</p>
+          <h2 class="doc-h2" id="record-merge-api">API</h2>
+          <pre class="doc-pre"><code>GET  /api/record-merge/:collection/allowed?item=        # switch + may I merge here, undo offer
+GET  /api/record-merge/:collection/candidates?of=&amp;q=   # likely duplicates, then search
+GET  /api/record-merge/:collection/plan?ids=a,b        # the merge screen's data (as you)
+POST /api/record-merge/:collection/apply  { survivor, discard: [], keep?: [], values: {}, relations: { &lt;key&gt;: 'move' | 'leave' } }
+GET  /api/record-merge/undo/:mergeId                   # still undoable?
+POST /api/record-merge/undo/:mergeId                   # undo (24 h)</code></pre>
+          <div class="doc-note">The older administrator-only one-step merge (POST /api/record-merge/:collection {survivor_id, merged_id}, POST /api/merge) stays for scripts; it does not check the person, locks or partners.</div>
           <!-- /SYNC:record-merge -->
         </div>
 
