@@ -110,20 +110,45 @@ function shareTargetName(share: ScreenShareInfo): string {
  * The bar the sharing person sees on every screen. Always-dark so it reads as "this is not the
  * page" in light and dark mode; never recorded itself (`data-replay-block`).
  */
+/** Room scrolling content keeps under the bar: its height + 16 px + the phone's safe area. */
+const SHARE_BAR_SPACE = 'calc(2.5rem + 1rem + 1rem + env(safe-area-inset-bottom))'
+
 export function ScreenShareBar() {
   const status = useScreenShareStatus()
   const left = useCountdown(status && !status.ended ? status.share.expires_at : null)
+  // While the bar shows, scrolling content reserves room under it (`--nvr-share-bar`).
+  const showing = !!status
+  useEffect(() => {
+    if (!showing || typeof document === 'undefined') return
+    const root = document.documentElement
+    root.style.setProperty('--nvr-share-bar', SHARE_BAR_SPACE)
+    root.setAttribute('data-screen-sharing', '')
+    return () => {
+      root.style.removeProperty('--nvr-share-bar')
+      root.removeAttribute('data-screen-sharing')
+    }
+  }, [showing])
   if (!status || typeof document === 'undefined') return null
   const { share, watching, ended } = status
   const who = shareTargetName(share)
+  const watchText =
+    watching.length === 0
+      ? 'not opened yet'
+      : share.to.kind === 'user'
+        ? 'watching now'
+        : `${watching.length === 1 ? watching[0] : `${watching.length} people`} watching`
   return createPortal(
     <div
       role='status'
       aria-live='polite'
       data-replay-block
       data-screen-share-bar={ended ? 'ended' : 'live'}
-      className='nvr-no-record pointer-events-none fixed inset-x-0 bottom-4 z-[160] flex justify-center px-4'
+      className='nvr-no-record pointer-events-none fixed inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] z-[160] flex justify-center px-4'
     >
+      {/* The app's page area (both hosts use #main-content) keeps clear of the bar too. */}
+      <style>
+        {'html[data-screen-sharing] #main-content{padding-bottom:var(--nvr-share-bar)}'}
+      </style>
       <div className='pointer-events-auto flex max-w-full items-center gap-3 rounded-full border border-white/10 bg-[#111827] py-1.5 pl-3.5 pr-1.5 text-[12.5px] text-slate-100 shadow-[0_8px_24px_-6px_rgba(15,23,42,0.45)]'>
         {ended ? (
           <span className='px-1 py-1 text-slate-300'>{ended}</span>
@@ -133,15 +158,15 @@ export function ScreenShareBar() {
               <span className='absolute inset-0 rounded-full bg-red-500 motion-safe:animate-ping motion-safe:opacity-60' />
               <span className='relative h-2.5 w-2.5 rounded-full bg-red-500' />
             </span>
+            {/* Narrow screens drop the name before the watching state: "Sharing · watching now". */}
             <span className='min-w-0 truncate'>
-              Sharing this app with <b className='font-semibold text-white'>{who}</b>
-              <span className='hidden text-slate-400 sm:inline'>
+              <span className='sm:hidden'>Sharing</span>
+              <span className='hidden sm:inline'>
+                Sharing this app with <b className='font-semibold text-white'>{who}</b>
+              </span>
+              <span className='text-slate-400' data-screen-share-watching>
                 {' · '}
-                {watching.length === 0
-                  ? 'not opened yet'
-                  : share.to.kind === 'user'
-                    ? 'watching now'
-                    : `${watching.length === 1 ? watching[0] : `${watching.length} people`} watching`}
+                {watchText}
               </span>
             </span>
             <span
@@ -182,6 +207,7 @@ export function ScreenSharePanel({
   const available = useScreenShareAvailable()
   const running = useScreenShareStatus()
   const [watched, setWatched] = useState<ScreenShareInfo | null>(null)
+  const [endedWhy, setEndedWhy] = useState<string | null>(null)
   const { data } = useQuery({
     queryKey: shareKey(ticketId),
     queryFn: () =>
@@ -198,7 +224,11 @@ export function ScreenSharePanel({
       if (Number(p?.ticket) === ticketId)
         void qc.invalidateQueries({ queryKey: shareKey(ticketId) })
     }
-    const offs = [rt.on('screenshare:state', refetch), rt.on('screenshare:ended', refetch)]
+    const onEnded = (p: { ticket?: unknown; reason?: unknown } | null) => {
+      if (Number(p?.ticket) === ticketId && typeof p?.reason === 'string') setEndedWhy(p.reason)
+      refetch(p)
+    }
+    const offs = [rt.on('screenshare:state', refetch), rt.on('screenshare:ended', onEnded)]
     return () => {
       for (const off of offs) off()
     }
@@ -241,7 +271,7 @@ export function ScreenSharePanel({
         className='flex items-center gap-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'
       >
         <MonitorUp className='h-3.5 w-3.5 shrink-0' />
-        {watched.sharer_name} stopped sharing their screen.
+        {endedSentence(watched.sharer_name, endedWhy)}
       </p>
     )
   if (data.active && data.share)
@@ -257,11 +287,28 @@ export function ScreenSharePanel({
   return null
 }
 
+/** Why a share the support person watched ended, in plain words. */
+export function endedSentence(name: string, reason: string | null | undefined): string {
+  switch (reason) {
+    case 'page':
+    case 'stale':
+      return `${name}'s page closed, so sharing ended.`
+    case 'expired':
+      return 'Sharing ended after 30 minutes.'
+    case 'moved':
+      return 'Sharing ended because the request moved to someone else.'
+    case 'closed':
+      return 'Sharing ended because the request was closed.'
+    default:
+      return `${name} stopped sharing their screen.`
+  }
+}
+
 function SharingNow({ name, onStop }: { name: string | null; onStop: () => void }) {
   return (
     <div
       data-screen-share-card='sharing'
-      className='flex items-center gap-3 rounded-lg border border-red-200 bg-red-50/70 px-3.5 py-3 dark:border-red-500/25 dark:bg-red-500/[0.07]'
+      className='flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-3 dark:border-border dark:bg-white/[0.03]'
     >
       <span className='relative flex h-2.5 w-2.5 shrink-0' aria-hidden>
         <span className='absolute inset-0 rounded-full bg-red-500 motion-safe:animate-ping motion-safe:opacity-60' />
@@ -274,7 +321,7 @@ function SharingNow({ name, onStop }: { name: string | null; onStop: () => void 
         type='button'
         data-screen-share-stop-card
         onClick={onStop}
-        className='h-7 shrink-0 rounded-md border border-red-300 bg-white px-3 text-[12px] font-medium text-red-700 hover:bg-red-50 dark:border-red-500/40 dark:bg-transparent dark:text-red-300 dark:hover:bg-red-500/10'
+        className='h-7 shrink-0 rounded-md border border-red-300 bg-white px-3 text-[12px] font-medium text-red-700 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 dark:border-red-500/40 dark:bg-transparent dark:text-red-300 dark:hover:bg-red-500/10'
       >
         Stop sharing
       </button>
@@ -333,8 +380,8 @@ function StartCard({ ticketId, answer }: { ticketId: number; answer: ShareAnswer
           </p>
           <p className='mt-1.5 flex items-start gap-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
             <ShieldCheck className='mt-px h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400' />
-            What you type and the values on records are hidden from them, the same as screen
-            recordings. Stops when you press Stop, close the page, or after 30 minutes.
+            What you type and the values on records are hidden from them. Stops when you press Stop,
+            close the page, or after 30 minutes.
           </p>
           {canStart ? (
             <button
@@ -401,6 +448,7 @@ export function LiveScreenViewer({
     'joining' | 'waiting' | 'live' | 'denied' | 'ended' | 'unavailable'
   >('joining')
   const [wide, setWide] = useState(false)
+  const [endedReason, setEndedReason] = useState<string | null>(null)
   const ticket = share.ticket
 
   const fitToBox = useCallback(() => {
@@ -408,8 +456,12 @@ export function LiveScreenViewer({
     const size = sizeRef.current
     const wrapper = replayerRef.current?.wrapper
     if (!box || !size || !wrapper) return
-    const scale = Math.min(1, box.clientWidth / Math.max(1, size.width))
+    // Fill the frame's width at the recording's aspect ratio (up or down), the frame's height
+    // follows, and the page is centred should it ever come out narrower than the frame.
+    const width = box.clientWidth
+    const scale = width / Math.max(1, size.width)
     wrapper.style.transform = `scale(${scale})`
+    wrapper.style.left = `${Math.max(0, Math.round((width - size.width * scale) / 2))}px`
     box.style.height = `${Math.round(size.height * scale)}px`
   }, [])
 
@@ -485,7 +537,9 @@ export function LiveScreenViewer({
         if (alive && Number(p?.ticket) === ticket) setPhase('denied')
       }),
       rt.on('screenshare:ended', (p) => {
-        if (alive && Number(p?.ticket) === ticket) setPhase('ended')
+        if (!alive || Number(p?.ticket) !== ticket) return
+        setEndedReason(typeof p?.reason === 'string' ? p.reason : null)
+        setPhase('ended')
       })
     ]
     void loading.then((R) => {
@@ -507,6 +561,10 @@ export function LiveScreenViewer({
       if (st.state === 'live' && Replayer) rt.emit('screenshare:watch', { ticket })
     })
     if (offStatus) offs.push(offStatus)
+    const observer =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => fitToBox()) : null
+    if (boxRef.current) observer?.observe(boxRef.current)
+    offs.push(() => observer?.disconnect())
     const onResize = () => fitToBox()
     window.addEventListener('resize', onResize)
     return () => {
@@ -583,7 +641,7 @@ export function LiveScreenViewer({
         {phase !== 'live' && (
           <div className='absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-6 text-center text-[12px] text-slate-500 dark:text-muted-foreground'>
             {phase === 'ended' ? (
-              <span>{share.sharer_name} stopped sharing.</span>
+              <span>{endedSentence(share.sharer_name, endedReason)}</span>
             ) : phase === 'denied' ? (
               <span>This screen share is only for the person working this request.</span>
             ) : phase === 'unavailable' ? (
