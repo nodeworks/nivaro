@@ -4872,6 +4872,9 @@ export function QueueWorklist({
             </button>
           )}
           <div className='ml-auto flex flex-wrap items-center gap-2'>
+            {/* First, so its kept-empty slot joins the free space on the left instead of
+                opening a gap between the buttons. */}
+            {!viewersInHeader && <ListViewers kind='queue' id={queueId} />}
             {view === 'table' && (
               <Popover>
                 <PopoverTrigger asChild>
@@ -5007,7 +5010,6 @@ export function QueueWorklist({
                 return s ? `${name} — ${s}` : name
               }}
             />
-            {!viewersInHeader && <ListViewers kind='queue' id={queueId} />}
             {view === 'table' && (
               <button
                 type='button'

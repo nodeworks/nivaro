@@ -8911,6 +8911,8 @@ export function CollectionBrowserView({
             </button>
           )
         })}
+        {/* Before the buttons, so its kept-empty slot reads as free space, not a gap. */}
+        {!viewersInHeader && <ListViewers kind='list' id={collection} />}
         <RealtimeStaleMark className='h-8' />
         <FocusModeToggle />
         {realtime && collection && (
@@ -8955,7 +8957,6 @@ export function CollectionBrowserView({
             return s ? `${name} — ${s}` : name
           }}
         />
-        {!viewersInHeader && <ListViewers kind='list' id={collection} />}
         {isAdmin && bc.copy_as !== false && (
           <CopyAsButton
             collection={collection}
