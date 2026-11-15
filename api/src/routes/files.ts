@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { posix } from 'node:path'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import mime from 'mime-types'
@@ -19,6 +18,7 @@ import {
   attachFileToRecord
 } from '../services/file-attach.js'
 import { logFileDownload } from '../services/file-downloads.js'
+import { startFileProcessing, transformCacheKey } from '../services/file-processing.js'
 import {
   STORED_FILE_SECURITY_HEADERS,
   servingNeedsHead,
@@ -174,6 +174,8 @@ export async function filesRoutes(app: FastifyInstance) {
       user: req.user?.id,
       req
     })
+    // Thumbnail / text extraction in the background; the chip shows "Processing…" meanwhile.
+    startFileProcessing(file)
     return reply.code(201).send({ data: file })
   })
 
@@ -540,13 +542,10 @@ export async function filesRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Invalid dimensions' })
     }
 
-    const paramsHash = createHash('sha1')
-      .update(`w=${width ?? ''}&h=${height ?? ''}&fit=${fit}&format=${format}&q=${quality}`)
-      .digest('hex')
-      .slice(0, 16)
     // Built from the resolved row only: the caller's string may carry path segments the
-    // database ignores when matching (SQL Server reads "<id>/../<other>" as "<id>").
-    const cacheKey = `transforms/${String(file.id).toLowerCase()}/${paramsHash}.${format}`
+    // database ignores when matching (SQL Server reads "<id>/../<other>" as "<id>"). The same
+    // key the upload processor fills for the chip thumbnail (services/file-processing.ts).
+    const cacheKey = transformCacheKey(String(file.id), { width, height, fit, format, quality })
     const contentType = `image/${format}`
     const storage = getStorage()
 

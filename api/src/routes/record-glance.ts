@@ -1,0 +1,83 @@
+import type { FastifyInstance } from 'fastify'
+import { requireAuth } from '../middleware/authenticate.js'
+import { unreadableFileIds } from '../services/file-access.js'
+import { readProcessingStates } from '../services/file-processing.js'
+import { recordCard } from '../services/record-card.js'
+import { clampSince, recordChangesSince } from '../services/move-unseen.js'
+import { recordVisibleTo } from '../services/revision-access.js'
+
+/**
+ * Small reads a record page and its links make about the record's CURRENT state (rt3):
+ *
+ *   GET /api/records/:collection/:id/unseen?since=<iso>  — what others changed since the
+ *       mover's page read the record (the move confirm lists what they have not seen, #14)
+ *   GET /api/records/:collection/:id/card                — hover card: name, step, owners,
+ *       key amounts (#16)
+ *   GET /api/files/processing?ids=a,b                    — file processing status (#17)
+ *
+ * Every one reads AS THE CALLER: a record they cannot read is 404 (never "exists but hidden"),
+ * values are cut to their field list, a file they cannot read is left out of the answer.
+ */
+const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+const ID = /^[A-Za-z0-9_.:-]{1,64}$/
+const FILE_IDS_MAX = 100
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export async function recordGlanceRoutes(app: FastifyInstance) {
+  app.get<{
+    Params: { collection: string; id: string }
+    Querystring: { since?: string; fields_since?: string }
+  }>(
+    '/records/:collection/:id/unseen',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, id } = req.params
+      if (!NAME.test(collection) || !ID.test(id))
+        return reply.code(400).send({ error: 'Name a record' })
+      const since = clampSince(req.query.since)
+      if (!since) return reply.code(400).send({ error: 'since must be a time' })
+      if (/^(nivaro_|directus_)/i.test(collection) || !(await recordVisibleTo(req, collection, id)))
+        return reply.code(404).send({ error: 'Not found' })
+      const data = await recordChangesSince(req.user!, !!req.isAdmin, collection, id, since, {
+        fieldsSince: clampSince(req.query.fields_since)
+      })
+      return reply.send({ data })
+    }
+  )
+
+  app.get<{ Params: { collection: string; id: string } }>(
+    '/records/:collection/:id/card',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, id } = req.params
+      if (!NAME.test(collection) || !ID.test(id))
+        return reply.code(400).send({ error: 'Name a record' })
+      const card = await recordCard(req.user!, collection, id, req.workspaceId ?? undefined)
+      if (!card) return reply.code(404).send({ error: 'Not found' })
+      return reply.send({ data: card })
+    }
+  )
+
+  app.get<{ Querystring: { ids?: string } }>(
+    '/files/processing',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const asked = [
+        ...new Set(
+          String(req.query.ids ?? '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter((s) => UUID.test(s))
+        )
+      ].slice(0, FILE_IDS_MAX)
+      if (asked.length === 0) return reply.send({ data: {} })
+      const hidden = new Set((await unreadableFileIds(asked, req)).map((i) => i.toLowerCase()))
+      const ids = asked.filter((i) => !hidden.has(i.toLowerCase()))
+      const states = await readProcessingStates(ids)
+      const data: Record<string, { status: string; steps: string[] }> = {}
+      for (const [fid, s] of Object.entries(states))
+        data[fid] = { status: s.status, steps: s.steps }
+      return reply.send({ data })
+    }
+  )
+}

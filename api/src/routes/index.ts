@@ -264,6 +264,7 @@ import { recordMergeRoutes } from './record-merge.js'
 import { recordMetaRoutes } from './record-meta.js'
 import { recordPromotionRoutes } from './record-promotion.js'
 import { recordTemplatesRoutes } from './record-templates.js'
+import { recordGlanceRoutes } from './record-glance.js'
 import { recordViewRoutes } from './record-views.js'
 import { referencedByRoutes } from './referenced-by.js'
 import { releaseRunsRoutes } from './release-runs.js'
@@ -482,6 +483,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // What the record form shows about partner integrations (#609 #615 #616 #617).
   await app.register(recordIntegrationsRoutes)
   await app.register(recordViewRoutes)
+  // rt3 #14/#16/#17 — unseen changes before a move, record hover cards, file processing status.
+  await app.register(recordGlanceRoutes)
   // #3227 — role starter sidebar layouts (a person's own rides preferences.nav_layout)
   await app.register(navLayoutRoutes, { prefix: '/nav-layout' })
   // Collections page: collections an admin pins to the top for everyone
