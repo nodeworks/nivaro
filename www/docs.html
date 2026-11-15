@@ -536,6 +536,7 @@
           <a class="docs-nav-item" data-section="form-collaboration" href="#form-collaboration">Form Collaboration &amp; Drafts</a>
           <a class="docs-nav-item" data-section="duplicate-warnings" href="#duplicate-warnings">Duplicate Warnings</a>
           <a class="docs-nav-item" data-section="partner-needs" href="#partner-needs">Partner Needs on the Form</a>
+          <a class="docs-nav-item" data-section="line-split" href="#line-split">Move Lines to a New Record</a>
           <a class="docs-nav-item" data-section="list-signals" href="#list-signals">Fulfilment, Send-backs &amp; Back to Queue</a>
           <a class="docs-nav-item" data-section="import-from-url" href="#import-from-url">Bulk Import from URL</a>
           <a class="docs-nav-item" data-section="ai-field-mapping" href="#ai-field-mapping">AI Field Mapping</a>
@@ -18271,6 +18272,30 @@ GET /api/duplicates/unit_types/check?values={"name":"mx480"}&amp;exclude=&lt;id&
         <div class="doc-section" id="s-partner-needs" data-toc='[]'>
           <!-- SYNC:partner-needs -->
           <!-- /SYNC:partner-needs -->
+        </div>
+
+        <div class="doc-section" id="s-line-split" data-toc='[{"id":"line-split","label":"Move Lines to a New Record"},{"id":"line-split-use","label":"On a record"},{"id":"line-split-who","label":"Who may do it"},{"id":"line-split-copy","label":"What is copied"},{"id":"line-split-setup","label":"Turning it on (administrators)"},{"id":"line-split-api","label":"API"}]'>
+          <!-- SYNC:line-split -->
+          <h1 class="doc-h1" id="line-split">Move Lines to a New Record</h1>
+          <p class="doc-p">Sometimes part of a request ships now and the rest later, or some lines need a different warehouse. Instead of deleting lines and typing a second request by hand, people tick the lines and move them to a new record. The details are copied, the ticked lines move (they keep their history), and both records say where the lines went.</p>
+          <h2 class="doc-h2" id="line-split-use">On a record</h2>
+          <ul class="doc-ul">
+            <li>In the line grid, press **Select rows**, tick the lines to move, then **Move N to a new …**. A short panel says what will happen; **Move N lines** does it.</li>
+            <li>The new record gets this record’s details and starts at the first step of its pipeline, like any new record. The ticked lines move onto it; the others stay.</li>
+            <li>Both records get a note in their Notes thread — “Moved 3 lines to a new record” and “Created from another record — 3 lines moved here” — with a link to the other one. History shows the same.</li>
+            <li>A message offers **Open the new …**. The record you were on stays open, without the moved lines.</li>
+            <li>At least one line must stay and one must move. To take every line, use More → Duplicate instead.</li>
+            <li>Only saved lines can move: save new lines and line changes first.</li>
+          </ul>
+          <h2 class="doc-h2" id="line-split-who">Who may do it</h2>
+          <p class="doc-p">The person must be able to change the record and its lines, and to create records of that kind. A record someone else is editing, or one locked while it waits on approvers (or locked for administrators after approval), refuses the move with the reason in plain words. Nothing is changed when any line is refused: the new record and every moved line are put back.</p>
+          <h2 class="doc-h2" id="line-split-copy">What is copied</h2>
+          <p class="doc-p">The same fields More → Duplicate copies: what people see and type on the form. Never copied: the id, created/updated stamps, generated ids (they get a new number), calculated values, hidden fields (integration ids and status mirrors), read-only fields, fields marked “do not duplicate”, the pipeline state, and the record’s files. Many-to-many lists (zones, years, people) are copied unless the setting is off. Only what the person could set on a new record copies: fields outside their field permissions and admin-only fields (for non-administrators) take their defaults, and each line moves as their own change, so a link they may not change refuses the move.</p>
+          <h2 class="doc-h2" id="line-split-setup">Turning it on (administrators)</h2>
+          <p class="doc-p">**Data Model → a collection → Settings → Move lines to a new record.** Off by default. Switch it on, pick which line lists can move, and click any detail that should stay behind (a partner’s status, an order number). Optionally pick a “Split from” link field that points back to the original record. The setting is stored as <code class="doc-code">browser_config.line_split</code> on the collection: <code class="doc-code">{enabled, relations: ["&lt;line collection&gt;.&lt;link field&gt;"], skip_fields?, link_field?, copy_links?}</code>.</p>
+          <h2 class="doc-h2" id="line-split-api">API</h2>
+          <p class="doc-p"><code class="doc-code">POST /api/record-split/:collection/:id</code> with <code class="doc-code">{relation: "&lt;line collection&gt;.&lt;link field&gt;", line_ids: [...], values?: {...}}</code> answers <code class="doc-code">201 {data: {id, readable, moved, relation, field, link_failures}}</code>. <code class="doc-code">values</code> sets details of the new record that differ (only fields the copy itself could carry). Refusals answer a plain <code class="doc-code">error</code> and a <code class="doc-code">code</code>: <code class="doc-code">SPLIT_OFF</code>, <code class="doc-code">SPLIT_RELATION</code>, <code class="doc-code">SPLIT_NO_LINES</code>, <code class="doc-code">SPLIT_KEEP_ONE</code>, <code class="doc-code">SPLIT_LINE_NOT_ON_RECORD</code>, <code class="doc-code">EDIT_LOCKED</code>, <code class="doc-code">RECORD_LOCKED</code>. It is one write: the record is created with <code class="doc-code">{&lt;lines field&gt;: {move: [ids]}}</code>, the nested one-to-many shape any create or update can use to move existing rows onto a record.</p>
+          <!-- /SYNC:line-split -->
         </div>
 
         <div class="doc-section" id="s-list-signals" data-toc='[{"id":"list-signals","label":"Fulfilment, Send-backs &amp; Back to Queue"},{"id":"list-signals-fulfilment","label":"Shipped n / m on lists"},{"id":"list-signals-send-backs","label":"Sent back"},{"id":"list-signals-back","label":"Back to the queue"},{"id":"list-signals-open-tabs","label":"Open in tabs"},{"id":"list-signals-recent","label":"Recently viewed"},{"id":"list-signals-owner-load","label":"Owner load"},{"id":"list-signals-saved-view-widget","label":"Dashboard widgets from a saved view"},{"id":"list-signals-sla-presets","label":"SLA duration presets"},{"id":"list-signals-row-flags","label":"Row flags on a catalog picker"},{"id":"list-signals-facet-builder","label":"Facet builders on a catalog picker"},{"id":"list-signals-unseen","label":"Changed since you looked"},{"id":"list-signals-formula-columns","label":"Formula columns"},{"id":"list-signals-role-default","label":"Default view per role"},{"id":"list-signals-heavy-columns","label":"Heavy list columns"},{"id":"list-signals-tree","label":"Tree view and hierarchy scope"}]'>

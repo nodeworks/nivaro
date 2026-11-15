@@ -257,6 +257,7 @@ import {
 import { RowWatchButton } from './RowWatchButton'
 import { RuleProvenanceChip } from './RuleProvenancePopover'
 import { type GridSetAllConfig, normalizeSetAllRows, SetAllRowsButton } from './SetAllRowsButton'
+import { SplitLinesButton } from './SplitLinesButton'
 import type { CMSField, CMSRelation, NestedOps } from './types'
 
 // ── ERP error-blob mining (submission_errors) ────────────────────────────────
@@ -8526,6 +8527,24 @@ export function InlineTableField({
               <SquarePen className='h-3 w-3' aria-hidden='true' />
               Edit {selectedIds.size} selected…
             </button>
+          )}
+          {selectColOn && selectedIds.size > 0 && !isNew && !!parentCollection && (
+            // Idea 4: the ticked lines leave for a new record (off unless the
+            // parent collection turns it on for this line list).
+            <SplitLinesButton
+              parentCollection={parentCollection}
+              parentId={String(parentId)}
+              lineCollection={relatedCollection}
+              linkField={manyField}
+              selectedIds={[...selectedIds].filter((k) => !k.startsWith('pending:'))}
+              selectedUnsaved={[...selectedIds].filter((k) => k.startsWith('pending:')).length}
+              totalSaved={Math.max(0, rows.length - pendingDeletes.size)}
+              unsavedEdits={isPendingMode && (pendingEdits.size > 0 || pendingDeletes.size > 0)}
+              onMoved={() => {
+                setSelectedIds(new Set())
+                setSelectMode(false)
+              }}
+            />
           )}
           <button
             type='button'

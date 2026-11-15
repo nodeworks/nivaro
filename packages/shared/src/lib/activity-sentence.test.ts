@@ -469,3 +469,24 @@ describe('o2m rows', () => {
     )
   })
 })
+
+describe('split sentences (idea 4)', () => {
+  it('says lines moved to a new record, never the other record from the log', () => {
+    const out: ActivityEntryInput = {
+      action: 'split-out',
+      collection: 'purchase_orders',
+      item: '4471',
+      comment: '{"to":"4480","field":"lines","lines":3}'
+    }
+    expect(activityPredicate(out, labels)).toBe('moved 3 lines of PO 4471 to a new record')
+    expect(
+      activityPredicate(
+        { action: 'split-in', collection: 'purchase_orders', item: '4471', comment: '{"lines":1}' },
+        labels
+      )
+    ).toBe('created PO 4471 from 1 line of another record')
+    expect(
+      activityPredicate({ action: 'split-out', collection: 'purchase_orders', comment: 'x' })
+    ).toBe('moved lines to a new record')
+  })
+})

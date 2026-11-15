@@ -770,7 +770,13 @@ export async function loadRecordNotes(
     ...ownReasons
       .filter((a) => {
         const action = String(a.action ?? '').toLowerCase()
-        return !action.includes('transition') && !action.startsWith('lock-')
+        // A split (`split-*`) is said by its own source (routes/record-split.ts),
+        // with a link to the other record; its comment is machine JSON.
+        return (
+          !action.includes('transition') &&
+          !action.startsWith('lock-') &&
+          !action.startsWith('split-')
+        )
       })
       .map((a) => ({
         id: `reason:${a.id}`,
