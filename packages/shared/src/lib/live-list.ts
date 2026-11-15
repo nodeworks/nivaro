@@ -378,6 +378,8 @@ export function mayAffectMatch(
   const changed = event.changed_fields
   if (!changed || changed.length === 0) return true
   if (changed.every((f) => f.startsWith('$'))) return false
+  // "Changed by others" (`$changed`): any real edit can bring a record into the window.
+  if (fields.has('$changed')) return true
   if (fields.size === 0) return false
   return changed.some((f) => fields.has(f))
 }

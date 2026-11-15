@@ -43,6 +43,7 @@ import {
   recomputeAutoIdPrefix,
   resolveAutoIdPattern
 } from './auto-ids.js'
+import { applyChangedFilter, CHANGED_FIELD, resolveChangedCondition } from './changed-filter.js'
 import { isPresencePageChange } from './collection-live-mode.js'
 import { getCollection, getFields, getRelations as getRegisteredRelations } from './collections.js'
 import { applyCrossRecordDefaults } from './cross-record-defaults.js'
@@ -4010,6 +4011,14 @@ export async function applyConditions(
       q.where(function (this: QB) {
         applyRiskRules(this, collection, rules, applyRuleConditions)
       })
+      continue
+    }
+    // Virtual path: changed by someone other than the reader in a time window
+    // (realtime 2026-11-14, services/changed-filter.ts). One bounded read of the
+    // activity log's window answers the ids, shared by the page and its total.
+    if (cond.path[0] === CHANGED_FIELD && cond.path.length === 1) {
+      const { f, ids } = await resolveChangedCondition(cond, collection, userId ?? null)
+      applyChangedFilter(q, collection, f, userId ?? null, ids)
       continue
     }
     // Virtual path: changed since the reader last opened it (#643) — edited,
