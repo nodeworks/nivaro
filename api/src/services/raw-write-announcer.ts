@@ -269,8 +269,10 @@ export async function announceRawWrites(
 /** Read and delete one batch from the inbox. Rows are claimed by the delete itself. */
 async function claimBatch(): Promise<Record<string, unknown>[]> {
   if (isMssql(db)) {
+    // READPAST: rows a procedure announced inside a transaction that is still open are left for
+    // a later drain (they may yet roll back) instead of holding the drain until it commits.
     const res = (await db.raw(
-      `DELETE TOP (${DRAIN_BATCH}) FROM ${TABLE}
+      `DELETE TOP (${DRAIN_BATCH}) FROM ${TABLE} WITH (READPAST)
        OUTPUT DELETED.collection, DELETED.item, DELETED.action, DELETED.changed_fields, DELETED.source`
     )) as unknown
     return Array.isArray(res) ? (res as Record<string, unknown>[]) : []
