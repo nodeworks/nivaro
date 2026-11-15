@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { JournalEntry } from '../../../services/event-journal.js'
 import {
+  changeTableQuery,
+  changeTrackingAnnouncements,
+  changeTrackingStep,
   effectiveOutsideWrites,
   journalAnnounced,
   judgeWatchable,
@@ -228,5 +231,82 @@ describe('settings', () => {
       if (prevCloud == null) delete process.env.CLOUD_META_DB_URL
       else process.env.CLOUD_META_DB_URL = prevCloud
     }
+  })
+})
+
+describe('change tracking', () => {
+  it('watches a tracked table with a one-column key, no timestamp or index needed', () => {
+    const f = facts({ dateColumns: new Map(), leading: new Set(), tracked: true })
+    expect(judgeWatchable('workflows', f, [])).toMatchObject({
+      watchable: true,
+      method: 'change-tracking',
+      pk: 'id'
+    })
+    // a tracked table with a composite key falls back to the timestamp judge
+    expect(judgeWatchable('x', facts({ tracked: true, pk: ['a', 'b'] }), []).reason_code).toBe(
+      'no-key'
+    )
+    expect(judgeWatchable('workflows', facts(), []).method).toBe('timestamp')
+  })
+
+  it('starts at the current version, then reads one look behind', () => {
+    const s1 = changeTrackingStep(null, '100', '1')
+    expect(s1).toEqual({ kind: 'start', next: { ctLast: '100', ctPending: '100' } })
+    const s2 = changeTrackingStep(s1.next, '130', '1')
+    expect(s2).toEqual({ kind: 'idle', next: { ctLast: '100', ctPending: '130' } })
+    const s3 = changeTrackingStep(s2.next, '150', '1')
+    expect(s3).toEqual({
+      kind: 'read',
+      from: '100',
+      to: '130',
+      next: { ctLast: '130', ctPending: '150' }
+    })
+  })
+
+  it('resyncs with one "many changed" when the kept history no longer reaches the version', () => {
+    expect(changeTrackingStep({ ctLast: '100', ctPending: '120' }, '9000', '500')).toEqual({
+      kind: 'resync',
+      next: { ctLast: '9000', ctPending: '9000' }
+    })
+    // versions past 2^53 compare as integers, not floats
+    expect(
+      changeTrackingStep(
+        { ctLast: '9007199254740993', ctPending: '9007199254740995' },
+        '9007199254740999',
+        '9007199254740992'
+      ).kind
+    ).toBe('read')
+  })
+
+  it('builds the CHANGETABLE read and refuses versions that are not numbers', () => {
+    const sql = changeTableQuery(
+      { schema: 'dbo', table: 'work]flows', pk: 'id' },
+      '100',
+      '130',
+      500
+    )
+    expect(sql).toContain('SELECT TOP (501) CAST(ct.[id] AS NVARCHAR(255)) AS id')
+    expect(sql).toContain('FROM CHANGETABLE(CHANGES [dbo].[work]]flows], 100) AS ct')
+    expect(sql).toContain('WHERE ct.SYS_CHANGE_VERSION <= 130')
+    expect(() =>
+      changeTableQuery({ schema: 'dbo', table: 't', pk: 'id' }, '1; DROP', '2')
+    ).toThrow()
+  })
+
+  it('announces adds, changes and removals apart, skipping what the app already told', () => {
+    const recent = new Map()
+    noteJournal([entry('collection:workflows', { item: 2 })], 1000, 15_000, new Map(), recent)
+    const a = changeTrackingAnnouncements(
+      [
+        { id: 1, op: 'I' },
+        { id: 2, op: 'U' },
+        { id: 3, op: 'U' },
+        { id: 4, op: 'D' }
+      ],
+      recent.get('workflows'),
+      2000,
+      15_000
+    )
+    expect(a).toEqual({ create: ['1'], update: ['3'], delete: ['4'], deduped: 1 })
   })
 })

@@ -25,6 +25,8 @@ interface Row {
   reason: string | null
   reason_code: string | null
   ts_column: string | null
+  /** How it is watched: change tracking, the changed-at column, or null (cannot be). */
+  method: 'change-tracking' | 'timestamp' | null
   viewers: number
   chosen: boolean
   state: 'watching' | 'starting' | 'refused' | 'live-off' | 'error' | null
@@ -229,8 +231,8 @@ export function OutsideWritesTab() {
               />
             )}
             <p className='m-0 text-[11.5px] text-muted-foreground'>
-              Only collections with an index on their changed-at column can be chosen; up to{' '}
-              {d.limits.max_watched}.
+              Only collections that can be watched (change tracking, or an index on their changed-at
+              column) can be chosen; up to {d.limits.max_watched}.
             </p>
           </div>
         )}
@@ -281,7 +283,7 @@ export function OutsideWritesTab() {
               <thead>
                 <tr className='border-b border-slate-200 bg-slate-50 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted/40'>
                   <th className='px-3 py-2 font-medium'>Collection</th>
-                  <th className='px-3 py-2 font-medium'>Changed-at column</th>
+                  <th className='px-3 py-2 font-medium'>How</th>
                   <th className='px-3 py-2 font-medium'>Now</th>
                   <th className='px-3 py-2 text-right font-medium'>Caught, 24 h</th>
                   <th className='px-3 py-2 font-medium'>Last caught</th>
@@ -299,8 +301,21 @@ export function OutsideWritesTab() {
                       )}
                     </td>
                     <td className='px-3 py-2'>
-                      {r.watchable ? (
-                        <span className='font-mono text-[11.5px]'>{r.ts_column}</span>
+                      {r.method === 'change-tracking' ? (
+                        <span>
+                          Change tracking
+                          <span className='block text-[11px] text-muted-foreground'>
+                            adds, changes and removals
+                          </span>
+                        </span>
+                      ) : r.watchable ? (
+                        <span>
+                          Changed-at column{' '}
+                          <span className='font-mono text-[11.5px]'>{r.ts_column}</span>
+                          <span className='block text-[11px] text-muted-foreground'>
+                            adds and changes
+                          </span>
+                        </span>
                       ) : (
                         <span className='block max-w-[44ch] text-muted-foreground'>{r.reason}</span>
                       )}

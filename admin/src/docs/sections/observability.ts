@@ -486,6 +486,7 @@ await ctx.sql.announceWrites?.('forecasts', ids, { action: 'update', changed_fie
     {
       type: 'ul',
       items: [
+        'Where SQL Server change tracking is on for the table, the watcher reads the tracked changes since the last version it saw instead: no changed-at column or index needed, and removals are seen too (announced as deletes). It stays one look behind, so a procedure that announces its own writes is never announced twice. If the kept history (2 days) no longer reaches the last version, one “many records changed” goes out and it starts again from now. Change tracking is set up per database with api/src/scripts/change-tracking-setup.ts. The Outside writes tab shows per collection which way it is watched.',
         'A collection is watched on its changed-at column: the field marked “date updated”, else date_updated, updated_at, modified and similar names. It needs an index that starts with that column and a one-column primary key; without them it is refused (the Outside writes tab says why), so the watcher never reads a whole table every few seconds.',
         'Each look reads a small window by the database’s own clock, in UTC and in local time (procedures often stamp GETDATE()), reaching two minutes back for transactions that commit late, and skips rows other transactions hold locked until a later look.',
         'More than 500 changed rows in one look become one “many records changed” announcement.',
