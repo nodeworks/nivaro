@@ -457,3 +457,85 @@ export interface AlertSubscription {
   mode: AlertMode
   last_notified_at: string | null
 }
+
+// ─── Ready to send (idea 37) ────────────────────────────────────────────────
+
+export type ReadySeverity = 'block' | 'warn' | 'ask'
+
+export interface ReadyIssue {
+  severity: ReadySeverity
+  kind?: 'requirement' | 'condition' | 'push' | 'contract'
+  partner?: string
+  message: string
+  field?: string
+  collection?: string
+  fk_field?: string
+  rows?: Array<{ id: string; label: string }>
+}
+
+export interface ReadyEntry {
+  collection: string
+  item: string
+  label: string
+  state: string | null
+  transition: { id: string; label: string }
+  partners: string[]
+  owners: Array<{ id: string; name: string }>
+  issues: ReadyIssue[]
+  worst: ReadySeverity
+  checked_at: string
+  checked_by?: string | null
+}
+
+export interface ReadyPartnerGroup {
+  partner: string
+  records: number
+  refused: number
+  warnings: number
+  asks: number
+}
+
+export interface ReadyProblemGroup {
+  key: string
+  label: string
+  severity: ReadySeverity
+  kind: ReadyIssue['kind'] | null
+  partners: string[]
+  records: number
+  lines: number
+}
+
+/** GET /ready-to-send — the newest board, only the records the viewer may read. */
+export interface ReadyBoard {
+  run: {
+    id: number
+    status: string
+    started_at: string | null
+    finished_at: string | null
+    generated_at: string
+    trigger: string
+    duration_ms: number
+  } | null
+  running: boolean
+  can_run: boolean
+  /** Administrators only. */
+  coverage?: {
+    candidates: number
+    checked: number
+    ready: number
+    errors: number
+    partial: { reason: 'cap' | 'time'; checked: number; total: number } | null
+  } | null
+  collections?: Record<string, string>
+  totals?: { records: number; refused: number; warnings: number; asks: number }
+  partners?: ReadyPartnerGroup[]
+  problems?: ReadyProblemGroup[]
+  entries?: ReadyEntry[]
+}
+
+export interface ReadyCheckAnswer {
+  sending: boolean
+  ready: boolean
+  entries: ReadyEntry[]
+  collection_label: string
+}

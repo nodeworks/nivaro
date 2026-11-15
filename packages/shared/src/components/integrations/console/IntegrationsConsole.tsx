@@ -7,6 +7,7 @@ import { EventsView } from './EventsView'
 import { FirefightView } from './FirefightView'
 import { InboundView } from './InboundView'
 import { PartnersView } from './PartnersView'
+import { ReadyToSendView } from './ReadyToSendView'
 import { TONE_SOFT, TONE_TEXT } from './tone'
 
 export interface ConsoleTab {
@@ -82,6 +83,11 @@ export function IntegrationsConsole({
       key: 'events',
       label: 'Events',
       render: () => <EventsView onOpenRecord={onOpenRecord} />
+    },
+    {
+      key: 'ready',
+      label: 'Ready to send',
+      render: () => <ReadyToSendView onOpenRecord={onOpenRecord} />
     },
     ...extraTabs,
     {

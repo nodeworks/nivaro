@@ -131,6 +131,8 @@ export type RenderTemplateOpts = {
   draftBody?: { mode: PayloadMode; body: string }
   /** Defaults to body-secrets.ts `bodySecretNames` when that module is present. */
   secretNames?: SecretNamesResolver
+  /** `secretNames` resolves the API by id and ignores the name: skip the name lookup. */
+  secretNamesById?: boolean
 }
 
 export type RenderTemplateResult = {
@@ -1085,11 +1087,14 @@ async function canonicalApiName(apiName: string): Promise<string> {
 
 async function secretNamesFor(
   apiName: string | null,
-  resolver: SecretNamesResolver
+  resolver: SecretNamesResolver,
+  /** False when the caller's own resolver already knows its API (the push resolves by id): the
+   *  name lookup would be a read per render for nothing. */
+  canonical = true
 ): Promise<string[] | undefined> {
   if (!apiName?.trim()) return undefined
   try {
-    const names = await resolver(await canonicalApiName(apiName))
+    const names = await resolver(canonical ? await canonicalApiName(apiName) : apiName.trim())
     return Array.isArray(names) ? names : undefined
   } catch (e) {
     // biome-ignore lint/suspicious/noConsole: a failed secret lookup must be visible in the server log
@@ -1114,11 +1119,13 @@ export async function renderPayloadTemplate(
   opts: RenderTemplateOpts = {}
 ): Promise<RenderTemplateResult> {
   const resolver = opts.secretNames ?? defaultSecretNames
+  // A resolver that knows its own API by id (the push) needs no name lookup per render.
+  const canonical = opts.secretNamesById !== true
 
   if (opts.draft || opts.draftBody) {
     const row = await getTemplate(key)
     if (!row) throw unknownKey(key)
-    const secretNames = await secretNamesFor(row.external_api, resolver)
+    const secretNames = await secretNamesFor(row.external_api, resolver, canonical)
     const mode = opts.draftBody?.mode ?? row.draft_mode
     const body = opts.draftBody?.body ?? row.draft_body
     if (!isMode(mode)) {
@@ -1144,7 +1151,7 @@ export async function renderPayloadTemplate(
       `Payload template '${key}' has no published version`
     )
   }
-  const secretNames = await secretNamesFor(row.external_api, resolver)
+  const secretNames = await secretNamesFor(row.external_api, resolver, canonical)
   const r = await renderBody(row.published_mode, row.published_body, scope, {
     lockedKeys: row.locked_keys,
     secretNames
