@@ -296,8 +296,9 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
         scheduled_at: scheduledAt,
         status: 'pending',
         created_by: req.user!.id,
-        created_at: now,
-        updated_at: now
+        created_at: now
+        // The table has no updated_at column (000_base_schema): writing one failed every
+        // create, cancel and execute with "Invalid column name 'updated_at'".
         // For now, scheduled changes must be executed manually via POST /:id/execute.
       })
       .returning('id')
@@ -348,9 +349,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: 'Cannot cancel an already executed change' })
     }
 
-    await db('nivaro_scheduled_changes')
-      .where({ id })
-      .update({ status: 'cancelled', updated_at: new Date() })
+    await db('nivaro_scheduled_changes').where({ id }).update({ status: 'cancelled' })
     announceScheduled(existing.collection, existing.item_id)
 
     await logActivity({
@@ -396,7 +395,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
     }
     await db('nivaro_scheduled_changes')
       .where({ id, status: 'pending' })
-      .update({ scheduled_at: at, updated_at: new Date() })
+      .update({ scheduled_at: at })
     await logActivity({
       action: 'schedule-change-move',
       user: req.user?.id,
@@ -429,7 +428,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
     const fail = async (status: number, error: string, extra: Record<string, unknown> = {}) => {
       await db('nivaro_scheduled_changes')
         .where({ id })
-        .update({ status: 'failed', error_message: error.slice(0, 500), updated_at: now })
+        .update({ status: 'failed', error_message: error.slice(0, 500) })
       announceScheduled(change.collection, change.item_id)
       return reply.code(status).send({ error, status: 'failed', ...extra })
     }
@@ -446,7 +445,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
 
     await db('nivaro_scheduled_changes')
       .where({ id })
-      .update({ status: 'executed', executed_at: now, updated_at: now })
+      .update({ status: 'executed', executed_at: now })
     announceScheduled(change.collection, change.item_id)
 
     await logActivity({
