@@ -128,7 +128,11 @@ export function publicLivePageHtml(o: PublicLivePageOptions): string {
 <meta name="referrer" content="no-referrer"><meta name="color-scheme" content="light dark">
 <title>${esc(o.title)}</title><style>${STYLE}</style></head><body><main class="wrap">
 ${o.context ? `<p class="ctx">${esc(o.context)}</p>` : ''}<div id="nvr-live" aria-live="polite">${o.liveHtml}</div>
-<p class="foot"><span>${o.foot ? esc(o.foot) : 'This page updates while it is open.'}</span></p>
+${
+  o.foot || o.streamUrl
+    ? `<p class="foot"><span>${o.foot ? esc(o.foot) : 'This page updates while it is open.'}</span></p>`
+    : ''
+}
 </main><script nonce="${esc(o.nonce)}">${liveScript(o.streamUrl, o.refreshUrl, o.liveMode ?? 'normal')}</script></body></html>`
 }
 
