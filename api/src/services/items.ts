@@ -100,6 +100,13 @@ import {
   STATE_FIELD,
   splitStateField
 } from './record-state.js'
+import {
+  announceJunctionLinkedParents,
+  announceRelatedParents,
+  fileFieldsOf,
+  junctionParentAspects,
+  queueForeignAspect
+} from './related-announce.js'
 import { enforceRelationLimits } from './relation-limits.js'
 import { isStatementTimeout, noteReadShape, span, timeAccessSync } from './request-trace.js'
 import {
@@ -2127,6 +2134,9 @@ async function broadcastJunctionParents(
   if (legs.length === 0) return
   const sent = new Set<string>()
   for (const leg of legs) {
+    // `$related` (and `$files` for a file junction) rides along, so the parent's open page
+    // refreshes its link lists and Files panel, not just the record row (realtime 3 / 18).
+    const aspects = junctionParentAspects(collection, leg, rels)
     for (const row of rows) {
       const parent = row?.[leg.many_field]
       if (parent == null || parent === '' || typeof parent === 'object') continue
@@ -2135,9 +2145,36 @@ async function broadcastJunctionParents(
       sent.add(key)
       broadcastCollectionUpdate(req?.server?.io, leg.one_collection as string, String(parent), {
         action: 'update',
-        changed_fields: [leg.one_field as string]
+        changed_fields: [leg.one_field as string, ...aspects]
       })
     }
+  }
+}
+
+/**
+ * Realtime 18 / 3 — after a committed write: the records this row points at hear `$related`
+ * (both parents on an FK move), the records it is linked to through a junction hear it too (an
+ * update with column changes only), and a changed file field says `$files` on the record itself.
+ * Coalesced and capped in services/related-announce.ts. Never throws.
+ */
+async function announceForeignAspects(
+  collection: string,
+  id: string | number,
+  rows: Array<Record<string, unknown> | null | undefined>,
+  opts: { changedFields?: string[]; forward?: boolean } = {}
+): Promise<void> {
+  try {
+    const rels = await getRelsForCollection(collection).catch(() => [] as CMSRelation[])
+    if (rels.length === 0) return
+    announceRelatedParents(collection, rels, rows)
+    if (opts.forward) announceJunctionLinkedParents(collection, rels, [id])
+    const changed = opts.changedFields ?? []
+    if (changed.length > 0) {
+      const files = fileFieldsOf(collection, rels)
+      if (changed.some((f) => files.has(f))) queueForeignAspect(collection, id, '$files')
+    }
+  } catch {
+    /* a notice never breaks a write */
   }
 }
 
@@ -7553,6 +7590,9 @@ export async function createOne(
       await broadcastJunctionParents(req, collection, [
         (result ?? ctx.payload) as Record<string, unknown>
       ])
+      await announceForeignAspects(collection, returnedId as string | number, [
+        { ...(ctx.payload as Record<string, unknown>), ...(result ?? {}) }
+      ])
     })
 
     // Hidden from its own writer: the id, never null (see markOutOfView).
@@ -7998,11 +8038,18 @@ export async function updateOne(
       changed_fields: Object.keys(columnPayload ?? {})
     })
     // Both parents when the row moved from one record to another.
-    if (Object.keys(columnPayload ?? {}).length > 0)
+    if (Object.keys(columnPayload ?? {}).length > 0) {
       await broadcastJunctionParents(req, collection, [
         previousData,
         { ...(previousData ?? {}), ...columnPayload }
       ])
+      await announceForeignAspects(
+        collection,
+        id,
+        [previousData, { ...(previousData ?? {}), ...columnPayload }],
+        { changedFields: Object.keys(columnPayload ?? {}), forward: true }
+      )
+    }
   })
 
   return result
@@ -8387,5 +8434,6 @@ export async function deleteOne(
   void deferEffect('realtime:delete', async () => {
     broadcastCollectionUpdate(req?.server?.io, collection, id, { action: 'delete' })
     await broadcastJunctionParents(req, collection, [previousData])
+    await announceForeignAspects(collection, id, [previousData])
   })
 }

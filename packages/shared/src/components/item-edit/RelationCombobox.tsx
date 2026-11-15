@@ -26,6 +26,7 @@ function labelInitials(label: string): string {
   )
 }
 
+import { pickerOptionsMeta } from '../../lib/live-pickers'
 import { queryKeys } from '../../lib/query-keys'
 import { cn, matchesAllTokens, userOptionFilter } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
@@ -447,6 +448,8 @@ export function RelationCombobox({
     // Wait for the display template: it decides `fields`, and starting before
     // it lands sent the whole first page twice.
     enabled: open && !colMetaPending,
+    // Someone else's new / changed / removed record: re-read on the next open (live-pickers.ts).
+    meta: pickerOptionsMeta(collection),
     staleTime: filterStr ? 0 : 30_000,
     // A new SEARCH keeps the previous answer on screen (narrowed locally below)
     // instead of blanking the list behind a spinner. A changed filter, sort or
@@ -480,6 +483,7 @@ export function RelationCombobox({
     queryKey: ['relation-opts', collection, '', filterStr, tmplFields, serverSort ?? ''],
     queryFn: () => fetchOptions(''),
     enabled: open && !colMetaPending && serverFoundNothing,
+    meta: pickerOptionsMeta(collection),
     staleTime: filterStr ? 0 : 30_000
   })
   const labelMatches = useMemo(

@@ -56,6 +56,14 @@ export interface LiveQueryMeta {
   minGapMs?: number
   /** Never refreshed by events — only reconciled after a gap (a surface that keeps itself live). */
   reconcileOnly?: boolean
+  /**
+   * Events (and reconciles) only mark it stale — it is never re-read while on screen; it reads
+   * again the next time it is shown or enabled. For a picker's option list: someone else's new
+   * vendor appears the next time the dropdown opens, and an OPEN dropdown never reshuffles under
+   * the pointer. Joins its collection's room only once it holds data (a picker nobody opened
+   * listens to nothing).
+   */
+  staleOnly?: boolean
 }
 
 /** `meta` for a query the bridge keeps current: `useQuery({ …, meta: liveQueryMeta({ reads: ['orders'] }) })`. */
@@ -250,7 +258,10 @@ export function createLiveQueryBridge(
     const wanted = new Set<string>()
     for (const q of cache.getAll() as AnyQuery[]) {
       if (q.getObserversCount() === 0) continue
-      for (const c of liveCollectionsOf(metaOf(q))) wanted.add(c)
+      const meta = metaOf(q)
+      // A stale-only list nobody has loaded yet cannot go stale.
+      if (meta?.staleOnly && !q.state.dataUpdatedAt) continue
+      for (const c of liveCollectionsOf(meta)) wanted.add(c)
     }
     for (const c of wanted) {
       const t = lingering.get(c)
@@ -281,6 +292,7 @@ export function createLiveQueryBridge(
       syncRooms()
     })
   }
+  const joinedStaleOnly = new WeakSet<AnyQuery>()
   const offCache = cache.subscribe((e) => {
     if (
       e.type === 'added' ||
@@ -290,6 +302,14 @@ export function createLiveQueryBridge(
       e.type === 'observerOptionsUpdated'
     )
       queueSync()
+    // A stale-only list's first answer: now it has something that can go stale.
+    else if (e.type === 'updated' && e.action?.type === 'success') {
+      const q = e.query as AnyQuery
+      if (metaOf(q)?.staleOnly && !joinedStaleOnly.has(q)) {
+        joinedStaleOnly.add(q)
+        queueSync()
+      }
+    }
   })
 
   // ── Refetching: only active queries, min gap per query, hidden tabs defer ──
@@ -315,7 +335,7 @@ export function createLiveQueryBridge(
     const due: AnyQuery[] = []
     const idle: AnyQuery[] = []
     for (const q of targets) {
-      if (q.getObserversCount() === 0) idle.push(q)
+      if (q.getObserversCount() === 0 || metaOf(q)?.staleOnly) idle.push(q)
       else if (doc?.hidden) {
         idle.push(q)
         deferred.add(q)
@@ -376,10 +396,18 @@ export function createLiveQueryBridge(
     if (disposed) return
     counters.reconciles++
     const tagged: AnyQuery[] = []
+    const staleOnly = new Set<AnyQuery>()
     for (const q of cache.getAll() as AnyQuery[]) {
-      if (metaOf(q)) tagged.push(q)
+      const meta = metaOf(q)
+      if (meta?.staleOnly) staleOnly.add(q)
+      else if (meta) tagged.push(q)
     }
     deferred.clear()
+    if (staleOnly.size > 0)
+      void qc.invalidateQueries({
+        predicate: (q) => staleOnly.has(q as AnyQuery),
+        refetchType: 'none'
+      })
     const set = new Set(tagged)
     // Tagged queries (active refetch, the rest marked stale) + the active self-live surfaces.
     // A read already in flight (a focus refetch) started after the gap: keep it.

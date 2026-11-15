@@ -2314,6 +2314,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         [targetJr.junction_field]: fileId
       })
       attached = true
+      // A raw junction insert: the record's open Files panel hears it (realtime 3).
+      const { queueForeignAspect } = await import('../services/related-announce.js')
+      queueForeignAspect(collection, String(item_id), '$files')
     } catch {
       /* duplicate/constraint — file already attached */
     }
