@@ -288,6 +288,7 @@ import { searchRoutes } from './search.js'
 import { searchAnalyticsRoutes } from './search-analytics.js'
 import { securityRoutes, securitySelfRoutes } from './security.js'
 import { semanticSearchRoutes } from './semantic-search.js'
+import { sendViewRoutes } from './send-view.js'
 import { sequenceRoutes } from './sequences.js'
 import { sessionRecordingRoutes } from './session-recordings.js'
 import { sessionReplayClipRoutes } from './session-replay-clips.js'
@@ -680,6 +681,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(mergeRoutes, { prefix: '/merge' })
   await app.register(dashboardLinkRoutes, { prefix: '/dashboard-links' })
   await app.register(journeyRoutes, { prefix: '/journeys' })
+  await app.register(sendViewRoutes, { prefix: '/send-view' })
   await app.register(sessionRecordingRoutes, { prefix: '/session-recordings' })
   // Clips / library / shares of recordings — full paths, no prefix (#1366).
   await app.register(sessionReplayClipRoutes)

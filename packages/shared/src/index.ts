@@ -395,6 +395,7 @@ export {
   type InlineEditController,
   useInlineEdit
 } from './components/list/InlineEdit'
+export { ListViewers } from './components/list/ListViewers'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export {
@@ -631,6 +632,8 @@ export {
 export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
 export { SlowNotice, SlowNoticeView } from './components/SlowNotice'
 export { type StaleBuild, StaleBuildChip } from './components/StaleBuildChip'
+export { SendViewButton } from './components/send-view/SendViewButton'
+export { SentViewCards } from './components/send-view/SentViewCards'
 export {
   buildReportPayload,
   ReportProblemButton,
@@ -931,6 +934,7 @@ export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket
 export * from './lib/list-inline-edit'
 export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
+export * from './lib/list-viewers'
 export * from './lib/live'
 export * from './lib/live-list'
 export * from './lib/live-ops'
@@ -1232,6 +1236,7 @@ export {
   searchRankWords,
   tokenize
 } from './lib/search-text'
+export * from './lib/send-view'
 export {
   type ClockSample,
   measureClockOffset,

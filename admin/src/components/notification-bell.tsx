@@ -22,7 +22,7 @@ import { getSocket } from '@/lib/socket'
 import { cn } from '@/lib/utils'
 
 /** Where a notification's click lands in the admin app. */
-const NOTIF_ROUTES: NotificationRouteMap = {
+export const NOTIF_ROUTES: NotificationRouteMap = {
   record: (c, i) => `/collections/${c}/${i}`,
   list: (c) => `/collections/${c}`,
   report: (id) => `/report-studio/${id}`,

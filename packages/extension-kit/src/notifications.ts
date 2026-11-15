@@ -16,6 +16,8 @@ export type NotifyCategory =
   | 'chaos'
   /** Front-end crashes new in a release (Issue Log → Crashes). Administrators only. */
   | 'crashes'
+  /** A colleague used "Send my view" (a record, list or queue they were looking at). */
+  | 'views'
   | 'other'
 
 export type NotificationKind =

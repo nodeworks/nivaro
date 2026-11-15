@@ -578,6 +578,8 @@ const RELAYED_EVENTS = new Set([
   'presence:changed',
   'read:changed',
   'prefs:changed',
+  // Send my view: a poke on the person's own room (the card reads the view as them).
+  'view:sent',
   // #1675 — pushed widgets: the figure computed as this sign-in, for this tab's own watch key.
   'widget:watching',
   'widget:data',

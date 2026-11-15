@@ -156,6 +156,7 @@ import {
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import { userErrorMessage } from '../lib/safe-error'
 import { logSearch, logSearchOpen } from '../lib/search-log'
+import { listViewInput } from '../lib/send-view'
 import { type CellShape, type SkeletonColumn, shapeForField } from '../lib/skeleton-shapes'
 import { knownTotalFrom } from '../lib/slow-reason'
 import { nextSortValue } from '../lib/sort-cycle'
@@ -247,6 +248,7 @@ import { UserChip, UserRosterCluster } from './item-edit/UserChip'
 import { LiveRowMark } from './LiveRowMark'
 import { CopyListLinkButton } from './list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from './list/InlineEdit'
+import { ListViewers } from './list/ListViewers'
 import { MapView } from './MapView'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
@@ -269,6 +271,7 @@ import { RowHighlightLegend } from './RowHighlightLegend'
 import { RowPresence } from './RowPresence'
 import { TableSkeletonRows } from './Skeletons'
 import { SlowNoticeView } from './SlowNotice'
+import { SendViewButton } from './send-view/SendViewButton'
 import { TipLayer } from './TipLayer'
 import { UnseenDot } from './UnseenDot'
 import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
@@ -6918,6 +6921,20 @@ export function CollectionBrowserView({
     }
   }
 
+  // Send my view: the sender's own words for this view (saved view, filter chips, search) —
+  // settings only, the recipient's list reads its rows as them.
+  const sendViewSummary = (): string | null => {
+    const parts: string[] = []
+    const viewName = views.find((v) => v.id === activeViewId)?.name
+    if (viewName) parts.push(viewName)
+    for (const f of filters) {
+      const c = filterChipText(f)
+      parts.push(c.value ? `${c.field}: ${c.value}` : c.field)
+    }
+    if (appliedSearch) parts.push(`“${appliedSearch}”`)
+    return parts.length ? parts.join(', ').slice(0, 160) : null
+  }
+
   // #21 Back to the exact list — the list's state rides on the address (`?lv=`, replaced,
   // never pushed), so Back from a record, a crumb, a record's back arrow (efp-new reads the
   // address through LIST_ADDRESS_EVENT), a reload and a copied address bar all come back to
@@ -8302,6 +8319,23 @@ export function CollectionBrowserView({
           <RotateCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
         </button>
         <CopyListLinkButton listKey={`cbv:${collection}`} getState={listLinkState} />
+        <SendViewButton
+          getView={() =>
+            listViewInput(
+              'list',
+              collection,
+              `cbv:${collection}`,
+              listLinkState() as unknown as Record<string, unknown>,
+              sendViewSummary()
+            )
+          }
+          describe={() => {
+            const name = meta?.display_name || titleCase(collection)
+            const s = sendViewSummary()
+            return s ? `${name} — ${s}` : name
+          }}
+        />
+        <ListViewers kind='list' id={collection} />
         {isAdmin && bc.copy_as !== false && (
           <CopyAsButton
             collection={collection}

@@ -98,6 +98,11 @@ export const NOTIFY_RULE_CATS: Array<{ key: string; label: string; help: string 
     help: 'A crash that is new in the current release reached several times or more than one person within 15 minutes. Only administrators get these.'
   },
   {
+    key: 'views',
+    label: 'Views sent to you',
+    help: 'A colleague used Send my view to hand you a record, list or queue they were looking at. When you have the app open it arrives as a small card instead.'
+  },
+  {
     key: 'system',
     label: 'System & digests',
     help: 'Maintenance windows, failing monitors, import results, updates on support requests you raised, and the daily action summary itself. Maintenance and monitor failures always email immediately.'

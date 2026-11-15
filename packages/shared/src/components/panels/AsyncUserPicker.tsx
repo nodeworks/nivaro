@@ -73,7 +73,7 @@ export function AsyncUserPicker({
         <PopoverTrigger asChild>
           <button
             type='button'
-            className='flex h-full w-full items-center justify-between gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-left text-[13px] text-slate-700 hover:border-slate-300'
+            className='flex h-full w-full items-center justify-between gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-left text-[13px] text-slate-700 hover:border-slate-300 dark:border-border dark:bg-background dark:text-slate-200 dark:hover:border-slate-600'
           >
             <span className={`flex-1 truncate ${selectedLabel ? '' : 'text-slate-400'}`}>
               {selectedLabel ?? 'Select a user…'}
@@ -95,7 +95,7 @@ export function AsyncUserPicker({
         )}
       </div>
       <PopoverContent align='start' className='w-72 p-0' sideOffset={4}>
-        <div className='border-b border-slate-100 px-2 py-1.5'>
+        <div className='border-b border-slate-100 px-2 py-1.5 dark:border-border'>
           <div className='relative'>
             <Search className='absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
             <input
@@ -103,7 +103,7 @@ export function AsyncUserPicker({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder='Search users…'
-              className='h-7 w-full rounded-md bg-slate-50 pl-7 pr-2 text-[12px] placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan/40'
+              className='h-7 w-full rounded-md bg-slate-50 pl-7 pr-2 text-[12px] placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan/40 dark:bg-muted dark:text-slate-200'
             />
           </div>
         </div>
@@ -128,7 +128,7 @@ export function AsyncUserPicker({
                     onChange(u.id)
                     setOpen(false)
                   }}
-                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-slate-50 ${selected ? 'font-medium text-slate-800' : 'text-slate-600'}`}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-slate-50 dark:hover:bg-muted ${selected ? 'font-medium text-slate-800 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300'}`}
                 >
                   <Check
                     className={`h-3.5 w-3.5 shrink-0 ${selected ? 'text-nvr-cyan' : 'opacity-0'}`}

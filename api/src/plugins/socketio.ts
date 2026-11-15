@@ -32,6 +32,8 @@ import { fieldFocusTracker } from '../services/field-focus.js'
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
 import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
+import { mayReadListTopic } from '../services/list-viewer-access.js'
+import { listViewerJoinPlan } from '../services/list-viewer-topics.js'
 import { setLockPresenceProbe } from '../services/lock-presence.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { opsRoom, opsTopicGate } from '../services/ops-live.js'
@@ -1843,6 +1845,33 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         try {
           const room = await opsRoomOf(spec.topic)
           if (!room) return
+          // "Who else has this list open" (list-viewer-topics.ts): readers announce, only
+          // administrators join the room — the names reach administrators and nobody else.
+          if (spec.gate === 'viewers') {
+            let plan = { listen: false, announce: false }
+            await watchGate.join(
+              `ops:${spec.topic}`,
+              async () => {
+                const role = user.role
+                  ? await db('nivaro_roles').where({ id: user.role }).first('admin_access')
+                  : null
+                const isAdmin = !!role?.admin_access
+                plan = listViewerJoinPlan({
+                  isAdmin,
+                  viewAs: (socket.data.nvrBind as SocketBind | undefined)?.kind === 'masq',
+                  mayRead: await mayReadListTopic(user, spec.topic, isAdmin)
+                })
+                return plan.listen || plan.announce
+              },
+              () => {
+                if (plan.listen) socket.join(room)
+                if (plan.announce)
+                  addTopicViewer(room, socket.id, { id: user.id, name: displayName(user) })
+                broadcastTopicViewers(spec.topic, room)
+              }
+            )
+            return
+          }
           await watchGate.join(
             `ops:${spec.topic}`,
             async () => {

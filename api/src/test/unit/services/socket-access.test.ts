@@ -246,6 +246,12 @@ describe('room gates (#1720)', () => {
       expect(await roomStillAllowed(ANA, `t:A:ops:${t}`, notAdmin)).toBe(true)
     expect(await roomStillAllowed(ANA, 'ops:bogus', notAdmin)).toBe(false)
   })
+  it('keeps list-viewer rooms (who else has this list open) for administrators only', async () => {
+    for (const t of ['list-view:workflows', 'queue-view:3F2A9C1E-0000-4000-8000-000000000001']) {
+      expect(await roomStillAllowed(ANA, `ops:${t}`, notAdmin)).toBe(false)
+      expect(await roomStillAllowed(ANA, `t:A:ops:${t}`, async () => true)).toBe(true)
+    }
+  })
   it("keeps the tenant-wide `all` room for the socket's own tenant only", async () => {
     const ctx = { tenantNames: ['T-A', 'acme'] }
     expect(await roomStillAllowed(ANA, 't:T-A:all', notAdmin, ctx)).toBe(true)
