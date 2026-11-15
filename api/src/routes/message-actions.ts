@@ -10,7 +10,8 @@ import {
   linkHeadline,
   linkStateHtml,
   linkStateSignature,
-  loadApprovalLinkState
+  loadApprovalLinkState,
+  redactLinkState
 } from '../services/approval-link-state.js'
 import {
   type LiveMode,
@@ -338,6 +339,20 @@ async function liveModeOf(user: User | null): Promise<LiveMode> {
   }
 }
 
+/** Can the person signed in here read the approval's record (judged as them; null = 404)? */
+async function viewerCanReadRecord(
+  viewer: User | null,
+  payload: ActionTokenPayload
+): Promise<boolean> {
+  if (!viewer || !payload.collection || !payload.item) return false
+  try {
+    const { readOne } = await import('../services/items.js')
+    return !!(await readOne(viewer, payload.collection, payload.item, undefined, ['id']))
+  } catch {
+    return false
+  }
+}
+
 /** The landing page for a decision link: where the approval stands, live while open. */
 export function linkPage(opts: {
   token: string
@@ -406,10 +421,14 @@ export async function messageActionsRoutes(app: FastifyInstance) {
     token: string,
     payload: ActionTokenPayload,
     state: ApprovalLinkState,
-    holder: User | null
+    holder: User | null,
+    /** Who is signed in here (defaults to the holder). Names and times show only to someone
+     *  who can read the record, judged as them; anyone else gets the redacted state. */
+    viewer: User | null = holder
   ) => {
     const spent = !!app.redis && !!payload.jti && !!(await app.redis.exists(usedKey(payload.jti)))
     const nonce = randomUUID().replace(/-/g, '')
+    if (!(await viewerCanReadRecord(viewer, payload))) state = redactLinkState(state)
     return reply
       .code(status)
       .header('cache-control', 'no-store')
@@ -472,7 +491,7 @@ export async function messageActionsRoutes(app: FastifyInstance) {
     }
     const me = await sessionUser(req, reply)
     const holder = me && sameUser(me.user.id, payload.user) ? me.user : null
-    return sendLinkPage(reply, 200, token, payload, state, holder)
+    return sendLinkPage(reply, 200, token, payload, state, holder, me?.user ?? null)
   })
 
   // ── GET /stream?token= — "changed" while the landing page is open ─────────────

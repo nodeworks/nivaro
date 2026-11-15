@@ -32,6 +32,10 @@ vi.mock('../../../services/approval-link-state.js', async (orig) => ({
   ...(await orig<object>()),
   loadApprovalLinkState: vi.fn(async () => linkState.current)
 }))
+// Who may read the approval's record (judged as the signed-in person): everyone but 'no-read'.
+vi.mock('../../../services/items.js', () => ({
+  readOne: vi.fn(async (u: { id: string }) => (u.id === 'no-read' ? null : { id: '372789' }))
+}))
 vi.mock('../../../db/index.js', () => ({
   db: () => ({ where: () => ({ first: async () => undefined }) })
 }))
@@ -125,18 +129,52 @@ describe('live landing page (rt9 #21)', () => {
     }
   }
 
-  it('shows an already-decided approval to anyone holding the link, with nothing to press', async () => {
+  it('tells an anonymous link holder only that it was decided — no names, no times', async () => {
     linkState.current = decided
     const res = await (await app()).inject({
       method: 'GET',
       url: `/callback?token=${encodeURIComponent(mint())}`
     })
     expect(res.statusCode).toBe(200)
-    expect(res.body).toContain('Already approved')
-    expect(res.body).toContain('Beth Lee')
+    expect(res.body).toContain('This approval has already been decided')
+    expect(res.body).not.toContain('Beth Lee')
+    expect(res.body).not.toContain('<time')
     expect(res.body).not.toContain('<form')
     // Final answer: no live stream.
     expect(res.body).toContain('var STREAM=null')
+  })
+
+  it('an anonymous holder of a pending link elsewhere sees only the step label', async () => {
+    linkState.current = { ...PENDING, waiting_on_holder: false, last: decided.last }
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: `/callback?token=${encodeURIComponent(mint())}`
+    })
+    expect(res.body).toContain('Waiting on Finance review')
+    expect(res.body).not.toContain('Beth Lee')
+  })
+
+  it('names who decided and when once signed in as someone who can read the record', async () => {
+    linkState.current = decided
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: `/callback?token=${encodeURIComponent(mint())}`,
+      headers: { 'x-test-session': 'colleague' }
+    })
+    expect(res.body).toContain('Already approved')
+    expect(res.body).toContain('Beth Lee')
+    expect(res.body).toContain('<time datetime="2026-11-14T15:42:00.000Z"')
+  })
+
+  it('keeps names from a signed-in person who cannot read the record', async () => {
+    linkState.current = decided
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: `/callback?token=${encodeURIComponent(mint())}`,
+      headers: { 'x-test-session': 'no-read' }
+    })
+    expect(res.body).toContain('This approval has already been decided')
+    expect(res.body).not.toContain('Beth Lee')
   })
 
   it('a pending page listens on its own token-scoped stream', async () => {

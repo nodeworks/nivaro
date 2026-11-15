@@ -34,6 +34,15 @@ export interface ApprovalLinkState {
   mine: LinkDecision | null
   /** Pending, the current step is the holder's, and they have not decided it. */
   waiting_on_holder: boolean
+  /** Redacted for a reader who is not signed in as someone who can read the record: no
+   *  names, no times (redactLinkState). */
+  anonymous?: boolean
+}
+
+/** What a link holder who is NOT signed in (or cannot read the record) may see: whether it is
+ *  decided and the current step's label — never who decided or when. Pure. */
+export function redactLinkState(s: ApprovalLinkState): ApprovalLinkState {
+  return { ...s, last: null, mine: null, anonymous: true }
 }
 
 const sameId = (a: unknown, b: unknown) =>
@@ -177,6 +186,22 @@ export interface LinkHeadline {
 /** The sentence the page leads with. Pure (tested). `verb` = the link's own action. */
 export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): LinkHeadline {
   const by = (d: LinkDecision | null) => (d ? { name: d.mine ? 'you' : d.by, at: d.at } : null)
+  if (s.anonymous && (s.status === 'approved' || s.status === 'rejected'))
+    return {
+      tone: 'muted',
+      title: 'This approval has already been decided',
+      by: null,
+      note: 'Sign in to Nivaro to see who decided and when.',
+      decidable: false
+    }
+  if (s.anonymous && s.status === 'pending' && !s.waiting_on_holder)
+    return {
+      tone: 'wait',
+      title: `Waiting on ${s.step_label ?? 'the next step'}`,
+      by: null,
+      note: 'Sign in to Nivaro to see more.',
+      decidable: false
+    }
   switch (s.status) {
     case 'gone':
       return {

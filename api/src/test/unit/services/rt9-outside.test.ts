@@ -14,7 +14,8 @@ import {
   type ApprovalLinkState,
   linkHeadline,
   linkStateHtml,
-  linkStateSignature
+  linkStateSignature,
+  redactLinkState
 } from '../../../services/approval-link-state.js'
 import { publicLiveCsp, publicLivePageHtml } from '../../../services/public-live-page.js'
 import { maskUrlPath, maskUrlQuery } from '../../../services/secret-mask.js'
@@ -63,6 +64,18 @@ describe('decision link headline (rt9 #21)', () => {
     expect(h.title).toBe('You approved your step')
     expect(h.note).toBe('Now waiting on Finance review.')
     expect(h.decidable).toBe(false)
+  })
+
+  it('redacts names and times for anonymous readers, but still lets the approver decide', () => {
+    const a = redactLinkState({ ...base, status: 'approved' })
+    const h = linkHeadline(a, 'approve')
+    expect(h.title).toBe('This approval has already been decided')
+    expect(h.by).toBeNull()
+    expect(JSON.stringify(h)).not.toContain('Beth')
+    expect(linkHeadline(redactLinkState(base), 'approve').title).toBe('Waiting on Finance review')
+    const ask = linkHeadline(redactLinkState({ ...base, waiting_on_holder: true }), 'approve')
+    expect(ask.decidable).toBe(true)
+    expect(JSON.stringify(ask)).not.toContain('Beth')
   })
 
   it('handles withdrawn and removed approvals', () => {

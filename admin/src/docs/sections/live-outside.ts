@@ -34,7 +34,7 @@ export const liveOutsideDocs: DocSection = {
         'The button opens a page that says where the approval stands now and keeps saying it while open: “Already approved by Beth Lee at 10:42 AM”, “Waiting on Finance review”, “This approval was withdrawn”.',
         'Deciding still needs the approver named in the link, signed in to Nivaro in that browser, and a press of the button on the page (a link scanner that opens the email decides nothing). A link decides once.',
         'A second press, a second tab, or a colleague who decided first never shows an error: the page shows the decision that stands and nothing to press.',
-        'The page names the approval, the step and the people who decided — never values from the record. “Open in Nivaro” opens the record as you.'
+        'Who decided and when show only once you are signed in as someone who can read the record. Anyone else holding the link sees only “This approval has already been decided” or the step it waits on. The page never shows values from the record; “Open in Nivaro” opens it as you.'
       ]
     },
     { type: 'h2', id: 'submission-status-page', text: 'Status page for public form submissions' },
