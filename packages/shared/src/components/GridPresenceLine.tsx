@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { GridEditor } from '../lib/grid-presence'
 import { cn } from '../lib/utils'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 
 /**
  * The page-level line of a budget / planning grid (realtime round 8, item 22):
@@ -26,7 +27,7 @@ export function GridPresenceLine({
 }) {
   if (editors.length === 0) return null
   const where = (e: GridEditor) => {
-    const row = rowLabel(e.item) || `#${e.item}`
+    const row = rowLabel(e.item) || e.item
     const cell = e.field ? cellLabel?.(e.field, e.item) : null
     return cell ? `${row} · ${cell}` : row
   }
@@ -60,7 +61,7 @@ export function GridPresenceLine({
                 {' '}
                 for{' '}
                 <span className='font-medium text-slate-900 dark:text-slate-50'>
-                  {rowLabel(editors[0].item) || `#${editors[0].item}`}
+                  {rowLabel(editors[0].item) || editors[0].item}
                 </span>
               </>
             )}
@@ -75,7 +76,38 @@ export function GridPresenceLine({
               </Person>
             )
           })}
-          {more > 0 && <span className='text-slate-500 dark:text-slate-400'>and {more} more</span>}
+          {more > 0 && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type='button'
+                  data-grid-presence-more
+                  className='rounded text-slate-600 underline decoration-slate-300 underline-offset-2 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:decoration-slate-600 dark:hover:text-white'
+                >
+                  and {more} more
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align='end' className='w-72 p-2'>
+                <ul className='space-y-1.5 text-[12px] text-slate-600 dark:text-slate-300'>
+                  {editors.slice(shown.length).map((e) => {
+                    const at = oneRow ? cellOnly(e) : where(e)
+                    return (
+                      <li key={`${e.userId}|${e.page}`}>
+                        <Person editor={e}>
+                          <span className='font-medium text-slate-900 dark:text-slate-50'>
+                            {e.name}
+                          </span>
+                          {at && (
+                            <span className='text-slate-500 dark:text-slate-400'> · {at}</span>
+                          )}
+                        </Person>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </PopoverContent>
+            </Popover>
+          )}
         </>
       )}
     </div>
@@ -84,13 +116,14 @@ export function GridPresenceLine({
 
 function Person({ editor, children }: { editor: GridEditor; children: ReactNode }) {
   return (
-    <span className='inline-flex min-w-0 items-center gap-1.5' data-grid-presence-person>
+    <span className='inline-flex min-w-0 items-baseline gap-1.5' data-grid-presence-person>
       <span
         aria-hidden
-        className='h-2 w-2 shrink-0 rounded-full'
+        className='h-2 w-2 shrink-0 translate-y-[-1px] self-center rounded-full'
         style={{ background: editor.color }}
       />
-      <span className='min-w-0 truncate'>{children}</span>
+      {/* Wraps on a narrow screen instead of cutting off where the person is. */}
+      <span className='min-w-0 break-words'>{children}</span>
     </span>
   )
 }

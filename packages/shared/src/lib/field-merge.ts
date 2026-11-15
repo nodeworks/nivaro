@@ -28,6 +28,7 @@ const RICH_IFACES = new Set([
   'input-rich-text-html',
   'input-rich-text-md'
 ])
+const BLOCK_HTML = /<(p|div|ul|ol|li|h[1-6]|br)\b/i
 const SET_IFACES = new Set([
   'tags',
   'select-multiple-dropdown',
@@ -85,6 +86,16 @@ export function fieldMergeKind(
   // A plain JSON list on both sides (a multi-value field with a custom interface).
   if ((type === 'json' || Array.isArray(mine)) && Array.isArray(mine) && Array.isArray(theirs))
     return mine.every(isPlain) && theirs.every(isPlain) ? 'set' : 'none'
+  // No interface known (meta not read yet, or an unregistered field): paragraph markup on both
+  // sides is rich text.
+  if (
+    !iface &&
+    typeof mine === 'string' &&
+    typeof theirs === 'string' &&
+    BLOCK_HTML.test(mine) &&
+    BLOCK_HTML.test(theirs)
+  )
+    return 'rich'
   // Long plain text without a text-area interface still merges by line.
   if (
     (type === 'text' || type === 'string') &&

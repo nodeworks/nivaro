@@ -67,16 +67,17 @@ export function windowCellEmit(cell: string, state: 'start' | 'end'): void {
   window.dispatchEvent(new CustomEvent('nvr:cell-editing', { detail: { cell, state } }))
 }
 
-/** Calm, distinct outline colours (readable on white and on the dark card). */
-const CURSOR_COLORS = [
+/**
+ * Calm, clearly distinct outline colours (readable on white and on the dark card). No amber,
+ * orange or red: those read as status (warning, refused) in this app.
+ */
+export const CURSOR_COLORS = [
   '#0ea5e9', // sky
   '#8b5cf6', // violet
-  '#f59e0b', // amber
   '#10b981', // emerald
   '#ec4899', // pink
-  '#6366f1', // indigo
-  '#f97316', // orange
-  '#14b8a6' // teal
+  '#64748b', // slate
+  '#84cc16' // lime
 ]
 
 /** One colour per person, the same on every screen (a hash of their id). */
@@ -88,17 +89,51 @@ export function cursorColor(personId: string | null | undefined): string {
 }
 
 /**
+ * Colours for the people on one screen right now: everyone keeps the colour they already had
+ * while they stay, a newcomer takes the first colour nobody on screen holds, so no two people
+ * share a colour until there are more people than colours. Pure; `prev` is the last answer.
+ */
+export function assignCursorColors(
+  ids: string[],
+  prev: ReadonlyMap<string, string> = new Map()
+): Map<string, string> {
+  const out = new Map<string, string>()
+  const key = (id: string) => id.toUpperCase()
+  for (const id of ids) {
+    const kept = prev.get(key(id))
+    if (kept && ![...out.values()].includes(kept)) out.set(key(id), kept)
+  }
+  for (const id of ids) {
+    if (out.has(key(id))) continue
+    const used = new Set(out.values())
+    const free = CURSOR_COLORS.find((c) => !used.has(c))
+    out.set(key(id), free ?? cursorColor(id))
+  }
+  return out
+}
+
+/** "Beth Ray" → "BR" (one name → its first two letters). */
+export function personInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return '?'
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
+  return (words[0][0] + words[words.length - 1][0]).toUpperCase()
+}
+
+/**
  * Mark a grid cell as someone else's cursor: their colour as the outline (`--nvr-cursor`,
- * the hosts' CSS reads it) and their name as the hover tip. Returns the undo.
+ * the hosts' CSS reads it) and their name as the hover tip. `color` overrides the hashed one
+ * (a screen that assigns colours per person present). Returns the undo.
  */
 export function markRemoteCell(
   el: HTMLElement,
-  person: { id?: string | null; name: string }
+  person: { id?: string | null; name: string },
+  color?: string
 ): () => void {
   const hadTip = el.getAttribute('data-tip')
   el.classList.add('nvr-remote-editing')
   el.dataset.remoteEditor = person.name
-  el.style.setProperty('--nvr-cursor', cursorColor(person.id ?? person.name))
+  el.style.setProperty('--nvr-cursor', color ?? cursorColor(person.id ?? person.name))
   el.setAttribute('data-tip', `${person.name} is here`)
   return () => {
     el.classList.remove('nvr-remote-editing')

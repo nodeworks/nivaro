@@ -1,5 +1,11 @@
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createCellAnnouncer, cursorColor, markRemoteCell } from './grid-cursors'
+import {
+  assignCursorColors,
+  createCellAnnouncer,
+  cursorColor,
+  markRemoteCell,
+  personInitials
+} from './grid-cursors'
 import { useLiveEvent } from './live'
 import { useLivePreference } from './live-preference'
 import { useMyUserId } from './presence-signals'
@@ -260,10 +266,21 @@ export function useGridPresence(opts: GridPresenceOptions): GridPresence {
     return () => clearInterval(t)
   }, [enabled, book.size])
   const shown = live.normal && enabled
-  const editors = useMemo(() => (shown ? freshGridEditors(book, now) : EMPTY), [shown, book, now])
+  // Colours are per screen: each person keeps theirs while they stay, a newcomer gets the first
+  // one nobody here holds (no two people alike on one screen).
+  const colorsRef = useRef<Map<string, string>>(new Map())
+  const editors = useMemo(() => {
+    if (!shown) return EMPTY
+    const fresh = freshGridEditors(book, now)
+    const colors = assignCursorColors([...new Set(fresh.map((e) => e.userId))], colorsRef.current)
+    colorsRef.current = colors
+    return fresh.map((e) => ({ ...e, color: colors.get(e.userId.toUpperCase()) ?? e.color }))
+  }, [shown, book, now])
 
-  // ── Outline others' cells ──────────────────────────────────────────────
+  // ── Outline others' cells, with a name chip ────────────────────────────
   // Re-applied after every render of the grid's host (a re-rendered cell drops the class).
+  // The chip (initials, the person's colour) is a real element beside the cell, so it shows on
+  // touch screens (no hover) and on inputs (which draw no ::before / ::after).
   useEffect(() => {
     const el = containerRef?.current
     if (!el || editors.length === 0) return
@@ -273,7 +290,9 @@ export function useGridPresence(opts: GridPresenceOptions): GridPresence {
       const cell = el.querySelector<HTMLElement>(
         `[data-grid-cell="${cssEscape(gridPresenceCell(e.item, e.field))}"]`
       )
-      if (cell) undo.push(markRemoteCell(cell, { id: e.userId, name: e.name }))
+      if (!cell) continue
+      undo.push(markRemoteCell(cell, { id: e.userId, name: e.name }, e.color))
+      undo.push(placeNameChip(cell, e))
     }
     return () => {
       for (const u of undo) u()
@@ -290,6 +309,40 @@ export function gridPageKey(kind: string, ...parts: string[]): string {
   const s = parts.join('\u0001')
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
   return `${kind.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24)}:${(h >>> 0).toString(36)}`
+}
+
+/** The initials chip on someone else's cell; returns its removal. */
+function placeNameChip(cell: HTMLElement, e: GridEditor): () => void {
+  const host =
+    cell instanceof HTMLInputElement || cell instanceof HTMLTextAreaElement
+      ? cell.parentElement
+      : cell
+  if (!host || typeof document === 'undefined') return () => {}
+  const chip = document.createElement('span')
+  chip.setAttribute('data-grid-presence-chip', '')
+  chip.setAttribute('aria-hidden', 'true')
+  chip.textContent = personInitials(e.name)
+  Object.assign(chip.style, {
+    position: 'absolute',
+    top: '-7px',
+    right: '2px',
+    zIndex: '5',
+    padding: '0 4px',
+    borderRadius: '4px',
+    background: e.color,
+    color: '#fff',
+    font: '600 9px/14px ui-sans-serif, system-ui, sans-serif',
+    letterSpacing: '0.02em',
+    pointerEvents: 'none'
+  })
+  const staticHost = getComputedStyle(host).position === 'static'
+  const prevPos = host.style.position
+  if (staticHost) host.style.position = 'relative'
+  host.appendChild(chip)
+  return () => {
+    chip.remove()
+    if (staticHost) host.style.position = prevPos
+  }
 }
 
 function cssEscape(v: string): string {
