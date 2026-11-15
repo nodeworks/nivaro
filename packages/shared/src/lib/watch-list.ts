@@ -393,6 +393,11 @@ export interface WatchActions {
 }
 
 /** Pin / unpin / dock writes, applied to the cache first (the click lands at once). */
+/** Watch-list writes from this tab, shared by every useWatchActions caller (module state). */
+let writeSeq = 0
+let writesInFlight = 0
+let stalePrefsAnswer = false
+
 export function useWatchActions(): WatchActions & { prefs: WatchPrefs } {
   const client = useOptionalNivaroClient()
   const qc = useQueryClient()
@@ -417,21 +422,40 @@ export function useWatchActions(): WatchActions & { prefs: WatchPrefs } {
   )
   const write = useMutation({
     mutationFn: async (cmd: Parameters<Client['request']>[0]) =>
-      (client as Client).request(cmd) as Promise<{ data: WatchPrefs }>,
-    onSuccess: settle
+      (client as Client).request(cmd) as Promise<{ data: WatchPrefs }>
   })
   const run = useCallback(
     async (cmd: Parameters<Client['request']>[0], fallback: string) => {
       if (!client) return
+      const seq = ++writeSeq
+      writesInFlight++
       try {
-        await write.mutateAsync(cmd)
+        const r = await write.mutateAsync(cmd)
+        // Only the NEWEST write's answer may replace the list on screen: an older write (a
+        // "seen" mark sent with the pin) answers with the list as it stood before the newer
+        // optimistic change and would drop it — the new pin vanished, the dock read four rows
+        // under the five-pin key and kept them as fresh for a minute ("adding takes 30 s").
+        if (seq === writeSeq) settle(r)
+        else stalePrefsAnswer = true
       } catch (err) {
         void qc.invalidateQueries({ queryKey: watchKeys.prefs })
         toastError(err, fallback)
         throw err
+      } finally {
+        writesInFlight--
+        if (writesInFlight === 0) {
+          // Everything this tab sent has landed: read the list again if an answer was skipped,
+          // and re-read the rows (a read started while a write was in flight saw the old pins).
+          if (stalePrefsAnswer) {
+            stalePrefsAnswer = false
+            void qc.invalidateQueries({ queryKey: watchKeys.prefs })
+          }
+          void qc.invalidateQueries({ queryKey: ['watch-list', 'rows'] })
+          void qc.invalidateQueries({ queryKey: ['watch-list', 'summary'] })
+        }
       }
     },
-    [client, write, qc]
+    [client, write, qc, settle]
   )
 
   const pin = useCallback(

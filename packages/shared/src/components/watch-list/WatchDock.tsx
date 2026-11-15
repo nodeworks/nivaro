@@ -46,6 +46,7 @@ import {
   WATCH_WIDTH_MAX,
   WATCH_WIDTH_MIN,
   type WaitingRowData,
+  type WatchPinRef,
   type WatchPrefs,
   type WatchRemovedRef,
   type WatchRowData,
@@ -91,6 +92,8 @@ type Client = NonNullable<ReturnType<typeof useOptionalNivaroClient>>
 interface RowsAnswer {
   rows?: WatchRowData[]
   changed: string[]
+  /** The pins the server read the rows for. */
+  pins?: WatchPinRef[]
 }
 
 function useDockData(prefs: WatchPrefs, visible: boolean, tab: DockTab) {
@@ -105,6 +108,18 @@ function useDockData(prefs: WatchPrefs, visible: boolean, tab: DockTab) {
     staleTime: 60_000,
     placeholderData: (prev) => prev
   })
+  // The answer names the pins it was read for. A read that raced a pin or unpin (started
+  // before the write reached the server) answers for another list: ask again once, at once,
+  // instead of showing a loading row until the minute is up.
+  const answeredSig = rows.data?.pins ? pinsSignature(rows.data.pins) : null
+  const reasked = useRef('')
+  useEffect(() => {
+    if (!answeredSig || answeredSig === sig || rows.isFetching || rows.isPlaceholderData) return
+    const mark = `${sig}#${rows.dataUpdatedAt}`
+    if (reasked.current === mark) return
+    reasked.current = mark
+    void rows.refetch()
+  }, [answeredSig, sig, rows.isFetching, rows.isPlaceholderData, rows.dataUpdatedAt, rows.refetch])
   const summary = useQuery({
     queryKey: watchKeys.summary(sig),
     queryFn: () =>
