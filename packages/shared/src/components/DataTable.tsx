@@ -17,6 +17,7 @@ import {
   formatDateFilter,
   parseDateFilter
 } from '../lib/date-filter'
+import { useKeepRowCheckboxFocus } from '../lib/keep-row-focus'
 import {
   describeNumberFilter,
   formatNumberFilter,
@@ -956,6 +957,8 @@ export function DataTable<T = Record<string, unknown>>({
 
   const headCellRefs = useRef<Record<string, HTMLTableCellElement | null>>({})
   const hScrollRef = useRef<HTMLDivElement | null>(null)
+  // The <tbody> re-keys on enterKey: keep a focused row checkbox through a live refresh.
+  useKeepRowCheckboxFocus(hScrollRef)
   const checkboxHeadRef = useRef<HTMLTableCellElement | null>(null)
   // The empty message spans every column, so on a wide table centring it in
   // the cell puts it right of the visible middle. It is pinned to the visible

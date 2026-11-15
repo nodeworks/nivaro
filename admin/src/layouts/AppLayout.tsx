@@ -958,7 +958,7 @@ export function AppLayout() {
                           className='h-8 w-8'
                           fallback={
                             <Avatar className='h-8 w-8 shrink-0'>
-                              <AvatarFallback className='bg-nvr-cyan/[0.15] text-[11px] font-bold text-nvr-navy'>
+                              <AvatarFallback className='bg-nvr-cyan/[0.15] text-[11px] font-bold text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'>
                                 {initials}
                               </AvatarFallback>
                             </Avatar>

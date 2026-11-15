@@ -29,6 +29,7 @@ import {
   type ReadyCheck,
   timedCheck
 } from './services/ready-probe.js'
+import { maskUrlQuery } from './services/secret-mask.js'
 import { NIVARO_VERSION } from './version.js'
 
 /**
@@ -70,6 +71,23 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     trustProxy: fastifyTrustProxy(trustProxyFromEnv().value),
     logger: {
       level: config.LOG_LEVEL,
+      // Same request serializer as the web process (server.ts): no query string (stream
+      // tickets ride ?ticket=) and link tokens in the path masked.
+      serializers: {
+        req: (req: {
+          method?: string
+          url?: string
+          host?: string
+          ip?: string
+          socket?: { remotePort?: number }
+        }) => ({
+          method: req.method,
+          url: maskUrlQuery(String(req.url ?? '').split('?')[0]),
+          host: req.host,
+          remoteAddress: req.ip,
+          remotePort: req.socket?.remotePort
+        })
+      },
       ...(config.NODE_ENV === 'development'
         ? {
             transport: {
@@ -274,7 +292,7 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     if (status >= 500 && !noteCutStatement(err, req))
       void trackError({
         source: 'server',
-        route: `${req.method} ${req.routeOptions?.url ?? req.url} (realtime)`,
+        route: `${req.method} ${req.routeOptions?.url ?? maskUrlQuery(req.url)} (realtime)`,
         message: err.message,
         stack: err.stack,
         userId: req.user?.id ?? null

@@ -14,6 +14,7 @@
  */
 import { hostname } from 'node:os'
 import { currentTraceMeta } from './request-trace.js'
+import { maskUrlPath } from './secret-mask.js'
 import { normalizeApp, normalizeScreenPath } from './traffic-client-facts.js'
 import { callerKeyFor, pathTemplate } from './traffic-entities.js'
 
@@ -103,7 +104,9 @@ export function inflightStart(req: unknown): void {
     const id = currentTraceMeta()?.id
     if (!id || byTrace.size >= INFLIGHT_CAP) return
     const r = req as Record<string, unknown> & { raw?: { url?: string }; url?: string }
-    const path = String(r.raw?.url ?? r.url ?? '').split('?')[0]
+    // A link token riding the path (public dashboard / form / feed links) never reaches the
+    // in-flight inspector.
+    const path = maskUrlPath(String(r.raw?.url ?? r.url ?? '').split('?')[0])
     byTrace.set(id, {
       id,
       req,

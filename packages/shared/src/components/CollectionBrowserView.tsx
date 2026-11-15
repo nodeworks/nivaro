@@ -95,6 +95,7 @@ import {
 } from '../lib/format-value'
 import { IN_STEP_COLUMN, IN_STEP_SORT, inStepText } from '../lib/in-step'
 import type { JobProgressPayload } from '../lib/jobs-tray'
+import { useKeepRowCheckboxFocus } from '../lib/keep-row-focus'
 import {
   createCursorBook,
   isCursorRefusal,
@@ -4830,6 +4831,9 @@ export function CollectionBrowserView({
   }, [exportMenuOpen])
   const colsRef = useRef<HTMLDivElement>(null)
   const tableScrollRef = useRef<HTMLDivElement>(null)
+  // The <tbody> re-keys on every refresh: a live update that removes another row must not
+  // throw a keyboard user off the row checkbox they were on.
+  useKeepRowCheckboxFocus(tableScrollRef)
   // A shared link IS the view: the collection / role default view never lands over it.
   // Same for a deep link's context (army 8 b16): a dashboard count opens the records it
   // counted, not those records further narrowed by a saved default view.
