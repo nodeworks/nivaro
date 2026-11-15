@@ -297,6 +297,8 @@ export function CollectionCalendar({
     ...Array.from({ length: firstDow }, () => null),
     ...Array.from({ length: daysInMonth }, (_, i) => i + 1)
   ]
+  // Fill the last week, so the grid ends on a whole row instead of a gap.
+  while (cells.length % 7 !== 0) cells.push(null)
   const today = new Date()
   const isThisMonth =
     today.getFullYear() === cursor.getFullYear() && today.getMonth() === cursor.getMonth()
@@ -417,7 +419,7 @@ export function CollectionCalendar({
               data-cal-day={key || undefined}
               className={cn(
                 'min-h-24 bg-white p-1.5 transition-colors dark:bg-card',
-                day && isThisMonth && day === today.getDate() && 'bg-[#00ceff08]',
+                day && isThisMonth && day === today.getDate() && 'bg-[#f3fcff] dark:bg-[#0f2630]',
                 isOver && 'bg-[#eafaff] dark:bg-[#0d2a33]'
               )}
             >

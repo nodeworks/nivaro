@@ -2538,34 +2538,46 @@ export function DisplayPrefsCard() {
  * Round 9 #14 — "Play a sound for urgent items" (off by default): one short chime when urgent
  * work lands on this person (lib/urgent-chime.ts). Says plainly when it cannot play.
  */
-function UrgentSoundRow({ on, onChange }: { on: boolean; onChange: (next: boolean) => void }) {
+export function UrgentSoundRow({
+  on,
+  onChange
+}: {
+  on: boolean
+  onChange: (next: boolean) => void
+}) {
   const live = useLivePreference()
   return (
     <div
       data-urgent-sound
-      className='flex flex-wrap items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'
+      className='flex items-start gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'
     >
-      <Toggle on={on} onChange={() => onChange(!on)} label='Play a sound for urgent items' />
-      Play a sound for urgent items
-      <span className='text-[11px] text-slate-500 dark:text-slate-400'>
-        one short chime when an urgent task, a missed deadline you own or a priority record lands on
-        you — never in quiet hours, do not disturb or focus mode
+      <span className='pt-px'>
+        <Toggle on={on} onChange={() => onChange(!on)} label='Play a sound for urgent items' />
       </span>
-      <button
-        type='button'
-        onClick={() => playUrgentChime({ preview: true })}
-        className='rounded px-1.5 py-0.5 text-[11.5px] font-medium text-[#0089ad] underline decoration-dotted underline-offset-2 hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-nvr-cyan'
-      >
-        Hear it
-      </button>
-      {on && live.off && (
-        <span
-          data-urgent-sound-off
-          className='basis-full pl-10 text-[11.5px] text-amber-700 dark:text-amber-300'
-        >
-          Live updates are Off, so it stays silent until you turn them back on (Display).
-        </span>
-      )}
+      <div className='min-w-0'>
+        <div className='flex flex-wrap items-center gap-x-2'>
+          <span>Play a sound for urgent items</span>
+          <button
+            type='button'
+            onClick={() => playUrgentChime({ preview: true })}
+            className='rounded px-1 py-0.5 text-[11.5px] font-medium text-[#007a99] underline decoration-dotted underline-offset-2 hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-nvr-cyan'
+          >
+            Hear it
+          </button>
+        </div>
+        <p className='mt-0.5 max-w-[68ch] text-[11.5px] leading-snug text-slate-500 dark:text-slate-400'>
+          One short chime when an urgent task, a missed deadline you own or a priority record lands
+          on you. Never in quiet hours, do not disturb or focus mode.
+        </p>
+        {on && live.off && (
+          <p
+            data-urgent-sound-off
+            className='mt-1 text-[11.5px] text-amber-700 dark:text-amber-300'
+          >
+            Live updates are Off, so it stays silent until you turn them back on (Display).
+          </p>
+        )}
+      </div>
     </div>
   )
 }
