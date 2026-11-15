@@ -34,7 +34,7 @@ export function ConfigTheirsPanel({
         </span>
         <span className='text-slate-500 dark:text-muted-foreground'>
           {rows.length
-            ? `${rows.length} ${rows.length === 1 ? 'field differs' : 'fields differ'} from your form. Your form is unchanged.`
+            ? `${rows.length} ${rows.length === 1 ? 'field differs' : 'fields differ'} from your form. Nothing in your form has changed yet.`
             : 'Same as your form.'}
         </span>
         <span className='ml-auto flex items-center gap-2'>
@@ -70,10 +70,14 @@ export function ConfigTheirsPanel({
                   <td className='px-4 py-1.5 font-medium text-slate-700 dark:text-foreground'>
                     {r.label}
                   </td>
-                  <td className='break-words px-4 py-1.5 font-mono text-[11.5px] text-slate-700 dark:text-slate-200'>
+                  <td
+                    className={`break-words px-4 py-1.5 text-slate-700 dark:text-slate-200 ${r.code ? 'font-mono text-[11.5px]' : ''}`}
+                  >
                     {r.theirs}
                   </td>
-                  <td className='break-words px-4 py-1.5 font-mono text-[11.5px] text-slate-500 dark:text-slate-400'>
+                  <td
+                    className={`break-words px-4 py-1.5 text-slate-500 dark:text-slate-400 ${r.code ? 'font-mono text-[11.5px]' : ''}`}
+                  >
                     {r.mine}
                   </td>
                 </tr>

@@ -64,7 +64,18 @@ describe('config watch (rt4 #14 / #18)', () => {
       { name: 'Name', enabled: 'Enabled', headers: 'Headers', note: 'Note' }
     )
     expect(rows.map((r) => r.key)).toEqual(['name', 'headers'])
-    expect(rows[0]).toEqual({ key: 'name', label: 'Name', theirs: 'Theirs', mine: 'Mine' })
+    expect(rows[0]).toEqual({
+      key: 'name',
+      label: 'Name',
+      theirs: 'Theirs',
+      mine: 'Mine',
+      code: false
+    })
     expect(rows[1].theirs).toBe('[{"key":"a","value":"2"}]')
+    expect(rows[1].code).toBe(true)
+    expect(
+      diffConfigFields({ u: 'https://a.example/x' }, { u: 'https://b.example/x' }, { u: 'URL' })[0]
+        .code
+    ).toBe(true)
   })
 })

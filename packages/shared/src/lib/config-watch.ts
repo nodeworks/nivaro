@@ -184,7 +184,18 @@ export interface ConfigFieldDiff {
   label: string
   theirs: string
   mine: string
+  /** Code-like (URL, key, JSON): shown in monospace; plain text is not. */
+  code: boolean
 }
+
+const looksLikeCode = (v: unknown) =>
+  v != null &&
+  v !== '' &&
+  (typeof v === 'object' ||
+    (typeof v === 'string' &&
+      /^(https?:\/\/|[{[])|^[\w.-]+$/.test(v) &&
+      !/\s/.test(v) &&
+      /[/:._-]/.test(v)))
 
 function shown(v: unknown): string {
   if (v == null || v === '') return '—'
@@ -220,7 +231,13 @@ export function diffConfigFields(
   const out: ConfigFieldDiff[] = []
   for (const [key, label] of Object.entries(labels)) {
     if (canon(mine[key]) === canon(theirs[key])) continue
-    out.push({ key, label, theirs: shown(theirs[key]), mine: shown(mine[key]) })
+    out.push({
+      key,
+      label,
+      theirs: shown(theirs[key]),
+      mine: shown(mine[key]),
+      code: looksLikeCode(theirs[key]) || looksLikeCode(mine[key])
+    })
   }
   return out
 }

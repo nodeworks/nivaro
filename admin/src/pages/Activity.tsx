@@ -6,6 +6,7 @@ import {
   useActivityLabels
 } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArrowUp } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import {
@@ -279,9 +280,10 @@ export function ActivityPage() {
                 hoverRef.current = false
                 reread()
               }}
-              className='sticky -top-4 z-10 flex w-full sm:-top-6 items-center justify-center gap-1.5 rounded-t-lg border-b border-slate-100 bg-card py-1.5 text-[12px] font-medium text-nvr-cyan shadow-sm transition-colors hover:bg-muted motion-safe:animate-[nvr-fade-in_240ms_ease-out_backwards] dark:border-border'
+              className='sticky -top-4 z-10 flex w-full items-center justify-center gap-1.5 rounded-t-lg border-b border-slate-100 bg-card py-2 text-[12px] font-medium text-nvr-cyan shadow-sm transition-colors hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan motion-safe:animate-[nvr-fade-in_240ms_ease-out_backwards] sm:-top-6 dark:border-border dark:hover:bg-nvr-cyan/15'
             >
-              {waiting === 1 ? '1 newer entry' : `${formatNumber(waiting)} newer entries`}
+              <ArrowUp className='h-3.5 w-3.5' aria-hidden />
+              {waiting === 1 ? 'Show 1 newer entry' : `Show ${formatNumber(waiting)} newer entries`}
             </button>
           )}
           {isLoading ? (

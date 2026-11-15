@@ -3477,19 +3477,6 @@ export function PipelineEditorView({
     <>
       {/* Sticky header */}
       <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        {liveChange && (
-          <ConfigChangeStrip
-            className='-mx-8 -mt-5 mb-4'
-            change={liveChange}
-            dirty={pipelineDirty}
-            onShow={() => {
-              clearLiveChange()
-              invalidate()
-              queryClient.invalidateQueries({ queryKey: ['pipeline-versions', templateId] })
-            }}
-            onDismiss={clearLiveChange}
-          />
-        )}
         <div className='flex items-center justify-between'>
           <div className='flex items-center gap-2 text-[13px]'>
             {onBack && (
@@ -3572,6 +3559,19 @@ export function PipelineEditorView({
             )}
           </div>
         </div>
+        {liveChange && (
+          <ConfigChangeStrip
+            className='-mx-8 -mb-5 mt-4 border-b-0 border-t'
+            change={liveChange}
+            dirty={pipelineDirty}
+            onShow={() => {
+              clearLiveChange()
+              invalidate()
+              queryClient.invalidateQueries({ queryKey: ['pipeline-versions', templateId] })
+            }}
+            onDismiss={clearLiveChange}
+          />
+        )}
       </div>
 
       <div className='p-6 lg:p-8 space-y-6'>

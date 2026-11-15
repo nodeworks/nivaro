@@ -1,3 +1,4 @@
+import { X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { type ConfigChange, configChangeText } from '../lib/config-watch'
 
@@ -47,6 +48,8 @@ export function ConfigChangeStrip({
     : change
       ? `${configChangeText(change, now)}.`
       : ''
+  // Amber whenever pressing Show costs something: a refused save, or edits Show would replace.
+  const warn = !!stale || (!!dirty && !!showDiscards)
   const link =
     'rounded font-medium text-nvr-cyan underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
   return (
@@ -54,18 +57,18 @@ export function ConfigChangeStrip({
       aria-live='polite'
       data-config-change
       className={`flex flex-wrap items-center gap-x-2 gap-y-1 border-b px-4 py-1.5 text-[12px] motion-safe:animate-[nvr-fade-in_240ms_ease-out_backwards] ${
-        stale
+        warn
           ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100'
           : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-border dark:bg-muted/40 dark:text-foreground'
       } ${className ?? ''}`}
     >
       <span
-        className={`h-1.5 w-1.5 shrink-0 rounded-full ${stale ? 'bg-amber-500' : 'bg-nvr-cyan'}`}
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${warn ? 'bg-amber-500' : 'bg-nvr-cyan'}`}
         aria-hidden
       />
       <span className='min-w-0'>{text}</span>
       {dirty && !stale && (
-        <span className='text-slate-500 dark:text-muted-foreground'>
+        <span className={warn ? '' : 'text-slate-500 dark:text-muted-foreground'}>
           {showDiscards ? 'Show replaces your unsaved edits.' : 'Your unsaved edits stay.'}
         </span>
       )}
@@ -89,9 +92,9 @@ export function ConfigChangeStrip({
           type='button'
           onClick={onDismiss}
           aria-label='Dismiss'
-          className='ml-auto rounded px-1 text-slate-400 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:text-slate-200'
+          className='-my-1 ml-auto inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-black/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-white/10'
         >
-          ×
+          <X className='h-4 w-4' aria-hidden />
         </button>
       )}
     </output>

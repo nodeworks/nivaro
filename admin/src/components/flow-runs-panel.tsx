@@ -22,9 +22,12 @@ interface FlowRun {
 }
 
 const STATUS_CONFIG: Record<FlowRun['status'], string> = {
-  success: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  error: 'bg-red-50 text-red-700 border-red-200',
-  running: 'bg-amber-50 text-amber-700 border-amber-200'
+  success:
+    'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/30',
+  error:
+    'bg-red-50 text-red-700 border-red-200 dark:bg-red-500/15 dark:text-red-300 dark:border-red-500/30',
+  running:
+    'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30'
 }
 
 function StatusBadge({ status }: { status: FlowRun['status'] }) {
@@ -117,13 +120,15 @@ export function FlowRunsPanel({ flowId }: { flowId: string }) {
             Run History
           </h2>
           {liveStep && (
-            <span className='inline-flex min-w-0 max-w-[160px] items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10.5px] font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'>
-              <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-500 motion-reduce:animate-none' />
-              <span className='truncate'>{liveStep}</span>
-            </span>
+            <span
+              className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-500 motion-reduce:animate-none'
+              role='img'
+              aria-label='A run is in progress'
+              data-tip={liveStep}
+            />
           )}
           {open && data && (
-            <span className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500'>
+            <span className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-muted dark:text-muted-foreground'>
               {runs.length}
             </span>
           )}
@@ -176,11 +181,18 @@ export function FlowRunsPanel({ flowId }: { flowId: string }) {
                           {live[run.id].steps.length === 1 ? 'step' : 'steps'}
                         </span>
                       ) : null}
-                      <span className='shrink-0 text-[10.5px] tabular-nums text-slate-400'>
-                        {run.status === 'running' && live[run.id]?.status !== 'running'
-                          ? formatDuration(live[run.id]?.ms ?? null)
-                          : formatDuration(run.duration_ms)}
-                      </span>
+                      {(() => {
+                        const ms =
+                          run.status === 'running' && live[run.id]?.status !== 'running'
+                            ? (live[run.id]?.ms ?? null)
+                            : run.duration_ms
+                        // A run still going has no duration yet: say nothing rather than "—".
+                        return ms == null && run.status === 'running' ? null : (
+                          <span className='shrink-0 text-[10.5px] tabular-nums text-slate-400'>
+                            {formatDuration(ms)}
+                          </span>
+                        )
+                      })()}
                       <StatusBadge
                         status={
                           run.status === 'running' &&
