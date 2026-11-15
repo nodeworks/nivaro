@@ -1040,6 +1040,17 @@ export async function supportRoutes(app: FastifyInstance) {
     }
     if (!events.length) return reply.send({ data: (await serializeTickets([t]))[0] })
     await db('nivaro_tasks').where({ id: t.id }).update(patch)
+    // Closing settles the request's notifications: "Closed by <who>".
+    if (patch.status === 'done' || patch.status === 'cancelled') {
+      const { resolveNotifications } = await import('../services/notification-resolve.js')
+      await resolveNotifications({
+        on: 'ticket',
+        id: t.id,
+        at: new Date(),
+        actorId: req.user!.id,
+        status: patch.status as 'done' | 'cancelled'
+      })
+    }
     await logTicketEvent(t.id, req.user!.id, events.join(' · '), req)
     const updated = (await loadTicket(t.id))!
     const statusMoved = patch.status !== undefined

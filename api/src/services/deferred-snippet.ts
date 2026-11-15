@@ -75,27 +75,39 @@ export interface DeferredSnippet {
   text: string
   collection: string | null
   item: string | null
+  /** The inbox row the held mail came with: the summary re-checks it at send
+   *  time and leaves the line out once it was handled. */
+  notification: number | null
 }
 
 export function encodeDeferredSnippet(
   htmlOrText: string,
-  record?: { collection?: string | null; item?: string | number | null }
+  record?: {
+    collection?: string | null
+    item?: string | number | null
+    notification?: number | null
+  }
 ): string {
   const t = mailSummaryText(htmlOrText)
   const c = record?.collection ? String(record.collection) : null
   const i = record?.item != null && String(record.item) !== '' ? String(record.item) : null
-  return JSON.stringify({ t, c, i }).slice(0, 2000)
+  const n =
+    Number.isFinite(Number(record?.notification)) && record?.notification != null
+      ? Number(record.notification)
+      : null
+  return JSON.stringify(n != null ? { t, c, i, n } : { t, c, i }).slice(0, 2000)
 }
 
 export function decodeDeferredSnippet(raw: string | null | undefined): DeferredSnippet {
   const s = String(raw ?? '')
   if (s.startsWith('{"t":')) {
     try {
-      const j = JSON.parse(s) as { t?: unknown; c?: unknown; i?: unknown }
+      const j = JSON.parse(s) as { t?: unknown; c?: unknown; i?: unknown; n?: unknown }
       return {
         text: String(j.t ?? ''),
         collection: j.c ? String(j.c) : null,
-        item: j.i != null && j.i !== '' ? String(j.i) : null
+        item: j.i != null && j.i !== '' ? String(j.i) : null,
+        notification: j.n != null && Number.isFinite(Number(j.n)) ? Number(j.n) : null
       }
     } catch {
       // fall through: an old plain row
@@ -103,5 +115,5 @@ export function decodeDeferredSnippet(raw: string | null | undefined): DeferredS
   }
   // A row from before: the stripped page. Its start is boilerplate, so show nothing rather
   // than "Engineering Finance Portal Engineering Finance Portal …".
-  return { text: '', collection: null, item: null }
+  return { text: '', collection: null, item: null, notification: null }
 }

@@ -46,7 +46,11 @@ import {
 } from './bundles'
 import { DeliveryChips } from './DeliveryChips'
 import { NotificationActions } from './NotificationActions'
-import { NotificationChangesList, NotificationDetailBits } from './NotificationDetailBits'
+import {
+  NotificationChangesList,
+  NotificationDetailBits,
+  ResolvedLine
+} from './NotificationDetailBits'
 
 /**
  * The full notifications inbox — lane tabs (Critical / Needs you / FYI),
@@ -547,6 +551,7 @@ export function NotificationCenterView({
             {n.message.replace(/<[^>]+>/g, '')}
           </p>
         )}
+        <ResolvedLine resolved={n.detail?.resolved} className='text-[11.5px]' />
       </>
     )
     return (
@@ -669,7 +674,7 @@ export function NotificationCenterView({
               )}
             </div>
           )}
-          {n.actions && n.actions.length > 0 && (
+          {n.actions && n.actions.length > 0 && !n.detail?.resolved && (
             <NotificationActions
               actions={unread ? n.actions : n.actions.filter((a) => !!a.input)}
               notificationId={n.id}

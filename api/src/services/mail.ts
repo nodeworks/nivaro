@@ -560,7 +560,11 @@ async function applyDigestDeferral(
   /** Filled with the addresses left out because their rules say "No email". */
   offOut?: string[],
   /** The record the mail is about: the daily summary links the held line to it. */
-  record?: { collection?: string | null; item?: string | number | null }
+  record?: {
+    collection?: string | null
+    item?: string | number | null
+    notification?: number | null
+  }
 ): Promise<string[]> {
   if (skip || recipients.length === 0) return recipients
   try {
@@ -775,6 +779,9 @@ export interface MailOptions {
   /** The record the email is about, when it differs from the logged
    *  `collection`/`item` context (otherwise those two already decide). */
   record?: { collection: string; id: string | number } | null
+  /** The inbox row this mail rides with (notifyUser): a mail held for the daily
+   *  summary is left out of it once that row was handled. */
+  notification_id?: number | null
 }
 
 /** The branding lookup a send derives from its options (#1463). */
@@ -941,7 +948,7 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
     opts.category,
     opts.cadence === 'sender',
     off,
-    { collection: opts.collection, item: opts.item }
+    { collection: opts.collection, item: opts.item, notification: opts.notification_id ?? null }
   )
   await logSkipped(
     off.map((address) => ({ address, reason: NO_EMAIL_REASON })),
