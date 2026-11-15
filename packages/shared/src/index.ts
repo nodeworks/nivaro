@@ -984,6 +984,7 @@ export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
 export * from './lib/live-data-changed'
 export * from './lib/live-findings'
 export * from './lib/live-search'
+export * from './lib/live-views'
 export * from './lib/live-widgets'
 export {
   isListTimeout,
