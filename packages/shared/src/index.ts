@@ -329,6 +329,7 @@ export {
   type PreflightResult,
   PushReadinessChip
 } from './components/integrations/RecordIntegrationPreview'
+export { SendStatusLines, SendStatusMarks } from './components/integrations/SendStatus'
 export type { ChangeReasonChallenge } from './components/item-edit/ChangeReasonDialog'
 export {
   ChangeReasonDialog,
@@ -759,6 +760,7 @@ export {
   startApiVersionWatch,
   useApiUpdate
 } from './lib/api-version'
+export * from './lib/approval-progress'
 export * from './lib/attention-prefs'
 export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
@@ -974,6 +976,7 @@ export { currentViewport } from './lib/layout-resolve'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export { LineLockContext, lineLockView, useLineLocks } from './lib/line-locks'
+export { linkedChangeSentence, useLinkedRecordWatch } from './lib/linked-changes'
 export * from './lib/list-inline-edit'
 export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
@@ -1317,6 +1320,7 @@ export {
   searchRankWords,
   tokenize
 } from './lib/search-text'
+export * from './lib/send-status'
 export {
   type ClockSample,
   measureClockOffset,

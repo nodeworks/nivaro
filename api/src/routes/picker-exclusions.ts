@@ -3,7 +3,9 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { readLinkedChange } from '../services/linked-change.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
+import { announceRecordAspect } from '../services/record-events.js'
 import { type RecordToolRequest, recordToolRefusal } from '../services/record-tool-gate.js'
 import { recordVisibleTo } from '../services/revision-access.js'
 
@@ -74,6 +76,8 @@ export async function pickerExclusionRoutes(app: FastifyInstance) {
         item: String(item_id),
         user: req.user?.id ?? null
       })
+      // rt4 #6 — open forms that link to this record re-check their picker (ids only).
+      announceRecordAspect(collection, String(item_id), '$picker')
       return reply.send({ data: { excluded: true } })
     }
   )
@@ -97,7 +101,34 @@ export async function pickerExclusionRoutes(app: FastifyInstance) {
         item: String(item_id),
         user: req.user?.id ?? null
       })
+      announceRecordAspect(collection, String(item_id), '$picker')
       return reply.send({ data: { excluded: false } })
+    }
+  )
+
+  // rt4 #6 — the last change to a record other forms link to: who, when and which fields
+  // (yes/no and choice values only), for the line under a picker whose value just stopped
+  // being offered. Only for a record the caller can open; only fields they may read.
+  app.get<{ Querystring: { collection?: string; item_id?: string; since?: string } }>(
+    '/linked-change',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const collection = String(req.query.collection ?? '').trim()
+      const itemId = String(req.query.item_id ?? '').trim()
+      if (!collection || !itemId)
+        return reply.code(400).send({ error: 'collection and item_id required' })
+      if (!(await recordVisibleTo(req, collection, itemId))) {
+        return reply.code(404).send({ error: 'Not found' })
+      }
+      const since = req.query.since ? new Date(String(req.query.since)) : new Date(0)
+      const change = await readLinkedChange(
+        req.user!,
+        req.isAdmin === true,
+        collection,
+        itemId,
+        Number.isNaN(since.getTime()) ? new Date(0) : since
+      )
+      return reply.send({ data: change })
     }
   )
 
@@ -175,6 +206,10 @@ export async function pickerExclusionRoutes(app: FastifyInstance) {
         item: ids.join(','),
         user: req.user?.id ?? null
       })
+      // Forms linking to any of them re-check; a long list says "many" once.
+      if (ids.length <= 50)
+        for (const id of ids) announceRecordAspect(collection, String(id), '$picker')
+      else announceRecordAspect(collection, '*', '$picker')
       return reply.send({ data: { success: true, count: ids.length } })
     }
   )

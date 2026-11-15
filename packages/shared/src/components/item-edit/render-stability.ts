@@ -75,6 +75,7 @@ function applySpecsEqual(
  * callback stays absent when the newest value has none (rows test for it).
  */
 const NO_DUPLICATES: Record<string, DuplicateHint> = {}
+const NO_LINKED: Record<string, string> = {}
 
 export function useStableFieldAffordances(next: FieldAffordances): FieldAffordances {
   const latest = useRef(next)
@@ -113,6 +114,10 @@ export function useStableFieldAffordances(next: FieldAffordances): FieldAffordan
     next.duplicates ?? NO_DUPLICATES,
     duplicateHintsEqual
   )
+  const linkedChanges = useKeepIfEqual<Record<string, string>>(
+    next.linkedChanges ?? NO_LINKED,
+    shallowRecordEqual
+  )
   return useMemo<FieldAffordances>(
     () => ({
       remoteChanges,
@@ -128,7 +133,8 @@ export function useStableFieldAffordances(next: FieldAffordances): FieldAffordan
       fromAutofill,
       glossaryHelp,
       placementText,
-      duplicates
+      duplicates,
+      linkedChanges
     }),
     [
       remoteChanges,
@@ -144,7 +150,8 @@ export function useStableFieldAffordances(next: FieldAffordances): FieldAffordan
       fromAutofill,
       glossaryHelp,
       placementText,
-      duplicates
+      duplicates,
+      linkedChanges
     ]
   )
 }
