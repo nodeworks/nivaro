@@ -56,6 +56,7 @@ export * from './sections/live-lists.js'
 export * from './sections/live-ops.js'
 export * from './sections/live-progress.js'
 export * from './sections/live-records.js'
+export * from './sections/live-screens.js'
 export * from './sections/low-code.js'
 export * from './sections/mobile-app.js'
 export * from './sections/monitoring.js'
@@ -307,6 +308,7 @@ import {
 } from './sections/live-ops.js'
 import { collabLiveProgress } from './sections/live-progress.js'
 import { collabLiveOps, collabLiveRecords, collabPresence } from './sections/live-records.js'
+import { liveScreensDocs } from './sections/live-screens.js'
 import { loadingFeelDocs } from './sections/loading-feel'
 import {
   lowCodeFormulaBuilder,
@@ -900,6 +902,7 @@ export const navSections: NavGroup[] = [
       collabLiveProgress,
       collabOfflinePopout,
       collabLiveLists,
+      liveScreensDocs,
       collabLiveOps,
       collabPresence,
       collabNotificationsCenter,

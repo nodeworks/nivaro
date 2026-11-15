@@ -8,15 +8,17 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   ExternalLink,
   History,
   Search,
   ShieldCheck,
   Trash2
 } from 'lucide-react'
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { slideIn, useTopInserts } from '../../lib/live-screen'
 import {
   type NotificationActionSpec,
   type NotificationDeliveryRecord,
@@ -165,6 +167,10 @@ export interface NotificationCenterViewProps {
   className?: string
 }
 
+const bundleFeedKey = (b: { collection: string; item: string | number }) =>
+  `b:${b.collection}:${b.item}`
+const rowFeedKey = (n: { id: number }) => `n:${n.id}`
+
 export function NotificationCenterView({
   routes,
   onNavigate,
@@ -245,7 +251,7 @@ export function NotificationCenterView({
       }>(get('/notifications/unread-count'))
   })
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: [
       'notifications',
       'center',
@@ -308,6 +314,42 @@ export function NotificationCenterView({
   const bundles = data?.bundles ?? []
   const total = data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  // Realtime screens (2026-11-14): a new notification slides in at the top only while the
+  // person is scrolled at the top. Scrolled down, it waits behind a quiet "N new" pill and the
+  // rows on screen keep their place; read state from the bell or another tab still updates in
+  // place (read:changed → useUserSync). Page 1 of a settled answer only.
+  const feedOn = status !== 'sent' && page === 1 && !!data && !isPlaceholderData
+  const feedKey = [status, lane, search, collectionFilter, app ?? '', groupByRecord].join('|')
+  const bundleFeed = useTopInserts(data ? bundles : undefined, bundleFeedKey, {
+    enabled: feedOn,
+    resetKey: feedKey
+  })
+  const rowFeed = useTopInserts(data ? notifications : undefined, rowFeedKey, {
+    enabled: feedOn,
+    resetKey: feedKey
+  })
+  const shownBundles = data ? bundleFeed.rows : bundles
+  const shownRows = data ? rowFeed.rows : notifications
+  const heldNew = bundleFeed.held + rowFeed.held
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const bundleRoot = bundleFeed.rootRef
+  const rowRoot = rowFeed.rootRef
+  const setListEl = useCallback(
+    (el: HTMLDivElement | null) => {
+      listRef.current = el
+      bundleRoot(el)
+      rowRoot(el)
+    },
+    [bundleRoot, rowRoot]
+  )
+  useEffect(() => {
+    slideIn(listRef.current, [...bundleFeed.arrived, ...rowFeed.arrived])
+  }, [bundleFeed.arrived, rowFeed.arrived])
+  const revealNew = () => {
+    bundleFeed.reveal()
+    rowFeed.reveal()
+  }
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ['notifications'] })
     void qc.invalidateQueries({ queryKey: ['notification-count'] })
@@ -730,6 +772,7 @@ export function NotificationCenterView({
     return (
       <div
         key={`bundle:${key}`}
+        data-live-key={bundleFeedKey(b)}
         data-notification-bundle={key}
         data-notification-bundle-count={b.count}
         data-notification-bundle-lane={b.lane}
@@ -1270,45 +1313,64 @@ export function NotificationCenterView({
             </p>
           </div>
         ) : (
-          <div className='mx-8 my-6 divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
-            {pinned.length > 0 && (
-              <div data-notification-pinned>
-                <div className='bg-amber-50 px-4 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'>
-                  Needs your acknowledgement · {pinned.length}
-                </div>
-                {pinned.map((n) => (
-                  <Fragment key={`pin:${n.id}`}>{renderRow(n)}</Fragment>
-                ))}
+          <>
+            {heldNew > 0 && (
+              // Zero-height and sticky: floats over the list, never pushes it.
+              <div className='sticky top-2 z-10 flex h-0 justify-center overflow-visible'>
+                <button
+                  type='button'
+                  data-notification-new-pill={heldNew}
+                  onClick={revealNew}
+                  className='mt-1 inline-flex h-7 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-white px-3 text-[12px] font-medium text-nvr-navy shadow-sm transition-colors hover:bg-nvr-cyan/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:border-nvr-cyan/40 dark:bg-card dark:text-nvr-cyan dark:hover:bg-nvr-cyan/10'
+                >
+                  <ChevronUp className='h-3.5 w-3.5' aria-hidden />
+                  {heldNew} new
+                </button>
               </div>
             )}
-            {bundles.map(renderBundle)}
-            {notifications.map((n, ni) => {
-              const bucketOf = (ts: string | Date | null | undefined) => {
-                if (!ts) return 'Older'
-                const d = new Date(ts)
-                const now = new Date()
-                const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-                if (d >= midnight) return 'Today'
-                if (d >= new Date(midnight.getTime() - 86400e3)) return 'Yesterday'
-                if (d >= new Date(midnight.getTime() - 6 * 86400e3)) return 'This week'
-                return 'Older'
-              }
-              const bucket = bucketOf(n.created_at)
-              const prevBucket = ni > 0 ? bucketOf(notifications[ni - 1].created_at) : null
-              const header =
-                bucket !== prevBucket ? (
-                  <div className='bg-slate-50/80 px-4 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:bg-muted/40'>
-                    {bucket}
+            <div
+              ref={setListEl}
+              className='mx-8 my-6 divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'
+            >
+              {pinned.length > 0 && (
+                <div data-notification-pinned>
+                  <div className='bg-amber-50 px-4 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'>
+                    Needs your acknowledgement · {pinned.length}
                   </div>
-                ) : null
-              return (
-                <Fragment key={n.id}>
-                  {header}
-                  {renderRow(n)}
-                </Fragment>
-              )
-            })}
-          </div>
+                  {pinned.map((n) => (
+                    <Fragment key={`pin:${n.id}`}>{renderRow(n)}</Fragment>
+                  ))}
+                </div>
+              )}
+              {shownBundles.map(renderBundle)}
+              {shownRows.map((n, ni) => {
+                const bucketOf = (ts: string | Date | null | undefined) => {
+                  if (!ts) return 'Older'
+                  const d = new Date(ts)
+                  const now = new Date()
+                  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+                  if (d >= midnight) return 'Today'
+                  if (d >= new Date(midnight.getTime() - 86400e3)) return 'Yesterday'
+                  if (d >= new Date(midnight.getTime() - 6 * 86400e3)) return 'This week'
+                  return 'Older'
+                }
+                const bucket = bucketOf(n.created_at)
+                const prevBucket = ni > 0 ? bucketOf(shownRows[ni - 1].created_at) : null
+                const header =
+                  bucket !== prevBucket ? (
+                    <div className='bg-slate-50/80 px-4 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:bg-muted/40'>
+                      {bucket}
+                    </div>
+                  ) : null
+                return (
+                  <Fragment key={n.id}>
+                    {header}
+                    <div data-live-key={rowFeedKey(n)}>{renderRow(n)}</div>
+                  </Fragment>
+                )
+              })}
+            </div>
+          </>
         )}
         {status !== 'sent' && total > PAGE_SIZE && (
           <div className='mx-8 mb-6 flex items-center justify-between'>
