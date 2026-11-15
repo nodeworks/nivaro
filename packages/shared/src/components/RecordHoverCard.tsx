@@ -170,12 +170,18 @@ export function RecordHoverCard({
   collection,
   id,
   children,
-  disabled
+  disabled,
+  side = 'bottom',
+  block = false
 }: {
   collection: string | null | undefined
   id: unknown
   children: ReactNode
   disabled?: boolean
+  /** Where the card opens (a list docked at the right edge opens it to the left). */
+  side?: 'bottom' | 'left' | 'right' | 'top'
+  /** Wrap a block (a whole row) rather than an inline link. */
+  block?: boolean
 }) {
   const eligible = !disabled && hoverCardEligible(collection, id)
   const card = useHoverIntent(eligible, 500)
@@ -192,7 +198,7 @@ export function RecordHoverCard({
       <PopoverAnchor asChild>
         {/* biome-ignore lint/a11y/noStaticElementInteractions: a hover/focus wrapper; the link inside is the control */}
         <span
-          className='inline'
+          className={block ? 'block' : 'inline'}
           data-record-card-anchor
           onPointerEnter={(e) => {
             if (e.pointerType === 'mouse') show()
@@ -209,7 +215,7 @@ export function RecordHoverCard({
       </PopoverAnchor>
       {card.open && (
         <PopoverContent
-          side='bottom'
+          side={side}
           align='start'
           sideOffset={6}
           collisionPadding={12}

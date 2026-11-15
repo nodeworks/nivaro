@@ -399,6 +399,7 @@ export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
 export { ListLoadError } from './components/ListLoadError'
+export { LiveAnnouncer } from './components/LiveAnnouncer'
 export { LiveCount, type LiveCountProps } from './components/LiveCount'
 export { LiveNewMatchesPill } from './components/LiveNewMatchesPill'
 export { LiveRowMark } from './components/LiveRowMark'
@@ -666,6 +667,7 @@ export type {
   SupportTicket,
   SupportTicketDetail
 } from './components/support/types'
+export { TabCountHost } from './components/TabCountHost'
 export { Term } from './components/Term'
 export { TickerNumber } from './components/TickerNumber'
 export { TipLayer, useOverflowTip } from './components/TipLayer'
@@ -674,6 +676,9 @@ export { UserAvatar } from './components/UserAvatar'
 export { WidgetImageMenu } from './components/WidgetImageMenu'
 export type { InputBinding } from './components/WidgetSlot'
 export { WidgetSlot } from './components/WidgetSlot'
+export { WatchDock } from './components/watch-list/WatchDock'
+export { WatchListButton } from './components/watch-list/WatchListButton'
+export { WatchPinButton } from './components/watch-list/WatchPinButton'
 export type {
   ReviewListConfig,
   ReviewListResult,
@@ -755,6 +760,7 @@ export {
   startApiVersionWatch,
   useApiUpdate
 } from './lib/api-version'
+export * from './lib/attention-prefs'
 export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
 export {
@@ -974,16 +980,17 @@ export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
 export * from './lib/list-return'
 export * from './lib/live'
+export * from './lib/live-announcer'
 export * from './lib/live-counts'
+export * from './lib/live-data-changed'
+export * from './lib/live-findings'
 export * from './lib/live-list'
 export * from './lib/live-moves'
 export * from './lib/live-ops'
 export * from './lib/live-queries'
 export * from './lib/live-screen'
-export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
-export * from './lib/live-data-changed'
-export * from './lib/live-findings'
 export * from './lib/live-search'
+export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
 export * from './lib/live-views'
 export * from './lib/live-widgets'
 export {
@@ -1356,11 +1363,6 @@ export { registerStagedRowLabel, stagedRowLabel } from './lib/staged-row-labels'
 export * from './lib/stale-chunk'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
-export * from './lib/attention-prefs'
-export * from './lib/waiting-count'
-export * from './lib/live-announcer'
-export { LiveAnnouncer } from './components/LiveAnnouncer'
-export { TabCountHost } from './components/TabCountHost'
 export { configureTabSound, pickSoundTab, shouldPlayHere } from './lib/tab-sound'
 export {
   BRAND_ACCENT,
@@ -1412,6 +1414,14 @@ export {
   viewAs,
   viewAsPath
 } from './lib/view-as'
+export * from './lib/waiting-count'
+export {
+  useWatchActions,
+  useWatchPrefs,
+  useWatchUi,
+  watchKeys,
+  watchUi
+} from './lib/watch-list'
 export {
   buildWidgetImageLabel,
   describeDateRangeFilter,

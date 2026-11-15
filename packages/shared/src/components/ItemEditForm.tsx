@@ -271,6 +271,7 @@ import {
 import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
 import { ListNeighborNav } from './item-edit/ListNeighborNav'
+import { WatchPinButton } from './watch-list/WatchPinButton'
 import { deferredSections } from './item-edit/lazy-sections'
 import { type LineRevision, mergeEditOf, restoredLineConflicts } from './item-edit/line-merge'
 import {
@@ -13840,6 +13841,15 @@ function ItemEditFormView({
                                                 <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
                                               </button>
                                             ))}
+                                          {/* rt5: pin to the watch list (W on the page). */}
+                                          {!isNew && !designMode && (
+                                            <WatchPinButton
+                                              collection={collection}
+                                              itemId={itemId}
+                                              shortcut
+                                              size='sm'
+                                            />
+                                          )}
                                         </div>
                                         {lastTouchText && (
                                           <p

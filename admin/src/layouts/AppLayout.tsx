@@ -111,7 +111,9 @@ import {
   TabCountHost,
   TipLayer,
   useClientChaosGate,
-  useLiveQueryBridge
+  useLiveQueryBridge,
+  WatchDock,
+  WatchListButton
 } from '@nivaro/shared'
 import { AskPanelHost } from '@/components/ask-panel-host'
 import { BugReporter } from '@/components/bug-reporter'
@@ -727,6 +729,8 @@ export function AppLayout() {
                   {/* Realtime idea 12: refresh this page's data in place (never the page). */}
                   <ScreenRefreshButton variant='rail' />
                   <NotificationBell collapsed compact />
+                  {/* rt5: the watch list (dot = a pinned record changed while it was closed). */}
+                  <WatchListButton variant='rail' />
                   {/* Beside chat and the bell rather than buried in System: "what
                   changed" is something people reach for from anywhere, not a
                   configuration screen they navigate to. */}
@@ -977,6 +981,10 @@ export function AppLayout() {
                 </PageErrorBoundary>
               </HelpVideoHost>
             </main>
+            {/* rt5: the watch list dock — its own column beside the page, never over it. */}
+            <PeekSheetProviders>
+              <WatchDock />
+            </PeekSheetProviders>
           </div>
         </div>
         {/* Outside the animated page wrapper on purpose — see bug-reporter.tsx. */}

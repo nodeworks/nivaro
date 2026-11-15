@@ -339,6 +339,7 @@ import { usersRoutes } from './users.js'
 import { viewStreamRoutes } from './view-stream.js'
 import { viewSubscriptionsRoutes } from './view-subscriptions.js'
 import { virtualCollectionsRoutes } from './virtual-collections.js'
+import { watchListRoutes } from './watch-list.js'
 import { webhooksRoutes } from './webhooks.js'
 import { buildWidgetScript, widgetRoutes } from './widget.js'
 import { widgetsInternalRoutes } from './widgets-internal.js'
@@ -499,6 +500,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(recordViewRoutes)
   // rt3 #14/#16/#17 — unseen changes before a move, record hover cards, file processing status.
   await app.register(recordGlanceRoutes)
+  // rt5 — the watch list dock: pinned records, waiting on others, mentions & replies.
+  await app.register(watchListRoutes, { prefix: '/watch-list' })
   // #3227 — role starter sidebar layouts (a person's own rides preferences.nav_layout)
   await app.register(navLayoutRoutes, { prefix: '/nav-layout' })
   // Collections page: collections an admin pins to the top for everyone
