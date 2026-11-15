@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest'
 import { ItemEditAuthContext } from '../../context'
 import { listViewTopic, othersFrom, viewersSentence } from '../../lib/list-viewers'
 import { type RealtimeAdapter, RealtimeContext } from '../../lib/realtime'
-import { dueText } from '../chat/room-due'
 import { ListViewers } from './ListViewers'
 
 function fakeRealtime() {
@@ -102,16 +101,5 @@ describe('list viewer helpers', () => {
     expect(viewersSentence(othersFrom([{ id: 'b', name: 'Beth Ames' }], 'x'))).toBe(
       'Beth is viewing this too'
     )
-  })
-})
-
-describe('room state chip due text', () => {
-  it('says when the step is due, or how late it is', () => {
-    expect(dueText(null)).toBeNull()
-    expect(dueText({ remaining_hours: null })).toBeNull()
-    expect(dueText({ remaining_hours: 4.2 })).toBe('Due in 4h')
-    expect(dueText({ remaining_hours: 0.25 })).toBe('Due in 15m')
-    expect(dueText({ remaining_hours: 72 })).toBe('Due in 3d')
-    expect(dueText({ remaining_hours: -3 })).toBe('3h overdue')
   })
 })

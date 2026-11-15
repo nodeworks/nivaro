@@ -120,6 +120,9 @@ export interface RoomRecordSla {
   remaining_hours: number | null
   /** The clock counts business hours only. */
   business_hours: boolean
+  /** When the clock turns amber / red (ISO) — the instants the SLA banner counts down to. */
+  warning_at: string | null
+  due_at: string | null
 }
 
 /** Record header facts: state, SLA, owners (#985). Gated: canSeeRoom + reading the record as
@@ -179,7 +182,9 @@ export async function roomRecordFacts(
         elapsed_hours: e.elapsed_hours != null ? Number(e.elapsed_hours) : null,
         due_hours: e.duration_hours != null ? Number(e.duration_hours) : null,
         remaining_hours: e.remaining_hours != null ? Number(e.remaining_hours) : null,
-        business_hours: !!e.business_hours_only
+        business_hours: !!e.business_hours_only,
+        warning_at: e.warning_at ? String(e.warning_at) : null,
+        due_at: e.due_at ? String(e.due_at) : null
       }
     }
   } catch {

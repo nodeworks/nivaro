@@ -33,6 +33,7 @@ export function SendViewButton({
   const { userId } = useItemEditAuth()
   const [open, setOpen] = useState(false)
   const [to, setTo] = useState('')
+  const [toName, setToName] = useState('')
   const [note, setNote] = useState('')
   const [what, setWhat] = useState('')
 
@@ -42,11 +43,15 @@ export function SendViewButton({
         post('/send-view', { to, view: getView(), note: note.trim() || undefined })
       ),
     onSuccess: (r) => {
+      const who = toName || 'them'
       toast.success(
-        r.data?.mode === 'live' ? 'Sent' : 'Sent — it is waiting in their notifications'
+        r.data?.mode === 'live'
+          ? `Sent to ${who}`
+          : `Sent to ${who} — it is waiting in their notifications`
       )
       setOpen(false)
       setTo('')
+      setToName('')
       setNote('')
     },
     onError: (err) => toastError(err, 'Could not send your view')
@@ -104,7 +109,13 @@ export function SendViewButton({
               </p>
             )}
           </div>
-          <AsyncUserPicker value={to} onChange={setTo} />
+          <AsyncUserPicker
+            value={to}
+            onChange={(id, person) => {
+              setTo(id)
+              setToName(person?.name ?? '')
+            }}
+          />
           {self && (
             <p className='text-[11.5px] text-amber-700 dark:text-amber-300'>
               Choose someone other than yourself.
@@ -133,7 +144,7 @@ export function SendViewButton({
               type='submit'
               disabled={!to || self || send.isPending}
               data-send-view-submit=''
-              className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400'
+              className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-nvr-cyan'
             >
               <Send className='h-3.5 w-3.5' />
               {send.isPending ? 'Sending…' : 'Send'}

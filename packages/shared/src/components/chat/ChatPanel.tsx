@@ -46,6 +46,7 @@ import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, patch as patchCmd, post } from '../../lib/commands'
+import { useDeadlineNow } from '../../lib/deadline-ticker'
 import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
 import { usePresenceOnlinePoll } from '../../lib/presence-live'
 import { fullHref, presencePlaceHref, type StuckState, stuckText } from '../../lib/presence-state'
@@ -161,7 +162,7 @@ import {
   ThreadPane,
   WelcomeNote
 } from './RoomParts'
-import { dueText } from './room-due'
+import { dueStatus, dueText } from './room-due'
 import { ClipPlayer, clipInfo } from './ScreenClip'
 
 /**
@@ -796,6 +797,8 @@ function EntityRoomCard({ room }: { room: string }) {
     },
     { includeOwn: true, debounceMs: 600 }
   )
+  // The clock counts on the page's shared deadline ticker — the same beat the SLA banner uses.
+  const deadlineNow = useDeadlineNow(!!facts?.sla?.due_at)
   if (!isEntity || !card) return null
   const build = cfg.recordUrl ?? ((c: string, id: string | number) => `/collections/${c}/${id}`)
   const href = build(card.collection, card.id)
@@ -804,11 +807,17 @@ function EntityRoomCard({ room }: { room: string }) {
   // step + owners + clock), the card's own read until then.
   const stepLabel = facts?.state?.label ?? card.state
   const stepColor = facts?.state ? facts.state.color : card.color
-  const due = dueText(sla)
+  const due = dueText(sla, deadlineNow)
+  const slaStatus = dueStatus(sla, deadlineNow) ?? sla?.status
+  // The room header already names the record; repeat it only when its label says more.
+  const recordName =
+    facts?.label && facts.label.toLowerCase() !== String(token ?? '').toLowerCase()
+      ? facts.label
+      : null
   const slaTone =
-    sla?.status === 'breached'
+    slaStatus === 'breached'
       ? 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300'
-      : sla?.status === 'warning'
+      : slaStatus === 'warning'
         ? 'bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
         : 'bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300'
   return (
@@ -819,20 +828,23 @@ function EntityRoomCard({ room }: { room: string }) {
       <span className='shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
         {card.type_label}
       </span>
-      {/* The record's own name keeps its room (~12 characters) — the step pill shrinks
-          first, so the chip always says WHICH record it is. */}
-      <span
-        className='min-w-[12ch] max-w-[18ch] shrink-0 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'
-        data-tip={token ?? undefined}
-      >
-        {token}
-      </span>
+      {recordName && (
+        <span
+          className='min-w-0 flex-1 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'
+          data-tip={recordName}
+        >
+          {recordName}
+        </span>
+      )}
       {stepLabel && (
         <span
           key={stepLabel}
           data-chat-room-state={stepLabel}
           data-tip={stepLabel}
-          className='nvr-fade-in min-w-0 truncate rounded-full px-2 py-0.5 text-[10px] font-semibold'
+          className={cn(
+            'nvr-fade-in truncate rounded-full px-2 py-0.5 text-[10px] font-semibold',
+            recordName ? 'max-w-[55%] shrink-0' : 'min-w-0'
+          )}
           style={{
             backgroundColor: stepColor ? `${stepColor}26` : 'rgba(100,116,139,.15)',
             color: stepColor ?? undefined
@@ -843,7 +855,7 @@ function EntityRoomCard({ room }: { room: string }) {
       )}
       {sla && (
         <span
-          key={`${sla.status}|${due ?? ''}`}
+          key={slaStatus ?? 'none'}
           className={cn(
             'nvr-fade-in shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
             slaTone
@@ -853,12 +865,12 @@ function EntityRoomCard({ room }: { room: string }) {
               ? `${Math.round(sla.elapsed_hours ?? 0)}h in this step of ${sla.due_hours}h allowed${sla.business_hours ? ' (business hours)' : ''}`
               : undefined
           }
-          data-chat-room-sla={sla.status}
+          data-chat-room-sla={slaStatus}
         >
           {due ??
-            (sla.status === 'breached'
+            (slaStatus === 'breached'
               ? 'Past SLA'
-              : sla.status === 'warning'
+              : slaStatus === 'warning'
                 ? 'SLA soon'
                 : 'On time')}
         </span>

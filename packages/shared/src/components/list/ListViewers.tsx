@@ -76,7 +76,7 @@ function Stack({ viewers, ring }: { viewers: ListViewer[]; ring: 'toolbar' | 'he
     ring === 'header' ? 'ring-2 ring-white dark:ring-card' : 'ring-2 ring-white dark:ring-slate-900'
   const disc = cn('inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full', ringCls)
   return (
-    <span className='flex -space-x-1'>
+    <span className='flex -space-x-0.5'>
       {shown.map((v) => (
         <UserAvatar
           key={v.id}
