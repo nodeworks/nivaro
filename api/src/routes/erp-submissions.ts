@@ -613,7 +613,25 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         ids = asked.filter((i) => upper.has(i.toUpperCase()))
         if (ids.length === 0) return { data: {} }
       }
-      const found = await readSendStatuses(collection, ids)
+      // rt6 #18 — retry plans read the retry sweeps' live schedules (admin overrides, pauses).
+      const found = await readSendStatuses(collection, ids, {
+        schedule: (sweep) => {
+          const job = app.cron?.list?.().find((j) => j.id === sweep)
+          return job
+            ? {
+                expression: job.expression,
+                timezone: job.timezone ?? null,
+                paused: job.paused === true
+              }
+            : null
+        },
+        remediationOn: async () => {
+          const { allObligationKinds } = await import('../services/integration-obligations.js')
+          if (allObligationKinds().length === 0) return false
+          const { remediationEnabled } = await import('../services/integration-remediation.js')
+          return remediationEnabled()
+        }
+      })
       // Answer under the ids as asked (the database may spell a GUID differently).
       const byUpper = new Map(Object.entries(found).map(([k, v]) => [k.toUpperCase(), v]))
       const data: Record<string, unknown> = {}

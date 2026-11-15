@@ -480,6 +480,11 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
       item: String(jobId),
       comment: `created ${created}, updated ${updated}, skipped ${skipped}, errors ${errorRows}`
     })
+    // rt6 #19 — a catalog / price / stock import tells the owners of open records it touched.
+    if (created + updated > 0) {
+      const { noteCatalogChange } = await import('../services/catalog-impact.js')
+      noteCatalogChange(job.collection as string, null)
+    }
   } catch (err) {
     await db('nivaro_import_jobs')
       .where({ id: jobId })

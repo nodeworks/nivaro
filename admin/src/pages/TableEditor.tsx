@@ -7472,6 +7472,9 @@ interface BrowserConfig {
   /** Record workspace tabs in the portal: open records stack as tabs above
    *  the form, unsaved edits survive switching. Opt-in. */
   record_tabs?: boolean
+  /** rt6 #19 — a catalog / price / stock import tells the owners of open records whose
+   *  catalog lines it changed (api services/catalog-impact.ts). Off by default. */
+  catalog_notice?: boolean
   /** Registry bulk actions (keys) the bar shows; null/absent = all. */
   bulk_actions?: string[] | null
   /** #2490 — live record events: on (default), batched id lists, or off (lists poll). */
@@ -7775,6 +7778,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
       'quick_filters',
       'default_sort',
       'record_tabs',
+      'catalog_notice',
       'bulk_actions',
       'live_events',
       'search_fields',
@@ -7796,6 +7800,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (next.quick_filters?.length) clean.quick_filters = next.quick_filters
     if (next.default_sort?.trim()) clean.default_sort = next.default_sort.trim()
     if (next.record_tabs === true) clean.record_tabs = true
+    if (next.catalog_notice === true) clean.catalog_notice = true
     if (Array.isArray(next.bulk_actions)) clean.bulk_actions = next.bulk_actions
     if (next.live_events === 'batched' || next.live_events === 'off')
       clean.live_events = next.live_events
@@ -7878,6 +7883,21 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           <Switch
             checked={cfg.record_tabs === true}
             onCheckedChange={(v) => void patch({ record_tabs: v })}
+          />
+        </div>
+        <div className='flex items-center justify-between gap-4' data-catalog-notice-setting>
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>
+              Tell owners about catalog updates
+            </p>
+            <p className='text-[11.5px] text-slate-500'>
+              When a catalog, price or stock import changes lines on open records, each record owner
+              gets one notice listing them. For records with a catalog lines field
+            </p>
+          </div>
+          <Switch
+            checked={cfg.catalog_notice === true}
+            onCheckedChange={(v) => void patch({ catalog_notice: v })}
           />
         </div>
         <InlineEditSetting

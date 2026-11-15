@@ -35,6 +35,7 @@ import {
 import { registerReadinessCheck } from '../services/readiness.js'
 import { SECRET_NAME_RE } from '../services/secret-markers.js'
 import { isSensitiveHeaderName, maskBodySecrets } from '../services/secret-mask.js'
+import { cleanReferenceLabel, referenceLabelOf } from '../services/send-status.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { readAgreed, validateAgreed, withAgreed } from '../services/traffic-partner-contract.js'
 
@@ -365,6 +366,8 @@ function serializeForRead(row: ExternalApiRow) {
     enabled: !!row.enabled,
     integration_type: row.integration_type ?? null,
     integration_config: parseJson(row.integration_config),
+    // rt6 — what this partner calls the number it gives back ("PO", "order"); null = "reference".
+    reference_label: referenceLabelOf(row.integration_config),
     // #65 — the retry policy was PATCHable but never read back, so the editor
     // always showed it empty.
     retry_policy: parseJson(row.retry_policy) ?? null,
@@ -671,6 +674,8 @@ export async function externalApisRoutes(app: FastifyInstance) {
       enabled: boolean
       integration_type: string | null
       integration_config: unknown
+      /** rt6 — stored inside integration_config; '' / null = the default word. */
+      reference_label: string | null
       retry_policy: {
         max_attempts?: number
         backoff_minutes?: number
@@ -840,6 +845,22 @@ export async function externalApisRoutes(app: FastifyInstance) {
     if (body.integration_type !== undefined) patch.integration_type = body.integration_type
     if (body.integration_config !== undefined)
       patch.integration_config = toJsonStr(body.integration_config)
+    // rt6 — the reference label lives inside integration_config, merged so the rest of it
+    // (skip_sends, extension keys) stays as it is.
+    if (body.reference_label !== undefined) {
+      const base =
+        body.integration_config !== undefined
+          ? body.integration_config
+          : parseJson(existing.integration_config)
+      const cfg =
+        base && typeof base === 'object' && !Array.isArray(base)
+          ? { ...(base as Record<string, unknown>) }
+          : {}
+      const label = cleanReferenceLabel(body.reference_label)
+      if (label) cfg.reference_label = label
+      else delete cfg.reference_label
+      patch.integration_config = Object.keys(cfg).length > 0 ? toJsonStr(cfg) : null
+    }
 
     if (body.auth_config !== undefined) {
       const merged = mergeAuthConfig(

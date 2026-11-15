@@ -8,6 +8,7 @@ import {
   runWithTenantDb
 } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { noteCatalogChange } from './catalog-impact.js'
 import { getIo } from './io-holder.js'
 import { fanOutRawWrites } from './raw-write-fanout.js'
 import { broadcastCollectionUpdate } from './realtime.js'
@@ -173,6 +174,9 @@ function broadcastPlanned(list: RawWriteAnnouncement[]): number {
     }
   }
   stats.broadcasts += planned.length
+  // rt6 #19 — a catalog / stock write by a procedure or script: the owners of open records whose
+  // lines it changed hear it once (services/catalog-impact.ts; O(1) for any other collection).
+  for (const a of list) noteCatalogChange(a.collection, a.ids ?? null)
   // Realtime round 3 #6 — GraphQL events for action-less announcements, opted-in webhooks and
   // flows, alert re-evaluation (services/raw-write-fanout.ts). Never blocks the broadcast.
   void fanOutRawWrites(list, planned).catch(() => {})

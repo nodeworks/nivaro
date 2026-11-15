@@ -43,16 +43,20 @@ export const liveFormsDocs: DocSection = {
           'Ledger took the request and has not said yes yet. "Usually answers within …" appears only when there are enough earlier answers to say so.'
         ],
         [
-          'Ledger accepted it at 10:43 AM — reference PO 12345',
-          'Done. The reference is the one Ledger gave back.'
+          'Ledger accepted it at 10:43 AM — PO 12345',
+          'Done. The number is the one Ledger gave back, under the word Ledger uses for it (the API\u2019s Reference label; "reference" when none is set).'
         ],
         [
-          'Ledger refused it at 10:43 AM: <reason> — fix what it names, then send it again',
+          'Ledger refused it at 10:43 AM: <reason>. Fix what it names, then send it again.',
           'Ledger answered no. Its own words are shown when it gave any.'
         ],
         [
-          'Ledger could not take it at 10:43 AM … — send it again in a few minutes',
-          'The call did not get through, or Ledger was down or busy. Nothing was refused.'
+          "Couldn't reach Ledger — nothing was sent. Retrying at 10:45 AM (attempt 2 of 5)",
+          'The call did not get through (network, time-out, or Ledger was down). Nothing was refused, and it will be tried again by itself at that time; the line counts down to it.'
+        ],
+        [
+          "Couldn't reach Ledger — nothing was sent. Try again or ask an admin.",
+          'The same, with nothing set up to try again. A quieter line under it says why: "Will not retry — automatic retries are not set up for Ledger".'
         ],
         [
           'No answer from Ledger after 25 minutes — the send is held and will not be repeated automatically',
@@ -60,9 +64,30 @@ export const liveFormsDocs: DocSection = {
         ]
       ]
     },
+    { type: 'h3', id: 'live-forms-retries', text: 'Sends that retry by themselves' },
+    {
+      type: 'p',
+      text: 'A failed send is tried again with nobody pressing anything only in two cases, and the record says which: the external API has a retry policy (External APIs → the API → Automatic retry for failed pushes: how many times and how long to wait), or Settings → Integrations → automatic remediation is on and the send was one the integration ledger tracks (it waits 1, 5, 30, 120 and 120 minutes, five attempts in all, and only for a call that did not get through). The time shown is the next run of the job that does it, so it matches what will happen. Anything else says "Will not retry —" and why: the partner refused it (sending the same thing again cannot fix it), every attempt was made, retries are paused, or there is nothing stored to send. Dead letters and failed flow runs are always retried by a person.'
+    },
+    { type: 'h3', id: 'live-forms-reference-label', text: 'Reference label' },
+    {
+      type: 'p',
+      text: 'Each external API can say what it calls the number it gives back — "PO", "order" — in its Reference label (External APIs → the API → Integration Type card). Records then read "Ledger accepted it at 10:43 AM — PO 12345". Empty means "reference".'
+    },
+    { type: 'h3', id: 'live-forms-catalog-notice', text: 'Catalog updates tell record owners' },
+    {
+      type: 'p',
+      text: 'When a catalog, price or stock import changes the catalog under open records, the owners of those records hear it once — not once per line: "Catalog update changed prices on 14 lines in 6 of your open records". Opening it shows the list filtered to exactly those records; each line then says what changed (above). Only records you can read are counted, only records that can still be changed (an open step that does not lock the record), and the same findings are never sent twice. A newer notice replaces an unread older one.'
+    },
+    {
+      type: 'p',
+      text: 'It is off until an administrator turns on "Tell owners about catalog updates" for the record collection (Data Model → the collection → Browser settings). It covers the catalog lines field\u2019s price columns and its stock column when that stock is matched to the record by one field (for example the record\u2019s warehouse). Imports that announce their writes, staged imports and collection imports all count; changes are gathered for 20 seconds after the last one (two minutes at most) so a large import is one notice.'
+    },
     {
       type: 'pre',
       code: `GET /api/erp-submissions/send-status?collection=&ids=a,b,c   → {data: {id: [latest send per system]}}  (≤ 100 ids; only records you can see)
+   each send: … ref_label, retry {at, attempt, of} | null, no_retry (why it will not be retried) | null
+PATCH /api/external-apis/:id {reference_label: "PO" | null}   (admin; kept in integration_config)
 GET /api/picker-exclusions/linked-change?collection=&item_id=&since=   → who changed a linked record, when, and which fields`
     }
   ]

@@ -185,10 +185,11 @@ export async function resolveTargetUrl(
       case 'approval':
         if (spec.collection && spec.id != null)
           return withFocus(await recordLink(spec.collection, spec.id, opts))
+        // The list (rt6 #19: `query` ids=… opens it filtered to exactly those records).
         if (spec.collection)
-          return (
+          return withFocus(
             `${await linkTo('home', {}, opts)}`.replace(/\/$/, '') +
-            `/collections/${spec.collection}`
+              `/collections/${spec.collection}`
           )
         return spec.kind === 'approval' ? linkTo('approvals', {}, opts) : null
       // An integration obligation is USUALLY about a record — the same URL

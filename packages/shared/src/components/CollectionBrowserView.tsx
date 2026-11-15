@@ -4803,7 +4803,9 @@ export function CollectionBrowserView({
   // A shared link IS the view: the collection / role default view never lands over it.
   // Same for a deep link's context (army 8 b16): a dashboard count opens the records it
   // counted, not those records further narrowed by a saved default view.
-  const deepLinked = !sharedLink && (initialConditions?.length ?? 0) > 0
+  // rt6 #19 — `?ids=` (an import batch, a catalog notice's "See which") is a deep link too.
+  const deepLinked =
+    !sharedLink && ((initialConditions?.length ?? 0) > 0 || (initialFilters?.length ?? 0) > 0)
   const defaultAppliedRef = useRef(!!sharedLink || deepLinked)
   const { isAdmin } = useItemEditAuth()
 

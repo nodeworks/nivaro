@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { selectInChunks, whereInList } from './db-batch.js'
 import { answerDeadline, SENDING_STATUS } from './erp-unanswered.js'
+import { planRetries, type RetrySweep, type SweepSchedule } from './send-retry.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -37,6 +38,12 @@ export interface SendStatusFact {
   answer_by: string | null
   /** Median time this partner took to accept a send (30 days, ≥ MIN_SAMPLES), else null. */
   usual_answer_ms: number | null
+  /** What this partner calls the number it gives back ("PO", "order"); null = "reference". */
+  ref_label: string | null
+  /** rt6 #18 — a failed send a sweep will try again by itself: when, and which attempt. */
+  retry: { at: string; attempt: number; of: number } | null
+  /** rt6 #18 — a failed send nothing will repeat: why (reads after "Will not retry — "). */
+  no_retry: string | null
 }
 
 interface Row {
@@ -50,6 +57,40 @@ interface Row {
   error_class: string | null
   last_error: string | null
   api_name: string | null
+  api_config: string | null
+  attempts: number | null
+  retry_count: number | null
+  next_retry_at: Date | string | null
+}
+
+/** Longest reference label kept (a word or two: "PO", "Sales order"). */
+export const REF_LABEL_MAX = 40
+
+/** The reference label stored in an API's integration_config, cleaned; null = default. */
+export function referenceLabelOf(config: unknown): string | null {
+  let c: unknown = config
+  if (typeof c === 'string') {
+    try {
+      c = JSON.parse(c)
+    } catch {
+      return null
+    }
+  }
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return null
+  return cleanReferenceLabel((c as Record<string, unknown>).reference_label)
+}
+
+/** A label as stored: plain words, one line, at most REF_LABEL_MAX characters; null = none. */
+export function cleanReferenceLabel(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const t = [...v]
+    .map((ch) => (ch.charCodeAt(0) < 32 || ch === '<' || ch === '>' ? ' ' : ch))
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, REF_LABEL_MAX)
+    .trim()
+  return t || null
 }
 
 /** At most this many records per read (a list page). */
@@ -136,7 +177,13 @@ async function usualAnswerFor(apiIds: number[]): Promise<Map<number, number | nu
  */
 export async function readSendStatuses(
   collection: string,
-  items: string[]
+  items: string[],
+  opts: {
+    /** A retry sweep's schedule from the cron registry (route); default schedules otherwise. */
+    schedule?: (sweep: RetrySweep) => SweepSchedule | null
+    /** The remediation switch AND at least one obligation kind registered. */
+    remediationOn?: () => Promise<boolean>
+  } = {}
 ): Promise<Record<string, SendStatusFact[]>> {
   if (items.length === 0) return {}
   const rows = await selectInChunks(items, 200, (chunk) => {
@@ -156,7 +203,11 @@ export async function readSendStatuses(
       's.external_ref',
       's.error_class',
       's.last_error',
+      's.attempts',
+      's.retry_count',
+      's.next_retry_at',
       'a.name as api_name',
+      'a.integration_config as api_config',
       db.raw('ROW_NUMBER() OVER (PARTITION BY s.item, s.external_api ORDER BY s.id DESC) as rn')
     )
     return db
@@ -172,7 +223,11 @@ export async function readSendStatuses(
         'external_ref',
         'error_class',
         'last_error',
-        'api_name'
+        'attempts',
+        'retry_count',
+        'next_retry_at',
+        'api_name',
+        'api_config'
       ) as unknown as Promise<Row[]>
   })
   if (rows.length === 0) return {}
@@ -198,6 +253,21 @@ export async function readSendStatuses(
     )
   ]
   const usual = awaiting.length > 0 ? await usualAnswerFor(awaiting) : new Map()
+  // rt6 #18 — failed sends: will a sweep try them again by itself, and when?
+  const retries = await planRetries(
+    rows.map((r) => ({
+      id: Number(r.id),
+      status: String(r.status ?? ''),
+      error_class: r.error_class ?? null,
+      attempts: r.attempts,
+      retry_count: r.retry_count,
+      next_retry_at: r.next_retry_at,
+      updated_at: r.updated_at,
+      external_api: r.external_api != null ? Number(r.external_api) : null,
+      api: r.api_name?.trim() || 'the other system'
+    })),
+    { schedule: opts.schedule, remediationOn: opts.remediationOn }
+  ).catch(() => new Map())
   const out: Record<string, SendStatusFact[]> = {}
   for (const r of rows) {
     const key = String(r.item)
@@ -215,7 +285,10 @@ export async function readSendStatuses(
       usual_answer_ms:
         r.status === 'pending' && r.external_api != null
           ? (usual.get(Number(r.external_api)) ?? null)
-          : null
+          : null,
+      ref_label: referenceLabelOf(r.api_config),
+      retry: retries.get(Number(r.id))?.retry ?? null,
+      no_retry: retries.get(Number(r.id))?.no_retry ?? null
     }
     const list = out[key] ?? []
     list.push(fact)
