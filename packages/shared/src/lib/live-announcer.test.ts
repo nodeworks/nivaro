@@ -149,7 +149,9 @@ describe('createAnnouncer coalescing', () => {
 
 describe('waiting count and attention prefs', () => {
   it('adds the four My Work figures and ignores junk', () => {
-    expect(waitingCount({ owned: 3, approvals: 2, tasks: 1, questions: 0 })).toBe(6)
+    expect(waitingCount({ owned: 3, approvals: 2, tasks: 1, questions: 0 })).toBe(5)
+    // Open tasks never count toward the tab title.
+    expect(waitingCount({ tasks: 7 })).toBe(0)
     expect(waitingCount({ owned: 2.9 })).toBe(2)
     expect(waitingCount({ owned: -4, tasks: Number.NaN })).toBe(0)
     expect(waitingCount(null)).toBe(0)

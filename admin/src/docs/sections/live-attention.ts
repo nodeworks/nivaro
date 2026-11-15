@@ -12,7 +12,7 @@ export const collabTabCount: DocSection = {
     { type: 'h3', id: 'live-tab-count-title', text: 'The count in the browser tab' },
     {
       type: 'p',
-      text: 'When things are waiting on you, the tab title starts with the number, for example "(3) My Work · EFP", and the tab icon carries a small red dot with the same number (9+ above nine). The number is the My Work figure: records you own, approval steps waiting on you, your open tasks and questions put to you. It follows live, so you do not have to look at the page to learn that something arrived. When nothing is waiting, the title and icon go back to normal. A custom (white-label) icon stays your icon; the dot is drawn over it.'
+      text: 'When things are waiting on you, the tab title starts with the number, for example "(3) My Work · EFP", and the tab icon carries a small red dot with the same number (9+ above nine). The number counts records you own, approval steps waiting on you and questions put to you. Open tasks are not counted. It follows live, so you do not have to look at the page to learn that something arrived. When nothing is waiting, the title and icon go back to normal. A custom (white-label) icon stays your icon; the dot is drawn over it.'
     },
     {
       type: 'note',
