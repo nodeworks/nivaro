@@ -13451,7 +13451,7 @@ Authorization: Bearer &lt;admin-token&gt;
         <div class="doc-section" id="s-content-ops-scheduled-changes" data-toc='[{"id":"content-ops-scheduled-changes","label":"Content Scheduling"}]'>
           <!-- SYNC:content-ops-scheduled-changes -->
           <h1 class="doc-h1" id="content-ops-scheduled-changes">Content Scheduling</h1>
-          <p class="doc-p">Scheduled changes let you queue a field update, workflow transition, or publish/unpublish action to execute at a future date and time. Changes are stored in <code class="doc-code">nivaro_scheduled_changes</code> with a <code class="doc-code">pending</code> status and are executed manually (POST /:id/execute or the Execute button) — nothing runs them automatically at scheduled_at yet.</p>
+          <p class="doc-p">Scheduled changes let you queue a field update, workflow transition, or publish/unpublish action to execute at a future date and time. Changes are stored in <code class="doc-code">nivaro_scheduled_changes</code> with a <code class="doc-code">pending</code> status and apply by themselves at scheduled_at (the <code class="doc-code">scheduled-changes-apply</code> job, every minute, as the person who scheduled them — see Big Saves, Totals &amp; Scheduled Changes). Administrators can still apply one early with POST /:id/execute or the Execute button.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
           <p class="doc-p">On any item edit page, the Schedule button in the header opens a dialog to queue a change for that record — pick the change type, the values, and the date/time. All pending and past changes across collections are managed on the /deadlines/scheduled page, where each change can be edited, cancelled, or executed immediately.</p>
           <h3 class="doc-h3">Creating a scheduled change via API</h3>
@@ -17086,7 +17086,7 @@ DELETE /api/tasks/:id</code></pre>
           <p class="doc-p">When an administrator has turned it on (Settings → AI Features → Let AI do this), the assignee of an open task sees a sparkle button that asks AI to draft a plan for it — reviewed, approved and undoable like any Ask AI plan, with the outcome posted on the task. See the AI Features → Let AI do this section.</p>
           <!-- /SYNC:tasks -->
         </div>
-        <div class="doc-section" id="s-support-requests" data-toc='[{"id":"support-requests","label":"Support Requests"},{"id":"support-ai-do","label":"Let AI do this"},{"id":"support-report-problem","label":"Report a problem"}]'>
+        <div class="doc-section" id="s-support-requests" data-toc='[{"id":"support-requests","label":"Support Requests"},{"id":"support-ai-do","label":"Let AI do this"},{"id":"support-report-problem","label":"Report a problem"},{"id":"support-screen-share","label":"Share my screen with support"}]'>
           <!-- SYNC:support-requests -->
           <h1 class="doc-h1" id="support-requests">Support Requests</h1>
           <p class="doc-p">People ask the administrators for help or for a change to a record, and follow the request until it is done. A support request is a task (<code class="doc-code">nivaro_tasks.kind = support</code>) that points at a record, or at nothing for General Support, and waits unassigned until someone picks it up.</p>
@@ -17128,6 +17128,16 @@ GET   /api/tasks/requested               // tasks I asked others to do</code></p
   "route": "/records/orders/42", "app": "portal", "context": "…",
   "replay": { "recording_id": "&lt;own recording&gt;", "offset_ms": 8600 } }
 → { "data": { "ticket": { … }, "issue_id": 501 } }</code></pre>
+          <h3 class="doc-h3" id="support-screen-share">Share my screen with support</h3>
+          <p class="doc-p">The person who asked for help can show the support person their screen, live. On their own open request they press Share my screen with Beth. Beth (the person the request is assigned to, or the request type’s team while nobody has picked it up) sees the app as they use it, inside the request, and can only watch. Only this app is shared — not other tabs or anything else on their computer.</p>
+          <ul class="doc-ul">
+            <li>What is hidden is exactly what screen recordings hide: everything typed, record field values (unless an administrator allowed a field under Session replay masking), rich text, file names and anything marked not to record.</li>
+            <li>While sharing, a bar on every screen says “Sharing this app with Beth” with a Stop button and the time left.</li>
+            <li>Sharing stops when they press Stop, close or reload the page, after 30 minutes, or when the request is closed or handed to someone else.</li>
+            <li>Nobody can start it for them: not an administrator, not View as, not an API key. Being an administrator does not let you watch either — only the request’s support person or team can.</li>
+            <li>Starting, stopping and each person’s first look are written to the request’s history.</li>
+          </ul>
+          <div class="doc-note">Hosts: admin shows it already. A portal mounts <code class="doc-code">&lt;ScreenShareHost /&gt;</code> from <code class="doc-code">@nivaro/react</code> once in its shell (needs <code class="doc-code">rrweb</code> installed, as for session recording). Set <code class="doc-code">SCREEN_SHARE=off</code> to turn the feature off for an instance.</div>
           <!-- /SYNC:support-requests -->
         </div>
         <div class="doc-section" id="s-change-proposals" data-toc='[{"id":"change-proposals","label":"Propose a Change on a Locked Record"},{"id":"change-proposals-turn-on","label":"Turning it on"},{"id":"change-proposals-propose","label":"Proposing"},{"id":"change-proposals-decide","label":"Accepting or declining"},{"id":"change-proposals-history","label":"History"}]'>
@@ -17658,22 +17668,64 @@ PATCH /api/item-locks/config/:collection
           <div class="doc-note">Matrix and grid pages can name what they edit with the <code class="doc-code">presence_noun</code> option (for example <code class="doc-code">allocations</code>); without it the line uses the collection name.</div>
           <!-- /SYNC:live-sync -->
         <!-- LIVE SELECTIONS & TIME IN STEP -->
-        <div class="doc-section" id="s-live-selection" data-toc='[{"id":"live-selection","label":"Live Selections & Time in Step"},{"id":"live-selection-open","label":"Someone has them open"},{"id":"live-selection-changed","label":"Changed since you picked them"},{"id":"live-selection-sums","label":"Selection count and sums"},{"id":"live-selection-in-step","label":"In step: time in the current step"}]'>
+        <div class="doc-section" id="s-live-selection" data-toc='[{"id":"live-selection","label":"Live Selections &amp; Time in Step"},{"id":"live-selection-open","label":"Someone has them open"},{"id":"live-selection-changed","label":"Changed since you picked them"},{"id":"live-selection-sums","label":"Selection count and sums"},{"id":"live-selection-in-step","label":"In step: time in the current step"}]'>
           <!-- SYNC:live-selection -->
           <h1 class="doc-h1" id="live-selection">Live Selections &amp; Time in Step</h1>
           <p class="doc-p">When you select rows for a bulk action, the list keeps an eye on them until you act. The bulk bar tells you, in one quiet line, if someone else has those records open or has changed them since you picked them. Everything is worked out as you: only records you can read, only people you are allowed to see, only fields you can read.</p>
           <h3 class="doc-h3" id="live-selection-open">Someone has them open</h3>
           <p class="doc-p">"2 of these are open by Beth right now" (or "being edited by Beth" when she holds the edit lock). Skip those takes them out of your selection; Continue keeps them and stops saying so until someone else opens one. With live updates set to Calm, who-is-here signals are quiet, so only edit locks are mentioned.</p>
           <h3 class="doc-h3" id="live-selection-changed">Changed since you picked them</h3>
-          <p class="doc-p">The list remembers when you picked each row. If someone else edits, moves or deletes one of them afterwards, the bar says "3 selected rows changed since you picked them". Review lists each one with a link to open it. Continue keeps them and counts them as seen as they are now.</p>
+          <p class="doc-p">The list remembers when you picked each row. If someone else edits, moves or deletes one of them afterwards, the bar says "3 selected rows changed since you picked them". Review lists each one — "Beth changed Amount and Status · 2 min ago", "Sam moved it to Finance" — with a link to open it. Continue keeps them and counts them as seen as they are now. In collection lists the check also runs once when you open a bulk form (move, delete, message), so it works with live updates Off too.</p>
           <h3 class="doc-h3" id="live-selection-sums">Selection count and sums</h3>
-          <p class="doc-p">The bulk bar shows how many rows are selected and the sum of the columns the totals row sums (otherwise the money and decimal columns on screen). The figures follow the rows as they change.</p>
+          <p class="doc-p">The bulk bar shows how many rows are selected and the sum of the columns the totals row sums (otherwise the money and decimal columns on screen). The figures follow the rows as they change and fade gently from the old number to the new one (no fade with Calm, Off or reduced motion). Rows you selected on another page count with the values the list last showed for them.</p>
           <h3 class="doc-h3" id="live-selection-in-step">In step: time in the current step</h3>
-          <p class="doc-p">An optional In step column in collection lists and queue worklists ("Finance · 3 d 4 h", sortable), and "for 3 d 4 h" beside the step on the record's pipeline panel. They tick on one shared page clock and reset when the record moves.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Where</th><th>What it shows</th></tr></thead>
+            <tbody><tr><tr><td>Collection lists — Columns → Add column → In step</td><td>"Finance · 3 d 4 h": the step and how long the record has been in it. Off until you add it. Click the header to sort on the server: shortest first, then longest (records with no open step last).</td></tr>
+              <tr><td>Queue worklists — Customize columns → In step</td><td>The same column; it sorts like Aging.</td></tr>
+              <tr><td>Record page — pipeline panel header</td><td>"for 3 d 4 h" beside the step chip.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">All of them count on one shared page clock (no extra reads while they tick) from the moment the record entered its step — its newest move into that step, else when its pipeline started. When someone moves the record, the step and the time reset as the list or panel picks up the move.</p>
           <!-- /SYNC:live-selection -->
         <!-- GROUPED LISTS, DRAGS AND URGENT SOUND -->
-        <div class="doc-section" id="s-live-groups-drags" data-toc='[]'>
+        <div class="doc-section" id="s-live-groups-drags" data-toc='[{"id":"live-groups-drags","label":"Grouped Lists, Drags and Urgent Sound"},{"id":"live-groups","label":"Grouped lists"},{"id":"live-drags","label":"Calendar and Gantt drags"},{"id":"live-urgent-sound","label":"Sound for urgent items"},{"id":"live-groups-dev","label":"For developers"}]'>
           <!-- SYNC:live-groups-drags -->
+          <h1 class="doc-h1" id="live-groups-drags">Grouped Lists, Drags and Urgent Sound</h1>
+          <p class="doc-p">Three more places that keep up with other people without you reloading: grouped lists, calendar and Gantt drags, and an optional sound for urgent work.</p>
+          <h3 class="doc-h3" id="live-groups">Grouped lists</h3>
+          <p class="doc-p">When a collection list or a queue table is grouped ("Group: State", "Group: Priority"…), each group header counts its rows live. When someone changes the field a list is grouped by, the record glides from its old group to its new one.</p>
+          <ul class="doc-ul">
+            <li>Nothing moves under your pointer or keyboard focus. While you point at or tab through the list, a record bound for another group stays where it is with a small arrow mark — hover it for "Now in Closed — it moves there when you move the pointer away". It moves as soon as the pointer leaves the list, or after 10 seconds.</li>
+            <li>A record that no longer belongs in the list fades and leaves the same way.</li>
+            <li>In Calm or with reduced motion, records simply appear in their new group without gliding. With Live updates Off, the list waits for the refresh button.</li>
+            <li>A grouped queue table re-reads once per burst of changes, as you, so its counts are always the ones you are allowed to see.</li>
+          </ul>
+          <h3 class="doc-h3" id="live-drags">Calendar and Gantt drags</h3>
+          <p class="doc-p">On a collection's Calendar view you can drag an entry to another day; on the Gantt view you can drag a bar along the timeline (both dates move by the same number of days). Created and updated stamps never move.</p>
+          <ul class="doc-ul">
+            <li>Others looking at the same calendar or Gantt (same date fields) see a dashed outline of the entry moving, with your first name, while you drag — only if they can open that record. Nothing but the record id and the day travels; each person sees the entry's name from their own read.</li>
+            <li>If someone else moved the same entry while you were dragging it, your drop does not silently win or vanish. The view says "Beth just moved Pump check to Dec 4. You dropped it on Dec 6." with Keep Beth's and Use yours. Escape keeps theirs.</li>
+            <li>Without a mouse: focus an entry (Tab), press Space to pick it up, move it with the arrow keys (a day; up and down a week on the calendar) and press Enter to drop it — Escape puts it back. Screen readers hear where it is after each step. On a touch screen, press and hold an entry to pick it up; a quick swipe still scrolls the page.</li>
+            <li>The question compares against the version you were looking at — what the page loaded, or the last live update it showed — so a change someone made after your last look is never overwritten, even if it landed before you started dragging.</li>
+            <li>Dragging uses the same permissions as editing the record; a refused move is explained and the entry returns.</li>
+            <li>Ghosts are a "who else is here" signal: they are hidden in Calm and Off.</li>
+          </ul>
+          <h3 class="doc-h3" id="live-urgent-sound">Sound for urgent items</h3>
+          <p class="doc-p">Profile → Notifications → "Play a sound for urgent items" (off until you turn it on) plays one short two-note chime when urgent work lands on you. "Hear it" plays a sample.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Counts as urgent</th><th>Example</th></tr></thead>
+            <tbody><tr><tr><td>A critical notification</td><td>An SLA escalation, a monitor failing</td></tr>
+              <tr><td>A missed deadline waiting on your acknowledgement</td><td>An SLA breach on a record you own</td></tr>
+              <tr><td>An urgent task assigned to you</td><td>A task with priority Urgent</td></tr>
+              <tr><td>A record whose collection marks it urgent</td><td>Data Model → Settings → Collection Browser → Urgent flag names a yes/no field; a record with it on that lands on you</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">It never plays while Live updates are Off, inside your quiet hours, with do not disturb or focus mode on, while a huddle is holding your notifications, or before you have clicked anywhere in the app (browsers block sound until then). With several tabs open, only the one you used last plays it, and it replaces the ordinary notification sound for that arrival, so you never hear two.</p>
+          <h3 class="doc-h3" id="live-groups-dev">For developers</h3>
+          <ul class="doc-ul">
+            <li><code class="doc-code">useSteadyGroups</code> / <code class="doc-code">planGroupHold</code> / <code class="doc-code">useRowGlide</code> (shared lib/live-groups.ts) — grouped rows that hold under the pointer and glide (FLIP) otherwise; rows carry <code class="doc-code">data-row-key</code>, headers <code class="doc-code">data-group-key</code>.</li>
+            <li><code class="doc-code">useLiveDrag</code>, <code class="doc-code">saveDrop</code>, <code class="doc-code">DragClashNotice</code> (shared lib/live-drag.ts) — ghosts over the <code class="doc-code">record:drag</code> socket event (api services/drag-relay.ts: passed on to the record's row-watch room only, the dragger must watch the row and may update the collection); drops carry <code class="doc-code">_base_revision</code>, so a newer save answers 409 MIDAIR_COLLISION.</li>
+            <li><code class="doc-code">notification:new</code> carries <code class="doc-code">urgent: true</code> (and <code class="doc-code">quiet: true</code> inside quiet hours) for urgent rows (api services/notification-urgent.ts). Extensions mark their own with <code class="doc-code">notifyUser(…, { urgent: true })</code>. Collection setting: <code class="doc-code">browser_config.urgent_field</code>. Person setting: <code class="doc-code">preferences.urgent_sound</code>.</li>
+          </ul>
           <!-- /SYNC:live-groups-drags -->
         </div>
 
@@ -18632,9 +18684,11 @@ GET /api/duplicates/unit_types/test?record=&lt;id&gt;&amp;config=&lt;JSON&gt;   
             <li>Only fields the person may read are named. Read-only, calculated and generated fields are never badged.</li>
           </ul>
           <h2 class="doc-h2" id="partner-needs-which">Which steps count</h2>
+          <ul class="doc-ul">
             <li>Partner pushes on steps out of the record’s current step and out of every step it can reach by moving forward (to a step with a higher order). A new record starts at its pipeline’s first step. When the pipeline’s steps have no order, only the next steps count. Steps a person presses and automatic steps both count.</li>
             <li>A push counts only when its own conditions pass for the current values: the lookup that must find a row (<code class="doc-code">skip_when_empty</code>), the any-of check (<code class="doc-code">skip_unless_any</code>) and the guard rules. These are the same checks the push itself runs.</li>
             <li>What a push needs is read from its payload template: a value it always sends with no fallback. A value with a fallback, one sent only when it is not empty, or one inside an <code class="doc-code">if</code> in Liquid is not badged.</li>
+          </ul>
           <h2 class="doc-h2" id="partner-needs-setting">Turning it on</h2>
           <p class="doc-p">**Data Model → Settings → Form UX → Partner needs on the form**, per collection, off by default. Stored as <code class="doc-code">browser_config.partner_badges</code> on the collection (no migration):</p>
           <pre class="doc-pre"><code>PATCH /api/collections/stock_requests
@@ -18662,12 +18716,14 @@ GET /api/duplicates/unit_types/test?record=&lt;id&gt;&amp;config=&lt;JSON&gt;   
           <h1 class="doc-h1" id="line-split">Move Lines to a New Record</h1>
           <p class="doc-p">Sometimes part of a request ships now and the rest later, or some lines need a different warehouse. Instead of deleting lines and typing a second request by hand, people tick the lines and move them to a new record. The details are copied, the ticked lines move (they keep their history), and both records say where the lines went.</p>
           <h2 class="doc-h2" id="line-split-use">On a record</h2>
+          <ul class="doc-ul">
             <li>In the line grid, press **Select rows**, tick the lines to move, then **Move N to a new …**. A short panel says what will happen; **Move N lines** does it.</li>
             <li>The new record gets this record’s details and starts at the first step of its pipeline, like any new record. The ticked lines move onto it; the others stay.</li>
             <li>Both records get a note in their Notes thread — “Moved 3 lines to a new record” and “Created from another record — 3 lines moved here” — with a link to the other one. History shows the same.</li>
             <li>A message offers **Open the new …**. The record you were on stays open, without the moved lines.</li>
             <li>At least one line must stay and one must move. To take every line, use More → Duplicate instead.</li>
             <li>Only saved lines can move: save new lines and line changes first.</li>
+          </ul>
           <h2 class="doc-h2" id="line-split-who">Who may do it</h2>
           <p class="doc-p">The person must be able to change the record and its lines, and to create records of that kind. A record someone else is editing, or one locked while it waits on approvers (or locked for administrators after approval), refuses the move with the reason in plain words. Nothing is changed when any line is refused: the new record and every moved line are put back.</p>
           <h2 class="doc-h2" id="line-split-copy">What is copied</h2>
@@ -18682,10 +18738,12 @@ GET /api/duplicates/unit_types/test?record=&lt;id&gt;&amp;config=&lt;JSON&gt;   
           <h1 class="doc-h1" id="copying-records">Copying Records</h1>
           <p class="doc-p">A copy of a record is a new record. It starts at the first step of its workflow, like any record someone creates by hand: its owners are worked out again, its deadline clocks start now, and none of the original’s history, approvals or notes come along. Only the values a person would type again are copied.</p>
           <h2 class="doc-h2" id="copying-records-paths">Where people copy records</h2>
+          <ul class="doc-ul">
             <li>**Clone** on the record page (More menu, admin and efp-new) — a dialog to change or leave out fields, then <code class="doc-code">POST /api/items/:collection/:id/clone</code>; the copy opens at once, so nobody mistakes the original (still at its step) for the copy. Linked lists (Zone, Project Sub Type…) copy too; a list you may not set stays behind and the message names it.</li>
             <li>**More → Duplicate** on the record page (admin and efp-new) — opens a new, filled-in form; nothing is saved until the person saves it.</li>
             <li>**Save as template** — the template keeps the same values a copy would.</li>
             <li>Lines copied with a record (a grid’s child rows) follow the same rule for their own collection.</li>
+          </ul>
           <h2 class="doc-h2" id="copying-records-never">What is never copied</h2>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Kind of field</th><th>Why</th></tr></thead>
