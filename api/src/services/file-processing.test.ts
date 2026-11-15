@@ -56,7 +56,9 @@ describe('transformCacheKey', () => {
       .update('w=160&h=160&fit=cover&format=webp&q=80')
       .digest('hex')
       .slice(0, 16)
-    expect(transformCacheKey(FILE, CHIP_THUMB)).toBe(`transforms/${FILE.toLowerCase()}/${hash}.webp`)
+    expect(transformCacheKey(FILE, CHIP_THUMB)).toBe(
+      `transforms/${FILE.toLowerCase()}/${hash}.webp`
+    )
     expect(extractCacheKey(FILE)).toBe(`transforms/${FILE.toLowerCase()}/text.json`)
   })
 })
@@ -86,7 +88,10 @@ describe('processFile — status transitions', () => {
         throw new Error('scanned PDF')
       }
     })
-    const out = await processFile({ id: FILE, type: 'application/pdf', filename_download: 'q.pdf' }, d)
+    const out = await processFile(
+      { id: FILE, type: 'application/pdf', filename_download: 'q.pdf' },
+      d
+    )
     expect(out?.status).toBe('failed')
     expect((await readProcessingStates([FILE]))[FILE]?.status).toBe('failed')
     expect(announced).toEqual([FILE])
@@ -100,7 +105,9 @@ describe('processFile — status transitions', () => {
 
   it('a file with nothing to do has no status at all', async () => {
     const { d, announced } = deps()
-    expect(await processFile({ id: FILE, type: 'application/zip', filename_download: 'x.zip' }, d)).toBeNull()
+    expect(
+      await processFile({ id: FILE, type: 'application/zip', filename_download: 'x.zip' }, d)
+    ).toBeNull()
     expect(await readProcessingStates([FILE])).toEqual({})
     expect(announced).toEqual([])
   })

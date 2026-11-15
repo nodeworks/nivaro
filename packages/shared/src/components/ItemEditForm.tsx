@@ -288,6 +288,7 @@ import {
   parseRollupParentFilter,
   parseRollupSources
 } from './item-edit/live-rollups'
+import { headingLinksKey, LiveTitleText, useLiveHeadingFill } from './item-edit/live-title'
 import { HiddenByRulesNote, refineLockReasons, useLockWhy } from './item-edit/lock-why'
 import { m2aWriteMeta, parseM2aToken, resolveM2MRelatedCollection } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
@@ -2357,7 +2358,13 @@ function ItemEditFormView({
   // fields come in one small read of their own (Rob 2026-11-13: "Categories (no number)").
   const headingPaths = templateRelationPaths(colMeta?.display_template)
   const { data: headingLinked } = useQuery<Record<string, unknown> | null>({
-    queryKey: ['item-heading-links', collection, itemId, headingPaths.join(',')],
+    // rt3 #15 — keyed by the link ids too: a changed link names its new record at once.
+    queryKey: headingLinksKey(
+      collection,
+      String(itemId),
+      headingPaths,
+      itemData as Record<string, unknown> | undefined
+    ),
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown> }>(
@@ -2372,6 +2379,14 @@ function ItemEditFormView({
   const headingRow = withLinkedFields(
     itemData as Record<string, unknown> | undefined,
     headingLinked
+  )
+  // rt3 #15 — a number a partner / procedure fills in right after this person's own save.
+  useLiveHeadingFill(
+    collection,
+    isNew ? null : String(itemId),
+    colMeta?.display_template,
+    itemData as Record<string, unknown> | undefined,
+    !isNew && !recordGone && !designOn
   )
   // #3229 — the form's own shape for its loading placeholder, from the layout alone (it
   // resolves before the record, or a hover prefetch already put it in the cache).
@@ -13664,7 +13679,11 @@ function ItemEditFormView({
                                       >
                                         <div className='group/title flex items-center gap-1.5'>
                                           <h1 className='truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
-                                            {isNew ? `New ${singularTitle}` : itemTitle}
+                                            {isNew ? (
+                                              `New ${singularTitle}`
+                                            ) : (
+                                              <LiveTitleText text={itemTitle} />
+                                            )}
                                           </h1>
                                           {!isNew &&
                                             itemTitle &&

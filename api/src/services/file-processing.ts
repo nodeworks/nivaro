@@ -37,7 +37,13 @@ export const STATUS_TTL_S = 30 * 60
 /** Files worked on at once per process; the rest wait their turn. */
 export const PROCESS_CONCURRENCY = 2
 /** The chip thumbnail rendition (2x the largest chip). */
-export const CHIP_THUMB = { width: 160, height: 160, fit: 'cover', format: 'webp', quality: 80 } as const
+export const CHIP_THUMB = {
+  width: 160,
+  height: 160,
+  fit: 'cover',
+  format: 'webp',
+  quality: 80
+} as const
 
 const RASTER = /^image\/(jpeg|jpg|png|webp|gif|avif|tiff)$/i
 const TEXT_EXT = /\.(pdf|docx|xlsx|xls|xlsm|csv|txt|md|eml|html?)$/i
@@ -54,9 +60,7 @@ export interface TransformParams {
 /** Where a transform rendition is cached. One definition for the route and the processor. */
 export function transformCacheKey(fileId: string, p: TransformParams): string {
   const hash = createHash('sha1')
-    .update(
-      `w=${p.width ?? ''}&h=${p.height ?? ''}&fit=${p.fit}&format=${p.format}&q=${p.quality}`
-    )
+    .update(`w=${p.width ?? ''}&h=${p.height ?? ''}&fit=${p.fit}&format=${p.format}&q=${p.quality}`)
     .digest('hex')
     .slice(0, 16)
   return `transforms/${String(fileId).toLowerCase()}/${hash}.${p.format}`
@@ -99,8 +103,7 @@ async function redis(): Promise<Redis | null> {
 async function writeState(fileId: string, state: FileProcessingState): Promise<void> {
   const key = keyOf(fileId)
   memory.set(key, { state, exp: Date.now() + STATUS_TTL_S * 1000 })
-  if (memory.size > 2000)
-    for (const [k, v] of memory) if (v.exp < Date.now()) memory.delete(k)
+  if (memory.size > 2000) for (const [k, v] of memory) if (v.exp < Date.now()) memory.delete(k)
   const r = await redis()
   if (!r) return
   await r.set(`nvr:fileproc:${key}`, JSON.stringify(state), 'EX', STATUS_TTL_S).catch(() => null)
@@ -300,9 +303,14 @@ export async function announceFileProcessed(fileId: string): Promise<void> {
     for (const row of rows) {
       const owner = parentLeg ? row[parentLeg.many_field] : row.id
       if (owner == null || owner === '') continue
-      emitRecordEvent(parentLeg ? parentLeg.one_collection : ref.table, String(owner), 'file:processed', {
-        file: String(fileId)
-      })
+      emitRecordEvent(
+        parentLeg ? parentLeg.one_collection : ref.table,
+        String(owner),
+        'file:processed',
+        {
+          file: String(fileId)
+        }
+      )
     }
   }
 }

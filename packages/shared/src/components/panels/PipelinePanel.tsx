@@ -40,6 +40,7 @@ import {
 import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
 import { userErrorMessage } from '../../lib/safe-error'
 import { serverNow } from '../../lib/server-clock'
+import type { UnseenChange } from '../../lib/unseen-changes'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import {
   cn,
@@ -116,6 +117,7 @@ import {
 import { SlaClockLine } from './SlaClock'
 import { type StandInReason, StandInReasonLines, standInIds } from './StandInReason'
 import type { TransitionRequirementsPayload } from './TransitionRequirementsDialog'
+import { UnseenChangesNotice, useUnseenMoveCheck } from './unseen-move-check'
 
 // Opens only when a transition needs answers first; loads then.
 const TransitionRequirementsDialog = lazy(() =>
@@ -2834,6 +2836,9 @@ function PipelinePanelInner({
   // Brief lines that warned before a forward move (army6 D6): the confirm says "<move> anyway".
   const [forwardWarning, setForwardWarning] = useState<BriefLineView[]>([])
   const checkForwardMove = useForwardMoveCheck(collection, String(item))
+  // rt3 #14 — changes by someone else since this page read the record, not yet on screen.
+  const [unseen, setUnseen] = useState<UnseenChange[]>([])
+  const unseenCheck = useUnseenMoveCheck(collection, String(item))
   // #1722 — "Kim is approving" for the others, while this panel's confirm or requirements
   // dialog is open; and the same notice from anyone else's.
   useRecordSignalWhile(collection, item, 'transition', !!pendingTransition || !!requirementsDialog)
@@ -2902,6 +2907,23 @@ function PipelinePanelInner({
         transitionBusyRef.current = false
       }
       if (!ok) return
+    }
+    // rt3 #14 — someone else changed the record since this page read it and it is not on
+    // screen: the confirm lists it (Review / Continue). Nothing changed = no extra step.
+    {
+      transitionBusyRef.current = true
+      let found: UnseenChange[] = []
+      try {
+        found = await unseenCheck.check()
+      } finally {
+        transitionBusyRef.current = false
+      }
+      setUnseen(found)
+      if (found.length > 0) {
+        setForwardWarning([])
+        setPendingTransition(txId)
+        return
+      }
     }
     // Most transitions are simply "yes, move it on": a confirm step there is a
     // second click carrying no information. Only stop and ask when the
@@ -3509,6 +3531,7 @@ function PipelinePanelInner({
       <OrderSendNote collection={collection} item={String(item)} tx={pendingTx} />
       <ApprovalBriefStrip collection={collection} item={item} omitLines={forwardWarning} />
       <ForwardMoveWarning lines={forwardWarning} />
+      <UnseenChangesNotice changes={unseen} />
       <input
         type='text'
         value={comment}
@@ -3527,9 +3550,12 @@ function PipelinePanelInner({
           size='sm'
           variant='ghost'
           className='h-7 text-[12px]'
-          onClick={() => setPendingTransition(null)}
+          onClick={() => {
+            if (unseen.length > 0) unseenCheck.review()
+            setPendingTransition(null)
+          }}
         >
-          Cancel
+          {unseen.length > 0 ? 'Review' : 'Cancel'}
         </Button>
         <Button
           type='button'
@@ -3555,7 +3581,11 @@ function PipelinePanelInner({
           ) : (
             <>
               <span>
-                {forwardWarning.length > 0 && pendingTx ? `${pendingTx.label} anyway` : 'Confirm'}
+                {unseen.length > 0
+                  ? 'Continue'
+                  : forwardWarning.length > 0 && pendingTx
+                    ? `${pendingTx.label} anyway`
+                    : 'Confirm'}
               </span>
               <Check className='h-3 w-3' />
             </>
@@ -3910,6 +3940,9 @@ function PipelineTransitionButtonsInner({
   // Brief lines that warned before a forward move (army6 D6): the confirm says "<move> anyway".
   const [forwardWarning, setForwardWarning] = useState<BriefLineView[]>([])
   const checkForwardMove = useForwardMoveCheck(collection, String(item))
+  // rt3 #14 — changes by someone else since this page read the record, not yet on screen.
+  const [unseen, setUnseen] = useState<UnseenChange[]>([])
+  const unseenCheck = useUnseenMoveCheck(collection, String(item))
   // #1722 — other viewers of the record see "Kim is approving" while this dialog is open.
   useRecordSignalWhile(collection, item, 'transition', !!pendingTransition || !!requirementsDialog)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -3977,6 +4010,23 @@ function PipelineTransitionButtonsInner({
         transitionBusyRef.current = false
       }
       if (!ok) return
+    }
+    // rt3 #14 — someone else changed the record since this page read it and it is not on
+    // screen: the confirm lists it (Review / Continue). Nothing changed = no extra step.
+    {
+      transitionBusyRef.current = true
+      let found: UnseenChange[] = []
+      try {
+        found = await unseenCheck.check()
+      } finally {
+        transitionBusyRef.current = false
+      }
+      setUnseen(found)
+      if (found.length > 0) {
+        setForwardWarning([])
+        setPendingTransition(txId)
+        return
+      }
     }
     // Most transitions are simply "yes, move it on": a confirm step there is a
     // second click carrying no information. Only stop and ask when the
@@ -4571,6 +4621,7 @@ function PipelineTransitionButtonsInner({
           <OrderSendNote collection={collection} item={String(item)} tx={pendingTx} />
           <ApprovalBriefStrip collection={collection} item={item} omitLines={forwardWarning} />
           <ForwardMoveWarning lines={forwardWarning} />
+          <UnseenChangesNotice changes={unseen} />
           <input
             type='text'
             value={comment}
@@ -4589,9 +4640,12 @@ function PipelineTransitionButtonsInner({
               size='sm'
               variant='ghost'
               className='h-7 text-[12px]'
-              onClick={() => setPendingTransition(null)}
+              onClick={() => {
+                if (unseen.length > 0) unseenCheck.review()
+                setPendingTransition(null)
+              }}
             >
-              Cancel
+              {unseen.length > 0 ? 'Review' : 'Cancel'}
             </Button>
             <Button
               type='button'
@@ -4618,9 +4672,11 @@ function PipelineTransitionButtonsInner({
               ) : (
                 <>
                   <span>
-                    {forwardWarning.length > 0 && pendingTx
-                      ? `${pendingTx.label} anyway`
-                      : 'Confirm'}
+                    {unseen.length > 0
+                      ? 'Continue'
+                      : forwardWarning.length > 0 && pendingTx
+                        ? `${pendingTx.label} anyway`
+                        : 'Confirm'}
                   </span>
                   <Check className='h-3 w-3' />
                 </>

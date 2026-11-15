@@ -265,6 +265,7 @@ import { QuickFilterBarEditor, QuickFilterEditButton } from './quick-filters/Qui
 import { useQuickFilterEditing } from './quick-filters/useQuickFilterEditing'
 import { RealtimeStaleMark } from './RealtimeStatusBanner'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
+import { RecordHoverCard } from './RecordHoverCard'
 import { RowHighlightLegend } from './RowHighlightLegend'
 import { RowPresence } from './RowPresence'
 import { TableSkeletonRows } from './Skeletons'
@@ -868,7 +869,12 @@ function RecordRelationLabel({
         [item.first_name, item.last_name].filter(Boolean).join(' ') || item.email || item.id || ''
       )
     : renderDisplayTemplate(meta?.display_template ?? null, item)
-  return <span className='text-[12px] text-slate-700 dark:text-slate-200'>{label}</span>
+  // rt3 #16 — hover shows the linked record's current step, owners and amounts.
+  return (
+    <RecordHoverCard collection={relatedCollection} id={id} disabled={userCol}>
+      <span className='text-[12px] text-slate-700 dark:text-slate-200'>{label}</span>
+    </RecordHoverCard>
+  )
 }
 
 // ─── Cell renderer (admin CellValue port, same precedence) ────────────────────

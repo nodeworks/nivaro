@@ -50,7 +50,12 @@ export function templateFieldNames(template: string | null | undefined): string[
  */
 export function pickCardAmounts(
   row: Record<string, unknown>,
-  fields: Array<{ field: string; type?: string | null; hidden?: boolean | null; label?: string | null }>,
+  fields: Array<{
+    field: string
+    type?: string | null
+    hidden?: boolean | null
+    label?: string | null
+  }>,
   template: string | null | undefined
 ): RecordCardAmount[] {
   const inTemplate = new Set(templateFieldNames(template))
@@ -138,7 +143,12 @@ export async function recordCard(
     owners: deco?.owners ?? [],
     amounts: pickCardAmounts(
       row,
-      fields as Array<{ field: string; type?: string | null; hidden?: boolean | null; label?: string | null }>,
+      fields as Array<{
+        field: string
+        type?: string | null
+        hidden?: boolean | null
+        label?: string | null
+      }>,
       meta?.display_template ?? null
     ),
     updated_at: updatedIso

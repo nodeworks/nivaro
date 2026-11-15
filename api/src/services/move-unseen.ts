@@ -204,8 +204,9 @@ async function fileLinksOf(collection: string): Promise<FileLink[]> {
     if (!target) {
       const theirs = (await getRelations(r.many_collection).catch(() => [])) as typeof rels
       target =
-        theirs.find((x) => x.many_collection === r.many_collection && x.many_field === r.junction_field)
-          ?.one_collection ?? null
+        theirs.find(
+          (x) => x.many_collection === r.many_collection && x.many_field === r.junction_field
+        )?.one_collection ?? null
     }
     if (target && FILE_TABLES.has(target))
       out.push({
@@ -303,7 +304,13 @@ export async function recordChangesSince(
   ).catch(() => [])
 
   // ── Files added / removed through a link table ──────────────────────────
-  const fileEvents: Array<{ junction: string; added: number; removed: number; at: string; by: Array<string | null> }> = []
+  const fileEvents: Array<{
+    junction: string
+    added: number
+    removed: number
+    at: string
+    by: Array<string | null>
+  }> = []
   for (const link of links) {
     if (readable && link.alias && !readable.has(link.alias)) continue
     if (!isAdmin && !(await can(user, 'read', link.junction).catch(() => false))) continue
@@ -319,7 +326,13 @@ export async function recordChangesSince(
       .catch(() => [])) as Array<Record<string, unknown>>
     const mine = rows.filter((r) => sameId(parseJson(r.data)?.[link.parentField], item))
     if (mine.length === 0) continue
-    const ev = { junction: link.junction, added: 0, removed: 0, at: '', by: [] as Array<string | null> }
+    const ev = {
+      junction: link.junction,
+      added: 0,
+      removed: 0,
+      at: '',
+      by: [] as Array<string | null>
+    }
     for (const r of mine) {
       if (r.action === 'create') ev.added++
       else ev.removed++
@@ -355,7 +368,8 @@ export async function recordChangesSince(
     const target = labels.links?.[`${collection}.${f.field}`]
     if (!target) continue
     for (const v of [f.from, f.to])
-      if (v != null && v !== '' && typeof v !== 'object') linkRefs.push({ collection: target, id: String(v) })
+      if (v != null && v !== '' && typeof v !== 'object')
+        linkRefs.push({ collection: target, id: String(v) })
   }
   if (linkRefs.length > 0) {
     const more = await deps

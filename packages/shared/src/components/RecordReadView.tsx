@@ -46,6 +46,7 @@ import {
 } from './layout-editor/design-context'
 import { choiceLabelsFrom } from './layout-editor/overview/describe-conditions'
 import { integrityByField, useRecordIntegrity } from './panels/RecordIntegrityBanner'
+import { RecordHoverCard } from './RecordHoverCard'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 import { type InputBinding, WidgetSlot } from './WidgetSlot'
 
@@ -304,15 +305,23 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
     }
   }
   if (isNamelessLabel(label)) label = NAMELESS_LABEL
-  if (!drill) return <>{label}</>
+  // rt3 #16 — hover shows the linked record's current step, owners and amounts.
+  if (!drill)
+    return (
+      <RecordHoverCard collection={collection} id={id}>
+        {label}
+      </RecordHoverCard>
+    )
   return (
-    <button
-      type='button'
-      onClick={() => drill.open({ collection, itemId: String(id) })}
-      className='text-left underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#007a99] hover:decoration-[#007a99] dark:decoration-slate-600 dark:hover:text-nvr-cyan dark:hover:decoration-nvr-cyan'
-    >
-      {label}
-    </button>
+    <RecordHoverCard collection={collection} id={id}>
+      <button
+        type='button'
+        onClick={() => drill.open({ collection, itemId: String(id) })}
+        className='text-left underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#007a99] hover:decoration-[#007a99] dark:decoration-slate-600 dark:hover:text-nvr-cyan dark:hover:decoration-nvr-cyan'
+      >
+        {label}
+      </button>
+    </RecordHoverCard>
   )
 }
 
@@ -727,16 +736,18 @@ function ChildTable({
       const id = pv.ids?.[0]
       if (drill && target && id)
         return (
-          <button
-            type='button'
-            onClick={(e) => {
-              e.stopPropagation()
-              drill.open({ collection: target, itemId: String(id) })
-            }}
-            className='text-left underline decoration-slate-300 underline-offset-2 hover:text-[#007a99] dark:decoration-slate-600 dark:hover:text-nvr-cyan'
-          >
-            {pv.value}
-          </button>
+          <RecordHoverCard collection={target} id={id}>
+            <button
+              type='button'
+              onClick={(e) => {
+                e.stopPropagation()
+                drill.open({ collection: target, itemId: String(id) })
+              }}
+              className='text-left underline decoration-slate-300 underline-offset-2 hover:text-[#007a99] dark:decoration-slate-600 dark:hover:text-nvr-cyan'
+            >
+              {pv.value}
+            </button>
+          </RecordHoverCard>
         )
       return pv.value
     }

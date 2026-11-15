@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { requireAuth } from '../middleware/authenticate.js'
 import { unreadableFileIds } from '../services/file-access.js'
 import { readProcessingStates } from '../services/file-processing.js'
-import { recordCard } from '../services/record-card.js'
 import { clampSince, recordChangesSince } from '../services/move-unseen.js'
+import { recordCard } from '../services/record-card.js'
 import { recordVisibleTo } from '../services/revision-access.js'
 
 /**
@@ -27,23 +27,19 @@ export async function recordGlanceRoutes(app: FastifyInstance) {
   app.get<{
     Params: { collection: string; id: string }
     Querystring: { since?: string; fields_since?: string }
-  }>(
-    '/records/:collection/:id/unseen',
-    { preHandler: requireAuth },
-    async (req, reply) => {
-      const { collection, id } = req.params
-      if (!NAME.test(collection) || !ID.test(id))
-        return reply.code(400).send({ error: 'Name a record' })
-      const since = clampSince(req.query.since)
-      if (!since) return reply.code(400).send({ error: 'since must be a time' })
-      if (/^(nivaro_|directus_)/i.test(collection) || !(await recordVisibleTo(req, collection, id)))
-        return reply.code(404).send({ error: 'Not found' })
-      const data = await recordChangesSince(req.user!, !!req.isAdmin, collection, id, since, {
-        fieldsSince: clampSince(req.query.fields_since)
-      })
-      return reply.send({ data })
-    }
-  )
+  }>('/records/:collection/:id/unseen', { preHandler: requireAuth }, async (req, reply) => {
+    const { collection, id } = req.params
+    if (!NAME.test(collection) || !ID.test(id))
+      return reply.code(400).send({ error: 'Name a record' })
+    const since = clampSince(req.query.since)
+    if (!since) return reply.code(400).send({ error: 'since must be a time' })
+    if (/^(nivaro_|directus_)/i.test(collection) || !(await recordVisibleTo(req, collection, id)))
+      return reply.code(404).send({ error: 'Not found' })
+    const data = await recordChangesSince(req.user!, !!req.isAdmin, collection, id, since, {
+      fieldsSince: clampSince(req.query.fields_since)
+    })
+    return reply.send({ data })
+  })
 
   app.get<{ Params: { collection: string; id: string } }>(
     '/records/:collection/:id/card',
