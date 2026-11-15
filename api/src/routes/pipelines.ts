@@ -2480,6 +2480,29 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   )
 
   /**
+   * Realtime round 8 #12 — "What changed since you sent it back": when the record is back in
+   * a step it was sent back from, the fields, lines and files that changed since that send
+   * back, judged as the caller (services/resubmission-diff.ts). `data: null` = not a return.
+   */
+  app.get(
+    '/instance/:collection/:item/resubmission',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, item } = req.params as { collection: string; item: string }
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
+      const { buildResubmissionDiff } = await import('../services/resubmission-diff.js')
+      try {
+        return reply.send({ data: await buildResubmissionDiff(req, collection, String(item)) })
+      } catch (err) {
+        req.log.warn({ err }, 'resubmission diff failed')
+        return reply
+          .code(503)
+          .send({ error: 'Could not load this right now', code: 'RESUBMISSION_UNAVAILABLE' })
+      }
+    }
+  )
+
+  /**
    * Impact preview for a PROPOSED skip-criteria change, before it is saved.  /**
    * Impact preview for a PROPOSED skip-criteria change, before it is saved.
    *

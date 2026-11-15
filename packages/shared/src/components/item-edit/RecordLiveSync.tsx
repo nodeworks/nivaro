@@ -113,6 +113,8 @@ export const RECORD_QUERY_HEADS = [
   'pipeline-instance-owners',
   'pipeline-owners-resolved',
   'approval-brief',
+  // rt8 #12: what changed since a send back.
+  'resubmission',
   'erp-submissions',
   'record-integrations',
   'record-integrity',

@@ -13,6 +13,7 @@ import {
   Copy,
   Eye,
   FileDown,
+  LayoutTemplate,
   LifeBuoy,
   Loader2,
   Lock,
@@ -120,7 +121,7 @@ import {
   linkedChangeSentence,
   useLinkedRecordWatch
 } from '../lib/linked-changes'
-import { useLiveEvent } from '../lib/live'
+import { useLiveEvent, useLiveRecord } from '../lib/live'
 import { linkDepsOfPaths, useLiveLinkLabels } from '../lib/live-link-labels'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useShownRecords } from '../lib/missed-updates'
@@ -283,6 +284,7 @@ import { HeaderFreshness } from './item-edit/HeaderFreshness'
 import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
 import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import { HeaderMenu, HeaderToolGroup, HeaderTools } from './item-edit/HeaderTools'
+import { type HeldEdit, HeldEditsChip } from './item-edit/HeldEditsChip'
 import { HighlightedCode } from './item-edit/HighlightedCode'
 import {
   clientMidairError,
@@ -309,6 +311,14 @@ import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock
 import { ListNeighborNav } from './item-edit/ListNeighborNav'
 import { LiveTraceSheet } from './item-edit/LiveTraceSheet'
 import { WatchPinButton } from './watch-list/WatchPinButton'
+import {
+  fieldStatus,
+  formUpdatedText,
+  type LayoutSwitch,
+  layoutMayChange,
+  splitUnsaved,
+  useSmoothLayout
+} from './item-edit/layout-switch'
 import { deferredSections } from './item-edit/lazy-sections'
 import { type LineRevision, mergeEditOf, restoredLineConflicts } from './item-edit/line-merge'
 import {
@@ -417,6 +427,7 @@ import { choiceLabelsFrom } from './layout-editor/overview/describe-conditions'
 import { AlertBanners } from './panels/AlertBanners'
 import { LegalHoldBanner } from './panels/LegalHoldBanner'
 import { RecordIntegrityBanner, useRecordIntegrity } from './panels/RecordIntegrityBanner'
+import { ResubmissionStrip } from './panels/ResubmissionDiff'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordGraphSheet } from './RecordGraph'
 import { type ReadViewLayout, RecordReadView } from './RecordReadView'
@@ -2106,15 +2117,16 @@ function ItemEditFormView({
   // A small screen gets a form's phone version (#2715) — read once per open,
   // so turning the device never swaps the form under someone's edits.
   const [viewport] = useState(currentViewport)
+  // Desktop keeps the key the host's own /active read shares (admin ItemEdit).
+  const activeLayoutKey = [
+    'active-layout',
+    collection,
+    layoutSlug ?? null,
+    itemId,
+    ...(viewport ? [viewport] : [])
+  ]
   const { data: fetchedLayoutData } = useQuery<ActiveLayoutData | null>({
-    // Desktop keeps the key the host's own /active read shares (admin ItemEdit).
-    queryKey: [
-      'active-layout',
-      collection,
-      layoutSlug ?? null,
-      itemId,
-      ...(viewport ? [viewport] : [])
-    ],
+    queryKey: activeLayoutKey,
     queryFn: () =>
       client
         .request<{ data: ActiveLayoutData | null }>(
@@ -2129,7 +2141,26 @@ function ItemEditFormView({
     staleTime: 60_000,
     enabled: !designOn
   })
-  const activeLayoutData = designOn ? design.layout : fetchedLayoutData
+  // rt8 #18: a move or field change that makes another form apply switches the page in place
+  // (item-edit/layout-switch.ts) — the new field list is read first, the view keeps its field
+  // and focus, unsaved values the new form cannot take are held back (onLayoutSwitchRef).
+  const onLayoutSwitchRef = useRef<(sw: LayoutSwitch, fields: CMSField[] | null) => void>(() => {})
+  const { shown: smoothLayoutData } = useSmoothLayout(fetchedLayoutData, {
+    enabled: !designOn && !isNew && !layoutSlug,
+    prepare: (id) =>
+      qc.fetchQuery({
+        queryKey: ['field-config', collection, id],
+        queryFn: () =>
+          client
+            .request<{ data: CMSField[] }>(
+              get(`/field-config/${collection}`, { layout_id: String(id) })
+            )
+            .then((r) => r.data ?? []),
+        staleTime: 60_000
+      }),
+    onSwitch: (sw, fields) => onLayoutSwitchRef.current(sw, fields)
+  })
+  const activeLayoutData = designOn ? design.layout : smoothLayoutData
 
   const layoutId = activeLayoutData?.layout?.id ?? null
 
@@ -6364,6 +6395,99 @@ function ItemEditFormView({
       }),
     [qc, collection, itemId]
   )
+  // ── rt8 #18: the form follows the record ──────────────────────────────────
+  // Which form applies can depend on the record. A changed step (own move, someone else's,
+  // another tab — every path refreshes 'pipeline-instance') or a change to a field one of the
+  // forms' record rules reads re-asks /active as the viewer; useSmoothLayout switches in place.
+  const layoutStepRef = useRef<string | null>(null)
+  const layoutRuleFields = fetchedLayoutData?.rule_fields ?? null
+  const layoutLiveOn = !designOn && !isNew && !layoutSlug && !!itemId
+  const activeLayoutKeyRef = useRef(activeLayoutKey)
+  activeLayoutKeyRef.current = activeLayoutKey
+  const reaskLayoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reaskLayout = useCallback(() => {
+    if (reaskLayoutTimer.current) return
+    // One re-ask per second at most, whatever the burst.
+    reaskLayoutTimer.current = setTimeout(() => {
+      reaskLayoutTimer.current = null
+      void qc.invalidateQueries({ queryKey: activeLayoutKeyRef.current, exact: true })
+    }, 1000)
+  }, [qc])
+  useEffect(
+    () => () => {
+      if (reaskLayoutTimer.current) clearTimeout(reaskLayoutTimer.current)
+    },
+    []
+  )
+  useEffect(() => {
+    if (!layoutLiveOn) return
+    let lastState: string | null | undefined
+    return qc.getQueryCache().subscribe((event) => {
+      if (event.type !== 'updated' || event.action.type !== 'success') return
+      const k = event.query.queryKey
+      if (!Array.isArray(k) || k[0] !== 'pipeline-instance' || k[1] !== collection) return
+      if (String(k[2]) !== String(itemId) || k.length > 3) return
+      const inst = (
+        event.query.state.data as {
+          instance?: { current_state?: string | null; current_state_obj?: { label?: string } }
+        } | null
+      )?.instance
+      if (!inst) return
+      layoutStepRef.current = inst.current_state_obj?.label ?? null
+      const next = inst.current_state ?? null
+      if (lastState !== undefined && next !== lastState) reaskLayout()
+      lastState = next
+    })
+  }, [qc, collection, itemId, layoutLiveOn, reaskLayout])
+  useLiveRecord(
+    collection,
+    layoutLiveOn ? itemId : null,
+    (batch) => {
+      if (layoutMayChange(batch, layoutRuleFields)) reaskLayout()
+    },
+    { enabled: layoutLiveOn && !!layoutRuleFields?.length, includeOwn: true, debounceMs: 400 }
+  )
+  // The switch itself: unsaved values the new form shows and lets the person edit stay; the
+  // rest come out of the save and wait in the "not on this form" chip.
+  const [heldEdits, setHeldEdits] = useState<HeldEdit[]>([])
+  const [formNote, setFormNote] = useState<{ text: string; n: number } | null>(null)
+  onLayoutSwitchRef.current = (sw, fields) => {
+    setFormNote({ text: formUpdatedText(layoutStepRef.current), n: sw.n })
+    if (isNew) return
+    const { held } = splitUnsaved(draftRef.current, initialDataRef.current, fields)
+    if (held.length === 0) return
+    const labelOf = (k: string) =>
+      (fieldConfig ?? []).find((f) => f.field === k)?.label ||
+      k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    const next = { ...draftRef.current }
+    const add: HeldEdit[] = []
+    for (const h of held) {
+      add.push({ field: h.field, label: labelOf(h.field), value: next[h.field], status: h.status })
+      next[h.field] = initialDataRef.current[h.field] ?? null
+    }
+    draftRef.current = next
+    setDraft(next)
+    setIsDirty(draftDiffers(next, initialDataRef.current))
+    setHeldEdits((prev) => [...prev.filter((p) => !add.some((a) => a.field === p.field)), ...add])
+  }
+  useEffect(() => {
+    if (!formNote) return
+    const t = setTimeout(() => setFormNote(null), 8000)
+    return () => clearTimeout(t)
+  }, [formNote])
+  // Another record: nothing held over.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on identity only
+  useEffect(() => {
+    setHeldEdits([])
+    setFormNote(null)
+  }, [collection, itemId])
+  const putBackHeld = (field: string) => {
+    const h = heldEdits.find((x) => x.field === field)
+    if (!h || fieldStatus(fieldConfig, field) !== 'editable') return
+    handleFieldChange(field, h.value)
+    setHeldEdits((prev) => prev.filter((x) => x.field !== field))
+  }
+
   relockOnEditRef.current =
     lockEnabled && !lockAcquired && !lockHolder
       ? () => void (lockReleased ? relockLock() : claimLock())
@@ -16740,6 +16864,49 @@ function ItemEditFormView({
                                       padding than side padding"). */}
                                       {!isNew && itemId && !designOn && recordExtras && (
                                         <RecordRecapStrip
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                        />
+                                      )}
+                                      {/* rt8 #18: the record now gets another form — a quiet note, and
+                                      the unsaved values that form cannot take, kept aside. */}
+                                      {(formNote || heldEdits.length > 0) && !designOn && (
+                                        <div
+                                          className='flex flex-wrap items-center gap-x-3 gap-y-1.5'
+                                          data-form-switch
+                                        >
+                                          {formNote && (
+                                            <p
+                                              key={formNote.n}
+                                              role='status'
+                                              className='nvr-fade-in inline-flex items-center gap-1.5 text-[12px] text-slate-500 dark:text-slate-400'
+                                              data-form-updated
+                                            >
+                                              <LayoutTemplate
+                                                aria-hidden
+                                                className='h-3.5 w-3.5 text-slate-400 dark:text-slate-500'
+                                              />
+                                              {formNote.text}
+                                            </p>
+                                          )}
+                                          <HeldEditsChip
+                                            edits={heldEdits}
+                                            canPutBack={(f) =>
+                                              fieldStatus(fieldConfig, f) === 'editable' &&
+                                              !lockReasons[f]
+                                            }
+                                            onPutBack={putBackHeld}
+                                            onDiscard={(f) =>
+                                              setHeldEdits((prev) =>
+                                                f ? prev.filter((x) => x.field !== f) : []
+                                              )
+                                            }
+                                          />
+                                        </div>
+                                      )}
+                                      {/* rt8 #12: back after a send back — what changed since. */}
+                                      {!isNew && itemId && !designOn && showPipeline && (
+                                        <ResubmissionStrip
                                           collection={collection}
                                           itemId={String(itemId)}
                                         />

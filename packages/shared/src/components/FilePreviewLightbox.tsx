@@ -1,6 +1,8 @@
-import { Download, X } from 'lucide-react'
+import { Download, RefreshCw, X } from 'lucide-react'
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
+import { useParentDraft } from '../context'
+import { useNewerFile, versionedUrl } from '../lib/newer-file'
 
 /**
  * Inline attachment preview — click a file, see it, without a download round
@@ -64,7 +66,35 @@ function fmtBytes(n: number | null | undefined): string | null {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function FilePreviewLightbox({ file, onClose }: { file: PreviewFile; onClose: () => void }) {
+export function FilePreviewLightbox({
+  file: opened,
+  onClose,
+  record: recordProp
+}: {
+  file: PreviewFile
+  onClose: () => void
+  /** The record the file was opened from: its `$files` notices say when the file changed
+   *  (rt8 #19). Defaults to the record form the preview sits in. */
+  record?: { collection: string; itemId: string | number } | null
+}) {
+  const parent = useParentDraft()
+  const parentId = parent?.draft?.id
+  const record =
+    recordProp ??
+    (parent?.collection && parentId != null && !parent.isNew
+      ? { collection: parent.collection, itemId: String(parentId) }
+      : null)
+  const { current: shown, newer, showNewer } = useNewerFile(opened.id, record)
+  // The version on screen: the one opened, or the newer one once the person asked for it.
+  const file: PreviewFile = shown
+    ? {
+        ...opened,
+        url: versionedUrl(opened.url, shown),
+        name: shown.filename_download || shown.title || opened.name,
+        type: shown.type ?? opened.type,
+        size: shown.filesize != null ? Number(shown.filesize) : opened.size
+      }
+    : opened
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -121,7 +151,7 @@ export function FilePreviewLightbox({ file, onClose }: { file: PreviewFile; onCl
           No inline preview for this file type{type ? ` (${type})` : ''}.
         </p>
         <a
-          href={`${file.url}?download=1`}
+          href={`${opened.url}${opened.url.includes('?') ? '&' : '?'}download=1`}
           className='inline-flex items-center gap-1.5 rounded-md bg-nvr-cyan px-3 py-1.5 text-[12.5px] font-medium text-white hover:brightness-110'
         >
           <Download className='h-3.5 w-3.5' /> Download
@@ -138,7 +168,7 @@ export function FilePreviewLightbox({ file, onClose }: { file: PreviewFile; onCl
       data-file-lightbox
     >
       <div
-        className='flex items-center gap-3 px-4 py-2.5'
+        className='flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5'
         onClick={(e) => e.stopPropagation()}
         onKeyDown={() => {}}
       >
@@ -146,8 +176,37 @@ export function FilePreviewLightbox({ file, onClose }: { file: PreviewFile; onCl
           {file.name}
           {size && <span className='ml-2 text-[11px] font-normal text-white/60'>{size}</span>}
         </p>
+        {newer.kind === 'newer' && (
+          <p
+            role='status'
+            data-file-newer
+            className='nvr-fade-in flex shrink-0 items-center gap-2 rounded-md bg-white/10 py-1 pr-1 pl-2.5 text-[12px] text-white/90 max-sm:order-last max-sm:w-full max-sm:justify-between'
+          >
+            <span className='min-w-0 truncate sm:max-w-[42vw]'>
+              {newer.renamed && !newer.replaced
+                ? `Renamed to ${newer.renamed}`
+                : 'A newer version of this file exists'}
+            </span>
+            <button
+              type='button'
+              onClick={showNewer}
+              className='inline-flex shrink-0 items-center gap-1 rounded bg-[#ffffff] px-2 py-0.5 text-[11.5px] font-medium text-[#0f172a] hover:bg-[#e2e8f0] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffffff]'
+            >
+              <RefreshCw aria-hidden className='h-3 w-3' /> Show newer
+            </button>
+          </p>
+        )}
+        {newer.kind === 'gone' && (
+          <p
+            role='status'
+            data-file-gone
+            className='nvr-fade-in shrink-0 rounded-md bg-white/10 px-2.5 py-1 text-[12px] text-white/80 max-sm:order-last max-sm:w-full'
+          >
+            This file was removed from the record
+          </p>
+        )}
         <a
-          href={`${file.url}?download=1`}
+          href={`${opened.url}${opened.url.includes('?') ? '&' : '?'}download=1`}
           title='Download'
           className='rounded p-1.5 text-white/80 hover:bg-white/10 hover:text-white'
         >

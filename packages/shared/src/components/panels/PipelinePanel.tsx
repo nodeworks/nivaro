@@ -44,6 +44,7 @@ import {
 import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
 import { userErrorMessage } from '../../lib/safe-error'
 import { serverNow } from '../../lib/server-clock'
+import { type TrackTravel, travelPlan, useTrackTravel } from '../../lib/track-travel'
 import type { UnseenChange } from '../../lib/unseen-changes'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import {
@@ -122,6 +123,7 @@ import {
   waitingFill,
   workingFill
 } from './PipelineInsight'
+import { ResubmissionBrief } from './ResubmissionDiff'
 import { SlaClockLine } from './SlaClock'
 import { type StandInReason, StandInReasonLines, standInIds } from './StandInReason'
 import type { TransitionRequirementsPayload } from './TransitionRequirementsDialog'
@@ -1399,7 +1401,8 @@ function StateTrack({
   currentStateId,
   history,
   onPathIds,
-  skippedStates
+  skippedStates,
+  travel
 }: {
   states: PipelineState[]
   allTransitions: PipelineTransition[]
@@ -1411,6 +1414,8 @@ function StateTrack({
   onPathIds?: Set<string> | null
   /** State id → why the engine will skip it. null while loading. */
   skippedStates?: Map<string, string[]> | null
+  /** rt8 #17: someone else just moved the record — the track draws the hop. */
+  travel?: TrackTravel | null
 }) {
   // A narrow host (a phone-width sheet) scrolls the track sideways instead of
   // crushing each step to one letter per line; the current step is brought
@@ -1503,6 +1508,10 @@ function StateTrack({
   })()
   if (relevant.length < 2) return null
   const currentIndex = relevant.findIndex((st) => st.id === currentStateId)
+  const plan = travelPlan(
+    relevant.map((st) => st.id),
+    travel ?? null
+  )
 
   // Who moved the record across this gap. Position-based, not exact-pair:
   // a transition that SKIPS steps (manager approval jumping straight to VP)
@@ -1599,11 +1608,14 @@ function StateTrack({
                 the label a few pixels on a narrow track. */}
                 <div className='flex min-w-[76px] flex-1 flex-col items-center gap-1.5 px-1'>
                   <div
-                    key={isCurrent ? 'cur' : isDone ? 'done' : isSkipped ? 'skip' : 'todo'}
+                    key={`${isCurrent ? 'cur' : isDone ? 'done' : isSkipped ? 'skip' : 'todo'}${
+                      plan && plan.arriveIndex === i ? `:t${travel?.n}` : ''
+                    }`}
                     data-track-current={isCurrent || undefined}
+                    data-track-arrive={plan && plan.arriveIndex === i ? '' : undefined}
                     className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
                       isCurrent || isDone ? 'nvr-fill-sweep' : ''
-                    }`}
+                    } ${plan && plan.arriveIndex === i ? 'nvr-track-arrive' : ''}`}
                     // Per-state help text (#81) — instant tip via TipLayer.
                     data-tip={
                       doneBefore
@@ -1612,6 +1624,9 @@ function StateTrack({
                     }
                     data-track-again={doneBefore || undefined}
                     style={{
+                      ...(plan && plan.arriveIndex === i
+                        ? ({ '--nvr-track-arrive': `${plan.arriveDelay}ms` } as React.CSSProperties)
+                        : null),
                       backgroundColor:
                         isCurrent || isDone ? nodeColor : isSkipped ? 'transparent' : '#f1f5f9',
                       border:
@@ -1688,11 +1703,26 @@ function StateTrack({
                   <div className='mt-[13px] flex w-10 shrink-0 flex-col items-center gap-1.5'>
                     {(() => {
                       const lineColor = isDone ? `${nodeColor}55` : '#e8ecf0'
+                      const draw = plan?.segments.get(i)
                       return (
                         <div className='flex w-full shrink-0 items-center'>
                           <div
-                            className='h-0.5 flex-1 rounded-l-sm'
-                            style={{ backgroundColor: lineColor }}
+                            key={draw != null ? `t${travel?.n}` : 'line'}
+                            className={cn(
+                              'h-0.5 flex-1 rounded-l-sm',
+                              draw != null && 'nvr-track-travel'
+                            )}
+                            data-track-travel={draw != null ? '' : undefined}
+                            style={{
+                              backgroundColor: lineColor,
+                              ...(draw != null && plan
+                                ? ({
+                                    '--nvr-track-seg': `${plan.seg}ms`,
+                                    animationDelay: `${draw}ms`,
+                                    transformOrigin: plan.backward ? 'right' : 'left'
+                                  } as React.CSSProperties)
+                                : null)
+                            }}
                           />
                           <div
                             style={{
@@ -2749,108 +2779,114 @@ function ApprovalBriefStrip({
     staleTime: 30_000,
     retry: false
   })
-  if (!data) return null
+  if (!data) return <ResubmissionBrief collection={collection} item={item} />
   // What people changed — a title the record rebuilt is not someone's edit.
   const byPeople = data.changed_by_people ?? data.changed_total
   const omitted = new Set((omitLines ?? []).map(briefLineKey))
   const lines = (data.lines ?? []).filter((l) => !omitted.has(briefLineKey(l)))
 
   return (
-    <div className='rounded-md border border-slate-200 bg-white px-3 py-2 text-[11.5px] dark:border-border dark:bg-card'>
-      <p className='text-slate-500 dark:text-muted-foreground'>
-        <span className='font-medium text-slate-700 dark:text-foreground'>
-          Since entering this state
-        </span>{' '}
-        ({briefAgeText(data.days_in_state)}):{' '}
-        {data.changed_total === 0 && data.comments === 0 && data.addendums.count === 0 ? (
-          <span>no changes to this record.</span>
-        ) : (
-          <>
-            {byPeople > 0 && (
-              <span>
-                {byPeople} field{byPeople === 1 ? '' : 's'} changed
-                {data.edited_by.length > 0 ? ` by ${data.edited_by.join(', ')}` : ''}
-              </span>
-            )}
-            {byPeople === 0 &&
-              data.changed_total > 0 &&
-              data.comments === 0 &&
-              data.addendums.count === 0 && (
-                <span>only values the record fills in itself changed.</span>
-              )}
-            {data.comments > 0 && (
-              <span>
-                {byPeople > 0 ? ' · ' : ''}
-                {data.comments} comment{data.comments === 1 ? '' : 's'}
-              </span>
-            )}
-            {data.addendums.count > 0 && (
-              <span>
-                {' · '}
-                {data.addendums.count} addendum{data.addendums.count === 1 ? '' : 's'}
-                {data.addendums.cost_impact !== 0
-                  ? ` (${data.addendums.cost_impact > 0 ? '+' : ''}$${Math.abs(data.addendums.cost_impact).toLocaleString()})`
-                  : ''}
-              </span>
-            )}
-          </>
-        )}
-      </p>
-      {data.field_changes.length > 0 && (
-        <div className='mt-1 space-y-0.5'>
-          {data.field_changes.slice(0, 5).map((f) => {
-            // Labels, not column keys (army11 f3/f4 M5, a1 F-4); a long value is cut
-            // around where the two differ, so the change itself stays visible.
-            const pair = briefDiffPair(f.old, f.new)
-            return (
-              <p
-                key={f.field}
-                data-brief-change={f.field}
-                className='text-[11px] text-slate-500 dark:text-muted-foreground'
-              >
-                <span className='font-medium text-slate-700 dark:text-foreground'>
-                  {f.label || titleCase(f.field)}
+    <>
+      {/* rt8 #12: back after a send back — what changed since, above the step's own brief. */}
+      <ResubmissionBrief collection={collection} item={item} />
+      <div className='rounded-md border border-slate-200 bg-white px-3 py-2 text-[11.5px] dark:border-border dark:bg-card'>
+        <p className='text-slate-500 dark:text-muted-foreground'>
+          <span className='font-medium text-slate-700 dark:text-foreground'>
+            Since entering this state
+          </span>{' '}
+          ({briefAgeText(data.days_in_state)}):{' '}
+          {data.changed_total === 0 && data.comments === 0 && data.addendums.count === 0 ? (
+            <span>no changes to this record.</span>
+          ) : (
+            <>
+              {byPeople > 0 && (
+                <span>
+                  {byPeople} field{byPeople === 1 ? '' : 's'} changed
+                  {data.edited_by.length > 0 ? ` by ${data.edited_by.join(', ')}` : ''}
                 </span>
-                {f.auto ? <span> (updated automatically)</span> : null}:{' '}
-                {pair.old !== null && (
-                  <>
-                    <span className='text-red-600 line-through dark:text-red-400'>{pair.old}</span>
-                    <span aria-hidden='true'> → </span>
-                    <span className='sr-only'> changed to </span>
-                  </>
+              )}
+              {byPeople === 0 &&
+                data.changed_total > 0 &&
+                data.comments === 0 &&
+                data.addendums.count === 0 && (
+                  <span>only values the record fills in itself changed.</span>
                 )}
-                <span className='text-emerald-700 dark:text-emerald-400'>{pair.new}</span>
-              </p>
-            )
-          })}
-          {data.field_changes.length > 5 && (
-            <p className='text-[10.5px] text-slate-400'>
-              +{data.field_changes.length - 5} more — see History for the full trail
-            </p>
+              {data.comments > 0 && (
+                <span>
+                  {byPeople > 0 ? ' · ' : ''}
+                  {data.comments} comment{data.comments === 1 ? '' : 's'}
+                </span>
+              )}
+              {data.addendums.count > 0 && (
+                <span>
+                  {' · '}
+                  {data.addendums.count} addendum{data.addendums.count === 1 ? '' : 's'}
+                  {data.addendums.cost_impact !== 0
+                    ? ` (${data.addendums.cost_impact > 0 ? '+' : ''}$${Math.abs(data.addendums.cost_impact).toLocaleString()})`
+                    : ''}
+                </span>
+              )}
+            </>
           )}
-        </div>
-      )}
-      {lines.map((l) => (
-        <p
-          key={`${l.label}:${l.text}`}
-          data-brief-line={l.label}
-          className='mt-1 text-slate-500 dark:text-muted-foreground'
-        >
-          <span className='font-medium text-slate-700 dark:text-foreground'>{l.label}</span>{' '}
-          <span
-            className={
-              l.tone === 'danger'
-                ? 'text-red-700 dark:text-red-300'
-                : l.tone === 'warn'
-                  ? 'text-amber-700 dark:text-amber-300'
-                  : ''
-            }
-          >
-            {l.text}
-          </span>
         </p>
-      ))}
-    </div>
+        {data.field_changes.length > 0 && (
+          <div className='mt-1 space-y-0.5'>
+            {data.field_changes.slice(0, 5).map((f) => {
+              // Labels, not column keys (army11 f3/f4 M5, a1 F-4); a long value is cut
+              // around where the two differ, so the change itself stays visible.
+              const pair = briefDiffPair(f.old, f.new)
+              return (
+                <p
+                  key={f.field}
+                  data-brief-change={f.field}
+                  className='text-[11px] text-slate-500 dark:text-muted-foreground'
+                >
+                  <span className='font-medium text-slate-700 dark:text-foreground'>
+                    {f.label || titleCase(f.field)}
+                  </span>
+                  {f.auto ? <span> (updated automatically)</span> : null}:{' '}
+                  {pair.old !== null && (
+                    <>
+                      <span className='text-red-600 line-through dark:text-red-400'>
+                        {pair.old}
+                      </span>
+                      <span aria-hidden='true'> → </span>
+                      <span className='sr-only'> changed to </span>
+                    </>
+                  )}
+                  <span className='text-emerald-700 dark:text-emerald-400'>{pair.new}</span>
+                </p>
+              )
+            })}
+            {data.field_changes.length > 5 && (
+              <p className='text-[10.5px] text-slate-400'>
+                +{data.field_changes.length - 5} more — see History for the full trail
+              </p>
+            )}
+          </div>
+        )}
+        {lines.map((l) => (
+          <p
+            key={`${l.label}:${l.text}`}
+            data-brief-line={l.label}
+            className='mt-1 text-slate-500 dark:text-muted-foreground'
+          >
+            <span className='font-medium text-slate-700 dark:text-foreground'>{l.label}</span>{' '}
+            <span
+              className={
+                l.tone === 'danger'
+                  ? 'text-red-700 dark:text-red-300'
+                  : l.tone === 'warn'
+                    ? 'text-amber-700 dark:text-amber-300'
+                    : ''
+              }
+            >
+              {l.text}
+            </span>
+          </p>
+        ))}
+      </div>
+    </>
   )
 }
 
@@ -3335,6 +3371,9 @@ function PipelinePanelInner({
     window.addEventListener(RUN_TRANSITION_EVENT, onRun)
     return () => window.removeEventListener(RUN_TRANSITION_EVENT, onRun)
   }, [collection, item, previewing])
+
+  // rt8 #17: a move someone else made draws along the track (never on first paint or our own).
+  const trackTravel = useTrackTravel(collection, item, data?.instance?.current_state ?? null)
 
   if (isLoading)
     // Collapsed-shell skeleton at the real header height (px-5 py-3.5 row) —
@@ -3871,6 +3910,7 @@ function PipelinePanelInner({
                         history={history ?? []}
                         onPathIds={onPathIds}
                         skippedStates={skippedStates}
+                        travel={trackTravel}
                       />
                     )}
                     {data?.branches && <BranchLanes data={data.branches} />}

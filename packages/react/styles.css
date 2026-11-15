@@ -185,6 +185,19 @@ tr.nvr-row-flash > td {
   to { transform: scale(1); }
 }
 .nvr-fill-sweep { animation: nvr-fill-sweep var(--nvr-dur-slow) var(--nvr-ease-out) 1; transform-origin: center; }
+/* rt8 #17: the pipeline track follows a move someone else made — each crossed segment draws in
+   turn (send backs right to left), the step it lands on fills when the line reaches it. Normal
+   live mode only (Calm / Off / reduced motion: none, decided in PipelinePanel too). */
+@keyframes nvr-track-travel {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.nvr-track-travel { animation: nvr-track-travel var(--nvr-track-seg, 240ms) cubic-bezier(0.4, 0, 0.2, 1) both; }
+@keyframes nvr-track-arrive {
+  from { transform: scale(0.78); opacity: 0.35; }
+  to { transform: scale(1); opacity: 1; }
+}
+.nvr-track-arrive { animation: nvr-track-arrive var(--nvr-dur-slow) var(--nvr-ease-out) var(--nvr-track-arrive, 0ms) both; }
 @keyframes nvr-rise-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
@@ -303,7 +316,7 @@ html[data-live-mode] .nvr-derived-fresh { animation: none; }
 
 
 @media (prefers-reduced-motion: reduce) {
-  .nvr-saved-glow, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in, .nvr-section-enter, .nvr-tab-enter, .nvr-expand-in, .nvr-shake, .nvr-fade-in, .nvr-autofill-glow, .nvr-pop-in, .nvr-value-pulse, .nvr-value-pulse-bg, .nvr-idle-breathe, .nvr-row-enter, .nvr-slide-up, .nvr-slide-up-centered { animation: none; }
+  .nvr-saved-glow, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in, .nvr-section-enter, .nvr-tab-enter, .nvr-expand-in, .nvr-shake, .nvr-fade-in, .nvr-autofill-glow, .nvr-pop-in, .nvr-value-pulse, .nvr-value-pulse-bg, .nvr-idle-breathe, .nvr-row-enter, .nvr-slide-up, .nvr-slide-up-centered, .nvr-track-travel, .nvr-track-arrive { animation: none; }
 }
 
 /* Live updates Calm / Off (Profile → Display, packages/shared lib/live-preference.ts sets
@@ -314,7 +327,9 @@ html[data-live-mode] .nvr-value-pulse-bg,
 html[data-live-mode] .nvr-state-pulse,
 html[data-live-mode] .nvr-row-enter,
 html[data-live-mode] tr.nvr-row-flash > td,
-html[data-live-mode] .nvr-row-flash { animation: none; }
+html[data-live-mode] .nvr-row-flash,
+html[data-live-mode] .nvr-track-travel,
+html[data-live-mode] .nvr-track-arrive { animation: none; }
 html[data-live-mode] .nvr-remote-editing { outline: none; box-shadow: none; }
 html[data-live-mode] .nvr-remote-editing::after,
 html[data-live-mode] .nvr-remote-editing > td:first-child::after { display: none; }

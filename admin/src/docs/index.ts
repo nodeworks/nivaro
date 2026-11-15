@@ -67,6 +67,7 @@ export * from './sections/live-ops.js'
 export * from './sections/live-outside.js'
 export * from './sections/live-people.js'
 export * from './sections/live-progress.js'
+export * from './sections/live-record-moves.js'
 export * from './sections/live-records.js'
 export * from './sections/live-saves.js'
 export * from './sections/live-screens.js'
@@ -347,6 +348,7 @@ import {
 import { liveOutsideDocs } from './sections/live-outside.js'
 import { livePeopleDocs } from './sections/live-people.js'
 import { collabLiveProgress } from './sections/live-progress.js'
+import { liveRecordMovesDocs } from './sections/live-record-moves.js'
 import {
   collabLiveAdmin,
   collabLiveOps,
@@ -973,6 +975,7 @@ export const navSections: NavGroup[] = [
       liveFormsDocs,
       pickerBadgesDocs,
       liveSavesDocs,
+      liveRecordMovesDocs,
       collabOfflinePopout,
       collabLiveLists,
       liveSelectionDocs,
