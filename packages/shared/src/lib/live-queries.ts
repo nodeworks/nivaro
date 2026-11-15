@@ -10,6 +10,7 @@ import {
   useOptionalRealtime,
   useRealtimeStatus
 } from './realtime'
+import { setScreenRefreshClient } from './screen-refresh'
 
 /**
  * Socket events refresh exactly what changed (#2450).
@@ -471,6 +472,10 @@ export function useLiveQueryBridge(opts?: LiveQueryBridgeOptions): void {
   const realtime = useOptionalRealtime()
   // Options are read once per mount (the bridge is long-lived).
   const optsRef = useRef(opts)
+  // Realtime idea 12: the screen refresh (↻, Cmd-K, idle resync) refetches through this client.
+  useEffect(() => {
+    setScreenRefreshClient(qc)
+  }, [qc])
   useEffect(() => {
     if (!realtime) return
     const bridge = createLiveQueryBridge(qc, realtime, optsRef.current)

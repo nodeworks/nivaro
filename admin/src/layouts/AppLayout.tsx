@@ -100,6 +100,7 @@ import {
   RecordOutboxHost,
   recordNavigation,
   restoreTrailScroll,
+  ScreenRefreshButton,
   SOMETHING_WENT_WRONG,
   scrollPathOf,
   scrollToRestore,
@@ -719,6 +720,8 @@ export function AppLayout() {
                 {/* Footer utilities */}
                 <div className='flex shrink-0 flex-col items-center gap-0.5 border-t border-white/[0.07] px-1.5 py-2'>
                   <TeamChatDock />
+                  {/* Realtime idea 12: refresh this page's data in place (never the page). */}
+                  <ScreenRefreshButton variant='rail' />
                   <NotificationBell collapsed compact />
                   {/* Beside chat and the bell rather than buried in System: "what
                   changed" is something people reach for from anywhere, not a

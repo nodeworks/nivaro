@@ -255,6 +255,7 @@ import { qualityCheckRoutes } from './quality-checks.js'
 import { queuesRoutes } from './queues.js'
 import { readinessRoutes } from './readiness.js'
 import { realtimeBuildRoutes, realtimeRoutes, recordViewersRoutes } from './realtime.js'
+import { realtimeTrustRoutes } from './realtime-trust.js'
 import { realtimeVerifyRoutes } from './realtime-verify.js'
 import { realtimeWorkerRoutes } from './realtime-worker.js'
 import { recordGraphRoutes } from './record-graph.js'
@@ -555,6 +556,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(realtimeRoutes, { prefix: '/realtime' })
   // #2937 — sign-in only: is this tab on an old build (reload old tabs when idle).
   await app.register(realtimeBuildRoutes, { prefix: '/realtime' })
+  // Realtime ideas 14/15 — missed-update beacons (signed in) + their report (admin).
+  await app.register(realtimeTrustRoutes, { prefix: '/realtime' })
   // #2463 / #2477 / #2478 / #2760 — realtime verification tooling (admin).
   await app.register(realtimeVerifyRoutes, { prefix: '/realtime' })
   // #2475 — the SharedWorker script (no sign-in: code, not data); apart from the admin routes.

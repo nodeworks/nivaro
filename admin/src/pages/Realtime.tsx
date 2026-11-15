@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
+import { MissedUpdatesTab } from './realtime/MissedUpdatesTab'
 import { SocketHealthTab } from './realtime/SocketHealthTab'
 import { AutoReloadControl, MinBuildControl, RememberedRefreshes } from './realtime/StickyRefresh'
 import { VerifyTab } from './realtime/VerifyTab'
@@ -26,6 +27,7 @@ type Tab =
   | 'firehose'
   | 'pipeline'
   | 'verify'
+  | 'missed'
 
 const REALTIME_TABS: Array<[Tab, string]> = [
   ['sockets', 'Sockets & rooms'],
@@ -36,7 +38,8 @@ const REALTIME_TABS: Array<[Tab, string]> = [
   ['concurrency', 'Concurrency'],
   ['firehose', 'Firehose'],
   ['pipeline', 'Event pipeline'],
-  ['verify', 'Verification']
+  ['verify', 'Verification'],
+  ['missed', 'Missed updates']
 ]
 
 interface SocketRow {
@@ -177,6 +180,7 @@ export default function Realtime() {
         {tab === 'firehose' && <FirehoseTab />}
         {tab === 'pipeline' && <PipelineTab />}
         {tab === 'verify' && <VerifyTab />}
+        {tab === 'missed' && <MissedUpdatesTab />}
       </div>
     </div>
   )

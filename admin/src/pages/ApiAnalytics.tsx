@@ -451,6 +451,9 @@ export function ApiAnalyticsPage() {
           <RumPanel />
         </div>
         <div className='mt-6'>
+          <ReloadsPanel />
+        </div>
+        <div className='mt-6'>
           <DeadClickPanel />
         </div>
         <div className='mt-6 scroll-mt-4' ref={requestsRef} id='api-request-log'>
@@ -826,6 +829,174 @@ function RumPanel() {
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  )
+}
+
+interface ReleaseCount {
+  release: string
+  views: number
+  reloads: number
+  back_forward: number
+}
+interface ReloadStats {
+  available: boolean
+  days: number
+  views: number
+  reloads: number
+  back_forward: number
+  releases: ReleaseCount[]
+  reloaded: Array<{
+    screen: string
+    loads: number
+    reloads: number
+    share: number
+    by_release: ReleaseCount[]
+  }>
+  back_forth: Array<{ screen: string; via: string; count: number; by_release: ReleaseCount[] }>
+}
+
+/** Realtime idea 15 — screens people reload (not trusting what they show) and A → B → A
+ *  bounces, per release. Route patterns and counts only. */
+function ReloadsPanel() {
+  const [days, setDays] = useState(7)
+  const { data } = useQuery({
+    queryKey: ['rum-reloads', days],
+    queryFn: () =>
+      api.get<{ data: ReloadStats }>('/rum/reloads', { params: { days } }).then((r) => r.data.data)
+  })
+  const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : '—')
+  const releases = data?.releases ?? []
+  return (
+    <div
+      className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'
+      data-reloads-panel
+    >
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <div>
+          <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+            Reloads and back-and-forth
+          </p>
+          <p className='mt-0.5 text-[11.5px] text-slate-400'>
+            Pages people reloaded, and pages they left and came straight back to — usually to see
+            whether the data had changed.
+          </p>
+        </div>
+        <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+          {[1, 7, 14].map((d) => (
+            <button
+              key={d}
+              type='button'
+              onClick={() => setDays(d)}
+              className={
+                days === d
+                  ? 'rounded bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-foreground'
+                  : 'rounded px-2 py-0.5 text-[11px] font-medium text-slate-400'
+              }
+            >
+              {d}d
+            </button>
+          ))}
+        </span>
+      </div>
+      {!data ? null : !data.available ? (
+        <p className='mt-3 text-[12px] text-slate-400'>
+          Reload tracking starts once this database has migration 530.
+        </p>
+      ) : data.views === 0 ? (
+        <p className='mt-3 text-[12px] text-slate-400'>
+          No samples yet — browsers report how each page was reached a few seconds after it loads.
+        </p>
+      ) : (
+        <>
+          {releases.length > 0 && (
+            <div className='mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              {releases.map((r) => (
+                <span key={r.release} className='tabular-nums'>
+                  <span className='font-mono text-slate-700 dark:text-foreground'>{r.release}</span>{' '}
+                  reloads {pct(r.reloads, r.views)} · back-and-forth {pct(r.back_forward, r.views)}{' '}
+                  of {r.views.toLocaleString()} views
+                </span>
+              ))}
+            </div>
+          )}
+          <div className='mt-3 grid gap-5 xl:grid-cols-2'>
+            <div>
+              <p className='mb-1 text-[11px] font-semibold text-slate-500 dark:text-muted-foreground'>
+                Most reloaded screens
+              </p>
+              {data.reloaded.length === 0 ? (
+                <p className='text-[12px] text-slate-400'>No reloads in this window.</p>
+              ) : (
+                <table className='w-full text-[12px] tabular-nums'>
+                  <thead>
+                    <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
+                      <th className='py-1 pr-3 font-semibold'>Screen</th>
+                      <th className='py-1 pr-3 text-right font-semibold'>Reloads</th>
+                      <th className='py-1 pr-3 text-right font-semibold'>Of loads</th>
+                      <th className='py-1 font-semibold'>By release</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.reloaded.map((r) => (
+                      <tr key={r.screen} className='border-t border-slate-100 dark:border-border'>
+                        <td className='max-w-[280px] truncate py-1.5 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
+                          {r.screen}
+                        </td>
+                        <td className='py-1.5 pr-3 text-right text-slate-700 dark:text-foreground'>
+                          {r.reloads}
+                        </td>
+                        <td className='py-1.5 pr-3 text-right text-slate-500'>
+                          {Math.round(r.share * 100)}%
+                        </td>
+                        <td className='py-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                          {r.by_release.map((b) => `${b.release}: ${b.reloads}`).join(' · ')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div>
+              <p className='mb-1 text-[11px] font-semibold text-slate-500 dark:text-muted-foreground'>
+                Back-and-forth (came back to ← after)
+              </p>
+              {data.back_forth.length === 0 ? (
+                <p className='text-[12px] text-slate-400'>No back-and-forth in this window.</p>
+              ) : (
+                <table className='w-full text-[12px] tabular-nums'>
+                  <thead>
+                    <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
+                      <th className='py-1 pr-3 font-semibold'>Screen ← left for</th>
+                      <th className='py-1 pr-3 text-right font-semibold'>Times</th>
+                      <th className='py-1 font-semibold'>By release</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.back_forth.map((p) => (
+                      <tr
+                        key={`${p.screen}<${p.via}`}
+                        className='border-t border-slate-100 dark:border-border'
+                      >
+                        <td className='max-w-[320px] truncate py-1.5 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
+                          {p.screen} <span className='text-slate-400'>←</span> {p.via}
+                        </td>
+                        <td className='py-1.5 pr-3 text-right text-slate-700 dark:text-foreground'>
+                          {p.count}
+                        </td>
+                        <td className='py-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                          {p.by_release.map((b) => `${b.release}: ${b.back_forward}`).join(' · ')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </>
       )}
     </div>
   )

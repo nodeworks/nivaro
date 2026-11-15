@@ -353,6 +353,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_report_annotations',
   'nivaro_job_runs',
   'nivaro_rum_events',
+  'nivaro_missed_updates', // realtime idea 14: missed-update aggregates (migration 530)
   'nivaro_search_log', // #1581 search analytics (migration 485)
   'nivaro_ops_reports', // daily operations report (migration 525)
   'nivaro_login_events',

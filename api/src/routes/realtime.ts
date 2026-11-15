@@ -21,6 +21,7 @@ import {
 } from '../services/client-version.js'
 import { currentSeq } from '../services/event-journal.js'
 import {
+  dataResyncSettings,
   effectiveIdleReload,
   getIdleReloadSettings,
   idleReloadVerdict,
@@ -136,8 +137,12 @@ export async function realtimeBuildRoutes(app: FastifyInstance): Promise<void> {
       enabled: settings.auto_reload_idle,
       idle_seconds: settings.idle_seconds
     }
+    // Realtime idea 13: stale data refreshes in place (any setting); only a new build reloads.
+    const data_resync = dataResyncSettings()
     if (!settings.auto_reload_idle)
-      return { data: { older: null, target: null, id: null, reason: 'off', auto_reload } }
+      return {
+        data: { older: null, target: null, id: null, reason: 'off', auto_reload, data_resync }
+      }
     const q = req.query ?? {}
     const fromQuery = clientVersionFromHello(q)
     const version: ClientVersion | null = fromQuery.build
@@ -151,7 +156,7 @@ export async function realtimeBuildRoutes(app: FastifyInstance): Promise<void> {
     if (!appName && version?.tab)
       appName = cluster.clients.find((c) => c.version?.tab === version.tab)?.app ?? null
     const verdict = idleReloadVerdict(cluster.judge, { app: appName, version }, cluster.partial)
-    return { data: { ...verdict, auto_reload } }
+    return { data: { ...verdict, auto_reload, data_resync } }
   })
 }
 

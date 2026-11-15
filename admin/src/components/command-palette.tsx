@@ -1,4 +1,10 @@
-import { openAskPanel, TipLayer, userErrorMessage } from '@nivaro/shared'
+import {
+  openAskPanel,
+  refreshScreenData,
+  screenRefreshMatches,
+  TipLayer,
+  userErrorMessage
+} from '@nivaro/shared'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
@@ -14,6 +20,7 @@ import {
   Paperclip,
   Play,
   Plus,
+  RotateCw,
   Search,
   Settings2,
   Sparkles,
@@ -1388,6 +1395,24 @@ export function CommandPalette() {
                         ))}
                       </CommandGroup>
                     </>
+                  )}
+
+                  {screenRefreshMatches(q) && (
+                    <CommandGroup heading='This page'>
+                      <CommandItem
+                        value='tool-refresh-data'
+                        onSelect={() => {
+                          setOpen(false)
+                          void refreshScreenData({ reason: 'palette' })
+                        }}
+                      >
+                        <RotateCw className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
+                        <span className='text-[13px]'>Refresh this page’s data</span>
+                        <span className='ml-auto text-[11px] text-muted-foreground'>
+                          Keeps your edits
+                        </span>
+                      </CommandItem>
+                    </CommandGroup>
                   )}
 
                   {'audit contrast'.includes(q.toLowerCase()) && q.length >= 3 && (

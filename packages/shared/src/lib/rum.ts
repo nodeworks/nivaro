@@ -11,6 +11,7 @@
  * '/collections/:c/:id') so p75s aggregate per PAGE, not per record.
  */
 
+import { startMissedUpdateDetector } from './missed-updates'
 import { isSignedOut, isSignedOutError, noteUnauthorized } from './signed-out'
 
 interface RumEvent {
@@ -28,7 +29,34 @@ interface RumEvent {
   role?: string
   fetch_ms?: number
   paint_ms?: number
+  /** Realtime idea 15 — how this page was reached: 'navigate' | 'reload' | 'back_forward' |
+   *  'prerender' (a full load's PerformanceNavigationTiming type; an SPA route change is
+   *  'navigate', or 'back_forward' when the browser's Back/Forward caused it). */
+  nav?: NavKind
+  /** The route pattern left behind — only on 'back_forward' (A → B → back to A says B). */
+  prev?: string
 }
+
+export type NavKind = 'navigate' | 'reload' | 'back_forward' | 'prerender'
+const NAV_KINDS: readonly NavKind[] = ['navigate', 'reload', 'back_forward', 'prerender']
+
+/** Pure: a PerformanceNavigationTiming `type` (or anything) → one of the four kinds. */
+export function navKindOf(type: unknown): NavKind {
+  return NAV_KINDS.includes(type as NavKind) ? (type as NavKind) : 'navigate'
+}
+
+/** Pure: an SPA route change counts as Back/Forward when a popstate came just before it. */
+export const POPSTATE_WINDOW_MS = 1000
+export function routeNavKind(now: number, lastPopAt: number | null): NavKind {
+  return lastPopAt != null && now - lastPopAt >= 0 && now - lastPopAt < POPSTATE_WINDOW_MS
+    ? 'back_forward'
+    : 'navigate'
+}
+
+/** The route this tab showed when it last left a page (for a full-load Back/Forward). */
+const LAST_ROUTE_KEY = 'nvr-rum-last-route'
+let lastRoute: string | null = null
+let lastPopAt: number | null = null
 
 let started = false
 let appName: string | undefined
@@ -161,17 +189,27 @@ function flush(): void {
     queue.length = 0
     return
   }
-  const body = JSON.stringify({ events: queue.splice(0, queue.length) })
+  sendTelemetry('/rum', { events: queue.splice(0, queue.length) })
+}
+
+/**
+ * Fire-and-forget POST of a small JSON body to `<apiBase><path>` on the RUM transport (sendBeacon,
+ * else a keepalive fetch with the host's bearer token). Never throws. Used by the RUM queue and
+ * the missed-update detector (lib/missed-updates.ts).
+ */
+export function sendTelemetry(path: string, payload: unknown): void {
+  if (isSignedOut()) return
   try {
+    const body = JSON.stringify(payload)
     const token = tokenProvider?.()
     // sendBeacon survives pagehide; credentialed fetch is the fallback. A beacon cannot carry an
     // Authorization header, so a bearer-token host always takes the keepalive fetch.
     const ok =
       !token &&
       typeof navigator.sendBeacon === 'function' &&
-      navigator.sendBeacon(`${apiBase}/rum`, new Blob([body], { type: 'application/json' }))
+      navigator.sendBeacon(`${apiBase}${path}`, new Blob([body], { type: 'application/json' }))
     if (!ok) {
-      void fetch(`${apiBase}/rum`, {
+      void fetch(`${apiBase}${path}`, {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -256,12 +294,22 @@ export function rumRouteChange(pathname: string): void {
   // Two rAFs: the first fires before paint of the new route's first frame,
   // the second after it — a cheap "render settled" proxy that tracks what a
   // person perceives far better than the synchronous route switch does.
+  const route = toPattern(pathname)
+  const nav = routeNavKind(began, lastPopAt)
+  const prev = lastRoute
+  lastRoute = route
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       document.removeEventListener('visibilitychange', noteHidden)
       if (wasHidden) return
       const ms = Math.round(performance.now() - began)
-      enqueue({ route: toPattern(pathname), kind: 'route', duration_ms: ms })
+      enqueue({
+        route,
+        kind: 'route',
+        duration_ms: ms,
+        nav,
+        ...(nav === 'back_forward' && prev && prev !== route ? { prev } : {})
+      })
     })
   })
 }
@@ -280,6 +328,22 @@ export function startRum(opts?: {
   tokenProvider = opts?.getToken
   watchRageClicks(() => toPattern(window.location.pathname))
   watchDeadClicks(() => toPattern(window.location.pathname))
+  // Idea 15: Back/Forward inside the app is a popstate just before the route change.
+  window.addEventListener('popstate', () => {
+    lastPopAt = performance.now()
+  })
+  let leftRoute: string | null = null
+  try {
+    leftRoute = sessionStorage.getItem(LAST_ROUTE_KEY)
+  } catch {
+    leftRoute = null
+  }
+  lastRoute = toPattern(window.location.pathname)
+  // Idea 14: after a reload, did the page really show something stale? (hashes only)
+  startMissedUpdateDetector({
+    routePattern: (p) => toPattern(p),
+    send: (body) => sendTelemetry('/realtime/missed-updates', body)
+  })
 
   const nav = performance.getEntriesByType('navigation')[0] as
     | PerformanceNavigationTiming
@@ -295,11 +359,17 @@ export function startRum(opts?: {
     // LCP unsupported — the other vitals still report
   }
 
+  const loadRoute = toPattern(window.location.pathname)
+  const loadNav = navKindOf(nav?.type)
   const report = () => {
     const fcpEntry = performance.getEntriesByName('first-contentful-paint')[0]
     enqueue({
-      route: toPattern(window.location.pathname),
+      route: loadRoute,
       kind: 'load',
+      nav: loadNav,
+      ...(loadNav === 'back_forward' && leftRoute && leftRoute !== loadRoute
+        ? { prev: leftRoute.slice(0, 300) }
+        : {}),
       ttfb_ms: nav ? Math.round(nav.responseStart) : undefined,
       fcp_ms: fcpEntry ? Math.round(fcpEntry.startTime) : undefined,
       lcp_ms: lcp ?? undefined,
@@ -308,6 +378,13 @@ export function startRum(opts?: {
   }
   // LCP settles within a few seconds of load; report once, then flush on exit.
   setTimeout(report, 6_000)
+  window.addEventListener('pagehide', () => {
+    try {
+      sessionStorage.setItem(LAST_ROUTE_KEY, toPattern(window.location.pathname))
+    } catch {
+      /* storage off: a Back/Forward load just carries no previous route */
+    }
+  })
   window.addEventListener('pagehide', flush)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') flush()
