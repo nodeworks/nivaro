@@ -3,6 +3,7 @@ import type { FastifyRequest } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
 import { OAUTH_CHAT_SCOPE } from '../lib/oauth.js'
+import { agentDisplayName, mcpConnOf, peekMcpSettings } from './mcp-calls.js'
 
 /**
  * Remote MCP settings (env only):
@@ -173,13 +174,22 @@ function cleanAppName(raw: string | undefined, fallback: string): string {
  * itself is the registrant's choice and is only ever shown as app text.
  */
 export function mcpAppLabel(req: FastifyRequest): { name: string; ref: string } | null {
+  // rt8 #21: the name the connection goes by (its owner's or an admin's choice) wins.
+  // Without a chosen name the app's own (cleaned, APP_LABEL_MAX) name stands — agentDisplayName's
+  // badge cap (40) is for the record badge, not for this label.
+  const named = (fallback: string) => {
+    const conn = mcpConnOf(req)
+    const settings = peekMcpSettings()
+    const chosen = conn ? settings?.connection_names?.[String(conn).toLowerCase()] : undefined
+    return chosen ? agentDisplayName(conn, fallback, settings).slice(0, APP_LABEL_MAX) : fallback
+  }
   if (req.authMethod === 'oauth' && req.oauthClientId)
     return {
-      name: cleanAppName(req.oauthClientName, 'Connected app'),
+      name: named(cleanAppName(req.oauthClientName, 'Connected app')),
       ref: `oauth client ${req.oauthClientId}`
     }
   const keyId = req.apiKeyId ?? req.apiKeySimulatedId
   if ((req.authMethod === 'api_key' || req.authMethod === 'key_sim') && keyId != null)
-    return { name: cleanAppName(req.apiKeyName, 'API key'), ref: `api key ${keyId}` }
+    return { name: named(cleanAppName(req.apiKeyName, 'API key')), ref: `api key ${keyId}` }
   return null
 }

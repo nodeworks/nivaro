@@ -21,8 +21,10 @@ export const NOTIFY_CATEGORIES: NotifyCategory[] = [
   'mentions',
   'workflow',
   'proposals',
+  'approval_changes',
   'sla',
   'watch',
+  'watch_list',
   'alerts',
   'audit',
   'anomaly',
@@ -32,6 +34,7 @@ export const NOTIFY_CATEGORIES: NotifyCategory[] = [
   'huddle',
   'chaos',
   'crashes',
+  'views',
   'other'
 ]
 

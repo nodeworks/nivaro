@@ -43,6 +43,16 @@ export type RecordAspect =
   | '$approvals'
   /** rt4 #6 — the record was hidden from or shown in pickers again (routes/picker-exclusions.ts). */
   | '$picker'
+  /** rt6 #15 — someone started or stopped editing a list cell of the record in place
+   *  (services/cell-locks.ts; lists re-read who holds which cell). */
+  | '$cells'
+  /** rt7 #12 — a scheduled change on the record was made, moved, cancelled or applied
+   *  (routes/scheduled-changes.ts). */
+  | '$scheduled'
+  /** rt9 #20 — a banner-enabled threshold alert fired on the record (hooks/alerts.ts). */
+  | '$alerts'
+  /** rt9 #19 — a support request raised from the record opened, moved or closed (record-help.ts). */
+  | '$support'
 
 export function announceRecordAspect(
   collection: string | null | undefined,

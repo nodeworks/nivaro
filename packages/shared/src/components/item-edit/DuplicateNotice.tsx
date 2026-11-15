@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { CopyCheck, ExternalLink } from 'lucide-react'
-import { type ReactNode, useMemo, useRef } from 'react'
+import { CopyCheck, ExternalLink, GitMerge } from 'lucide-react'
+import { createContext, type ReactNode, useContext, useMemo, useRef } from 'react'
 import { useDrilldown, useItemNavigation, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { get } from '../../lib/commands'
@@ -282,6 +282,36 @@ function RecordLink({
   )
 }
 
+/**
+ * "Merge…" on the notice (merge records, 2026-11-14): the form hands its unsaved values
+ * to the merge screen with the matching records, so the person can fold what they typed
+ * into the existing record instead of saving a copy. Provided by the record form only
+ * where the collection allows merging.
+ */
+export interface DuplicateMergeApi {
+  open(hint: DuplicateHint): void
+}
+export const DuplicateMergeContext = createContext<DuplicateMergeApi | null>(null)
+
+function MergeLink({ hint, className }: { hint: DuplicateHint; className?: string }) {
+  const api = useContext(DuplicateMergeContext)
+  if (!api) return null
+  return (
+    <button
+      type='button'
+      onClick={() => api.open(hint)}
+      className={cn(
+        'inline rounded-sm font-medium underline decoration-current/40 underline-offset-2 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+        className
+      )}
+      data-duplicate-merge
+    >
+      <GitMerge className='mr-0.5 inline h-2.5 w-2.5 -translate-y-px' aria-hidden />
+      Merge…
+    </button>
+  )
+}
+
 /** The notice under a compared field. Exact copies first (amber), near ones quiet. */
 export function DuplicateNotice({ field, hint }: { field: string; hint: DuplicateHint }) {
   const exact = hint.matches.filter((m) => m.match === 'exact')
@@ -314,6 +344,7 @@ export function DuplicateNotice({ field, hint }: { field: string; hint: Duplicat
             Open
             <ExternalLink className='h-2.5 w-2.5' aria-hidden />
           </RecordLink>
+          <MergeLink hint={hint} />
           {hint.blocks && (
             <span className='basis-full pl-4 text-amber-700/90 dark:text-amber-400/90'>
               Saving a copy is not allowed here — open the existing one instead.
@@ -344,6 +375,7 @@ export function DuplicateNotice({ field, hint }: { field: string; hint: Duplicat
           ))}
           {close.length > 3 && <span>+{close.length - 3} more</span>}
           <span>({hint.noun}) — check it is not the same one</span>
+          {exact.length === 0 && <MergeLink hint={hint} />}
         </p>
       )}
     </div>

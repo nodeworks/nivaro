@@ -46,7 +46,15 @@ const RETRY_MS = 8000
 export interface RecordConflict {
   field: string
   current_value: unknown
+  /** Who changed it meanwhile and when (realtime round 8, item 3) — read as the viewer. */
+  by?: string | null
+  at?: string | null
+  /** The viewer may not read the field now: no value is shown, only that it changed. */
+  hidden?: boolean
 }
+
+/** One field's decision in the review of a clash (Keep mine / Take theirs / Merge). */
+export type OutboxPick = 'mine' | 'theirs' | { merged: unknown }
 
 export interface RecordOutboxEntry {
   /** `<owner>|<collection>|<item>` */
@@ -67,6 +75,8 @@ export interface RecordOutboxEntry {
   error: string | null
   conflicts: RecordConflict[] | null
   latest_revision: number | null
+  /** Fields of this save that already went out on reconnect; only the clashing ones wait. */
+  sent_fields?: string[]
 }
 
 interface OutboxClient {
@@ -78,8 +88,9 @@ interface OutboxQueryClient {
 }
 
 export interface RecordOutboxEvent {
-  /** `expired`: dropped after RECORD_OUTBOX_TTL_MS without being sent. */
-  type: 'replayed' | 'conflict' | 'failed' | 'expired'
+  /** `expired`: dropped after RECORD_OUTBOX_TTL_MS without being sent.
+   *  `resolved`: every clashing field took the other person's value — nothing left to send. */
+  type: 'replayed' | 'conflict' | 'failed' | 'expired' | 'resolved'
   entry: RecordOutboxEntry
 }
 
@@ -566,6 +577,9 @@ export function claimRecordOutbox(collection: string, item: string | number): ()
   if (!boundOwner) return () => {}
   const id = outboxEntryId(boundOwner, collection, item)
   localClaims.add(id)
+  // A new list, so a review tray (useSyncExternalStore) sees the hold change.
+  entries = [...entries]
+  emit()
   let release: () => void = () => {}
   const held = new Promise<void>((r) => {
     release = r
@@ -574,8 +588,32 @@ export function claimRecordOutbox(collection: string, item: string | number): ()
   if (locks) void locks.request(`nvr-record-outbox:${id}`, {}, () => held).catch(() => {})
   return () => {
     localClaims.delete(id)
+    entries = [...entries]
+    emit()
     release()
   }
+}
+
+const reviewNudges = new Set<() => void>()
+
+/**
+ * The person is about to move on — pressed Save, or left a record — while a clash may still
+ * wait: the review card (folded to its one-line pill by default) opens. Does nothing when no
+ * clash waits.
+ */
+export function nudgeOutboxReview(): void {
+  if (!entries.some((e) => e.status === 'conflict')) return
+  for (const n of reviewNudges) n()
+}
+
+export function onOutboxReviewNudge(cb: () => void): () => void {
+  reviewNudges.add(cb)
+  return () => reviewNudges.delete(cb)
+}
+
+/** A record form in this tab holds the entry (it reviews the clash in its own merge dialog). */
+export function isRecordOutboxHeld(entryId: string): boolean {
+  return localClaims.has(entryId)
 }
 
 async function withEntryLock(id: string, fn: () => Promise<void>): Promise<void> {
@@ -685,22 +723,148 @@ export async function checkUnknownBase(
   return { conflicts, latest: latest == null ? null : Number(latest) || null }
 }
 
+// ── Clash check before sending (realtime round 8, item 3) ──────────────────
+
+export interface OutboxSendPlan {
+  /** Fields someone else changed while the save waited — never sent without a decision. */
+  clashes: RecordConflict[]
+  /** The record's newest revision when it was checked (null = not known). */
+  latest: number | null
+}
+
+/**
+ * Before a queued save goes out, find the fields someone else changed meanwhile — READ AS THE
+ * VIEWER: the record through `GET /items` (role, row filter, User Scopes, field read rules), who
+ * and when through `GET /revisions/field-touch` (the same gates, readable fields only). A field
+ * now holding something other than what was loaded AND other than this person's value is a
+ * clash. A field the viewer may not read is not judged here (the server's mid-air check still
+ * guards it when the save goes). No revision newer than the save's base = nothing to check.
+ * Throws when offline; any other failed read throws too (the caller falls back to the
+ * server's own check).
+ */
+export async function planOutboxSend(
+  client: OutboxClient,
+  e: Pick<RecordOutboxEntry, 'collection' | 'item' | 'payload' | 'before' | 'base_revision'>
+): Promise<OutboxSendPlan> {
+  const latestRes = await client.request<{ data?: { latest?: number | null } }>(
+    get('/revisions', { collection: e.collection, item: e.item, latest_only: '1' })
+  )
+  const rawLatest = latestRes?.data?.latest
+  const latest = rawLatest == null ? null : Number(rawLatest) || null
+  if (e.base_revision != null && (latest == null || latest <= e.base_revision))
+    return { clashes: [], latest: e.base_revision }
+  const fields = Object.keys(e.payload)
+  const cur = await client.request<{ data?: Record<string, unknown> | null }>(
+    get(`/items/${e.collection}/${encodeURIComponent(e.item)}`, { fields: fields.join(',') })
+  )
+  const row = cur?.data ?? {}
+  const clashes: RecordConflict[] = []
+  for (const f of fields) {
+    // Left out of the viewer's read: not theirs to see — the server judges it on send.
+    if (!(f in row)) continue
+    const now = row[f] ?? null
+    if (!sameValue(now, e.before[f] ?? null) && !sameValue(now, e.payload[f]))
+      clashes.push({ field: f, current_value: now })
+  }
+  if (clashes.length > 0) await nameWhoChanged(client, e, clashes)
+  return { clashes, latest }
+}
+
+/** Who changed each clashing field and when (best effort: a failed read names nobody). */
+async function nameWhoChanged(
+  client: OutboxClient,
+  e: Pick<RecordOutboxEntry, 'collection' | 'item'>,
+  clashes: RecordConflict[]
+): Promise<void> {
+  try {
+    const r = await client.request<{ data?: Record<string, { at?: string; who?: string }> }>(
+      get('/revisions/field-touch', {
+        collection: e.collection,
+        item: e.item,
+        fields: clashes.map((c) => c.field).join(',')
+      })
+    )
+    const touch = r?.data ?? {}
+    for (const c of clashes) {
+      const t = touch[c.field]
+      c.by = t?.who ? String(t.who).slice(0, 80) : null
+      c.at = t?.at ? String(t.at) : null
+    }
+  } catch {
+    /* no names — the review says "Someone" */
+  }
+}
+
+/**
+ * The server named collisions (its own mid-air check): its `current_value` was read with no
+ * field list, so it is replaced by the viewer's own read — a field they may not read shows as
+ * changed, never its value.
+ */
+async function asViewer(
+  client: OutboxClient,
+  e: Pick<RecordOutboxEntry, 'collection' | 'item'>,
+  conflicts: RecordConflict[]
+): Promise<RecordConflict[]> {
+  if (conflicts.length === 0) return []
+  let row: Record<string, unknown> | null = null
+  try {
+    const cur = await client.request<{ data?: Record<string, unknown> | null }>(
+      get(`/items/${e.collection}/${encodeURIComponent(e.item)}`, {
+        fields: conflicts.map((c) => c.field).join(',')
+      })
+    )
+    row = cur?.data ?? null
+  } catch {
+    row = null
+  }
+  const shaped: RecordConflict[] = conflicts.map((c) =>
+    row && c.field in row
+      ? { field: c.field, current_value: row[c.field] ?? null }
+      : { field: c.field, current_value: null, hidden: true }
+  )
+  await nameWhoChanged(client, e, shaped)
+  return shaped
+}
+
+function pickKeys<T>(obj: Record<string, T>, keys: Iterable<string>): Record<string, T> {
+  const out: Record<string, T> = {}
+  for (const k of keys) if (k in obj) out[k] = obj[k]
+  return out
+}
+
+/** The PATCH body of (part of) an entry. */
+function patchBody(
+  e: Pick<RecordOutboxEntry, 'payload' | 'change_reason'>,
+  base: number | null,
+  fields?: Iterable<string>
+): Record<string, unknown> {
+  const b: Record<string, unknown> = fields ? pickKeys(e.payload, fields) : { ...e.payload }
+  if (base != null) b._base_revision = base
+  if (e.change_reason) b._change_reason = e.change_reason
+  return b
+}
+
 async function replayOne(
   client: OutboxClient,
   e: RecordOutboxEntry
 ): Promise<'done' | 'offline' | 'conflict' | 'failed'> {
   await updateEntry(e.id, { status: 'sending' })
+  const path = `/items/${e.collection}/${encodeURIComponent(e.item)}`
   try {
-    let base = e.base_revision
-    if (base == null) {
-      const check = await checkUnknownBase(client, e)
-      if (check.conflicts.length > 0) return markConflict(e, check.conflicts, check.latest ?? 0)
-      base = check.latest
+    let plan: OutboxSendPlan | null = null
+    try {
+      plan = await planOutboxSend(client, e)
+    } catch (err) {
+      if (isOfflineSaveError(err)) throw err
+      // The check could not run (an older server, a read refused): a save with a base
+      // revision still goes — the server's mid-air check guards it. Without one nothing
+      // would, so it is refused like any other failed save.
+      if (e.base_revision == null) throw err
+      plan = null
     }
-    const body: Record<string, unknown> = { ...e.payload }
-    if (base != null) body._base_revision = base
-    if (e.change_reason) body._change_reason = e.change_reason
-    await client.request(patch(`/items/${e.collection}/${encodeURIComponent(e.item)}`, body))
+    const base = e.base_revision ?? plan?.latest ?? null
+    if (plan && plan.clashes.length > 0) return await sendAroundClashes(client, e, plan, base)
+    await client.request(patch(path, patchBody(e, base)))
     return finish(e)
   } catch (err) {
     if (isOfflineSaveError(err)) {
@@ -711,18 +875,153 @@ async function replayOne(
     if (coll) {
       // The Save may have landed before its answer was lost (a gateway
       // timeout): every "conflict" then already holds this person's value.
-      if (coll.conflicts.every((c) => sameValue(c.current_value, e.payload[c.field])))
-        return finish(e)
-      return markConflict(e, coll.conflicts, coll.latest)
+      const real = coll.conflicts.filter((c) => !sameValue(c.current_value, e.payload[c.field]))
+      if (real.length === 0) return finish(e)
+      const clashes = await asViewer(client, e, real)
+      try {
+        return await sendAroundClashes(
+          client,
+          e,
+          { clashes, latest: coll.latest },
+          e.base_revision,
+          true
+        )
+      } catch (again) {
+        if (isOfflineSaveError(again)) {
+          await updateEntry(e.id, { status: 'queued', error: 'Waiting for a connection' })
+          return 'offline'
+        }
+        return fail(e, again)
+      }
     }
-    const msg =
-      (err as { response?: { error?: string; message?: string } })?.response?.message ??
-      (err as { response?: { error?: string } })?.response?.error ??
-      userErrorMessage(err, 'Could not save')
-    const next = await updateEntry(e.id, { status: 'failed', error: msg })
-    if (next) emitEvent({ type: 'failed', entry: next })
-    return 'failed'
+    return fail(e, err)
   }
+}
+
+async function fail(e: RecordOutboxEntry, err: unknown): Promise<'failed'> {
+  const msg =
+    (err as { response?: { error?: string; message?: string } })?.response?.message ??
+    (err as { response?: { error?: string } })?.response?.error ??
+    userErrorMessage(err, 'Could not save')
+  const next = await updateEntry(e.id, { status: 'failed', error: msg })
+  if (next) emitEvent({ type: 'failed', entry: next })
+  return 'failed'
+}
+
+/**
+ * Some fields clash: the rest go out now (against the save's own base — the server still
+ * refuses any of them someone touched since), the clashing ones stay as a conflict for the
+ * person to decide. A clashing field is never sent without that decision.
+ */
+async function sendAroundClashes(
+  client: OutboxClient,
+  e: RecordOutboxEntry,
+  plan: OutboxSendPlan,
+  base: number | null,
+  retried = false
+): Promise<'done' | 'offline' | 'conflict' | 'failed'> {
+  const clashing = new Set(plan.clashes.map((c) => c.field))
+  const rest = Object.keys(e.payload).filter((f) => !clashing.has(f))
+  const clashes = [...plan.clashes]
+  let sent: string[] = []
+  if (rest.length > 0) {
+    try {
+      await client.request(
+        patch(`/items/${e.collection}/${encodeURIComponent(e.item)}`, patchBody(e, base, rest))
+      )
+      sent = rest
+    } catch (err) {
+      if (isOfflineSaveError(err)) throw err
+      const coll = midairCollisionOf(err)
+      if (!coll || retried) return fail(e, err)
+      // The server saw a change the value check could not (changed and changed back, a
+      // field the viewer may not read): those clash too; the rest go once more.
+      const more = coll.conflicts.filter(
+        (c) => !clashing.has(c.field) && !sameValue(c.current_value, e.payload[c.field])
+      )
+      clashes.push(...(await asViewer(client, e, more)))
+      return sendAroundClashes(
+        client,
+        e,
+        { clashes, latest: coll.latest || plan.latest },
+        base,
+        true
+      )
+    }
+  }
+  const keep = clashes.map((c) => c.field)
+  const next = await updateEntry(e.id, {
+    status: 'conflict',
+    payload: pickKeys(e.payload, keep),
+    before: pickKeys(e.before, keep),
+    conflicts: plain(clashes),
+    latest_revision: plan.latest,
+    sent_fields: [...new Set([...(e.sent_fields ?? []), ...sent])],
+    error: 'Someone else changed this record'
+  })
+  if (sent.length > 0) {
+    void boundQc?.invalidateQueries({ queryKey: ['item', e.collection] })
+    void boundQc?.invalidateQueries({ queryKey: ['collision-base', e.collection] })
+  }
+  if (next) emitEvent({ type: 'conflict', entry: next })
+  return 'conflict'
+}
+
+/**
+ * The person decided one clashing field (the review tray, realtime round 8 item 3):
+ *   - `theirs` drops it from the save;
+ *   - `mine` keeps their value, now judged against the other person's (a FURTHER change by
+ *     someone clashes again instead of being overwritten);
+ *   - `{merged}` sends the merged value the same way.
+ * When no undecided field is left the save goes out against the revision the person
+ * reviewed; with nothing left to send the entry is dropped.
+ */
+export async function resolveRecordOutboxField(
+  collection: string,
+  item: string | number,
+  field: string,
+  choice: OutboxPick
+): Promise<void> {
+  if (!boundOwner) return
+  const id = outboxEntryId(boundOwner, collection, item)
+  const e = entries.find((x) => x.id === id) ?? (await readEntry(id))
+  if (!e || e.owner !== boundOwner || e.status !== 'conflict') return
+  const c = (e.conflicts ?? []).find((x) => x.field === field)
+  if (!c) return
+  const payload = { ...e.payload }
+  const before = { ...e.before }
+  if (choice === 'theirs') {
+    delete payload[field]
+    delete before[field]
+  } else {
+    if (typeof choice === 'object') payload[field] = plain(choice.merged)
+    if (!c.hidden) before[field] = c.current_value
+  }
+  const left = (e.conflicts ?? []).filter((x) => x.field !== field)
+  const now = new Date().toISOString()
+  if (left.length > 0) {
+    await updateEntry(id, { payload, before, conflicts: left, updated_at: now })
+    return
+  }
+  if (Object.keys(payload).length === 0) {
+    entries = entries.filter((x) => x.id !== id)
+    emit()
+    await deleteEntry(id)
+    announce()
+    emitEvent({ type: 'resolved', entry: { ...e, payload, conflicts: [] } })
+    void boundQc?.invalidateQueries({ queryKey: ['item', e.collection] })
+    return
+  }
+  await updateEntry(id, {
+    payload,
+    before,
+    conflicts: null,
+    status: 'queued',
+    error: null,
+    base_revision: e.latest_revision ?? e.base_revision,
+    updated_at: now
+  })
+  scheduleReplay(0)
 }
 
 async function finish(e: RecordOutboxEntry): Promise<'done'> {
@@ -735,21 +1034,6 @@ async function finish(e: RecordOutboxEntry): Promise<'done'> {
   void boundQc?.invalidateQueries({ queryKey: ['item', e.collection] })
   void boundQc?.invalidateQueries({ queryKey: ['collision-base', e.collection] })
   return 'done'
-}
-
-async function markConflict(
-  e: RecordOutboxEntry,
-  conflicts: RecordConflict[],
-  latest: number
-): Promise<'conflict'> {
-  const next = await updateEntry(e.id, {
-    status: 'conflict',
-    conflicts: plain(conflicts),
-    latest_revision: latest,
-    error: 'Someone else changed this record'
-  })
-  if (next) emitEvent({ type: 'conflict', entry: next })
-  return 'conflict'
 }
 
 /** Put a failed / conflicted entry back in the queue. */
@@ -778,6 +1062,7 @@ export function __resetRecordOutboxForTests(
   listeners.clear()
   eventListeners.clear()
   retryListeners.clear()
+  reviewNudges.clear()
   if (retryTimer) clearTimeout(retryTimer)
   retryTimer = null
   replaying = false

@@ -29,11 +29,20 @@ import {
   valueFitsSqlType
 } from '../lib/sql-value-fit.js'
 import { getAncestors, getTreeConfig, type TreeConfig } from '../lib/tree.js'
-import { shouldRecomputeWriteField } from '../lib/write-formula.js'
+import {
+  sameStoredValue as sameFormulaInput,
+  shouldRecomputeWriteField,
+  writeFormulaInputs
+} from '../lib/write-formula.js'
 import { fetchDefaultWorkspaceId } from '../middleware/workspace.js'
 import { deferEffect, withUnitOfWork } from '../services/unit-of-work.js'
 import type { CMSField, CMSRelation, ItemsQuery, User } from '../types.js'
 import { type AliasLink, dedupeAliasLinks, sameAliasLink } from './alias-links.js'
+import {
+  APPROVAL_CHANGED_FIELD,
+  approvalChangedWanted,
+  resolveApprovalChangedCondition
+} from './approval-changes.js'
 import {
   applyAutoIdsExt,
   autoIdFieldsFor,
@@ -48,6 +57,7 @@ import { isPresencePageChange } from './collection-live-mode.js'
 import { getCollection, getFields, getRelations as getRegisteredRelations } from './collections.js'
 import { applyCrossRecordDefaults } from './cross-record-defaults.js'
 import { whereInList } from './db-batch.js'
+import { type DerivedNote, noteDerivedCauses } from './derived-causes.js'
 import { assertNotEditLocked } from './edit-lock.js'
 import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
@@ -96,8 +106,10 @@ import { broadcastCollectionUpdate } from './realtime.js'
 import { attachRecordInstance, splitInstanceField } from './record-instance.js'
 import {
   applyAgingFilter,
+  applyInStepSort,
   applyStateFilter,
   attachRecordState,
+  IN_STEP_SORT,
   STATE_FIELD,
   splitStateField
 } from './record-state.js'
@@ -119,14 +131,17 @@ import {
   type RollupSource,
   recalcAffectedRollups,
   recalcOwnFilteredRollups,
+  rollupFieldsFedBy,
   roundToScale
 } from './rollups.js'
+import { announceRecalc } from './recalc-announce.js'
 import {
   applyRowLocksOnWrite,
   applyRowRulesOnCreate,
   applyRowRulesOnUpdate,
   type VirtualParent
 } from './row-rules-autofill.js'
+import { openSaveProgress } from './save-progress.js'
 import { fallbackSearchColumns, narrowSearchColumns, parseSearchFields } from './search-fields.js'
 import { BINARY_COLLATION, fastContainsKind, fastLike, textKindOf } from './search-like.js'
 import {
@@ -1641,7 +1656,11 @@ export async function applyWriteComputedFields(
   collection: string,
   payload: Record<string, unknown>,
   context?: Record<string, unknown>,
-  opts?: { previous?: Record<string, unknown> | null }
+  opts?: {
+    previous?: Record<string, unknown> | null
+    /** rt9 #10: collects why a stored value re-derived on an UPDATE (services/derived-causes.ts). */
+    derived?: DerivedNote[]
+  }
 ): Promise<void> {
   const fields = await getComputedFields(collection)
   const writeFields = fields.filter((f) => f.computed_type === 'write' && f.computed_formula)
@@ -1675,7 +1694,20 @@ export async function applyWriteComputedFields(
         .where({ id: fkVal })
         .select(cfg.source_field)
         .first()
-      if (target && cfg.source_field in target) payload[f.field] = target[cfg.source_field]
+      if (target && cfg.source_field in target) {
+        payload[f.field] = target[cfg.source_field]
+        if (opts?.derived && opts.previous)
+          opts.derived.push({
+            field: f.field,
+            kind: 'lookup',
+            from: opts.previous[f.field],
+            to: payload[f.field],
+            inputs: [
+              { collection, field: cfg.fk_field },
+              { collection: rel.one_collection, field: cfg.source_field, item: String(fkVal) }
+            ]
+          })
+      }
     } catch {
       // bad config or unreadable target — leave the column alone
     }
@@ -1705,6 +1737,18 @@ export async function applyWriteComputedFields(
     const result = evalFormula(f.computed_formula as string, evalCtx)
     if (store && result !== null) {
       payload[f.field] = result
+      if (opts?.derived && opts.previous) {
+        const prev = opts.previous
+        opts.derived.push({
+          field: f.field,
+          kind: 'computed',
+          from: prev[f.field],
+          to: result,
+          inputs: writeFormulaInputs(f.computed_formula as string)
+            .filter((k) => k in payload && !sameFormulaInput(payload[k], prev[k]))
+            .map((k) => ({ collection, field: k }))
+        })
+      }
     }
   }
 }
@@ -3416,6 +3460,12 @@ async function applySorts(
     const path = desc ? s.slice(1) : s
     const direction = desc ? 'desc' : 'asc'
 
+    // Time in the current pipeline step (the lists' "In step" column) — record-state.ts.
+    if (path === IN_STEP_SORT) {
+      applyInStepSort(q, collection, desc)
+      continue
+    }
+
     if (!path.includes('.')) {
       // Simple scalar sort — a calculated field orders by its expression
       const virtual = (await primeVirtualSql(collection)).get(path)
@@ -4019,6 +4069,19 @@ export async function applyConditions(
     if (cond.path[0] === CHANGED_FIELD && cond.path.length === 1) {
       const { f, ids } = await resolveChangedCondition(cond, collection, userId ?? null)
       applyChangedFilter(q, collection, f, userId ?? null, ids)
+      continue
+    }
+    // Virtual path: changed after approval (round 7, item 21, services/approval-changes.ts) —
+    // records in an approved state with an app write since, in a field the reader may read.
+    if (cond.path[0] === APPROVAL_CHANGED_FIELD && cond.path.length === 1) {
+      const want = approvalChangedWanted(cond)
+      const ids = await resolveApprovalChangedCondition(cond, collection, userId ?? null)
+      if (ids === null) {
+        if (want) q.whereRaw('1 = 0')
+      } else if (ids.length === 0) {
+        if (want) q.whereRaw('1 = 0')
+      } else if (want) whereInList(q, `${collection}.id`, ids)
+      else q.whereNot((b) => whereInList(b, `${collection}.id`, ids))
       continue
     }
     // Virtual path: changed since the reader last opened it (#643) — edited,
@@ -6560,9 +6623,34 @@ async function applyAliasO2MWrites(
   req: FastifyRequest | undefined,
   workspaceId: string | undefined,
   isNewParent: boolean,
-  callerPayload = false
+  callerPayload = false,
+  parentCollection?: string
 ): Promise<NestedCreated> {
   const created: NestedCreated = []
+  // Save progress for big saves (rt7 #8): the saving tab hears "320/500 lines" over its own
+  // socket when it named the save (?save_progress=). A no-op otherwise.
+  const progress = openSaveProgress(
+    req,
+    writes.reduce(
+      (n, w) =>
+        n +
+        w.moves.length +
+        w.rows.length +
+        (isNewParent ? 0 : w.updates.length + (w.set ? 0 : w.deletes.length)),
+      0
+    )
+  )
+  // Open pages on an EXISTING parent hear that its totals are being recalculated while a
+  // nested set runs (rt7 #9): the per-row recalc is skipped until the whole set is in.
+  const recalcFields =
+    !isNewParent && parentCollection
+      ? await rollupFieldsFedBy(
+          parentCollection,
+          writes.map((w) => w.collection)
+        ).catch(() => [] as string[])
+      : []
+  if (recalcFields.length > 0 && parentCollection)
+    announceRecalc(parentCollection, parentId, 'start', recalcFields)
   // Rows changed in place, with what they held before, for the undo.
   const changed: Array<{
     collection: string
@@ -6671,6 +6759,7 @@ async function applyAliasO2MWrites(
             callerPayload
           })
           moved.push({ collection: w.collection, fk: w.fk, id: mid, from })
+          progress.step()
           // The link may be a field this caller's write drops (read-only, a
           // locked row rule): a move that did not land is a refusal, never a
           // silent no-op.
@@ -6704,6 +6793,7 @@ async function applyAliasO2MWrites(
             if (before && !k.startsWith('_') && k in before) prior[k] = before[k]
           await updateOne(user, w.collection, u.id, patch, req, workspaceId, { callerPayload })
           changed.push({ collection: w.collection, id: u.id, prior })
+          progress.step()
         } catch (err) {
           throw nestedError(err, w, `${w.field}[${u.id}]`)
         }
@@ -6726,6 +6816,7 @@ async function applyAliasO2MWrites(
           if (rid != null && !preExisting.has(String(rid)))
             created.push({ collection: w.collection, id: rid })
           if (row) last = row
+          progress.step()
         } catch (err) {
           throw nestedError(err, w, `${w.field}[${i}]`)
         }
@@ -6738,16 +6829,19 @@ async function applyAliasO2MWrites(
         const removals = w.set
           ? [...preExisting].filter((id) => !keep.has(id))
           : w.deletes.map(String)
+        if (w.set) progress.grow(removals.length)
         for (const id of removals) {
           ownedOrRefuse(id, 'row')
           try {
             await deleteOne(user, w.collection, id, req, workspaceId)
+            progress.step()
           } catch (err) {
             throw nestedError(err, w, `${w.field} delete ${id}`)
           }
         }
       }
       // One recalc for the whole set: every row shares the parent.
+      progress.phase('totals')
       if (last) await recalcAffectedRollups(w.collection, last)
       else if (updates.length > 0 || (w.deletes.length > 0 && !isNewParent)) {
         const any = (await db(w.collection)
@@ -6761,6 +6855,10 @@ async function applyAliasO2MWrites(
     const note = await undo()
     e.message = `${e.message} — nothing was changed${note}`
     throw e
+  } finally {
+    progress.end()
+    if (recalcFields.length > 0 && parentCollection)
+      announceRecalc(parentCollection, parentId, 'done', recalcFields)
   }
   return created
 }
@@ -7543,7 +7641,8 @@ export async function createOne(
           req,
           workspaceId,
           true,
-          opts?.callerPayload === true
+          opts?.callerPayload === true,
+          collection
         )
       } catch (err) {
         await undoNewParent(collection, returnedId as string | number, aliasWrites)
@@ -7874,8 +7973,10 @@ export async function updateOne(
   }
   // Layout row rules flagged on_update re-derive their targets when the PATCH
   // changed one of their triggers (caller-sent targets still win).
+  // rt9 #10: why stored values re-derive in this write (noted once the write lands).
+  const derivedNotes: DerivedNote[] = []
   await span('row-rules:update', () =>
-    applyRowRulesOnUpdate(collection, ctx.payload, callerFields, previousData ?? null)
+    applyRowRulesOnUpdate(collection, ctx.payload, callerFields, previousData ?? null, derivedNotes)
   )
 
   // Datetime auto-fields — on_update: 'now' sets the field to current timestamp
@@ -7884,7 +7985,10 @@ export async function updateOne(
   // Write-time computed fields — merge previous data as context so formula can read existing fields
   const writeCtx = { ...(previousData ?? {}), ...ctx.payload }
   await span('computed-fields:write', () =>
-    applyWriteComputedFields(collection, ctx.payload, writeCtx, { previous: previousData ?? null })
+    applyWriteComputedFields(collection, ctx.payload, writeCtx, {
+      previous: previousData ?? null,
+      derived: derivedNotes
+    })
   )
 
   // Field validation rules on the caller's fields (see createOne), judged on
@@ -7982,6 +8086,12 @@ export async function updateOne(
       writeScope.apply(updQ)
       await updQ.update(columnPayload)
     })
+    if (derivedNotes.length > 0)
+      void noteDerivedCauses(
+        collection,
+        id,
+        derivedNotes.filter((n) => n.field in columnPayload)
+      )
   }
   // Alias M2M links (additive) before the read-back — see extractAliasM2MWrites
   const linkFailures: string[] = []
@@ -7996,7 +8106,8 @@ export async function updateOne(
       req,
       workspaceId,
       false,
-      opts?.callerPayload === true
+      opts?.callerPayload === true,
+      collection
     )
 
   // A field this row's OWN stored rollup filters on (projects.pub_amount_follows_cars)

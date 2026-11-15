@@ -66,6 +66,7 @@ import {
 } from '../../lib/filter-sentence'
 import { deliverLive, releaseLiveOwner } from '../../lib/focus-mode'
 import { type ColumnFormatConfig, formatMultiValue, formatValue } from '../../lib/format-value'
+import { QUEUE_IN_STEP_COLUMN, queueServerSort } from '../../lib/in-step'
 import { createCursorBook, noteNextCursor, pageRequest } from '../../lib/keyset-pager'
 import {
   type InlineEditorKind,
@@ -97,7 +98,17 @@ import {
   takeListAway
 } from '../../lib/list-return'
 import { expandCoalesced, LIVE_ASPECTS, useLiveEvent } from '../../lib/live'
+import { movingRowTitle, useRowGlide, useSteadyGroups } from '../../lib/live-groups'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
+import {
+  type BurstEvent,
+  GONE_ROW_CLASS,
+  GONE_ROW_TITLE,
+  resumeAsRefetch,
+  useLiveBurst,
+  useLivePause,
+  useSteadyRows
+} from '../../lib/live-list-flow'
 import { listTrailDetail, setTrailDetail } from '../../lib/nav-trail'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isOwnWrite } from '../../lib/own-writes'
@@ -114,6 +125,15 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { copyIdText } from '../../lib/record-ref'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { userErrorMessage } from '../../lib/safe-error'
+import { listViewInput } from '../../lib/send-view'
+import {
+  selectionSums,
+  splitSelKey,
+  useSelectedRowMemory,
+  useSelectionChanges,
+  useSelectionLiveMarks,
+  useSelectionPicks
+} from '../../lib/selection-watch'
 import { useTableDensity } from '../../lib/table-density'
 import { matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
@@ -131,6 +151,11 @@ import { BulkActionButtons, useBuiltinGate } from '../bulk/BulkActionButtons'
 import { BulkCompareButton } from '../bulk/BulkCompareButton'
 import { BulkFieldUpdateButton } from '../bulk/BulkFieldUpdateButton'
 import { BulkRowMark } from '../bulk/BulkRowMark'
+import {
+  BulkSelectionNotices,
+  type OpenInput,
+  SelectionFigures
+} from '../bulk/BulkSelectionNotices'
 import { BulkMessageButton } from '../bulk/MessageStakeholders'
 import { compareCell, RowActionsMenu, roleMayUpdate } from '../CollectionBrowserView'
 import { ColumnHeaderMenu } from '../cbv/ColumnHeaderMenu'
@@ -149,15 +174,18 @@ import { type Column, DataTable, type FilterDef } from '../DataTable'
 import { EmptyState } from '../EmptyState'
 import { FocusModeToggle } from '../FocusModeToggle'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill } from '../FulfilmentPill'
+import { InStepCell } from '../InStep'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/IntegrationDots'
 import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { queueReturnApplies, readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { ListLoadError } from '../ListLoadError'
 import { LiveCount } from '../LiveCount'
+import { LiveBurstPill, LivePauseButton } from '../LiveListControls'
 import { LiveRowMark } from '../LiveRowMark'
 import { CopyListLinkButton } from '../list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from '../list/InlineEdit'
+import { ListViewers } from '../list/ListViewers'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
   PICKER_EXCLUDED_TITLE,
@@ -167,6 +195,7 @@ import { RealtimeStaleMark } from '../RealtimeStatusBanner'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
 import { RowPresence } from '../RowPresence'
+import { SendViewButton } from '../send-view/SendViewButton'
 import { UnseenDot } from '../UnseenDot'
 import { Badge } from '../ui/badge'
 import { Checkbox } from '../ui/checkbox'
@@ -184,6 +213,7 @@ import { QueueBulkMove } from './QueueBulkMove'
 import { QueueItemSheet } from './QueueItemSheet'
 import { QueueKanbanBoard } from './QueueKanbanBoard'
 import { QueueQuickFilters } from './QueueQuickFilters'
+import { QueueTeamStrip } from './QueueTeamStrip'
 import { QueueWorkloadView } from './QueueWorkloadView'
 import {
   formulaTotalFormat,
@@ -234,6 +264,9 @@ export interface QueueWorklistProps {
    *  everywhere; a list hides them only when every collection the queue can
    *  create in is on it (the header covers those, not the rest). */
   hideCreateActions?: boolean | string[]
+  /** The host's header row shows who else has this queue open (admin queue page), so the
+   *  toolbar keeps no slot for it. */
+  viewersInHeader?: boolean
   /** Hosts with an Ask AI page pass this: the toolbar gains "Ask about this
    *  queue" (#1276), which hands the queue over so the host can open Ask AI
    *  with the question seeded. Absent = no button. */
@@ -441,6 +474,8 @@ interface QueueView {
 
 /** Rows per server group request (#741); "Show more" adds another page. */
 const GROUP_PAGE_SIZE = 50
+/** An empty selection (stable, so the selection-watch hooks see no change). */
+const NO_KEYS: string[] = []
 
 /** #741 — a group header as the server sends it. */
 interface ServerGroup {
@@ -793,6 +828,7 @@ export function QueueWorklist({
   realtime,
   renderError,
   hideCreateActions = false,
+  viewersInHeader = false,
   onAsk
 }: QueueWorklistProps) {
   const qc = useQueryClient()
@@ -868,6 +904,21 @@ export function QueueWorklist({
   const selectedCountRef = useRef(0)
   const viewRef = useRef<'table' | 'kanban' | 'workload'>('table')
   viewRef.current = view
+  // A grouped table (round 9 #16) shows the whole set's group counts: any write may move one,
+  // so it re-reads like the kanban does (one coalesced read per burst, as the viewer).
+  const groupedRef = useRef(false)
+  groupedRef.current = view === 'table' && !!groupBy
+  // Realtime round 2 (2026-11-14, lib/live-list-flow.ts): an import or bulk change is one
+  // quiet pill (#10); the list can be paused, and Resume applies what waited in one go (#11).
+  const liveBurst = useLiveBurst()
+  const liveBurstRef = useRef(liveBurst)
+  liveBurstRef.current = liveBurst
+  const liveApplyRef = useRef<((evs: BurstEvent[]) => void) | null>(null)
+  const livePause = useLivePause<BurstEvent>(queueId ? `queue:${queueId}` : null, (held) => {
+    if (!resumeAsRefetch(held) && liveApplyRef.current) return liveApplyRef.current(held)
+    showLiveChanges()
+  })
+  const livePauseGate = livePause.gate
   const limit = 25
 
   const { data: queue, error: queueError } = useQuery<QueueMeta>({
@@ -1116,10 +1167,26 @@ export function QueueWorklist({
       const flat = evs.flatMap((e) =>
         e ? (expandCoalesced(e as never) as unknown as LiveEv[]) : [e]
       )
+      const aspectOnly = (ev: LiveEv | undefined) =>
+        !!ev &&
+        !ev.action &&
+        !!ev.changed_fields?.length &&
+        ev.changed_fields.every((f) => f.startsWith('$'))
+      // An import or bulk change (#10): its rows wait for the pill's Show (one re-read) —
+      // no refetch, flashes or stats ticks per batch. Records key by collection + id.
+      const writes = flat
+        .filter((ev) => ev && !aspectOnly(ev))
+        .map((ev) => ({
+          ...ev,
+          item: String(ev?.item ?? '*') === '*' ? '*' : `${ev?.collection}:${String(ev?.item)}`
+        }))
+      const inBurst = writes.length > 0 && liveBurstRef.current.tracker.push(writes as never)
+      if (inBurst) liveBurstRef.current.publish()
       for (const ev of flat) {
         const fields = ev?.changed_fields
         const key = ev?.collection != null ? `${ev.collection}:${String(ev.item)}` : null
         const visible = key != null && visibleKeysRef.current.has(key)
+        if (inBurst && !aspectOnly(ev)) continue
         if (ev && !ev.action && fields?.length && fields.every((f) => f.startsWith('$'))) {
           if (fields.includes(LIVE_ASPECTS.tasks)) aspectKeys.add('queue-task-counts')
           if (fields.includes(LIVE_ASPECTS.integrations))
@@ -1133,7 +1200,10 @@ export function QueueWorklist({
           if (fields.includes(LIVE_ASPECTS.owners) && visible) refresh = true
           if (fields.includes(LIVE_ASPECTS.state)) {
             // Off screen = the pill (a record entering by a pipeline start, army 4 a06-1).
-            const fx = stateAspectEffect(visible, viewRef.current === 'kanban')
+            const fx = stateAspectEffect(
+              visible,
+              viewRef.current === 'kanban' || groupedRef.current
+            )
             stats = true
             if (fx.refresh) refresh = true
             pill += fx.pill
@@ -1148,7 +1218,10 @@ export function QueueWorklist({
         }
         stats = true
         const own = ev?.collection != null && isOwnWrite(ev.collection, ev.item as string)
-        if (key && (visible || ev?.action === 'create' || viewRef.current === 'kanban')) {
+        if (
+          key &&
+          (visible || ev?.action === 'create' || viewRef.current === 'kanban' || groupedRef.current)
+        ) {
           refresh = true
           if (!own) livePendingRef.current.push({ key, by: null })
         } else pill += 1
@@ -1157,16 +1230,20 @@ export function QueueWorklist({
       if (refresh) scheduleRefetch()
       if (stats) scheduleStats()
     }
-    const unsub = subscribe(collections, (ev) => deliverLive(liveOwner, [ev ?? {}], handle))
+    // Paused (#11): held per queue until Resume; then focus mode decides as before.
+    const apply = (held: BurstEvent[]) => deliverLive(liveOwner, held as LiveEv[], handle)
+    liveApplyRef.current = apply
+    const unsub = subscribe(collections, (ev) => livePauseGate([(ev ?? {}) as BurstEvent], apply))
     return () => {
       scheduleRefetchRef.current = null
       unsub()
+      liveApplyRef.current = null
       releaseLiveOwner(liveOwner)
       if (aspectTimer) clearTimeout(aspectTimer)
       if (refetchTimer) clearTimeout(refetchTimer)
       if (statsTimer) clearTimeout(statsTimer)
     }
-  }, [ctxRealtime, realtime, queue?.sources, qc, queueId, userId, liveOwner])
+  }, [ctxRealtime, realtime, queue?.sources, qc, queueId, userId, liveOwner, livePauseGate])
 
   // rt2 #17 — who owns records changed without those records being written (owner matrix,
   // delegation, out of office): rows may enter or leave "My items" and owner cells move. A
@@ -1473,12 +1550,7 @@ export function QueueWorklist({
           scope,
           // Last State Change is Aging read the other way round: the newest
           // move is the least aged.
-          sort:
-            sort === 'state_entered'
-              ? '-aging_hours'
-              : sort === '-state_entered'
-                ? 'aging_hours'
-                : sort,
+          sort: queueServerSort(sort),
           filters: JSON.stringify(apiFilters),
           // Table + group: headers only (rows load per group on expand, #741).
           // Kanban renders the full matching set, grouped client-side.
@@ -1610,13 +1682,25 @@ export function QueueWorklist({
 
   // Who has each row open (#272 → #2486): pushed through the presence room when the host has
   // a realtime adapter, a 30 s count poll otherwise. Per-node data — a hint, never truth.
-  const presenceRows = useMemo(
-    () =>
-      (serverGrouped ? [] : (data?.data ?? []))
-        .slice(0, 100)
-        .map((r) => ({ collection: r.collection, item: r.item_id })),
-    [serverGrouped, data?.data]
-  )
+  // ── Bulk selection state (declared here so presence can watch the selected rows too) ──
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  // Selecting rows is an explicit mode, as on the CBV (Rob 2026-10-26): off =
+  // no checkboxes and no bulk bar; on = both, and each row's own Actions menu
+  // is disabled. Leaving it clears the selection.
+  const [bulkMode, setBulkMode] = useState(false)
+  // rt8: plus selected rows that are not on this page, so the bulk bar can say who has them
+  // open (≤ 200 watched in all; the server caps a socket at 300).
+  const presenceRows = useMemo(() => {
+    const onPage = (serverGrouped ? [] : (data?.data ?? []))
+      .slice(0, 100)
+      .map((r) => `${r.collection}:${r.item_id}`)
+    const seen = new Set(onPage)
+    const offPage = bulkMode ? selectedIds.filter((k) => !seen.has(k)).slice(0, 100) : []
+    return [...onPage, ...offPage].map((k) => {
+      const i = k.indexOf(':')
+      return { collection: k.slice(0, i), item: k.slice(i + 1) }
+    })
+  }, [serverGrouped, data?.data, bulkMode, selectedIds])
   const rowViewers = useRowPresence(presenceRows)
   const transitionNote = useTransitionNote()
   // Long-request honesty (#370)
@@ -1759,12 +1843,7 @@ export function QueueWorklist({
           .request(
             get(`/queues/${queueId}/items`, {
               scope,
-              sort:
-                sort === 'state_entered'
-                  ? '-aging_hours'
-                  : sort === '-state_entered'
-                    ? 'aging_hours'
-                    : sort,
+              sort: queueServerSort(sort),
               filters: JSON.stringify(apiFilters),
               group_by: groupBy as string,
               group_key: key,
@@ -1777,7 +1856,14 @@ export function QueueWorklist({
       placeholderData: (prev: { key: string; rows: QueueItemRow[] } | undefined) => prev
     }))
   })
-  const groupRowsStamp = groupRowQueries.map((q) => q.dataUpdatedAt).join(',')
+  // The open groups re-read together after a live change; their rows are drawn once every one
+  // has landed, so a record moving from one group to another never blinks out between the two
+  // reads (and can glide, lib/live-groups.ts).
+  const anyGroupFetching = groupRowQueries.some((q) => q.isFetching)
+  const settledGroupStampRef = useRef('')
+  if (!anyGroupFetching || !settledGroupStampRef.current)
+    settledGroupStampRef.current = groupRowQueries.map((q) => q.dataUpdatedAt).join(',')
+  const groupRowsStamp = settledGroupStampRef.current
   // biome-ignore lint/correctness/useExhaustiveDependencies: the stamp string is the dependency (useQueries results are a fresh array each render)
   const groupRows = useMemo(() => {
     const byKey = new Map<string, QueueItemRow[]>()
@@ -1822,15 +1908,20 @@ export function QueueWorklist({
     stats: QueueStats
     filtered_stats: QueueStats | null
     state_counts?: Record<string, number>
+    totals?: QueueTotalsAnswer
+    totals_partial?: boolean
   }>({
     queryKey: ['queue-live-stats', queueId, scope, debouncedFilterValues, statsTick],
+    // The totals row ticks with the tiles (#13): the same read totals the whole result as the
+    // viewer (it reads every row for the stats already), coalesced by the stats tick.
     queryFn: () =>
       client.request(
         get(`/queues/${queueId}/items`, {
           scope,
           filters: JSON.stringify(apiFilters),
           page: 1,
-          limit: 1
+          limit: 1,
+          ...(totalPaths.length ? { totals: totalPaths.join(',') } : {})
         })
       ),
     enabled: statsTick > 0 && !!data,
@@ -1896,6 +1987,17 @@ export function QueueWorklist({
     items.map((r) => ({ collection: r.collection, id: r.item_id })),
     lockTick
   )
+  // Rows never move under the pointer or keyboard focus (#12): a reorder from a live refetch
+  // waits until the pointer leaves the table (≤ 10 s); values still update in place.
+  const steadyItems = useSteadyRows(
+    items,
+    (r) => `${r.collection}:${r.item_id}`,
+    rowChanges.rootRef,
+    {
+      enabled: view === 'table' && !serverGrouped,
+      resetKey: JSON.stringify([queueId, scope, page, sort, debouncedFilterValues])
+    }
+  )
   // A stable enter key through live refetches, so rows that did not change
   // do not replay their enter animation.
   const enterKeyRef = useRef(dataUpdatedAt)
@@ -1954,12 +2056,19 @@ export function QueueWorklist({
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on each completed read
   useEffect(() => {
     setPendingUpdates(0)
+    liveBurstRef.current.clear()
   }, [dataUpdatedAt])
 
   function refreshPendingUpdates() {
     qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
     qc.invalidateQueries({ queryKey: ['queue-workload', queueId] })
     setPendingUpdates(0)
+  }
+  /** Show (burst pill) / a big Resume: one re-read of the rows, stats and totals. */
+  function showLiveChanges() {
+    liveBurstRef.current.clear()
+    livePause.dropHeld()
+    refreshPendingUpdates()
   }
 
   // ── Trends (daily snapshots → sparklines + deltas on the global tiles) ──
@@ -2630,7 +2739,10 @@ export function QueueWorklist({
     const log = queueAwayRef.current
     const fromCache = !!log && dataUpdatedAt > 0 && dataUpdatedAt <= log.leftAt
     const plan = fromCache ? planListReturn(log) : 'fresh'
-    if (plan === 'replay' || plan === 'refetch') {
+    if (plan === 'replay' && log && livePause.paused) {
+      // A paused queue (#11) holds what changed while away too; Resume applies it.
+      livePauseGate(log.events.filter((e) => !e.own) as BurstEvent[], () => {})
+    } else if (plan === 'replay' || plan === 'refetch') {
       livePendingRef.current = (log?.events ?? [])
         .filter((e) => !e.own)
         .map((e) => ({ key: `${e.collection}:${String(e.item)}`, by: null }))
@@ -2727,6 +2839,17 @@ export function QueueWorklist({
     if (views.data.some((v) => v.id === want)) setActiveViewId(want)
   }, [views, displayReady])
   /** What "Copy link" puts in the URL — the worklist as on screen. */
+  // Send my view: the tab and how many filters — the sender's settings, never row values.
+  const queueViewSummary = (): string | null => {
+    const parts: string[] = []
+    const tab = SCOPE_TABS.find((t) => t.value === scope)?.label
+    if (tab) parts.push(tab)
+    const n = Object.values(filterValues).filter((v) =>
+      Array.isArray(v) ? v.length > 0 : v !== '' && v != null
+    ).length
+    if (n > 0) parts.push(`${n} filter${n === 1 ? '' : 's'}`)
+    return parts.length ? parts.join(', ') : null
+  }
   const listLinkState = (): QueueLinkState => ({
     scope,
     filters: filterValues,
@@ -2870,12 +2993,7 @@ export function QueueWorklist({
     }
   })
 
-  // ── Bulk actions ──
-  const [selectedIds, setSelectedIds] = useState<string[]>([])
-  // Selecting rows is an explicit mode, as on the CBV (Rob 2026-10-26): off =
-  // no checkboxes and no bulk bar; on = both, and each row's own Actions menu
-  // is disabled. Leaving it clears the selection.
-  const [bulkMode, setBulkMode] = useState(false)
+  // ── Bulk actions ── (selectedIds / bulkMode are declared above, beside presenceRows)
   const toggleBulkMode = () => {
     if (bulkMode) setSelectedIds([])
     setBulkMode(!bulkMode)
@@ -2914,6 +3032,62 @@ export function QueueWorklist({
     return null
   }
 
+  // ── The selection, watched while it is held (rt8 items 5–7, lib/selection-watch.ts) ──────
+  // Row keys are already `collection:item` (rowId), the selection-watch key shape.
+  const selectionKeys = bulkMode ? selectedIds : NO_KEYS
+  const selPicks = useSelectionPicks(selectionKeys)
+  const selCollections = useMemo(
+    () => [...new Set(selectionKeys.map((k) => splitSelKey(k).collection))],
+    [selectionKeys]
+  )
+  const selMarks = useSelectionLiveMarks(selCollections, selPicks.picks)
+  // A bulk action was chosen: check every selected row, not only the ones a live event marked
+  // (live updates Off sends no marks) — the collection list does the same when a form opens.
+  // Held until the selection empties.
+  const [selCheckAll, setSelCheckAll] = useState(false)
+  if (selCheckAll && selectionKeys.length === 0) setSelCheckAll(false)
+  const selCheckKeys = useMemo(
+    () => (selCheckAll ? selectionKeys : selectionKeys.filter((k) => selMarks.marked.has(k))),
+    [selCheckAll, selectionKeys, selMarks.marked]
+  )
+  const selChanges = useSelectionChanges(selCheckKeys, selPicks.picks)
+  const selChangedRows = selChanges.rows.filter((r) => selPicks.picks.has(r.key))
+  const selLocks = useRowLocksByCollection(
+    selectionKeys.map((k) => {
+      const { collection, id } = splitSelKey(k)
+      return { collection, id }
+    }),
+    lockTick
+  )
+  const selOpen: OpenInput[] = selectionKeys
+    .map((key) => {
+      const { collection, id } = splitSelKey(key)
+      const v = rowViewers[rowPresenceKey(collection, id)]
+      const lock = selLocks.get(key)
+      return {
+        key,
+        viewerIds: v?.ids ?? [],
+        viewerCount: v?.count ?? 0,
+        lockName: lock && !lock.is_mine ? (lock.locked_by_name ?? 'someone') : null
+      }
+    })
+    .filter((o) => o.viewerCount > 0 || !!o.lockName)
+  const selRows = useSelectedRowMemory(
+    items as unknown as Array<Record<string, unknown>>,
+    (r) => `${r.collection}:${r.item_id}`,
+    selectionKeys
+  )
+  // The sums: the stored columns the totals row sums.
+  const selSumCols = totalCols.filter(
+    (k) =>
+      columnAggs[k] === 'sum' && totalsSupportOf(k)?.kind === 'server' && k.startsWith('extra.')
+  )
+  const selSums = selectionSums(
+    selRows,
+    selSumCols,
+    (r, k) => (r.extra as Record<string, unknown> | undefined)?.[k.slice('extra.'.length)]
+  )
+
   const groupKeyLabel = (key: string): string => {
     if (groupBy === 'state') return key === 'No state' ? key : stateLabel(key)
     if (groupBy === 'collection') return collectionLabel(key)
@@ -2929,9 +3103,49 @@ export function QueueWorklist({
     return key
   }
 
-  const rowGroups = groups?.map((g) => ({
+  // Grouped table (round 9 #16): counts follow the data; a row whose group changed glides
+  // there, or — while the pointer or focus rests in the table — holds and says where it goes.
+  const steadyGroups = useSteadyGroups(
+    (groups ?? []).map((g) => ({ ...g, rows: collapsedGroups.has(g.key) ? [] : g.rows })),
+    rowId,
+    rowChanges.rootRef,
+    {
+      enabled: view === 'table' && !!groupBy,
+      resetKey: JSON.stringify([
+        queueId,
+        scope,
+        sort,
+        debouncedFilterValues,
+        groupBy,
+        [...collapsedGroups],
+        groupPages
+      ])
+    }
+  )
+  useRowGlide(
+    rowChanges.rootRef,
+    steadyGroups.groups
+      .map((g) => `\u00a7${g.key}\u0002${g.rows.map(rowId).join('\u0001')}`)
+      .join('\u0003'),
+    {
+      enabled: view === 'table' && !!groupBy,
+      resetKey: JSON.stringify([queueId, scope, sort, debouncedFilterValues, groupBy])
+    }
+  )
+  const rowGone = (k: string) => steadyItems.isGone(k) || steadyGroups.isGone(k)
+  const rowMovingTo = (k: string) => {
+    const to = steadyGroups.movingTo(k)
+    return to == null ? null : groupKeyLabel(to)
+  }
+  const steadyRowsOf = new Map(steadyGroups.groups.map((sg) => [sg.key, sg.rows]))
+  const shownGroups: DisplayGroup[] | null = groups
+    ? steadyGroups.groups.map(
+        (sg) => sg.group ?? { key: sg.key, rows: [], breached: 0, atRisk: 0, count: 0, sums: {} }
+      )
+    : null
+  const rowGroups = shownGroups?.map((g) => ({
     key: g.key,
-    rows: g.rows,
+    rows: steadyRowsOf.get(g.key) ?? [],
     header: (
       <>
         <span>{groupKeyLabel(g.key)}</span>
@@ -3016,10 +3230,15 @@ export function QueueWorklist({
           {/* #643 — someone else changed this since you last opened it. The
             mark hangs in the column's widened left padding, so item names
             stay aligned with each other and with the header. */}
-          {rowLocks.get(rowId(row)) || rowChanges.isNew(rowId(row)) ? (
+          {rowLocks.get(rowId(row)) ||
+          rowChanges.isNew(rowId(row)) ||
+          rowGone(rowId(row)) ||
+          rowMovingTo(rowId(row)) != null ? (
             <LiveRowMark
               lock={rowLocks.get(rowId(row))}
               isNew={rowChanges.isNew(rowId(row))}
+              gone={rowGone(rowId(row))}
+              movingTo={rowMovingTo(rowId(row))}
               dataAttr='data-queue-live-mark'
               hang
             />
@@ -3099,6 +3318,19 @@ export function QueueWorklist({
       header: aliasFor('aging_hours', 'Aging'),
       sortable: true,
       render: (row) => formatAging(row.aging_hours)
+    },
+    {
+      // rt8 — the step and how long it has been there, ticking on the page clock; sorts on
+      // the server as Aging. Off unless the viewer adds it.
+      key: QUEUE_IN_STEP_COLUMN,
+      header: aliasFor(QUEUE_IN_STEP_COLUMN, 'In step'),
+      sortable: true,
+      render: (row) => (
+        <InStepCell
+          stepLabel={row.state ? stateLabel(row.state) : null}
+          enteredAt={row.state_entered_at}
+        />
+      )
     },
     {
       // When the record entered its current state — the same moment Aging
@@ -3483,6 +3715,9 @@ export function QueueWorklist({
         label={aliasFor(`extra.${field}`, formatColumnHeader(field))}
         choices={f ? inlineChoices(f) : undefined}
         target={kind === 'm2o' && m ? inlineM2oTarget(m.relations, row.collection, field) : null}
+        collection={row.collection}
+        itemId={row.item_id}
+        field={field}
         onCommit={(v, dir) => commitQueueCell(row, field, kind, v, dir)}
       >
         {node}
@@ -3566,6 +3801,7 @@ export function QueueWorklist({
     'owners',
     'aging_hours',
     'state_entered',
+    QUEUE_IN_STEP_COLUMN,
     'sla_status',
     'at_risk',
     ...(addendumsEnabled ? ['addendums'] : []),
@@ -3776,8 +4012,15 @@ export function QueueWorklist({
     ...(claimsEnabled ? [claimColumn] : []),
     actionsColumn
   ]
-  // The footer: one figure per visible column with a total on, over the whole result.
-  const totalsAnswer = data?.totals
+  // The footer: one figure per visible column with a total on, over the whole result. The
+  // newer of the list read and the live stats read (#13) wins, per column.
+  const liveTotalsNewer = liveStatsNewer && !!liveStats?.totals
+  const totalsAnswer: QueueTotalsAnswer | undefined = liveTotalsNewer
+    ? { ...data?.totals, ...liveStats?.totals }
+    : data?.totals
+  const totalsPartial = liveTotalsNewer
+    ? liveStats?.totals_partial === true
+    : data?.totals_partial === true
   const totalsRow = (() => {
     if (!totalsOn) return undefined
     const cells: Record<string, React.ReactNode> = {}
@@ -3807,7 +4050,7 @@ export function QueueWorklist({
               sup.kind === 'server' ? totalsAnswer?.[sup.path]?.by_collection : undefined,
             collectionLabel,
             format,
-            partial: data?.totals_partial === true,
+            partial: totalsPartial,
             derivedText: sup.kind === 'derived' ? derivedText(sup.terms) : undefined
           })
       cells[c.key] = (
@@ -3820,7 +4063,7 @@ export function QueueWorklist({
           ) : (
             <span className='text-slate-700 dark:text-slate-200'>
               {value == null ? '—' : format(value)}
-              {data?.totals_partial ? '*' : ''}
+              {totalsPartial ? '*' : ''}
             </span>
           )}
         </span>
@@ -3861,12 +4104,7 @@ export function QueueWorklist({
         const res = await client.request<QueueItemsPage>(
           get(`/queues/${queueId}/items`, {
             scope,
-            sort:
-              sort === 'state_entered'
-                ? '-aging_hours'
-                : sort === '-state_entered'
-                  ? 'aging_hours'
-                  : sort,
+            sort: queueServerSort(sort),
             filters: JSON.stringify(apiFilters),
             page: p,
             limit: 100
@@ -4616,7 +4854,14 @@ export function QueueWorklist({
           )}
           <RealtimeStaleMark className='h-8' />
           <FocusModeToggle />
-          {pendingUpdates > 0 && (
+          {(ctxRealtime || realtime) && queueId && (
+            <LivePauseButton
+              paused={livePause.paused}
+              held={livePause.held}
+              onToggle={livePause.toggle}
+            />
+          )}
+          {pendingUpdates > 0 && !liveBurst.label && (
             <button
               type='button'
               onClick={refreshPendingUpdates}
@@ -4746,6 +4991,23 @@ export function QueueWorklist({
               </button>
             )}
             <CopyListLinkButton listKey={`queue:${queueId}`} getState={listLinkState} />
+            <SendViewButton
+              getView={() =>
+                listViewInput(
+                  'queue',
+                  queueId,
+                  `queue:${queueId}`,
+                  listLinkState() as unknown as Record<string, unknown>,
+                  queueViewSummary()
+                )
+              }
+              describe={() => {
+                const s = queueViewSummary()
+                const name = queue?.name ?? 'This queue'
+                return s ? `${name} — ${s}` : name
+              }}
+            />
+            {!viewersInHeader && <ListViewers kind='queue' id={queueId} />}
             {view === 'table' && (
               <button
                 type='button'
@@ -5126,6 +5388,7 @@ export function QueueWorklist({
             )}
           </div>
         )}
+        {view !== 'workload' && <QueueTeamStrip queueId={queueId} />}
         {view !== 'workload' && (
           <QueueQuickFilters
             defs={quickFilterDefs}
@@ -5459,6 +5722,14 @@ export function QueueWorklist({
                 )}
                 aria-busy={isRefetching || undefined}
               >
+                {/* #10 — an import or bulk change: one pill over the table, never in the toolbar. */}
+                {liveBurst.label && (
+                  <LiveBurstPill
+                    label={liveBurst.label}
+                    onShow={showLiveChanges}
+                    className='bottom-28'
+                  />
+                )}
                 {loadElapsed != null && (
                   <span className='nvr-slide-up-centered absolute left-1/2 top-6 z-[6] -translate-x-1/2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 shadow-lg dark:border-border dark:bg-card dark:text-slate-300'>
                     {queueSlow.text ?? 'Still working'} — {loadElapsed}s
@@ -5470,7 +5741,7 @@ export function QueueWorklist({
                   density={density}
                   minBodyHeight={360}
                   columns={columns}
-                  rows={items}
+                  rows={steadyItems.rows}
                   rowKey={(row) => `${row.collection}:${row.item_id}`}
                   total={data?.total ?? 0}
                   page={page}
@@ -5494,6 +5765,10 @@ export function QueueWorklist({
                   rowTitle={(row) => {
                     const lock = rowLocks.get(rowId(row))
                     return (
+                      (rowGone(rowId(row)) ? GONE_ROW_TITLE : undefined) ??
+                      (rowMovingTo(rowId(row)) != null
+                        ? movingRowTitle(rowMovingTo(rowId(row)) as string)
+                        : undefined) ??
                       rowChanges.titleFor(rowId(row)) ??
                       (lock && !lock.is_mine ? lockLabel(lock) : undefined) ??
                       (isPickerExcluded(row.collection, row.item_id)
@@ -5504,7 +5779,8 @@ export function QueueWorklist({
                   rowClassName={(row) =>
                     cn(
                       rowHighlight(row),
-                      isPickerExcluded(row.collection, row.item_id) && PICKER_EXCLUDED_ROW_CLASS
+                      isPickerExcluded(row.collection, row.item_id) && PICKER_EXCLUDED_ROW_CLASS,
+                      rowGone(rowId(row)) && GONE_ROW_CLASS
                     )
                   }
                   emptyMessage={
@@ -5688,6 +5964,42 @@ export function QueueWorklist({
           }
           onTransition={(state) => runBulk('Transition', (row) => performTransition(row, state))}
           onClear={() => setSelectedIds([])}
+          onActionIntent={() => setSelCheckAll(true)}
+          figures={
+            <SelectionFigures
+              tone='light'
+              total={selectedIds.length}
+              sums={selSums.sums}
+              known={selSums.known}
+              noun='row'
+              labelOf={(k) => {
+                const c = columns.find((x) => x.key === k)
+                return c ? columnHeaderText(c) : k
+              }}
+              format={(k, v) => {
+                const fmt = formatConfigFor(k.slice('extra.'.length))
+                return formatTotal(v, 'sum', (fmt?.type === 'number' ? fmt : null) as never)
+              }}
+            />
+          }
+          notices={
+            <BulkSelectionNotices
+              tone='light'
+              framed
+              total={selectedIds.length}
+              open={selOpen}
+              changed={selChangedRows}
+              labelOf={(k) => items.find((r) => rowId(r) === k)?.label ?? null}
+              onSkip={(keys) => setSelectedIds((s) => s.filter((k) => !keys.includes(k)))}
+              onAcknowledgeChanged={(keys) => {
+                selPicks.restamp(keys)
+                selMarks.clear(keys)
+              }}
+              onOpenRecord={({ collection, id }) =>
+                window.open(itemNav.urlFor({ collection, itemId: id }), '_blank', 'noopener')
+              }
+            />
+          }
         >
           {selectedIds.length >= 2 && (
             <button

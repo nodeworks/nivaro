@@ -1,6 +1,7 @@
 import { onOpsWrite } from '../db/ops-signal.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
 import { getIo } from './io-holder.js'
+import { parseListViewTopic } from './list-viewer-topics.js'
 import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
 
 /**
@@ -32,10 +33,16 @@ export type OpsTopic =
   | 'access-requests'
   | 'webhooks'
   | 'dead-letters'
+  | 'sessions'
+  | 'usage'
 
-/** 'ticket' — the person must be able to see that support ticket (canSeeTicket).
- *  'dashboard' / 'report' — that dashboard / report is visible to the person (rt4 #18). */
-export type OpsGate = 'admin' | 'auth' | 'ticket' | 'dashboard' | 'report'
+/**
+ * 'ticket' — the person must be able to see that support ticket (canSeeTicket).
+ * 'dashboard' / 'report' — that dashboard / report is visible to the person (rt4 #18).
+ * 'viewers' — "who else has this list / queue open" (services/list-viewers.ts): anyone who may
+ * read the list ANNOUNCES themselves, only administrators join the room and hear the names.
+ */
+export type OpsGate = 'admin' | 'auth' | 'ticket' | 'dashboard' | 'report' | 'viewers'
 
 const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   readiness: 'admin',
@@ -53,7 +60,11 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   'access-requests': 'admin',
   // Webhook deliveries and the dead-letter queue (2026-11-14): pokes only, admin pages.
   webhooks: 'admin',
-  'dead-letters': 'admin'
+  'dead-letters': 'admin',
+  // Realtime round 9: a person's sessions / phones changed ({user_id} only, sessions-live.ts)
+  // and the instance's usage moved (a coalesced poke, usage-live.ts). Administrators only.
+  sessions: 'admin',
+  usage: 'admin'
 }
 
 /**
@@ -82,6 +93,7 @@ export function opsTopicGate(raw: unknown): { topic: string; gate: OpsGate } | n
       raw
     )
   if (c) return { topic: raw, gate: c[1] === 'dashboard' || c[1] === 'report' ? c[1] : 'admin' }
+  if (raw.length <= 80 && parseListViewTopic(raw)) return { topic: raw, gate: 'viewers' }
   return null
 }
 

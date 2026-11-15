@@ -7,8 +7,47 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  mayMailReceipt,
+  mintStatusToken,
+  parseStatusPageConfig,
+  STATUS_META_KEY,
+  statusMetaOf,
+  statusPageUrl,
+  submitterEmail,
+  withoutStatusMeta
+} from '../services/submission-status.js'
 import { overWindowLimit } from '../services/windowed-limit.js'
 import type { CMSField, CMSRelation, User } from '../types.js'
+
+/** "We received your request" with the status link, to the address the submitter gave. */
+async function sendSubmissionReceivedMail(
+  to: string,
+  formName: string,
+  statusUrl: string,
+  exp: number
+): Promise<void> {
+  const { sendMail } = await import('../services/mail.js')
+  const until = new Date(exp * 1000).toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC'
+  })
+  await sendMail({
+    to,
+    subject: `We received your ${formName}`,
+    template: 'notice',
+    skipDigest: true,
+    data: {
+      heading: 'We received your request',
+      lead: `Thanks for sending “${formName}”. You can follow where it stands on its status page, which updates while it is open.`,
+      action_url: statusUrl,
+      action_label: 'See its status',
+      footnote: `Keep this email: the link is how you check on your request. It works until ${until}.`
+    }
+  })
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -313,10 +352,15 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
         .limit(limit)
         .offset(offset)
 
-      const submissions = rows.map((r: Record<string, unknown>) => ({
-        ...r,
-        data: parseJson(r.data as string) ?? {}
-      }))
+      const submissions = rows.map((r: Record<string, unknown>) => {
+        const data = parseJson<Record<string, unknown>>(r.data as string) ?? {}
+        return {
+          ...r,
+          // The status-link binding (a hash) is never shown; the admin sees that one exists.
+          data: withoutStatusMeta(data),
+          status_link: !!statusMetaOf(data)
+        }
+      })
 
       return reply.send({
         data: submissions,
@@ -516,15 +560,35 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
         .send({ error: 'One of the values does not fit its field. Check the form and try again.' })
     }
 
-    // Insert submission record
+    // Insert submission record. Realtime round 9 (#22): a form with its status page on binds a
+    // signed link to this submission (only the link's SHA-256 is stored, under a reserved key
+    // admin reads never show).
     const submissionId = randomUUID()
+    const statusCfg = parseStatusPageConfig(form.form_config)
+    const status =
+      statusCfg.enabled && collectionId != null
+        ? mintStatusToken(submissionId, String(collectionId), statusCfg.ttl_days)
+        : null
     await db('nivaro_submissions').insert({
       id: submissionId,
       form: form.id,
-      data: toJsonStr(filteredData),
+      data: toJsonStr(status ? { ...filteredData, [STATUS_META_KEY]: status.meta } : filteredData),
       ip,
       created_at: new Date()
     })
+    const statusUrl = status ? statusPageUrl(status.token) : null
+    const typed = statusUrl ? submitterEmail(statusCfg, filteredData) : null
+    // The receipt goes to an address an anonymous person typed: capped per address and per form
+    // (services/submission-status.ts), never only per IP. A cap hit = no email, nothing more said.
+    const emailTo = typed && (await mayMailReceipt(app.redis, form.id, typed)) ? typed : null
+    if (statusUrl && emailTo) {
+      void sendSubmissionReceivedMail(
+        emailTo,
+        String(form.name),
+        statusUrl,
+        status!.meta.exp
+      ).catch((err) => req.log.warn({ err, form: form.id }, 'submission status email failed'))
+    }
 
     // The items service logged the create; this entry says it came from the public form.
     if (collectionId != null) {
@@ -541,7 +605,8 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
     return reply.code(201).send({
       data: {
         id: submissionId,
-        message: form.success_message || 'Submitted successfully'
+        message: form.success_message || 'Submitted successfully',
+        ...(statusUrl ? { status_url: statusUrl, status_emailed: !!emailTo } : {})
       }
     })
   })

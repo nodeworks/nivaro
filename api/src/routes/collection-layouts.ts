@@ -426,6 +426,8 @@ export type PickResult = {
   checked: PickCheck[]
   /** The A/B test (#2614) on the form resolution picked for this role, when there is one. */
   ab?: AbApplied | null
+  /** Fields any candidate form's record rules read (rt8 #18: a change to one re-asks). */
+  ruleFields?: string[]
 }
 /**
  * What else decides the pick: the day (active dates, #2714), the screen (phone
@@ -853,7 +855,11 @@ export async function resolveLayout(opts: {
     if (Object.keys(over).length > 0) record = { ...(record ?? {}), ...over }
   }
   const res = pickBestLayoutTraced(layouts, userRoleId, record, isAdmin, ctx)
-  return { ...res, checked: [...slugChecks, ...res.checked] }
+  return {
+    ...res,
+    checked: [...slugChecks, ...res.checked],
+    ruleFields: collectRecordConditionFields(layouts)
+  }
 }
 
 /**
@@ -1346,7 +1352,10 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         layout,
         ...stripEditorNotes(groups, assignments, { stripAiPrompt: !req.isAdmin }),
         ungrouped_sort,
-        ...(requestedFormUnavailable ? { requested_form_unavailable: true } : {})
+        ...(requestedFormUnavailable ? { requested_form_unavailable: true } : {}),
+        // rt8 #18: field names only — an open record re-asks which form applies when one of
+        // these (or its step) changes, and switches in place.
+        ...(item && !slug ? { rule_fields: resolved.ruleFields ?? [] } : {})
       }
     })
   })

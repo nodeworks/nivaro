@@ -53,6 +53,11 @@ export const NOTIFY_RULE_CATS: Array<{ key: string; label: string; help: string 
     help: 'Someone proposed new values on a locked record whose step you own (to accept or decline), and whether a change you proposed was accepted or declined.'
   },
   {
+    key: 'approval_changes',
+    label: 'Changed after approval',
+    help: 'A record you approved was changed afterwards (by an administrator, a process or an accepted proposal). One notice per burst of changes, never for your own.'
+  },
+  {
     key: 'sla',
     label: 'SLA & escalations',
     help: 'A record you own is nearing or past its SLA, and escalation-ladder notices as they climb. SLA escalations always email immediately.'
@@ -61,6 +66,11 @@ export const NOTIFY_RULE_CATS: Array<{ key: string; label: string; help: string 
     key: 'watch',
     label: 'Watches',
     help: 'Something you explicitly watch fired: field watches, per-record subscriptions, and watched stock parts (Stock Planning).'
+  },
+  {
+    key: 'watch_list',
+    label: 'Watch list alerts',
+    help: 'Alerts you set on records in your watch list: when one reaches a step, when a field changes, or when it is overdue. Also the daily email of what changed on your pinned records, when you turn it on.'
   },
   {
     key: 'alerts',
@@ -101,6 +111,11 @@ export const NOTIFY_RULE_CATS: Array<{ key: string; label: string; help: string 
     key: 'crashes',
     label: 'App crashes',
     help: 'A crash that is new in the current release reached several times or more than one person within 15 minutes. Only administrators get these.'
+  },
+  {
+    key: 'views',
+    label: 'Views sent to you',
+    help: 'A colleague used Send my view to hand you a record, list or queue they were looking at. When you have the app open it arrives as a small card instead.'
   },
   {
     key: 'system',

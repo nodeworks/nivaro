@@ -3,8 +3,12 @@ export type NotifyCategory =
   | 'workflow'
   /** Proposed changes on records locked after approval: to review, and their outcome. */
   | 'proposals'
+  /** A record changed after it was approved: to the people who approved it, once per burst. */
+  | 'approval_changes'
   | 'sla'
   | 'watch'
+  /** Alerts a person set on records in their watch list (reaches a step, field changes, overdue). */
+  | 'watch_list'
   | 'alerts'
   /** Activity-pattern alerts on the audit log (#23). */
   | 'audit'
@@ -18,6 +22,8 @@ export type NotifyCategory =
   | 'chaos'
   /** Front-end crashes new in a release (Issue Log → Crashes). Administrators only. */
   | 'crashes'
+  /** A colleague used "Send my view" (a record, list or queue they were looking at). */
+  | 'views'
   | 'other'
 
 export type NotificationKind =
@@ -87,6 +93,9 @@ export interface NotificationDetail {
     label?: string | null
     id?: string | number | null
   } | null
+  /** rt8 #21 — the change came from an agent working for the sender ("via Claude"); set by
+   *  notifyUser from the request, never by a caller. */
+  via_agent?: string
   /** #2365 — the sender asked for an explicit acknowledgement. */
   ack_required?: boolean
   /** ISO time the recipient acknowledged; absent while pending. */
@@ -145,6 +154,10 @@ export interface NotifyUserOptions {
    *  pinned in the bell until acknowledged, escalates up the recipient's
    *  chain, and the sender sees who has and has not acknowledged. */
   ack_required?: boolean
+  /** Urgent work for this person (a priority record, a breach): with their "Play a sound for
+   *  urgent items" setting on, the app plays a short chime when it arrives. Only counts on a
+   *  row that asks them to act (critical / needs you), never on an FYI. */
+  urgent?: boolean
   /** Structured content stored with the row. */
   detail?: Omit<NotificationDetail, 'why'> | null
   /** Internal: set on outbox re-deliveries to prevent re-enqueue loops. */

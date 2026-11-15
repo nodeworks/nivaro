@@ -1,18 +1,32 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, Loader2, Pencil } from 'lucide-react'
+import { AlertTriangle, Check, Loader2, Pencil } from 'lucide-react'
 import type React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
+import {
+  CELL_BEAT_MS,
+  CELL_READ_COALESCE_MS,
+  type CellCoords,
+  type CellHolder,
+  cellHolderKey,
+  overwritesOthers,
+  readCellHolders,
+  releaseCell,
+  takeCell
+} from '../../lib/cell-locks'
 import { get, patch } from '../../lib/commands'
+import { cursorColor } from '../../lib/grid-cursors'
 import {
   type InlineEditorKind,
   inlineInputValue,
   inlineValueUnchanged,
   parseInlineInput
 } from '../../lib/list-inline-edit'
+import { LIVE_ASPECTS, useLiveCollection } from '../../lib/live'
 import { userErrorMessage } from '../../lib/safe-error'
-import { choiceLabel, cn } from '../../lib/utils'
+import { choiceLabel, cn, formatDate } from '../../lib/utils'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
+import { RelationLabel } from '../layout-editor/pickers/relation-label'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 
@@ -25,6 +39,11 @@ import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
  * rights, User Scopes, row filters, validation, edit locks, hooks, activity,
  * revisions). A refusal rolls the optimistic value back and stays on the cell
  * in the server's own words.
+ *
+ * Several people on one list (rt6 #15, lib/cell-locks.ts): a cell that knows its record
+ * (`collection` + `itemId` + `field`) takes a soft lock while its editor is open — others see
+ * who is editing it and cannot open it — and its save first re-reads the field as the viewer:
+ * a value someone else changed since the editor opened asks inline, Keep mine / Take theirs.
  */
 
 export interface InlineCommit {
@@ -45,9 +64,27 @@ export interface InlineCommit {
   next?: string | null
 }
 
+/** A save held back because someone else changed the field since the editor opened. */
+export interface InlineConflict {
+  theirs: unknown
+  mine: unknown
+  by: string | null
+  at: string | null
+  commit: InlineCommit
+}
+
 export interface InlineEditController {
   editing: string | null
-  start: (cellKey: string) => void
+  /** Open a cell. With `coords` it takes the soft lock and remembers the value it opened on. */
+  start: (cellKey: string, opts?: { coords?: CellCoords; value?: unknown }) => void
+  /** A cell on screen: its holder is read and kept live. Returns the undo. */
+  watchCell: (cellKey: string, coords: CellCoords) => () => void
+  /** Someone else editing this cell now (never the viewer). */
+  holderOf: (coords: CellCoords) => CellHolder | null
+  /** The cell was taken by someone else just as the viewer opened it. */
+  refusedOf: (cellKey: string) => string | null
+  conflictOf: (cellKey: string) => InlineConflict | null
+  resolveConflict: (cellKey: string, keep: 'mine' | 'theirs') => void
   cancel: () => void
   commit: (c: InlineCommit) => void
   errorOf: (cellKey: string) => string | null
@@ -63,13 +100,113 @@ export function useInlineEdit(): InlineEditController {
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState<Record<string, true>>({})
   const [saved, setSaved] = useState<Record<string, true>>({})
+  const [conflicts, setConflicts] = useState<Record<string, InlineConflict>>({})
+  const [refused, setRefused] = useState<Record<string, string>>({})
+  const [holders, setHolders] = useState<Map<string, CellHolder>>(() => new Map())
+  const [watchedCollections, setWatchedCollections] = useState<string[]>([])
   const savedTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
-  useEffect(
-    () => () => {
+  // ── Soft cell locks (rt6 #15) ──────────────────────────────────────────────
+  /** Cells on screen, per collection: cellKey → coords. */
+  const watched = useRef(new Map<string, Map<string, CellCoords>>())
+  /** The value and time each open editor started from (the overwrite check's base). */
+  const opened = useRef(new Map<string, { value: unknown; at: string }>())
+  /** The cell whose lock this list holds. */
+  const held = useRef<{ cellKey: string; coords: CellCoords } | null>(null)
+  const readTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    const timers = readTimers.current
+    return () => {
+      mounted.current = false
       for (const t of Object.values(savedTimers.current)) clearTimeout(t)
+      for (const t of timers.values()) clearTimeout(t)
+      timers.clear()
+      if (held.current) releaseCell(client, held.current.coords)
+      held.current = null
+    }
+  }, [client])
+
+  const readHolders = useCallback(
+    (collection: string) => {
+      if (readTimers.current.has(collection)) return
+      readTimers.current.set(
+        collection,
+        setTimeout(() => {
+          readTimers.current.delete(collection)
+          const cells = [...(watched.current.get(collection)?.values() ?? [])]
+          readCellHolders(client, collection, cells)
+            .then((found) => {
+              if (!mounted.current) return
+              setHolders((prev) => {
+                const next = new Map(prev)
+                for (const k of next.keys()) if (k.startsWith(`${collection}\u0001`)) next.delete(k)
+                for (const [k, h] of found) next.set(k, h)
+                return next
+              })
+            })
+            .catch(() => {})
+        }, CELL_READ_COALESCE_MS)
+      )
     },
-    []
+    [client]
   )
+
+  const watchCell = useCallback(
+    (cellKey: string, coords: CellCoords) => {
+      let m = watched.current.get(coords.collection)
+      if (!m) {
+        m = new Map()
+        watched.current.set(coords.collection, m)
+        const c = coords.collection
+        setWatchedCollections((prev) => (prev.includes(c) ? prev : [...prev, c]))
+      }
+      m.set(cellKey, coords)
+      readHolders(coords.collection)
+      return () => {
+        watched.current.get(coords.collection)?.delete(cellKey)
+      }
+    },
+    [readHolders]
+  )
+
+  // Someone started or stopped editing a cell of a row on screen (`$cells`), or the row was
+  // removed: re-read the holders of that collection's cells, coalesced.
+  useLiveCollection(
+    watchedCollections,
+    (batch) => {
+      const touched = new Set(batch.events.map((e) => String(e.collection)))
+      for (const c of touched) readHolders(c)
+    },
+    {
+      debounceMs: 300,
+      match: (ev) => {
+        const m = watched.current.get(String(ev.collection))
+        if (!m || m.size === 0) return false
+        const cellsNotice = !!ev.changed_fields?.includes(LIVE_ASPECTS.cells)
+        if (!cellsNotice && ev.action !== 'delete') return false
+        if (ev.item === '*') return true
+        const id = String(ev.item).toUpperCase()
+        for (const c of m.values()) if (String(c.id).toUpperCase() === id) return true
+        return false
+      }
+    }
+  )
+
+  // Let go of a cell when its editor closes (commit, cancel, Tab to the next cell); keep
+  // beating while it stays open.
+  useEffect(() => {
+    const h = held.current
+    if (h && h.cellKey !== editing) {
+      releaseCell(client, h.coords)
+      held.current = null
+    }
+    if (!editing || !held.current) return
+    const coords = held.current.coords
+    const t = setInterval(() => void takeCell(client, coords, true), CELL_BEAT_MS)
+    return () => clearInterval(t)
+  }, [editing, client])
+
   const clearError = useCallback((cellKey: string) => {
     setErrors((prev) => {
       if (!(cellKey in prev)) return prev
@@ -79,20 +216,33 @@ export function useInlineEdit(): InlineEditController {
     })
   }, [])
   const start = useCallback(
-    (cellKey: string) => {
+    (cellKey: string, opts?: { coords?: CellCoords; value?: unknown }) => {
       clearError(cellKey)
+      setRefused((prev) => withoutKey(prev, cellKey))
+      setConflicts((prev) => withoutKey(prev, cellKey))
       setEditing(cellKey)
+      const coords = opts?.coords
+      if (!coords) return
+      opened.current.set(cellKey, { value: opts?.value, at: new Date().toISOString() })
+      held.current = { cellKey, coords }
+      // Open at once; if someone else took the cell a moment earlier, close it and say who.
+      void takeCell(client, coords).then((r) => {
+        if (r.ok || !mounted.current) return
+        if (held.current?.cellKey === cellKey) held.current = null
+        opened.current.delete(cellKey)
+        setEditing((cur) => (cur === cellKey ? null : cur))
+        setRefused((prev) => ({ ...prev, [cellKey]: r.holder.name }))
+        readHolders(coords.collection)
+      })
     },
-    [clearError]
+    [clearError, client, readHolders]
   )
   const cancel = useCallback(() => setEditing(null), [])
-  const commit = useCallback(
+
+  const send = useCallback(
     (c: InlineCommit) => {
-      setEditing(c.next ?? null)
-      if (inlineValueUnchanged(c.kind, c.before, c.value)) return
       const undo = c.optimistic?.() ?? (() => {})
       setSaving((prev) => ({ ...prev, [c.cellKey]: true }))
-      clearError(c.cellKey)
       client
         .request<{ data: Record<string, unknown> | null }>(
           patch(`/items/${encodeURIComponent(c.collection)}/${encodeURIComponent(String(c.id))}`, {
@@ -104,11 +254,7 @@ export function useInlineEdit(): InlineEditController {
           setSaved((prev) => ({ ...prev, [c.cellKey]: true }))
           clearTimeout(savedTimers.current[c.cellKey])
           savedTimers.current[c.cellKey] = setTimeout(() => {
-            setSaved((prev) => {
-              const next = { ...prev }
-              delete next[c.cellKey]
-              return next
-            })
+            setSaved((prev) => withoutKey(prev, c.cellKey))
           }, 1500)
         })
         .catch((err: unknown) => {
@@ -119,24 +265,116 @@ export function useInlineEdit(): InlineEditController {
           }))
         })
         .finally(() => {
-          setSaving((prev) => {
-            const next = { ...prev }
-            delete next[c.cellKey]
-            return next
-          })
+          setSaving((prev) => withoutKey(prev, c.cellKey))
         })
     },
-    [client, clearError]
+    [client]
   )
+
+  const commit = useCallback(
+    (c: InlineCommit) => {
+      setEditing(c.next ?? null)
+      const base = opened.current.get(c.cellKey)
+      opened.current.delete(c.cellKey)
+      if (inlineValueUnchanged(c.kind, c.before, c.value)) return
+      clearError(c.cellKey)
+      if (!base) {
+        send(c)
+        return
+      }
+      // Overwrite check: the field as it is now, read as the viewer.
+      setSaving((prev) => ({ ...prev, [c.cellKey]: true }))
+      findConflict(client, c, base)
+        .catch(() => null)
+        .then((conflict) => {
+          if (!mounted.current) return
+          if (!conflict) {
+            send(c)
+            return
+          }
+          setSaving((prev) => withoutKey(prev, c.cellKey))
+          setConflicts((prev) => ({ ...prev, [c.cellKey]: conflict }))
+        })
+    },
+    [client, clearError, send]
+  )
+
+  const resolveConflict = useCallback(
+    (cellKey: string, keep: 'mine' | 'theirs') => {
+      const cf = conflicts[cellKey]
+      if (!cf) return
+      setConflicts((prev) => withoutKey(prev, cellKey))
+      if (keep === 'mine') send(cf.commit)
+      // Theirs: nothing to write — the list re-reads the row as it is now.
+      else cf.commit.onSaved?.(null)
+    },
+    [conflicts, send]
+  )
+
   return {
     editing,
     start,
     cancel,
     commit,
+    watchCell,
+    holderOf: (coords) => {
+      const h = holders.get(cellHolderKey(coords.collection, coords.id, coords.field))
+      return h && !h.mine ? h : null
+    },
+    refusedOf: (k) => refused[k] ?? null,
+    conflictOf: (k) => conflicts[k] ?? null,
+    resolveConflict,
     errorOf: (k) => errors[k] ?? null,
     savingOf: (k) => !!saving[k],
     savedOf: (k) => !!saved[k],
     clearError
+  }
+}
+
+function withoutKey<T>(prev: Record<string, T>, k: string): Record<string, T> {
+  if (!(k in prev)) return prev
+  const next = { ...prev }
+  delete next[k]
+  return next
+}
+
+/**
+ * Re-read the field as the viewer; a value someone else changed since the editor opened (and
+ * not to what is being saved) is a conflict, with who and when from the activity log when it
+ * names this field.
+ */
+async function findConflict(
+  client: ReturnType<typeof useNivaroClient>,
+  c: InlineCommit,
+  base: { value: unknown; at: string }
+): Promise<InlineConflict | null> {
+  const path = `/items/${encodeURIComponent(c.collection)}/${encodeURIComponent(String(c.id))}`
+  const res = await client.request<{ data: Record<string, unknown> | null }>(
+    get(path, { fields: `id,${c.field}` })
+  )
+  const row = res?.data
+  if (!row || !(c.field in row)) return null
+  const theirs = row[c.field]
+  if (!overwritesOthers(c.kind, base.value, theirs, c.value)) return null
+  const change = await client
+    .request<{
+      data: { by?: string | null; at?: string; fields?: Array<{ field: string }> } | null
+    }>(
+      get('/picker-exclusions/linked-change', {
+        collection: c.collection,
+        item_id: String(c.id),
+        since: base.at
+      })
+    )
+    .then((r) => r?.data ?? null)
+    .catch(() => null)
+  const named = !!change?.fields?.some((f) => f.field === c.field)
+  return {
+    theirs,
+    mine: c.value,
+    by: named ? (change?.by ?? null) : null,
+    at: named ? (change?.at ?? null) : null,
+    commit: c
   }
 }
 
@@ -407,6 +645,112 @@ function M2oEditor({
   )
 }
 
+/** A value as the conflict line words it ("empty" for blank). */
+function ConflictValue({
+  kind,
+  value,
+  choices,
+  target
+}: {
+  kind: InlineEditorKind
+  value: unknown
+  choices?: Array<{ value: string; label: string }>
+  target?: string | null
+}) {
+  if (value == null || value === '') return <span className='italic'>empty</span>
+  if (kind === 'm2o' && target) {
+    const id = value && typeof value === 'object' ? (value as { id?: unknown }).id : value
+    return <RelationLabel relatedCollection={target} id={id} />
+  }
+  let text: string
+  if (kind === 'boolean') text = value === true || value === 1 || value === 'true' ? 'Yes' : 'No'
+  else if (kind === 'choice')
+    text = choiceLabel(choices?.find((c) => c.value === String(value))?.label ?? String(value))
+  else if (kind === 'date') text = formatDate(String(value))
+  else if (kind === 'datetime') {
+    const d = new Date(String(value))
+    text = Number.isNaN(d.getTime())
+      ? String(value)
+      : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  } else text = String(value)
+  return <span>“{text}”</span>
+}
+
+function clockTime(iso: string | null): string | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? null
+    : d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
+
+/** The inline question when a save would overwrite someone else's change. */
+function ConflictBar({
+  conflict,
+  kind,
+  choices,
+  target,
+  onKeep
+}: {
+  conflict: InlineConflict
+  kind: InlineEditorKind
+  choices?: Array<{ value: string; label: string }>
+  target?: string | null
+  onKeep: (keep: 'mine' | 'theirs') => void
+}) {
+  const when = clockTime(conflict.at)
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: stops the row's open-on-click
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the two buttons inside take the keys
+    <span
+      data-inline-conflict=''
+      onClick={(e) => e.stopPropagation()}
+      className='flex min-w-[240px] max-w-[560px] flex-wrap items-center gap-x-3 gap-y-1 whitespace-normal rounded-md bg-amber-50 px-2 py-1 text-[11.5px] leading-4 text-amber-900 ring-1 ring-inset ring-amber-200 dark:bg-amber-400/10 dark:text-amber-100 dark:ring-amber-400/25'
+    >
+      <span className='flex min-w-0 flex-1 basis-[240px] items-start gap-1.5'>
+        <AlertTriangle
+          aria-hidden='true'
+          className='mt-0.5 h-3 w-3 shrink-0 text-amber-600 dark:text-amber-300'
+        />
+        <span className='min-w-0'>
+          {conflict.by ?? 'Someone'} changed this to{' '}
+          <span className='font-medium'>
+            <ConflictValue kind={kind} value={conflict.theirs} choices={choices} target={target} />
+          </span>
+          {when ? (
+            <>
+              {' '}
+              <span className='whitespace-nowrap'>at {when}</span>
+            </>
+          ) : (
+            ' while you were editing'
+          )}
+          . <span className='whitespace-nowrap'>Yours:</span>{' '}
+          <span className='font-medium' data-inline-conflict-mine=''>
+            <ConflictValue kind={kind} value={conflict.mine} choices={choices} target={target} />
+          </span>
+        </span>
+      </span>
+      <span className='ml-auto flex shrink-0 items-center gap-1'>
+        <button
+          type='button'
+          onClick={() => onKeep('mine')}
+          className='rounded px-1.5 py-0.5 font-medium text-amber-900 ring-1 ring-inset ring-amber-300 transition-colors hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-amber-50 dark:ring-amber-400/40 dark:hover:bg-amber-400/15'
+        >
+          Keep mine
+        </button>
+        <button
+          type='button'
+          onClick={() => onKeep('theirs')}
+          className='rounded px-1.5 py-0.5 font-medium text-amber-900 transition-colors hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-amber-50 dark:hover:bg-amber-400/15'
+        >
+          Take theirs
+        </button>
+      </span>
+    </span>
+  )
+}
+
 /**
  * One list cell that may be edited in place. Renders `children` (the cell's
  * normal display) until it opens, then the editor for its kind.
@@ -419,6 +763,9 @@ export function InlineEditCell({
   label,
   choices,
   target,
+  collection,
+  itemId,
+  field,
   onCommit,
   children
 }: {
@@ -433,6 +780,11 @@ export function InlineEditCell({
   choices?: Array<{ value: string; label: string }>
   /** M2O fields: the collection the picker reads. */
   target?: string | null
+  /** The record and field this cell edits: with all three, the cell takes a soft lock while
+   *  open, shows who else is editing it, and checks for others' changes before saving. */
+  collection?: string
+  itemId?: string | number | null
+  field?: string
   onCommit: (value: unknown, dir: 0 | 1 | -1) => void
   children: React.ReactNode
 }) {
@@ -440,6 +792,22 @@ export function InlineEditCell({
   const error = controller.errorOf(cellKey)
   const isSaving = controller.savingOf(cellKey)
   const isSaved = controller.savedOf(cellKey)
+  const coords =
+    collection && field && itemId != null && itemId !== ''
+      ? { collection, id: itemId, field }
+      : null
+  const coordsKey = coords ? `${coords.collection}|${String(coords.id)}|${coords.field}` : ''
+  const { watchCell } = controller
+  // biome-ignore lint/correctness/useExhaustiveDependencies: coordsKey stands for coords
+  useEffect(() => {
+    if (!coords) return
+    return watchCell(cellKey, coords)
+  }, [watchCell, cellKey, coordsKey])
+  const holder = coords && !open ? controller.holderOf(coords) : null
+  const refusedBy = controller.refusedOf(cellKey)
+  const conflict = controller.conflictOf(cellKey)
+  const startEditing = () => controller.start(cellKey, coords ? { coords, value } : undefined)
+
   if (open) {
     const cancel = controller.cancel
     if (kind === 'm2o' && target)
@@ -480,6 +848,42 @@ export function InlineEditCell({
       />
     )
   }
+  if (conflict) {
+    return (
+      <ConflictBar
+        conflict={conflict}
+        kind={kind}
+        choices={choices}
+        target={target}
+        onKeep={(keep) => controller.resolveConflict(cellKey, keep)}
+      />
+    )
+  }
+  if (holder) {
+    // Someone else is editing this cell: their colour and name, and it does not open.
+    const color = cursorColor(holder.name)
+    return (
+      <span
+        data-inline-held-by={holder.name}
+        data-tip={`${holder.name} is editing this`}
+        style={{ '--nvr-cursor': color } as React.CSSProperties}
+        className='relative -mx-1 flex min-h-[22px] min-w-[48px] cursor-default items-center gap-1.5 rounded px-1 ring-1 ring-inset ring-[var(--nvr-cursor)]'
+      >
+        <span className='min-w-0 flex-1 truncate'>{children}</span>
+        <span className='sr-only'>
+          {label}: {holder.name} is editing this
+        </span>
+        <span
+          aria-hidden='true'
+          className='inline-flex max-w-[180px] shrink-0 items-center gap-1 text-[10.5px] leading-4 text-slate-600 dark:text-slate-300'
+        >
+          <span className='h-1.5 w-1.5 shrink-0 rounded-full' style={{ backgroundColor: color }} />
+          <span className='min-w-0 truncate font-medium'>{holder.name}</span>{' '}
+          <span className='shrink-0'>is editing</span>
+        </span>
+      </span>
+    )
+  }
   return (
     // biome-ignore lint/a11y/useSemanticElements: wraps arbitrary cell content (links, chips)
     <span
@@ -490,14 +894,14 @@ export function InlineEditCell({
       aria-label={`${label}: edit`}
       onClick={(e) => {
         e.stopPropagation()
-        controller.start(cellKey)
+        startEditing()
       }}
       onDoubleClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === 'F2') {
           e.preventDefault()
           e.stopPropagation()
-          controller.start(cellKey)
+          startEditing()
         }
       }}
       className={cn(
@@ -513,6 +917,15 @@ export function InlineEditCell({
         <Check className='h-3 w-3 shrink-0 text-emerald-500 dark:text-emerald-400' />
       ) : (
         <Pencil className='invisible h-3 w-3 shrink-0 text-slate-400 group-hover/ie:visible group-focus-visible/ie:visible dark:text-slate-500' />
+      )}
+      {refusedBy && !error && (
+        <span
+          className='ml-1 max-w-[220px] shrink-0 truncate text-[10.5px] font-medium text-slate-500 dark:text-slate-400'
+          data-inline-refused=''
+          role='status'
+        >
+          {refusedBy} started editing this
+        </span>
       )}
       {error && (
         <span

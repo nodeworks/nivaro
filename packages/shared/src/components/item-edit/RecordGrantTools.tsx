@@ -12,6 +12,7 @@ import { Button } from '../ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
 import { Input } from '../ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { scheduledChangesKey } from './ScheduledChangeChip'
 
 function errorText(e: unknown, fallback: string): string {
   return userErrorMessage(e, fallback)
@@ -124,6 +125,7 @@ export function ScheduleChangeButton({
   layoutSlug?: string | null
 }) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [field, setField] = useState('')
@@ -156,6 +158,8 @@ export function ScheduleChangeButton({
       setField('')
       setValue('')
       setAt('')
+      // The header countdown (ScheduledChangeChip) shows it at once.
+      void qc.invalidateQueries({ queryKey: scheduledChangesKey(collection, itemId) })
       toast.success('Change scheduled')
     },
     onError: (e) => toast.error(errorText(e, 'Could not schedule the change'))

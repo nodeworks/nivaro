@@ -1,6 +1,7 @@
 import {
   ChangeImpactStrip,
   Combobox,
+  ConfigReachNote,
   ConfigReadBack,
   cleanQuickFilters,
   DataGuideCard,
@@ -54,7 +55,10 @@ import { HeavyListColumnsCard } from '@/components/heavy-list-columns-card'
 import { InlineEditSetting } from '@/components/inline-edit-setting'
 import { LabelSearchFieldsSetting } from '@/components/label-search-fields-setting'
 import { LineSplitCard } from '@/components/line-split-card'
+import { MergeRecordsSetting } from '@/components/merge-records-setting'
+import { NeverCopySetting } from '@/components/never-copy-setting'
 import { PagePresence } from '@/components/page-presence'
+import { PickerBadgesCard } from '@/components/picker-badges-card'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -2834,6 +2838,8 @@ function FieldMetaEditor({
           </Button>
         </div>
       </div>
+      {/* rt8 #25 — who a save of this field reaches right now (administrators). */}
+      <ConfigReachNote className='mt-2' collections={[tableName]} />
       {impactCheck && (
         <ChangeImpactStrip
           className='mt-2'
@@ -4370,9 +4376,11 @@ function SettingsTab({
       <ItemLockingSection tableName={tableName} />
       <AddendumsSection tableName={tableName} />
       <PickerFilterSection tableName={tableName} />
+      <PickerBadgesCard tableName={tableName} />
       <HeavyListColumnsCard collection={tableName} />
       <BrowserSettingsSection tableName={tableName} />
       <DuplicateCheckCard tableName={tableName} />
+      <MergeRecordsSetting tableName={tableName} />
       <EmptyStateSlugSection tableName={tableName} />
       <RenameCollectionSection tableName={tableName} />
       <AuditDepthSection tableName={tableName} />
@@ -4702,6 +4710,8 @@ type SummaryModeRulesDraft = {
   change_proposals?: boolean
   /** Lines lock one at a time (Item locking section) — carried through, not edited here. */
   line_locks?: boolean
+  /** "Changed after approval" badge (api approval-changes.ts): false = off, absent = on. */
+  changed_after_approval?: false | { states: string[] }
 }
 const NO_STATE_KEY = '__none__'
 
@@ -4777,7 +4787,12 @@ function FormUxSection({
         : [],
       ...(raw?.edit_lock ? { edit_lock: raw.edit_lock } : {}),
       ...(raw?.change_proposals === true ? { change_proposals: true } : {}),
-      ...(raw?.line_locks === true ? { line_locks: true } : {})
+      ...(raw?.line_locks === true ? { line_locks: true } : {}),
+      ...(raw?.changed_after_approval === false
+        ? { changed_after_approval: false as const }
+        : raw?.changed_after_approval && typeof raw.changed_after_approval === 'object'
+          ? { changed_after_approval: raw.changed_after_approval }
+          : {})
     }
   }, [meta])
   const save = (next: SummaryModeRulesDraft) => saveMut.mutate({ summary_mode_rules: next })
@@ -4843,6 +4858,14 @@ function FormUxSection({
   const setProposals = (on: boolean) => {
     const { change_proposals: _drop, ...rest } = cfg
     save(on ? { ...rest, change_proposals: true } : rest)
+  }
+  // Round 7, item 21 — on by default wherever the post-approval lock exists.
+  const approvalBadgeOn =
+    cfg.changed_after_approval !== false &&
+    (adminOnlyLock || (cfg.changed_after_approval?.states?.length ?? 0) > 0)
+  const setApprovalBadge = (on: boolean) => {
+    const { changed_after_approval: _drop, ...rest } = cfg
+    save(on ? rest : { ...rest, changed_after_approval: false })
   }
 
   const ModeSeg = ({
@@ -5154,6 +5177,36 @@ function FormUxSection({
             disabled={busy}
             aria-label='Propose a change on locked records'
             data-change-proposals-switch
+          />
+        </div>
+        {/* "Changed after approval" badge (round 7, item 21) */}
+        <div
+          className='flex items-start justify-between gap-4 px-4 py-3'
+          data-approval-badge-setting
+        >
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>
+              Show "Changed after approval"
+            </p>
+            <p className='mt-0.5 text-[12px] text-slate-500'>
+              When a record that reached an approved step changes afterwards (an administrator
+              editing through the lock, a process writing back, an accepted proposal), its header
+              shows a badge with the approved value next to the value now, and the people who
+              approved it get one quiet notice per burst of changes. Lists can filter by it. On by
+              default where a post-approval lock exists.
+            </p>
+            {!adminOnlyLock && !cfg.changed_after_approval && (
+              <p className='mt-1.5 text-[11.5px] text-amber-700'>
+                This collection has no post-approval lock, so there is no approved step to watch.
+              </p>
+            )}
+          </div>
+          <Switch
+            checked={approvalBadgeOn}
+            onCheckedChange={setApprovalBadge}
+            disabled={busy || (!adminOnlyLock && !cfg.changed_after_approval)}
+            aria-label='Show Changed after approval'
+            data-approval-badge-switch
           />
         </div>
         {/* Changes tray pointer */}
@@ -7472,10 +7525,15 @@ interface BrowserConfig {
   /** Record workspace tabs in the portal: open records stack as tabs above
    *  the form, unsaved edits survive switching. Opt-in. */
   record_tabs?: boolean
+  /** rt6 #19 — a catalog / price / stock import tells the owners of open records whose
+   *  catalog lines it changed (api services/catalog-impact.ts). Off by default. */
+  catalog_notice?: boolean
   /** Registry bulk actions (keys) the bar shows; null/absent = all. */
   bulk_actions?: string[] | null
   /** #2490 — live record events: on (default), batched id lists, or off (lists poll). */
   live_events?: 'on' | 'batched' | 'off'
+  /** Round 9 #14 — a yes/no field that marks a record urgent (api notification-urgent.ts). */
+  urgent_field?: string
   /** List search (`?search=`) only over these columns; absent = every string/text field. */
   search_fields?: string[]
   /** Search item 23 — extra text fields a labels-only global search also matches. */
@@ -7485,6 +7543,8 @@ interface BrowserConfig {
   /** Duplicate warnings on create (DuplicateCheckCard; api services/duplicate-rules.ts);
    *  absent = on with the default criteria. Edited by its own card, kept as is here. */
   duplicate_check?: DuplicateCheckValue
+  /** Fields a copy (Clone, Duplicate, Save as template) never carries (api services/copy-rules.ts). */
+  never_copy?: string[]
   /** Keys edited elsewhere (export_filename, fulfilment, …) ride along untouched. */
   [key: string]: unknown
 }
@@ -7725,6 +7785,47 @@ function LiveEventsSetting({
   )
 }
 
+/**
+ * Round 9 #14 — which yes/no field marks a record of this collection urgent. A person who asked
+ * for it (Profile → "Play a sound for urgent items") hears one short chime when such a record
+ * lands on them; nothing else changes. Off (no field) by default.
+ */
+function UrgentFieldSetting({
+  fields,
+  value,
+  onChange
+}: {
+  fields: Array<{ field: string; type?: string | null; label?: string | null }>
+  value: string
+  onChange: (v: string) => void
+}) {
+  const flags = fields.filter((f) => String(f.type) === 'boolean')
+  return (
+    <div className='flex items-start justify-between gap-4' data-urgent-field={value || 'none'}>
+      <div className='min-w-0'>
+        <p className='text-[12.5px] font-medium text-slate-700 dark:text-foreground'>Urgent flag</p>
+        <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          {flags.length === 0
+            ? 'Needs a yes/no field. People who turned on the urgent sound hear a chime when a record with it on lands on them'
+            : 'A record with this yes/no field on counts as urgent: people who turned on the urgent sound hear a chime when it lands on them'}
+        </p>
+      </div>
+      <div className='w-44 shrink-0'>
+        <SimpleSelect
+          value={value}
+          onChange={onChange}
+          options={[
+            { value: '', label: 'None' },
+            ...flags.map((f) => ({ value: f.field, label: f.label || titleCase(f.field) }))
+          ]}
+          disabled={flags.length === 0}
+          ariaLabel='Urgent flag'
+        />
+      </div>
+    </div>
+  )
+}
+
 function BrowserSettingsSection({ tableName }: { tableName: string }) {
   const qc = useQueryClient()
   const { data: col } = useQuery({
@@ -7775,8 +7876,10 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
       'quick_filters',
       'default_sort',
       'record_tabs',
+      'catalog_notice',
       'bulk_actions',
       'live_events',
+      'urgent_field',
       'search_fields',
       'label_search_fields',
       'inline_edit'
@@ -7796,9 +7899,11 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (next.quick_filters?.length) clean.quick_filters = next.quick_filters
     if (next.default_sort?.trim()) clean.default_sort = next.default_sort.trim()
     if (next.record_tabs === true) clean.record_tabs = true
+    if (next.catalog_notice === true) clean.catalog_notice = true
     if (Array.isArray(next.bulk_actions)) clean.bulk_actions = next.bulk_actions
     if (next.live_events === 'batched' || next.live_events === 'off')
       clean.live_events = next.live_events
+    if (next.urgent_field?.trim()) clean.urgent_field = next.urgent_field.trim()
     if (next.search_fields?.length) clean.search_fields = next.search_fields
     if (next.label_search_fields?.length) clean.label_search_fields = next.label_search_fields
     if (next.inline_edit) {
@@ -7880,6 +7985,21 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
             onCheckedChange={(v) => void patch({ record_tabs: v })}
           />
         </div>
+        <div className='flex items-center justify-between gap-4' data-catalog-notice-setting>
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>
+              Tell owners about catalog updates
+            </p>
+            <p className='text-[11.5px] text-slate-500'>
+              When a catalog, price or stock import changes lines on open records, each record owner
+              gets one notice listing them. Only for collections with a catalog lines field.
+            </p>
+          </div>
+          <Switch
+            checked={cfg.catalog_notice === true}
+            onCheckedChange={(v) => void patch({ catalog_notice: v })}
+          />
+        </div>
         <InlineEditSetting
           value={normalizeInlineEdit(cfg.inline_edit)}
           candidates={inlineEditCandidates(col?.fields ?? [], tableName, col?.relations ?? [])}
@@ -7888,6 +8008,11 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
         <LiveEventsSetting
           value={cfg.live_events ?? 'on'}
           onChange={(v) => void patch({ live_events: v })}
+        />
+        <UrgentFieldSetting
+          fields={col?.fields ?? []}
+          value={cfg.urgent_field ?? ''}
+          onChange={(v) => void patch({ urgent_field: v || undefined })}
         />
         <SearchFieldsSetting
           fields={col?.fields ?? []}
@@ -7899,6 +8024,16 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           displayTemplate={col?.display_template}
           value={cfg.label_search_fields}
           onChange={(v) => void patch({ label_search_fields: v })}
+        />
+        <NeverCopySetting
+          collection={tableName}
+          fields={col?.fields ?? []}
+          value={cfg.never_copy}
+          onChange={(v) =>
+            void patch({ never_copy: v }).then(() =>
+              qc.invalidateQueries({ queryKey: ['copy-rules', tableName] })
+            )
+          }
         />
         <div className='flex items-center justify-between gap-4'>
           <div>

@@ -21,7 +21,10 @@ const state = {
   created: [] as Array<{ collection: string; data: Record<string, unknown>; opts: unknown }>,
   junction: [] as Array<Record<string, unknown>>,
   activity: [] as Array<Record<string, unknown>>,
-  allowedCreate: ['*'] as string[] | null
+  allowedCreate: ['*'] as string[] | null,
+  linkCalls: [] as Array<{ collection: string; id: unknown; opts: unknown }>,
+  linkThrows: null as Error | null,
+  extraLinks: {} as Record<string, unknown>
 }
 
 const RELS = [
@@ -133,6 +136,17 @@ vi.mock('./permissions.js', () => ({
   getAllowedFields: async (_u: unknown, action: string) =>
     action === 'create' ? state.allowedCreate : ['*']
 }))
+// Link sets come from the one copy rule (copy-rules.ts, read as the caller, fail closed).
+vi.mock('./copy-rules.js', () => ({
+  linkSetsToCopy: async (_u: unknown, collection: string, id: unknown, opts: unknown) => {
+    state.linkCalls.push({ collection, id, opts })
+    if (state.linkThrows) throw state.linkThrows
+    return {
+      links: { zones: state.junction.map((r) => r.zones_id), ...state.extraLinks },
+      notCopied: []
+    }
+  }
+}))
 vi.mock('./edit-lock.js', () => {
   class EditLockedError extends Error {
     statusCode = 403
@@ -234,6 +248,9 @@ beforeEach(() => {
   state.junction = [{ zones_id: 3 }, { zones_id: 4 }]
   state.activity = []
   state.allowedCreate = ['*']
+  state.linkCalls = []
+  state.linkThrows = null
+  state.extraLinks = {}
 })
 
 describe('the per-collection switch', () => {
@@ -580,5 +597,34 @@ describe('only what the caller could write on a create', () => {
       src.indexOf("'Move undone: a later row was refused'") + 300
     )
     expect(undo).toMatch(/\{ callerPayload \}/)
+  })
+})
+
+describe('link sets (security review 2026-11-15)', () => {
+  it('come from copy-rules linkSetsToCopy as the caller, minus the lists the split skips', async () => {
+    state.browserConfig = JSON.stringify({
+      line_split: { ...ON.line_split, copy_links: true, link_field: 'split_from' }
+    })
+    state.extraLinks = { split_from: ['nope'] }
+    await splitRecord(req(), 'requests', 'R1', {
+      relation: 'request_lines.request',
+      line_ids: ['L1']
+    })
+    expect(state.linkCalls).toEqual([
+      { collection: 'requests', id: 'R1', opts: { isAdmin: false } }
+    ])
+    expect(state.created[0].data.zones).toEqual([3, 4])
+    // split_from is the split's own link field, never overwritten by a copied list
+    expect(state.created[0].data.split_from).toBe('R1')
+  })
+
+  it('copies no links when the copy rule fails (fail closed)', async () => {
+    state.linkThrows = new Error('boom')
+    await splitRecord(req(), 'requests', 'R1', {
+      relation: 'request_lines.request',
+      line_ids: ['L1']
+    })
+    expect(state.created).toHaveLength(1)
+    expect(state.created[0].data.zones).toBeUndefined()
   })
 })

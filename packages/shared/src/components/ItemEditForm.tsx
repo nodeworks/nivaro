@@ -13,6 +13,7 @@ import {
   Copy,
   Eye,
   FileDown,
+  LayoutTemplate,
   LifeBuoy,
   Loader2,
   Lock,
@@ -57,8 +58,12 @@ import {
 } from '../context'
 import { useSlowReason } from '../hooks/useSlowReason'
 import { formatApiPayload } from '../lib/api-payload'
+import { openSectionOf } from '../lib/co-edit'
+import { coeditCovers } from '../lib/coedit-registry'
 import { del, get, getActiveLayout, patch, post, put } from '../lib/commands'
 import type { FieldSource } from '../lib/config-sentences'
+import { childCopySkip, fetchCopySkip, headerCopySkip } from '../lib/copy-rules'
+import { useDerivedCausesLive } from '../lib/derived-causes'
 import {
   deleteDraft,
   draftCreatedAs,
@@ -116,12 +121,15 @@ import {
   linkedChangeSentence,
   useLinkedRecordWatch
 } from '../lib/linked-changes'
+import { useLiveEvent, useLiveRecord } from '../lib/live'
+import { linkDepsOfPaths, useLiveLinkLabels } from '../lib/live-link-labels'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useShownRecords } from '../lib/missed-updates'
 import { requestMoveState } from '../lib/move-state'
 import { lockedAfterMoveText, movedNoticeId, namedMovedNoticeRecent } from '../lib/moved-notice'
 import { ownersHeaderTile } from '../lib/owners-header-tile'
 import { queryKeys } from '../lib/query-keys'
+import { useOptionalRealtime } from '../lib/realtime'
 import { useRecordReader } from '../lib/record-loader'
 import {
   bindRecordOutbox,
@@ -131,6 +139,7 @@ import {
   enqueueRecordSave,
   isOfflineSaveError,
   midairCollisionOf,
+  nudgeOutboxReview,
   onRecordOutboxEvent,
   onRecordOutboxRetry,
   retryRecordOutbox,
@@ -140,10 +149,20 @@ import { isRecordPopout, openRecordPopout } from '../lib/record-popout'
 import { announceRecordTabs } from '../lib/record-tabs'
 import { invalidateRecordTasks } from '../lib/record-tasks'
 import { reimportAllowed } from '../lib/reimport-visibility'
+import { useRollupRecalc } from '../lib/rollup-recalc'
 import { reportCodeError, userErrorMessage } from '../lib/safe-error'
+import { currentRecordTab } from '../lib/send-view'
+import {
+  newSaveId,
+  SAVE_PROGRESS_MIN_ROWS,
+  type SaveProgressEvent,
+  saveProgressText,
+  withSaveId
+} from '../lib/save-progress'
 import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
 import { stagedRowLabel } from '../lib/staged-row-labels'
 import {
+  approvalBadgeStates,
   holdSummaryReresolve,
   normalizeSummaryModeRules,
   resolveSummaryMode,
@@ -199,6 +218,7 @@ import {
   AddendumViewContext
 } from './item-edit/AddendumFieldContext'
 import { useAutoIdPreview } from './item-edit/AutoIdPreviewField'
+import { ChangedAfterApprovalBadge } from './item-edit/ChangedAfterApprovalBadge'
 import {
   type ChangeReasonChallenge,
   ChangeReasonDialog,
@@ -212,10 +232,21 @@ import {
   settleTouchedAfterSave,
   useCascadeClearNotices
 } from './item-edit/cascade-clear-notice'
+import {
+  CoeditFormContext,
+  type CoeditFormInfo,
+  isCoeditInterface,
+  sharedTextUnderLock
+} from './item-edit/coedit/context'
 import { columnLengthError } from './item-edit/column-length'
 import { configUpdateReaction } from './item-edit/config-update'
 import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
-import { useDuplicateCheck } from './item-edit/DuplicateNotice'
+import {
+  type DuplicateHint,
+  type DuplicateMergeApi,
+  DuplicateMergeContext,
+  useDuplicateCheck
+} from './item-edit/DuplicateNotice'
 import {
   type CopiedLineChange,
   copiedLineLabel,
@@ -253,6 +284,7 @@ import { HeaderFreshness } from './item-edit/HeaderFreshness'
 import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
 import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import { HeaderMenu, HeaderToolGroup, HeaderTools } from './item-edit/HeaderTools'
+import { type HeldEdit, HeldEditsChip } from './item-edit/HeldEditsChip'
 import { HighlightedCode } from './item-edit/HighlightedCode'
 import {
   clientMidairError,
@@ -278,6 +310,17 @@ import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
 import { ListNeighborNav } from './item-edit/ListNeighborNav'
 import { LiveTraceSheet } from './item-edit/LiveTraceSheet'
+import { WatchPinButton } from './watch-list/WatchPinButton'
+import {
+  fieldStatus,
+  formUpdatedText,
+  type LayoutSwitch,
+  layoutMayChange,
+  linkChangeText,
+  splitStagedLinks,
+  splitUnsaved,
+  useSmoothLayout
+} from './item-edit/layout-switch'
 import { deferredSections } from './item-edit/lazy-sections'
 import { type LineRevision, mergeEditOf, restoredLineConflicts } from './item-edit/line-merge'
 import {
@@ -337,12 +380,16 @@ import { endQuickCreateFollows } from './item-edit/QuickCreateButton'
 import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
+import { RecalcValue } from './item-edit/RecalcValue'
+import { RecordChatMentionsChip } from './item-edit/RecordChatMentionsChip'
 import { PickerExclusionToggle, ScheduleChangeButton } from './item-edit/RecordGrantTools'
+import { ScheduledChangeChip } from './item-edit/ScheduledChangeChip'
 import {
   RecordHeaderActionButtons,
   RecordHeaderActionDialog,
   useRecordHeaderActions
 } from './item-edit/RecordHeaderActions'
+import { RecordHelpChip } from './item-edit/RecordHelpChip'
 import {
   invalidateRecordInsights,
   invalidateRecordNotes,
@@ -379,20 +426,26 @@ import {
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
 import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
 import { choiceLabelsFrom } from './layout-editor/overview/describe-conditions'
+import { AlertBanners } from './panels/AlertBanners'
 import { LegalHoldBanner } from './panels/LegalHoldBanner'
 import { RecordIntegrityBanner, useRecordIntegrity } from './panels/RecordIntegrityBanner'
+import { ResubmissionStrip } from './panels/ResubmissionDiff'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordGraphSheet } from './RecordGraph'
 import { type ReadViewLayout, RecordReadView } from './RecordReadView'
 import { ScreenRefreshButton } from './ScreenRefreshButton'
+import { SendViewButton } from './send-view/SendViewButton'
 import { SuggestFormChange } from './support/SuggestFormChange'
 import { SupportRequestDialog } from './support/SupportRequestDialog'
+import { MergeRecordsDialog } from './merge/MergeRecordsDialog'
+import { MergeRecordMenuItems, MergeWithFlow, useMergeAllowed } from './merge/MergeWithFlow'
 
 let formulaCtxHydrated = false
 
 import { EntryStrip } from './item-edit/entry/EntryStrip'
 import { useEntryKeyboard } from './item-edit/entry/useEntryKeyboard'
 import { useEntryMode } from './item-edit/entry/useEntryMode'
+import { FieldPointerHost } from './item-edit/FieldPointer'
 import { type FindableField, FindInRecordButton } from './item-edit/FindInRecord'
 import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { StepsBar } from './item-edit/StepsBar'
@@ -546,8 +599,8 @@ function GridContainer({ children }: { children: (containerWidth: number) => Rea
 /** The "can't save yet" toast — one at a time however often Save is pressed. */
 const VALIDATION_TOAST_ID = 'nvr-form-validation'
 
-type SaveStepStatus = 'pending' | 'running' | 'done' | 'error'
-interface SaveStepItem {
+export type SaveStepStatus = 'pending' | 'running' | 'done' | 'error'
+export interface SaveStepItem {
   id: string
   label: string
   status: SaveStepStatus
@@ -572,7 +625,8 @@ function SaveStepIcon({ status }: { status: SaveStepStatus }) {
   )
 }
 
-function SaveProgressDialog({
+/** Exported for the design harness and tests; the form is its only caller. */
+export function SaveProgressDialog({
   open,
   steps,
   onClose,
@@ -725,7 +779,7 @@ function SaveProgressDialog({
                         </button>
                       )}
                       {step.status === 'running' && rowPct !== null && (
-                        <div className='mt-1.5 h-1 rounded-full bg-slate-200 overflow-hidden'>
+                        <div className='mt-1.5 h-1 rounded-full bg-slate-200 dark:bg-muted overflow-hidden'>
                           <div
                             className='h-full rounded-full bg-nvr-cyan transition-all duration-200'
                             style={{ width: `${rowPct}%` }}
@@ -1287,11 +1341,14 @@ const DUPLICATE_CHILD_SKIP = new Set([
 export function duplicateChildRow(
   row: Record<string, unknown>,
   parentField: string,
-  childConfig: Array<{ field: string; readonly?: boolean | null; options?: unknown }> | null
+  childConfig: Array<{ field: string; readonly?: boolean | null; options?: unknown }> | null,
+  /** The child collection's copy rule (lib/copy-rules.ts childCopySkip). */
+  extraSkip?: ReadonlySet<string>
 ): Record<string, unknown> {
   const blocked = new Set(
     (childConfig ?? []).filter((f) => f.readonly || isNoDuplicate(f)).map((f) => f.field)
   )
+  for (const f of extraSkip ?? []) blocked.add(f)
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(row)) {
     if (DUPLICATE_CHILD_SKIP.has(k) || k === parentField || blocked.has(k)) continue
@@ -1930,8 +1987,12 @@ function FieldContexts({
   fieldComments,
   partnerNeeds,
   lineLocks = false,
+  coedit = null,
+  duplicateMerge = null,
   children
 }: {
+  /** The duplicate notice's "Merge…" (new records where merging is allowed). */
+  duplicateMerge?: DuplicateMergeApi | null
   affordances: FieldAffordances | null
   personalDefaults: PersonalDefaultsApi
   sources?: Record<string, FieldSource> | null
@@ -1939,6 +2000,8 @@ function FieldContexts({
   partnerNeeds?: PartnerNeedsCtx | null
   /** The record's lines lock one at a time (realtime item 7) — line grids read it. */
   lineLocks?: boolean
+  /** The record long-text fields co-edit on (realtime round 3 item 8); null = none. */
+  coedit?: CoeditFormInfo | null
   children: ReactNode
 }) {
   return (
@@ -1947,7 +2010,13 @@ function FieldContexts({
         <FieldSourcesContext.Provider value={sources ?? null}>
           <FieldCommentsContext.Provider value={fieldComments}>
             <PartnerNeedsContext.Provider value={partnerNeeds ?? null}>
-              <LineLockContext.Provider value={lineLocks}>{children}</LineLockContext.Provider>
+              <LineLockContext.Provider value={lineLocks}>
+                <CoeditFormContext.Provider value={coedit}>
+                  <DuplicateMergeContext.Provider value={duplicateMerge}>
+                    {children}
+                  </DuplicateMergeContext.Provider>
+                </CoeditFormContext.Provider>
+              </LineLockContext.Provider>
             </PartnerNeedsContext.Provider>
           </FieldCommentsContext.Provider>
         </FieldSourcesContext.Provider>
@@ -2050,15 +2119,16 @@ function ItemEditFormView({
   // A small screen gets a form's phone version (#2715) — read once per open,
   // so turning the device never swaps the form under someone's edits.
   const [viewport] = useState(currentViewport)
+  // Desktop keeps the key the host's own /active read shares (admin ItemEdit).
+  const activeLayoutKey = [
+    'active-layout',
+    collection,
+    layoutSlug ?? null,
+    itemId,
+    ...(viewport ? [viewport] : [])
+  ]
   const { data: fetchedLayoutData } = useQuery<ActiveLayoutData | null>({
-    // Desktop keeps the key the host's own /active read shares (admin ItemEdit).
-    queryKey: [
-      'active-layout',
-      collection,
-      layoutSlug ?? null,
-      itemId,
-      ...(viewport ? [viewport] : [])
-    ],
+    queryKey: activeLayoutKey,
     queryFn: () =>
       client
         .request<{ data: ActiveLayoutData | null }>(
@@ -2073,7 +2143,26 @@ function ItemEditFormView({
     staleTime: 60_000,
     enabled: !designOn
   })
-  const activeLayoutData = designOn ? design.layout : fetchedLayoutData
+  // rt8 #18: a move or field change that makes another form apply switches the page in place
+  // (item-edit/layout-switch.ts) — the new field list is read first, the view keeps its field
+  // and focus, unsaved values the new form cannot take are held back (onLayoutSwitchRef).
+  const onLayoutSwitchRef = useRef<(sw: LayoutSwitch, fields: CMSField[] | null) => void>(() => {})
+  const { shown: smoothLayoutData } = useSmoothLayout(fetchedLayoutData, {
+    enabled: !designOn && !isNew && !layoutSlug,
+    prepare: (id) =>
+      qc.fetchQuery({
+        queryKey: ['field-config', collection, id],
+        queryFn: () =>
+          client
+            .request<{ data: CMSField[] }>(
+              get(`/field-config/${collection}`, { layout_id: String(id) })
+            )
+            .then((r) => r.data ?? []),
+        staleTime: 60_000
+      }),
+    onSwitch: (sw, fields) => onLayoutSwitchRef.current(sw, fields)
+  })
+  const activeLayoutData = designOn ? design.layout : smoothLayoutData
 
   const layoutId = activeLayoutData?.layout?.id ?? null
 
@@ -2424,8 +2513,21 @@ function ItemEditFormView({
         .catch(() => null),
     enabled: !isNew && !recordGone && !designOn && headingPaths.length > 0,
     staleTime: 30_000,
-    retry: false
+    retry: false,
+    // rt9 #8: the linked records the heading names — a rename there re-reads this.
+    meta: {
+      linkLabels: linkDepsOfPaths(
+        collection,
+        headingPaths,
+        itemData as Record<string, unknown> | undefined,
+        relations
+      )
+    }
   })
+  // rt9 #8: relation chips, link cells and this heading follow renames of linked records.
+  useLiveLinkLabels(!designOn)
+  // rt9 #10: notes on why derived values moved, kept live for this record's fields.
+  useDerivedCausesLive(collection, isNew || designOn ? null : String(itemId))
   const headingRow = withLinkedFields(
     itemData as Record<string, unknown> | undefined,
     headingLinked
@@ -2690,7 +2792,14 @@ function ItemEditFormView({
   }, [client, authUserId, qc])
   // Another record on this mount (or unmount): hand the entry back to the replayers.
   // biome-ignore lint/correctness/useExhaustiveDependencies: release on identity only
-  useEffect(() => releaseOutboxClaim, [collection, itemId])
+  useEffect(
+    () => () => {
+      releaseOutboxClaim()
+      // Leaving this record while an offline clash waits opens its review card (round 8 item 3).
+      nudgeOutboxReview()
+    },
+    [collection, itemId]
+  )
   const [isDirty, setIsDirty] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   // Remote-change ghosts (#2): field → what it was before someone else's
@@ -2949,6 +3058,16 @@ function ItemEditFormView({
   }
   const initialDataRef = useRef<Record<string, unknown>>({})
   const touchedFields = useRef<Set<string>>(new Set())
+  // Co-editing long text (realtime round 3 item 8): the record its rich-text fields write
+  // together on, and each field's saved value (a watcher's clean form is never touched).
+  const realtimeHost = useOptionalRealtime()
+  const coeditForm = useMemo<CoeditFormInfo | null>(
+    () =>
+      isNew || designOn
+        ? null
+        : { collection, item: String(itemId), saved: (f) => initialDataRef.current[f] },
+    [collection, itemId, isNew, designOn]
+  )
 
   const [copiedHeaderField, setCopiedHeaderField] = useState<string | null>(null)
 
@@ -3984,6 +4103,14 @@ function ItemEditFormView({
       // "2 changes" and resend the old values against an old revision.
       const ownEdits = ownEditFields(changed, userTouchedRef.current, draftRef.current, prev)
       const isOwnEdit = (k: string) => ownEdits.has(k)
+      // A save from the writing session this person is in (realtime round 3 item 8): their
+      // draft already holds that text — never a conflict with itself, never a "changed" note.
+      // Decided here, so Save's mid-air check does not ask about it either.
+      const coeditedNow = new Set(
+        changed.filter((k) => coeditCovers(collection, String(itemId), k, record[k]))
+      )
+      for (const k of coeditedNow) if (isOwnEdit(k)) decideRemoteConflict(k, record[k])
+      const coedited = (k: string) => coeditedNow.has(k)
       // Notes only for a refetch that follows someone else's live write, and
       // only for the fields it named (live-record-marks.ts) — any other refetch
       // (Edit taking the lock, focus, Summary → Edit after a reload) is not a
@@ -4005,8 +4132,9 @@ function ItemEditFormView({
             // the remote value waits behind "Take theirs / Keep mine" (#6).
             // Conflicts always show (they protect the person's edit, socket
             // or not); plain notes only for a live write that named the field.
-            const conflict = isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k])
-            if (!conflict && !noted.includes(k)) continue
+            const conflict =
+              isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k]) && !coedited(k)
+            if (!conflict && (!noted.includes(k) || coedited(k))) continue
             next[k] = conflict
               ? { was: prev[k], by, at, theirs: record[k], conflict: true }
               : { was: prev[k], by, at }
@@ -4014,7 +4142,9 @@ function ItemEditFormView({
           return next
         })
         const logged = changed.filter(
-          (k) => noted.includes(k) || (isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k]))
+          (k) =>
+            !coedited(k) &&
+            (noted.includes(k) || (isOwnEdit(k) && !valuesEqual(draftRef.current[k], record[k])))
         )
         if (logged.length > 0)
           setRemoteLog((cur) =>
@@ -5551,6 +5681,8 @@ function ItemEditFormView({
     evaluateFieldRulesForChange
   ])
 
+  // The shared-text fields open under someone else's record lock (set below, with the lock).
+  const sharedTextOpenRef = useRef<ReadonlySet<string>>(new Set())
   // After a manual lock release the next real edit re-acquires the lock.
   // Ref because useItemLock is declared below this callback.
   const relockOnEditRef = useRef<null | (() => void)>(null)
@@ -5565,7 +5697,9 @@ function ItemEditFormView({
     (field: string, value: unknown) => {
       // Design mode: inputs are inert.
       if (designOn) return
-      if (readOnlyRef.current && !undoingRef.current) return
+      // Shared text stays writable under someone else's record lock (realtime round 3 item 8).
+      if (readOnlyRef.current && !undoingRef.current && !sharedTextOpenRef.current.has(field))
+        return
       // No-op guard: editors can emit a change with an IDENTICAL value (rich
       // text normalizing on mount is the classic) — that must not dirty the
       // form, or a freshly loaded record claims unsaved changes with nothing
@@ -6056,6 +6190,11 @@ function ItemEditFormView({
     () => normalizeSummaryModeRules(colMeta?.summary_mode_rules).change_proposals === true,
     [colMeta?.summary_mode_rules]
   )
+  // Round 7, item 21 — "Changed after approval" badge (on by default with the post-approval lock).
+  const approvalBadgeOn = useMemo(
+    () => !!approvalBadgeStates(normalizeSummaryModeRules(colMeta?.summary_mode_rules)),
+    [colMeta?.summary_mode_rules]
+  )
   // The lock lookups below read the same /pipelines/instance answer the
   // pipeline panel shows. The panel mounts a moment later and read it again on
   // every cold record page; the first answer now seeds its cache (only while
@@ -6144,9 +6283,35 @@ function ItemEditFormView({
   // work never takes (or keeps) the record lock.
   const lineLocksOn =
     !isNew && !designOn && !!normalizeSummaryModeRules(colMeta?.summary_mode_rules).line_locks
-  const recordLockDirty = lineLocksOn
-    ? unsavedSummary.fields.length + unsavedSummary.links + unsavedSummary.unlinks > 0
-    : hasUnsaved || lineDrafts.size > 0
+  // Shared text (realtime round 3 item 8, Rob 2026-11-14): rich-text fields people write
+  // together stay open on a record someone else holds the lock on, and changing only them
+  // neither takes the lock nor is refused by it. Needs the live connection.
+  const sharedTextFields = useMemo(
+    () =>
+      new Set(
+        realtimeHost && !isNew && !designOn
+          ? (fieldConfig ?? []).filter((f) => isCoeditInterface(f)).map((f) => f.field)
+          : []
+      ),
+    [fieldConfig, realtimeHost, isNew, designOn]
+  )
+  const sharedTextBase = {
+    sharedFields: sharedTextFields,
+    unsavedFields: unsavedSummary.fields,
+    otherChanges:
+      unsavedSummary.rows + unsavedSummary.links + unsavedSummary.unlinks + lineDrafts.size,
+    recordGone: !!recordGone
+  }
+  const onlySharedTextUnsaved = sharedTextUnderLock({
+    ...sharedTextBase,
+    heldByOther: false,
+    stepLocked: false
+  }).onlySharedUnsaved
+  const recordLockDirty = onlySharedTextUnsaved
+    ? false
+    : lineLocksOn
+      ? unsavedSummary.fields.length + unsavedSummary.links + unsavedSummary.unlinks > 0
+      : hasUnsaved || lineDrafts.size > 0
   const {
     lockHolder,
     acquired: lockAcquired,
@@ -6190,11 +6355,24 @@ function ItemEditFormView({
       ),
     [fieldConfig]
   )
-  /** The form-wide read-only, for one field (line grids stay open under line locks). */
+  // Someone else holds the RECORD lock (not a step's own edit lock): shared text stays open.
+  const sharedTextView = sharedTextUnderLock({
+    ...sharedTextBase,
+    heldByOther: lockReadOnly,
+    stepLocked: !!editLockMessage && !editLockPartial
+  })
+  const textOpenUnderLock = sharedTextView.open
+  /** The form-wide read-only, for one field (line grids stay open under line locks, shared
+   *  text under a held record lock). */
   const formLocks = (field: string) =>
-    isReadOnly && !(linesOpenUnderLock && lineGridFields.has(field))
-  /** Save stays possible when only lines (which lock on their own) can change. */
-  const saveBlockedByLock = isReadOnly && !linesOpenUnderLock
+    isReadOnly &&
+    !(linesOpenUnderLock && lineGridFields.has(field)) &&
+    !(textOpenUnderLock && sharedTextFields.has(field))
+  /** A save of shared text alone goes through a held lock (the server lets it, coedit-fields). */
+  const sharedTextSaveOk = sharedTextView.saveOk
+  sharedTextOpenRef.current = textOpenUnderLock ? sharedTextFields : new Set()
+  /** Save stays possible when only lines (which lock on their own) or shared text can change. */
+  const saveBlockedByLock = isReadOnly && !linesOpenUnderLock && !sharedTextSaveOk
   // The step moved (this form's own transition, a live state change, another
   // tab): who may edit now is the server's call — re-read the edit-lock
   // verdict, so a record that just went into approval turns read-only (and
@@ -6219,6 +6397,142 @@ function ItemEditFormView({
       }),
     [qc, collection, itemId]
   )
+  // ── rt8 #18: the form follows the record ──────────────────────────────────
+  // Which form applies can depend on the record. A changed step (own move, someone else's,
+  // another tab — every path refreshes 'pipeline-instance') or a change to a field one of the
+  // forms' record rules reads re-asks /active as the viewer; useSmoothLayout switches in place.
+  const layoutStepRef = useRef<string | null>(null)
+  const layoutRuleFields = fetchedLayoutData?.rule_fields ?? null
+  const layoutLiveOn = !designOn && !isNew && !layoutSlug && !!itemId
+  const activeLayoutKeyRef = useRef(activeLayoutKey)
+  activeLayoutKeyRef.current = activeLayoutKey
+  const reaskLayoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reaskLayout = useCallback(() => {
+    if (reaskLayoutTimer.current) return
+    // One re-ask per second at most, whatever the burst.
+    reaskLayoutTimer.current = setTimeout(() => {
+      reaskLayoutTimer.current = null
+      void qc.invalidateQueries({ queryKey: activeLayoutKeyRef.current, exact: true })
+    }, 1000)
+  }, [qc])
+  useEffect(
+    () => () => {
+      if (reaskLayoutTimer.current) clearTimeout(reaskLayoutTimer.current)
+    },
+    []
+  )
+  useEffect(() => {
+    if (!layoutLiveOn) return
+    let lastState: string | null | undefined
+    return qc.getQueryCache().subscribe((event) => {
+      if (event.type !== 'updated' || event.action.type !== 'success') return
+      const k = event.query.queryKey
+      if (!Array.isArray(k) || k[0] !== 'pipeline-instance' || k[1] !== collection) return
+      if (String(k[2]) !== String(itemId) || k.length > 3) return
+      const inst = (
+        event.query.state.data as {
+          instance?: { current_state?: string | null; current_state_obj?: { label?: string } }
+        } | null
+      )?.instance
+      if (!inst) return
+      layoutStepRef.current = inst.current_state_obj?.label ?? null
+      const next = inst.current_state ?? null
+      if (lastState !== undefined && next !== lastState) reaskLayout()
+      lastState = next
+    })
+  }, [qc, collection, itemId, layoutLiveOn, reaskLayout])
+  useLiveRecord(
+    collection,
+    layoutLiveOn ? itemId : null,
+    (batch) => {
+      if (layoutMayChange(batch, layoutRuleFields)) reaskLayout()
+    },
+    { enabled: layoutLiveOn && !!layoutRuleFields?.length, includeOwn: true, debounceMs: 400 }
+  )
+  // The switch itself: unsaved values the new form shows and lets the person edit stay; the
+  // rest come out of the save and wait in the "not on this form" chip.
+  const [heldEdits, setHeldEdits] = useState<HeldEdit[]>([])
+  const [formNote, setFormNote] = useState<{ text: string; n: number } | null>(null)
+  onLayoutSwitchRef.current = (sw, fields) => {
+    setFormNote({ text: formUpdatedText(layoutStepRef.current), n: sw.n })
+    if (isNew) return
+    const { held } = splitUnsaved(draftRef.current, initialDataRef.current, fields)
+    // Staged picks / removals on a many-to-many field follow the same rule (they never pass
+    // through the draft): a field the new form hides or locks gives them up to the chip.
+    const heldLinks = splitStagedLinks(m2mLinks, m2mUnlinks, stagingKeyToFieldRef.current, fields)
+    if (held.length === 0 && heldLinks.length === 0) return
+    const labelOf = (k: string) =>
+      (fieldConfig ?? []).find((f) => f.field === k)?.label ||
+      k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    const add: HeldEdit[] = []
+    if (held.length > 0) {
+      const next = { ...draftRef.current }
+      for (const h of held) {
+        add.push({
+          field: h.field,
+          label: labelOf(h.field),
+          value: next[h.field],
+          status: h.status
+        })
+        next[h.field] = initialDataRef.current[h.field] ?? null
+      }
+      draftRef.current = next
+      setDraft(next)
+      setIsDirty(draftDiffers(next, initialDataRef.current))
+    }
+    if (heldLinks.length > 0) {
+      const gone = new Set(heldLinks.map((h) => h.stagingKey))
+      setM2mLinks((prev) => new Map([...prev].filter(([k]) => !gone.has(k))))
+      setM2mUnlinks((prev) => new Map([...prev].filter(([k]) => !gone.has(k))))
+      for (const h of heldLinks)
+        add.push({
+          field: h.field,
+          label: labelOf(h.field),
+          value: null,
+          status: h.status,
+          links: {
+            stagingKey: h.stagingKey,
+            add: h.links,
+            remove: h.unlinks,
+            text: linkChangeText(h.links.length, h.unlinks.length)
+          }
+        })
+    }
+    setHeldEdits((prev) => [...prev.filter((p) => !add.some((a) => a.field === p.field)), ...add])
+  }
+  useEffect(() => {
+    if (!formNote) return
+    const t = setTimeout(() => setFormNote(null), 8000)
+    return () => clearTimeout(t)
+  }, [formNote])
+  // Another record: nothing held over.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on identity only
+  useEffect(() => {
+    setHeldEdits([])
+    setFormNote(null)
+  }, [collection, itemId])
+  const putBackHeld = (field: string) => {
+    const h = heldEdits.find((x) => x.field === field)
+    if (!h || fieldStatus(fieldConfig, field) !== 'editable') return
+    if (h.links) {
+      // Back into staging exactly as they were; saving sends them with the record.
+      const { stagingKey, add, remove } = h.links
+      if (add.length > 0)
+        setM2mLinks((prev) => {
+          const next = new Map(prev)
+          next.set(stagingKey, [...new Set([...(prev.get(stagingKey) ?? []), ...add])])
+          return next
+        })
+      if (remove.length > 0)
+        setM2mUnlinks((prev) => {
+          const next = new Map(prev)
+          next.set(stagingKey, new Set([...(prev.get(stagingKey) ?? []), ...remove]))
+          return next
+        })
+    } else handleFieldChange(field, h.value)
+    setHeldEdits((prev) => prev.filter((x) => x.field !== field))
+  }
+
   relockOnEditRef.current =
     lockEnabled && !lockAcquired && !lockHolder
       ? () => void (lockReleased ? relockLock() : claimLock())
@@ -6721,6 +7035,19 @@ function ItemEditFormView({
     }
     return out
   }, [fieldConfig, liveRowsByRelation, stagedRowsByRelation, addendumRollupKeys, draft])
+
+  // rt7 #9 — totals the server is recalculating after line writes (this tab's or a big save's):
+  // shown dimmed with "Updating…" until the re-read lands, then faded in once.
+  const recalc = useRollupRecalc({
+    collection,
+    itemId: isNew ? null : itemId,
+    fields: fieldConfig,
+    dataUpdatedAt: itemDataUpdatedAt,
+    queryKey: ['item', collection, itemId],
+    enabled: !isNew && !designOn && addendumViewId === 'original'
+  })
+  const recalcOf = (field: string): 'pending' | 'landed' | null =>
+    recalc.pending.has(field) ? 'pending' : recalc.landed.has(field) ? 'landed' : null
 
   const effectiveDraft = useMemo(
     () => (addendumViewData ? { ...draft, ...addendumViewData } : draft),
@@ -7469,12 +7796,16 @@ function ItemEditFormView({
       setActiveTab('__general__')
       switched = true
     }
-    if (!switched) return false
+    // A folded section holding the field opens itself (co-edit OPEN_SECTION_EVENT): asked now
+    // and again while a tab switch paints, since the section mounts only after it.
+    openSectionOf(key)
+    if (!switched && group.type !== 'section' && group.type !== 'metadata') return false
     const tryFlash = (attempt: number) => {
       if (document.querySelector(`[data-field="${key}"]`)) {
         flashField(key)
         return
       }
+      openSectionOf(key)
       if (attempt < 12) setTimeout(() => tryFlash(attempt + 1), 150)
     }
     setTimeout(() => tryFlash(0), 150)
@@ -8483,6 +8814,8 @@ function ItemEditFormView({
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
   // Request a change (#999) — a support ticket about this record.
   const [supportOpen, setSupportOpen] = useState(false)
+  // Merge records (2026-11-14): "Merge with…" in the ⋯ menu opens the picker, then the merge.
+  const [mergeWithOpen, setMergeWithOpen] = useState(false)
   // Suggest a form change (#2609) — about the form, not this record's data.
   const [suggestOpen, setSuggestOpen] = useState(false)
   // The More (or folded tools) button the suggestion was picked from: its popover sits there.
@@ -9346,10 +9679,15 @@ function ItemEditFormView({
   }
 
   function handleSave() {
+    nudgeOutboxReview()
     if (recordGone) return
     // The header Save is disabled on a read-only record; the host's triggers
     // (workspace "Save all", the entry keyboard) are not — they land here.
-    if (isReadOnly && !isNew && (saveBlockedByLock || unsavedSummary.fields.length > 0)) {
+    if (
+      isReadOnly &&
+      !isNew &&
+      (saveBlockedByLock || (unsavedSummary.fields.length > 0 && !sharedTextSaveOk))
+    ) {
       toast.info(
         editLockMessage ??
           `${lockHolder?.locked_by_name ?? 'Someone else'} is editing this record — nothing was saved`
@@ -9557,6 +9895,25 @@ function ItemEditFormView({
         .catch(() => {})
     }
   }
+  // rt7 #8 — a create that carries many lines names itself (?save_progress=) and the server
+  // reports "320 of 500 lines" over this person's own socket (lib/save-progress.ts). Without a
+  // socket nothing arrives and the step keeps its spinner and "Saving 500 lines…".
+  const activeSaveRef = useRef<{ id: string; total: number } | null>(null)
+  useLiveEvent(
+    'save:progress',
+    (p: SaveProgressEvent) => {
+      const a = activeSaveRef.current
+      if (!a || !p || p.save !== a.id) return
+      const total = typeof p.total === 'number' && p.total > 0 ? p.total : a.total
+      const done = Math.min(total, Math.max(0, Number(p.done) || 0))
+      updateStep('main', (prev) =>
+        prev.status !== 'running'
+          ? {}
+          : { progress: { done, total }, detail: saveProgressText(p, a.total) }
+      )
+    },
+    { includeOwn: true }
+  )
   const saveMut = useMutation({
     mutationFn: async () => {
       if (isNew) draftSpentRef.current = true
@@ -9866,14 +10223,35 @@ function ItemEditFormView({
       }
       lastSavePayloadRef.current = payload
       let savedId: string
+      // Many lines in this create: name the save so its progress can be shown.
+      const nestedRows = isNew
+        ? Object.values(rowBody).reduce<number>((n, v) => n + (Array.isArray(v) ? v.length : 0), 0)
+        : 0
+      const saveId = nestedRows >= SAVE_PROGRESS_MIN_ROWS ? newSaveId() : null
+      if (saveId) {
+        activeSaveRef.current = { id: saveId, total: nestedRows }
+        updateStep('main', {
+          detail: saveProgressText(null, nestedRows),
+          progress: { done: 0, total: nestedRows }
+        })
+      }
       try {
         if (isNew) {
-          const r = await client.request<WriteAnswer>(post(`/items/${collection}`, payload))
+          const r = await client
+            .request<WriteAnswer>(post(withSaveId(`/items/${collection}`, saveId), payload))
+            .finally(() => {
+              activeSaveRef.current = null
+            })
           // The id comes from the answer even when the creator cannot read
           // the record back (data {id} + meta.readable false); an older server
           // answered data null — the record exists, but its id is unknown.
           const newId = r?.data?.id ?? r?.meta?.id
           noteWriteAnswer(r)
+          if (saveId)
+            updateStep('main', {
+              detail: `${mainDetail} · ${nestedRows.toLocaleString()} lines saved`,
+              progress: { done: nestedRows, total: nestedRows }
+            })
           if (newId == null) throw new CreatedOutOfViewError()
           savedId = String(newId)
         } else if (Object.keys(payload).some((k) => !k.startsWith('_'))) {
@@ -11635,6 +12013,18 @@ function ItemEditFormView({
     draft,
     stagedLines: pendingO2MRows
   })
+  // "Merge…" on the notice: the draft folds into an existing record (merge records).
+  const [dupMerge, setDupMerge] = useState<DuplicateHint | null>(null)
+  const hasDuplicateHints = Object.keys(duplicateHints).length > 0
+  const mergeAllowedHere = useMergeAllowed(
+    collection,
+    null,
+    isNew && !designOn && hasDuplicateHints
+  )
+  const duplicateMergeApi = useMemo<DuplicateMergeApi | null>(
+    () => (mergeAllowedHere.data?.allowed ? { open: (hint) => setDupMerge(hint) } : null),
+    [mergeAllowedHere.data?.allowed]
+  )
   // Idea 43: "Needed by <partner>" badges, judged on the values the form holds now.
   const partnerNeeds = usePartnerNeedsForm({
     collection,
@@ -12546,7 +12936,26 @@ function ItemEditFormView({
     // A rollup whose live total has moved away from the stored one shows both
     // figures and the difference — on an addendum that difference IS the
     // amendment, and replacing the old number with the new one hides it.
-    const groupFields = baseFields.map((f) => {
+    const groupFields = baseFields.map((f0) => {
+      const rc = recalcOf(f0.field)
+      const f = rc
+        ? {
+            ...f0,
+            options: {
+              // Options arrive parsed; a raw JSON string (older rows) is read first.
+              ...(typeof f0.options === 'string'
+                ? (() => {
+                    try {
+                      return JSON.parse(f0.options) as Record<string, unknown>
+                    } catch {
+                      return {}
+                    }
+                  })()
+                : ((f0.options as Record<string, unknown> | null) ?? {})),
+              __recalc: rc
+            }
+          }
+        : f0
       const live = liveRollupValues.get(f.field)
       if (live === undefined) return f
       const original = draft[f.field]
@@ -13609,6 +14018,8 @@ function ItemEditFormView({
                                 fieldComments={fieldComments}
                                 partnerNeeds={partnerNeeds}
                                 lineLocks={lineLocksOn}
+                                coedit={coeditForm}
+                                duplicateMerge={duplicateMergeApi}
                               >
                                 {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a
@@ -13910,6 +14321,29 @@ function ItemEditFormView({
                                                 <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
                                               </button>
                                             ))}
+                                          {/* rt5: pin to the watch list (W on the page). */}
+                                          {!isNew && !designMode && (
+                                            <WatchPinButton
+                                              collection={collection}
+                                              itemId={itemId}
+                                              shortcut
+                                              size='sm'
+                                            />
+                                          )}
+                                          {!isNew && itemId && !designMode && approvalBadgeOn && (
+                                            <ChangedAfterApprovalBadge
+                                              collection={collection}
+                                              itemId={String(itemId)}
+                                              enabled
+                                            />
+                                          )}
+                                          {/* rt9 #19: an open support request raised from this record. */}
+                                          {!isNew && !designMode && (
+                                            <RecordHelpChip
+                                              collection={collection}
+                                              itemId={String(itemId)}
+                                            />
+                                          )}
                                         </div>
                                         {lastTouchText && (
                                           <p
@@ -13989,6 +14423,21 @@ function ItemEditFormView({
                                                 userName={provenance.user_name}
                                                 timestamp={provenance.timestamp}
                                                 api={provenance.api}
+                                              />
+                                            )}
+                                            {/* rt7 #12: the soonest pending scheduled change, counted down. */}
+                                            {!isNew && itemId && !designOn && (
+                                              <ScheduledChangeChip
+                                                collection={collection}
+                                                itemId={String(itemId)}
+                                                fields={fieldConfig}
+                                                relations={relations}
+                                              />
+                                            )}
+                                            {!isNew && itemId && !designOn && (
+                                              <RecordChatMentionsChip
+                                                collection={collection}
+                                                itemId={String(itemId)}
                                               />
                                             )}
                                             {/* Admin-only: the route 403s everyone else anyway. */}
@@ -14315,6 +14764,18 @@ function ItemEditFormView({
                                                 collection={collection}
                                                 itemId={String(itemId)}
                                               />
+                                              <SendViewButton
+                                                compact
+                                                getView={() => ({
+                                                  kind: 'record',
+                                                  collection,
+                                                  item: String(itemId),
+                                                  tab: currentRecordTab()
+                                                })}
+                                                describe={() =>
+                                                  `This ${singularTitle.toLowerCase()}`
+                                                }
+                                              />
                                               <RecordInsightsButton
                                                 compact
                                                 collection={collection}
@@ -14465,7 +14926,16 @@ function ItemEditFormView({
                                                     // are integration/system state (external ids, status
                                                     // mirrors) that must not follow the record.
                                                     const copyable = new Set<string>()
-                                                    const skip = new Set<string>(AUDIT)
+                                                    // The one copy rule (api services/copy-rules.ts): the
+                                                    // pipeline's state field, partner statuses / external
+                                                    // ids, the collection's never-copy list — a copy starts
+                                                    // fresh, never at the original's step.
+                                                    const skip = new Set<string>([
+                                                      ...AUDIT,
+                                                      ...headerCopySkip(
+                                                        await fetchCopySkip(client, qc, collection)
+                                                      )
+                                                    ])
                                                     for (const fc of fieldConfig ?? []) {
                                                       const opts = fc.options as Record<
                                                         string,
@@ -14681,12 +15151,22 @@ function ItemEditFormView({
                                                               })
                                                               .catch(() => null)
                                                           ])
+                                                        // The line's copy rule (its state field,
+                                                        // generated ids, partner columns).
+                                                        const childSkip = childCopySkip(
+                                                          await fetchCopySkip(
+                                                            client,
+                                                            qc,
+                                                            rel.many_collection
+                                                          )
+                                                        )
                                                         const childRows = (res.data ?? []).map(
                                                           (r0) =>
                                                             duplicateChildRow(
                                                               r0,
                                                               rel.many_field as string,
-                                                              childConfig
+                                                              childConfig,
+                                                              childSkip
                                                             )
                                                         )
                                                         if (childRows.length) rows[key] = childRows
@@ -14877,6 +15357,18 @@ function ItemEditFormView({
                                                   )}
                                                 </>
                                               )}
+                                              {!isNew && itemId && (
+                                                <MergeRecordMenuItems
+                                                  collection={collection}
+                                                  itemId={String(itemId)}
+                                                  onMergeWith={() => setMergeWithOpen(true)}
+                                                  onUndone={() =>
+                                                    void qc.invalidateQueries({
+                                                      queryKey: ['item', collection]
+                                                    })
+                                                  }
+                                                />
+                                              )}
                                               {moreMenuItems}
                                               {canDelete && <div data-nvr-menu-divider />}
                                               {canDelete &&
@@ -15014,13 +15506,27 @@ function ItemEditFormView({
                                                           'creator',
                                                           'last_state_change'
                                                         ])
+                                                        // A template never carries what a copy
+                                                        // leaves behind (lib/copy-rules.ts): the
+                                                        // state field, partner statuses, ids.
+                                                        const copySkip = headerCopySkip(
+                                                          await fetchCopySkip(
+                                                            client,
+                                                            qc,
+                                                            collection
+                                                          )
+                                                        )
                                                         const values: Record<string, unknown> = {}
                                                         for (const fc of fieldConfig ?? []) {
                                                           const opts = fc.options as Record<
                                                             string,
                                                             unknown
                                                           > | null
-                                                          if (AUDIT.has(fc.field)) continue
+                                                          if (
+                                                            AUDIT.has(fc.field) ||
+                                                            copySkip.has(fc.field)
+                                                          )
+                                                            continue
                                                           if (
                                                             opts &&
                                                             typeof opts === 'object' &&
@@ -15516,6 +16022,30 @@ function ItemEditFormView({
                                       saveMut.mutate()
                                     }}
                                   />
+                                  {isNew && dupMerge && (
+                                    <MergeRecordsDialog
+                                      collection={collection}
+                                      ids={dupMerge.matches.slice(0, 4).map((m) => m.id)}
+                                      draft={{ values: draft }}
+                                      open
+                                      onOpenChange={(o) => {
+                                        if (!o) setDupMerge(null)
+                                      }}
+                                    />
+                                  )}
+                                  {!isNew && itemId && mergeWithOpen && (
+                                    <MergeWithFlow
+                                      collection={collection}
+                                      itemId={String(itemId)}
+                                      open={mergeWithOpen}
+                                      onOpenChange={setMergeWithOpen}
+                                      onMerged={() =>
+                                        void qc.invalidateQueries({
+                                          queryKey: ['item', collection]
+                                        })
+                                      }
+                                    />
+                                  )}
                                   {!isNew && itemId && (
                                     <SupportRequestDialog
                                       open={supportOpen}
@@ -16021,7 +16551,7 @@ function ItemEditFormView({
                                                               />
                                                             )
                                                           }
-                                                          const inner = f.cmsField ? (
+                                                          const inner0 = f.cmsField ? (
                                                             <>
                                                               <StripFieldValue
                                                                 field={f.cmsField}
@@ -16059,6 +16589,16 @@ function ItemEditFormView({
                                                                 f.displayFormat
                                                               )}
                                                             </span>
+                                                          )
+                                                          // rt7 #9: a total being recalculated stays dimmed
+                                                          // with "Updating…" until the new figure lands.
+                                                          const inner = (
+                                                            <RecalcValue
+                                                              state={recalcOf(f.field)}
+                                                              inline
+                                                            >
+                                                              {inner0}
+                                                            </RecalcValue>
                                                           )
                                                           // Configured link template ({{value}} + any {{field}} from
                                                           // the draft) turns the header value into an external link
@@ -16377,6 +16917,49 @@ function ItemEditFormView({
                                           itemId={String(itemId)}
                                         />
                                       )}
+                                      {/* rt8 #18: the record now gets another form — a quiet note, and
+                                      the unsaved values that form cannot take, kept aside. */}
+                                      {(formNote || heldEdits.length > 0) && !designOn && (
+                                        <div
+                                          className='flex flex-wrap items-center gap-x-3 gap-y-1.5'
+                                          data-form-switch
+                                        >
+                                          {formNote && (
+                                            <p
+                                              key={formNote.n}
+                                              role='status'
+                                              className='nvr-fade-in inline-flex items-center gap-1.5 text-[12px] text-slate-500 dark:text-slate-400'
+                                              data-form-updated
+                                            >
+                                              <LayoutTemplate
+                                                aria-hidden
+                                                className='h-3.5 w-3.5 text-slate-400 dark:text-slate-500'
+                                              />
+                                              {formNote.text}
+                                            </p>
+                                          )}
+                                          <HeldEditsChip
+                                            edits={heldEdits}
+                                            canPutBack={(f) =>
+                                              fieldStatus(fieldConfig, f) === 'editable' &&
+                                              !lockReasons[f]
+                                            }
+                                            onPutBack={putBackHeld}
+                                            onDiscard={(f) =>
+                                              setHeldEdits((prev) =>
+                                                f ? prev.filter((x) => x.field !== f) : []
+                                              )
+                                            }
+                                          />
+                                        </div>
+                                      )}
+                                      {/* rt8 #12: back after a send back — what changed since. */}
+                                      {!isNew && itemId && !designOn && showPipeline && (
+                                        <ResubmissionStrip
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                        />
+                                      )}
                                       {!isNew &&
                                         itemId &&
                                         recordExtras &&
@@ -16411,6 +16994,14 @@ function ItemEditFormView({
                                             itemId={String(pipelineItem)}
                                           />
                                         )}
+                                      {/* rt9 #20 — threshold banners ("just crossed 90%"), null
+                                      unless an admin turned a definition's banner on. */}
+                                      {!isNew && itemId && !designOn && (
+                                        <AlertBanners
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                        />
+                                      )}
                                       {/* #17 — null unless the record is under legal hold (no wrapper:
                                       an empty sibling still costs this stack a gap). */}
                                       {!isNew && itemId && !designOn && (
@@ -16473,6 +17064,14 @@ function ItemEditFormView({
                                           dirty={isDirty}
                                           loadDenied={itemLoadDenied}
                                           onGoneChange={setRecordGone}
+                                        />
+                                      )}
+                                      {!isNew && !designOn && itemId != null && (
+                                        <FieldPointerHost
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                          fieldLabel={fieldCommentLabel}
+                                          onGo={(f) => jumpToFieldRef.current(f)}
                                         />
                                       )}
                                       {accessRegained && !isNew && itemId != null && (

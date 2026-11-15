@@ -351,6 +351,10 @@ export async function endDeviceGrant(
     return null
   const ended = await takeGrant(redis, g.user_id, g.id, 'device')
   if (!ended) return null
+  // Realtime round 9 — administrators with this person's page open see the phone go.
+  void import('./sessions-live.js')
+    .then((m) => m.noteSessionsChanged([String(ended.user_id)]))
+    .catch(() => {})
   // Rows an earlier sign-out could not delete go first; then this phone's.
   await retryLeftoverPushRows(redis, opts.req)
   await deleteOrKeep(

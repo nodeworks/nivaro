@@ -841,6 +841,23 @@ export async function recalcOwnFilteredRollups(
   }
 }
 
+/**
+ * The stored rollup fields ON `parentCollection` that a write to any of `childCollections`
+ * re-derives (rt7 #9: an open page shows "Updating…" on exactly these while a nested set runs).
+ * Names only; [] when none.
+ */
+export async function rollupFieldsFedBy(
+  parentCollection: string,
+  childCollections: string[]
+): Promise<string[]> {
+  const out = new Set<string>()
+  for (const child of new Set(childCollections)) {
+    for (const entry of await getRollupContributors(child))
+      if (entry.parentCollection === parentCollection) out.add(entry.rollupField)
+  }
+  return [...out]
+}
+
 /** Clears the cached contributor map; the next lookup rebuilds it from nivaro_fields. */
 export function bustRollupContributorCache(): void {
   contributorCache = null
@@ -908,10 +925,40 @@ export function clearDecimalScaleCache(): void {
 // bounded so a mis-configured cycle cannot run away.
 const MAX_CASCADE_DEPTH = 3
 
+/**
+ * rt9 #10: what a stored rollup reads — each source's child collection and value field (or the
+ * fields its value formula names), with the child that changed when one record started it.
+ */
+export function rollupInputs(
+  entry: Pick<RollupContributorEntry, 'sources'>,
+  trigger?: { collection: string; item: unknown }
+): Array<{ collection: string; field: string; item?: string }> {
+  const out: Array<{ collection: string; field: string; item?: string }> = []
+  for (const s of entry.sources) {
+    if (!s.related_collection) continue
+    const fields = s.value_field
+      ? [s.value_field]
+      : [...String(s.value_formula ?? '').matchAll(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)/g)].map(
+          (m) => m[1]
+        )
+    const item =
+      trigger && trigger.collection === s.related_collection && trigger.item != null
+        ? String(trigger.item)
+        : undefined
+    // A count reads no field: the link itself is what changed.
+    const named = fields.length ? fields : s.fk_field ? [s.fk_field] : []
+    for (const f of [...new Set(named)])
+      out.push({ collection: s.related_collection, field: f, ...(item ? { item } : {}) })
+  }
+  return out
+}
+
 export async function recalcRollupsForParent(
   entry: RollupContributorEntry,
   parentId: unknown,
-  depth = 0
+  depth = 0,
+  /** rt9 #10: the child record whose write started this recalc, when known. */
+  trigger?: { collection: string; item: unknown }
 ): Promise<void> {
   if (parentId == null) return
   try {
@@ -946,6 +993,19 @@ export async function recalcRollupsForParent(
       .where({ id: parentId })
       .update({ [entry.rollupField]: total })
     noteDerivedWrite('rollup')
+    void import('./derived-causes.js')
+      .then(({ noteDerivedCauses }) =>
+        noteDerivedCauses(entry.parentCollection, parentId, [
+          {
+            field: entry.rollupField,
+            kind: 'rollup',
+            from: currentNum,
+            to: total,
+            inputs: rollupInputs(entry, trigger)
+          }
+        ])
+      )
+      .catch(() => {})
     // #1875 — a raw write: tell open pages the parent's total moved.
     void import('./raw-write-announcer.js')
       .then(({ announceRawWrites }) =>
@@ -975,7 +1035,11 @@ export async function recalcRollupsForParent(
           .first(...fks)) as Record<string, unknown> | undefined
         for (const g of grand) {
           const gid = row?.[g.parentFk]
-          if (gid != null) await recalcRollupsForParent(g, gid, depth + 1)
+          if (gid != null)
+            await recalcRollupsForParent(g, gid, depth + 1, {
+              collection: entry.parentCollection,
+              item: parentId
+            })
         }
       }
     }
@@ -1012,8 +1076,9 @@ export async function recalcAffectedRollups(
       if (rowId != null) ids.add(rowId)
       if (prevId != null) ids.add(prevId)
 
+      const trigger = row?.id != null ? { collection: childCollection, item: row.id } : undefined
       for (const id of ids) {
-        await recalcRollupsForParent(entry, id)
+        await recalcRollupsForParent(entry, id, 0, trigger)
       }
     }
   } catch (err) {

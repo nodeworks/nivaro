@@ -1,6 +1,21 @@
 export type { ActivityEntryProps } from './components/ActivityEntry'
 export { ActivityEntry, ActivityFeed, useActivityLabels } from './components/ActivityEntry'
+export type { FeedSourceInput } from './components/activity/RecordActivityStream'
+export { RecordActivityStream } from './components/activity/RecordActivityStream'
 export { AgentBadge } from './components/AgentBadge'
+export { AgentPresenceChip } from './components/AgentPresenceChip'
+export {
+  type ConfigReachAnswer,
+  ConfigReachNote,
+  configReachText
+} from './components/ConfigReachNote'
+export {
+  type AgentMode,
+  agentSentence,
+  agentsFromPayload,
+  type RecordAgent,
+  useRecordAgents
+} from './lib/agent-presence'
 export * from './components/AnnouncementBanner'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export * from './components/AudienceConfirmPanel'
@@ -391,6 +406,11 @@ export {
   useRecordOutboxEntry
 } from './components/item-edit/RecordOutbox'
 export { RecordRecapStrip } from './components/item-edit/RecordRecapStrip'
+export {
+  type AlertBannerData,
+  AlertBanners,
+  alertBannersKey
+} from './components/panels/AlertBanners'
 export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeButton'
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
 export {
@@ -411,11 +431,20 @@ export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
 export { ListLoadError } from './components/ListLoadError'
+export { LiveBurstPill, LivePauseButton } from './components/LiveListControls'
 export { LiveAnnouncer } from './components/LiveAnnouncer'
 export { LiveCount, type LiveCountProps } from './components/LiveCount'
+// rt8 — time in step, and the bulk bar's selection watch.
+export { InStepCell, StepForLine } from './components/InStep'
+export {
+  BulkSelectionNotices,
+  type OpenInput as BulkOpenInput,
+  SelectionFigures
+} from './components/bulk/BulkSelectionNotices'
 export { LiveNewMatchesPill } from './components/LiveNewMatchesPill'
 export { LIVE_OFF_TIP, LiveOffNote } from './components/LiveOffNote'
 export { LivePreferenceHost } from './components/LivePreferenceHost'
+export { DragClashNotice } from './components/DragClashNotice'
 export { LiveRowMark } from './components/LiveRowMark'
 export { LoadErrorNote } from './components/LoadErrorNote'
 export * from './components/layout-editor'
@@ -426,6 +455,7 @@ export {
   type InlineEditController,
   useInlineEdit
 } from './components/list/InlineEdit'
+export { ListViewers } from './components/list/ListViewers'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export {
@@ -442,6 +472,16 @@ export {
   type McpAdminTab,
   McpConnectionsAdminView
 } from './components/McpConnectionsAdminView'
+export {
+  type MergeDoneInfo,
+  MergeRecordsDialog
+} from './components/merge/MergeRecordsDialog'
+export {
+  MergePicker,
+  MergeRecordMenuItems,
+  MergeWithFlow,
+  useMergeAllowed
+} from './components/merge/MergeWithFlow'
 export { MyWorkView } from './components/MyWorkView'
 export {
   type ApiCaller,
@@ -666,12 +706,21 @@ export {
 export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
 export { SlowNotice, SlowNoticeView } from './components/SlowNotice'
 export { type StaleBuild, StaleBuildChip } from './components/StaleBuildChip'
+export { SendViewButton } from './components/send-view/SendViewButton'
+export { SentViewCards } from './components/send-view/SentViewCards'
 export {
   buildReportPayload,
   ReportProblemButton,
   type ReportProblemPayload
 } from './components/support/ReportProblem'
 export { SupportRequestDialog } from './components/support/SupportRequestDialog'
+export {
+  LiveScreenViewer,
+  ScreenShareBar,
+  ScreenShareHost,
+  type ScreenShareHostProps,
+  ScreenSharePanel
+} from './components/support/ScreenShare'
 export { SupportView } from './components/support/SupportView'
 export {
   StatusPill as SupportStatusPill,
@@ -692,6 +741,9 @@ export { UserAvatar } from './components/UserAvatar'
 export { WidgetImageMenu } from './components/WidgetImageMenu'
 export type { InputBinding } from './components/WidgetSlot'
 export { WidgetSlot } from './components/WidgetSlot'
+export { WatchDock } from './components/watch-list/WatchDock'
+export { WatchListButton } from './components/watch-list/WatchListButton'
+export { WatchPinButton } from './components/watch-list/WatchPinButton'
 export type {
   ReviewListConfig,
   ReviewListResult,
@@ -878,6 +930,8 @@ export {
   scrubCrashText
 } from './lib/crash-report'
 export * from './lib/deadline-ticker'
+export * from './lib/in-step'
+export * from './lib/selection-watch'
 export { useAfterIdle } from './lib/defer'
 export { deliveryAckFor } from './lib/delivery-ack'
 export {
@@ -972,6 +1026,17 @@ export {
   cursorColor,
   markRemoteCell
 } from './lib/grid-cursors'
+// Who is editing on a budget / planning grid (realtime round 8, item 22).
+export { GridPresenceLine } from './components/GridPresenceLine'
+export {
+  type GridEditor,
+  type GridPresence,
+  type GridPresenceOptions,
+  gridPageKey,
+  gridPresenceCell,
+  parseGridPresenceCell,
+  useGridPresence
+} from './lib/grid-presence'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
 export {
   type BuildStatus,
@@ -992,20 +1057,62 @@ export { currentViewport } from './lib/layout-resolve'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export { LineLockContext, lineLockView, useLineLocks } from './lib/line-locks'
+export { coeditCovers, coeditLive } from './lib/coedit-registry'
 export { linkedChangeSentence, useLinkedRecordWatch } from './lib/linked-changes'
 export * from './lib/list-inline-edit'
+// rt6 — status badges in pickers + soft locks on list cells.
+export * from './lib/cell-locks'
+export {
+  forgetPickerBadgeRules,
+  type PickerBadge,
+  type PickerBadgeTone,
+  useOptionBadges,
+  useRecordBadges
+} from './lib/picker-badges'
+export { PickerBadgeList, RecordPickerBadges } from './components/item-edit/PickerBadges'
 export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
 export * from './lib/list-return'
+export * from './lib/list-viewers'
 export * from './lib/live'
 export * from './lib/live-announcer'
 export * from './lib/live-announcer'
 export * from './lib/live-counts'
 export * from './lib/live-data-changed'
+export * from './lib/live-deltas'
 export * from './lib/live-findings'
 export * from './lib/live-list'
+export {
+  addDays as dragAddDays,
+  applyDragMessage,
+  clashSentence,
+  clashWriter,
+  type DragGhost,
+  type DragPosition,
+  type DropResult,
+  dayKey as dragDayKey,
+  dayLabel as dragDayLabel,
+  dayOf as dragDayOf,
+  daysBetween as dragDaysBetween,
+  dragBaseRevision,
+  type KeyMove,
+  keyboardMove,
+  keyMoveAnnouncement,
+  type LiveDrag,
+  saveDrop,
+  spanLabel as dragSpanLabel,
+  TOUCH_LONG_PRESS_MS,
+  TOUCH_SLOP_PX,
+  useDragBaseBook,
+  useLiveDrag,
+  valueOnDay
+} from './lib/live-drag'
+export * from './lib/live-groups'
+export * from './lib/live-list-flow'
+export * from './lib/urgent-chime'
 export * from './lib/live-moves'
 export * from './lib/live-ops'
+export * from './lib/config-watch'
 // Realtime round 3 #24 — Live updates: Normal / Calm / Off (Profile → Display, role defaults)
 export {
   __resetLivePreferenceForTests,
@@ -1136,6 +1243,17 @@ export {
   useRowPresence,
   useTyping
 } from './lib/presence-hooks'
+// Realtime round 7 — co-editing on a record page (section presence, pointing a co-viewer).
+export {
+  bindRecordCoEdit,
+  type CoEditSocket,
+  type CoViewer,
+  type FieldPointer,
+  pointCoViewer,
+  useCoViewers,
+  useFieldEditors,
+  useFieldPointer
+} from './lib/co-edit'
 export {
   PRESENCE_ONLINE_KEY,
   PRESENCE_POLL_BACKSTOP_MS,
@@ -1346,6 +1464,18 @@ export {
   useScreenLoader,
   useScreenRefreshState
 } from './lib/screen-refresh'
+export {
+  createFrameAssembler as createScreenShareAssembler,
+  packBatch as packScreenShareBatch,
+  registerScreenShareRuntime,
+  type ScreenShareInfo,
+  type ScreenShareRuntime,
+  type ScreenShareStatus,
+  screenShareRunning,
+  startScreenShare,
+  stopScreenShare,
+  useScreenShareStatus
+} from './lib/screen-share'
 export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'
 export * from './lib/search-log'
 export {
@@ -1363,6 +1493,7 @@ export {
   tokenize
 } from './lib/search-text'
 export * from './lib/send-status'
+export * from './lib/send-view'
 export {
   type ClockSample,
   measureClockOffset,
@@ -1483,6 +1614,13 @@ export {
 export * from './lib/waiting-count'
 export * from './lib/waiting-count'
 export {
+  useWatchActions,
+  useWatchPrefs,
+  useWatchUi,
+  watchKeys,
+  watchUi
+} from './lib/watch-list'
+export {
   buildWidgetImageLabel,
   describeDateRangeFilter,
   describeEntityFilters,
@@ -1512,3 +1650,4 @@ export {
   type W2SSampler
 } from './lib/write-to-screen'
 export * from './types'
+export * from './lib/state-census'

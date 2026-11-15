@@ -104,6 +104,7 @@ var JOINS = {
   'ops:join': ['ops:leave', function (p) { return p && p.topic ? 'ops:' + p.topic : null }],
   'record:join': ['record:leave', function (p) { return p && p.collection && p.item != null ? 'record:' + p.collection + ':' + p.item : null }],
   'chat:join': ['chat:leave', function (p) { return p && p.room ? 'chat:' + p.room : null }],
+  'coedit:watch': ['coedit:unwatch', function (p) { return p && p.collection && p.item != null && p.field ? 'coedit:' + p.collection + ':' + p.item + ':' + p.field : null }],
   'pulse:join': ['pulse:leave', function () { return 'pulse' }],
   'presence-map:join': ['presence-map:leave', function () { return 'presence-map' }],
   'presence:join': [null, function (p) { return typeof p === 'string' && p ? 'presence:' + p : null }],
@@ -158,6 +159,8 @@ function route(event, args) {
   } else if (event === 'ops:changed') {
     var opsHolders = p && p.topic ? holdersOf('ops:' + p.topic) : []
     targets = opsHolders.length ? opsHolders : null
+  } else if (event.indexOf('coedit:') === 0) {
+    targets = p && p.collection && p.item != null && p.field ? holdersOf('coedit:' + p.collection + ':' + p.item + ':' + p.field) : []
   } else if (event.indexOf('record:') === 0 || event.indexOf('field:') === 0) {
     if (p && p.collection && p.item != null) {
       targets = holdersOf('record:' + p.collection + ':' + p.item)
@@ -296,6 +299,8 @@ function hold(port, key, spec) {
   st.rooms.add(key)
   if (!roomSpecs.has(key)) roomSpecs.set(key, spec)
   if (first) joinServer(key)
+  /* A co-edit field another tab already watches: ask for its current session for this tab. */
+  else if (key.indexOf('coedit:') === 0 && authed) emitRaw('coedit:sync', spec.payload)
 }
 function release(port, key) {
   var st = ports.get(port)

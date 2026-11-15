@@ -6,6 +6,7 @@ import { registerAgentTriggerHooks } from './hooks/agent-triggers.js'
 import { registerAggregateCapHooks, setApp as setAggregateCapApp } from './hooks/aggregate-caps.js'
 import { registerAiValidationHooks, setApp as setAiValidationApp } from './hooks/ai-validation.js'
 import { registerAlertHooks, setApp as setAlertApp } from './hooks/alerts.js'
+import { registerApprovalChangeHooks } from './hooks/approval-changes.js'
 import { registerCrossTriggerHooks, setApp as setCrossTriggerApp } from './hooks/cross-triggers.js'
 import { registerEmbeddingHooks, setApp as setEmbeddingApp } from './hooks/embeddings.js'
 import { registerFieldWatchHooks, setApp as setFieldWatchApp } from './hooks/field-watches.js'
@@ -19,6 +20,7 @@ import { registerPipelineAutostartHooks } from './hooks/pipeline-autostart.js'
 import { registerQueueMaterializationHooks } from './hooks/queue-materialization.js'
 import { registerRecordIntegrityHooks } from './hooks/record-integrity.js'
 import { registerTaskDoneWhenHooks } from './hooks/task-done-when.js'
+import { registerWatchListHooks } from './hooks/watch-list.js'
 import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
 import { buildRealtimeServer } from './realtime-server.js'
 import { loadEventFlows } from './routes/flows.js'
@@ -76,6 +78,7 @@ async function main() {
   if (!process.env.CLOUD_META_DB_URL && !realtime) {
     registerActivityHooks()
     registerFieldWatchHooks()
+    registerWatchListHooks()
     registerInactivePeopleHooks()
     registerNotificationSubscriptionHooks()
     registerPipelineAutostartHooks()
@@ -90,6 +93,7 @@ async function main() {
     registerTaskDoneWhenHooks()
     registerAgentTriggerHooks()
     registerWorkflowAutoHooks()
+    registerApprovalChangeHooks()
     registerCoreTriggers()
   }
 

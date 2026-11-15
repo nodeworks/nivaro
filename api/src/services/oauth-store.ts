@@ -231,6 +231,8 @@ export async function createDeviceGrant(
   }
   await storeGrant(redis, grant)
   await setDeviceGrantLife(redis, grant.id, REFRESH_TTL_S)
+  // Realtime round 9 — administrators with this person's page open see the new phone.
+  void import('./sessions-live.js').then((m) => m.noteSessionsChanged([userId])).catch(() => {})
   return grant
 }
 

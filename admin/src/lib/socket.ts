@@ -573,7 +573,9 @@ export function getSocket(): Socket {
     // rt4 #20 — the person's own lists (saved views, searches, Overview pins) and the shared
     // collection pins moved.
     'mine:changed',
-    'pins:changed'
+    'pins:changed',
+    // rt7 #8 — "Saving 320/500 lines…" for this person's own big save (counts only).
+    'save:progress'
   ]) {
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   }
@@ -590,7 +592,11 @@ export function getSocket(): Socket {
     'record:automation',
     'owners:changed',
     'record:signal',
-    'record:chat'
+    'record:chat',
+    // rt7 #9 — a big save is recalculating this record's totals (field names only).
+    'record:recalc',
+    // rt8 #21 — an AI agent reading or writing the record (names only).
+    'record:agents'
   ])
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   if (!usesWorkerSocket())
@@ -665,6 +671,8 @@ const RELAYED_EVENTS = new Set([
   'presence:changed',
   'read:changed',
   'prefs:changed',
+  // Send my view: a poke on the person's own room (the card reads the view as them).
+  'view:sent',
   // rt4 #20 — a person's own lists and the shared pins, to follower tabs too (the same notice
   // reaching a tab twice inside 150 ms is delivered once by useLiveEvent).
   'mine:changed',

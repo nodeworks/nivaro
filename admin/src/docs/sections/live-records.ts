@@ -318,6 +318,16 @@ export const collabLiveOps: DocSection = {
   label: 'Live Operations Screens',
   content: [
     { type: 'h1', id: 'live-ops', text: 'Live Operations Screens' },
+    { type: 'h2', id: 'config-reach', text: 'Who a config change reaches' },
+    {
+      type: 'p',
+      text: 'When an administrator saves a layout, a field, a rule, a pipeline step or transition, or a draft of the owner matrix, the save shows **This reaches 34 open forms, 12 people right now** — the record pages of the affected collections that are open at that moment, not counting your own. Open the line to see who, with how many forms each. It is worked out from the live connections in memory (`GET /api/realtime/config-reach?collections=…`, administrators only) and refreshed every 15 seconds while shown.'
+    },
+    { type: 'h2', id: 'search-live', text: 'Search results stay current' },
+    {
+      type: 'p',
+      text: 'While the search palette (⌘K) is open, its record results follow changes to the collections they come from: a renamed record shows its new name in place, a record that no longer matches stays where it was, struck through and marked **No longer matches** (it cannot be opened from there), and new matches are counted on a small **1 new match · Show** pill — Show asks again and lays the results out afresh. Nothing moves under the keyboard selection on its own. It is the same live results the full search page has: every re-ask is your own search, so a record you can no longer see stops matching; bursts of changes are one re-ask, and nothing arrives when live updates are **Off**.'
+    },
     {
       type: 'p',
       text: 'The operations screens, and help videos, follow what is happening without a reload. As with live records, the server only says THAT something moved (ids, counts and field names — never values); each screen re-reads through its own permission-checked request. A slow poll stays underneath as the safety net, so a screen is never worse off when the socket is down.'
@@ -424,6 +434,58 @@ useLiveEvent('conformance:progress', (p) => setProgress(p), { includeOwn: true }
     {
       type: 'p',
       text: 'Table Editor → Settings → Collection Browser → Live updates (`browser_config.live_events`): Every change (default), Batched (changes gathered for 2 seconds and sent as one list of ids) or Off (no live record events, no journal entry, no cross-server stream; lists on the collection refresh every 30 seconds instead). Use Off for import staging tables and other high-churn rows nobody watches live. Other API servers pick up a change within 30 seconds.'
+    }
+  ]
+}
+
+export const collabLiveAdmin: DocSection = {
+  id: 'live-admin-signals',
+  label: 'Live Sessions & Usage',
+  content: [
+    { type: 'h1', id: 'live-admin-signals', text: 'Live Sessions & Usage' },
+    {
+      type: 'p',
+      text: 'Two administrator screens keep up on their own: a person’s signed-in browsers and phones, and the instance’s usage figures. Only administrators receive these updates, and the update itself names nothing private — the screen re-reads through the same administrator-only request it always used.'
+    },
+    { type: 'h2', id: 'live-admin-sessions', text: 'Signed-in browsers and phones' },
+    {
+      type: 'p',
+      text: 'People → a person → Access shows Signed-in browsers (which browser, the address it signed in from, when, and when the session ends) and Signed-in phones. When that person signs in, signs out, is signed out by an administrator or has a phone removed, both lists refresh within about a second; a newly signed-in browser gets a short, soft highlight (none when Live updates are Calm or Off, or when your device asks for reduced motion). Session ids are never shown. Sessions that started before this was added say “Signed in before this was recorded”.'
+    },
+    {
+      type: 'table',
+      head: ['Signal', 'Who gets it', 'What it carries'],
+      rows: [
+        [
+          'ops topic `sessions` (`ops:join {topic: "sessions"}`)',
+          'Administrators only (checked when the socket joins)',
+          '`ops:changed {topic, user_id}` — the person whose sessions changed (or `{all: true}` when one action touched more than 50 people). Never a session id, device, address or token.'
+        ]
+      ]
+    },
+    { type: 'h2', id: 'live-admin-usage', text: 'Usage figures' },
+    {
+      type: 'p',
+      text: '`GET /api/usage/live` (administrators) answers what the instance holds right now: records (rows in every table that is not a `nivaro_` system table, from the database’s own running counts — `records.approx` is true, so they can trail a write by a few seconds), file storage (bytes and files), AI tokens used this calendar month (UTC) and people who can sign in (accounts that are not suspended). The answer is kept a few seconds and read once at a time, so many open screens cost one read.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/usage/live
+→ { data: { records: { count: 128450, approx: true },
+            storage: { bytes: 5368709120, files: 2210 },
+            ai: { tokens: 1240000, calls: 812, since: "2026-11-01T00:00:00.000Z" },
+            users: { count: 64 },
+            at: "2026-11-15T15:42:07.000Z" } }
+
+socket  ops:join {topic: "usage"}   → ops:changed {topic: "usage", at}   (≤ 1 every ~2 s)`
+    },
+    {
+      type: 'p',
+      text: 'A record created or deleted, a bulk write announced by a procedure or import, a file added, replaced or removed, an AI call, or a person added, removed, suspended or restored sends one coalesced `usage` notice to administrators watching; the screen then reads `GET /api/usage/live` again. There are no plans or limits here: a hosting layer sets these figures against its own plan (Nivaro Cloud’s Account page shows them as a live meter).'
+    },
+    {
+      type: 'note',
+      text: 'Extension UI bundles get `useLiveOps(topic, onEvent, {debounceMs, match})` on `window.__NIVARO__`, and the Account page has an `account-usage` slot: a bundle that fills it replaces the built-in Usage details card.'
     }
   ]
 }

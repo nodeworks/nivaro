@@ -101,7 +101,16 @@ export const LIVE_ASPECTS = {
   /** An approval chain on the record was started or a step decided (rt4 #8). */
   approvals: '$approvals',
   /** The record was hidden from pickers or shown again (rt4 #6): forms that link to it re-check. */
-  picker: '$picker'
+  picker: '$picker',
+  /** Someone started or stopped editing a list cell of the record in place (rt6 #15): lists
+   *  with inline editing re-read who holds which cell. */
+  cells: '$cells',
+  /** A scheduled change on the record was made, moved, cancelled or applied (rt7 #12). */
+  scheduled: '$scheduled',
+  /** A banner-enabled threshold alert fired on the record (rt9 #20): banners re-read. */
+  alerts: '$alerts',
+  /** A support request raised from the record opened, moved or closed (rt9 #19). */
+  support: '$support'
 } as const
 
 // The person's live-updates setting (Normal / Calm / Off): the transport tap and the hooks

@@ -93,6 +93,7 @@ import {
   formatMultiValue,
   formatValue
 } from '../lib/format-value'
+import { IN_STEP_COLUMN, IN_STEP_SORT, inStepText } from '../lib/in-step'
 import type { JobProgressPayload } from '../lib/jobs-tray'
 import {
   createCursorBook,
@@ -139,6 +140,8 @@ import {
 } from '../lib/list-return'
 import { expandCoalesced, LIVE_ASPECTS, useLiveEvent } from '../lib/live'
 import { createCoalescer } from '../lib/live-counts'
+import { useLiveLinkLabels } from '../lib/live-link-labels'
+import { movingRowTitle, useRowGlide, useSteadyGroups } from '../lib/live-groups'
 import {
   conditionFields,
   flashRows,
@@ -149,6 +152,17 @@ import {
   viewerMatches,
   writerOf
 } from '../lib/live-list'
+import {
+  burstWriter,
+  GONE_ROW_CLASS,
+  GONE_ROW_TITLE,
+  resumeAsRefetch,
+  totalsMayMove,
+  useKeptEntries,
+  useLiveBurst,
+  useLivePause,
+  useSteadyRows
+} from '../lib/live-list-flow'
 import { listLoadErrorText, loadErrorStatus } from '../lib/load-error'
 import { useShownRecords } from '../lib/missed-updates'
 import { listTrailDetail, setTrailDetail } from '../lib/nav-trail'
@@ -174,10 +188,20 @@ import {
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import { userErrorMessage } from '../lib/safe-error'
 import { logSearch, logSearchOpen } from '../lib/search-log'
+import {
+  selectionSums,
+  selKey,
+  useSelectedRowMemory,
+  useSelectionChanges,
+  useSelectionLiveMarks,
+  useSelectionPicks
+} from '../lib/selection-watch'
 import type { SendStatusFact } from '../lib/send-status'
+import { listViewInput } from '../lib/send-view'
 import { type CellShape, type SkeletonColumn, shapeForField } from '../lib/skeleton-shapes'
 import { knownTotalFrom } from '../lib/slow-reason'
 import { nextSortValue } from '../lib/sort-cycle'
+import { approvalBadgeStates, normalizeSummaryModeRules } from '../lib/summary-mode'
 import { isFileCollection } from '../lib/system-collections'
 import { useTableDensity } from '../lib/table-density'
 import { templateRelationPaths } from '../lib/template-paths'
@@ -190,6 +214,7 @@ import {
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
 import { loadUserCard, userCardQuery } from '../lib/user-cards'
 import { cn, formatDateTime, humanHours } from '../lib/utils'
+import { useWatchActions } from '../lib/watch-list'
 import { useAskRecordDrag, usePublishAskContext } from './ai/ask-context'
 import {
   type AvailableBulkAction,
@@ -203,12 +228,18 @@ import {
 import { BulkCompareButton } from './bulk/BulkCompareButton'
 import { BulkFieldUpdate } from './bulk/BulkFieldUpdate'
 import { BulkRowMark } from './bulk/BulkRowMark'
+import { BulkSelectionNotices, type OpenInput, SelectionFigures } from './bulk/BulkSelectionNotices'
 import { type BulkUpdateAnswer, bulkUpdateOutcome } from './bulk/bulk-update-preview'
 import { MessageStakeholdersForm } from './bulk/MessageStakeholders'
 import { type RowPushOp, runRowPush, useRowPushActions } from './bulk/RowPushActions'
 import { CellCopyLayer } from './CellCopyLayer'
 import { CollectionImportBanner } from './CollectionImportBanner'
 import { CopyAsButton } from './CopyAsButton'
+import {
+  APPROVAL_CHANGED_LABEL,
+  approvalChangedEntry,
+  isApprovalChangedFilter
+} from './cbv/approval-changed'
 import { CollectionTree, useTreeConfig } from './cbv/CollectionTree'
 import { ColumnHeaderMenu } from './cbv/ColumnHeaderMenu'
 import {
@@ -265,6 +296,7 @@ import { FilterControl } from './DataTable'
 import { FocusModeToggle } from './FocusModeToggle'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill, fulfilmentFigures } from './FulfilmentPill'
 import { HScrollProxy } from './HScrollProxy'
+import { InStepCell } from './InStep'
 import { startDocumentExtraction, useDocumentAutofillConfig } from './import/DocumentAutofillButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from './integrations/IntegrationDots'
 import { SendStatusMarks } from './integrations/SendStatus'
@@ -274,10 +306,14 @@ import { invalidateRecordQueries } from './item-edit/RecordLiveSync'
 import { relatedMissing } from './item-edit/related-missing'
 import { UserChip, UserRosterCluster } from './item-edit/UserChip'
 import { LiveCount } from './LiveCount'
+import { LiveBurstPill, LivePauseButton } from './LiveListControls'
 import { LiveRowMark } from './LiveRowMark'
 import { CopyListLinkButton } from './list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from './list/InlineEdit'
+import { ListViewers } from './list/ListViewers'
 import { MapView } from './MapView'
+import { MergeRecordsDialog } from './merge/MergeRecordsDialog'
+import { useMergeAllowed } from './merge/MergeWithFlow'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
   PICKER_EXCLUDED_TITLE,
@@ -303,6 +339,7 @@ import { RowHighlightLegend } from './RowHighlightLegend'
 import { RowPresence } from './RowPresence'
 import { TableSkeletonRows } from './Skeletons'
 import { SlowNoticeView } from './SlowNotice'
+import { SendViewButton } from './send-view/SendViewButton'
 import { TipLayer } from './TipLayer'
 import { UnseenDot } from './UnseenDot'
 import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
@@ -617,6 +654,9 @@ export interface CollectionBrowserViewProps {
     render: () => React.ReactNode
   }>
   showCreate?: boolean
+  /** The host's header row shows who else has this list open (admin list page), so the
+   *  toolbar keeps no slot for it. */
+  viewersInHeader?: boolean
   className?: string
 }
 
@@ -1034,6 +1074,7 @@ export function RowActionsMenu({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const { isAdmin } = useItemEditAuth()
+  const watch = useWatchActions()
   const ref = rowMenuRef({
     label,
     meta: qc.getQueryData<CollectionMeta>(['cbv-collection-meta', collection]),
@@ -1617,6 +1658,17 @@ export function RowActionsMenu({
                     setOpen(false)
                     onPeek()
                   })}
+                {/* rt5: follow the record from the watch list dock. */}
+                {watch.isPinned(collection, id)
+                  ? item('Remove from watch list', () => {
+                      setOpen(false)
+                      void watch.unpin(collection, id).catch(() => {})
+                    })
+                  : !watch.full &&
+                    item('Add to watch list', () => {
+                      setOpen(false)
+                      void watch.pin(collection, id).catch(() => {})
+                    })}
                 {discussable &&
                   item('Discuss in chat', () => {
                     setOpen(false)
@@ -2596,7 +2648,8 @@ function filtersToConditions(
     if (
       f.path[0]?.startsWith('$has_') ||
       f.path[0] === '$missing_required' ||
-      f.path[0] === '$unseen'
+      f.path[0] === '$unseen' ||
+      isApprovalChangedFilter(f)
     ) {
       // Presence filters (#397/#398): the server reads the VALUE's
       // truthiness, so NOT flips the value rather than the operator.
@@ -3228,7 +3281,11 @@ function filterChipText(f: ActiveFilter): { field: string; op: string; value: st
     const label = DATE_PRESETS.find((d) => d.value === f.value)?.label ?? String(f.value)
     return { field, op: 'in the', value: `${label} (rolling)` }
   }
-  if (f.path[0]?.startsWith('$has_') || f.path[0] === '$missing_required') {
+  if (
+    f.path[0]?.startsWith('$has_') ||
+    f.path[0] === '$missing_required' ||
+    isApprovalChangedFilter(f)
+  ) {
     return { field, op: '', value: '' }
   }
   return { field, op: opLabel(f.op).toLowerCase(), value: String(f.value ?? '') }
@@ -3694,7 +3751,7 @@ function FilterBar({
       {/* Applied chips — click to edit in place ("Changed by others" is a toolbar pill of its
           own, beside the quick filters). */}
       {filters
-        .filter((f) => !isChangedFilter(f))
+        .filter((f) => !isChangedFilter(f) && !isApprovalChangedFilter(f))
         .map((f) => {
           const chip = filterChipText(f)
           return (
@@ -3809,116 +3866,6 @@ function RelatedColumnRoot({
   )
 }
 
-/** Bulk-bar merge form (#63): two selected duplicates — pick the survivor,
- *  preview reference counts (dry run), confirm. Every FK repoints, the
- *  duplicate deletes through trash. Admin-only (the server enforces too). */
-function RecordMergeForm({
-  collection,
-  ids,
-  onDone,
-  onCancel
-}: {
-  collection: string
-  ids: Array<string | number>
-  onDone: (msg: string) => void
-  onCancel: () => void
-}) {
-  const client = useNivaroClient()
-  const [survivor, setSurvivor] = useState<string | number>(ids[0])
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  const [preview, setPreview] = useState<{ references: Record<string, number> } | null>(null)
-  const merged = ids.find((x) => String(x) !== String(survivor))!
-
-  useEffect(() => {
-    setPreview(null)
-    let alive = true
-    void client
-      .request<{ data: { references: Record<string, number> } }>(
-        post(`/record-merge/${collection}`, {
-          survivor_id: survivor,
-          merged_id: merged,
-          dry_run: true
-        })
-      )
-      .then((r) => {
-        if (alive) setPreview(r.data)
-      })
-      .catch(() => {
-        if (alive) setPreview({ references: {} })
-      })
-    return () => {
-      alive = false
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [survivor])
-
-  const refTotal = preview ? Object.values(preview.references).reduce((a, b) => a + b, 0) : null
-  const run = async () => {
-    setBusy(true)
-    setErr(null)
-    try {
-      const r = await client.request<{ data: { delete_error: string | null } }>(
-        post(`/record-merge/${collection}`, { survivor_id: survivor, merged_id: merged })
-      )
-      onDone(
-        r.data.delete_error
-          ? `Merged — references repointed, but the duplicate was not deleted: ${r.data.delete_error}`
-          : `Merged ${merged} into ${survivor}`
-      )
-    } catch (e) {
-      setErr(
-        (e as { response?: { error?: string } })?.response?.error ??
-          userErrorMessage(e, 'Merge failed')
-      )
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <span className='flex flex-wrap items-center gap-2'>
-      <span className='text-[12px] text-slate-300 dark:text-muted-foreground'>Keep</span>
-      {ids.map((id) => (
-        <button
-          key={String(id)}
-          type='button'
-          onClick={() => setSurvivor(id)}
-          className={cn(
-            'h-8 rounded-md border px-3 font-mono text-[12px]',
-            String(survivor) === String(id)
-              ? 'border-nvr-cyan bg-nvr-cyan/[0.13] text-[#7fe7ff]'
-              : 'border-white/20 dark:border-border text-slate-300 dark:text-muted-foreground hover:bg-white/10 dark:hover:bg-muted'
-          )}
-        >
-          {String(id)}
-        </button>
-      ))}
-      <span className='text-[11.5px] text-slate-300 dark:text-muted-foreground'>
-        {refTotal == null
-          ? 'Scanning references…'
-          : `${refTotal.toLocaleString()} reference(s) will repoint · ${merged} goes to trash`}
-      </span>
-      {err && <span className='text-[11.5px] text-red-300'>{err}</span>}
-      <button
-        type='button'
-        disabled={busy || refTotal == null}
-        onClick={() => void run()}
-        className='h-8 rounded-md bg-red-500 px-3 text-[12.5px] font-semibold text-white dark:text-foreground disabled:opacity-50'
-      >
-        {busy ? 'Merging…' : 'Merge'}
-      </button>
-      <button
-        type='button'
-        onClick={onCancel}
-        className='h-8 px-2 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:text-white dark:hover:text-foreground'
-      >
-        Cancel
-      </button>
-    </span>
-  )
-}
-
 // ─── Bulk bar (admin components/bulk-action-bar.tsx port) ─────────────────────
 
 function BulkBar({
@@ -3930,11 +3877,20 @@ function BulkBar({
   relations,
   registryKeys,
   pointField,
+  figures,
+  notices,
+  onFormOpen,
   onClear,
   onSuccess
 }: {
   collection: string
   selectedIds: Array<string | number>
+  /** rt8 — the count and live sums of the selection (replaces the plain count). */
+  figures?: React.ReactNode
+  /** rt8 — "open by Beth" / "changed since you picked them", a full-width line in the bar. */
+  notices?: React.ReactNode
+  /** rt8 — a bulk form (move, delete, message, merge) opened or closed. */
+  onFormOpen?: (open: boolean) => void
   /** The column header's "Set <column> on N selected rows…" (2026-11-13). */
   pointField?: { field: string; nonce: number } | null
   transitions: Array<{
@@ -3956,9 +3912,19 @@ function BulkBar({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const itemNav = useItemNavigation()
-  const [mode, setMode] = useState<
-    'actions' | 'transition' | 'message' | 'confirm-delete' | 'merge'
-  >('actions')
+  const [mode, setMode] = useState<'actions' | 'transition' | 'message' | 'confirm-delete'>(
+    'actions'
+  )
+  // Merge records (2026-11-14): 2–5 selected records → the merge screen.
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const mergedRef = useRef(false)
+  const mergeAllowed = useMergeAllowed(collection, null, selectedIds.length >= 2)
+  const onFormOpenRef = useRef(onFormOpen)
+  onFormOpenRef.current = onFormOpen
+  useEffect(() => {
+    onFormOpenRef.current?.(mode !== 'actions')
+  }, [mode])
+  useEffect(() => () => onFormOpenRef.current?.(false), [])
   // Built-in operations are registry entries too (Data Model → Settings →
   // Bulk actions): a collection can switch them off or restrict who sees them.
   const builtin = useBuiltinGate([collection], registryKeys)
@@ -4148,7 +4114,7 @@ function BulkBar({
   return (
     <div
       data-cbv-bulkbar
-      className='nvr-slide-up flex shrink-0 flex-wrap items-center gap-3 border-t border-[#16233c] bg-[#0f1e2d] px-4 py-2.5 text-white dark:text-foreground shadow-[0_-2px_12px_rgba(0,0,0,0.25)] dark:border-border dark:bg-card dark:text-foreground dark:shadow-none'
+      className='nvr-slide-up flex shrink-0 flex-wrap items-center gap-3 border-t border-[#16233c] bg-[#0f1e2d] py-2.5 pl-4 pr-16 text-white dark:text-foreground shadow-[0_-2px_12px_rgba(0,0,0,0.25)] dark:border-border dark:bg-card dark:text-foreground dark:shadow-none'
     >
       <button
         type='button'
@@ -4158,15 +4124,19 @@ function BulkBar({
       >
         ✕
       </button>
-      <span className='text-[13px] font-medium text-nvr-cyan dark:text-nvr-cyan'>
-        {selectedIds.length} item{selectedIds.length === 1 ? '' : 's'} selected
-      </span>
+      {figures ?? (
+        <span className='text-[13px] font-medium text-nvr-cyan dark:text-nvr-cyan'>
+          {selectedIds.length} item{selectedIds.length === 1 ? '' : 's'} selected
+        </span>
+      )}
       {note && (
         <span className='text-[12px] text-slate-300 dark:text-muted-foreground'>{note}</span>
       )}
       <span className='flex-1' />
       {mode === 'actions' && (
-        <span className='flex flex-wrap items-center gap-1.5'>
+        // Wraps inside the bar instead of pushing the last actions (Delete) off the edge
+        // or under the floating corner button (the bar keeps room for it on the right).
+        <span className='flex min-w-0 shrink flex-wrap items-center justify-end gap-1.5'>
           {builtin('recipes') &&
             recipes.map((r) => (
               <span key={r.id} className='group/recipe relative inline-flex'>
@@ -4233,16 +4203,20 @@ function BulkBar({
               className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
             />
           )}
-          {builtin('merge') && selectedIds.length === 2 && auth.isAdmin && (
-            <button
-              type='button'
-              onClick={() => setMode('merge')}
-              title='Merge these two duplicates into one — every reference repoints to the survivor'
-              className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
-            >
-              Merge…
-            </button>
-          )}
+          {builtin('merge') &&
+            mergeAllowed.data?.may_merge &&
+            selectedIds.length >= 2 &&
+            selectedIds.length <= 5 && (
+              <button
+                type='button'
+                onClick={() => setMergeOpen(true)}
+                data-tip='Merge these into one record: pick each value, keep one, discard the rest'
+                className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
+                data-bulk-merge
+              >
+                Merge…
+              </button>
+            )}
           {/* Registry bulk actions (Data Model → Settings → Bulk actions):
               On Hold / Cancel / … — access + guards enforced server-side. */}
           <BulkActionButtons
@@ -4299,17 +4273,25 @@ function BulkBar({
           )}
         </span>
       )}
-      {mode === 'merge' && (
-        <RecordMergeForm
+      {mergeOpen && (
+        <MergeRecordsDialog
           collection={collection}
-          ids={selectedIds.slice(0, 2)}
-          onDone={(msg) => {
-            setNote(msg)
-            onSuccess()
-            onClear()
-            setMode('actions')
+          ids={selectedIds.slice(0, 5)}
+          open
+          onOpenChange={(o) => {
+            if (o) return
+            setMergeOpen(false)
+            // The selection (and this bar) stays until the dialog closes, so its Done
+            // step and Undo stay on screen.
+            if (mergedRef.current) {
+              mergedRef.current = false
+              onSuccess()
+              onClear()
+            }
           }}
-          onCancel={() => setMode('actions')}
+          onMerged={() => {
+            mergedRef.current = true
+          }}
         />
       )}
       {mode === 'message' && (
@@ -4523,6 +4505,7 @@ function BulkBar({
           </button>
         </span>
       )}
+      {notices}
     </div>
   )
 }
@@ -4540,7 +4523,8 @@ const CBV_KIND_SHAPE: Partial<Record<string, CellShape>> = {
   fulfilment: 'badge',
   integrations: 'badge',
   tasks: 'short',
-  addendums: 'short'
+  addendums: 'short',
+  in_step: 'short'
 }
 
 /** Rows changed since the person last opened the active view: opaque, so pinned cells match. */
@@ -4597,9 +4581,11 @@ export function CollectionBrowserView({
   initialAiPrompt,
   extraViews,
   showCreate = true,
+  viewersInHeader = false,
   className
 }: CollectionBrowserViewProps) {
   const client = useNivaroClient()
+  const watchList = useWatchActions()
   const qc = useQueryClient()
   const { open: openTarget, urlFor } = useItemNavigation()
 
@@ -4843,7 +4829,9 @@ export function CollectionBrowserView({
   // A shared link IS the view: the collection / role default view never lands over it.
   // Same for a deep link's context (army 8 b16): a dashboard count opens the records it
   // counted, not those records further narrowed by a saved default view.
-  const deepLinked = !sharedLink && (initialConditions?.length ?? 0) > 0
+  // rt6 #19 — `?ids=` (an import batch, a catalog notice's "See which") is a deep link too.
+  const deepLinked =
+    !sharedLink && ((initialConditions?.length ?? 0) > 0 || (initialFilters?.length ?? 0) > 0)
   const defaultAppliedRef = useRef(!!sharedLink || deepLinked)
   const { isAdmin } = useItemEditAuth()
 
@@ -5209,6 +5197,9 @@ export function CollectionBrowserView({
         label={columnLabel(key)}
         choices={f ? inlineChoices(f) : undefined}
         target={kind === 'm2o' ? inlineM2oTarget(relations, collection, key) : null}
+        collection={collection}
+        itemId={row.id as string | number}
+        field={key}
         onCommit={(v, dir) => commitInlineCell(row, key, kind, v, dir)}
       >
         {node}
@@ -5220,7 +5211,11 @@ export function CollectionBrowserView({
     // Dotted keys are related-value columns resolved server-side; plain keys
     // must exist on the collection.
     return wanted.filter(
-      (k) => k.includes('.') || fieldByName.has(k) || (k.startsWith('__f:') && !!columnFormulas[k])
+      (k) =>
+        k.includes('.') ||
+        fieldByName.has(k) ||
+        k === IN_STEP_COLUMN ||
+        (k.startsWith('__f:') && !!columnFormulas[k])
     )
   }, [displayColumns, nonHidden, fieldByName, columnFormulas])
 
@@ -5248,13 +5243,15 @@ export function CollectionBrowserView({
   /** Header label: user rename → dotted breadcrumb → title-cased field. */
   const columnLabel = (key: string) =>
     columnLabels[key] ??
-    (key.startsWith('__f:')
-      ? (columnFormulas[key] ?? 'Formula')
-      : key.includes('.')
-        ? key.split('.').map(titleCase).join(' › ')
-        : key === 'id'
-          ? 'ID'
-          : titleCase(key))
+    (key === IN_STEP_COLUMN
+      ? 'In step'
+      : key.startsWith('__f:')
+        ? (columnFormulas[key] ?? 'Formula')
+        : key.includes('.')
+          ? key.split('.').map(titleCase).join(' › ')
+          : key === 'id'
+            ? 'ID'
+            : titleCase(key))
 
   // #644 — a formula column's value for one row. Plain tokens read the row;
   // dotted ones read the bulk resolve-paths answer. Numeric-looking strings
@@ -5947,10 +5944,19 @@ export function CollectionBrowserView({
   const visibleIdsRef = useRef<Set<string>>(new Set())
   visibleIdsRef.current = new Set(rows.map((r) => String(r.id)))
   // Who has each row open (#2486): pushed through the presence room; the mark slot shows it.
-  const presenceRows = useMemo(
-    () => rows.slice(0, 100).map((r) => ({ collection, item: String(r.id) })),
-    [rows, collection]
-  )
+  // rt8: plus selected rows that are not on this page, so the bulk bar can say who has them
+  // open (≤ 200 watched in all; the server caps a socket at 300).
+  const presenceRows = useMemo(() => {
+    const onPage = rows.slice(0, 100).map((r) => String(r.id))
+    const seen = new Set(onPage)
+    const offPage = bulkMode
+      ? selectedIds
+          .map(String)
+          .filter((id) => !seen.has(id))
+          .slice(0, 100)
+      : []
+    return [...onPage, ...offPage].map((item) => ({ collection, item }))
+  }, [rows, collection, bulkMode, selectedIds])
   const rowViewers = useRowPresence(presenceRows)
   const itemsKeyRef = useRef<unknown[]>([])
   itemsKeyRef.current = [
@@ -5966,13 +5972,16 @@ export function CollectionBrowserView({
     conditions: conditionsParam,
     search: appliedSearch,
     page,
-    grouped: !!groupBy
+    grouped: !!groupBy,
+    allLoaded: false
   })
   liveCtxRef.current = {
     conditions: conditionsParam,
     search: appliedSearch,
     page,
-    grouped: !!groupBy
+    grouped: !!groupBy,
+    // A grouped list holding every row (≤ 500): a new record can join its group in place.
+    allLoaded: !!groupBy && !aiResult && total <= 500
   }
   const liveOwner = useRef({}).current
   // rt2 #17 — owners of this collection's records may have moved without a write to them
@@ -5991,11 +6000,45 @@ export function CollectionBrowserView({
   // count into a pill the viewer clicks to refresh — a paging table that
   // silently reshuffles rows under the cursor reads as a glitch, not freshness.
   const [pendingLive, setPendingLive] = useState(0)
+  // Realtime round 2 (2026-11-14, lib/live-list-flow.ts): an import or bulk change is one
+  // quiet pill (#10), the list can be paused (#11), totals follow the rows (#13).
+  const liveBurst = useLiveBurst()
+  const liveBurstRef = useRef(liveBurst)
+  liveBurstRef.current = liveBurst
+  const liveApplyRef = useRef<((evs: CollectionUpdateEvent[]) => void) | null>(null)
+  const totalFieldsRef = useRef<Set<string>>(new Set())
+  totalFieldsRef.current = new Set(totalReads.map((r) => r.key))
+  const refreshTotals = () => void qc.invalidateQueries({ queryKey: ['cbv-col-total', collection] })
+  const livePause = useLivePause<CollectionUpdateEvent>(
+    collection ? `cbv:${collection}` : null,
+    (held) => {
+      // Resume applies what waited in one go: record by record when it is a few, else one read.
+      if (!resumeAsRefetch(held) && liveApplyRef.current) return liveApplyRef.current(held)
+      liveBurstRef.current.clear()
+      setPendingLive(0)
+      void refetch()
+      refreshTotals()
+    }
+  )
+  const livePauseGate = livePause.gate
+  /** Show (burst pill) / Refresh: one re-read of the rows and their totals. */
+  const showLiveChanges = () => {
+    liveBurst.clear()
+    livePause.dropHeld()
+    setPendingLive(0)
+    void refetch()
+    refreshTotals()
+  }
   // The live handler, for replaying what changed while the list was away (realtime #16).
   const replayRef = useRef<((evs: CollectionUpdateEvent[]) => void) | null>(null)
   useEffect(() => {
     if (!realtime || !collection) return
     const countPill = (n = 1) => setPendingLive((c) => c + n)
+    // Totals rows (#13): re-asked as the viewer at most every 2 s while changes keep coming.
+    const totals = createCoalescer(
+      () => void qc.invalidateQueries({ queryKey: ['cbv-col-total', collection] }),
+      { quietMs: 2000, maxWaitMs: 6000 }
+    )
     // Aspect notices (#1874/#1873/#1825/#1824 — `$tasks`, `$addendums`, …)
     // say a row's related counts/badges moved, not its columns: refresh just
     // those per-page reads, coalesced, and never count them into the pill.
@@ -6056,6 +6099,30 @@ export function CollectionBrowserView({
       if (events.length === 0 || disposed) return
       // Saved-view pills count as the viewer; re-ask once the burst settles.
       viewCountCo.poke()
+      // An import or bulk change (#10): no row patches or flashes — one pill, Show = one read.
+      // The writer comes from ONE viewer read of a few of its rows, once per burst.
+      const burst = liveBurstRef.current
+      if (burst.tracker.push(events as never)) {
+        burst.publish()
+        const sample = burst.tracker.current()?.sample ?? []
+        if (sample.length > 0 && burst.claimWriterRead())
+          void viewerMatches(client, collection, sample, undefined)
+            .then((rows) => {
+              const w = burstWriter(rows.values())
+              const self = !!w && !!selfUserId && w.toUpperCase() === selfUserId.toUpperCase()
+              if (!disposed && w && !self) liveBurstRef.current.setWriter(w)
+            })
+            .catch(() => {})
+        return
+      }
+      if (
+        totalsMayMove(
+          events,
+          totalFieldsRef.current,
+          conditionFields(liveCtxRef.current.conditions)
+        )
+      )
+        totals.poke()
       const latest = new Map<string, CollectionUpdateEvent>()
       let bulk = false
       for (const ev of events) {
@@ -6143,7 +6210,7 @@ export function CollectionBrowserView({
       }
       if (disposed) return
       const condFields = conditionFields(ctx.conditions)
-      const canPlace = ctx.page === 1 && !ctx.grouped
+      const canPlace = (ctx.page === 1 && !ctx.grouped) || ctx.allLoaded
       const patches = new Map<string, Record<string, unknown>>()
       const removed: string[] = []
       const added: Array<{ row: Record<string, unknown>; ev: CollectionUpdateEvent }> = []
@@ -6202,20 +6269,26 @@ export function CollectionBrowserView({
       if (buf.length > 0 && !flushTimer) flushTimer = setTimeout(() => void flush(), 300)
     }
 
-    const unsub = realtime.subscribeCollections([collection], (ev) =>
-      deliverLive(liveOwner, [ev], handle)
-    )
-    replayRef.current = handle
+    // Paused (#11): held per list until Resume; then focus mode decides as before.
+    const apply = (evs: CollectionUpdateEvent[]) => deliverLive(liveOwner, evs, handle)
+    liveApplyRef.current = apply
+    const unsub = realtime.subscribeCollections([collection], (ev) => livePauseGate([ev], apply))
+    // Back-to-list replay (#16) runs the handler itself (no focus-mode hold), but a paused list
+    // holds the replayed changes too until Resume.
+    const replay = (evs: CollectionUpdateEvent[]) => livePauseGate(evs, handle)
+    replayRef.current = replay
     return () => {
       disposed = true
-      if (replayRef.current === handle) replayRef.current = null
+      if (replayRef.current === replay) replayRef.current = null
       unsub()
+      liveApplyRef.current = null
       releaseLiveOwner(liveOwner)
+      totals.cancel()
       if (aspectTimer) clearTimeout(aspectTimer)
       if (flushTimer) clearTimeout(flushTimer)
       viewCountCo.cancel()
     }
-  }, [realtime, collection, qc, client, selfUserId, rowChanges, liveOwner])
+  }, [realtime, collection, qc, client, selfUserId, rowChanges, liveOwner, livePauseGate])
 
   // ── Back to the list keeps your place (realtime #16, lib/list-return.ts) ──
   // While mounted, a quiet standby subscription waits; once the list unmounts it records what
@@ -6287,6 +6360,12 @@ export function CollectionBrowserView({
     rows.map((r) => String(r.id)),
     lockTick
   )
+  // Rows never move under the pointer or keyboard focus (#12): a reorder waits until the
+  // pointer leaves the list (≤ 10 s); values still update in place.
+  const steadyRows = useSteadyRows(rows, (r) => String(r.id), rowChanges.rootRef, {
+    enabled: !groupBy && !aiResult,
+    resetKey: JSON.stringify(itemsKeyRef.current)
+  })
 
   // ── At-risk row highlighting (nivaro_at_risk_rules) ───────────────────────
   // One rules probe per collection; when any active rule exists, the visible
@@ -6341,6 +6420,16 @@ export function CollectionBrowserView({
   // Addendum presence for the visible page — one batched call, only when the
   // collection opted in. Drives the Addendums column.
   const addendumsEnabled = !!meta?.addendums_enabled
+  // Round 7, item 21 — "Changed after approval" quick filter where the badge is on.
+  const approvalFilterOn = useMemo(
+    () =>
+      !!approvalBadgeStates(
+        normalizeSummaryModeRules(
+          (meta as { summary_mode_rules?: unknown } | undefined)?.summary_mode_rules
+        )
+      ),
+    [meta]
+  )
   const { data: addendumSummary } = useQuery({
     queryKey: ['cbv-addendum-summary', collection, pageIdsKey],
     queryFn: () =>
@@ -6427,7 +6516,7 @@ export function CollectionBrowserView({
     staleTime: 30_000,
     retry: false
   })
-  const { data: pipelineData } = useQuery({
+  const { data: pipelineRead } = useQuery({
     queryKey: ['cbv-pipeline-instances', collection, pageIdsKey],
     queryFn: () =>
       client
@@ -6440,6 +6529,12 @@ export function CollectionBrowserView({
     staleTime: 30_000,
     retry: false
   })
+  // A row held in place after it left the list keeps its state badge (lib/live-list-flow.ts).
+  const keptInstances = useKeptEntries(pipelineRead?.instances)
+  const pipelineData = useMemo(
+    () => (pipelineRead ? { ...pipelineRead, instances: keptInstances ?? null } : pipelineRead),
+    [pipelineRead, keptInstances]
+  )
   const templateId = pipelineData?.binding?.template
   // Admins read the whole template; everyone else its outline (states + the
   // transitions their role may run) — GET /pipelines/:id answers them 403.
@@ -6485,7 +6580,7 @@ export function CollectionBrowserView({
     staleTime: 30_000,
     retry: false
   })
-  const { data: ownersByItem } = useQuery({
+  const { data: ownersRead } = useQuery({
     queryKey: ['cbv-owners', collection, pageIdsKey],
     queryFn: () =>
       client
@@ -6496,9 +6591,12 @@ export function CollectionBrowserView({
         )
         .then((r) => r.data ?? {}),
     enabled: hasPipelineBinding && pageIdsKey.length > 0,
+    // A live insert/remove changes the id set: keep the names on screen until the new read lands.
+    placeholderData: (prev) => prev,
     staleTime: 60_000,
     retry: false
   })
+  const ownersByItem = useKeptEntries(ownersRead)
 
   // ── Bulk resolve of dotted + alias column values for the current page ─────
   const dottedCols = useMemo(
@@ -6537,13 +6635,22 @@ export function CollectionBrowserView({
         })
       )
       .then((r) => r.data ?? { rows: {}, targets: {} })
-  const { data: resolvedData } = useQuery({
+  const { data: resolvedRead } = useQuery({
     queryKey: ['cbv-resolved', collection, rowIdsKey, resolveList.join(',')],
     queryFn: () => fetchResolved(rowIdsKey),
     enabled: rows.length > 0 && resolveList.length > 0,
+    // Same: related labels stay while a live change re-reads them for the new id set.
+    placeholderData: (prev) => prev,
     staleTime: 30_000,
     retry: false
   })
+  const keptResolvedRows = useKeptEntries(resolvedRead?.rows)
+  const resolvedData = useMemo(
+    () => (resolvedRead ? { ...resolvedRead, rows: keptResolvedRows ?? {} } : resolvedRead),
+    [resolvedRead, keptResolvedRows]
+  )
+  // rt9 #8: link cells and dotted columns follow renames of the records they name.
+  useLiveLinkLabels()
   const resolvedFor = (rowId: unknown, key: string): string | null => {
     const path = key.includes('.') ? key : aliasPathByField[key]
     if (!path) return null
@@ -7011,7 +7118,9 @@ export function CollectionBrowserView({
         if (typeof c !== 'string' && c.formula && c.key.startsWith('__f:'))
           formulas[c.key] = c.formula
       setColumnFormulas(formulas)
-      const valid = keys.filter((k) => k.includes('.') || fieldByName.has(k) || !!formulas[k])
+      const valid = keys.filter(
+        (k) => k.includes('.') || fieldByName.has(k) || k === IN_STEP_COLUMN || !!formulas[k]
+      )
       if (valid.length > 0) setDisplayColumns(valid)
       const labels: Record<string, string> = {}
       const formats: Record<string, ColumnFormatConfig> = {}
@@ -7255,6 +7364,20 @@ export function CollectionBrowserView({
       ...(page > 1 ? { p: page } : {}),
       ...(addendumsOnly ? { a: true } : {})
     }
+  }
+
+  // Send my view: the sender's own words for this view (saved view, filter chips, search) —
+  // settings only, the recipient's list reads its rows as them.
+  const sendViewSummary = (): string | null => {
+    const parts: string[] = []
+    const viewName = views.find((v) => v.id === activeViewId)?.name
+    if (viewName) parts.push(viewName)
+    for (const f of filters) {
+      const c = filterChipText(f)
+      parts.push(c.value ? `${c.field}: ${c.value}` : c.field)
+    }
+    if (appliedSearch) parts.push(`“${appliedSearch}”`)
+    return parts.length ? parts.join(', ').slice(0, 160) : null
   }
 
   // #21 Back to the exact list — the list's state rides on the address (`?lv=`, replaced,
@@ -7550,6 +7673,13 @@ export function CollectionBrowserView({
       }
       const cellFor = (r: Record<string, unknown>, c: string) => {
         const cfg = columnFormats[c]
+        if (c === IN_STEP_COLUMN) {
+          // Known for the rows the list has read the steps of (the page on screen).
+          const inst = pipelineData?.instances?.[String(r.id)]
+          return inst && !inst.completed_at
+            ? (inStepText(inst.state_label, inst.entered_at, Date.now()) ?? '')
+            : ''
+        }
         if (c.startsWith('__f:')) {
           const f = columnFormulas[c]
           const num = f
@@ -7854,6 +7984,65 @@ export function CollectionBrowserView({
   const toggleRow = (id: string | number) =>
     setSelectedIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
 
+  // ── The selection, watched while it is held (rt8 items 5–7, lib/selection-watch.ts) ──────
+  const selectionKeys = useMemo(
+    () => (bulkMode && collection ? selectedIds.map((id) => selKey(collection, String(id))) : []),
+    [bulkMode, collection, selectedIds]
+  )
+  const selPicks = useSelectionPicks(selectionKeys)
+  const selMarks = useSelectionLiveMarks(collection ? [collection] : [], selPicks.picks)
+  // A bulk form (move, delete, message…) is open: check every selected row once, not only
+  // the ones a live event marked (live updates Off sends no marks).
+  const [bulkFormOpen, setBulkFormOpen] = useState(false)
+  const selCheckKeys = useMemo(
+    () => (bulkFormOpen ? selectionKeys : selectionKeys.filter((k) => selMarks.marked.has(k))),
+    [bulkFormOpen, selectionKeys, selMarks.marked]
+  )
+  const selChanges = useSelectionChanges(selCheckKeys, selPicks.picks)
+  const selChangedRows = selChanges.rows.filter((r) => selPicks.picks.has(r.key))
+  const selLocks = useRowLocks(
+    bulkMode ? collection : null,
+    bulkMode ? selectedIds.map(String) : [],
+    lockTick
+  )
+  const selOpen: OpenInput[] = selectionKeys
+    .map((key) => {
+      const id = key.slice(collection.length + 1)
+      const v = rowViewers[rowPresenceKey(collection, id)]
+      const lock = selLocks.get(id)
+      return {
+        key,
+        viewerIds: v?.ids ?? [],
+        viewerCount: v?.count ?? 0,
+        lockName: lock && !lock.is_mine ? (lock.locked_by_name ?? 'someone') : null
+      }
+    })
+    .filter((o) => o.viewerCount > 0 || !!o.lockName)
+  const selRows = useSelectedRowMemory(
+    rows as Array<Record<string, unknown>>,
+    (r) => String(r.id),
+    bulkMode ? selectedIds.map(String) : []
+  )
+  // The sums: the columns the totals row sums, else the money / decimal columns on screen.
+  const sumCols = (() => {
+    const summed = effectiveColumns.filter(
+      (k) =>
+        columnAggs[k] === 'sum' && (isNumericCol(k) || k.startsWith('__f:')) && !k.includes('.')
+    )
+    if (summed.length) return summed
+    return effectiveColumns
+      .filter((k) => {
+        if (k.includes('.') || k === 'id' || k.startsWith('__')) return false
+        if (columnFormats[k]?.type === 'number' && columnFormats[k]?.prefix === '$') return true
+        const t = fieldByName.get(k)?.type
+        return (t === 'decimal' || t === 'float') && !isM2OField(relations, collection, k)
+      })
+      .slice(0, 2)
+  })()
+  const selSums = selectionSums(selRows, sumCols, (r, k) =>
+    k.startsWith('__f:') ? formulaValue(r, k) : r[k]
+  )
+
   // Select every row the CURRENT filters match, not just this page (#77) —
   // an id-only fetch capped at 2000 so the selection stays a real id list the
   // existing bulk endpoints already understand.
@@ -7900,12 +8089,15 @@ export function CollectionBrowserView({
       | 'tasks'
       | 'actions'
       | 'formula'
+      | 'in_step'
   }
   const baseColDescs: CbvColDesc[] = [
     ...effectiveColumns.map((k) =>
       k.startsWith('__f:')
         ? { key: k, kind: 'formula' as const }
-        : { key: k, kind: 'data' as const }
+        : k === IN_STEP_COLUMN
+          ? { key: k, kind: 'in_step' as const }
+          : { key: k, kind: 'data' as const }
     ),
     ...(hasPipeline
       ? [
@@ -7962,8 +8154,11 @@ export function CollectionBrowserView({
   type CbvEntry =
     | { kind: 'header'; gkey: string; label: string; count: number }
     | { kind: 'row'; row: Record<string, unknown> }
-  const renderList: CbvEntry[] = (() => {
-    if (!groupBy) return rows.map((row) => ({ kind: 'row' as const, row }))
+  // Grouped (round 9 #16): the counts follow the data at once; a row whose grouping field
+  // changed glides to its new group — unless the pointer or focus rests in the list, then the
+  // arrangement holds (lib/live-groups.ts) and the row says where it is going.
+  const groupedNext = (() => {
+    if (!groupBy) return []
     const buckets = new Map<string, Array<Record<string, unknown>>>()
     for (const row of rows) {
       const g = groupValueOf(row)
@@ -7976,14 +8171,33 @@ export function CollectionBrowserView({
       if (b === '(empty)') return -1
       return a.localeCompare(b, undefined, { numeric: true })
     })
-    const out: CbvEntry[] = []
-    for (const g of keys) {
+    return keys.map((g) => {
       const bucket = buckets.get(g) ?? []
-      out.push({ kind: 'header', gkey: g, label: g, count: bucket.length })
-      if (!collapsedGroups.has(g)) for (const row of bucket) out.push({ kind: 'row', row })
+      return { key: g, count: bucket.length, rows: collapsedGroups.has(g) ? [] : bucket }
+    })
+  })()
+  const groupsResetKey = `${JSON.stringify(itemsKeyRef.current)}|${groupBy}|${[...collapsedGroups].join('\u0001')}`
+  const steadyGroups = useSteadyGroups(groupedNext, (r) => String(r.id), rowChanges.rootRef, {
+    enabled: !!groupBy && !aiResult,
+    resetKey: groupsResetKey
+  })
+  const rowGone = (k: string) => steadyRows.isGone(k) || steadyGroups.isGone(k)
+  const renderList: CbvEntry[] = (() => {
+    if (!groupBy) return steadyRows.rows.map((row) => ({ kind: 'row' as const, row }))
+    const out: CbvEntry[] = []
+    for (const g of steadyGroups.groups) {
+      out.push({ kind: 'header', gkey: g.key, label: g.key, count: g.group?.count ?? 0 })
+      for (const row of g.rows) out.push({ kind: 'row', row })
     }
     return out
   })()
+  useRowGlide(
+    rowChanges.rootRef,
+    renderList
+      .map((e) => (e.kind === 'header' ? `\u00a7${e.gkey}` : String(e.row.id)))
+      .join('\u0001'),
+    { enabled: !!groupBy && !aiResult, resetKey: groupsResetKey }
+  )
   // The row that holds the list's one tab stop: the last row focused while it is still
   // listed, else the first row (army8 review M9: every row was a Tab stop, 50 before the pager).
   const [rowFocusKey, setRowFocusKey] = useState<string | null>(null)
@@ -8216,7 +8430,8 @@ export function CollectionBrowserView({
       if (
         f.path[0]?.startsWith('$has_') ||
         f.path[0] === '$missing_required' ||
-        f.path[0] === '$unseen'
+        f.path[0] === '$unseen' ||
+        isApprovalChangedFilter(f)
       ) {
         clauses.push({ kind: 'phrase', text: `${f.not ? 'not ' : ''}${field.toLowerCase()}` })
         continue
@@ -8510,6 +8725,28 @@ export function CollectionBrowserView({
                     label: 'Peek',
                     run: () => recordDrill.push([{ collection, itemId: String(cellMenu.row.id) }])
                   },
+                  // rt5: follow the record from the watch list dock.
+                  ...(watchList.isPinned(collection, cellMenu.row.id as string | number)
+                    ? [
+                        {
+                          label: 'Remove from watch list',
+                          run: () =>
+                            void watchList
+                              .unpin(collection, cellMenu.row.id as string | number)
+                              .catch(() => {})
+                        }
+                      ]
+                    : watchList.full
+                      ? []
+                      : [
+                          {
+                            label: 'Add to watch list',
+                            run: () =>
+                              void watchList
+                                .pin(collection, cellMenu.row.id as string | number)
+                                .catch(() => {})
+                          }
+                        ]),
                   // The friendly id, never the row id (army 7 N7); none = nothing to copy.
                   ...(rowMenuRef({
                     meta,
@@ -8601,6 +8838,37 @@ export function CollectionBrowserView({
             setPage(1)
           }}
         />
+        {approvalFilterOn &&
+          (() => {
+            const active = filters.find(isApprovalChangedFilter)
+            return (
+              <button
+                type='button'
+                data-approval-changed-filter
+                onClick={() => {
+                  const rest = filters.filter((x) => !isApprovalChangedFilter(x))
+                  setFilters(active ? rest : [...rest, approvalChangedEntry()])
+                  setPage(1)
+                }}
+                aria-pressed={!!active}
+                data-tip={
+                  active
+                    ? 'Showing records changed in the app after they were approved. Click to show all.'
+                    : 'Only records changed in the app after they were approved'
+                }
+                className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
+                  active
+                    ? 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+                }`}
+              >
+                <FileDiff className='h-3.5 w-3.5' />
+                {active?.not
+                  ? `Not ${APPROVAL_CHANGED_LABEL.toLowerCase()}`
+                  : APPROVAL_CHANGED_LABEL}
+              </button>
+            )
+          })()}
         {addendumsEnabled && (
           <button
             type='button'
@@ -8645,13 +8913,17 @@ export function CollectionBrowserView({
         })}
         <RealtimeStaleMark className='h-8' />
         <FocusModeToggle />
-        {pendingLive > 0 && (
+        {realtime && collection && (
+          <LivePauseButton
+            paused={livePause.paused}
+            held={livePause.held}
+            onToggle={livePause.toggle}
+          />
+        )}
+        {pendingLive > 0 && !liveBurst.label && (
           <button
             type='button'
-            onClick={() => {
-              setPendingLive(0)
-              void refetch()
-            }}
+            onClick={showLiveChanges}
             className='flex h-8 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2.5 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
           >
             {pendingLive} update{pendingLive === 1 ? '' : 's'} · Refresh
@@ -8659,10 +8931,7 @@ export function CollectionBrowserView({
         )}
         <button
           type='button'
-          onClick={() => {
-            setPendingLive(0)
-            void refetch()
-          }}
+          onClick={showLiveChanges}
           aria-label='Refresh'
           title='Refresh'
           className='flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
@@ -8670,6 +8939,23 @@ export function CollectionBrowserView({
           <RotateCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
         </button>
         <CopyListLinkButton listKey={`cbv:${collection}`} getState={listLinkState} />
+        <SendViewButton
+          getView={() =>
+            listViewInput(
+              'list',
+              collection,
+              `cbv:${collection}`,
+              listLinkState() as unknown as Record<string, unknown>,
+              sendViewSummary()
+            )
+          }
+          describe={() => {
+            const name = meta?.display_name || titleCase(collection)
+            const s = sendViewSummary()
+            return s ? `${name} — ${s}` : name
+          }}
+        />
+        {!viewersInHeader && <ListViewers kind='list' id={collection} />}
         {isAdmin && bc.copy_as !== false && (
           <CopyAsButton
             collection={collection}
@@ -9169,6 +9455,22 @@ export function CollectionBrowserView({
                 <p className='mt-2 border-t border-slate-100 px-1.5 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:border-slate-800'>
                   Add column
                 </p>
+                {hasPipeline && !effectiveColumns.includes(IN_STEP_COLUMN) && (
+                  <button
+                    type='button'
+                    data-cbv-add-in-step=''
+                    onClick={() => setDisplayColumns([...effectiveColumns, IN_STEP_COLUMN])}
+                    className='flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                  >
+                    <span aria-hidden className='text-slate-400'>
+                      ＋
+                    </span>
+                    <span className='truncate'>In step</span>
+                    <span className='ml-auto shrink-0 text-[10.5px] text-slate-400'>
+                      step · time there
+                    </span>
+                  </button>
+                )}
                 {nonHidden
                   .filter((f) => !effectiveColumns.includes(f.field))
                   .map((f) => (
@@ -9998,6 +10300,10 @@ export function CollectionBrowserView({
           ref={rowChanges.rootRef}
           className='nvr-fade-in relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900'
         >
+          {/* #10 — an import or bulk change: one pill over the list, never in the toolbar. */}
+          {liveBurst.label && (
+            <LiveBurstPill label={liveBurst.label} onShow={showLiveChanges} className='bottom-28' />
+          )}
           {/* Refetch overlay — rows stay visible (placeholderData) but dim so
               paginate/sort/filter visibly does something. Only while the rows on screen are
               the PREVIOUS key's: a page already painted from cache (the idle-prefetched next
@@ -10092,6 +10398,41 @@ export function CollectionBrowserView({
                       const pinned = !!pinOf(key)
                       const baseTh = `group/hcell sticky top-0 h-8 select-none whitespace-nowrap bg-slate-50 px-3 py-0 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:bg-slate-800 dark:text-slate-400 ${pinned ? 'z-[4]' : 'z-[2]'}`
                       const pinPart = pinCls(key, '', '')
+                      // rt8 — In step sorts on the server by time in the current step.
+                      if (col.kind === 'in_step') {
+                        const active = sort === IN_STEP_SORT || sort === `-${IN_STEP_SORT}`
+                        const desc = sort === `-${IN_STEP_SORT}`
+                        return (
+                          <th
+                            key={key}
+                            ref={pinned ? pinRef(key) : undefined}
+                            style={{ ...widthStyle(key), ...pinStyle(key) }}
+                            onClick={() => nextSort(IN_STEP_SORT)}
+                            aria-sort={active ? (desc ? 'descending' : 'ascending') : 'none'}
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.target !== e.currentTarget) return
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault()
+                                nextSort(IN_STEP_SORT)
+                              }
+                            }}
+                            data-tip='How long each record has been in its current step. Sort: shortest first, then longest.'
+                            className={`${baseTh} relative cursor-pointer text-left hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan ${pinPart}`}
+                          >
+                            {columnLabel(key)}
+                            <span
+                              aria-hidden
+                              className={`ml-1 inline-block transition-colors duration-200 ${
+                                active ? 'text-[#00a5cc]' : 'text-slate-300 dark:text-slate-500'
+                              }`}
+                            >
+                              {active ? (desc ? '▼' : '▲') : '⇅'}
+                            </span>
+                            {pinButton(key)}
+                          </th>
+                        )
+                      }
                       if (col.kind !== 'data') {
                         const label =
                           col.kind === 'state'
@@ -10541,6 +10882,7 @@ export function CollectionBrowserView({
                         return (
                           <tr
                             key={`__group__${entry.gkey}`}
+                            data-group-key={entry.gkey}
                             onClick={() =>
                               setCollapsedGroups((prev) => {
                                 const next = new Set(prev)
@@ -10603,16 +10945,23 @@ export function CollectionBrowserView({
                           {...rowOpenProps(id)}
                           data-row-key={String(id)}
                           title={
+                            (rowGone(String(id)) ? GONE_ROW_TITLE : undefined) ??
+                            (steadyGroups.movingTo(String(id)) != null
+                              ? movingRowTitle(steadyGroups.movingTo(String(id)) as string)
+                              : undefined) ??
                             rowChanges.titleFor(String(id)) ??
                             (rowLock && !rowLock.is_mine ? lockLabel(rowLock) : undefined) ??
                             (risk ? `At risk — ${risk.rule}` : undefined) ??
                             (pickerExcluded ? PICKER_EXCLUDED_TITLE : undefined)
                           }
                           data-picker-excluded={pickerExcluded ? '' : undefined}
+                          data-row-gone={rowGone(String(id)) ? '' : undefined}
                           style={enterStyle}
                           className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-nvr-cyan/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan dark:border-slate-800 dark:hover:bg-nvr-cyan/[0.08] ${
                             isSelected ? 'bg-nvr-cyan/[0.08]' : (riskTint ?? '')
-                          } ${pickerExcluded ? PICKER_EXCLUDED_ROW_CLASS : ''}`}
+                          } ${pickerExcluded ? PICKER_EXCLUDED_ROW_CLASS : ''} ${
+                            rowGone(String(id)) ? GONE_ROW_CLASS : ''
+                          }`}
                         >
                           {/* stopPropagation only — the checkbox's own onChange
                             toggles; toggling here too would double-toggle. */}
@@ -10622,10 +10971,15 @@ export function CollectionBrowserView({
                               onClick={(e) => e.stopPropagation()}
                             >
                               <span className='flex items-center gap-1'>
-                                {rowLock || rowChanges.isNew(String(id)) ? (
+                                {rowLock ||
+                                rowChanges.isNew(String(id)) ||
+                                rowGone(String(id)) ||
+                                steadyGroups.movingTo(String(id)) != null ? (
                                   <LiveRowMark
                                     lock={rowLock}
                                     isNew={rowChanges.isNew(String(id))}
+                                    gone={rowGone(String(id))}
+                                    movingTo={steadyGroups.movingTo(String(id))}
                                     dataAttr='data-cbv-live-mark'
                                   />
                                 ) : rowViewers[rowPresenceKey(collection, String(id))] ? (
@@ -10670,39 +11024,63 @@ export function CollectionBrowserView({
                                   }}
                                   className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
                                 >
-                                  {state ? (
-                                    <span
-                                      className='inline-flex items-center gap-1.5 rounded-full py-0.5 pl-2 pr-2.5 text-[11px] font-semibold text-slate-700 dark:text-slate-200'
-                                      style={{
-                                        backgroundColor: `${state.state_color ?? '#6b7280'}1f`
-                                      }}
-                                    >
+                                  {/* rt6 — the pill gives way (truncates) before the send marks
+                                      do: the marks never run under the next column. */}
+                                  <div className='flex min-w-0 items-center'>
+                                    {state ? (
                                       <span
-                                        aria-hidden
-                                        className='h-1.5 w-1.5 shrink-0 rounded-full'
-                                        style={{ backgroundColor: state.state_color ?? '#6b7280' }}
-                                      />
-                                      {state.state_label ?? state.state_key ?? '?'}
-                                      {state.via_addendum && (
+                                        className='inline-flex min-w-0 items-center gap-1.5 rounded-full py-0.5 pl-2 pr-2.5 text-[11px] font-semibold text-slate-700 dark:text-slate-200'
+                                        style={{
+                                          backgroundColor: `${state.state_color ?? '#6b7280'}1f`
+                                        }}
+                                      >
                                         <span
-                                          data-tip={`Addendum "${state.via_addendum.title ?? ''}" in approval — record itself is ${state.record_state_label ?? 'unchanged'}`}
-                                          className='ml-0.5 rounded-sm bg-amber-500/15 px-1 text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300'
-                                        >
-                                          Addendum
+                                          aria-hidden
+                                          className='h-1.5 w-1.5 shrink-0 rounded-full'
+                                          style={{
+                                            backgroundColor: state.state_color ?? '#6b7280'
+                                          }}
+                                        />
+                                        <span className='truncate'>
+                                          {state.state_label ?? state.state_key ?? '?'}
                                         </span>
-                                      )}
-                                    </span>
-                                  ) : (
-                                    <span className='text-[12px] text-slate-300'>—</span>
-                                  )}
-                                  {/* rt4 #10 — the row's sends, beside its state when the list has
+                                        {state.via_addendum && (
+                                          <span
+                                            data-tip={`Addendum "${state.via_addendum.title ?? ''}" in approval — record itself is ${state.record_state_label ?? 'unchanged'}`}
+                                            className='ml-0.5 rounded-sm bg-amber-500/15 px-1 text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300'
+                                          >
+                                            Addendum
+                                          </span>
+                                        )}
+                                      </span>
+                                    ) : (
+                                      <span className='text-[12px] text-slate-300'>—</span>
+                                    )}
+                                    {/* rt4 #10 — the row's sends, beside its state when the list has
                                       no integrations column to carry them. */}
-                                  {!integrationsEnabled && (
-                                    <SendStatusMarks
-                                      facts={sendStatus?.[String(id)]}
-                                      className='ml-1.5 align-middle'
-                                    />
-                                  )}
+                                    {!integrationsEnabled && (
+                                      <SendStatusMarks
+                                        facts={sendStatus?.[String(id)]}
+                                        className='ml-1.5'
+                                      />
+                                    )}
+                                  </div>
+                                </td>
+                              )
+                            }
+                            if (col.kind === 'in_step') {
+                              const inst = pipelineData?.instances?.[String(id)]
+                              return (
+                                <td
+                                  key={key}
+                                  style={{ ...widthStyle(key), ...pinStyle(key) }}
+                                  className={`whitespace-nowrap px-3 py-1.5 text-[12px] ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                >
+                                  <InStepCell
+                                    stepLabel={inst?.state_label}
+                                    enteredAt={inst?.entered_at}
+                                    done={!!inst?.completed_at}
+                                  />
                                 </td>
                               )
                             }
@@ -11293,6 +11671,36 @@ export function CollectionBrowserView({
           relations={meta?.relations ?? []}
           registryKeys={bc.bulk_actions ?? null}
           pointField={pointField}
+          onFormOpen={setBulkFormOpen}
+          figures={
+            <SelectionFigures
+              tone='dark'
+              total={selectedIds.length}
+              sums={selSums.sums}
+              known={selSums.known}
+              labelOf={columnLabel}
+              format={(k, v) => formatTotal(v, 'sum', columnFormats[k])}
+            />
+          }
+          notices={
+            <BulkSelectionNotices
+              tone='dark'
+              total={selectedIds.length}
+              open={selOpen}
+              changed={selChangedRows}
+              onSkip={(keys) => {
+                const drop = new Set(keys.map((k) => k.slice(collection.length + 1)))
+                setSelectedIds((s) => s.filter((id) => !drop.has(String(id))))
+              }}
+              onAcknowledgeChanged={(keys) => {
+                selPicks.restamp(keys)
+                selMarks.clear(keys)
+              }}
+              onOpenRecord={({ id }) =>
+                window.open(urlFor({ collection, itemId: id }), '_blank', 'noopener')
+              }
+            />
+          }
           onClear={() => setSelectedIds([])}
           onSuccess={() => invalidateCbvRowQueries(qc, collection)}
         />

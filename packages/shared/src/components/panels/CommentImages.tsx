@@ -210,7 +210,15 @@ export function CommentImageStrip({
   )
 }
 
-function PostedImage({ id, name }: { id: string; name: string }) {
+function PostedImage({
+  id,
+  name,
+  record
+}: {
+  id: string
+  name: string
+  record?: { collection: string; itemId: string | number } | null
+}) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
   const [broken, setBroken] = useState(false)
@@ -245,6 +253,7 @@ function PostedImage({ id, name }: { id: string; name: string }) {
       {open && (
         <FilePreviewLightbox
           file={{ id, url, name, type: 'image/png' }}
+          record={record}
           onClose={() => setOpen(false)}
         />
       )}
@@ -253,7 +262,16 @@ function PostedImage({ id, name }: { id: string; name: string }) {
 }
 
 /** A posted comment's text; pasted images draw as thumbnails that open the file preview. */
-export function CommentBody({ text, className }: { text: string; className?: string }) {
+export function CommentBody({
+  text,
+  className,
+  record
+}: {
+  text: string
+  className?: string
+  /** The record the comment is on: an opened image hears when its file changes (rt8 #19). */
+  record?: { collection: string; itemId: string | number } | null
+}) {
   const parts = splitCommentImages(text)
   if (!parts.some((p) => p.kind === 'image')) {
     return (
@@ -275,7 +293,7 @@ export function CommentBody({ text, className }: { text: string; className?: str
         ) : (
           // biome-ignore lint/suspicious/noArrayIndexKey: parts are positional and never reorder
           <div key={`i${n}`} className='my-1.5 whitespace-normal'>
-            <PostedImage id={p.id} name={p.name} />
+            <PostedImage id={p.id} name={p.name} record={record} />
           </div>
         )
       )}

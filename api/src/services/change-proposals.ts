@@ -496,12 +496,20 @@ export async function loadProposal(id: number): Promise<ProposalRow | null> {
   return ((await db(PROPOSALS_TABLE).where({ id }).first()) as ProposalRow | undefined) ?? null
 }
 
-async function recordLabel(collection: string, item: string): Promise<string> {
+/**
+ * The record's name as ONE recipient may see it (their own read access: a record
+ * or label they cannot read gets the collection's name, never its id or label).
+ */
+async function recordLabelFor(userId: string, collection: string, item: string): Promise<string> {
   try {
-    const { resolveFriendlyIds } = await import('./workflow-transitions.js')
-    return (await resolveFriendlyIds(collection, [String(item)])).get(String(item)) ?? String(item)
+    const { getUser } = await import('./users.js')
+    const viewer = await getUser(String(userId))
+    if (!viewer) return 'a record'
+    const { recordLabelsAsViewer } = await import('./record-labels-as-viewer.js')
+    const labels = await recordLabelsAsViewer(viewer, [{ collection, id: String(item) }])
+    return labels[`${collection}:${String(item)}`] || 'a record'
   } catch {
-    return String(item)
+    return 'a record'
   }
 }
 
@@ -515,7 +523,7 @@ async function notifyProposer(
   if (sameId(p.created_by, actorId)) return
   try {
     const { notifyUser } = await import('./notification-channels.js')
-    const label = await recordLabel(p.collection, p.item)
+    const label = await recordLabelFor(String(p.created_by), p.collection, p.item)
     await notifyUser(app, String(p.created_by), {
       subject:
         outcome === 'accepted'
@@ -577,8 +585,9 @@ export async function proposalReviewers(
   }
   ids = ids.filter((id) => !sameId(id, proposerId))
   if (ids.length === 0) {
-    const { supportAudience } = await import('./support-tickets.js')
-    ids = (await supportAudience(null).catch(() => [] as string[])).filter(
+    // Administrators only (they may always decide) — never desk/team members who cannot.
+    const { activeAdministratorIds } = await import('./support-tickets.js')
+    ids = (await activeAdministratorIds().catch(() => [] as string[])).filter(
       (id) => !sameId(id, proposerId)
     )
   }
@@ -608,14 +617,15 @@ async function notifyReviewers(
     const reviewers = await proposalReviewers(p.collection, p.item, p.created_by, p.run)
     if (reviewers.length === 0) return
     const { notifyUser } = await import('./notification-channels.js')
-    const [label, names, labels] = await Promise.all([
-      recordLabel(p.collection, p.item),
+    const [names, labels] = await Promise.all([
       userNames([p.created_by]),
       fieldLabels(p.collection)
     ])
     const who = nameFrom(names, p.created_by) ?? 'Someone'
     const fieldText = p.fields.map((f) => labels.get(f) ?? f).join(', ')
     for (const uid of reviewers) {
+      // Each reviewer gets the record's name as THEY may read it.
+      const label = await recordLabelFor(uid, p.collection, p.item)
       await notifyUser(app, uid, {
         subject: `Change proposed on ${label} — review it`,
         message: `${who} proposed new values for ${fieldText}: ${p.reason}`.slice(0, 500),

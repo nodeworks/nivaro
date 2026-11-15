@@ -25,7 +25,9 @@ vi.mock('../../../services/traffic-map.js', () => ({ markCacheHit: vi.fn() }))
 vi.mock('../../../services/query-freshness.js', () => ({
   bustFreshnessInference: vi.fn(),
   parseFreshnessSources: vi.fn(() => []),
-  queryFreshness: vi.fn(async () => null)
+  queryFreshness: vi.fn(async () => null),
+  // Uncached runs name the collections they read (realtime: "data changed since run").
+  liveReadSources: vi.fn(async () => [])
 }))
 vi.mock('../../../services/db-tuning/param-sets.js', () => ({
   effectiveParams: vi.fn((p: unknown) => p),

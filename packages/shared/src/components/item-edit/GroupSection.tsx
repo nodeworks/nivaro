@@ -10,7 +10,9 @@ import {
   useNavigation,
   useOptionalNivaroClient
 } from '../../context'
+import { OPEN_SECTION_EVENT } from '../../lib/co-edit'
 import { get, post } from '../../lib/commands'
+import { countLabel, useCountStep } from '../../lib/count-step'
 import { isEmptyValue, isFolded, planFieldGrid, readGroupStructure } from '../../lib/form-structure'
 import { reportSectionUse } from '../../lib/form-usage-beacon'
 import { useRecordReader } from '../../lib/record-loader'
@@ -23,6 +25,7 @@ import {
   titleCase,
   toLocalDateString
 } from '../../lib/utils'
+import { LiveCount } from '../LiveCount'
 import { DesignDropZone, designWrap } from '../layout-editor/DesignNode'
 import { type DesignTarget, revealGroupKey, useLayoutDesign } from '../layout-editor/design-context'
 import { GridGuides } from '../layout-editor/grid-guides'
@@ -41,6 +44,7 @@ import { applyDisplayTemplate, resolveColSpan, useContainerWidth } from './helpe
 import { SectionIntro } from './LayoutContentBlock'
 import { invalidateM2MFor } from './m2m-invalidate'
 import { groupSectionPropsEqual } from './render-stability'
+import { SectionPresence } from './SectionPresence'
 import type {
   CMSField,
   CMSRelation,
@@ -854,6 +858,30 @@ export function StripFieldValue({
   return text
 }
 
+/** "12 → 13" for a few seconds after the count moved while folded, then "13" (rt8 #20). */
+function FoldedLineCount({ value }: { value: number }) {
+  const step = useCountStep(value)
+  return (
+    <span
+      className='shrink-0 text-[12px] tabular-nums text-slate-500 dark:text-slate-400'
+      data-folded-line-count={value}
+      aria-label={`${value} row${value === 1 ? '' : 's'}`}
+    >
+      {step && (
+        <span
+          aria-hidden
+          data-folded-line-step
+          className='nvr-fade-in text-slate-400 dark:text-slate-500'
+        >
+          {countLabel(step.from)}
+          <span className='px-1'>→</span>
+        </span>
+      )}
+      <LiveCount value={value} format={(v) => countLabel(Number(v))} />
+    </span>
+  )
+}
+
 function SummaryStrip({
   summaryFields,
   fields,
@@ -1003,7 +1031,7 @@ function SummaryStrip({
         <div className={ROW}>
           <span className={LBL}>{label}</span>
           <span className={VAL}>
-            {n} row{n !== 1 ? 's' : ''}
+            <LiveCount value={n} format={(v) => countLabel(Number(v))} /> row{n !== 1 ? 's' : ''}
           </span>
         </div>
       )
@@ -1228,6 +1256,24 @@ export const GroupSection = memo(function GroupSection({
   // Accordion mode: parent controls open/closed via isOpen + onToggle.
   const controlled = onToggle !== undefined
   const collapsed = designFolded ?? (controlled ? !isOpen : localCollapsed)
+  // Realtime round 7 #4 — a nudge's Go (or Find) opens the folded section that holds the field.
+  const openRef = useRef<() => void>(() => {})
+  openRef.current = () => {
+    if (!collapsed) return
+    if (designFolded !== null) setDesignFolded(false)
+    else if (controlled) onToggle?.()
+    else setLocalOpen(true)
+  }
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent).detail as { field?: string; key?: string } | undefined
+      if (d?.key === group.key || (d?.field && fields.some((f) => f.field === d.field)))
+        openRef.current()
+    }
+    window.addEventListener(OPEN_SECTION_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_SECTION_EVENT, onOpen)
+  }, [group.key, fields])
   useEffect(() => {
     if (deferred && !collapsed) onFirstOpen?.(group.key)
   }, [deferred, collapsed, onFirstOpen, group.key])
@@ -1303,6 +1349,10 @@ export const GroupSection = memo(function GroupSection({
       header
     )
 
+  // The one line grid in this section (several grids: the summary strip names each).
+  const lineFields = o2mCounts ? fields.filter((f) => f.field in o2mCounts) : []
+  const foldedLineField = lineFields.length === 1 ? lineFields[0].field : null
+
   const hiddenInDesign = (f: CMSField) =>
     showHidden && (f.hidden || !(visibleFields.has(f.field) || !visibleFields.size))
 
@@ -1347,7 +1397,20 @@ export const GroupSection = memo(function GroupSection({
           <span className='font-medium text-[13px] shrink-0 text-slate-800 dark:text-slate-200'>
             {group.label}
           </span>
+          {/* rt8 #20: a folded line section keeps its row count in view, live. */}
+          {collapsed && foldedLineField && o2mCounts && foldedLineField in o2mCounts && (
+            <FoldedLineCount value={o2mCounts[foldedLineField]} />
+          )}
           <span className='flex-1' />
+          {collapsed && !design && itemId && itemId !== 'new' && (
+            <SectionPresence
+              collection={collection}
+              itemId={itemId}
+              fields={fields}
+              relations={relations}
+              label={group.label || group.key}
+            />
+          )}
           {hasErrors && <span className='nvr-pop h-2 w-2 rounded-full bg-destructive shrink-0' />}
           <ChevronDown
             // Design mode: the chevron still folds the section; the rest of

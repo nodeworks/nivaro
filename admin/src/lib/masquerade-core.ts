@@ -126,7 +126,10 @@ function sameOriginApi(input: RequestInfo | URL): boolean {
  */
 export function installMasqueradeFetch(): void {
   const m = readMasquerade()
-  if (!m || typeof window === 'undefined') return
+  if (!m || typeof window === 'undefined')
+    return // An XMLHttpRequest would skip this wrapper: uploads with a progress bar (shared
+    // lib/upload-presence.ts) keep the SDK's fetch in this tab.
+  ;(window as unknown as { __nvrViewAsFetch?: boolean }).__nvrViewAsFetch = true
   const original = window.fetch.bind(window)
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     if (!sameOriginApi(input)) return original(input, init)

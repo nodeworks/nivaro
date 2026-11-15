@@ -1030,6 +1030,7 @@ export async function emitWorkflowStartEvent(opts: {
     // An IR created straight into Engineering Review with nobody to approve it
     // tells the administrators (and its creator) instead of waiting silently.
     void noticeGapFor(state, payload)
+    void watchListAfterMove(payload)
     import('../hooks/notification-subscriptions.js')
       .then(async ({ fireWorkflowStateSubscriptions }) =>
         fireWorkflowStateSubscriptions({
@@ -1112,6 +1113,17 @@ async function noticeGapFor(
 
 /** Retire the owner pings the move made stale (waiting-pings.ts), and the
  *  "No approver" notices about a step the record has left (L31). */
+/** Watch list (rt6): step alerts + auto-add / auto-remove, on the background pool. */
+async function watchListAfterMove(payload: Record<string, unknown>): Promise<void> {
+  try {
+    const { runInBackgroundPool } = await import('../db/pool-context.js')
+    const { onWatchTransition } = await import('./watch-list/transitions.js')
+    await runInBackgroundPool(() => onWatchTransition(payload))
+  } catch {
+    /* best effort */
+  }
+}
+
 async function retirePingsFor(payload: Record<string, unknown>, movedAt: Date): Promise<void> {
   const collection = String(payload.subject_collection ?? payload.collection)
   const item = String(payload.subject_item ?? payload.item)
@@ -1826,6 +1838,7 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
       if (payload.final_in_chain !== false) {
         void retirePingsFor(payload, movedAt)
         void noticeGapFor(newStateObj ?? null, payload)
+        void watchListAfterMove(payload)
       }
     }
     // Inside an auto chain (runAutoTransitions) the event waits until the

@@ -60,7 +60,26 @@ describe('integrationChipSummary', () => {
       partners: [],
       ok: 0,
       attention: 0,
-      pending: 0
+      pending: 0,
+      retrying: 0
     })
+  })
+
+  it('a failed send that will be retried by itself is amber (retrying), not attention', () => {
+    const s = integrationChipSummary(
+      [],
+      [
+        { external_api_name: 'Ledger', status: 'failed', last_error: 'timeout' },
+        { external_api_name: 'Depot', status: 'failed', last_error: 'timeout' }
+      ],
+      () => '',
+      new Set(['ledger'])
+    )
+    expect(s.partners.map((p) => [p.name, p.status])).toEqual([
+      ['Ledger', 'retrying'],
+      ['Depot', 'attention']
+    ])
+    expect(s.attention).toBe(1)
+    expect(s.retrying).toBe(1)
   })
 })

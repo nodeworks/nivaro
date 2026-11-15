@@ -4,6 +4,7 @@ import { useOptionalNivaroClient } from '../context'
 import { get } from '../lib/commands'
 import { useLiveEvent } from '../lib/live'
 import { parseLiveMode, resolveLiveMode, setLiveMode } from '../lib/live-preference'
+import { useUrgentChime } from '../lib/urgent-chime'
 
 /**
  * Feeds the person's live-updates setting (lib/live-preference.ts) into this tab. Mount ONCE per
@@ -42,6 +43,9 @@ export function LivePreferenceHost() {
     if (!keys || keys.includes('live_mode'))
       void qc.invalidateQueries({ queryKey: ['live-preference-default'] })
   })
+  // Round 9 #14 — the opt-in chime for urgent work (lib/urgent-chime.ts); silent unless the
+  // person turned it on, and never while Live updates are Off.
+  useUrgentChime(prefs.data)
   const own = prefs.data?.live_mode
   const ready = prefs.isSuccess && (role.isSuccess || role.isError)
   const roleMode = role.data ?? null

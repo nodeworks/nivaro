@@ -33,6 +33,7 @@ import {
 import { openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../../lib/record-peek'
 import { cn, formatRelative } from '../../lib/utils'
+import { AgentBadge } from '../AgentBadge'
 import { hasSnapshotView, offersChanges } from '../NotificationBell'
 import { RelativeTime } from '../RelativeTime'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -522,7 +523,7 @@ export function NotificationCenterView({
     const target = resolveNotificationTargetFor(n, routes)
     const head = (
       <>
-        <div className='flex items-baseline gap-2'>
+        <div className='flex flex-wrap items-baseline gap-x-2 sm:flex-nowrap'>
           {n.lane === 'critical' && (
             <span className='shrink-0 rounded bg-red-500/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-red-600 dark:text-red-400'>
               Critical
@@ -535,7 +536,8 @@ export function NotificationCenterView({
           )}
           <span
             className={cn(
-              'truncate text-[13px]',
+              // Wraps on a phone so the sender and what changed stay readable; one line on wider screens.
+              'min-w-0 break-words text-[13px] sm:truncate',
               unread
                 ? 'font-medium text-slate-900 dark:text-slate-100'
                 : 'font-normal text-slate-600 dark:text-slate-400'
@@ -543,12 +545,13 @@ export function NotificationCenterView({
           >
             {n.subject ?? n.title ?? '—'}
           </span>
-          <span className='shrink-0 text-[10.5px] text-slate-400'>
+          <span className='flex shrink-0 items-center gap-1.5 text-[10.5px] text-slate-400'>
+            <AgentBadge label={n.detail?.via_agent} />
             <RelativeTime value={n.created_at ?? new Date()} />
           </span>
         </div>
         {n.message && (
-          <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
+          <p className='mt-0.5 line-clamp-3 whitespace-pre-line text-[12px] text-slate-500'>
             {n.message.replace(/<[^>]+>/g, '')}
           </p>
         )}
@@ -603,6 +606,12 @@ export function NotificationCenterView({
               <button
                 type='button'
                 onClick={() => runNotificationTarget(target, onNavigate)}
+                {...(n.collection && !n.item && target.type !== 'chat' && target.type !== 'external'
+                  ? {
+                      'aria-label': `See what changed in ${titleWords(n.collection)}`,
+                      'data-tip': `See what changed in ${titleWords(n.collection)}`
+                    }
+                  : {})}
                 className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
               >
                 {target.type === 'chat'
@@ -614,7 +623,7 @@ export function NotificationCenterView({
                       : n.collection === '__chat__'
                         ? 'Chat'
                         : n.collection && !n.item
-                          ? 'See what changed'
+                          ? 'See changes'
                           : n.collection
                             ? `${n.collection} #${n.item}`
                             : 'Open'}
@@ -924,8 +933,8 @@ export function NotificationCenterView({
 
   return (
     <div className={cn('flex flex-1 min-h-0 flex-col', className)} data-nvr-notification-center>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-background'>
-        <div className='flex items-center justify-between'>
+      <header className='shrink-0 border-b border-slate-200 bg-white px-4 py-5 dark:border-border dark:bg-background sm:px-8'>
+        <div className='flex flex-wrap items-center justify-between gap-x-3 gap-y-2'>
           <div>
             <h1 className='text-xl font-bold text-slate-900 dark:text-slate-100'>Notifications</h1>
             <p className='mt-0.5 text-[13px] text-slate-400'>
@@ -935,12 +944,12 @@ export function NotificationCenterView({
                 : ''}
             </p>
           </div>
-          <div className='flex items-center gap-2'>
+          <div className='flex shrink-0 items-center gap-2'>
             <button
               type='button'
               onClick={() => setCleanOpen((o) => !o)}
               data-notification-cleanup-toggle
-              className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
+              className='inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
             >
               <Archive className='h-3.5 w-3.5' />
               Clean up
@@ -949,7 +958,7 @@ export function NotificationCenterView({
               type='button'
               onClick={() => markAllMut.mutate()}
               disabled={markAllMut.isPending}
-              className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
+              className='inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
             >
               <CheckCheck className='h-3.5 w-3.5' />
               {markAllMut.isPending ? 'Marking…' : 'Mark all read'}
@@ -1007,7 +1016,7 @@ export function NotificationCenterView({
         )}
         {/* Lane strip — what the badge counts sits first */}
         <div className='mt-4 flex flex-wrap items-center gap-2'>
-          <div className='flex items-center gap-1'>
+          <div className='flex max-w-full flex-wrap items-center gap-1'>
             {LANE_TABS.map((t) => {
               const c = laneCount(t.key)
               return (
@@ -1020,7 +1029,7 @@ export function NotificationCenterView({
                   }}
                   data-nvr-lane={t.key}
                   className={cn(
-                    'rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors',
+                    'shrink-0 whitespace-nowrap rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors',
                     lane === t.key
                       ? t.key === 'critical'
                         ? 'bg-red-500/10 text-red-700 dark:text-red-400'
@@ -1038,8 +1047,8 @@ export function NotificationCenterView({
               )
             })}
           </div>
-          <span className='mx-1 h-5 w-px bg-slate-200 dark:bg-border' />
-          <div className='flex items-center gap-1'>
+          <span className='mx-1 hidden h-5 w-px bg-slate-200 dark:bg-border sm:block' />
+          <div className='flex max-w-full flex-wrap items-center gap-1'>
             {STATUS_TABS.map((t) => (
               <button
                 key={t.key}
@@ -1049,7 +1058,7 @@ export function NotificationCenterView({
                   setPage(1)
                 }}
                 className={cn(
-                  'rounded-md px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+                  'shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                   status === t.key
                     ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
                     : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-slate-800/50'
@@ -1059,13 +1068,13 @@ export function NotificationCenterView({
               </button>
             ))}
           </div>
-          <div className='relative ml-auto'>
+          <div className='relative w-full sm:ml-auto sm:w-auto'>
             <Search className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
             <input
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder='Search notifications…'
-              className='h-8 w-[240px] rounded-md border border-slate-200 bg-background pl-8 pr-2.5 text-[12.5px] dark:border-border'
+              className='h-8 w-full rounded-md border border-slate-200 bg-background pl-8 sm:w-[240px] pr-2.5 text-[12.5px] dark:border-border'
             />
           </div>
           <SimpleSelect
@@ -1283,7 +1292,7 @@ export function NotificationCenterView({
                       )}
                     </div>
                     {g.message && (
-                      <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
+                      <p className='mt-0.5 line-clamp-2 whitespace-pre-line text-[12px] text-slate-500'>
                         {g.message.replace(/<[^>]+>/g, '')}
                       </p>
                     )}
@@ -1432,4 +1441,10 @@ export function NotificationCenterView({
       />
     </div>
   )
+}
+
+/** "workflow_lines" → "Workflow lines" (a collection's readable name when no label came with the row). */
+function titleWords(collection: string): string {
+  const t = collection.replace(/_/g, ' ').trim()
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : collection
 }

@@ -18,6 +18,26 @@ vi.mock('../../../services/support-tickets.js', () => ({
       v.isAdmin || String(t.created_by).toUpperCase() === v.id
   )
 }))
+const coeditGate = vi.hoisted(() => ({
+  mayRead: vi.fn(async () => true),
+  mayWrite: vi.fn(async () => true)
+}))
+vi.mock('../../../services/coedit-socket.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/coedit-socket.js')>()),
+  coeditGates: () => ({
+    canSeeRecord: async () => true,
+    mayRead: coeditGate.mayRead,
+    mayWrite: coeditGate.mayWrite,
+    writeRefused: async () => false,
+    fieldMayTravel: async () => true
+  })
+}))
+const followGate = vi.hoisted(() => ({
+  canFollowSharedView: vi.fn(
+    async (_k: string, _id: string, u: { id: string }, admin: boolean) => admin || u.id === 'ANA'
+  )
+}))
+vi.mock('../../../services/config-watch.js', () => followGate)
 vi.mock('../../../services/socket-tenant.js', () => ({
   inSocketTenant:
     (_s: unknown, fn: (...a: unknown[]) => Promise<void>) =>
@@ -26,6 +46,7 @@ vi.mock('../../../services/socket-tenant.js', () => ({
 }))
 
 import { db } from '../../../db/index.js'
+import { accessStamp } from '../../../services/access-stamp.js'
 import { canSeeRoom } from '../../../services/chat.js'
 import { getIo } from '../../../services/io-holder.js'
 import { can } from '../../../services/permissions.js'
@@ -136,6 +157,42 @@ describe('ticket presence rooms (#1882)', () => {
   })
 })
 
+describe('shared dashboard / report follow rooms (review 2026-11-14 F8)', () => {
+  it('a re-check keeps a non-admin follower the view is shared with, by the join gate', async () => {
+    const notAdmin = async () => false
+    expect(await roomStillAllowed(ANA, 'ops:cfg-dashboard:12', notAdmin)).toBe(true)
+    expect(followGate.canFollowSharedView).toHaveBeenLastCalledWith(
+      'dashboard',
+      '12',
+      { id: 'ANA', role: ANA.role ?? null },
+      false
+    )
+    expect(await roomStillAllowed(ANA, 'ops:cfg-report:r-9', notAdmin)).toBe(true)
+    expect(followGate.canFollowSharedView).toHaveBeenLastCalledWith(
+      'report',
+      'r-9',
+      expect.anything(),
+      false
+    )
+    // No longer shared with them: out.
+    followGate.canFollowSharedView.mockResolvedValueOnce(false)
+    expect(await roomStillAllowed(ANA, 'ops:cfg-dashboard:12', notAdmin)).toBe(false)
+    // Other config editors stay admin-only.
+    expect(await roomStillAllowed(ANA, 'ops:cfg-pipeline:3', notAdmin)).toBe(false)
+  })
+})
+
+describe('access re-check makes cached realtime verdicts stale (review 2026-11-14 M1/L5)', () => {
+  it('forgetJoinVerdicts moves the access stamp', () => {
+    const before = accessStamp()
+    forgetJoinVerdicts()
+    expect(accessStamp()).not.toBe(before)
+    const mid = accessStamp()
+    forgetJoinVerdicts('ana')
+    expect(accessStamp()).not.toBe(mid)
+  })
+})
+
 describe('ws-token binding (#1719, H1)', () => {
   it('round-trips every bind kind', () => {
     for (const bind of [
@@ -221,6 +278,20 @@ describe('room gates (#1720)', () => {
     expect(await roomStillAllowed(ANA, 'record:orders:7', notAdmin)).toBe(false)
     expect(await roomStillAllowed(ANA, 'record:orders:7', notAdmin)).toBe(true)
   })
+  it('co-edit rooms: the record gate, then the field read (and write for the cursor room)', async () => {
+    expect(await roomStillAllowed(ANA, 'coedit:r:notes:orders:7', notAdmin)).toBe(true)
+    vi.mocked(visibleIds).mockResolvedValueOnce(new Set())
+    expect(await roomStillAllowed(ANA, 'coedit:r:notes:orders:7', notAdmin)).toBe(false)
+    coeditGate.mayRead.mockResolvedValueOnce(false)
+    expect(await roomStillAllowed(ANA, 'coedit:r:notes:orders:7', notAdmin)).toBe(false)
+    // The field read is asked fresh (uncached relay field list, M1).
+    expect(coeditGate.mayRead).toHaveBeenLastCalledWith(ANA, 'orders', 'notes', undefined, true)
+    coeditGate.mayWrite.mockResolvedValueOnce(false)
+    expect(await roomStillAllowed(ANA, 'coedit:r:notes:orders:7', notAdmin)).toBe(true)
+    coeditGate.mayWrite.mockResolvedValueOnce(false)
+    expect(await roomStillAllowed(ANA, 'coedit:w:notes:orders:7', notAdmin)).toBe(false)
+    expect(await roomStillAllowed(ANA, 'coedit:x:junk', notAdmin)).toBe(false)
+  })
   it('asks canSeeRoom for chat rooms', async () => {
     vi.mocked(canSeeRoom).mockResolvedValueOnce(false)
     expect(await roomStillAllowed(ANA, 'chat:dm:ana:bob', notAdmin)).toBe(false)
@@ -245,6 +316,12 @@ describe('room gates (#1720)', () => {
     for (const t of ['issues', 'support', 'team', 'delegation', 'my-work'])
       expect(await roomStillAllowed(ANA, `t:A:ops:${t}`, notAdmin)).toBe(true)
     expect(await roomStillAllowed(ANA, 'ops:bogus', notAdmin)).toBe(false)
+  })
+  it('keeps list-viewer rooms (who else has this list open) for administrators only', async () => {
+    for (const t of ['list-view:workflows', 'queue-view:3F2A9C1E-0000-4000-8000-000000000001']) {
+      expect(await roomStillAllowed(ANA, `ops:${t}`, notAdmin)).toBe(false)
+      expect(await roomStillAllowed(ANA, `t:A:ops:${t}`, async () => true)).toBe(true)
+    }
   })
   it("keeps the tenant-wide `all` room for the socket's own tenant only", async () => {
     const ctx = { tenantNames: ['T-A', 'acme'] }

@@ -14,6 +14,7 @@ export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/back-and-peek.js'
 export * from './sections/bulk-actions.js'
+export * from './sections/changed-after-approval.js'
 export * from './sections/changed-by-others.js'
 export * from './sections/chaos.js'
 export * from './sections/chaos-ci.js'
@@ -28,6 +29,7 @@ export * from './sections/collaboration.js'
 export * from './sections/command-center.js'
 export * from './sections/config-review.js'
 export * from './sections/content-ops.js'
+export * from './sections/copying-records.js'
 export * from './sections/data-safety.js'
 export * from './sections/db-tuning.js'
 export * from './sections/detail-sheets.js'
@@ -55,16 +57,24 @@ export * from './sections/integrations-console.js'
 export * from './sections/layout-editor.js'
 export * from './sections/line-split.js'
 export * from './sections/live-attention.js'
+export * from './sections/live-coedit.js'
 export * from './sections/live-conflicts.js'
+export * from './sections/live-editing.js'
 export * from './sections/live-feeds.js'
 export * from './sections/live-forms.js'
+export * from './sections/live-groups-drags.js'
 export * from './sections/live-lists.js'
 export * from './sections/live-ops.js'
 export * from './sections/live-outside.js'
+export * from './sections/live-people.js'
 export * from './sections/live-progress.js'
+export * from './sections/live-record-moves.js'
 export * from './sections/live-records.js'
+export * from './sections/live-saves.js'
 export * from './sections/live-screens.js'
+export * from './sections/live-selection.js'
 export * from './sections/live-setting.js'
+export * from './sections/live-sync.js'
 export * from './sections/low-code.js'
 export * from './sections/mobile-app.js'
 export * from './sections/monitoring.js'
@@ -76,12 +86,14 @@ export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
 export * from './sections/partner-needs.js'
 export * from './sections/payload-templates.js'
+export * from './sections/picker-badges.js'
 export * from './sections/platform.js'
 export * from './sections/platform-additions.js'
 export * from './sections/quality-checks.js'
 export * from './sections/queues.js'
 export * from './sections/ready-to-send.js'
 export * from './sections/realtime-tier.js'
+export * from './sections/record-context.js'
 export * from './sections/record-glance.js'
 export * from './sections/record-insights.js'
 export * from './sections/record-integrations.js'
@@ -91,6 +103,7 @@ export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
 export * from './sections/security.js'
+export * from './sections/send-my-view.js'
 export * from './sections/sql-checks.js'
 export * from './sections/storage.js'
 export * from './sections/summary-mode.js'
@@ -98,6 +111,7 @@ export * from './sections/team-board.js'
 export * from './sections/team-throughput.js'
 export * from './sections/tree-advanced.js'
 export * from './sections/trees.js'
+export * from './sections/watch-list.js'
 export * from './sections/workflows-pipelines.js'
 
 import { accessInsightsDocs } from './sections/access-insights.js'
@@ -135,6 +149,7 @@ import {
 import { attributesGuide } from './sections/attributes.js'
 import { collabBackAndPeek } from './sections/back-and-peek.js'
 import { bulkActionsGuide } from './sections/bulk-actions.js'
+import { collabChangedAfterApproval } from './sections/changed-after-approval.js'
 import { collabChangedByOthers } from './sections/changed-by-others.js'
 import { chaosDocs } from './sections/chaos.js'
 import { chaosBuilderDocs } from './sections/chaos-builder.js'
@@ -195,6 +210,7 @@ import {
   pickerFilterGuide,
   upsertKeysGuide
 } from './sections/content-ops.js'
+import { copyingRecordsDocs } from './sections/copying-records.js'
 import {
   auditLevelDocs,
   bugReporterDocs,
@@ -316,9 +332,13 @@ import { layoutEditor, layoutPersonalDefaults } from './sections/layout-editor.j
 import { lineSplitDocs } from './sections/line-split.js'
 import { listEditing } from './sections/list-editing'
 import { collabLiveTrace, collabTabCount } from './sections/live-attention.js'
+import { collabLiveCoedit } from './sections/live-coedit.js'
 import { collabLiveConflicts } from './sections/live-conflicts.js'
+import { liveEditingDocs } from './sections/live-editing.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { liveFormsDocs } from './sections/live-forms.js'
+import { liveSavesDocs } from './sections/live-saves.js'
+import { collabLiveGroupsDrags } from './sections/live-groups-drags.js'
 import { collabLiveConfig, collabLiveCounts, collabLiveLists } from './sections/live-lists.js'
 import {
   aiActionsDocs,
@@ -328,10 +348,19 @@ import {
   webPushDocs
 } from './sections/live-ops.js'
 import { liveOutsideDocs } from './sections/live-outside.js'
+import { livePeopleDocs } from './sections/live-people.js'
 import { collabLiveProgress } from './sections/live-progress.js'
-import { collabLiveOps, collabLiveRecords, collabPresence } from './sections/live-records.js'
+import { liveRecordMovesDocs } from './sections/live-record-moves.js'
+import {
+  collabLiveAdmin,
+  collabLiveOps,
+  collabLiveRecords,
+  collabPresence
+} from './sections/live-records.js'
 import { liveScreensDocs } from './sections/live-screens.js'
+import { liveSelectionDocs } from './sections/live-selection.js'
 import { collabLiveSetting } from './sections/live-setting.js'
+import { collabLiveSync } from './sections/live-sync.js'
 import { loadingFeelDocs } from './sections/loading-feel'
 import {
   lowCodeFormulaBuilder,
@@ -409,6 +438,7 @@ import { overviewPageDocs } from './sections/overview-page'
 import { overviewSectionsDocs } from './sections/overview-sections'
 import { partnerNeedsDocs } from './sections/partner-needs.js'
 import { payloadTemplates } from './sections/payload-templates.js'
+import { pickerBadgesDocs } from './sections/picker-badges.js'
 import {
   aiContentValidation,
   aiDuplicateDetection,
@@ -445,6 +475,7 @@ import { realtimeLoadTest } from './sections/realtime-load-test.js'
 import { realtimePresenceLoad } from './sections/realtime-presence-load.js'
 import { realtimeTierDocs } from './sections/realtime-tier.js'
 import { realtimeTransport } from './sections/realtime-transport.js'
+import { collabRecordContext } from './sections/record-context.js'
 import { collabRecordGlance } from './sections/record-glance.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
 import { recordIntegrations } from './sections/record-integrations.js'
@@ -515,6 +546,7 @@ import {
   securityUserScopes,
   securityWorkspaceTemplates
 } from './sections/security.js'
+import { collabSendMyView } from './sections/send-my-view.js'
 import { sqlChecksDocs } from './sections/sql-checks.js'
 import {
   storageFileExpiry,
@@ -550,6 +582,7 @@ import {
   treeOverview,
   treeSetup
 } from './sections/trees.js'
+import { collabWatchList } from './sections/watch-list.js'
 import {
   pipelineApi,
   pipelineBranching,
@@ -932,20 +965,34 @@ export const navSections: NavGroup[] = [
       collabLiveRecords,
       collabReloadTrust,
       collabLiveConflicts,
+      collabLiveCoedit,
+      liveEditingDocs,
+      collabLiveSync,
       collabRecordGlance,
+      collabRecordContext,
       liveWidgetsDocs,
       liveOutsideDocs,
+      livePeopleDocs,
       collabLiveProgress,
       liveFormsDocs,
+      pickerBadgesDocs,
+      liveSavesDocs,
+      liveRecordMovesDocs,
       collabOfflinePopout,
       collabLiveLists,
+      liveSelectionDocs,
+      collabLiveGroupsDrags,
       collabChangedByOthers,
+      collabChangedAfterApproval,
       liveScreensDocs,
       collabLiveCounts,
       collabLiveConfig,
       collabBackAndPeek,
+      collabWatchList,
       collabLiveOps,
+      collabLiveAdmin,
       collabPresence,
+      collabSendMyView,
       collabTabCount,
       collabLiveSetting,
       collabLiveTrace,
@@ -979,6 +1026,7 @@ export const navSections: NavGroup[] = [
       duplicateWarningsDocs,
       partnerNeedsDocs,
       lineSplitDocs,
+      copyingRecordsDocs,
       adminUxListSignals,
       adminUxImportFromUrl,
       adminUxAiMapping,

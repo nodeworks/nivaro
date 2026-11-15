@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useMemo, useState } from 'react'
+import { type KeyboardEvent, type ReactNode, useMemo, useState } from 'react'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { inputBase } from './panel-style'
@@ -104,9 +104,12 @@ export function ChangeNoteSave({
   onChange,
   onSave,
   onClose,
-  intro
+  intro,
+  footer
 }: {
   open: boolean
+  /** Under the boxes (rt8 #25: who the save reaches). */
+  footer?: ReactNode
   anchor: HTMLElement | null
   policy: ChangeNotePolicy
   /** Replaces the line under the title (the edit freeze explains itself, #2717). */
@@ -156,6 +159,7 @@ export function ChangeNoteSave({
           onChange={onChange}
           onSubmit={() => void submit()}
         />
+        {footer && <div className='mt-2.5'>{footer}</div>}
         <div className='mt-3 flex items-center justify-end gap-1.5'>
           <button
             type='button'

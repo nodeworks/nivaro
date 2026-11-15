@@ -15,9 +15,18 @@ export function QueueBulkBar({
   onRelease,
   onTransition,
   onClear,
-  children
+  children,
+  figures,
+  notices,
+  onActionIntent
 }: {
   count: number
+  /** rt8 — the selection's live count + sums (replaces "N selected"). */
+  figures?: ReactNode
+  /** rt8 — "open by Beth" / "changed since you picked them", drawn above the bar. */
+  notices?: ReactNode
+  /** rt8 — the person reached for one of the bar's actions (pointer or keyboard). */
+  onActionIntent?: () => void
   states: Array<{ value: string; label: string }>
   busy: boolean
   claimsEnabled?: boolean
@@ -39,72 +48,84 @@ export function QueueBulkBar({
   return (
     // Labels never wrap ("Push to / Fusion" on two lines, 2026-11-09): every button keeps one
     // line (white-space inherits) and a bar wider than the window scrolls sideways instead.
-    <div className='nvr-slide-up-centered fixed bottom-6 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto whitespace-nowrap rounded-full border border-slate-200 bg-white px-4 py-2 shadow-lg dark:border-border dark:bg-card [&>*]:shrink-0'>
-      <span className='mr-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
-        {count} selected
-      </span>
-      {claimsEnabled && showClaim && (
-        <button
-          type='button'
-          disabled={busy}
-          onClick={onClaim}
-          className='rounded-md px-2.5 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 disabled:opacity-50 dark:text-nvr-cyan'
-        >
-          Claim
-        </button>
-      )}
-      {claimsEnabled && showRelease && (
-        <button
-          type='button'
-          disabled={busy}
-          onClick={onRelease}
-          className='rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
-        >
-          Release
-        </button>
-      )}
-      {children}
-      {showTransition && (
-        <Popover open={transitionOpen} onOpenChange={setTransitionOpen}>
-          <PopoverTrigger asChild>
-            <button
-              type='button'
-              disabled={busy || states.length === 0}
-              className='flex items-center gap-1 rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
-            >
-              Transition <ArrowRight className='h-3 w-3' />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className='w-[200px] p-0' align='center' side='top'>
-            <Command>
-              <CommandInput placeholder='Target state…' className='h-8 text-[12px]' />
-              <CommandList>
-                <CommandEmpty>No state found.</CommandEmpty>
-                {states.map((s) => (
-                  <CommandItem
-                    key={s.value}
-                    value={s.label}
-                    onSelect={() => {
-                      setTransitionOpen(false)
-                      onTransition(s.value)
-                    }}
-                  >
-                    {s.label}
-                  </CommandItem>
-                ))}
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
-      )}
-      <button
-        type='button'
-        onClick={onClear}
-        className='ml-1 rounded-full p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
-        aria-label='Clear selection'
+    <div className='nvr-slide-up-centered fixed bottom-6 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2'>
+      {notices}
+      <div
+        onPointerDownCapture={(e) => {
+          if ((e.target as Element | null)?.closest?.('button')) onActionIntent?.()
+        }}
+        onKeyDownCapture={(e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          if ((e.target as Element | null)?.closest?.('button')) onActionIntent?.()
+        }}
+        className='flex max-w-full items-center gap-1 overflow-x-auto whitespace-nowrap rounded-full border border-slate-200 bg-white px-4 py-2 shadow-lg dark:border-border dark:bg-card [&>*]:shrink-0'
       >
-        <X className='h-3.5 w-3.5' />
-      </button>
+        <span className='mr-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+          {figures ?? `${count} selected`}
+        </span>
+        {claimsEnabled && showClaim && (
+          <button
+            type='button'
+            disabled={busy}
+            onClick={onClaim}
+            className='rounded-md px-2.5 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 disabled:opacity-50 dark:text-nvr-cyan'
+          >
+            Claim
+          </button>
+        )}
+        {claimsEnabled && showRelease && (
+          <button
+            type='button'
+            disabled={busy}
+            onClick={onRelease}
+            className='rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
+          >
+            Release
+          </button>
+        )}
+        {children}
+        {showTransition && (
+          <Popover open={transitionOpen} onOpenChange={setTransitionOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type='button'
+                disabled={busy || states.length === 0}
+                className='flex items-center gap-1 rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
+              >
+                Transition <ArrowRight className='h-3 w-3' />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className='w-[200px] p-0' align='center' side='top'>
+              <Command>
+                <CommandInput placeholder='Target state…' className='h-8 text-[12px]' />
+                <CommandList>
+                  <CommandEmpty>No state found.</CommandEmpty>
+                  {states.map((s) => (
+                    <CommandItem
+                      key={s.value}
+                      value={s.label}
+                      onSelect={() => {
+                        setTransitionOpen(false)
+                        onTransition(s.value)
+                      }}
+                    >
+                      {s.label}
+                    </CommandItem>
+                  ))}
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+        )}
+        <button
+          type='button'
+          onClick={onClear}
+          className='ml-1 rounded-full p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+          aria-label='Clear selection'
+        >
+          <X className='h-3.5 w-3.5' />
+        </button>
+      </div>
     </div>
   )
 }

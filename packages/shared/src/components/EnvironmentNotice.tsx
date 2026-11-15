@@ -1,5 +1,6 @@
 import { ArrowUpRight, FlaskConical } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useTabTitleLabel } from '../lib/tab-attention'
 
 /**
  * "This is not production" (Rob 2026-11-13: people signed in to staging thinking it was the
@@ -69,24 +70,10 @@ export function useInstanceEnvironment(apiBase = ''): EnvironmentInfo | null {
   return info
 }
 
-/** Puts "Staging · " in front of the tab title while mounted (and keeps it there). */
+/** Puts "Staging · " in front of the tab title while mounted (after any attention count:
+ *  "(3) Staging · …"). The title has ONE owner, lib/tab-attention.ts — never a second observer. */
 function useTitlePrefix(label: string | null) {
-  useEffect(() => {
-    if (!label || typeof document === 'undefined') return
-    const prefix = `${label} · `
-    const apply = () => {
-      if (!document.title.startsWith(prefix)) document.title = prefix + document.title
-    }
-    apply()
-    const titleEl = document.querySelector('title')
-    const obs = titleEl ? new MutationObserver(apply) : null
-    if (titleEl && obs)
-      obs.observe(titleEl, { childList: true, characterData: true, subtree: true })
-    return () => {
-      obs?.disconnect()
-      if (document.title.startsWith(prefix)) document.title = document.title.slice(prefix.length)
-    }
-  }, [label])
+  useTabTitleLabel(label)
 }
 
 const TAPE =

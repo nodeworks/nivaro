@@ -27,6 +27,7 @@ import {
   sameId
 } from './ai-plans.js'
 import { getApp } from './io-holder.js'
+import { announceRecordHelp } from './record-help.js'
 import { nameOf, notifyTicket, SUPPORT_KIND, type TicketRow } from './support-tickets.js'
 import { logTaskEvent, type TaskRow } from './tasks.js'
 
@@ -1195,6 +1196,8 @@ export async function onTaskDoPlanFinished(
       .join('\n')
     await postThreadComment(task, ownerId, text)
     await logTaskEvent(task.id, ownerId, head.slice(0, 500), undefined, 'ai-task-do')
+    // rt9 #19: the plan may have picked up or closed the request — its record's chip re-reads.
+    if (kindOf(task) === 'ticket') announceRecordHelp((await loadTask(task.id)) as never)
     if (app && kindOf(task) === 'ticket') {
       const me = (await nameOf(ownerId)) ?? 'Someone'
       await notifyTicket(app, task as unknown as TicketRow, [task.created_by, task.assignee], {
@@ -1223,6 +1226,7 @@ export async function noteTaskDoUndo(
   const url = planLink(id)
   const text = `Rolled back what AI did (“${doc.title}”): ${result.undone} record${result.undone === 1 ? '' : 's'} restored${result.skipped ? `, ${result.skipped} changed since and left alone` : ''}${result.failed ? `, ${result.failed} failed` : ''}.${url ? `\nPlan: ${url}` : ''}`
   await postThreadComment(task, String(user.id), text).catch(() => undefined)
+  if (kindOf(task) === 'ticket') announceRecordHelp((await loadTask(task.id)) as never)
   await logTaskEvent(
     task.id,
     String(user.id),

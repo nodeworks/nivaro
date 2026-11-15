@@ -8,6 +8,8 @@ import {
   runWithTenantDb
 } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { noteCatalogChange } from './catalog-impact.js'
+import { noteRawWriteSources } from './field-write-sources.js'
 import { getIo } from './io-holder.js'
 import { fanOutRawWrites } from './raw-write-fanout.js'
 import { broadcastCollectionUpdate } from './realtime.js'
@@ -157,9 +159,12 @@ const stats = {
   lastDrainAt: null as string | null
 }
 
-function broadcastPlanned(list: RawWriteAnnouncement[]): number {
+function broadcastPlanned(list: RawWriteAnnouncement[], fromInbox = false): number {
   const io = getIo() ?? undefined
   const planned = planBroadcasts(list)
+  // Realtime round 7 #7 — keep who wrote each record field ("Set by procedure reforecast"),
+  // since a raw write leaves no revision. Fire and forget; the broadcast never waits on it.
+  void noteRawWriteSources(list, fromInbox)
   for (const p of planned) {
     try {
       broadcastCollectionUpdate(io, p.collection, p.item, {
@@ -173,10 +178,31 @@ function broadcastPlanned(list: RawWriteAnnouncement[]): number {
     }
   }
   stats.broadcasts += planned.length
+  // rt6 #19 — a catalog / stock write by a procedure or script: the owners of open records whose
+  // lines it changed hear it once (services/catalog-impact.ts; O(1) for any other collection).
+  for (const a of list) noteCatalogChange(a.collection, a.ids ?? null)
   // Realtime round 3 #6 — GraphQL events for action-less announcements, opted-in webhooks and
   // flows, alert re-evaluation (services/raw-write-fanout.ts). Never blocks the broadcast.
   void fanOutRawWrites(list, planned).catch(() => {})
+  noteApprovalBursts(list)
   return planned.length
+}
+
+/**
+ * "Changed after approval" (round 7, item 21): a procedure's or script's write to a few named
+ * records may open a change burst for their approvers (services/approval-changes.ts). Rollup
+ * recalcs follow an app write that already counted; creates and deletes are not "changed".
+ */
+function noteApprovalBursts(list: RawWriteAnnouncement[]): void {
+  for (const a of list) {
+    const named = (a.ids ?? []).filter((i) => i != null && String(i) !== '' && String(i) !== '*')
+    if (named.length === 0 || named.length > 20) continue
+    if (a.action === 'create' || a.action === 'delete') continue
+    if (/^rollup/i.test(String(a.source ?? ''))) continue
+    void import('./approval-changes.js')
+      .then((m) => m.noteApprovalWrite(a.collection, named, null))
+      .catch(() => {})
+  }
 }
 
 /** Broadcast everything queued now (tests, shutdown), each tenant in its own context. */
@@ -333,7 +359,7 @@ export async function drainRawWrites(): Promise<{ rows: number; broadcasts: numb
     const batch = await claimBatch()
     if (!batch.length) break
     rows += batch.length
-    broadcasts += broadcastPlanned(rowsToAnnouncements(batch))
+    broadcasts += broadcastPlanned(rowsToAnnouncements(batch), true)
     if (batch.length < DRAIN_BATCH) break
   }
   stats.drained += rows

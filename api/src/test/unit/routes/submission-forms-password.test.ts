@@ -296,3 +296,90 @@ describe('public submission refuses nested payloads end to end', () => {
     await app.close()
   })
 })
+
+// Realtime round 9 (#22): a form with its status page on hands back a signed link bound to the
+// submission; only its SHA-256 is stored, the admin list never shows it.
+const mail = vi.hoisted(() => ({ sent: [] as Array<Record<string, unknown>> }))
+vi.mock('../../../services/mail.js', () => ({
+  sendMail: vi.fn(async (o: Record<string, unknown>) => {
+    mail.sent.push(o)
+    return { status: 'sent', log_id: null }
+  })
+}))
+
+describe('submission status link (rt9 #22)', () => {
+  const statusForm = (extra: Record<string, unknown> = {}) => ({
+    password_hash: null,
+    form_config: JSON.stringify({
+      status_page: { enabled: true, source: 'pipeline', map: [], ...extra }
+    })
+  })
+
+  it('returns a status link and stores only its hash', async () => {
+    const app = await buildApp()
+    state.form = statusForm()
+    const res = await submit(app, '')
+    expect(res.statusCode).toBe(201)
+    const url = String(res.json().data.status_url)
+    expect(url).toMatch(/\/form-status\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)
+    const token = url.split('/form-status/')[1]
+    const insert = state.ran.find(
+      (q) => q.method === 'insert' && q.sql.includes('[nivaro_submissions]')
+    )
+    const stored = JSON.stringify(insert?.bindings ?? [])
+    expect(stored).not.toContain(token)
+    const { hashStatusToken } = await import('../../../services/submission-status.js')
+    expect(stored).toContain(hashStatusToken(token))
+    expect(mail.sent).toHaveLength(0)
+    await app.close()
+  })
+
+  it('emails the link to the address in the configured field only', async () => {
+    mail.sent.length = 0
+    const app = await buildApp()
+    state.form = { ...statusForm({ email_field: 'title' }), fields: '["title"]' }
+    const res = await submit(app, '', { title: 'pat@example.com' })
+    expect(res.json().data.status_emailed).toBe(true)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(mail.sent[0]?.to).toBe('pat@example.com')
+    expect(String((mail.sent[0]?.data as Record<string, unknown>)?.action_url)).toContain(
+      '/form-status/'
+    )
+    await app.close()
+  })
+
+  it('caps receipts per mailbox (case and +tags folded) and never says which cap hit', async () => {
+    mail.sent.length = 0
+    const app = await buildApp()
+    state.form = { ...statusForm({ email_field: 'title' }), fields: '["title"]' }
+    const addresses = [
+      'pat@example.com',
+      'PAT@example.com',
+      'pat+x@example.com',
+      'pat+y@Example.com'
+    ]
+    const emailed: boolean[] = []
+    for (const a of addresses) {
+      const res = await submit(app, '', { title: a })
+      expect(res.statusCode).toBe(201)
+      expect(res.json().data.status_url).toBeTruthy()
+      emailed.push(res.json().data.status_emailed)
+      expect(JSON.stringify(res.json())).not.toMatch(/cap|limit/i)
+    }
+    expect(emailed).toEqual([true, true, true, false])
+    await new Promise((r) => setTimeout(r, 20))
+    expect(mail.sent).toHaveLength(3)
+    // Another mailbox still gets its receipt.
+    const other = await submit(app, '', { title: 'sam@example.com' })
+    expect(other.json().data.status_emailed).toBe(true)
+    await app.close()
+  })
+
+  it('gives no link when the status page is off', async () => {
+    const app = await buildApp()
+    state.form = { password_hash: null }
+    const res = await submit(app, '')
+    expect(res.json().data.status_url).toBeUndefined()
+    await app.close()
+  })
+})

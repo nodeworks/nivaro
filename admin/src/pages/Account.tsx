@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useCloudPlugins, useExtensionPlugins } from '@/extensions/store'
 import {
   Table,
   TableBody,
@@ -272,6 +273,11 @@ function SelfHostedView() {
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export function AccountPage() {
+  const extensionPlugins = useExtensionPlugins()
+  const cloudPlugins = useCloudPlugins()
+  const usagePanels = [...cloudPlugins, ...extensionPlugins].flatMap((p) =>
+    p.slots?.['account-usage'] ? [p.slots['account-usage'].component] : []
+  )
   // Gate on health.cloud so we never call cloud endpoints in self-hosted mode.
   // The health query is already cached by AppLayout (staleTime: Infinity).
   const { data: health, isLoading: healthLoading } = useQuery({
@@ -510,8 +516,14 @@ export function AccountPage() {
             </Card>
           </div>
 
-          {/* Usage details */}
-          {(usage || usageQuery.isLoading) && (
+          {/* Usage details — a hosting layer's own usage panel (the `account-usage` slot, e.g. a
+              live plan meter) replaces the built-in card. */}
+          {usagePanels.length > 0 ? (
+            usagePanels.map((Panel, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: plugin slots have no stable key
+              <Panel key={i} />
+            ))
+          ) : (usage || usageQuery.isLoading) && (
             <Card className='border-border'>
               <CardHeader className='px-5 pt-5 pb-3'>
                 <CardTitle className='text-sm font-semibold text-slate-900 dark:text-foreground'>

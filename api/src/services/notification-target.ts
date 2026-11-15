@@ -185,7 +185,8 @@ export async function resolveTargetUrl(
       case 'approval':
         if (spec.collection && spec.id != null)
           return withFocus(await recordLink(spec.collection, spec.id, opts))
-        // A collection list; `query` narrows it (a bulk-change notice: `ids=1,2,3`).
+        // A collection list keeps its query: `ids=1,2,3` (a bulk-change notice, rt6 #19 catalog
+        // notice), a view digest, a sent view's `lv=` settings.
         if (spec.collection)
           return withFocus(
             `${await linkTo('home', {}, opts)}`.replace(/\/$/, '') +
@@ -214,7 +215,7 @@ export async function resolveTargetUrl(
       case 'chat':
         return spec.room ? linkTo('chat', { room: spec.room }, opts) : null
       case 'queue':
-        return spec.id != null ? linkTo('queue', { id: spec.id }, opts) : null
+        return spec.id != null ? withFocus(await linkTo('queue', { id: spec.id }, opts)) : null
       case 'report':
         return spec.id != null ? linkTo('report', { id: spec.id }, opts) : null
       case 'alerts':

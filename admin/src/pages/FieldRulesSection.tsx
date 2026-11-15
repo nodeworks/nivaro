@@ -1,4 +1,5 @@
 import {
+  ConfigReachNote,
   ConfigReadBack,
   describeFieldRule,
   FieldPicker,
@@ -805,6 +806,9 @@ export function FieldRulesSection({
           </Button>
         )}
       </div>
+
+      {/* rt8 #25 — rule edits reach open forms at once: who that is right now. */}
+      {isAdmin && list.length > 0 && <ConfigReachNote collections={[collection]} />}
 
       {isAdmin && list.length > 0 && (
         <ExplainButton

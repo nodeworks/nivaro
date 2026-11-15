@@ -106,6 +106,9 @@ import {
   recordNavigation,
   restoreTrailScroll,
   ScreenRefreshButton,
+  SentViewCards,
+  ScreenShareHost,
+  type ScreenShareRuntime,
   SOMETHING_WENT_WRONG,
   scrollPathOf,
   scrollToRestore,
@@ -113,12 +116,14 @@ import {
   TabCountHost,
   TipLayer,
   useClientChaosGate,
-  useLiveQueryBridge
+  useLiveQueryBridge,
+  WatchDock,
+  WatchListButton
 } from '@nivaro/shared'
 import { AskPanelHost } from '@/components/ask-panel-host'
 import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
-import { NotificationBell } from '@/components/notification-bell'
+import { NOTIF_ROUTES, NotificationBell } from '@/components/notification-bell'
 import { KeyboardShortcuts } from '@/components/shortcuts-overlay'
 import { TeamChatDock } from '@/components/team-chat'
 import { ThemeSwitcher } from '@/components/theme-switcher'
@@ -640,6 +645,8 @@ export function AppLayout() {
           </NivaroProvider>
           <IncidentBannerHost />
           <DrillBannerHost />
+          {/* Realtime idea 24 — "Sharing with … · Stop" while a support screen share runs. */}
+          <ScreenShareHost runtime={screenShareRuntime} />
           <div className='flex min-h-0 flex-1 overflow-hidden'>
             <a
               href='#main-content'
@@ -750,6 +757,8 @@ export function AppLayout() {
                   {/* Realtime idea 12: refresh this page's data in place (never the page). */}
                   <ScreenRefreshButton variant='rail' />
                   <NotificationBell collapsed compact />
+                  {/* rt5: the watch list (dot = a pinned record changed while it was closed). */}
+                  <WatchListButton variant='rail' />
                   {/* Beside chat and the bell rather than buried in System: "what
                   changed" is something people reach for from anywhere, not a
                   configuration screen they navigate to. */}
@@ -1000,6 +1009,10 @@ export function AppLayout() {
                 </PageErrorBoundary>
               </HelpVideoHost>
             </main>
+            {/* rt5: the watch list dock — its own column beside the page, never over it. */}
+            <PeekSheetProviders>
+              <WatchDock />
+            </PeekSheetProviders>
           </div>
         </div>
         {/* Outside the animated page wrapper on purpose — see bug-reporter.tsx. */}
@@ -1022,6 +1035,7 @@ export function AppLayout() {
         <UserSyncHost />
         <OutboxHost userId={authUser?.id ?? null} />
         <HuddleCallHost />
+        <SentViewHost />
         {/* Realtime #17: one record sheet for the whole app (My Work, the bell, notifications,
             search, record links in comments open records in it). */}
         <RecordPeekHost wrapSheet={(sheet) => <PeekSheetProviders>{sheet}</PeekSheetProviders>} />
@@ -1257,6 +1271,12 @@ function UserSyncHost() {
 }
 
 /** #2846 — the "Drill running" strip while a chaos fault is armed (Stop link for admins → /chaos). */
+/** rrweb, loaded only when a screen share starts or a support person opens one. */
+const screenShareRuntime: ScreenShareRuntime = {
+  loadRecord: async () => (await import('rrweb')).record as never,
+  loadReplayer: async () => (await import('rrweb')).Replayer as never
+}
+
 function DrillBannerHost() {
   const navigate = useNavigate()
   const { user } = useAuth()
@@ -1312,6 +1332,17 @@ function HuddleCallHost() {
   return (
     <NivaroProvider client={announcementsClient}>
       <HuddleCallLayer />
+    </NivaroProvider>
+  )
+}
+
+/** Send my view: a colleague's view arrives as a quiet card while this app is open. */
+function SentViewHost() {
+  const navigate = useNavigate()
+  if (readMasquerade()) return null
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <SentViewCards routes={NOTIF_ROUTES} onNavigate={(p) => navigate(p)} />
     </NivaroProvider>
   )
 }

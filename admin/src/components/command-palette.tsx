@@ -1,9 +1,12 @@
 import {
+  LiveNewMatchesPill,
   openAskPanel,
   peekable,
   refreshScreenData,
   screenRefreshMatches,
+  searchRowKey,
   TipLayer,
+  useLiveSearchResults,
   useRecordPeek,
   userErrorMessage
 } from '@nivaro/shared'
@@ -31,7 +34,7 @@ import {
   X,
   Zap
 } from 'lucide-react'
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { ScrollTabs } from '@/components/scroll-tabs'
@@ -183,6 +186,7 @@ export function withExactFirst(records: SearchRecord[], exact: SearchRecord | nu
 }
 
 const TAB_PAGE = 25
+const NO_RECORDS: SearchRecord[] = []
 
 /** A person from the directory search: directory columns for everyone;
  *  status and account kind only reach an admin. */
@@ -369,6 +373,7 @@ export function CommandPalette() {
   const peek = useRecordPeek()
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const listRef = useRef<HTMLDivElement>(null)
   const { user } = useAuth()
   const isAdmin = !!user?.is_admin
   const [open, setOpen] = useState(false)
@@ -425,7 +430,11 @@ export function CommandPalette() {
   // #1581 — search analytics: what was typed, how many results, how long, what was opened.
   const searchMsRef = useRef(0)
   const searchLogRef = useRef<{ key: string; id: Promise<number | null> } | null>(null)
-  const { data: searchData, isFetching } = useQuery({
+  const {
+    data: searchData,
+    isFetching,
+    dataUpdatedAt: searchUpdatedAt
+  } = useQuery({
     queryKey: ['global-search', debouncedQuery],
     queryFn: () => {
       const started = Date.now()
@@ -488,7 +497,10 @@ export function CommandPalette() {
   const pageMatches = q
     ? allPages.filter((p) => matchesQuery(p, q)).slice(0, 8)
     : allPages.slice(0, 8)
-  const records = live ? withExactFirst(searchData?.records ?? [], searchData?.exact) : []
+  const answerRecords = useMemo(
+    () => (live ? withExactFirst(searchData?.records ?? [], searchData?.exact) : NO_RECORDS),
+    [live, searchData]
+  )
   const people = live ? (searchData?.people ?? []) : []
   const serverActions = live ? (searchData?.actions ?? []) : []
   const semantic = debouncedQuery.length >= 4 ? (searchData?.semantic ?? []) : []
@@ -503,6 +515,36 @@ export function CommandPalette() {
 
   // Collection tabs: each matched collection's count as the caller, then one
   // collection's matches a page at a time.
+  // rt8 #24 — while open, the record results follow other people's writes (the /search page's
+  // live results, shared): a renamed record reads anew in place, one that stops matching dims
+  // where it is, new matches are only counted ("1 new match · Show"). Nothing moves under the
+  // keyboard selection; every re-ask is the palette's own search, as the viewer.
+  const recordsLive = useLiveSearchResults<SearchRecord>({
+    rows: answerRecords,
+    collections: [...new Set(answerRecords.map((r) => r.collection))].slice(0, 20),
+    enabled: open && live && !!searchData && !pendingCmd,
+    resetKey: `${debouncedQuery}|${searchUpdatedAt}`,
+    rootRef: listRef,
+    minGapMs: 1500,
+    fetchFresh: () =>
+      api
+        .get<{ data: GlobalSearchResponse }>('/global-search', {
+          params: { q: debouncedQuery, fresh: '1' }
+        })
+        .then((r) => withExactFirst(r.data.data.records ?? [], r.data.data.exact)),
+    onShow: () =>
+      void api
+        .get<{ data: GlobalSearchResponse }>('/global-search', {
+          params: { q: debouncedQuery, fresh: '1' }
+        })
+        .then((r) => {
+          qc.setQueryData(['global-search', debouncedQuery], r.data.data)
+          void qc.invalidateQueries({ queryKey: ['global-search-counts'] })
+        })
+        .catch(() => {})
+  })
+  const records = recordsLive.rows
+  const goneRecord = (r: SearchRecord) => recordsLive.dimmed.has(searchRowKey(r))
   const hitCollections = [...new Set(records.map((r) => r.collection))].sort().join(',')
   const { data: counts } = useQuery({
     queryKey: ['global-search-counts', debouncedQuery, hitCollections],
@@ -594,7 +636,6 @@ export function CommandPalette() {
   useEffect(() => {
     if (!pendingCmd) inputRef.current?.focus()
   }, [pendingCmd])
-  const listRef = useRef<HTMLDivElement>(null)
 
   // One log row per settled query per open; the row remembers what was picked.
   // biome-ignore lint/correctness/useExhaustiveDependencies: allPages is derived from stable inputs
@@ -734,7 +775,9 @@ export function CommandPalette() {
     ['record', records],
     ['sem', semantic]
   ] as const)
-    for (const r of list)
+    for (const r of list) {
+      // A row that no longer matches (rt8 #24) is neither previewed nor opened.
+      if (prefix === 'record' && goneRecord(r)) continue
       entries.set(recordValue(prefix, r), {
         kind: collectionLabel(r),
         title: recordLabel(r),
@@ -742,6 +785,7 @@ export function CommandPalette() {
         path: recordPath(r.collection, r.id),
         record: r
       })
+    }
   for (const r of recentViews)
     entries.set(`rview-${r.collection}-${r.item_id}`, {
       kind: titleCase(r.collection),
@@ -992,6 +1036,9 @@ export function CommandPalette() {
           )}
           <div className='flex'>
             <CommandList ref={listRef} className='max-h-[400px] flex-1'>
+              {!collectionTab && !activeExtra && (
+                <LiveNewMatchesPill count={recordsLive.newCount} onShow={recordsLive.show} />
+              )}
               {collectionTab ? (
                 <>
                   {tabRecords.length === 0 && (
@@ -1349,26 +1396,45 @@ export function CommandPalette() {
                     <>
                       <CommandSeparator />
                       <CommandGroup heading='Records'>
-                        {records.map((r, i) => (
-                          <CommandItem
-                            key={`record-${r.collection}-${r.id}`}
-                            value={recordValue('record', r)}
-                            onSelect={() => openRecord(r, i)}
-                          >
-                            <Search className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
-                            <div className='min-w-0 flex-1'>
-                              <div className='truncate text-[13px]'>
-                                <Hi text={recordLabel(r)} q={q} />
+                        {records.map((r, i) => {
+                          const gone = goneRecord(r)
+                          return (
+                            <CommandItem
+                              key={`record-${r.collection}-${r.id}`}
+                              value={recordValue('record', r)}
+                              onSelect={() => (gone ? undefined : openRecord(r, i))}
+                              aria-disabled={gone || undefined}
+                              data-row-key={searchRowKey(r)}
+                              data-search-gone={gone || undefined}
+                              className={gone ? 'opacity-55' : undefined}
+                            >
+                              <Search className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
+                              <div className='min-w-0 flex-1'>
+                                <div
+                                  className={
+                                    gone
+                                      ? 'truncate text-[13px] line-through decoration-slate-400'
+                                      : 'truncate text-[13px]'
+                                  }
+                                >
+                                  <Hi text={recordLabel(r)} q={q} />
+                                </div>
+                                {gone ? (
+                                  <div className='truncate text-[11px] text-muted-foreground'>
+                                    No longer matches
+                                  </div>
+                                ) : (
+                                  <RecordLine r={r} q={q} />
+                                )}
                               </div>
-                              <RecordLine r={r} q={q} />
-                            </div>
-                            <FriendlyIdChip r={r} />
-                            {r.exact && <ExactChip />}
-                            <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
-                              {collectionLabel(r)}
-                            </span>
-                          </CommandItem>
-                        ))}
+                              <FriendlyIdChip r={r} />
+                              {r.exact && <ExactChip />}
+                              <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
+                                {collectionLabel(r)}
+                              </span>
+                            </CommandItem>
+                          )
+                        })}
                       </CommandGroup>
                     </>
                   )}

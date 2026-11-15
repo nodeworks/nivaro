@@ -1,5 +1,6 @@
 import {
   Copy,
+  Crosshair,
   ExternalLink,
   Eye,
   History,
@@ -23,6 +24,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
+import { pointCoViewer, useCoViewers } from '../../lib/co-edit'
 import type { TextContext } from '../../lib/placement-behaviour'
 import { htmlToText } from '../../lib/sanitize-html'
 import { cn } from '../../lib/utils'
@@ -181,6 +183,8 @@ export function useFieldContextMenu({
   editable?: boolean
 }) {
   const [at, setAt] = useState<{ x: number; y: number } | null>(null)
+  // Realtime round 7 #4 — the other people on this record right now (none in Calm/Off).
+  const coViewers = useCoViewers(collection, itemId && itemId !== 'new' ? itemId : null)
   // Personal defaults: "Save as my default" asks inline (in the menu panel) before it saves.
   const personalDefaults = usePersonalDefaultsApi()
   // 'save' = Make default / Save as my default; 'update' = Update default (same slot, new value).
@@ -385,6 +389,19 @@ export function useFieldContextMenu({
         clickInside('[data-field-lineage]')
       }
     },
+    // Realtime round 7 #4 — "Point Beth to this field": a transient nudge to someone viewing
+    // the record right now (the server checks they can read the field and rate-limits it).
+    ...(saved && !field.field.startsWith('__')
+      ? coViewers.slice(0, 5).map(
+          (p) =>
+            ({
+              key: `point-${p.id}`,
+              label: `Point ${p.name} here`,
+              icon: <Crosshair className='h-3.5 w-3.5' />,
+              run: () => pointCoViewer(collection, itemId, field.field, p.id)
+            }) satisfies MenuItem
+        )
+      : []),
     ...(m2o && openRelated
       ? [
           {
@@ -510,7 +527,11 @@ export function useFieldContextMenu({
   // The ⋯ button shows only where the menu offers something about this field beyond the copy
   // items every field has: today, Save / Clear my default.
   const hasFieldItems = items.some(
-    (i) => i.key === 'save-default' || i.key === 'update-default' || i.key === 'clear-default'
+    (i) =>
+      i.key === 'save-default' ||
+      i.key === 'update-default' ||
+      i.key === 'clear-default' ||
+      i.key.startsWith('point-')
   )
   return {
     onContextMenu,
@@ -756,7 +777,13 @@ export function holdsLockByTakeOver(): boolean {
   return takeOverHolds.size > 0
 }
 
-export function usePresenceSoftLock(wrapperRef: RefObject<HTMLDivElement | null>) {
+export function usePresenceSoftLock(
+  wrapperRef: RefObject<HTMLDivElement | null>,
+  opts: { off?: boolean } = {}
+) {
+  // A field people write in together (rich text in the record form, realtime round 3 item 8)
+  // never asks: their typing merges, nobody overwrites anybody.
+  const off = !!opts.off
   const [editor, setEditor] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
   const confirmedRef = useRef(false)
@@ -783,7 +810,7 @@ export function usePresenceSoftLock(wrapperRef: RefObject<HTMLDivElement | null>
 
   const onFocusCapture = useCallback(
     (e: React.FocusEvent) => {
-      if (!editor || confirmedRef.current || holdsLockByTakeOver()) return
+      if (off || !editor || confirmedRef.current || holdsLockByTakeOver()) return
       const t = e.target as HTMLElement
       if (!t.matches('input, textarea, select, [contenteditable="true"], [role="combobox"]')) return
       pendingTargetRef.current = t
@@ -794,7 +821,7 @@ export function usePresenceSoftLock(wrapperRef: RefObject<HTMLDivElement | null>
       }, 0)
       setConfirming(true)
     },
-    [editor]
+    [editor, off]
   )
 
   const confirm = useCallback(() => {
@@ -809,7 +836,7 @@ export function usePresenceSoftLock(wrapperRef: RefObject<HTMLDivElement | null>
     pendingTargetRef.current = null
   }, [])
 
-  return { editor, confirming, onFocusCapture, confirm, cancel }
+  return { editor: off ? null : editor, confirming, onFocusCapture, confirm, cancel }
 }
 
 export function PresenceSoftLockStrip({

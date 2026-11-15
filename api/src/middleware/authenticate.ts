@@ -521,7 +521,10 @@ async function applyApiKey(
       path === '/api/users/cards' ||
       path === '/api/batch-get' ||
       path === '/api/activity/labels' ||
+      path === '/api/activity/feed' ||
       /^\/api\/partner-needs\/[^/]+$/.test(path) ||
+      path === '/api/picker-badges' ||
+      path === '/api/cell-locks/read' ||
       /^\/api\/field-config\/[^/]+\/project$/.test(path) ||
       // MCP protocol messages; the tool calls inside are judged one by one
       path === '/api/mcp'

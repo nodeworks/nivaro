@@ -43,6 +43,7 @@ import {
 import { type LintState, type LintTransition, lintTemplate } from '../services/pipeline-lint.js'
 import { loadPipelineOutline } from '../services/pipeline-outline-load.js'
 import { ADDENDUM_COLLECTION } from '../services/pipeline-subject.js'
+import { withReadGate } from '../services/read-gate.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import {
   checkTransitionOwner,
@@ -1418,15 +1419,33 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       color: string | null
     }>
     const stateById = new Map(states.map((st) => [String(st.id).toUpperCase(), st]))
-    const counts = (await db('nivaro_workflow_instances')
-      .where({ template: id })
-      .whereNull('completed_at')
-      .groupBy('current_state', 'collection')
-      .count({ c: '*' })
-      .select('current_state', 'collection')) as Array<{
+    // Per state: how many live records sit there and since when the longest-waiting one has —
+    // "entered" = the newest history row INTO the state it sits in, else when it started (the
+    // same reading as a record's `$state.entered_at`). History is read only for this template's
+    // open instances, through the (instance, to_state) index; the whole read holds a gate slot.
+    const entered = db('nivaro_workflow_history as h')
+      .join('nivaro_workflow_instances as ii', 'ii.id', 'h.instance')
+      .where('ii.template', id)
+      .whereNull('ii.completed_at')
+      .whereRaw('h.to_state = ii.current_state')
+      .groupBy('h.instance')
+      .select('h.instance')
+      .max({ at: 'h.timestamp' })
+      .as('e')
+    const counts = (await withReadGate(req.user?.id, () =>
+      db('nivaro_workflow_instances as i')
+        .leftJoin(entered, 'e.instance', 'i.id')
+        .where('i.template', id)
+        .whereNull('i.completed_at')
+        .groupBy('i.current_state', 'i.collection')
+        .count({ c: '*' })
+        .select('i.current_state', 'i.collection')
+        .select(db.raw('MIN(COALESCE(e.at, i.started_at)) as oldest'))
+    )) as Array<{
       current_state: string | null
       collection: string
       c: number
+      oldest: Date | string | null
     }>
     return reply.send({
       data: counts.map((row) => {
@@ -1437,6 +1456,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           state_id: row.current_state,
           collection: row.collection,
           count: Number(row.c),
+          oldest_at: row.oldest ? new Date(row.oldest).toISOString() : null,
           key: st?.key ?? null,
           label: st?.label ?? null,
           color: st?.color ?? null,
@@ -2456,6 +2476,29 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
       const brief = await buildApprovalBrief(collection, String(item))
       return reply.send({ data: brief })
+    }
+  )
+
+  /**
+   * Realtime round 8 #12 — "What changed since you sent it back": when the record is back in
+   * a step it was sent back from, the fields, lines and files that changed since that send
+   * back, judged as the caller (services/resubmission-diff.ts). `data: null` = not a return.
+   */
+  app.get(
+    '/instance/:collection/:item/resubmission',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, item } = req.params as { collection: string; item: string }
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
+      const { buildResubmissionDiff } = await import('../services/resubmission-diff.js')
+      try {
+        return reply.send({ data: await buildResubmissionDiff(req, collection, String(item)) })
+      } catch (err) {
+        req.log.warn({ err }, 'resubmission diff failed')
+        return reply
+          .code(503)
+          .send({ error: 'Could not load this right now', code: 'RESUBMISSION_UNAVAILABLE' })
+      }
     }
   )
 
@@ -3495,9 +3538,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const hist = (await selectInChunks(
         rows.map((r: { instance_id: unknown }) => String(r.instance_id)),
         2000,
+        // One read per page (≤500 ids); one bound list, so the plan is shared across lengths.
         (chunk) =>
-          db('nivaro_workflow_history')
-            .whereIn('instance', chunk)
+          whereInList(db('nivaro_workflow_history'), 'instance', chunk)
             .select('instance', 'to_state')
             .max('timestamp as at')
             .groupBy('instance', 'to_state')

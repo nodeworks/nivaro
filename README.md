@@ -158,7 +158,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **AI Knowledge** — Ask AI answers "how do I…" from the in-app docs (quoted and linked), a shared glossary of business terms (hover definitions on labels and in answers), per-collection data guides, AI-drafted glossary/guide suggestions an admin accepts, and a docs-gaps report of what the docs could not answer
 - **Trash & Restore** — every deleted record is restorable for 30 days with its original id
 - **Time-Travel Restore** — scrub a slider through a record's history and restore to any point
-- **Record Merge** — dedupe wizard that repoints every inbound reference to the survivor
+- **Merge Records** — fold duplicates into one: pick each field from any record (or combine long text / tags, or type a new value), keep one record and send the others to the trash, move lines, links, files, comments and tasks to the kept record; judged as the person (locks, partner ids), with a 24-hour undo. From a list selection, a record's ⋯ menu or the duplicate warning; per-collection "Allow merging" switch
 - **Spreadsheet Mode** — Excel-grade editable grid: keyboard nav, range select, paste blocks, fill down
 - **Schema Graph** — force-directed live map of your whole schema, sized by rows, heat-mapped by writes
 - **Live Presence Map** — see who's on which admin page in real time

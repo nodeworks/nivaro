@@ -66,7 +66,13 @@ export const LIVE_PRESENCE_EVENTS: ReadonlySet<string> = new Set([
   'field:editing',
   'field:changed',
   'presence:rows',
-  'record:uploading'
+  'record:uploading',
+  // rt8 #21 — "Claude (for Rob) is updating this record".
+  'record:agents',
+  // Who is editing a budget / planning grid (round 8 item 22, lib/grid-presence.ts).
+  'grid:editing',
+  // Round 9 #17 — ghosts of others' calendar / Gantt drags.
+  'record:drag'
 ])
 
 /**
@@ -84,7 +90,9 @@ export const LIVE_DATA_EVENTS: ReadonlySet<string> = new Set([
   'bulk:rows',
   'widget:data',
   'widget:stale',
-  'ops:changed'
+  'ops:changed',
+  // rt7 #9 — someone's big save is recalculating this record's totals.
+  'record:recalc'
 ])
 
 /** Should this named event be dropped before it reaches a screen? (pure for a given mode) */

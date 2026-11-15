@@ -1180,6 +1180,14 @@ export async function usersRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'notification_sounds must be an object or null' })
       }
     }
+    if ('urgent_sound' in body) {
+      // Round 9 #14 — one short chime when urgent work lands on this person (off by default;
+      // never while Live updates are Off, in quiet hours, do not disturb or focus mode).
+      const v = body.urgent_sound
+      if (v !== null && typeof v !== 'boolean')
+        return reply.code(400).send({ error: 'urgent_sound must be true, false or null' })
+      patch.urgent_sound = v === true ? true : null
+    }
     if ('notification_cleanup_days' in body) {
       // #2406 — archive read notifications older than N days automatically.
       const n = body.notification_cleanup_days

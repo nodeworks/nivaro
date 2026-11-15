@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import type { DerivedNote } from './derived-causes.js'
 import { evaluateRowRules, type RowRule, RowRuleLookupCache } from './field-rules.js'
 import { recordRuleEvalSample } from './field-rules-stats.js'
 
@@ -307,7 +308,9 @@ export async function applyRowRulesOnUpdate(
   collection: string,
   payload: Record<string, unknown>,
   callerFields: Set<string>,
-  existing: Record<string, unknown> | null
+  existing: Record<string, unknown> | null,
+  /** rt9 #10: why each target re-derived (its triggers that this write changed). */
+  derived?: DerivedNote[]
 ): Promise<string[]> {
   const wrote: string[] = []
   if (collection.startsWith('nivaro_') || !existing) return wrote
@@ -356,6 +359,15 @@ export async function applyRowRulesOnUpdate(
         if (working[key] !== merged[key]) {
           payload[key] = working[key]
           wrote.push(key)
+          derived?.push({
+            field: key,
+            kind: 'rule',
+            from: existing[key],
+            to: working[key],
+            inputs: [rule.trigger_field, ...(rule.trigger_fields ?? [])]
+              .filter((t): t is string => typeof t === 'string' && callerFields.has(t))
+              .map((t) => ({ collection, field: t }))
+          })
         }
       }
     }

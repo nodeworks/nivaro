@@ -17,6 +17,8 @@ const voided = vi.hoisted(() => ({
   tier: new Map<string, 'approval' | 'admin_only'>()
 }))
 vi.mock('../../../services/edit-lock.js', () => ({
+  // Realtime item 7 (line locks): no collection here is a line-locked child.
+  isLineLockChild: async () => false,
   lockHolderVerdict: async (holder: string | { id: string }) => {
     const id = typeof holder === 'string' ? holder : holder.id
     return voided.users.has(id)

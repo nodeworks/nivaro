@@ -3,6 +3,7 @@ import {
   CollectionBrowserView,
   defaultItemUrl,
   ItemEditAuthContext,
+  ListViewers,
   NavigationContext,
   NivaroProvider
 } from '@nivaro/shared'
@@ -70,7 +71,7 @@ export function CollectionBrowserV2Page() {
   const extraViews = useMemo(() => {
     const dateFields = (meta?.fields ?? [])
       .filter((f) => ['date', 'datetime', 'timestamp'].includes(String(f.type)))
-      .map((f) => ({ field: f.field, label: f.label || f.field }))
+      .map((f) => ({ field: f.field, label: f.label || f.field, type: f.type ?? null }))
     const template = meta?.display_template ?? null
     const views = [
       {
@@ -123,10 +124,22 @@ export function CollectionBrowserV2Page() {
         </button>
         {/* #3225 — how you got here (a record, a queue, search); Collections on a cold load. */}
         <PageTrail currentLabel={title} currentAs='h1' className='text-[13px]' />
+        {/* Who else has this list open — administrators only (the server sends nobody
+            else the names); in the header so it never reflows the list toolbar. */}
+        <span className='flex-1' />
+        <NivaroProvider client={client}>
+          <ListViewers
+            kind='list'
+            id={collection}
+            variant='header'
+            selfId={String(user?.id ?? '')}
+            className='mr-1'
+          />
+        </NivaroProvider>
         {isAdmin && (
           <Link
             to={`/data-model/${encodeURIComponent(collection)}`}
-            className='ml-auto inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/[0.1] dark:text-slate-300 dark:hover:bg-white/[0.05] dark:hover:text-slate-100'
+            className='inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/[0.1] dark:text-slate-300 dark:hover:bg-white/[0.05] dark:hover:text-slate-100'
           >
             <Pencil className='h-3.5 w-3.5' />
             Edit collection
@@ -148,27 +161,44 @@ export function CollectionBrowserV2Page() {
               collection={collection}
               initialSearch={searchParams.get('search') ?? ''}
               initialFilters={
-                // Import batch view (#128): ?ids=1,2,3 opens the browser
-                // filtered to exactly those records.
-                searchParams.get('ids')
+                // Pipeline editor's step chip: ?state=started,in_review opens the browser on the
+                // records sitting in those pipeline steps.
+                searchParams.get('state')
                   ? [
                       {
-                        id: 'batch-ids',
-                        path: ['id'],
-                        pathLabels: ['ID'],
-                        fieldType: 'integer',
+                        id: 'pipeline-state',
+                        path: ['$state'],
+                        pathLabels: ['State'],
+                        fieldType: 'string',
                         op: '_in',
-                        value: (searchParams.get('ids') ?? '')
+                        value: (searchParams.get('state') ?? '')
                           .split(',')
                           .filter(Boolean)
-                          .slice(0, 500)
+                          .slice(0, 50)
                       }
                     ]
-                  : undefined
+                  : // Import batch view (#128): ?ids=1,2,3 opens the browser
+                    // filtered to exactly those records.
+                    searchParams.get('ids')
+                    ? [
+                        {
+                          id: 'batch-ids',
+                          path: ['id'],
+                          pathLabels: ['ID'],
+                          fieldType: 'integer',
+                          op: '_in',
+                          value: (searchParams.get('ids') ?? '')
+                            .split(',')
+                            .filter(Boolean)
+                            .slice(0, 500)
+                        }
+                      ]
+                    : undefined
               }
               initialAiPrompt={aiPrompt}
               extraViews={extraViews}
               onOpenItem={(id) => navigate(`/collections/${collection}/${id}`)}
+              viewersInHeader
             />
           </ItemEditAuthContext.Provider>
         </NavigationContext.Provider>

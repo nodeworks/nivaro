@@ -124,6 +124,8 @@ export interface NotificationDeliveryRecord {
  *  `detail`, #27): the change lines a coalesced watch folded in, the child
  *  row it concerned. */
 export interface NotificationDetailRecord {
+  /** rt8 #21 — the change came from an agent working for the sender ("via Claude"). */
+  via_agent?: string | null
   changes?: Array<{ field: string; label: string; old: string; new: string }>
   via_child?: { collection: string; item: string; event: string; label?: string | null } | null
   bundle?: { writes: number; children: string[] } | null

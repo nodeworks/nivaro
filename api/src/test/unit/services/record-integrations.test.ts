@@ -107,6 +107,7 @@ describe('requirementIssues (#616)', () => {
     expect(issues).toEqual([
       {
         severity: 'ask',
+        kind: 'requirement',
         message: 'Asks for Sales order on 2 lines',
         collection: 'lines',
         fk_field: 'order',
@@ -117,6 +118,7 @@ describe('requirementIssues (#616)', () => {
       },
       {
         severity: 'ask',
+        kind: 'requirement',
         message: 'Asks for Site on 2 lines',
         collection: 'lines',
         fk_field: 'order',
@@ -125,7 +127,12 @@ describe('requirementIssues (#616)', () => {
           { id: '3', label: 'Line 3' }
         ]
       },
-      { severity: 'ask', message: 'Asks for Order number', field: 'order_number' }
+      {
+        severity: 'ask',
+        kind: 'requirement',
+        message: 'Asks for Order number',
+        field: 'order_number'
+      }
     ])
   })
 

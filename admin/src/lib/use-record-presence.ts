@@ -1,4 +1,4 @@
-import { liveEventQuiet, markRemoteCell, useLivePreference } from '@nivaro/shared'
+import { bindRecordCoEdit, liveEventQuiet, markRemoteCell, useLivePreference } from '@nivaro/shared'
 import { useEffect, useRef, useState } from 'react'
 import type { Socket } from 'socket.io-client'
 import { useAuth } from '@/lib/auth'
@@ -55,6 +55,9 @@ export function useRecordPresence(collection: string | undefined, item: string |
     const join = () => {
       if (!disposed) socket.emit('record:join', { collection, item })
     }
+    // Realtime round 7 — the shared form's section presence and "Point Beth to this field"
+    // ride this record-room socket (shared lib/co-edit.ts).
+    const unbindCoEdit = bindRecordCoEdit(socket, collection, item, user?.id ?? null)
     bind('auth:ok', join)
     // The socket is usually signed in already: join now, and again after each auth:ok.
     if (socket.connected) join()
@@ -80,11 +83,18 @@ export function useRecordPresence(collection: string | undefined, item: string |
     // the record room, so it carries upload announcements both ways —
     // outbound from the file fields' window event, inbound re-dispatched as
     // a window event RecordLiveSync renders as chips.
+    // rt9 #9: the whole report travels (upload id, field, phase, percent) — the server names the
+    // file only to people who may read that field. An upload naming another record stays out.
     const onLocalUpload = (e: Event) => {
-      const d = (e as CustomEvent).detail as { name?: string; state?: string }
-      if (d?.name) socket.emit('record:uploading', { name: d.name, state: d.state })
+      const d = (e as CustomEvent).detail as
+        | { name?: string; state?: string; collection?: string; item?: string }
+        | undefined
+      if (!d?.name) return
+      if (d.collection && (d.collection !== collection || String(d.item) !== String(item))) return
+      socket.emit('record:uploading', { ...d, collection, item: String(item) })
     }
-    window.addEventListener('nvr:upload-state', onLocalUpload)
+    // On the shared socket the record form's own `realtime.emit` already reaches the room.
+    if (!shared) window.addEventListener('nvr:upload-state', onLocalUpload)
     // Signals (a note being written, a transition dialog open — lib/presence-signals.ts) leave
     // through this socket too: it, not the feed socket, sits in the record room.
     const onSignalOut = (e: Event) => {
@@ -213,6 +223,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
       window.removeEventListener('nvr:upload-state', onLocalUpload)
       window.removeEventListener('nvr:record-signal-out', onSignalOut)
       disposed = true
+      unbindCoEdit()
       window.removeEventListener('nvr:cell-editing', onCellEditing)
       window.removeEventListener('nvr:row-editing', onRowEditing)
       document.removeEventListener('focusin', onFocusIn)

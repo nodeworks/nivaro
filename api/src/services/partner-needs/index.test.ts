@@ -66,6 +66,13 @@ const H = vi.hoisted(() => {
 type Row = Record<string, unknown>
 const tables = H.tables
 vi.mock('../../db/index.js', () => ({ db: H.fakeDb }))
+const gate = vi.hoisted(() => ({ labels: [] as string[] }))
+vi.mock('../read-gate.js', () => ({
+  withReadGate: async (_w: unknown, fn: () => Promise<unknown>, o?: { label?: string }) => {
+    gate.labels.push(String(o?.label))
+    return fn()
+  }
+}))
 
 const M = vi.hoisted(() => {
   // ─── metadata, permissions, the published template ───
@@ -371,7 +378,10 @@ describe('partnerNeeds', () => {
   })
 
   it('badges follow the deciding field: depot 1 → Alpha fields, depot 2 → Beta fields', async () => {
+    gate.labels = []
     const a = await partnerNeeds({ collection: 'orders', item: null, values: { depot: 1 } }, admin)
+    // The expensive body holds a read-gate slot.
+    expect(gate.labels).toEqual(['partner-needs'])
     expect(a.enabled).toBe(true)
     expect(a.depth).toBe('forward')
     expect(a.state?.key).toBe('draft')

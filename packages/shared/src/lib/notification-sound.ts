@@ -51,7 +51,35 @@ export function playNotificationSound(
   if (!kind || kind === 'off') return
   // A clean help-video recording captures this tab's audio: stay silent.
   if (isCleanRecording()) return
-  if (!opts.preview && !shouldPlayHere()) return
+  if (opts.preview) {
+    playNow(kind)
+    return
+  }
+  if (!shouldPlayHere()) return
+  // The urgent chime (lib/urgent-chime.ts) hears the same arrival on its own listener: wait a
+  // beat so that, when it plays, this one stays quiet — one sound per arrival.
+  setTimeout(() => {
+    if (!urgentChimeJustPlayed()) playNow(kind)
+  }, URGENT_SOUND_DEFER_MS)
+}
+
+let lastUrgentChimeAt = 0
+/** How long after the urgent chime the ordinary sound stays quiet (the same arrival). */
+export const URGENT_SOUND_WINDOW_MS = 1500
+/** How long the ordinary sound waits for a possible urgent chime of the same arrival. */
+export const URGENT_SOUND_DEFER_MS = 120
+
+/** The urgent chime just played (lib/urgent-chime.ts). */
+export function noteUrgentChime(now = Date.now()): void {
+  lastUrgentChimeAt = now
+}
+
+/** Did the urgent chime just play? Then the ordinary sound for that arrival is skipped. */
+export function urgentChimeJustPlayed(now = Date.now()): boolean {
+  return now - lastUrgentChimeAt < URGENT_SOUND_WINDOW_MS
+}
+
+function playNow(kind: string): void {
   const ac = audioCtx()
   if (!ac) return
   try {

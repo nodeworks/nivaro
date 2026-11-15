@@ -24,6 +24,19 @@ vi.mock('@nivaro/shared', () => ({
     stats: () => ({ gaps: 0, missed: 0, replayed: 0, refetched: 0 })
   }),
   refetchEventsFor: () => [],
+  // Realtime 23 — the per-record gap tracker is exercised in packages/shared (record-gaps.test.ts).
+  createRecordGapTracker: () => ({
+    observe: () => {},
+    forget: () => {},
+    stats: () => ({ gaps: 0, missed: 0, refetched: 0, tracked: 0 })
+  }),
+  recordRefetchEvent: () => null,
+  // Realtime 24 — socket self-repair is exercised in packages/shared (socket-liveness.test.ts).
+  attachSocketLiveness: () => null,
+  // Live updates setting (Normal/Calm/Off): these tests run as Normal.
+  liveCollectionEventPasses: () => true,
+  liveEventQuiet: () => false,
+  noteWriteToScreenEvent: () => {},
   // Reload reactions run at once here (the 0–3 s spread is exercised in packages/shared).
   createJitteredReaction: () => (_key: string, fn: () => void) => fn(),
   // #2476 — the replay socket tap is exercised in packages/shared (replay-socket.test.ts).

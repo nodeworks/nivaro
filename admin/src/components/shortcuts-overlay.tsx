@@ -55,7 +55,9 @@ const FIXED_SHORTCUTS: Array<{ label: string; keys: string[] }> = [
   { label: 'Open Ask AI on this page', keys: ['⌘', 'J'] },
   { label: 'Ask AI: edit the last question (empty box)', keys: ['↑'] },
   { label: 'Ask AI: stop the answer', keys: ['Esc'] },
-  { label: 'Ask AI: ask the last question again', keys: ['⌘', '↵'] }
+  { label: 'Ask AI: ask the last question again', keys: ['⌘', '↵'] },
+  { label: 'Pin or unpin this record on your watch list', keys: ['W'] },
+  { label: 'Show or hide the watch list', keys: ['⇧', 'W'] }
 ]
 
 /**

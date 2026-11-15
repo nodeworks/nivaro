@@ -5,7 +5,25 @@ import { db } from '../db/index.js'
 import { isSessionLike } from '../lib/auth-method.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  type ApprovalLinkState,
+  linkHeadline,
+  linkStateHtml,
+  linkStateSignature,
+  loadApprovalLinkState,
+  redactLinkState
+} from '../services/approval-link-state.js'
+import { adminLinkBase, ownOrigins, publicLinkBase } from '../services/instance-links.js'
+import {
+  type LiveMode,
+  publicLiveCsp,
+  publicLivePageHtml,
+  publicMessagePageHtml
+} from '../services/public-live-page.js'
+import { SignalStreamRoute, sharedSignature } from '../services/public-signal-stream.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
+import { takeBudget } from '../services/widget-live.js'
+import { overWindowLimit } from '../services/windowed-limit.js'
 import type { User } from '../types.js'
 
 /**
@@ -15,7 +33,10 @@ import type { User } from '../types.js'
  * with action buttons that hit GET /api/message-actions/callback?token=<signed>.
  * Tokens are HMAC-SHA256 signed with a key derived from SESSION_SECRET for this purpose only:
  *   base64url(JSON payload) + '.' + base64url(hmac)
- * Payload: { action_id, kind, ref_id, user?, collection?, item?, exp, jti? }
+ * Payload: { action_id, kind, ref_id, user?, collection?, item?, exp, jti?, t? }
+ *
+ * `t` is the tenant the token was minted for (currentTenantKey(); '' self-hosted): a token minted
+ * for one cloud tenant is refused on every other (they share SESSION_SECRET in one process).
  *
  * A card goes to a SHARED channel, so the link alone never decides anything (security audit
  * H8): an Approve/Reject link works only for the approver it names, signed in to Nivaro in that
@@ -33,9 +54,13 @@ export interface ActionTokenPayload {
   exp: number // unix seconds
   /** One-time id: a decision token is spent when its decision is made. */
   jti?: string
+  /** The tenant it was minted for ('' / absent = self-hosted). */
+  t?: string
 }
 
 export const TOKEN_TTL_SECONDS = 24 * 60 * 60 // 24 hours
+/** Decision links in an approval EMAIL sit in an inbox longer than a chat card. */
+export const EMAIL_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60
 
 function b64url(buf: Buffer): string {
   return buf.toString('base64url')
@@ -54,8 +79,10 @@ function hmac(data: string): Buffer {
 export function signActionToken(
   payload: Omit<ActionTokenPayload, 'exp'> & { exp?: number }
 ): string {
+  const tenant = currentTenantKey()
   const full: ActionTokenPayload = {
     ...payload,
+    ...(tenant ? { t: tenant } : {}),
     jti: payload.jti ?? randomUUID(),
     exp: payload.exp ?? Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS
   }
@@ -83,6 +110,8 @@ export function verifyActionToken(token: string): ActionTokenPayload | null {
       Buffer.from(body, 'base64url').toString('utf8')
     ) as ActionTokenPayload
     if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null
+    // Minted for another tenant (cloud): not ours to act on.
+    if ((payload.t ?? '') !== currentTenantKey()) return null
     return payload
   } catch {
     return null
@@ -127,7 +156,7 @@ export async function sendActionCard(opts: ActionCardOptions): Promise<boolean> 
   const buttons = opts.actions.map((a) => ({
     type: 'Action.OpenUrl',
     title: a.label,
-    url: `${config.PUBLIC_URL}/api/message-actions/callback?token=${encodeURIComponent(
+    url: `${publicLinkBase()}/api/message-actions/callback?token=${encodeURIComponent(
       signActionToken({
         action_id: a.action_id,
         kind: opts.context.kind,
@@ -206,23 +235,16 @@ export async function sendApprovalCard(opts: {
 }
 
 function htmlPage(title: string, body: string, status = 200) {
-  return {
-    status,
-    html: `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head><body style="font-family:Arial,Helvetica,sans-serif;display:flex;align-items:center;justify-content:center;height:90vh;"><div style="text-align:center;"><h2 style="color:#172940;">${body}</h2></div></body></html>`
-  }
+  return { status, html: publicMessagePageHtml(title, body) }
 }
 
 const escapeHtml = (v: string) => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 
-/** A decision link's landing page: the decision happens only when the person
- *  presses the button (a POST) — mail and chat link scanners that prefetch a
- *  GET can never approve or reject. */
-function confirmPage(token: string, decision: 'approve' | 'reject') {
+/** The decide form: the decision happens only when the person presses the button (a POST) —
+ *  mail and chat link scanners that prefetch a GET can never approve or reject. */
+function decideForm(token: string, decision: 'approve' | 'reject'): string {
   const verb = decision === 'approve' ? 'Approve' : 'Reject'
-  return {
-    status: 200,
-    html: `<!doctype html><html><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>${verb}</title></head><body style="font-family:Arial,Helvetica,sans-serif;display:flex;align-items:center;justify-content:center;height:90vh;"><form method="post" action="callback" style="text-align:center;"><h2 style="color:#172940;">${verb} this request?</h2><input type="hidden" name="token" value="${escapeHtml(token)}"><button type="submit" style="font-size:16px;padding:10px 24px;border:0;border-radius:6px;background:#00ceff;color:#fff;cursor:pointer;">${verb}</button></form></body></html>`
-  }
+  return `<form method="post" action="callback" class="actions"><input type="hidden" name="token" value="${escapeHtml(token)}"><button type="submit" data-k="decide"${decision === 'reject' ? ' class="reject"' : ''}>${verb}</button></form>`
 }
 
 /** Redis key that marks a decision token spent (tenant-scoped, the token's id hashed). */
@@ -279,7 +301,7 @@ async function judgeDecision(
   const me = await sessionUser(req, reply)
   if (!me) {
     if (signInRedirect) {
-      const base = config.PUBLIC_URL.replace(/\/$/, '')
+      const base = publicLinkBase()
       const back = `${base}/api/message-actions/callback?token=${encodeURIComponent(token)}`
       return {
         ok: false,
@@ -301,6 +323,107 @@ async function judgeDecision(
   return { ok: true, user: me.user, isAdmin: me.isAdmin }
 }
 
+/** Per-address cap on decision-link page loads (a link scanner or a guesser, not a person). */
+const LINK_VIEWS_PER_10_MIN = 120
+const LINK_STREAMS_PER_IP = 10
+const linkSigs = new Map<string, { at: number; sig: Promise<string | null> }>()
+
+/** The reader's live setting (Calm / Off) when signed in; Normal otherwise. */
+async function liveModeOf(user: User | null): Promise<LiveMode> {
+  if (!user) return 'normal'
+  try {
+    const row = (await db('nivaro_users').where({ id: user.id }).first('preferences', 'role')) as
+      | { preferences: unknown; role: string | null }
+      | undefined
+    const prefs =
+      typeof row?.preferences === 'string'
+        ? (JSON.parse(row.preferences) as Record<string, unknown>)
+        : ((row?.preferences as Record<string, unknown> | null) ?? {})
+    const own = prefs.live_mode
+    if (own === 'calm' || own === 'off' || own === 'normal') return own
+    const { liveDefaultForRole, loadLiveRoleDefaults } = await import(
+      '../services/live-preference.js'
+    )
+    return liveDefaultForRole(await loadLiveRoleDefaults(), row?.role) ?? 'normal'
+  } catch {
+    return 'normal'
+  }
+}
+
+/** Can the person signed in here read the approval's record (judged as them; null = 404)? */
+async function viewerCanReadRecord(
+  viewer: User | null,
+  payload: ActionTokenPayload
+): Promise<boolean> {
+  if (!viewer || !payload.collection || !payload.item) return false
+  try {
+    const { readOne } = await import('../services/items.js')
+    return !!(await readOne(viewer, payload.collection, payload.item, undefined, ['id']))
+  } catch {
+    return false
+  }
+}
+
+/** The landing page for a decision link: where the approval stands, live while open. */
+export function linkPage(opts: {
+  token: string
+  payload: ActionTokenPayload
+  state: ApprovalLinkState
+  /** The approver the link names is signed in here (the decide form may show). */
+  holderHere: boolean
+  spent: boolean
+  liveMode: LiveMode
+  nonce: string
+}): string {
+  const verb = opts.payload.action_id === 'approve' ? 'approve' : 'reject'
+  const h = linkHeadline(opts.state, verb)
+  const decidable = h.decidable && opts.holderHere && !opts.spent
+  const openUrl =
+    opts.payload.collection && opts.payload.item
+      ? `${adminLinkBase()}/collections/${encodeURIComponent(opts.payload.collection)}/${encodeURIComponent(opts.payload.item)}`
+      : undefined
+  const q = `token=${encodeURIComponent(opts.token)}`
+  return publicLivePageHtml({
+    title: h.title,
+    context: opts.state.chain_name ? `Approval · ${opts.state.chain_name}` : 'Approval',
+    liveHtml: linkStateHtml(h, {
+      formHtml: decidable ? decideForm(opts.token, verb) : undefined,
+      openUrl
+    }),
+    nonce: opts.nonce,
+    // Nothing more can change once it is decided: no stream for a final answer.
+    streamUrl: opts.state.status === 'pending' ? `stream?${q}` : null,
+    refreshUrl: `callback?${q}`,
+    liveMode: opts.liveMode
+  })
+}
+
+/**
+ * Did this decision POST come from our own landing page (security review L5)? The session
+ * cookie is SameSite=Lax, which alone still lets a same-site page (another subdomain) post the
+ * form. Rules, in order:
+ *  - `Sec-Fetch-Site` present (every current browser): only `same-origin` passes.
+ *  - otherwise `Origin` present and not `null`: it must be one of our own origins.
+ *  - neither (or `Origin: null` without fetch metadata): refused. The landing page is served
+ *    with `Referrer-Policy: no-referrer`, so its own form posts `Origin: null` — which is why
+ *    `Sec-Fetch-Site: same-origin` is the header that carries a same-origin form post.
+ */
+export function decisionPostFromOwnPage(
+  headers: Record<string, string | string[] | undefined>,
+  own: string[] = ownOrigins()
+): boolean {
+  const one = (v: string | string[] | undefined) =>
+    (Array.isArray(v) ? v[0] : v)?.trim().toLowerCase() || null
+  const site = one(headers['sec-fetch-site'])
+  if (site) return site === 'same-origin'
+  const origin = one(headers.origin)
+  if (!origin || origin === 'null') return false
+  return own.some((o) => o.toLowerCase() === origin)
+}
+
+const EXPIRED_TEXT = 'This link has expired or was changed. Open the request in Nivaro to decide.'
+const INCOMPLETE_TEXT = 'This link is missing a part. Open the request in Nivaro.'
+
 export async function messageActionsRoutes(app: FastifyInstance) {
   // The confirm page posts its token back as a plain HTML form.
   app.addContentTypeParser(
@@ -317,50 +440,191 @@ export async function messageActionsRoutes(app: FastifyInstance) {
 
   const send = (reply: FastifyReply, r: { status: number; html: string; redirect?: string }) => {
     if (r.redirect) return reply.redirect(r.redirect)
-    return reply.code(r.status).header('cache-control', 'no-store').type('text/html').send(r.html)
+    return reply
+      .code(r.status)
+      .header('cache-control', 'no-store')
+      .header('referrer-policy', 'no-referrer')
+      .header('content-security-policy', publicLiveCsp('none'))
+      .type('text/html')
+      .send(r.html)
   }
 
+  const sendLinkPage = async (
+    reply: FastifyReply,
+    status: number,
+    token: string,
+    payload: ActionTokenPayload,
+    state: ApprovalLinkState,
+    holder: User | null,
+    /** Who is signed in here (defaults to the holder). Names and times show only to someone
+     *  who can read the record, judged as them; anyone else gets the redacted state. */
+    viewer: User | null = holder
+  ) => {
+    const spent = !!app.redis && !!payload.jti && !!(await app.redis.exists(usedKey(payload.jti)))
+    const nonce = randomUUID().replace(/-/g, '')
+    if (!(await viewerCanReadRecord(viewer, payload))) state = redactLinkState(state)
+    return reply
+      .code(status)
+      .header('cache-control', 'no-store')
+      .header('referrer-policy', 'no-referrer')
+      .header('content-security-policy', publicLiveCsp(nonce, { forms: true }))
+      .type('text/html')
+      .send(
+        linkPage({
+          token,
+          payload,
+          state,
+          holderHere: !!holder,
+          spent,
+          liveMode: await liveModeOf(holder),
+          nonce
+        })
+      )
+  }
+
+  /** Page loads per address: a link opened by a person is a handful; a scanner is not. */
+  const overViewLimit = (req: FastifyRequest) =>
+    overWindowLimit(
+      app.redis,
+      `msgact-view:${currentTenantKey()}:${req.ip || 'unknown'}`,
+      LINK_VIEWS_PER_10_MIN,
+      600
+    )
+
   const viewRedirect = (payload: ActionTokenPayload) =>
-    `${config.ADMIN_URL}/collections/${encodeURIComponent(payload.collection ?? '')}/${encodeURIComponent(payload.item ?? '')}`
+    `${adminLinkBase()}/collections/${encodeURIComponent(payload.collection ?? '')}/${encodeURIComponent(payload.item ?? '')}`
 
   const isView = (payload: ActionTokenPayload) =>
     payload.action_id === 'view' || payload.kind === 'view'
 
+  const stateOf = (payload: ActionTokenPayload) =>
+    loadApprovalLinkState(Number(payload.ref_id), payload.user ?? null)
+
   app.get<{ Querystring: { token?: string } }>('/callback', async (req, reply) => {
     // A decision never happens on GET: the page asks, the button POSTs.
     const token = req.query.token
-    if (!token) return send(reply, htmlPage('Error', 'Missing token', 400))
+    if (!token) return send(reply, htmlPage('Link incomplete', INCOMPLETE_TEXT, 400))
     const payload = verifyActionToken(token)
-    if (!payload) return send(reply, htmlPage('Error', 'Invalid or expired link', 401))
+    if (!payload) return send(reply, htmlPage('Link expired', EXPIRED_TEXT, 401))
     if (isView(payload)) return reply.redirect(viewRedirect(payload))
-    if (payload.kind !== 'approval') return send(reply, htmlPage('Error', 'Unknown action', 400))
+    if (payload.kind !== 'approval')
+      return send(reply, htmlPage('Link not recognised', 'Open the request in Nivaro.', 400))
+    if (await overViewLimit(req))
+      return send(
+        reply,
+        htmlPage('Too many requests', 'Wait a few minutes, then open the link again.', 429)
+      )
 
-    const verdict = await judgeDecision(req, reply, token, payload, true)
-    if (!verdict.ok) return send(reply, verdict)
-    if (app.redis && (await app.redis.exists(usedKey(payload.jti as string))))
-      return send(reply, htmlPage('Done', 'This link was already used.', 409))
-    return send(reply, confirmPage(token, payload.action_id === 'approve' ? 'approve' : 'reject'))
+    const state = await stateOf(payload)
+    // Still waiting on this approver: deciding needs them, signed in (security audit H8).
+    // Anything else — already decided, withdrawn, another step — the page simply says so.
+    if (state.waiting_on_holder) {
+      const verdict = await judgeDecision(req, reply, token, payload, true)
+      if (!verdict.ok) return send(reply, verdict)
+      return sendLinkPage(reply, 200, token, payload, state, verdict.user)
+    }
+    const me = await sessionUser(req, reply)
+    const holder = me && sameUser(me.user.id, payload.user) ? me.user : null
+    return sendLinkPage(reply, 200, token, payload, state, holder, me?.user ?? null)
   })
+
+  // ── GET /stream?token= — "changed" while the landing page is open ─────────────
+  // Token-scoped: only this approval's record prompts a check, the page's own answer must
+  // actually move, and the event carries nothing (services/public-signal-stream.ts).
+  const streams = new SignalStreamRoute()
+  app.addHook('preClose', async () => {
+    streams.closeAll()
+  })
+  app.get<{ Querystring: { token?: string } }>(
+    '/stream',
+    { compress: false } as never,
+    async (req, reply) => {
+      const token = req.query.token
+      const payload = token ? verifyActionToken(token) : null
+      if (!token || !payload || payload.kind !== 'approval')
+        return reply.code(404).send({ error: 'Not found' })
+      const instanceId = Number(payload.ref_id)
+      const holder = payload.user ?? null
+      const tenant = currentTenantKey()
+      // Budgeted like every public stream (share links, embeds): a burst of writes cannot turn
+      // into a burst of recomputes.
+      const signature = () =>
+        sharedSignature(
+          linkSigs,
+          `${tenant}|${instanceId}|${holder}`,
+          async () => linkStateSignature(await loadApprovalLinkState(instanceId, holder)),
+          { budget: () => takeBudget(tenant) }
+        )
+      await streams.serve(req, reply, {
+        perIp: LINK_STREAMS_PER_IP,
+        heartbeatMs: 25_000,
+        coalesceMs: 1_000,
+        async open() {
+          const state = await loadApprovalLinkState(instanceId, holder)
+          if (state.status === 'gone') return { ok: false, code: 404, body: { error: 'Not found' } }
+          const collection = payload.collection ?? ''
+          const item = String(payload.item ?? '').toLowerCase()
+          return {
+            ok: true,
+            subject: {
+              watches: (ev) =>
+                ev.collection === collection &&
+                (ev.item === '*' || String(ev.item).toLowerCase() === item),
+              signature,
+              // The link expired: the page reloads into that answer.
+              stillServes: async () => !!verifyActionToken(token)
+            }
+          }
+        }
+      })
+    }
+  )
 
   app.post<{ Querystring: { token?: string }; Body: { token?: string } | null }>(
     '/callback',
     async (req, reply) => {
+      // A decision is made only by the button on our own page, never by a form elsewhere.
+      if (!decisionPostFromOwnPage(req.headers))
+        return send(
+          reply,
+          htmlPage(
+            'Decide in Nivaro',
+            'Open the link from your email or chat again to decide.',
+            403
+          )
+        )
       const token = req.query.token ?? (req.body as { token?: string } | null)?.token
-      if (!token) return send(reply, htmlPage('Error', 'Missing token', 400))
+      if (!token) return send(reply, htmlPage('Link incomplete', INCOMPLETE_TEXT, 400))
       const payload = verifyActionToken(token)
-      if (!payload) return send(reply, htmlPage('Error', 'Invalid or expired link', 401))
+      if (!payload) return send(reply, htmlPage('Link expired', EXPIRED_TEXT, 401))
       if (isView(payload)) return reply.redirect(viewRedirect(payload))
-      if (payload.kind !== 'approval') return send(reply, htmlPage('Error', 'Unknown action', 400))
+      if (payload.kind !== 'approval')
+        return send(reply, htmlPage('Link not recognised', 'Open the request in Nivaro.', 400))
 
       const verdict = await judgeDecision(req, reply, token, payload, false)
       if (!verdict.ok) return send(reply, verdict)
 
+      // Already decided (by them or anyone), withdrawn, or moved on: say where it stands —
+      // a second press, a second tab or a late colleague gets the answer, never an error.
+      const before = await stateOf(payload)
+      if (!before.waiting_on_holder)
+        return sendLinkPage(reply, 409, token, payload, before, verdict.user)
+
       // Spend the token BEFORE deciding (two quick clicks decide once). No Redis = no way to
       // prove single use, so no decision by link at all.
-      if (!app.redis) return send(reply, htmlPage('Error', 'Decide this request in Nivaro.', 503))
+      if (!app.redis)
+        return send(
+          reply,
+          htmlPage(
+            'Decide in Nivaro',
+            'This link cannot decide right now. Open the request in Nivaro.',
+            503
+          )
+        )
       const ttl = Math.max(60, payload.exp - Math.floor(Date.now() / 1000) + 60)
       const claimed = await app.redis.set(usedKey(payload.jti as string), '1', 'EX', ttl, 'NX')
-      if (claimed !== 'OK') return send(reply, htmlPage('Done', 'This link was already used.', 409))
+      if (claimed !== 'OK')
+        return sendLinkPage(reply, 409, token, payload, await stateOf(payload), verdict.user)
 
       const decision = payload.action_id === 'approve' ? 'approved' : 'rejected'
       // Lazy import breaks the approvals ↔ message-actions circular dependency
@@ -377,7 +641,17 @@ export async function messageActionsRoutes(app: FastifyInstance) {
       if (!result.ok) {
         // Nothing was decided: the link may be used again (e.g. after a transient failure).
         await app.redis.del(usedKey(payload.jti as string)).catch(() => {})
-        return send(reply, htmlPage('Error', result.error ?? 'Failed', result.status ?? 400))
+        // Someone decided in between: the page says who.
+        if (result.status === 409)
+          return sendLinkPage(reply, 409, token, payload, await stateOf(payload), verdict.user)
+        return send(
+          reply,
+          htmlPage(
+            'Not decided',
+            'Nothing was decided. Open the request in Nivaro to try again.',
+            result.status ?? 400
+          )
+        )
       }
       await logActivity({
         action: 'message-action',
@@ -387,7 +661,30 @@ export async function messageActionsRoutes(app: FastifyInstance) {
         comment: `approval ${decision} via message action`,
         req
       })
-      return send(reply, htmlPage('Done', `&#10003; Done — ${decision}`))
+      return sendLinkPage(reply, 200, token, payload, await stateOf(payload), verdict.user)
     }
   )
+}
+
+/** A decision-link pair (Approve + Reject) for one approver, for the approval email. */
+export function emailDecisionLinks(opts: {
+  instance: { id: number; collection: string; item: string }
+  userId: string
+}): { approve_url: string; reject_url: string } {
+  const base = `${publicLinkBase()}/api/message-actions/callback?token=`
+  const exp = Math.floor(Date.now() / 1000) + EMAIL_TOKEN_TTL_SECONDS
+  const mk = (action_id: 'approve' | 'reject') =>
+    base +
+    encodeURIComponent(
+      signActionToken({
+        action_id,
+        kind: 'approval',
+        ref_id: String(opts.instance.id),
+        user: opts.userId,
+        collection: opts.instance.collection,
+        item: String(opts.instance.item),
+        exp
+      })
+    )
+  return { approve_url: mk('approve'), reject_url: mk('reject') }
 }

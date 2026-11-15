@@ -339,59 +339,22 @@ function listOf(raw: unknown): string[] {
 
 /**
  * The many-to-many link sets the new record starts with (zones, funding years,
- * people), as the alias payload the items service writes. Files never copy, nor
- * a list the caller may not read or the collection marks "do not duplicate".
+ * people): the one copy rule every clone path uses (copy-rules.ts
+ * `linkSetsToCopy` — junction rows read as the caller, only links to records
+ * they can see, fail closed), minus the lists this split skips.
  */
-async function linkSetsToCopy(
+export async function splitLinkSets(
   user: User,
   collection: string,
   id: string | number,
-  rels: CMSRelation[],
-  fields: FieldMeta[],
-  skip: ReadonlySet<string>
+  skip: ReadonlySet<string>,
+  isAdmin: boolean
 ): Promise<Record<string, unknown>> {
+  const { linkSetsToCopy } = await import('./copy-rules.js')
+  const copy = await linkSetsToCopy(user, collection, id, { isAdmin }).catch(() => null)
+  if (!copy) return {}
   const out: Record<string, unknown> = {}
-  const readable = await getAllowedFields(user, 'read', collection).catch(() => null)
-  const mayRead = (f: string) => !readable || readable.includes('*') || readable.includes(f)
-  const byName = new Map(fields.map((f) => [f.field, f]))
-  for (const r of rels) {
-    if (r.one_collection !== collection || !r.one_field || r.junction_field == null) continue
-    const alias = r.one_field
-    const meta = byName.get(alias)
-    if (skip.has(alias) || !mayRead(alias)) continue
-    if (meta && (meta.hidden || meta.readonly || isNoDuplicateField(meta))) continue
-    if (meta?.special?.some((s) => s === 'files' || s === 'file')) continue
-    const jf = String(r.junction_field)
-    const companion = rels.find(
-      (c) => c.many_collection === r.many_collection && c.many_field === jf && c !== r
-    )
-    const target = companion?.one_collection ?? null
-    if (
-      /_files$/i.test(r.many_collection) ||
-      target === 'nivaro_files' ||
-      target === 'directus_files'
-    )
-      continue
-    if (!IDENT.test(r.many_collection) || !IDENT.test(r.many_field) || !IDENT.test(jf)) continue
-    const polymorphic = !!(r.one_allowed_collections ?? companion?.one_allowed_collections)
-    const disc = polymorphic
-      ? String(r.one_collection_field || companion?.one_collection_field || 'collection')
-      : null
-    if (disc && !IDENT.test(disc)) continue
-    try {
-      const rows = (await db(r.many_collection)
-        .where(r.many_field, id)
-        .whereNotNull(jf)
-        .limit(SPLIT_MAX_LINES)
-        .select(disc ? [jf, disc] : [jf])) as Array<Record<string, unknown>>
-      if (rows.length === 0) continue
-      out[alias] = disc
-        ? rows.map((x) => ({ collection: String(x[disc] ?? ''), id: x[jf] }))
-        : rows.map((x) => x[jf])
-    } catch {
-      /* a link table that cannot be read just does not copy */
-    }
-  }
+  for (const [field, value] of Object.entries(copy.links)) if (!skip.has(field)) out[field] = value
   return out
 }
 
@@ -540,7 +503,7 @@ export async function splitRecord(
     fields.some((f) => f.field === cfg.link_field)
   )
     header[cfg.link_field] = source.id ?? id
-  const links = cfg.copy_links ? await linkSetsToCopy(user, collection, id, rels, fields, skip) : {}
+  const links = cfg.copy_links ? await splitLinkSets(user, collection, id, skip, !!req.isAdmin) : {}
 
   // One write: the record, its link sets and the moved lines.
   const outcome: import('./items.js').CreateOutcome = {}
