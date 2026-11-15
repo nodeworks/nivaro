@@ -10,8 +10,20 @@ const MISSING = '2d8c8a2a-5a8e-4fa0-9d3c-4e5f6a7b8c9d'
 const state = vi.hoisted(() => ({
   admin: false,
   names: {} as Record<string, string>,
-  writes: [] as unknown[]
+  writes: [] as unknown[],
+  // Active people's display names / e-mails in the directory (lower-cased).
+  people: new Set<string>(['beth ortiz', 'beth@example.test'])
 }))
+vi.mock('../../../services/agent-name-guard.js', async (orig) => {
+  const real = await orig<typeof import('../../../services/agent-name-guard.js')>()
+  return {
+    ...real,
+    agentNameRefusal: (name: string) =>
+      real.agentNameRefusal(name, {
+        isPersonName: async (n: string) => state.people.has(n.trim().toLowerCase())
+      })
+  }
+})
 
 vi.mock('../../../middleware/authenticate.js', () => ({
   requireAuth: async (req: { user?: unknown }) => {
@@ -114,5 +126,35 @@ describe('agent names', () => {
     expect(state.names.k7).toBe('Ops bot')
     expect((await rename(`/mcp-connections/o${OTHER}/name`, 'Beth’s Claude')).statusCode).toBe(200)
     expect((await rename(`/mcp-connections/o${MISSING}/name`, 'Gone')).statusCode).toBe(404)
+  })
+})
+
+describe('names that pass for a person or the system (security review 2026-11-15)', () => {
+  const url = `/mcp-connections/mine/o${GRANT}/name`
+  it('refuses an active person’s display name or e-mail, any case', async () => {
+    for (const n of ['Beth Ortiz', 'BETH ORTIZ', 'beth@example.test']) {
+      const res = await rename(url, n)
+      expect(res.statusCode).toBe(400)
+      expect(res.json().code).toBe('AGENT_NAME_REFUSED')
+    }
+    expect(state.writes).toEqual([])
+  })
+
+  it('refuses reserved words, as a whole word anywhere in the name', async () => {
+    for (const n of ['Administrator', 'System', 'nivaro', 'Support bot', 'Service-Desk']) {
+      expect((await rename(url, n)).statusCode).toBe(400)
+    }
+    expect((await rename(url, 'Supporter')).statusCode).toBe(200)
+  })
+
+  it('applies the same rule to names set in the admin settings', async () => {
+    state.admin = true
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/mcp-connections/settings',
+      payload: { connection_names: { k7: 'Beth Ortiz' } }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(state.writes).toEqual([])
   })
 })

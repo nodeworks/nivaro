@@ -424,18 +424,22 @@ export const LIST_ROW_CAP = 20_000
  * The records of `collection` that sit in an approved stretch and have an app write since the
  * approval moment touching a field `readable` lets the reader see (null = every field). Outside
  * writes leave no trace a list can read cheaply, so a list finds app writes only — the record
- * badge finds both. One bounded read; ids as text.
+ * badge finds both. One bounded read behind the read gate, newest writes first (a cut keeps
+ * the most recent changes, the same ones every time); ids as text. `partial` = more rows than
+ * LIST_ROW_CAP matched, so older changes may be missing from `ids`.
  */
 export async function approvalChangedIds(
   collection: string,
-  readable: Set<string> | null
-): Promise<string[]> {
+  readable: Set<string> | null,
+  who: string | null = null
+): Promise<{ ids: string[]; partial: boolean }> {
+  const none = { ids: [] as string[], partial: false }
   const cfg = await approvalChangesConfigFor(collection)
-  if (!cfg) return []
+  if (!cfg) return none
   const bindings = (await db('nivaro_workflow_bindings')
     .where({ collection })
     .select('template')) as Array<{ template: string }>
-  if (bindings.length === 0) return []
+  if (bindings.length === 0) return none
   const stateRows = (await db('nivaro_workflow_states')
     .whereIn(
       'template',
@@ -444,7 +448,7 @@ export async function approvalChangedIds(
     .whereIn('key', cfg.states)
     .select('id')) as Array<{ id: string }>
   const approvedIds = stateRows.map((s) => String(s.id))
-  if (approvedIds.length === 0) return []
+  if (approvedIds.length === 0) return none
   const moments = db('nivaro_workflow_instances as i')
     .join('nivaro_workflow_history as h', 'h.instance', 'i.id')
     .where('i.collection', collection)
@@ -455,20 +459,30 @@ export async function approvalChangedIds(
     .select('i.item')
     .max({ moment: 'h.timestamp' })
     .as('m')
-  const rows = (await db('nivaro_revisions as r')
-    .join('nivaro_activity as a', 'r.activity', 'a.id')
-    .join(moments, 'm.item', 'r.item')
-    .where('r.collection', collection)
-    .whereNotNull('r.delta')
-    .whereRaw('a.timestamp > m.moment')
-    .limit(LIST_ROW_CAP)
-    .select('r.item', 'r.delta', 'a.timestamp', 'm.moment')) as Array<{
+  const { withReadGate } = await import('./read-gate.js')
+  const read = (await withReadGate(
+    who,
+    () =>
+      db('nivaro_revisions as r')
+        .join('nivaro_activity as a', 'r.activity', 'a.id')
+        .join(moments, 'm.item', 'r.item')
+        .where('r.collection', collection)
+        .whereNotNull('r.delta')
+        .whereRaw('a.timestamp > m.moment')
+        .orderBy('a.timestamp', 'desc')
+        .orderBy('r.id', 'desc')
+        .limit(LIST_ROW_CAP + 1)
+        .select('r.item', 'r.delta', 'a.timestamp', 'm.moment'),
+    { label: 'approval-changed-filter' }
+  )) as Array<{
     item: unknown
     delta: unknown
     timestamp: Date | string
     moment: Date | string
   }>
-  if (rows.length === 0) return []
+  const partial = read.length > LIST_ROW_CAP
+  const rows = partial ? read.slice(0, LIST_ROW_CAP) : read
+  if (rows.length === 0) return none
   const { tracked } = await candidateFields(collection, cfg)
   const counted = new Set(readable ? tracked.filter((f) => readable.has(f)) : tracked)
   const out = new Set<string>()
@@ -480,7 +494,7 @@ export async function approvalChangedIds(
     const delta = parseObject(r.delta)
     if (delta && Object.keys(delta).some((k) => counted.has(k))) out.add(id)
   }
-  return [...out]
+  return { ids: [...out], partial }
 }
 
 /** Is the condition asking for records changed after approval (true) or the rest (false)? */
@@ -506,7 +520,17 @@ export function resolveApprovalChangedCondition(
       const { getUser } = await import('./users.js')
       const user = await getUser(userId)
       if (!user) return null
-      return approvalChangedIds(collection, await readableFieldSet(user, collection))
+      const { ids, partial } = await approvalChangedIds(
+        collection,
+        await readableFieldSet(user, collection),
+        userId
+      )
+      // Said honestly: the list names the filter in meta.partial (services/partial-reads.ts).
+      if (partial) {
+        const { notePartialRead } = await import('./partial-reads.js')
+        notePartialRead(APPROVAL_CHANGED_FIELD)
+      }
+      return ids
     })().catch(() => null)
     resolvedIds.set(cond, hit)
   }

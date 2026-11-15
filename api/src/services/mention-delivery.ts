@@ -76,7 +76,7 @@ export function emailOutcome(row: MailLogRow | undefined): MentionChannel['statu
 
 /**
  * One person's delivery from their inbox row (pure). `row` null = no row landed: `muted`
- * (the decision now says they would not be told) or `not_told`.
+ * (the decision now says they would not be told — administrators only) or `not_told`.
  */
 export function describeMention(input: {
   id: string
@@ -116,7 +116,9 @@ export function describeMention(input: {
   let headline: MentionHeadline
   if (seenAt) headline = 'seen'
   else if (row) headline = 'in_inbox'
-  else if (input.silenced?.muted) headline = 'muted'
+  // Only administrators learn that someone muted them; to a non-admin author a muted person
+  // simply was not told (their notification rules are their own business).
+  else if (input.silenced?.muted && input.isAdmin) headline = 'muted'
   else headline = 'not_told'
   return {
     id: input.id,

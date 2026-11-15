@@ -452,18 +452,19 @@ export function agentDisplayName(
 }
 
 /**
- * The badge a record shows beside a write an agent made (#3213), from the app name stored on
- * the activity row (`via_app`) and the settings: "via Claude Code", or the fixed label. With the
- * row's connection (`conn`), the name the connection goes by now wins (rt8 #21) — renaming an
- * agent relabels its history.
+ * The badge a record shows beside a write an agent made (#3213), from the name stored on the
+ * activity row at write time (`via_app`: the name the connection went by then, else its app)
+ * and the settings: "via Claude Code", or the fixed label. Renaming an agent never relabels
+ * its history (security review 2026-11-15): the connection's current name is used only for a
+ * row that stored no name.
  */
 export function agentBadgeLabel(
   viaApp: string | null | undefined,
   s: McpSettings,
   conn?: string | null
 ): string {
-  const named = conn ? s.connection_names?.[String(conn).toLowerCase()] : undefined
-  const app = named || (typeof viaApp === 'string' ? cleanBadge(viaApp) : '')
+  const stored = typeof viaApp === 'string' ? cleanBadge(viaApp) : ''
+  const app = stored || (conn ? (s.connection_names?.[String(conn).toLowerCase()] ?? '') : '')
   if (s.agent_label_mode === 'fixed' || !app) return s.agent_label
   return cleanBadge(`via ${app}`)
 }

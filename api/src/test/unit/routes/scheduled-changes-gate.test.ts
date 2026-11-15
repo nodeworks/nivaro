@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
   admin: false,
+  // An administrator a restrict-mode User Scope narrows (seesAllRecords = false).
+  restricted: false,
   canUpdate: true,
   layout: { allow_schedule: true } as Record<string, unknown> | null,
   visible: true,
@@ -74,6 +76,9 @@ vi.mock('../../../middleware/authenticate.js', () => ({
   },
   requireAdmin: async () => undefined
 }))
+vi.mock('../../../services/user-scopes.js', () => ({
+  seesAllRecords: vi.fn(async (isAdmin: boolean) => !!isAdmin && !state.restricted)
+}))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
 vi.mock('../../../services/collections.js', () => ({
   getFields: vi.fn(async () => state.fields),
@@ -128,6 +133,7 @@ async function app() {
 
 beforeEach(() => {
   state.admin = false
+  state.restricted = false
   state.canUpdate = true
   state.layout = { allow_schedule: true }
   state.visible = true
@@ -419,5 +425,64 @@ describe('POST /scheduled-changes/:id/execute', () => {
       status: 'failed',
       error_message: 'Status is not allowed'
     })
+  })
+})
+
+// Restrict User Scopes bind administrators too (security review 2026-11-15): a scoped admin is
+// judged as the caller on every single-record path; an unscoped admin is not.
+describe('a scope-restricted administrator', () => {
+  const someone = { id: 1, created_by: 'U2', collection: 'orders', item_id: 7, status: 'pending' }
+  beforeEach(() => {
+    state.admin = true
+    state.restricted = true
+  })
+
+  it('cannot move, cancel, list or schedule on a record outside their scope', async () => {
+    state.existing = someone
+    state.visible = false
+    const a = await app()
+    const moved = await a.inject({
+      method: 'PATCH',
+      url: '/api/scheduled-changes/1',
+      payload: { scheduled_at: '2026-12-01T09:00:00.000Z' }
+    })
+    expect(moved.statusCode).toBe(404)
+    expect((await a.inject({ method: 'DELETE', url: '/api/scheduled-changes/1' })).statusCode).toBe(
+      404
+    )
+    expect(
+      (await a.inject({ method: 'GET', url: '/api/scheduled-changes/orders/7' })).statusCode
+    ).toBe(404)
+    const created = await a.inject({
+      method: 'POST',
+      url: '/api/scheduled-changes',
+      payload: body()
+    })
+    expect(created.statusCode).toBe(404)
+    expect(state.updates).toBe(0)
+    expect(state.inserts).toBe(0)
+  })
+
+  it('cannot move a change on a record they may read but not update', async () => {
+    state.existing = someone
+    state.updatable = false
+    const res = await (await app()).inject({
+      method: 'PATCH',
+      url: '/api/scheduled-changes/1',
+      payload: { scheduled_at: '2026-12-01T09:00:00.000Z' }
+    })
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('an unscoped administrator still manages anyone’s change', async () => {
+    state.restricted = false
+    state.existing = someone
+    state.visible = false
+    const res = await (await app()).inject({
+      method: 'PATCH',
+      url: '/api/scheduled-changes/1',
+      payload: { scheduled_at: '2026-12-01T09:00:00.000Z' }
+    })
+    expect(res.statusCode).toBe(200)
   })
 })

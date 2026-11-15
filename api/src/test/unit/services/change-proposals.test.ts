@@ -174,8 +174,24 @@ vi.mock('../../../services/record-access.js', () => ({
   ownsStep: (owners: Array<{ id: string }>, me: string) => owners.some((o) => o.id === me)
 }))
 vi.mock('../../../services/support-tickets.js', () => ({
-  supportAudience: async () => ['U-ADMIN', 'U-PROP']
+  // The desk audience would include a non-admin desk member; reviewers never use it.
+  supportAudience: async () => ['U-ADMIN', 'U-PROP', 'U-DESK'],
+  activeAdministratorIds: async () => ['U-ADMIN', 'U-PROP']
 }))
+vi.mock('../../../services/users.js', () => ({
+  getUser: async (id: string) => (id === 'U-GONE' ? undefined : { id, role: 'R' })
+}))
+// Labels are read as each recipient: one who cannot read the record gets the collection's name.
+vi.mock('../../../services/record-labels-as-viewer.js', () => ({
+  recordLabelsAsViewer: async (
+    u: { id: string },
+    refs: Array<{ collection: string; id: string }>
+  ) =>
+    Object.fromEntries(
+      refs.map((r) => [`${r.collection}:${r.id}`, labelBlind.has(u.id) ? 'Orders' : `REC-${r.id}`])
+    )
+}))
+const labelBlind = new Set<string>()
 vi.mock('../../../services/workflow-transitions.js', () => ({
   resolveFriendlyIds: async (_c: string, ids: string[]) => new Map(ids.map((i) => [i, `REC-${i}`]))
 }))
@@ -533,6 +549,26 @@ describe('reviewers are told (category Change proposals)', () => {
         subject: 'Change proposed on REC-R1 — review it',
         category: 'proposals'
       }
+    ])
+  })
+
+  it('each reviewer gets the record name as they may read it', async () => {
+    state.owners = ['U-OWNER', 'U-OWNER2']
+    labelBlind.add('U-OWNER2')
+    try {
+      await svc.createProposal(
+        reqAs('U-PROP'),
+        'orders',
+        'R1',
+        { values: { title: 'X' }, reason: 'Needed for the audit' },
+        appStub
+      )
+    } finally {
+      labelBlind.clear()
+    }
+    expect(state.notified.map((n) => [n.to, n.subject])).toEqual([
+      ['U-OWNER', 'Change proposed on REC-R1 — review it'],
+      ['U-OWNER2', 'Change proposed on Orders — review it']
     ])
   })
 

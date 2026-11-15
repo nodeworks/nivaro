@@ -101,6 +101,12 @@ async function setConnectionName(
   // Not found and not theirs answer alike: a person cannot probe other people's connections.
   if (!owner || (!admin && owner.toLowerCase() !== me))
     return reply.code(404).send({ error: 'Connection not found' })
+  // Never a person's name or a system word (shown beside writes, presence, notifications).
+  if (name) {
+    const { agentNameRefusal } = await import('../services/agent-name-guard.js')
+    const why = await agentNameRefusal(name)
+    if (why) return reply.code(400).send({ error: why, code: 'AGENT_NAME_REFUSED' })
+  }
   let next: Awaited<ReturnType<typeof writeMcpSettings>>
   try {
     next = await writeMcpSettings({ connection_names: { [conn]: name } })
@@ -269,6 +275,17 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
   }))
 
   app.patch('/settings', { preHandler: requireAdmin }, async (req, reply) => {
+    // The same name rule as PATCH …/:conn/name for names set here in bulk.
+    const names = (req.body as { connection_names?: unknown } | null)?.connection_names
+    if (names && typeof names === 'object' && !Array.isArray(names)) {
+      const { agentNameRefusal } = await import('../services/agent-name-guard.js')
+      for (const v of Object.values(names as Record<string, unknown>)) {
+        const name = typeof v === 'string' ? cleanAgentName(v) : ''
+        if (!name) continue
+        const why = await agentNameRefusal(name)
+        if (why) return reply.code(400).send({ error: why, code: 'AGENT_NAME_REFUSED' })
+      }
+    }
     try {
       const next = await writeMcpSettings(req.body)
       if (next === false)

@@ -75,7 +75,9 @@ export async function recordGlanceRoutes(app: FastifyInstance) {
         'id',
         ...fields
       ]).catch(() => null)) as Record<string, unknown> | null
-      if (!row) return reply.code(404).send({ error: 'Not found' })
+      // Hidden or missing: the same empty answer as "nothing kept", so a 404 here
+      // cannot tell a caller which hidden records have derived notes.
+      if (!row) return reply.send({ data: [] })
       const data = await causesForViewer(collection, row, stored, await defaultCauseDeps(req.user!))
       return reply.send({ data })
     }

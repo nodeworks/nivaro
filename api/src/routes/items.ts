@@ -511,6 +511,13 @@ export async function itemsRoutes(app: FastifyInstance) {
         ).catch(() => null)
         if (typo) return reply.send({ ...(result as object), ...typo })
       }
+      // A filter that answered from a capped read says so (names only): `meta.partial`.
+      const { partialReadsOf } = await import('../services/partial-reads.js')
+      const partial = partialReadsOf(req)
+      if (partial.length > 0) {
+        const r = result as { meta?: Record<string, unknown> }
+        return reply.send({ ...(result as object), meta: { ...(r.meta ?? {}), partial } })
+      }
       return reply.send(result)
     } catch (err) {
       return handleError(err, reply)

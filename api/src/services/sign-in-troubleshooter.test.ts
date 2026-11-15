@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { db } from '../db/index.js'
 
 vi.mock('../db/index.js', () => ({ db: vi.fn() }))
 const desk = vi.hoisted(() => ({ members: new Set<string>() }))
@@ -11,7 +12,9 @@ import {
   accountChecks,
   audienceFor,
   currentProblem,
+  deskRefusedTarget,
   forAudience,
+  isDeskRefusedTarget,
   type SignInTroubleshooter,
   signInHelpAudience,
   type TroubleAttempt
@@ -123,6 +126,23 @@ describe('who may read it', () => {
     expect(await signInHelpAudience({ id: 'admin-1', isAdmin: true })).toBe('admin')
     expect(await signInHelpAudience({ id: 'desk-1', isAdmin: false })).toBe('desk')
     expect(await signInHelpAudience({ id: 'someone', isAdmin: false })).toBeNull()
+  })
+})
+
+describe('targets the desk may not read (security review 2026-11-15)', () => {
+  it('administrators and machine accounts are admin-only', () => {
+    expect(deskRefusedTarget({ account_kind: null, admin_access: true })).toBe(true)
+    expect(deskRefusedTarget({ account_kind: null, admin_access: 1 })).toBe(true)
+    expect(deskRefusedTarget({ account_kind: 'service', admin_access: false })).toBe(true)
+    expect(deskRefusedTarget({ account_kind: null, admin_access: false })).toBe(false)
+    expect(deskRefusedTarget({})).toBe(false)
+  })
+
+  it('a lookup that fails counts as refused', async () => {
+    vi.mocked(db).mockImplementationOnce(() => {
+      throw new Error('db down')
+    })
+    expect(await isDeskRefusedTarget('a0000000-0000-0000-0000-000000000001')).toBe(true)
   })
 })
 

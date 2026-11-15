@@ -239,14 +239,15 @@ export async function liveInbound(collection: string): Promise<InboundRelation[]
   return out
 }
 
-/** Rows of `table.field` pointing at each id (raw count, every row). */
-async function rawCounts(table: string, field: string, ids: string[]) {
+/** Rows of `table.field` pointing at each id (raw count, every row; behind the read gate). */
+async function rawCounts(table: string, field: string, ids: string[], who: string) {
   const out: Record<string, number> = {}
-  const rows = (await db(table)
-    .whereIn(field, ids)
-    .groupBy(field)
-    .select(field)
-    .count({ n: '*' })) as Array<Record<string, unknown>>
+  const { withReadGate } = await import('../read-gate.js')
+  const rows = (await withReadGate(
+    who,
+    () => db(table).whereIn(field, ids).groupBy(field).select(field).count({ n: '*' }),
+    { label: 'record-merge:counts' }
+  )) as Array<Record<string, unknown>>
   for (const r of rows) {
     const id = ids.find((x) => sameId(x, r[field]))
     if (id) out[id] = (out[id] ?? 0) + Number(r.n ?? 0)
@@ -389,6 +390,71 @@ export async function recordVerdicts(
     }
   }
   return { survive, discard }
+}
+
+/**
+ * What the merge dialog may say about one inbound relation's rows. Pure. Only
+ * administrators get counts of rows the caller cannot see (raw tables, hidden
+ * rows): a non-admin gets their visible counts and a reason without numbers, so
+ * the plan never tells them how many hidden rows point at a record.
+ */
+export function judgeRelationCounts(input: {
+  raw: boolean
+  isAdmin: boolean
+  /** Every row, as counted in the table. */
+  counts: Record<string, number>
+  /** Rows the caller can read. */
+  visible: Record<string, number>
+  /** The caller may change the relation field on that collection. */
+  mayUpdate: boolean
+}): {
+  counts: Record<string, number>
+  hidden: Record<string, number>
+  movable: boolean
+  reason: string | null
+} {
+  const { raw, isAdmin, counts, visible, mayUpdate } = input
+  const tooMany = `More than ${MOVE_ROW_CAP} on one record — too many to move in one merge.`
+  if (raw) {
+    if (!isAdmin)
+      return {
+        counts: {},
+        hidden: {},
+        movable: false,
+        reason: 'Only an administrator can move these (the table is not set up as a list).'
+      }
+    const big = Object.values(counts).some((n) => n > MOVE_ROW_CAP)
+    return { counts: { ...counts }, hidden: {}, movable: !big, reason: big ? tooMany : null }
+  }
+  const hiddenAll: Record<string, number> = {}
+  for (const [id, n] of Object.entries(counts)) {
+    const h = n - (visible[id] ?? 0)
+    if (h > 0) hiddenAll[id] = h
+  }
+  const anyHidden = Object.keys(hiddenAll).length > 0
+  const hidden = isAdmin ? hiddenAll : {}
+  const shown = { ...visible }
+  if (!mayUpdate)
+    return {
+      counts: shown,
+      hidden,
+      movable: false,
+      reason: 'You cannot change these, so they stay where they are.'
+    }
+  if (anyHidden) {
+    const n = Object.values(hiddenAll).reduce((x, y) => x + y, 0)
+    return {
+      counts: shown,
+      hidden,
+      movable: false,
+      reason: isAdmin
+        ? `${n} of them you cannot see, so they cannot be moved by you.`
+        : 'Some of them you cannot see, so they cannot be moved by you. Ask an administrator.'
+    }
+  }
+  if (Object.values(shown).some((n) => n > MOVE_ROW_CAP))
+    return { counts: shown, hidden, movable: false, reason: tooMany }
+  return { counts: shown, hidden, movable: true, reason: null }
 }
 
 export async function buildMergePlan(
@@ -568,23 +634,15 @@ export async function buildMergePlan(
   for (const r of inbound) {
     let counts: Record<string, number>
     try {
-      counts = await rawCounts(r.collection, r.field, ids)
+      counts = await rawCounts(r.collection, r.field, ids, String(user.id))
     } catch {
       continue
     }
     const total = Object.values(counts).reduce((a, b) => a + b, 0)
     if (total === 0) continue
     const visible: Record<string, number> = {}
-    const hidden: Record<string, number> = {}
-    let movable = true
-    let reason: string | null = null
-    if (r.raw) {
-      for (const [id, n] of Object.entries(counts)) visible[id] = n
-      if (!isAdmin) {
-        movable = false
-        reason = 'Only an administrator can move these (the table is not set up as a list).'
-      }
-    } else {
+    let mayUpdate = isAdmin
+    if (!r.raw) {
       try {
         const rowsSeen = await visibleRows(
           user,
@@ -601,27 +659,13 @@ export async function buildMergePlan(
       } catch {
         /* the caller cannot read this collection at all: everything is hidden */
       }
-      for (const [id, n] of Object.entries(counts)) {
-        const h = n - (visible[id] ?? 0)
-        if (h > 0) hidden[id] = h
-      }
-      const [mayUpdate, upd] = await Promise.all([
+      const [mayUpd, upd] = await Promise.all([
         can(user, 'update', r.collection).catch(() => false),
         getAllowedFields(user, 'update', r.collection).catch((): string[] => [])
       ])
-      if (!mayUpdate || !readable(upd, r.field)) {
-        movable = false
-        reason = 'You cannot change these, so they stay where they are.'
-      } else if (Object.keys(hidden).length > 0) {
-        movable = false
-        const n = Object.values(hidden).reduce((a, b) => a + b, 0)
-        reason = `${n} of them you cannot see, so they cannot be moved by you. Ask an administrator.`
-      }
+      mayUpdate = !!mayUpd && readable(upd, r.field)
     }
-    if (movable && Object.values(counts).some((n) => n > MOVE_ROW_CAP)) {
-      movable = false
-      reason = `More than ${MOVE_ROW_CAP} on one record — too many to move in one merge.`
-    }
+    const judged = judgeRelationCounts({ raw: !!r.raw, isAdmin, counts, visible, mayUpdate })
     const [move_word, leave_word] = MOVE_WORDS[r.kind]
     planRelations.push({
       key: r.key,
@@ -629,11 +673,11 @@ export async function buildMergePlan(
       label: relationLabel(r, titles),
       collection: r.collection,
       field: r.field,
-      counts: visible,
-      hidden,
-      movable,
-      reason,
-      default: movable ? 'move' : 'leave',
+      counts: judged.counts,
+      hidden: judged.hidden,
+      movable: judged.movable,
+      reason: judged.reason,
+      default: judged.movable ? 'move' : 'leave',
       move_word,
       leave_word
     })

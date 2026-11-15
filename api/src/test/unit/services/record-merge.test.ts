@@ -6,7 +6,11 @@ import {
   type AttachedRow,
   judgeAttached
 } from '../../../services/record-merge/attached.js'
-import type { MergePlan, MergePlanRecord } from '../../../services/record-merge/plan.js'
+import {
+  judgeRelationCounts,
+  type MergePlan,
+  type MergePlanRecord
+} from '../../../services/record-merge/plan.js'
 import {
   emptyUndoLog,
   type InboundRelation,
@@ -499,8 +503,14 @@ function world() {
       saved.log = JSON.parse(JSON.stringify(log))
     },
     loadLog: async () => saved.log,
-    markUndone: async (log, u) => {
-      saved.log = { ...log, undone_at: new Date().toISOString(), undone_by: u }
+    claimUndo: async (_log, u) => {
+      // Compare-and-set like the store: only the first claim wins.
+      if (!saved.log || saved.log.undone_at) return false
+      saved.log = { ...saved.log, undone_at: new Date().toISOString(), undone_by: u }
+      return true
+    },
+    releaseUndo: async (log) => {
+      saved.log = { ...log, undone_at: null, undone_by: null }
     },
     unit: (fn) => fn(() => undefined)
   }
@@ -789,6 +799,34 @@ describe('undoMerge', () => {
     })
   })
 
+  it('runs only once when two undos race (claim first, then undo)', async () => {
+    const w = world()
+    const out = await applyMerge(req, 'pos', { survivor: 'A', discard: ['B'] }, w.deps)
+    const results = await Promise.allSettled([
+      undoMerge(req, out.merge_id, w.deps),
+      undoMerge(req, out.merge_id, w.deps)
+    ])
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    const refused = results.find((r) => r.status === 'rejected') as PromiseRejectedResult
+    expect(refused.reason).toMatchObject({ statusCode: 409, code: 'UNDO_REFUSED' })
+    expect(w.writes.filter((x) => x === 'restore pos/B')).toHaveLength(1)
+  })
+
+  it('gives the claim back when the undo itself fails', async () => {
+    const w = world()
+    const out = await applyMerge(req, 'pos', { survivor: 'A', discard: ['B'] }, w.deps)
+    const unit = w.deps.unit
+    w.deps.unit = async () => {
+      throw new Error('database went away')
+    }
+    await expect(undoMerge(req, out.merge_id, w.deps)).rejects.toThrow(/database went away/)
+    expect(w.saved.log?.undone_at).toBeNull()
+    w.deps.unit = unit
+    await expect(undoMerge(req, out.merge_id, w.deps)).resolves.toMatchObject({
+      restored: ['B']
+    })
+  })
+
   it('refuses someone else’s merge', async () => {
     const w = world()
     const out = await applyMerge(req, 'pos', { survivor: 'A', discard: ['B'] }, w.deps)
@@ -796,5 +834,69 @@ describe('undoMerge', () => {
     await expect(undoMerge(other, out.merge_id, w.deps)).rejects.toMatchObject({
       message: expect.stringMatching(/Only the person who merged/)
     })
+  })
+})
+
+describe('relation counts (no hidden-row counts for non-admins)', () => {
+  it('a non-admin sees only their own counts and a reason without numbers', () => {
+    const out = judgeRelationCounts({
+      raw: false,
+      isAdmin: false,
+      counts: { A: 5, B: 2 },
+      visible: { A: 3, B: 2 },
+      mayUpdate: true
+    })
+    expect(out).toEqual({
+      counts: { A: 3, B: 2 },
+      hidden: {},
+      movable: false,
+      reason: 'Some of them you cannot see, so they cannot be moved by you. Ask an administrator.'
+    })
+    expect(out.reason).not.toMatch(/\d/)
+  })
+
+  it('a raw table gives a non-admin no counts at all', () => {
+    expect(
+      judgeRelationCounts({
+        raw: true,
+        isAdmin: false,
+        counts: { A: 4 },
+        visible: {},
+        mayUpdate: false
+      })
+    ).toMatchObject({ counts: {}, hidden: {}, movable: false })
+  })
+
+  it('an administrator still gets the hidden counts and the raw counts', () => {
+    expect(
+      judgeRelationCounts({
+        raw: false,
+        isAdmin: true,
+        counts: { A: 5 },
+        visible: { A: 3 },
+        mayUpdate: true
+      })
+    ).toMatchObject({ counts: { A: 3 }, hidden: { A: 2 }, movable: false })
+    expect(
+      judgeRelationCounts({
+        raw: true,
+        isAdmin: true,
+        counts: { A: 4 },
+        visible: {},
+        mayUpdate: true
+      })
+    ).toEqual({ counts: { A: 4 }, hidden: {}, movable: true, reason: null })
+  })
+
+  it('everything visible and changeable moves', () => {
+    expect(
+      judgeRelationCounts({
+        raw: false,
+        isAdmin: false,
+        counts: { A: 2 },
+        visible: { A: 2 },
+        mayUpdate: true
+      })
+    ).toEqual({ counts: { A: 2 }, hidden: {}, movable: true, reason: null })
   })
 })

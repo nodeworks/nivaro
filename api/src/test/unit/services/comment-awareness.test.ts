@@ -130,16 +130,18 @@ describe('mention delivery', () => {
     ])
   })
 
-  it('no row: muted when their rules silence it, else not told; the reason is for admins only', () => {
+  it('no row: muted (admins only) when their rules silence it, else not told', () => {
     const base = { id: 'u2', name: 'Mark', row: null, mail, seenAt: null }
     const silenced = { muted: true, reason: 'Notification rules: in-app is OFF' }
+    // A non-admin author never learns that someone muted them (security review 2026-11-15).
     expect(describeMention({ ...base, silenced, isAdmin: false })).toMatchObject({
-      headline: 'muted',
+      headline: 'not_told',
       reason: null
     })
-    expect(describeMention({ ...base, silenced, isAdmin: true }).reason).toBe(
-      'Notification rules: in-app is OFF'
-    )
+    expect(describeMention({ ...base, silenced, isAdmin: true })).toMatchObject({
+      headline: 'muted',
+      reason: 'Notification rules: in-app is OFF'
+    })
     expect(describeMention({ ...base, silenced: null, isAdmin: false }).headline).toBe('not_told')
   })
 
