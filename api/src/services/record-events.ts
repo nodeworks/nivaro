@@ -18,7 +18,8 @@ import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
  *   hear it, while the traffic map / GraphQL subscriptions (which key on
  *   `action`) do not count it as a write. Aspects: `$state` (pipeline moved),
  *   `$addendums`, `$comments`, `$tasks`, `$integrations`, `$lock` (an edit lock
- *   was taken or released — list rows show/clear the lock icon).
+ *   was taken or released — list rows show/clear the lock icon), `$files` and `$related`
+ *   (both normally coalesced through services/related-announce.ts).
  * - `emitRecordEvent(c, id, 'record:integrity')` goes only to the record
  *   room (`record:<c>:<id>` — joined after a `can(read)` check), for signals
  *   nobody outside the open record needs.
@@ -31,6 +32,10 @@ export type RecordAspect =
   | '$tasks'
   | '$integrations'
   | '$lock'
+  /** The files a record carries changed (realtime 3; services/related-announce.ts). */
+  | '$files'
+  /** A child or linked record changed (realtime 18; services/related-announce.ts). */
+  | '$related'
 
 export function announceRecordAspect(
   collection: string | null | undefined,

@@ -117,7 +117,8 @@ describe('a junction row write tells the parent record', () => {
     expect(sent).toContainEqual({
       collection: 'workflows',
       item: '9',
-      extra: { action: 'update', changed_fields: ['divisions'] }
+      // Realtime 18: `$related` rides along so the open workflow refreshes its link lists.
+      extra: { action: 'update', changed_fields: ['divisions', '$related'] }
     })
     // The far leg (divisions) is reference data, not a parent: no event for it.
     expect(sent.some((e) => e.collection === 'divisions')).toBe(false)

@@ -52,6 +52,18 @@ export const collabLiveRecords: DocSection = {
         ],
         ['The history panel is open', 'New changes appear at the top, marked New.'],
         [
+          'Someone links, renames, replaces or removes one of the record’s files',
+          'The Files panel and file fields refresh quietly. A new file fades in where it lands; a file someone else removed stays a few seconds as a faded "Removed" row instead of vanishing. Your own uploads and removals never do either. You only ever see files you may read.'
+        ],
+        [
+          'A child or linked record changes (a line added, a PO created from the record, an invoice matched to it)',
+          'The record’s line grids, link lists, related panel and record widgets refresh quietly, without a flash and without touching what you are typing. Totals the change moves (stored rollups) refresh on their own. A burst of many records (an import) arrives as one refresh.'
+        ],
+        [
+          'Someone adds, renames or removes a record a dropdown lists (a vendor, a project, a lookup value)',
+          'The dropdown reads its options again the next time you open it, so the new record is there. An open dropdown never reshuffles under you; picker filters, cascades and your permissions still apply.'
+        ],
+        [
           'A flow run is working on the record',
           'A banner names the flow ("Automation is updating this record") until the run ends.'
         ],
@@ -73,7 +85,7 @@ export const collabLiveRecords: DocSection = {
         [
           '`collection:update`',
           '`collection:<name>`',
-          '`{collection, item, action?, changed_fields?}`. A notice with no `action` whose fields are all `$` names (`$state`, `$addendums`, `$comments`, `$tasks`, `$integrations`) says a related surface moved, not the record’s columns.'
+          "`{collection, item, action?, changed_fields?}`. A notice with no `action` whose fields are all `$` names (`$state`, `$addendums`, `$comments`, `$tasks`, `$integrations`, `$files`, `$related`) says a related surface moved, not the record’s columns. `$files` and `$related` ride other records’ writes: they are coalesced per collection over one second, and a second that names more than 50 records of one collection arrives as one collection-wide notice (`item: '*'`)."
         ],
         ['`record:integrity`', '`record:<collection>:<id>`', '`{collection, item}`'],
         [
@@ -158,7 +170,7 @@ useQuery({
     {
       type: 'ul',
       items: [
-        'Meta keys: `reads` (collections), `record` (`{collection, id}`), `fields` (only writes naming one of them count; creates, deletes and writes naming no fields always do), `aspects` (`$state`, `$comments`… — aspect notices are ignored otherwise), `includeOwn` (default on for `reads`, off for `record`, whose save already refreshed it), `minGapMs` (default 10 s for `reads`, 0 for `record`; a trailing refresh is never dropped), `reconcileOnly`.',
+        'Meta keys: `reads` (collections), `record` (`{collection, id}`), `fields` (only writes naming one of them count; creates, deletes and writes naming no fields always do), `aspects` (`$state`, `$comments`… — aspect notices are ignored otherwise), `includeOwn` (default on for `reads`, off for `record`, whose save already refreshed it), `minGapMs` (default 10 s for `reads`, 0 for `record`; a trailing refresh is never dropped), `reconcileOnly`, `staleOnly` (events only mark it stale and it reads again the next time it is shown — picker option lists use it through `pickerOptionsMeta(collection)`, so an open dropdown never reshuffles).',
         'The bridge joins the collection rooms that active tagged queries read and leaves them 30 s after the last one goes. Events coalesce for 300 ms per collection. Only queries on screen refetch; the rest are marked stale and refetch when they next mount. A hidden tab marks stale and refetches when it is shown again.',
         'Reconcile — every tagged query plus the active record, list, queue, My Work and widget reads refetch once — after a reconnect whose catch-up could not replay the gap (`status().resumed` is `unverified`), on `nvr:catchup-full`, and when a tab comes back after being hidden five minutes or more. A reconnect that replayed every missed event does not reconcile.',
         'At sign-in the server sends `catchup:cursor {seq}` — the event journal position — so a tab that has not received an event yet still replays its gap after a reconnect instead of missing it.',

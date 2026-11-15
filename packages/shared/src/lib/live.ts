@@ -43,7 +43,7 @@ import { type CollectionUpdateEvent, useOptionalRealtime } from './realtime'
  *   with `relayLiveEvent(event, payload)`.
  *
  * Virtual "aspect" fields: an event whose changed_fields are all `$`-names
- * (`$state`, `$addendums`, `$comments`, `$tasks`, `$integrations`) says a
+ * (`$state`, `$addendums`, `$comments`, `$tasks`, `$integrations`, `$files`, `$related`) says a
  * related surface moved, not the record's own columns — skip the row
  * refetch and refresh only that surface (`batch.aspectsOnly`).
  */
@@ -87,7 +87,14 @@ export const LIVE_ASPECTS = {
   integrations: '$integrations',
   owners: '$owners',
   /** An edit lock was taken or released (list rows show the lock icon). */
-  lock: '$lock'
+  lock: '$lock',
+  /** The files the record carries changed: a file field or file link, a file renamed, replaced
+   *  or deleted (Files panels and file fields refetch as the viewer). */
+  files: '$files',
+  /** A child or linked record changed — a line, a PO made from it, an invoice matched to it
+   *  (line grids, related lists and record widgets refetch; coalesced server-side, `'*'` when a
+   *  burst named more records than the cap). */
+  related: '$related'
 } as const
 
 export { isOwnWrite, noteOwnWrite, noteOwnWriteFromCommand } from './own-writes'
