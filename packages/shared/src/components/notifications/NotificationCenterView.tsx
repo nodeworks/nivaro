@@ -548,7 +548,7 @@ export function NotificationCenterView({
           </span>
         </div>
         {n.message && (
-          <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
+          <p className='mt-0.5 line-clamp-2 whitespace-pre-line text-[12px] text-slate-500'>
             {n.message.replace(/<[^>]+>/g, '')}
           </p>
         )}
@@ -1283,7 +1283,7 @@ export function NotificationCenterView({
                       )}
                     </div>
                     {g.message && (
-                      <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
+                      <p className='mt-0.5 line-clamp-2 whitespace-pre-line text-[12px] text-slate-500'>
                         {g.message.replace(/<[^>]+>/g, '')}
                       </p>
                     )}

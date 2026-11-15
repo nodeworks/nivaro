@@ -373,6 +373,15 @@ async function runOne(
         ...(summary ? { logs: summary.slice(0, 4000) } : {})
       })
     void announceCollectionImportRun(definition, String(next.id), 'completed')
+    // rt6 #19 — a catalog / price / stock import: owners of open records whose lines it changed
+    // hear it once (services/catalog-impact.ts; nothing for any other collection).
+    void import('./catalog-impact.js')
+      .then(async ({ noteCatalogChange }) => {
+        const { parseRecalcRollups } = await import('./import-rollups.js')
+        for (const c of parseRecalcRollups(definition.recalc_rollups)) noteCatalogChange(c, null)
+        for (const [c, ids] of Object.entries(affected ?? {})) noteCatalogChange(c, ids)
+      })
+      .catch(() => {})
     await notifyCreator(
       app,
       next,

@@ -429,7 +429,7 @@ export function NotificationBell({
             {n.title}
           </span>
           {n.message && (
-            <span className='mt-0.5 line-clamp-2 text-[11px] leading-snug text-slate-500'>
+            <span className='mt-0.5 line-clamp-2 whitespace-pre-line text-[11px] leading-snug text-slate-500'>
               {n.message.replace(/<[^>]+>/g, '')}
             </span>
           )}
