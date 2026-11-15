@@ -38,6 +38,13 @@ describe('filterSentence', () => {
     )
   })
 
+  it('says "about" on an approximate grand total, like the pager', () => {
+    const c: FilterClause[] = [{ kind: 'phrase', text: 'changed by others in the last 7 days' }]
+    expect(say(c, { shown: 1, of: 85607, ofApprox: true })).toBe(
+      'Showing Purchase Orders changed by others in the last 7 days — 1 of about 85,607.'
+    )
+  })
+
   it('omits "of" when the grand total is unknown or not larger', () => {
     const c: FilterClause[] = [{ kind: 'is', field: 'Zone', values: ['East'] }]
     expect(say(c, { shown: 128 })).toBe('Showing Purchase Orders where Zone is East — 128.')

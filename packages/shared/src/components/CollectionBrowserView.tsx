@@ -212,6 +212,14 @@ import { CopyAsButton } from './CopyAsButton'
 import { CollectionTree, useTreeConfig } from './cbv/CollectionTree'
 import { ColumnHeaderMenu } from './cbv/ColumnHeaderMenu'
 import {
+  ChangedByOthersChip,
+  changedCondition,
+  changedPhrase,
+  isChangedFilter,
+  viewChangedConditions,
+  viewChangedTip
+} from './cbv/changed-by-others'
+import {
   combineTerms,
   formatTotal,
   isTotalFn,
@@ -2565,6 +2573,11 @@ function filtersToConditions(
 ): Array<{ path: string[]; op: string; value: unknown }> {
   const conds: Array<{ path: string[]; op: string; value: unknown }> = []
   for (const f of filters) {
+    // "Changed by others" (cbv/changed-by-others.tsx): the server reads the window.
+    if (isChangedFilter(f)) {
+      conds.push(changedCondition(f))
+      continue
+    }
     const isDateType =
       f.fieldType === 'date' || f.fieldType === 'datetime' || f.fieldType === 'timestamp'
     if (f.op === '_between') {
@@ -3678,50 +3691,53 @@ function FilterBar({
         </div>
       </div>
 
-      {/* Applied chips — click to edit in place */}
-      {filters.map((f) => {
-        const chip = filterChipText(f)
-        return (
-          <span
-            key={f.id}
-            className='nvr-pop-in inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] transition-colors hover:border-nvr-cyan/40 dark:border-slate-700 dark:bg-slate-900'
-          >
-            <button
-              type='button'
-              onClick={() =>
-                onFiltersChange(filters.map((x) => (x.id === f.id ? { ...x, not: !x.not } : x)))
-              }
-              data-tip={f.not ? 'Negated — click to restore' : 'Click to negate (NOT)'}
-              className={
-                f.not
-                  ? 'rounded bg-amber-100 px-1 text-[10.5px] font-bold text-amber-700 dark:bg-amber-400/15 dark:text-amber-400'
-                  : 'rounded px-1 text-[10.5px] font-bold text-slate-300 hover:text-slate-500'
-              }
+      {/* Applied chips — click to edit in place ("Changed by others" is a toolbar pill of its
+          own, beside the quick filters). */}
+      {filters
+        .filter((f) => !isChangedFilter(f))
+        .map((f) => {
+          const chip = filterChipText(f)
+          return (
+            <span
+              key={f.id}
+              className='nvr-pop-in inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] transition-colors hover:border-nvr-cyan/40 dark:border-slate-700 dark:bg-slate-900'
             >
-              NOT
-            </button>
-            <button
-              type='button'
-              onClick={() => editChip(f)}
-              className='inline-flex items-center gap-1.5'
-            >
-              <span className='text-slate-500'>{chip.field}</span>
-              <span className='font-semibold text-slate-700 dark:text-slate-200'>{chip.op}</span>
-              {chip.value && (
-                <span className='text-[#00a5cc] dark:text-nvr-cyan'>{chip.value}</span>
-              )}
-            </button>
-            <button
-              type='button'
-              onClick={() => onFiltersChange(filters.filter((x) => x.id !== f.id))}
-              aria-label='Remove filter'
-              className='text-slate-400 hover:text-red-500'
-            >
-              ✕
-            </button>
-          </span>
-        )
-      })}
+              <button
+                type='button'
+                onClick={() =>
+                  onFiltersChange(filters.map((x) => (x.id === f.id ? { ...x, not: !x.not } : x)))
+                }
+                data-tip={f.not ? 'Negated — click to restore' : 'Click to negate (NOT)'}
+                className={
+                  f.not
+                    ? 'rounded bg-amber-100 px-1 text-[10.5px] font-bold text-amber-700 dark:bg-amber-400/15 dark:text-amber-400'
+                    : 'rounded px-1 text-[10.5px] font-bold text-slate-300 hover:text-slate-500'
+                }
+              >
+                NOT
+              </button>
+              <button
+                type='button'
+                onClick={() => editChip(f)}
+                className='inline-flex items-center gap-1.5'
+              >
+                <span className='text-slate-500'>{chip.field}</span>
+                <span className='font-semibold text-slate-700 dark:text-slate-200'>{chip.op}</span>
+                {chip.value && (
+                  <span className='text-[#00a5cc] dark:text-nvr-cyan'>{chip.value}</span>
+                )}
+              </button>
+              <button
+                type='button'
+                onClick={() => onFiltersChange(filters.filter((x) => x.id !== f.id))}
+                aria-label='Remove filter'
+                className='text-slate-400 hover:text-red-500'
+              >
+                ✕
+              </button>
+            </span>
+          )
+        })}
     </div>
   )
 }
@@ -4525,6 +4541,30 @@ const CBV_KIND_SHAPE: Partial<Record<string, CellShape>> = {
   integrations: 'badge',
   tasks: 'short',
   addendums: 'short'
+}
+
+/** Rows changed since the person last opened the active view: opaque, so pinned cells match. */
+const VIEW_CHANGED_ROW_CLASS = 'bg-[#f4fcfe] dark:bg-[#10232b]'
+/** …and on its pinned cells: the same tint, and on hover the colour the row's own hover wash
+ *  comes to over the table (cyan 4% light / 8% dark, flattened and measured), so a hovered
+ *  changed row never looks split at the pinned edge. */
+const VIEW_CHANGED_STICKY_CLASS =
+  'bg-[#f4fcfe] group-hover:bg-[#f5fdff] dark:bg-[#10232b] dark:group-hover:bg-[#233741]'
+
+/** The leading mark for such a row (the unseen dot's slot; a hollow ring, quieter than it). */
+function ViewChangedMark() {
+  const tip = 'Changed by someone else since you last opened this view'
+  return (
+    <span
+      data-cbv-view-changed=''
+      data-tip={tip}
+      role='img'
+      aria-label={tip}
+      className='inline-flex h-4 w-4 shrink-0 cursor-default items-center justify-center'
+    >
+      <span className='h-[7px] w-[7px] rounded-full border-[1.5px] border-nvr-cyan' />
+    </span>
+  )
 }
 
 /** How often a live collection re-reads quietly in case a write was never announced. */
@@ -6847,6 +6887,111 @@ export function CollectionBrowserView({
   views.slice(0, 12).forEach((v, i) => {
     viewCounts.set(v.id, viewCountQueries[i]?.data ?? null)
   })
+  // "N changed since you last opened this view" (realtime 2026-11-14, item 10): per person per
+  // view, counted as the viewer — the view's own filter plus "changed by someone else since I
+  // last opened it". Keys sit under ['cbv-view-count', collection] so the live feed's coalesced
+  // re-count moves them with the totals. The open view itself carries no changed pill.
+  const { data: viewOpened } = useQuery({
+    queryKey: ['cbv-view-opened', collection],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, string> }>(get('/saved-views/opened', { collection }))
+        .then((r) => r.data ?? {})
+        .catch(() => ({}) as Record<string, string>),
+    enabled: !!collection && views.length > 0,
+    staleTime: 60_000,
+    retry: false
+  })
+  const viewChangedQueries = useQueries({
+    queries: views.slice(0, 12).map((v) => {
+      const since = viewOpened?.[String(v.id)] ?? ''
+      const conds = viewChangedConditions(filtersToConditions(v.filters ?? []), since)
+      return {
+        queryKey: ['cbv-view-count', collection, v.id, 'changed', since, JSON.stringify(conds)],
+        queryFn: () =>
+          client
+            .request<{ total?: number }>(
+              get(`/items/${collection}`, { limit: 1, conditions: JSON.stringify(conds) })
+            )
+            .then((r) => (typeof r.total === 'number' ? r.total : null))
+            .catch(() => null),
+        enabled: !!collection && scopeGateOpen && !!since && v.id !== activeViewId,
+        staleTime: 60_000,
+        retry: false,
+        placeholderData: (prev: number | null | undefined) => prev
+      }
+    })
+  })
+  const viewChanged = new Map<number, number>()
+  views.slice(0, 12).forEach((v, i) => {
+    const n = viewChangedQueries[i]?.data
+    if (v.id !== activeViewId && viewOpened?.[String(v.id)] && typeof n === 'number' && n > 0)
+      viewChanged.set(v.id, n)
+  })
+  // Opening a view stamps it (any way it opens: a click, the default, a link) and answers when it
+  // was opened before; the rows that changed in between carry a quiet mark while it stays open.
+  const viewClickRef = useRef(false)
+  const viewStampRef = useRef<{ id: number; at: number; p: Promise<string | null> } | null>(null)
+  const [viewHighlight, setViewHighlight] = useState<{ viewId: number; since: string } | null>(null)
+  const activeViewKnown = activeViewId != null && views.some((v) => v.id === activeViewId)
+  useEffect(() => {
+    const id = activeViewId
+    if (id == null || id <= 0 || !collection || !activeViewKnown) {
+      setViewHighlight(null)
+      return
+    }
+    const clicked = viewClickRef.current
+    viewClickRef.current = false
+    // One stamp per open: a re-run straight after (StrictMode, a views refetch) reuses it, or
+    // the second stamp would answer the first one's time and nothing would be marked.
+    const held = viewStampRef.current
+    const p =
+      held && held.id === id && Date.now() - held.at < 5000
+        ? held.p
+        : client
+            .request<{ data?: { previous?: string | null } }>(
+              // Only a click feeds the config review's "views nobody opens" (#2020).
+              post(`/saved-views/${id}/opened`, clicked ? {} : { auto: true })
+            )
+            .then((r) => r?.data?.previous ?? null)
+            .catch(() => null)
+    viewStampRef.current = { id, at: held?.id === id ? held.at : Date.now(), p }
+    let gone = false
+    setViewHighlight(null)
+    void p.then((previous) => {
+      if (gone) return
+      if (previous) setViewHighlight({ viewId: id, since: previous })
+      void qc.invalidateQueries({ queryKey: ['cbv-view-opened', collection] })
+    })
+    return () => {
+      gone = true
+    }
+  }, [activeViewId, activeViewKnown, collection, client, qc])
+  const highlightSince =
+    viewHighlight && viewHighlight.viewId === activeViewId ? viewHighlight.since : null
+  const { data: viewChangedRows } = useQuery({
+    queryKey: ['cbv-view-changed-rows', collection, highlightSince, pageIdsKey],
+    queryFn: () => {
+      const ids = pageIdsKey.split(',')
+      return client
+        .request<{ data: Array<{ id: unknown }> }>(
+          get(`/items/${collection}`, {
+            fields: 'id',
+            limit: ids.length,
+            conditions: JSON.stringify(
+              viewChangedConditions([{ path: ['id'], op: '_in', value: ids }], highlightSince ?? '')
+            )
+          })
+        )
+        .then((r) => new Set((r.data ?? []).map((x) => String(x.id))))
+        .catch(() => new Set<string>())
+    },
+    enabled: !!collection && !!highlightSince && pageIdsKey.length > 0,
+    placeholderData: (prev) => prev,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false
+  })
+  const viewChangedSet = highlightSince ? viewChangedRows : undefined
   // Columns a view marks admin-only (Lines Ready): hidden from everyone else.
   const [columnAdminOnly, setColumnAdminOnly] = useState<Set<string>>(() => new Set())
   const applyView = (v: SavedView) => {
@@ -8006,14 +8151,18 @@ export function CollectionBrowserView({
   // labels the list already has (field labels, option lists in the query
   // cache). Never a fetch per filter: an unlabelled pick reads "one of 2 picked".
   const sentenceNarrowed = !!(appliedSearch || conditionsParam || activeViewId != null)
-  const { data: grandTotal } = useQuery({
-    queryKey: ['cbv-grand-total', collection],
+  // `approx`: the unfiltered total came from the approximate count, so the sentence says
+  // "1 of about 85,607" — the same words the pager uses for that figure.
+  const { data: grandTotalRes } = useQuery({
+    queryKey: ['cbv-grand-total', collection, 'with-approx'],
     queryFn: () =>
       client
-        .request<{ total?: number | null }>(
+        .request<{ total?: number | null; total_approx?: boolean }>(
           get(`/items/${collection}`, { limit: 1, fields: 'id', count: 'approx' })
         )
-        .then((r) => (typeof r.total === 'number' ? r.total : null)),
+        .then((r) =>
+          typeof r.total === 'number' ? { n: r.total, approx: r.total_approx === true } : null
+        ),
     enabled: !!collection && scopeGateOpen && !aiResult && sentenceNarrowed,
     staleTime: 5 * 60_000,
     retry: false
@@ -8070,6 +8219,10 @@ export function CollectionBrowserView({
         f.path[0] === '$unseen'
       ) {
         clauses.push({ kind: 'phrase', text: `${f.not ? 'not ' : ''}${field.toLowerCase()}` })
+        continue
+      }
+      if (isChangedFilter(f)) {
+        clauses.push({ kind: 'phrase', text: changedPhrase(f) })
         continue
       }
       const t = f.fieldType ?? ''
@@ -8206,7 +8359,8 @@ export function CollectionBrowserView({
       search: appliedSearch,
       clauses,
       shown: totalUnknown ? null : total,
-      of: grandTotal ?? null,
+      of: grandTotalRes?.n ?? null,
+      ofApprox: grandTotalRes?.approx === true,
       approx: totalApprox
     })
   })()
@@ -8434,6 +8588,16 @@ export function CollectionBrowserView({
           filters={filters}
           onFiltersChange={(f) => {
             setFilters(f)
+            setPage(1)
+          }}
+        />
+        {/* Changed by others (realtime 2026-11-14): a pill with a period picker, kept in the
+            list's filters so saved views and links carry it. */}
+        <ChangedByOthersChip
+          filter={filters.find(isChangedFilter)}
+          onChange={(next) => {
+            const rest = filters.filter((x) => !isChangedFilter(x))
+            setFilters(next ? [...rest, next] : rest)
             setPage(1)
           }}
         />
@@ -9526,13 +9690,29 @@ export function CollectionBrowserView({
             <button
               type='button'
               onClick={() => {
+                // The open stamp (and the config review's "views nobody opens", #2020) follows
+                // the active view; this marks it as the person's own choice.
+                if (activeViewId !== v.id) viewClickRef.current = true
                 applyView(v)
-                // Feeds the config review's "views nobody opens" (#2020).
-                client.request(post(`/saved-views/${v.id}/opened`, {})).catch(() => {})
               }}
             >
               {v.name}
             </button>
+            {viewChanged.has(v.id) && (
+              <span
+                data-view-changed={v.id}
+                data-tip={viewChangedTip(viewChanged.get(v.id) as number)}
+                aria-label={viewChangedTip(viewChanged.get(v.id) as number)}
+                role='img'
+                className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/15 px-1.5 text-[10.5px] font-semibold tabular-nums text-[#04516b] dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
+              >
+                <span aria-hidden className='h-[5px] w-[5px] rounded-full bg-nvr-cyan' />
+                <LiveCount
+                  value={viewChanged.get(v.id) as number}
+                  format={(n) => Number(n).toLocaleString()}
+                />
+              </span>
+            )}
             {viewCounts.get(v.id) != null && (
               <span
                 data-view-count={v.id}
@@ -10399,14 +10579,23 @@ export function CollectionBrowserView({
                       const unseen = unseenMap?.[String(id)]
                       const rowLock = rowLocks.get(String(id)) ?? null
                       const pickerExcluded = isPickerExcluded(collection, id)
+                      // Changed since the person last opened this view (item 10): an
+                      // opaque pale tint (pinned cells copy it), under risk and selection.
+                      const viewChangedRow = !!viewChangedSet?.has(String(id))
                       const riskTint =
-                        !isSelected && risk ? rowHighlightClass(risk.color) : undefined
+                        !isSelected && risk
+                          ? rowHighlightClass(risk.color)
+                          : !isSelected && viewChangedRow
+                            ? VIEW_CHANGED_ROW_CLASS
+                            : undefined
                       // Pinned cells need an OPAQUE bg — tinted rows carry the tint
                       // into their sticky cells so pinned columns match the row.
                       const stickyBg = isSelected
                         ? 'bg-[#e6fafe] dark:bg-[#0c2a33]'
-                        : (riskTint ??
-                          'bg-white group-hover:bg-[#f2fcff] dark:bg-slate-900 dark:group-hover:bg-[#0e2d3a]')
+                        : !risk && viewChangedRow
+                          ? VIEW_CHANGED_STICKY_CLASS
+                          : (riskTint ??
+                            'bg-white group-hover:bg-[#f2fcff] dark:bg-slate-900 dark:group-hover:bg-[#0e2d3a]')
                       return (
                         <tr
                           key={String(id)}
@@ -10444,6 +10633,8 @@ export function CollectionBrowserView({
                                     viewers={rowViewers[rowPresenceKey(collection, String(id))]}
                                     dataAttr='data-cbv-presence'
                                   />
+                                ) : !unseen && viewChangedRow ? (
+                                  <ViewChangedMark />
                                 ) : (
                                   <UnseenDot change={unseen} dataAttr='data-cbv-unseen' />
                                 )}

@@ -2,9 +2,11 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
+import { markViewOpened, readViewOpened } from '../services/changed-filter.js'
 import { forgetListWeightReport } from '../services/list-weight.js'
 import { writeRevision } from '../services/revisions.js'
 import { announceMineChanged } from '../services/user-sync.js'
+import { viewAsAdminOf } from '../services/view-as-attribution.js'
 
 interface SavedViewRow {
   id: number
@@ -302,14 +304,54 @@ export async function savedViewsRoutes(app: FastifyInstance) {
       sameId(view.user, req.user!.id) ||
       (!!view.is_shared && (view.role == null || sameId(view.role, req.user!.role ?? null)))
     if (!visible && !req.isAdmin) return reply.code(404).send({ error: 'Not found' })
-    void logActivityThrottled(app.redis, `saved-view-open:${view.id}:${req.user!.id}`, 3600, {
-      action: 'saved-view-open',
-      user: req.user!.id,
-      collection: 'nivaro_saved_views',
-      item: String(view.id),
-      comment: view.collection
-    })
-    return reply.code(204).send()
+    // `auto`: the list applied it by itself (the default, a link) — not a person choosing it.
+    const auto = (req.body as { auto?: unknown } | undefined)?.auto === true
+    if (!auto)
+      void logActivityThrottled(app.redis, `saved-view-open:${view.id}:${req.user!.id}`, 3600, {
+        action: 'saved-view-open',
+        user: req.user!.id,
+        collection: 'nivaro_saved_views',
+        item: String(view.id),
+        comment: view.collection
+      })
+    // "N changed since you last opened this view" (realtime 2026-11-14): the person's own
+    // last-opened time per view, in their preferences. The answer says when it was opened
+    // before, so the list can mark the rows that changed in between.
+    // An administrator viewing as someone reads their marks but never moves them.
+    let previous: string | null = null
+    const openedAt = new Date()
+    try {
+      if (viewAsAdminOf(req))
+        previous = (await readViewOpened(req.user!.id))[String(view.id)] ?? null
+      else previous = await markViewOpened(req.user!.id, view.id, openedAt)
+    } catch (err) {
+      req.log.warn({ err, view: view.id }, 'saved view opened stamp failed')
+    }
+    return reply.send({ data: { previous, opened_at: openedAt.toISOString() } })
+  })
+
+  // GET /opened?collection= — when the caller last opened each of their visible views of
+  // the collection ({[viewId]: ISO}; a view never opened is absent).
+  app.get('/opened', async (req, reply) => {
+    const { collection } = req.query as { collection?: string }
+    if (!collection) return reply.code(400).send({ error: 'collection is required' })
+    const userId = req.user!.id
+    const userRole = req.user!.role ?? null
+    const ids = (await db('nivaro_saved_views')
+      .where({ collection })
+      .where((qb) => {
+        qb.where({ user: userId }).orWhere((shared) => {
+          shared.where('is_shared', true).andWhere((roleQb) => {
+            roleQb.whereNull('role')
+            if (userRole) roleQb.orWhere('role', userRole)
+          })
+        })
+      })
+      .select('id')) as Array<{ id: number }>
+    const opened = await readViewOpened(userId)
+    const data: Record<string, string> = {}
+    for (const { id } of ids) if (opened[String(id)]) data[String(id)] = opened[String(id)]
+    return reply.send({ data })
   })
 
   // DELETE /:id — delete (owner or admin)
