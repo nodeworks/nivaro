@@ -30,6 +30,26 @@ describe('opsTopicsOfWrite', () => {
   })
 })
 
+describe('admin screen topics (2026-11-14)', () => {
+  it('integration tables and access requests poke their own topics', () => {
+    expect(opsTopicsOfWrite('update nivaro_integration_signal_rows set x = 1')).toEqual([
+      'integrations'
+    ])
+    expect(opsTopicsOfWrite('insert into nivaro_external_api_logs (api) values (?)')).toEqual([
+      'integrations'
+    ])
+    expect(opsTopicsOfWrite('merge nivaro_erp_submissions as t using x')).toEqual(['integrations'])
+    expect(opsTopicsOfWrite('insert into nivaro_access_requests (user) values (?)')).toEqual([
+      'access-requests'
+    ])
+  })
+
+  it('the three topics are admin-only rooms', () => {
+    for (const t of ['collections', 'integrations', 'access-requests'])
+      expect(opsTopicGate(t)).toEqual({ topic: t, gate: 'admin' })
+  })
+})
+
 describe('opsTopicGate', () => {
   it('allowlists topics and names who may join', () => {
     expect(opsTopicGate('readiness')).toEqual({ topic: 'readiness', gate: 'admin' })

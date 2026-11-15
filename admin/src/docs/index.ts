@@ -297,7 +297,7 @@ import { integrationsConsole } from './sections/integrations-console.js'
 import { layoutEditor, layoutPersonalDefaults } from './sections/layout-editor.js'
 import { listEditing } from './sections/list-editing'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
-import { collabLiveLists } from './sections/live-lists.js'
+import { collabLiveCounts, collabLiveLists } from './sections/live-lists.js'
 import {
   aiActionsDocs,
   flowMapReplayDocs,
@@ -900,6 +900,7 @@ export const navSections: NavGroup[] = [
       collabLiveProgress,
       collabOfflinePopout,
       collabLiveLists,
+      collabLiveCounts,
       collabLiveOps,
       collabPresence,
       collabNotificationsCenter,

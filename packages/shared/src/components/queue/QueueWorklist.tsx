@@ -142,6 +142,7 @@ import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/In
 import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { queueReturnApplies, readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { ListLoadError } from '../ListLoadError'
+import { LiveCount } from '../LiveCount'
 import { LiveRowMark } from '../LiveRowMark'
 import { CopyListLinkButton } from '../list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from '../list/InlineEdit'
@@ -154,7 +155,6 @@ import { RealtimeStaleMark } from '../RealtimeStatusBanner'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
 import { RowPresence } from '../RowPresence'
-import { TickerNumber } from '../TickerNumber'
 import { UnseenDot } from '../UnseenDot'
 import { Badge } from '../ui/badge'
 import { Checkbox } from '../ui/checkbox'
@@ -604,14 +604,14 @@ function StatTile({
             {filteredCount != null ? (
               <>
                 <span className='text-nvr-navy dark:text-nvr-cyan'>
-                  <TickerNumber value={filteredCount} format={formatNumber} />
+                  <LiveCount value={filteredCount} format={(v) => formatNumber(Number(v))} />
                 </span>
                 <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>
-                  / <TickerNumber value={count} format={formatNumber} />
+                  / <LiveCount value={count} format={(v) => formatNumber(Number(v))} />
                 </span>
               </>
             ) : (
-              <TickerNumber value={count} format={formatNumber} />
+              <LiveCount value={count} format={(v) => formatNumber(Number(v))} />
             )}
           </span>
           <span
@@ -1048,7 +1048,7 @@ export function QueueWorklist({
       statsTimer = setTimeout(() => {
         statsTimer = null
         setStatsTick((n) => n + 1)
-      }, 1500)
+      }, 2500)
     }
     const scheduleRefetch = () => {
       if (refetchTimer) return

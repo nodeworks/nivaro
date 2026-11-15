@@ -9,7 +9,9 @@ import {
   type NotificationRouteMap,
   playNotificationSound,
   NotificationBell as SharedNotificationBell,
-  soundForCategory
+  soundForCategory,
+  useLiveRefetchInterval,
+  useLiveRefresh
 } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, KeyRound } from 'lucide-react'
@@ -62,6 +64,10 @@ export function NotificationBell({
 
   // Access requests waiting on an admin (#19). Non-admins get a 403 → 0, so
   // no client-side role check is needed; the badge counts them with unread.
+  // Live: the admin-only `access-requests` topic pokes when one is filed or answered (everyone
+  // else's join is refused, so nothing arrives and the poll below stays their only read).
+  useLiveRefresh({ topic: 'access-requests', keys: [['access-requests-pending-count']] })
+  const accessPoll = useLiveRefetchInterval(120_000, { safetyMs: 10 * 60_000 })
   const { data: pendingAccess = 0 } = useQuery<number>({
     queryKey: ['access-requests-pending-count'],
     queryFn: () =>
@@ -72,7 +78,7 @@ export function NotificationBell({
         )
         .catch(() => 0),
     staleTime: 60_000,
-    refetchInterval: 120_000,
+    refetchInterval: accessPoll,
     retry: false
   })
 

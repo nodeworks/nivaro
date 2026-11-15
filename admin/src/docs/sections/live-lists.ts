@@ -65,3 +65,60 @@ export const collabLiveLists: DocSection = {
     }
   ]
 }
+
+export const collabLiveCounts: DocSection = {
+  id: 'live-counts',
+  label: 'Live Counts & Admin Screens',
+  content: [
+    { type: 'h1', id: 'live-counts', text: 'Live Counts & Admin Screens' },
+    {
+      type: 'p',
+      text: 'Numbers on a screen (queue totals, saved-view pills, the notification badge, the support desk tabs, the Collections directory) and the admin console screens follow the data without a reload. A live change says only THAT something moved; the number is then read again through its normal request, as you, so permissions always apply.'
+    },
+    { type: 'h3', id: 'live-counts-what', text: 'What follows live' },
+    {
+      type: 'table',
+      head: ['Screen', 'What updates'],
+      rows: [
+        [
+          'Collections directory (admins)',
+          'Record counts and last-change times refresh a few seconds after data is written. The order of rows (Most records, Recently changed) holds still while your pointer is over the page.'
+        ],
+        [
+          'Integrations console',
+          'Firefight signals and tab count, Partners and Events refresh when a signal, a partner call, a submission or an obligation is written.'
+        ],
+        [
+          'Queue tiles and saved-view pills',
+          'Total, Unowned, At risk and each view pill re-count once the burst of changes settles.'
+        ],
+        [
+          'Notification badge, Support desk tabs, Approvals, import counts',
+          'Re-read when a notification, ticket, approval or import run changes.'
+        ],
+        [
+          'Collection browser (lookup tables)',
+          'Changes announced by the server appear in place. A quiet safety re-read every two minutes catches writes nothing announces; it never runs while you have rows selected, a field focused or the pointer over the table.'
+        ]
+      ]
+    },
+    { type: 'h3', id: 'live-counts-feel', text: 'How it behaves' },
+    {
+      type: 'ul',
+      items: [
+        'Nothing pops up: no toast, banner or sound. A changed number cross-fades in the same spot (no movement, no bounce); with reduced motion it just swaps.',
+        'A burst of changes is one re-read: counts wait until changes have been quiet for 2 seconds or more, and never longer than 15 seconds into a steady stream. A hidden tab re-reads once when you come back.',
+        'Rows never move under your pointer or keyboard focus.'
+      ]
+    },
+    { type: 'h3', id: 'live-counts-dev', text: 'For developers' },
+    {
+      type: 'ul',
+      items: [
+        'In `@nivaro/shared`: `createCoalescer(fn, { quietMs, maxWaitMs })`, `useLiveRefresh({ topic, keys })` (one shared re-read per client + key set, 2 s floor) and `<LiveCount value format />`.',
+        'New admin-only ops topics for `useLiveOps` / `useLiveRefresh`: `collections` (poked by data writes, coalesced), `integrations` (signal, partner-call, submission and obligation tables) and `access-requests`. Pokes carry no rows, people or values.',
+        'Writes that bypass the items service (procedures, scripts, extensions) should call `announceRawWrites(collection)` so lists and counts on that collection update; the safety re-read is only a net.'
+      ]
+    }
+  ]
+}
