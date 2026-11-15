@@ -26,18 +26,50 @@ vi.mock('./collections.js', () => ({
 vi.mock('./record-labels-as-viewer.js', () => ({
   recordLabelsAsViewer: async () => ({ 'orders:5': 'PO-5 · 120.5' })
 }))
+// The card's step / owners / SLA come from the SAME sources the record page reads (security
+// review 2026-11-14) — never the command center's looser decorations.
+const geoCalls: unknown[] = []
 vi.mock('./command-center/geo.js', () => ({
-  decorateRecords: async () =>
-    new Map([
-      [
-        '5',
-        {
-          state: { key: 'review', label: 'In review', color: '#f59e0b' },
-          sla: 'ok',
-          owners: [{ id: 'u1', name: 'Beth Smith' }]
-        }
-      ]
-    ])
+  decorateRecords: async (...a: unknown[]) => {
+    geoCalls.push(a)
+    return new Map()
+  }
+}))
+let instance: { current_state?: string | null } | undefined = { current_state: 'S1' }
+const instanceCalls: unknown[][] = []
+vi.mock('./branch-instances.js', () => ({
+  findRecordInstance: async (...a: unknown[]) => {
+    instanceCalls.push(a)
+    return instance
+  }
+}))
+vi.mock('../db/index.js', () => ({
+  db: () => {
+    const b: Record<string, unknown> = {}
+    b.where = () => b
+    b.first = async () => ({ key: 'review', label: 'In review', color: '#f59e0b' })
+    return b
+  }
+}))
+const ownerCalls: unknown[][] = []
+let ownersAnswer: Record<
+  string,
+  Array<{ id: string; name: string; inactive?: 'suspended' | 'former' }>
+> = {
+  '5': [
+    { id: 'u1', name: 'Beth Smith' },
+    { id: 'u2', name: 'Former user', inactive: 'former' }
+  ]
+}
+vi.mock('../routes/pipelines.js', () => ({
+  resolvedOwnerNames: async (...a: unknown[]) => {
+    ownerCalls.push(a)
+    return ownersAnswer
+  }
+}))
+let slaAnswer: Record<string, { status: string | null }> = { '5': { status: 'warning' } }
+vi.mock('../routes/sla.js', () => ({
+  computeStatusBatch: async () => slaAnswer
 }))
 vi.mock('./command-center/regions.js', () => ({
   readableName: (c: string, n?: string | null) => n || c
@@ -52,6 +84,49 @@ describe('recordCard — read as the viewer', () => {
     readOneResult = null
     readOneError = null
     readOneCalls.length = 0
+    geoCalls.length = 0
+    ownerCalls.length = 0
+    instanceCalls.length = 0
+    instance = { current_state: 'S1' }
+    ownersAnswer = {
+      '5': [
+        { id: 'u1', name: 'Beth Smith' },
+        { id: 'u2', name: 'Former user', inactive: 'former' }
+      ]
+    }
+    slaAnswer = { '5': { status: 'warning' } }
+  })
+
+  it('an unreadable record never reaches the step, owner or SLA reads', async () => {
+    readOneResult = null
+    await recordCard(user, 'orders', '5')
+    expect(ownerCalls).toHaveLength(0)
+    expect(instanceCalls).toHaveLength(0)
+  })
+
+  it('step, owners and SLA come from the record page’s own sources', async () => {
+    readOneResult = { id: 5, number: 'PO-5' }
+    const card = await recordCard(user, 'orders', '5')
+    // The instance the pipeline panel shows (findRecordInstance), the header tile's owners.
+    expect(instanceCalls[0]).toEqual(['orders', '5'])
+    expect(ownerCalls[0]).toEqual(['orders', ['5']])
+    expect(geoCalls).toHaveLength(0)
+    expect(card?.state).toEqual({ key: 'review', label: 'In review', color: '#f59e0b' })
+    expect(card?.sla).toBe('warning')
+    // Redacted people read as the tile names them; inactive people stay marked.
+    expect(card?.owners).toEqual([
+      { id: 'u1', name: 'Beth Smith' },
+      { id: 'u2', name: 'Former user', inactive: 'former' }
+    ])
+  })
+
+  it('no pipeline, no SLA rule: no step and no SLA, never a guess', async () => {
+    readOneResult = { id: 5 }
+    instance = undefined
+    ownersAnswer = {}
+    slaAnswer = {}
+    const card = await recordCard(user, 'orders', '5')
+    expect(card).toMatchObject({ state: null, sla: null, owners: [] })
   })
 
   it('no card for a record the viewer cannot read (readOne answers null)', async () => {
@@ -82,7 +157,7 @@ describe('recordCard — read as the viewer', () => {
       title: 'PO-5 · 120.5',
       collection_label: 'Order',
       state: { label: 'In review' },
-      owners: [{ name: 'Beth Smith' }]
+      owners: [{ name: 'Beth Smith' }, { name: 'Former user' }]
     })
     expect(card?.amounts.map((a) => a.field)).toEqual(['total', 'tax_amount'])
     expect(card?.amounts[0]).toMatchObject({ label: 'Order total', value: 120.5, money: true })
