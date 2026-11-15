@@ -27,7 +27,11 @@ import {
   type VersionGroup
 } from '../services/client-versions-cluster.js'
 import { ownUserRoom, scopeUserRoomsPerTenant } from '../services/cloud-user-rooms.js'
-import { fieldValueAudience } from '../services/field-change-relay.js'
+import {
+  fieldChangeDelivery,
+  type RelayViewer,
+  relayableValue
+} from '../services/field-change-relay.js'
 import { fieldFocusTracker } from '../services/field-focus.js'
 import {
   cleanSignalField,
@@ -2254,8 +2258,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Live co-editing v3 — relay value keystrokes inside the record room.
     // Preview-only on the receiving side; persistence still goes through the
     // normal save path with all its validation.
-    // M6 — the value goes only to viewers whose read policy includes the field; the others get
-    // the same event without a value (they still see who is editing which field).
+    // The typed value goes only to the SOCKETS in the room whose person may read that field
+    // (the record read's field list) — never for system collections, encrypted, credential or
+    // concealed fields, to-many aliases or names the collection lacks, never to API-key sockets
+    // (services/field-change-relay.ts). Everyone else gets the same event without `value` (who
+    // is editing which field). Same event and shape as before; `value` is simply absent.
     socket.on(
       'field:change',
       inSocketTenant(
@@ -2270,35 +2277,39 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           const room = roomFor(payload)
           if (!user || !room || typeof payload?.field !== 'string') return
           const field = payload.field
-          const value =
-            typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
+          if (!field || field.length > 128) return
           // Typing keeps the "editing this field" mark alive.
           focusMarks.touch(room, field)
           const record = recordOf(room)
           const base = { ...record, field, user: { id: user.id, name: displayName(user) } }
           const me = String(user.id).toLowerCase()
-          const viewerIds = [
-            ...(recordViewers.get(room)?.values() ?? []),
-            ...boardPeerViewers(room)
-          ]
-            .map((v) => String(v.id))
-            .filter((id) => id.toLowerCase() !== me)
-          if (viewerIds.length === 0 || !record.collection) return
-          let audience: { readers: string[]; others: string[] }
-          try {
-            audience = await fieldValueAudience(viewerIds, record.collection, field)
-          } catch {
-            audience = { readers: [], others: viewerIds }
+          const bindKind = (sid: string) =>
+            (io.sockets.sockets.get(sid)?.data?.nvrBind as { kind?: string } | undefined)?.kind
+          const viewers: RelayViewer[] = [
+            ...[...(recordViewers.get(room)?.entries() ?? [])].map(([sid, v]) => ({
+              socket: sid,
+              id: String(v.id),
+              kind: bindKind(sid)
+            })),
+            ...boardPeerViewers(room).map((v) => ({ socket: v.socket, id: String(v.id) }))
+          ].filter((v) => !!v.socket && v.socket !== socket.id && v.id.toLowerCase() !== me)
+          if (viewers.length === 0 || !record.collection) return
+          const namesOnly = { valueTo: [] as string[], nameTo: viewers.map((v) => v.socket) }
+          let delivery = namesOnly
+          if (relayableValue(payload.value)) {
+            try {
+              delivery = await fieldChangeDelivery(viewers, record.collection, field)
+            } catch {
+              delivery = namesOnly
+            }
           }
-          // Personal rooms reach each viewer's tabs on every replica; a tab not on this record
-          // ignores it (the payload names its record).
-          if (audience.readers.length)
-            io.to(audience.readers.map((id) => `user:${id}`)).emit('field:changed', {
-              ...base,
-              value
-            })
-          if (audience.others.length)
-            io.to(audience.others.map((id) => `user:${id}`)).emit('field:changed', base)
+          const value =
+            typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
+          // Socket ids reach a socket on any replica (adapter); a person's other tabs and
+          // devices that are not on this record get nothing.
+          if (delivery.valueTo.length)
+            io.to(delivery.valueTo).emit('field:changed', { ...base, value })
+          if (delivery.nameTo.length) io.to(delivery.nameTo).emit('field:changed', base)
         }
       )
     )

@@ -9,8 +9,9 @@ import {
 } from '../../../services/cloud-user-rooms.js'
 import {
   __resetFieldChangeRelay,
-  fieldValueAudience,
-  type RelayDeps
+  fieldChangeDelivery,
+  type RelayDeps,
+  relayableValue
 } from '../../../services/field-change-relay.js'
 import {
   createSocketLimiter,
@@ -93,45 +94,146 @@ describe('per-socket rate limit (M10)', () => {
   })
 })
 
-describe('field:change values follow the viewer field list (M6)', () => {
-  const deps = (fields: Record<string, string[] | null>): RelayDeps => ({
+describe('field:change values go only to sockets whose person may read the field', () => {
+  // `cost` and `qty` are plain fields of orders; `card_no` is encrypted (left out of the
+  // value-field set, as loadValueFields does for is_encrypted / credential / concealed fields).
+  const ORDER_VALUE_FIELDS = new Set(['cost', 'qty'])
+  const deps = (
+    fields: Record<string, string[] | null>,
+    valueFields: (c: string) => Set<string> = (c) =>
+      c === 'orders' ? ORDER_VALUE_FIELDS : new Set()
+  ): RelayDeps => ({
     loadUser: async (id) => (id in fields ? ({ id, role: 'R' } as never) : null),
     allowedFields: async (u) => fields[(u as { id: string }).id] as string[] | null,
+    valueFields: async (c) => valueFields(c),
     now: () => 0
   })
+  const v = (socket: string, id: string, kind?: string) => ({ socket, id, kind })
 
-  it('splits viewers into readers and others', async () => {
-    const out = await fieldValueAudience(
-      ['admin', 'narrow', 'wide', 'gone'],
+  it('a field reader gets the value; a non-reader gets the name only', async () => {
+    const out = await fieldChangeDelivery(
+      [v('s1', 'admin'), v('s2', 'narrow'), v('s3', 'wide'), v('s4', 'gone')],
       'orders',
       'cost',
       deps({ admin: null, narrow: ['qty'], wide: ['*'] })
     )
-    expect(out.readers.sort()).toEqual(['admin', 'wide'])
-    expect(out.others.sort()).toEqual(['gone', 'narrow'])
+    expect(out.valueTo.sort()).toEqual(['s1', 's3'])
+    expect(out.nameTo.sort()).toEqual(['s2', 's4'])
+  })
+
+  it('an encrypted field never carries its value, even to someone who may read it', async () => {
+    const out = await fieldChangeDelivery(
+      [v('s1', 'admin'), v('s2', 'wide')],
+      'orders',
+      'card_no',
+      deps({ admin: null, wide: ['*'] })
+    )
+    expect(out).toEqual({ valueTo: [], nameTo: ['s1', 's2'] })
+  })
+
+  it('the real value-field set leaves out encrypted, credential, concealed and to-many fields', async () => {
+    vi.resetModules()
+    vi.doMock('../../../services/collections.js', () => ({
+      getFields: async () =>
+        ['cost', 'card_no', 'pin', 'static_token', 'lines', 'note'].map((field) => ({
+          field,
+          interface: field === 'pin' ? 'input-password' : 'input',
+          special: null
+        })),
+      getRelations: async () => [
+        { many_collection: 'order_lines', one_collection: 'orders', one_field: 'lines' }
+      ]
+    }))
+    vi.doMock('../../../services/encryption.js', () => ({
+      getEncryptedFields: async () => ['card_no']
+    }))
+    vi.doMock('../../../services/permissions.js', () => ({
+      getAllowedFields: async () => null
+    }))
+    vi.doMock('../../../db/index.js', () => ({
+      db: () => ({ where: () => ({ first: async () => ({ id: 'admin', role: 'A' }) }) })
+    }))
+    try {
+      const relay = await import('../../../services/field-change-relay.js')
+      const viewers = [v('s1', 'admin')]
+      for (const field of ['card_no', 'pin', 'static_token', 'lines', 'row:7', 'nope']) {
+        const out = await relay.fieldChangeDelivery(viewers, 'orders', field)
+        expect({ field, ...out }).toEqual({ field, valueTo: [], nameTo: ['s1'] })
+      }
+      expect(await relay.fieldChangeDelivery(viewers, 'orders', 'note')).toEqual({
+        valueTo: ['s1'],
+        nameTo: []
+      })
+      // System collections never carry values, whoever is watching.
+      expect(await relay.fieldChangeDelivery(viewers, 'nivaro_users', 'email')).toEqual({
+        valueTo: [],
+        nameTo: ['s1']
+      })
+      relay.__resetFieldChangeRelay()
+    } finally {
+      vi.doUnmock('../../../services/collections.js')
+      vi.doUnmock('../../../services/encryption.js')
+      vi.doUnmock('../../../services/permissions.js')
+      vi.doUnmock('../../../db/index.js')
+      vi.resetModules()
+    }
+  })
+
+  it('a View-as socket is judged as the viewed person, not the admin behind it', async () => {
+    // The admin `rob` views as `beth`: the socket is signed in as beth (id beth, kind masq).
+    // beth may not read cost, so that socket gets the name only, though rob could read it.
+    const out = await fieldChangeDelivery(
+      [v('rob-own-tab', 'rob', 'session'), v('rob-as-beth', 'beth', 'masq')],
+      'orders',
+      'cost',
+      deps({ rob: null, beth: ['qty'] })
+    )
+    expect(out.valueTo).toEqual(['rob-own-tab'])
+    expect(out.nameTo).toEqual(['rob-as-beth'])
+  })
+
+  it('an API-key socket gets the name only', async () => {
+    const out = await fieldChangeDelivery(
+      [v('k', 'admin', 'apikey')],
+      'orders',
+      'cost',
+      deps({ admin: null })
+    )
+    expect(out).toEqual({ valueTo: [], nameTo: ['k'] })
   })
 
   it('a failing permission read keeps the value back', async () => {
-    const out = await fieldValueAudience(['x'], 'orders', 'cost', {
-      loadUser: async () => ({ id: 'x' }) as never,
+    const out = await fieldChangeDelivery([v('s', 'x')], 'orders', 'cost', {
+      ...deps({ x: ['cost'] }),
       allowedFields: async () => {
         throw new Error('db away')
-      },
-      now: () => 0
+      }
     })
-    expect(out).toEqual({ readers: [], others: ['x'] })
+    expect(out).toEqual({ valueTo: [], nameTo: ['s'] })
   })
 
-  it('caches the answer per viewer and collection', async () => {
+  it('caches the answers per viewer + collection and per collection', async () => {
     const allowed = vi.fn(async () => ['cost'])
+    const valueFields = vi.fn(async () => ORDER_VALUE_FIELDS)
     const d: RelayDeps = {
       loadUser: async (id) => ({ id }) as never,
       allowedFields: allowed,
+      valueFields,
       now: () => 0
     }
-    await fieldValueAudience(['a'], 'orders', 'cost', d)
-    await fieldValueAudience(['a'], 'orders', 'qty', d)
+    await fieldChangeDelivery([v('s', 'a')], 'orders', 'cost', d)
+    await fieldChangeDelivery([v('s', 'a')], 'orders', 'qty', d)
     expect(allowed).toHaveBeenCalledTimes(1)
+    expect(valueFields).toHaveBeenCalledTimes(1)
+  })
+
+  it('only scalar values travel', () => {
+    expect(relayableValue('abc')).toBe(true)
+    expect(relayableValue(3)).toBe(true)
+    expect(relayableValue(false)).toBe(true)
+    expect(relayableValue(null)).toBe(true)
+    expect(relayableValue({ secret: 1 })).toBe(false)
+    expect(relayableValue(['x'])).toBe(false)
   })
 })
 

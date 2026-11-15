@@ -167,10 +167,14 @@ export function useRecordPresence(collection: string | undefined, item: string |
       const now = Date.now()
       if (now - lastEmit < 250) return
       lastEmit = now
+      const type = target && 'type' in target ? (target as HTMLInputElement).type : ''
+      // A password input never sends what is typed; co-viewers still see who is editing.
+      if (type === 'password') {
+        socket.emit('field:change', { field, collection, item })
+        return
+      }
       const value =
-        target && 'type' in target && (target as HTMLInputElement).type === 'checkbox'
-          ? (target as HTMLInputElement).checked
-          : (target?.value ?? '')
+        type === 'checkbox' ? (target as HTMLInputElement).checked : (target?.value ?? '')
       socket.emit('field:change', { field, value, collection, item })
     }
     // Row presence: an inline grid announces which saved row is open in its
