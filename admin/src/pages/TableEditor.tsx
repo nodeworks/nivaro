@@ -4710,6 +4710,8 @@ type SummaryModeRulesDraft = {
   change_proposals?: boolean
   /** Lines lock one at a time (Item locking section) — carried through, not edited here. */
   line_locks?: boolean
+  /** "Changed after approval" badge (api approval-changes.ts): false = off, absent = on. */
+  changed_after_approval?: false | { states: string[] }
 }
 const NO_STATE_KEY = '__none__'
 
@@ -4785,7 +4787,12 @@ function FormUxSection({
         : [],
       ...(raw?.edit_lock ? { edit_lock: raw.edit_lock } : {}),
       ...(raw?.change_proposals === true ? { change_proposals: true } : {}),
-      ...(raw?.line_locks === true ? { line_locks: true } : {})
+      ...(raw?.line_locks === true ? { line_locks: true } : {}),
+      ...(raw?.changed_after_approval === false
+        ? { changed_after_approval: false as const }
+        : raw?.changed_after_approval && typeof raw.changed_after_approval === 'object'
+          ? { changed_after_approval: raw.changed_after_approval }
+          : {})
     }
   }, [meta])
   const save = (next: SummaryModeRulesDraft) => saveMut.mutate({ summary_mode_rules: next })
@@ -4851,6 +4858,14 @@ function FormUxSection({
   const setProposals = (on: boolean) => {
     const { change_proposals: _drop, ...rest } = cfg
     save(on ? { ...rest, change_proposals: true } : rest)
+  }
+  // Round 7, item 21 — on by default wherever the post-approval lock exists.
+  const approvalBadgeOn =
+    cfg.changed_after_approval !== false &&
+    (adminOnlyLock || (cfg.changed_after_approval?.states?.length ?? 0) > 0)
+  const setApprovalBadge = (on: boolean) => {
+    const { changed_after_approval: _drop, ...rest } = cfg
+    save(on ? rest : { ...rest, changed_after_approval: false })
   }
 
   const ModeSeg = ({
@@ -5162,6 +5177,36 @@ function FormUxSection({
             disabled={busy}
             aria-label='Propose a change on locked records'
             data-change-proposals-switch
+          />
+        </div>
+        {/* "Changed after approval" badge (round 7, item 21) */}
+        <div
+          className='flex items-start justify-between gap-4 px-4 py-3'
+          data-approval-badge-setting
+        >
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>
+              Show "Changed after approval"
+            </p>
+            <p className='mt-0.5 text-[12px] text-slate-500'>
+              When a record that reached an approved step changes afterwards (an administrator
+              editing through the lock, a process writing back, an accepted proposal), its header
+              shows a badge with the approved value next to the value now, and the people who
+              approved it get one quiet notice per burst of changes. Lists can filter by it. On by
+              default where a post-approval lock exists.
+            </p>
+            {!adminOnlyLock && !cfg.changed_after_approval && (
+              <p className='mt-1.5 text-[11.5px] text-amber-700'>
+                This collection has no post-approval lock, so there is no approved step to watch.
+              </p>
+            )}
+          </div>
+          <Switch
+            checked={approvalBadgeOn}
+            onCheckedChange={setApprovalBadge}
+            disabled={busy || (!adminOnlyLock && !cfg.changed_after_approval)}
+            aria-label='Show Changed after approval'
+            data-approval-badge-switch
           />
         </div>
         {/* Changes tray pointer */}

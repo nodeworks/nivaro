@@ -60,6 +60,10 @@ export interface SummaryModeRules {
   /** Lines lock one at a time (realtime item 7): the record lock covers its own
    *  fields only; each line takes its own lock while someone edits it. */
   line_locks?: boolean
+  /** "Changed after approval" badge (api approval-changes.ts): absent = on where the
+   *  post-approval lock exists, `false` = off, `{ states }` = these approved states.
+   *  Carried through so a Form UX save never drops it. */
+  changed_after_approval?: false | { states: string[] }
 }
 
 export const NO_STATE = '__none__'
@@ -74,6 +78,7 @@ export function normalizeSummaryModeRules(raw: unknown): SummaryModeRules {
     edit_lock?: SummaryModeRules['edit_lock']
     change_proposals?: unknown
     line_locks?: unknown
+    changed_after_approval?: unknown
   }
   const def: SummaryMode = o.default === 'summary' ? 'summary' : 'edit'
   const rules: SummaryModeRule[] = []
@@ -95,8 +100,33 @@ export function normalizeSummaryModeRules(raw: unknown): SummaryModeRules {
     rules,
     ...(o.edit_lock ? { edit_lock: o.edit_lock } : {}),
     ...(o.change_proposals === true ? { change_proposals: true as const } : {}),
-    ...(o.line_locks === true ? { line_locks: true } : {})
+    ...(o.line_locks === true ? { line_locks: true } : {}),
+    ...(o.changed_after_approval === false
+      ? { changed_after_approval: false as const }
+      : approvedStatesOf(o.changed_after_approval)
+        ? { changed_after_approval: { states: approvedStatesOf(o.changed_after_approval) ?? [] } }
+        : {})
   }
+}
+
+function approvedStatesOf(v: unknown): string[] | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const s = (v as { states?: unknown }).states
+  const list = Array.isArray(s) ? s.filter((x): x is string => typeof x === 'string') : []
+  return list.length > 0 ? list : null
+}
+
+/**
+ * The approved states the "Changed after approval" badge watches on a collection (the twin of
+ * api approval-changes-core.ts approvalChangesConfigOf), or null when it is off there.
+ */
+export function approvalBadgeStates(cfg: SummaryModeRules | null | undefined): string[] | null {
+  if (!cfg) return null
+  const s = cfg.changed_after_approval
+  if (s === false) return null
+  if (s && s.states.length > 0) return s.states
+  const states = cfg.edit_lock?.admin_only?.states ?? []
+  return states.length > 0 ? states : null
 }
 
 /** True when any rule mentions roles — the evaluator then needs the viewer's role. */

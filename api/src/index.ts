@@ -6,6 +6,7 @@ import { registerAgentTriggerHooks } from './hooks/agent-triggers.js'
 import { registerAggregateCapHooks, setApp as setAggregateCapApp } from './hooks/aggregate-caps.js'
 import { registerAiValidationHooks, setApp as setAiValidationApp } from './hooks/ai-validation.js'
 import { registerAlertHooks, setApp as setAlertApp } from './hooks/alerts.js'
+import { registerApprovalChangeHooks } from './hooks/approval-changes.js'
 import { registerCrossTriggerHooks, setApp as setCrossTriggerApp } from './hooks/cross-triggers.js'
 import { registerEmbeddingHooks, setApp as setEmbeddingApp } from './hooks/embeddings.js'
 import { registerFieldWatchHooks, setApp as setFieldWatchApp } from './hooks/field-watches.js'
@@ -92,6 +93,7 @@ async function main() {
     registerTaskDoneWhenHooks()
     registerAgentTriggerHooks()
     registerWorkflowAutoHooks()
+    registerApprovalChangeHooks()
     registerCoreTriggers()
   }
 

@@ -157,6 +157,7 @@ import {
 import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
 import { stagedRowLabel } from '../lib/staged-row-labels'
 import {
+  approvalBadgeStates,
   holdSummaryReresolve,
   normalizeSummaryModeRules,
   resolveSummaryMode,
@@ -212,6 +213,7 @@ import {
   AddendumViewContext
 } from './item-edit/AddendumFieldContext'
 import { useAutoIdPreview } from './item-edit/AutoIdPreviewField'
+import { ChangedAfterApprovalBadge } from './item-edit/ChangedAfterApprovalBadge'
 import {
   type ChangeReasonChallenge,
   ChangeReasonDialog,
@@ -6098,6 +6100,11 @@ function ItemEditFormView({
   // Idea 6 — the collection lets people propose a change on a record locked after approval.
   const changeProposalsOn = useMemo(
     () => normalizeSummaryModeRules(colMeta?.summary_mode_rules).change_proposals === true,
+    [colMeta?.summary_mode_rules]
+  )
+  // Round 7, item 21 — "Changed after approval" badge (on by default with the post-approval lock).
+  const approvalBadgeOn = useMemo(
+    () => !!approvalBadgeStates(normalizeSummaryModeRules(colMeta?.summary_mode_rules)),
     [colMeta?.summary_mode_rules]
   )
   // The lock lookups below read the same /pipelines/instance answer the
@@ -14049,6 +14056,13 @@ function ItemEditFormView({
                                               itemId={itemId}
                                               shortcut
                                               size='sm'
+                                            />
+                                          )}
+                                          {!isNew && itemId && !designMode && approvalBadgeOn && (
+                                            <ChangedAfterApprovalBadge
+                                              collection={collection}
+                                              itemId={String(itemId)}
+                                              enabled
                                             />
                                           )}
                                         </div>

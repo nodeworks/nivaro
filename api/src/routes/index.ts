@@ -47,6 +47,7 @@ import { apiAnalyticsRoutes } from './api-analytics.js'
 import { apiKeyUsageRoutes } from './api-key-usage.js'
 import { apiKeysRoutes } from './api-keys.js'
 import { appInfoRoutes } from './app-info.js'
+import { approvalChangeRoutes } from './approval-changes.js'
 import { approvalsRoutes } from './approvals.js'
 import { atRiskRoutes } from './at-risk.js'
 import { attributesRoutes } from './attributes.js'
@@ -495,6 +496,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(myWorkRoutes)
   // Propose a change on a record locked after approval (idea 6, migration 527).
   await app.register(changeProposalRoutes, { prefix: '/change-proposals' })
+  // "Changed after approval" badge on a record (round 7, item 21).
+  await app.register(approvalChangeRoutes, { prefix: '/approval-changes' })
   // The admin Overview page (route `/`): figures, last-visit digest, layout + pins.
   await app.register(overviewPageRoutes, { prefix: '/overview' })
   await app.register(roleChecklistRoutes)

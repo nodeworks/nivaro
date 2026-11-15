@@ -190,6 +190,7 @@ import { listViewInput } from '../lib/send-view'
 import { type CellShape, type SkeletonColumn, shapeForField } from '../lib/skeleton-shapes'
 import { knownTotalFrom } from '../lib/slow-reason'
 import { nextSortValue } from '../lib/sort-cycle'
+import { approvalBadgeStates, normalizeSummaryModeRules } from '../lib/summary-mode'
 import { isFileCollection } from '../lib/system-collections'
 import { useTableDensity } from '../lib/table-density'
 import { templateRelationPaths } from '../lib/template-paths'
@@ -222,6 +223,11 @@ import { type RowPushOp, runRowPush, useRowPushActions } from './bulk/RowPushAct
 import { CellCopyLayer } from './CellCopyLayer'
 import { CollectionImportBanner } from './CollectionImportBanner'
 import { CopyAsButton } from './CopyAsButton'
+import {
+  APPROVAL_CHANGED_LABEL,
+  approvalChangedEntry,
+  isApprovalChangedFilter
+} from './cbv/approval-changed'
 import { CollectionTree, useTreeConfig } from './cbv/CollectionTree'
 import { ColumnHeaderMenu } from './cbv/ColumnHeaderMenu'
 import {
@@ -2629,7 +2635,8 @@ function filtersToConditions(
     if (
       f.path[0]?.startsWith('$has_') ||
       f.path[0] === '$missing_required' ||
-      f.path[0] === '$unseen'
+      f.path[0] === '$unseen' ||
+      isApprovalChangedFilter(f)
     ) {
       // Presence filters (#397/#398): the server reads the VALUE's
       // truthiness, so NOT flips the value rather than the operator.
@@ -3261,7 +3268,11 @@ function filterChipText(f: ActiveFilter): { field: string; op: string; value: st
     const label = DATE_PRESETS.find((d) => d.value === f.value)?.label ?? String(f.value)
     return { field, op: 'in the', value: `${label} (rolling)` }
   }
-  if (f.path[0]?.startsWith('$has_') || f.path[0] === '$missing_required') {
+  if (
+    f.path[0]?.startsWith('$has_') ||
+    f.path[0] === '$missing_required' ||
+    isApprovalChangedFilter(f)
+  ) {
     return { field, op: '', value: '' }
   }
   return { field, op: opLabel(f.op).toLowerCase(), value: String(f.value ?? '') }
@@ -3727,7 +3738,7 @@ function FilterBar({
       {/* Applied chips — click to edit in place ("Changed by others" is a toolbar pill of its
           own, beside the quick filters). */}
       {filters
-        .filter((f) => !isChangedFilter(f))
+        .filter((f) => !isChangedFilter(f) && !isApprovalChangedFilter(f))
         .map((f) => {
           const chip = filterChipText(f)
           return (
@@ -6359,6 +6370,16 @@ export function CollectionBrowserView({
   // Addendum presence for the visible page — one batched call, only when the
   // collection opted in. Drives the Addendums column.
   const addendumsEnabled = !!meta?.addendums_enabled
+  // Round 7, item 21 — "Changed after approval" quick filter where the badge is on.
+  const approvalFilterOn = useMemo(
+    () =>
+      !!approvalBadgeStates(
+        normalizeSummaryModeRules(
+          (meta as { summary_mode_rules?: unknown } | undefined)?.summary_mode_rules
+        )
+      ),
+    [meta]
+  )
   const { data: addendumSummary } = useQuery({
     queryKey: ['cbv-addendum-summary', collection, pageIdsKey],
     queryFn: () =>
@@ -8264,7 +8285,8 @@ export function CollectionBrowserView({
       if (
         f.path[0]?.startsWith('$has_') ||
         f.path[0] === '$missing_required' ||
-        f.path[0] === '$unseen'
+        f.path[0] === '$unseen' ||
+        isApprovalChangedFilter(f)
       ) {
         clauses.push({ kind: 'phrase', text: `${f.not ? 'not ' : ''}${field.toLowerCase()}` })
         continue
@@ -8671,6 +8693,37 @@ export function CollectionBrowserView({
             setPage(1)
           }}
         />
+        {approvalFilterOn &&
+          (() => {
+            const active = filters.find(isApprovalChangedFilter)
+            return (
+              <button
+                type='button'
+                data-approval-changed-filter
+                onClick={() => {
+                  const rest = filters.filter((x) => !isApprovalChangedFilter(x))
+                  setFilters(active ? rest : [...rest, approvalChangedEntry()])
+                  setPage(1)
+                }}
+                aria-pressed={!!active}
+                data-tip={
+                  active
+                    ? 'Showing records changed in the app after they were approved. Click to show all.'
+                    : 'Only records changed in the app after they were approved'
+                }
+                className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
+                  active
+                    ? 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+                }`}
+              >
+                <FileDiff className='h-3.5 w-3.5' />
+                {active?.not
+                  ? `Not ${APPROVAL_CHANGED_LABEL.toLowerCase()}`
+                  : APPROVAL_CHANGED_LABEL}
+              </button>
+            )
+          })()}
         {addendumsEnabled && (
           <button
             type='button'

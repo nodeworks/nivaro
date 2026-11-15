@@ -3,6 +3,8 @@ export type NotifyCategory =
   | 'workflow'
   /** Proposed changes on records locked after approval: to review, and their outcome. */
   | 'proposals'
+  /** A record changed after it was approved: to the people who approved it, once per burst. */
+  | 'approval_changes'
   | 'sla'
   | 'watch'
   /** Alerts a person set on records in their watch list (reaches a step, field changes, overdue). */
