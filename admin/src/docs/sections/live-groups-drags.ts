@@ -33,7 +33,9 @@ export const collabLiveGroupsDrags: DocSection = {
       items: [
         "Others looking at the same calendar or Gantt (same date fields) see a dashed outline of the entry moving, with your first name, while you drag — only if they can open that record. Nothing but the record id and the day travels; each person sees the entry's name from their own read.",
         'If someone else moved the same entry while you were dragging it, your drop does not silently win or vanish. The view says "Beth just moved Pump check to Dec 4. You dropped it on Dec 6." with Keep Beth\'s and Use yours. Escape keeps theirs.',
-        'Press Escape while dragging to put it back. Dragging uses the same permissions as editing the record; a refused move is explained and the entry returns.',
+        'Without a mouse: focus an entry (Tab), press Space to pick it up, move it with the arrow keys (a day; up and down a week on the calendar) and press Enter to drop it — Escape puts it back. Screen readers hear where it is after each step. On a touch screen, press and hold an entry to pick it up; a quick swipe still scrolls the page.',
+        'The question compares against the version you were looking at — what the page loaded, or the last live update it showed — so a change someone made after your last look is never overwritten, even if it landed before you started dragging.',
+        'Dragging uses the same permissions as editing the record; a refused move is explained and the entry returns.',
         'Ghosts are a "who else is here" signal: they are hidden in Calm and Off.'
       ]
     },

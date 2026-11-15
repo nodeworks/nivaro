@@ -8,6 +8,8 @@ import {
   daysBetween,
   GHOST_DROPPED_MS,
   GHOST_STALE_MS,
+  keyboardMove,
+  keyMoveAnnouncement,
   pruneGhosts,
   saveDrop,
   valueOnDay
@@ -116,5 +118,32 @@ describe('saveDrop', () => {
     await expect(
       saveDrop({ request } as never, 'jobs', '7', { due: '2026-12-04' }, 1)
     ).rejects.toBeTruthy()
+  })
+})
+
+describe('keyboard moves', () => {
+  it('Space picks up; arrows move a day (a week up/down on a calendar); Enter drops; Escape cancels', () => {
+    expect(keyboardMove(' ', false, 'calendar')).toEqual({ kind: 'pick' })
+    expect(keyboardMove('Enter', false, 'calendar')).toBeNull()
+    expect(keyboardMove('ArrowRight', false, 'calendar')).toBeNull()
+    expect(keyboardMove('ArrowRight', true, 'calendar')).toEqual({ kind: 'move', days: 1 })
+    expect(keyboardMove('ArrowUp', true, 'calendar')).toEqual({ kind: 'move', days: -7 })
+    expect(keyboardMove('ArrowUp', true, 'gantt')).toBeNull()
+    expect(keyboardMove('ArrowLeft', true, 'gantt')).toEqual({ kind: 'move', days: -1 })
+    expect(keyboardMove('Enter', true, 'gantt')).toEqual({ kind: 'drop' })
+    expect(keyboardMove(' ', true, 'gantt')).toEqual({ kind: 'drop' })
+    expect(keyboardMove('Escape', true, 'calendar')).toEqual({ kind: 'cancel' })
+  })
+  it('says what happened in plain words', () => {
+    expect(keyMoveAnnouncement('pick', 'Pump check', 'Nov 11', 'calendar')).toMatch(
+      /^Picked up Pump check, Nov 11\. Arrow keys/
+    )
+    expect(keyMoveAnnouncement('move', 'Pump check', 'Nov 12', 'calendar')).toBe('Nov 12')
+    expect(keyMoveAnnouncement('drop', 'Pump check', 'Nov 12', 'gantt')).toBe(
+      'Moved Pump check to Nov 12.'
+    )
+    expect(keyMoveAnnouncement('cancel', 'Pump check', 'Nov 11', 'gantt')).toBe(
+      'Pump check put back on Nov 11.'
+    )
   })
 })

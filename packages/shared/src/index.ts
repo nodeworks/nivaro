@@ -1013,8 +1013,15 @@ export {
   dayOf as dragDayOf,
   daysBetween as dragDaysBetween,
   dragBaseRevision,
+  type KeyMove,
+  keyboardMove,
+  keyMoveAnnouncement,
   type LiveDrag,
   saveDrop,
+  spanLabel as dragSpanLabel,
+  TOUCH_LONG_PRESS_MS,
+  TOUCH_SLOP_PX,
+  useDragBaseBook,
   useLiveDrag,
   valueOnDay
 } from './lib/live-drag'

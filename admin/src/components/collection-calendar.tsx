@@ -2,13 +2,18 @@ import {
   clashSentence,
   clashWriter,
   DragClashNotice,
-  dragBaseRevision,
+  dragAddDays,
   dragDayKey,
   dragDayLabel,
   dragDayOf,
+  keyboardMove,
+  keyMoveAnnouncement,
   saveDrop,
+  TOUCH_LONG_PRESS_MS,
+  TOUCH_SLOP_PX,
   toastError,
   useActorNames,
+  useDragBaseBook,
   useLiveCalendar,
   useLiveDrag,
   useNivaroClient,
@@ -119,6 +124,8 @@ export function CollectionCalendar({
   const view = `calendar:${field}`
   const ids = useMemo(() => live.entries.map((e) => String(e.row.id)), [live.entries])
   const liveDrag = useLiveDrag({ collection, view, items: ids, enabled: canDrag })
+  // The clash baseline: the version each entry was read at (load or the last live re-read).
+  const bases = useDragBaseBook(collection, fetched, canDrag)
   const [drag, setDrag] = useState<{ id: string; fromDay: string; overDay: string } | null>(null)
   const dragRef = useRef<{
     id: string
@@ -128,9 +135,14 @@ export function CollectionCalendar({
     x: number
     y: number
     active: boolean
-    base: Promise<number | null> | null
+    keyboard: boolean
+    touch: boolean
+    timer: ReturnType<typeof setTimeout> | null
   } | null>(null)
-  const suppressClickRef = useRef(false)
+  // A click right after a drag (pointer up / Space keyup on the same entry) must not open it.
+  const suppressClickUntilRef = useRef(0)
+  const [say, setSay] = useState('')
+  const refocusRef = useRef<string | null>(null)
   // Drops on their way: drawn on the new day until the re-read shows it there.
   const [pending, setPending] = useState<Map<string, { value: string; day: string; at: number }>>(
     () => new Map()
@@ -190,37 +202,69 @@ export function CollectionCalendar({
     )
   }
 
+  // A touch drag holds the page still while it lasts (the long press already told it apart
+  // from a scroll); removed when the drag ends.
+  const stopTouchScroll = useRef<(() => void) | null>(null)
+  const holdTouchScroll = () => {
+    if (stopTouchScroll.current) return
+    const block = (ev: TouchEvent) => ev.preventDefault()
+    document.addEventListener('touchmove', block, { passive: false })
+    stopTouchScroll.current = () => document.removeEventListener('touchmove', block)
+  }
+  const releaseTouchScroll = () => {
+    stopTouchScroll.current?.()
+    stopTouchScroll.current = null
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: unmount only — drop a touch hold left behind
+  useEffect(() => releaseTouchScroll, [])
+
+  const activate = (d: NonNullable<typeof dragRef.current>) => {
+    d.active = true
+    if (d.touch) holdTouchScroll()
+    setDrag({ id: d.id, fromDay: d.fromDay, overDay: d.overDay })
+  }
+
   const endDrag = (cancel: boolean) => {
     const d = dragRef.current
     dragRef.current = null
+    if (d?.timer) clearTimeout(d.timer)
+    releaseTouchScroll()
     if (!d?.active) return
-    suppressClickRef.current = true
+    suppressClickUntilRef.current = Date.now() + 600
     setDrag(null)
+    const what = label(d.row)
+    if (d.keyboard) refocusRef.current = d.id
     if (cancel || d.overDay === d.fromDay) {
       liveDrag.finish(d.id)
+      if (d.keyboard)
+        setSay(keyMoveAnnouncement('cancel', what, dragDayLabel(d.fromDay), 'calendar'))
       return
     }
-    void drop(d.id, d.row, d.overDay, d.base)
+    if (d.keyboard) setSay(keyMoveAnnouncement('drop', what, dragDayLabel(d.overDay), 'calendar'))
+    void drop(d.id, d.row, d.overDay)
   }
 
   const drop = async (
     id: string,
     row: Record<string, unknown>,
     day: string,
-    basePromise: Promise<number | null> | null,
     baseOverride?: number
   ) => {
     const value = valueOnDay(row[field], day, fieldType)
     setPending((m) => new Map(m).set(id, { value, day, at: Date.now() }))
     liveDrag.finish(id, { at: day })
     try {
-      const base = baseOverride ?? (basePromise ? await basePromise : null)
+      const base = baseOverride ?? (await bases.baseOf(id))
       const r = await saveDrop(client, collection, id, { [field]: value }, base)
       if (r.ok) {
+        // The next read brings the new version as this entry's baseline.
+        bases.forget(id)
         setClash(null)
         void qc.invalidateQueries({ queryKey: ['calendar', collection] })
         return
       }
+      // "Use yours" is then a choice made against the newer version.
+      if (r.latest > 0) bases.set(id, r.latest)
       setPending((m) => {
         const next = new Map(m)
         next.delete(id)
@@ -245,21 +289,32 @@ export function CollectionCalendar({
     }
   }
 
-  // Escape cancels a drag in progress.
+  // Escape cancels a pointer drag in progress (a keyboard one hears it on the entry).
   useEffect(() => {
     if (!drag) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') endDrag(true)
+      if (e.key === 'Escape' && !dragRef.current?.keyboard) endDrag(true)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
+  // After a keyboard move the entry sits in another day's cell: give it focus back there.
+  useEffect(() => {
+    const id = refocusRef.current
+    if (!id) return
+    const esc = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id
+    const el = document.querySelector<HTMLElement>(`[data-cal-entry="${esc}"]`)
+    if (el) {
+      el.focus({ preventScroll: true })
+      refocusRef.current = null
+    }
+  })
 
   const onEntryPointerDown = (e: React.PointerEvent, row: Record<string, unknown>) => {
-    if (!canDrag || e.button !== 0 || clash) return
+    if (!canDrag || e.button !== 0 || clash || dragRef.current?.keyboard) return
     const fromDay = dragDayOf(row[field])
     if (!fromDay) return
-    dragRef.current = {
+    const d: NonNullable<typeof dragRef.current> = {
       id: String(row.id),
       row,
       fromDay,
@@ -267,18 +322,30 @@ export function CollectionCalendar({
       x: e.clientX,
       y: e.clientY,
       active: false,
-      base: null
+      keyboard: false,
+      touch: e.pointerType === 'touch',
+      timer: null
     }
-    ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+    dragRef.current = d
+    // Touch: only a resting finger picks it up; a swipe stays a scroll.
+    if (d.touch)
+      d.timer = setTimeout(() => {
+        if (dragRef.current === d) activate(d)
+      }, TOUCH_LONG_PRESS_MS)
+    else (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
   }
   const onEntryPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current
-    if (!d) return
+    if (!d || d.keyboard) return
     if (!d.active) {
-      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 5) return
-      d.active = true
-      d.base = dragBaseRevision(client, collection, d.id)
-      setDrag({ id: d.id, fromDay: d.fromDay, overDay: d.fromDay })
+      const moved = Math.hypot(e.clientX - d.x, e.clientY - d.y)
+      if (d.touch) {
+        // Moved before the long press: it is a scroll — let it be one.
+        if (moved > TOUCH_SLOP_PX) endDrag(true)
+        return
+      }
+      if (moved < 5) return
+      activate(d)
     }
     const cell = document
       .elementFromPoint(e.clientX, e.clientY)
@@ -288,6 +355,53 @@ export function CollectionCalendar({
     d.overDay = cell
     setDrag({ id: d.id, fromDay: d.fromDay, overDay: cell })
     liveDrag.move(d.id, { at: cell })
+  }
+  const monthFirst = dragDayKey(new Date(cursor.getFullYear(), cursor.getMonth(), 1))
+  const monthLast = dragDayKey(monthEnd)
+  const onEntryKeyDown = (e: React.KeyboardEvent, row: Record<string, unknown>) => {
+    if (!canDrag || clash) return
+    const d = dragRef.current
+    const carrying = !!d?.keyboard && d.id === String(row.id)
+    const step = keyboardMove(e.key, carrying, 'calendar')
+    if (!step) return
+    e.preventDefault()
+    e.stopPropagation()
+    const what = label(row)
+    if (step.kind === 'pick') {
+      const fromDay = dragDayOf(row[field])
+      if (!fromDay) return
+      const next: NonNullable<typeof dragRef.current> = {
+        id: String(row.id),
+        row,
+        fromDay,
+        overDay: fromDay,
+        x: 0,
+        y: 0,
+        active: false,
+        keyboard: true,
+        touch: false,
+        timer: null
+      }
+      dragRef.current = next
+      activate(next)
+      suppressClickUntilRef.current = Date.now() + 600
+      setSay(keyMoveAnnouncement('pick', what, dragDayLabel(fromDay), 'calendar'))
+      return
+    }
+    if (!d) return
+    if (step.kind === 'move') {
+      let over = dragAddDays(d.overDay, step.days)
+      // Stays inside the month on screen (the drop must be where the person can see it).
+      if (over < monthFirst) over = monthFirst
+      if (over > monthLast) over = monthLast
+      if (over === d.overDay) return
+      d.overDay = over
+      setDrag({ id: d.id, fromDay: d.fromDay, overDay: over })
+      liveDrag.move(d.id, { at: over })
+      setSay(keyMoveAnnouncement('move', what, dragDayLabel(over), 'calendar'))
+      return
+    }
+    endDrag(step.kind === 'cancel')
   }
 
   // Grid: leading blanks + days
@@ -315,7 +429,11 @@ export function CollectionCalendar({
   const theirName = clashWho ? (clashNames.get(clashWho) ?? null) : null
 
   return (
-    <div className='flex-1 overflow-auto p-4' ref={live.ref}>
+    <div className='relative flex-1 overflow-auto p-4' ref={live.ref}>
+      {/* Keyboard moves say where the entry is (polite: never interrupts). */}
+      <p className='sr-only' aria-live='polite' data-cal-say>
+        {say}
+      </p>
       <div className='mb-3 flex items-center gap-2'>
         <Button
           variant='outline'
@@ -376,7 +494,7 @@ export function CollectionCalendar({
             onUseMine={() => {
               const row = rowById.get(clash.id) ?? clash.current ?? { id: clash.id }
               setClashBusy(true)
-              void drop(clash.id, row, clash.mineDay, null, clash.latest).finally(() =>
+              void drop(clash.id, row, clash.mineDay, clash.latest).finally(() =>
                 setClashBusy(false)
               )
             }}
@@ -478,9 +596,11 @@ export function CollectionCalendar({
                           onPointerMove={onEntryPointerMove}
                           onPointerUp={() => endDrag(false)}
                           onPointerCancel={() => endDrag(true)}
+                          onKeyDown={(e) => onEntryKeyDown(e, it)}
+                          aria-roledescription={canDrag ? 'movable entry' : undefined}
+                          aria-keyshortcuts={canDrag ? 'Space' : undefined}
                           onClick={(e) => {
-                            if (suppressClickRef.current) {
-                              suppressClickRef.current = false
+                            if (Date.now() < suppressClickUntilRef.current) {
                               e.preventDefault()
                               return
                             }
@@ -488,7 +608,7 @@ export function CollectionCalendar({
                           }}
                           className={cn(
                             'block w-full truncate rounded bg-[#00ceff1a] px-1.5 py-0.5 text-left text-[10px] font-medium text-nvr-navy hover:bg-[#00ceff33] dark:text-[#00ceff]',
-                            canDrag && 'cursor-grab touch-none active:cursor-grabbing',
+                            canDrag && 'cursor-grab select-none active:cursor-grabbing',
                             (departed || beingDragged) && 'opacity-50',
                             ghost &&
                               'outline-dashed outline-1 outline-violet-400 dark:outline-violet-400/70'
@@ -513,7 +633,8 @@ export function CollectionCalendar({
       {canDrag && !isLoading && (
         <p className='mt-2 text-[11px] text-slate-400'>
           Drag an entry to another day to change its{' '}
-          {dateFields.find((f) => f.field === field)?.label ?? field}.
+          {dateFields.find((f) => f.field === field)?.label ?? field}, or focus it, press Space,
+          move it with the arrow keys and press Enter.
         </p>
       )}
     </div>

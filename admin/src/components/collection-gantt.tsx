@@ -3,13 +3,18 @@ import {
   clashWriter,
   DragClashNotice,
   dragAddDays,
-  dragBaseRevision,
   dragDayKey,
   dragDayLabel,
   dragDayOf,
+  dragSpanLabel,
+  keyboardMove,
+  keyMoveAnnouncement,
   saveDrop,
+  TOUCH_LONG_PRESS_MS,
+  TOUCH_SLOP_PX,
   toastError,
   useActorNames,
+  useDragBaseBook,
   useLiveDrag,
   useLiveQueryRefresh,
   useNivaroClient,
@@ -158,6 +163,8 @@ export function CollectionGantt({
   const view = `gantt:${startField},${endField}`
   const ids = useMemo(() => rows.map((r) => String(r.it.id)), [rows])
   const liveDrag = useLiveDrag({ collection, view, items: ids, enabled: canDrag })
+  // The clash baseline: the version each bar was read at (load or the last live re-read).
+  const bases = useDragBaseBook(collection, items, canDrag)
   const [drag, setDrag] = useState<{ id: string; days: number } | null>(null)
   const dragRef = useRef<{
     id: string
@@ -165,12 +172,17 @@ export function CollectionGantt({
     startDay: string
     endDay: string
     x: number
+    y: number
     width: number
     days: number
     active: boolean
-    base: Promise<number | null> | null
+    keyboard: boolean
+    touch: boolean
+    timer: ReturnType<typeof setTimeout> | null
   } | null>(null)
-  const suppressClickRef = useRef(false)
+  const suppressClickUntilRef = useRef(0)
+  const [say, setSay] = useState('')
+  const refocusRef = useRef<string | null>(null)
   const [clash, setClash] = useState<Clash | null>(null)
   const [clashBusy, setClashBusy] = useState(false)
   const clashWho = clashWriter(clash?.current ?? null)
@@ -181,7 +193,6 @@ export function CollectionGantt({
     row: Record<string, unknown>,
     start: string,
     end: string,
-    basePromise: Promise<number | null> | null,
     baseOverride?: number
   ) => {
     const values: Record<string, string> = {
@@ -198,13 +209,15 @@ export function CollectionGantt({
         return next
       })
     try {
-      const base = baseOverride ?? (basePromise ? await basePromise : null)
+      const base = baseOverride ?? (await bases.baseOf(id))
       const r = await saveDrop(client, collection, id, values, base)
       void qc.invalidateQueries({ queryKey: ['gantt', collection] })
       if (r.ok) {
+        bases.forget(id)
         setClash(null)
         return
       }
+      if (r.latest > 0) bases.set(id, r.latest)
       forget()
       setClash({ id, label: label(row), start, end, current: r.current, latest: r.latest })
     } catch (err) {
@@ -213,61 +226,154 @@ export function CollectionGantt({
     }
   }
 
+  const stopTouchScroll = useRef<(() => void) | null>(null)
+  const holdTouchScroll = () => {
+    if (stopTouchScroll.current) return
+    const block = (ev: TouchEvent) => ev.preventDefault()
+    document.addEventListener('touchmove', block, { passive: false })
+    stopTouchScroll.current = () => document.removeEventListener('touchmove', block)
+  }
+  const releaseTouchScroll = () => {
+    stopTouchScroll.current?.()
+    stopTouchScroll.current = null
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: unmount only — drop a touch hold left behind
+  useEffect(() => releaseTouchScroll, [])
+
+  const activate = (d: NonNullable<typeof dragRef.current>) => {
+    d.active = true
+    if (d.touch) holdTouchScroll()
+    setDrag({ id: d.id, days: d.days })
+  }
+  const spanOf = (d: NonNullable<typeof dragRef.current>) =>
+    dragSpanLabel(dragAddDays(d.startDay, d.days), dragAddDays(d.endDay, d.days))
+
   const endDrag = (cancel: boolean) => {
     const d = dragRef.current
     dragRef.current = null
+    if (d?.timer) clearTimeout(d.timer)
+    releaseTouchScroll()
     if (!d?.active) return
-    suppressClickRef.current = true
+    suppressClickUntilRef.current = Date.now() + 600
     setDrag(null)
+    const what = label(d.row)
+    if (d.keyboard) refocusRef.current = d.id
     if (cancel || d.days === 0) {
       liveDrag.finish(d.id)
+      if (d.keyboard)
+        setSay(keyMoveAnnouncement('cancel', what, dragSpanLabel(d.startDay, d.endDay), 'gantt'))
       return
     }
-    void drop(d.id, d.row, dragAddDays(d.startDay, d.days), dragAddDays(d.endDay, d.days), d.base)
+    if (d.keyboard) setSay(keyMoveAnnouncement('drop', what, spanOf(d), 'gantt'))
+    void drop(d.id, d.row, dragAddDays(d.startDay, d.days), dragAddDays(d.endDay, d.days))
   }
   useEffect(() => {
     if (!drag) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') endDrag(true)
+      if (e.key === 'Escape' && !dragRef.current?.keyboard) endDrag(true)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+  })
+  useEffect(() => {
+    const id = refocusRef.current
+    if (!id) return
+    const esc = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id
+    const el = document.querySelector<HTMLElement>(`[data-gantt-bar="${esc}"]`)
+    if (el) {
+      el.focus({ preventScroll: true })
+      refocusRef.current = null
+    }
+  })
+
+  const startOf = (
+    row: { it: Record<string, unknown>; s: number; e: number },
+    lane: DOMRect,
+    keyboard: boolean,
+    pe?: React.PointerEvent
+  ): NonNullable<typeof dragRef.current> => ({
+    id: String(row.it.id),
+    row: row.it,
+    startDay: dragDayKey(new Date(row.s)),
+    endDay: dragDayKey(new Date(row.e)),
+    x: pe?.clientX ?? 0,
+    y: pe?.clientY ?? 0,
+    width: lane.width,
+    days: 0,
+    active: false,
+    keyboard,
+    touch: pe?.pointerType === 'touch',
+    timer: null
   })
 
   const onBarPointerDown = (
     e: React.PointerEvent<HTMLElement>,
     row: { it: Record<string, unknown>; s: number; e: number }
   ) => {
-    if (!canDrag || e.button !== 0 || clash) return
+    if (!canDrag || e.button !== 0 || clash || dragRef.current?.keyboard) return
     const lane = (e.currentTarget.parentElement as HTMLElement | null)?.getBoundingClientRect()
     if (!lane || lane.width <= 0) return
-    dragRef.current = {
-      id: String(row.it.id),
-      row: row.it,
-      startDay: dragDayKey(new Date(row.s)),
-      endDay: dragDayKey(new Date(row.e)),
-      x: e.clientX,
-      width: lane.width,
-      days: 0,
-      active: false,
-      base: null
-    }
-    e.currentTarget.setPointerCapture?.(e.pointerId)
+    const d = startOf(row, lane, false, e)
+    dragRef.current = d
+    // Touch: only a resting finger picks it up; a swipe stays a scroll.
+    if (d.touch)
+      d.timer = setTimeout(() => {
+        if (dragRef.current === d) activate(d)
+      }, TOUCH_LONG_PRESS_MS)
+    else e.currentTarget.setPointerCapture?.(e.pointerId)
   }
   const onBarPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current
-    if (!d) return
+    if (!d || d.keyboard) return
     const dx = e.clientX - d.x
     if (!d.active) {
+      if (d.touch) {
+        if (Math.hypot(dx, e.clientY - d.y) > TOUCH_SLOP_PX) endDrag(true)
+        return
+      }
       if (Math.abs(dx) < 5) return
-      d.active = true
-      d.base = dragBaseRevision(client, collection, d.id)
+      activate(d)
     }
     const days = Math.round(((dx / d.width) * span) / DAY)
-    if (days === d.days && drag) return
+    if (days === d.days) return
     d.days = days
     setDrag({ id: d.id, days })
     liveDrag.move(d.id, { start: dragAddDays(d.startDay, days), end: dragAddDays(d.endDay, days) })
+  }
+  const onBarKeyDown = (
+    e: React.KeyboardEvent<HTMLElement>,
+    row: { it: Record<string, unknown>; s: number; e: number }
+  ) => {
+    if (!canDrag || clash) return
+    const cur = dragRef.current
+    const carrying = !!cur?.keyboard && cur.id === String(row.it.id)
+    const step = keyboardMove(e.key, carrying, 'gantt')
+    if (!step) return
+    e.preventDefault()
+    e.stopPropagation()
+    const what = label(row.it)
+    if (step.kind === 'pick') {
+      const lane = (e.currentTarget.parentElement as HTMLElement | null)?.getBoundingClientRect()
+      if (!lane) return
+      const d = startOf(row, lane, true)
+      dragRef.current = d
+      activate(d)
+      suppressClickUntilRef.current = Date.now() + 600
+      setSay(keyMoveAnnouncement('pick', what, spanOf(d), 'gantt'))
+      return
+    }
+    if (!cur) return
+    if (step.kind === 'move') {
+      cur.days += step.days
+      setDrag({ id: cur.id, days: cur.days })
+      liveDrag.move(cur.id, {
+        start: dragAddDays(cur.startDay, cur.days),
+        end: dragAddDays(cur.endDay, cur.days)
+      })
+      setSay(keyMoveAnnouncement('move', what, spanOf(cur), 'gantt'))
+      return
+    }
+    endDrag(step.kind === 'cancel')
   }
 
   // Month ticks
@@ -328,7 +434,11 @@ export function CollectionGantt({
   const theirName = clashWho ? (clashNames.get(clashWho) ?? null) : null
 
   return (
-    <div className='flex-1 overflow-auto p-4'>
+    <div className='relative flex-1 overflow-auto p-4'>
+      {/* Keyboard moves say where the bar is (polite: never interrupts). */}
+      <p className='sr-only' aria-live='polite' data-gantt-say>
+        {say}
+      </p>
       <div className='mb-3 flex flex-wrap items-center gap-3'>
         <div className='flex items-center gap-1.5'>
           <span className='text-[11px] text-slate-400'>Start</span>
@@ -340,7 +450,9 @@ export function CollectionGantt({
         </div>
         <span className='ml-auto text-[11px] text-slate-400'>
           {rows.length} record{rows.length !== 1 ? 's' : ''} in window
-          {canDrag && rows.length > 0 ? ' · drag a bar to move its dates' : ''}
+          {canDrag && rows.length > 0
+            ? ' · drag a bar to move its dates, or focus it and press Space'
+            : ''}
         </span>
       </div>
 
@@ -356,7 +468,7 @@ export function CollectionGantt({
               const row = rows.find((r) => String(r.it.id) === clash.id)?.it ??
                 clash.current ?? { id: clash.id }
               setClashBusy(true)
-              void drop(clash.id, row, clash.start, clash.end, null, clash.latest).finally(() =>
+              void drop(clash.id, row, clash.start, clash.end, clash.latest).finally(() =>
                 setClashBusy(false)
               )
             }}
@@ -445,9 +557,11 @@ export function CollectionGantt({
                       onPointerMove={onBarPointerMove}
                       onPointerUp={() => endDrag(false)}
                       onPointerCancel={() => endDrag(true)}
+                      onKeyDown={(ev) => onBarKeyDown(ev, r)}
+                      aria-roledescription={canDrag ? 'movable bar' : undefined}
+                      aria-keyshortcuts={canDrag ? 'Space' : undefined}
                       onClick={(ev) => {
-                        if (suppressClickRef.current) {
-                          suppressClickRef.current = false
+                        if (Date.now() < suppressClickUntilRef.current) {
                           ev.preventDefault()
                           return
                         }
@@ -455,7 +569,7 @@ export function CollectionGantt({
                       }}
                       className={cn(
                         'absolute top-1/2 h-3 -translate-y-1/2 rounded-full bg-[#00ceff66] ring-1 ring-[#00ceff] focus-visible:outline-none focus-visible:ring-2',
-                        canDrag && 'cursor-grab touch-none active:cursor-grabbing',
+                        canDrag && 'cursor-grab select-none active:cursor-grabbing',
                         drag?.id === id && 'shadow-[0_2px_8px_-1px_rgba(0,140,180,0.45)]',
                         ghost && 'opacity-60'
                       )}

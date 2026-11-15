@@ -1,6 +1,11 @@
 import type { NivaroClient } from '@nivaro/sdk'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { withRowBaseRevision } from '../components/item-edit/line-midair'
+import {
+  type RowBaseBook,
+  rowBaseBookFor,
+  withRowBaseRevision
+} from '../components/item-edit/line-midair'
+import { useNivaroClient } from '../context'
 import { get, patch } from './commands'
 import { useLiveEvent } from './live'
 import { useActorNames, writerOf } from './live-list'
@@ -251,7 +256,28 @@ export function useLiveDrag(opts: {
 
 // ── Drops that never silently overwrite ──────────────────────────────────
 
-/** The record's newest revision now — the base a drag starts from (null = none / unknown). */
+/**
+ * The revision each drawn entry was READ at — the clash baseline. Every read of the view (the
+ * first load and each live re-read) notes its rows; a row new or changed since the last read
+ * gets a fresh base in ONE batched `GET /revisions/latest`, an unchanged row keeps the base it
+ * had (what the person sees is still that version). So a save someone made after the person's
+ * last look — before or during the drag — is a clash, never overwritten. The book is the same
+ * per-collection one the record grids use (components/item-edit/line-midair.ts).
+ */
+export function useDragBaseBook(
+  collection: string,
+  rows: Array<Record<string, unknown>> | null | undefined,
+  enabled = true
+): RowBaseBook {
+  const client = useNivaroClient()
+  const book = useMemo(() => rowBaseBookFor(client, collection), [client, collection])
+  useEffect(() => {
+    if (enabled && rows && rows.length > 0) book.noteRows(rows)
+  }, [book, rows, enabled])
+  return book
+}
+
+/** The record's newest revision now (null = none / unknown). */
 export async function dragBaseRevision(
   client: Pick<NivaroClient, 'request'>,
   collection: string,
@@ -307,4 +333,57 @@ export async function saveDrop(
 /** Who made the newer save, from the viewer's own read (null = unknown). */
 export function clashWriter(current: Record<string, unknown> | null): string | null {
   return writerOf(current)
+}
+
+// ── Keyboard and touch ────────────────────────────────────────────────────
+
+/** A touch drag starts only after the finger rests this long (a swipe still scrolls). */
+export const TOUCH_LONG_PRESS_MS = 450
+/** A finger moving this far before the long press ends is a scroll, not a drag. */
+export const TOUCH_SLOP_PX = 8
+
+export type KeyMove =
+  | { kind: 'pick' }
+  | { kind: 'move'; days: number }
+  | { kind: 'drop' }
+  | { kind: 'cancel' }
+  | null
+
+/**
+ * The keyboard way to move an entry (pure): Space picks it up; arrows move it a day (Up/Down
+ * a week on a calendar); Enter or Space drops it; Escape puts it back. Null = not ours (the key
+ * keeps its usual meaning: Enter on an entry that is not picked up still opens it).
+ */
+export function keyboardMove(key: string, carrying: boolean, grid: 'calendar' | 'gantt'): KeyMove {
+  if (!carrying) return key === ' ' || key === 'Spacebar' ? { kind: 'pick' } : null
+  if (key === 'Escape') return { kind: 'cancel' }
+  if (key === 'Enter' || key === ' ' || key === 'Spacebar') return { kind: 'drop' }
+  if (key === 'ArrowLeft') return { kind: 'move', days: -1 }
+  if (key === 'ArrowRight') return { kind: 'move', days: 1 }
+  if (grid === 'calendar' && key === 'ArrowUp') return { kind: 'move', days: -7 }
+  if (grid === 'calendar' && key === 'ArrowDown') return { kind: 'move', days: 7 }
+  return null
+}
+
+/** What the polite live region says for a keyboard move. `where` = "Nov 12" / "Nov 7 – Nov 16". */
+export function keyMoveAnnouncement(
+  kind: 'pick' | 'move' | 'drop' | 'cancel',
+  what: string,
+  where: string,
+  grid: 'calendar' | 'gantt'
+): string {
+  if (kind === 'pick')
+    return `Picked up ${what}, ${where}. ${
+      grid === 'calendar'
+        ? 'Arrow keys move it a day, up and down a week'
+        : 'Left and right arrows move it a day'
+    }; Enter drops it, Escape puts it back.`
+  if (kind === 'move') return where
+  if (kind === 'drop') return `Moved ${what} to ${where}.`
+  return `${what} put back on ${where}.`
+}
+
+/** "Nov 7 – Nov 16" for a Gantt span. */
+export function spanLabel(start: string, end: string): string {
+  return start === end ? dayLabel(start) : `${dayLabel(start)} – ${dayLabel(end)}`
 }
