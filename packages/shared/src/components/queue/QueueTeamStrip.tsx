@@ -98,7 +98,7 @@ const DOT: Record<TeamStatus, string> = {
   online: 'bg-emerald-500',
   away: 'bg-amber-500',
   offline: 'bg-slate-300 dark:bg-slate-600',
-  out: 'border border-slate-400 bg-background dark:border-slate-500'
+  out: 'border border-slate-400 bg-white dark:border-slate-500 dark:bg-slate-900'
 }
 
 const GROUP_LABEL: Record<TeamStatus, string> = {
@@ -123,20 +123,20 @@ function initialsOf(name: string): string {
 function Face({
   row,
   size = 24,
-  surface = 'background',
+  surface = 'strip',
   z
 }: {
   row: TeamRow
   size?: number
-  surface?: 'background' | 'popover'
+  surface?: 'strip' | 'popover'
   z?: number
 }) {
   const { member, status } = row
   const px = `${size}px`
-  const ring = surface === 'popover' ? 'ring-popover' : 'ring-background'
+  const ring = surface === 'popover' ? 'ring-popover' : 'ring-white dark:ring-slate-900'
   return (
     <span
-      className={cn('relative inline-flex shrink-0', status === 'out' && 'opacity-60')}
+      className={cn('relative inline-flex shrink-0', status === 'out' && 'opacity-75')}
       style={{ width: px, height: px, zIndex: z }}
     >
       <UserAvatar
@@ -196,9 +196,20 @@ function Roster({ rows, more, note }: { rows: TeamRow[]; more: number; note: str
                   <span className='font-medium normal-case tracking-normal'>Show</span>
                 </button>
               ) : (
-                <h4 className='sticky top-0 z-10 bg-popover px-2 py-1.5 font-semibold text-[11px] text-slate-500 uppercase tracking-wide dark:text-slate-400'>
-                  {GROUP_LABEL[st]} · {list.length}
-                </h4>
+                <div className='sticky top-0 z-10 flex items-center justify-between bg-popover px-2 py-1.5'>
+                  <h4 className='font-semibold text-[11px] text-slate-500 uppercase tracking-wide dark:text-slate-400'>
+                    {GROUP_LABEL[st]} · {list.length}
+                  </h4>
+                  {st === 'offline' && (
+                    <button
+                      type='button'
+                      onClick={() => setShowOffline(false)}
+                      className='rounded px-1 font-medium text-[11px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    >
+                      Hide
+                    </button>
+                  )}
+                </div>
               )}
               {!folded && (
                 <ul>
@@ -307,7 +318,7 @@ export function QueueTeamStrip({ queueId }: { queueId: string }) {
     : null
   return (
     <div
-      className='flex shrink-0 items-center gap-3 border-slate-100 border-b bg-background px-4 py-1.5 text-[12px] dark:border-slate-800'
+      className='flex shrink-0 items-center gap-3 border-slate-100 border-b bg-white px-4 py-1.5 text-[12px] dark:border-slate-800 dark:bg-slate-900'
       data-queue-team
       data-live-quiet={pref.quiet ? '' : undefined}
     >
@@ -321,7 +332,7 @@ export function QueueTeamStrip({ queueId }: { queueId: string }) {
           >
             <span className='shrink-0 whitespace-nowrap text-slate-700 dark:text-slate-200'>
               {teamSummary(rows)}
-              {asOf && <span className='text-slate-400 dark:text-slate-500'> · as of {asOf}</span>}
+              {asOf && <span className='text-slate-500 dark:text-slate-400'> · as of {asOf}</span>}
             </span>
             <span className='flex shrink-0 items-center -space-x-1'>
               {shown.map((r, i) => (
