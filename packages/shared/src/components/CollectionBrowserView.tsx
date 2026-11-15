@@ -122,7 +122,7 @@ import {
   rememberListPage,
   restoreWindowOutcome
 } from '../lib/list-page-memory'
-import { expandCoalesced, LIVE_ASPECTS } from '../lib/live'
+import { expandCoalesced, LIVE_ASPECTS, useLiveEvent } from '../lib/live'
 import { createCoalescer } from '../lib/live-counts'
 import {
   conditionFields,
@@ -5900,6 +5900,17 @@ export function CollectionBrowserView({
     grouped: !!groupBy
   }
   const liveOwner = useRef({}).current
+  // rt2 #17 — owners of this collection's records may have moved without a write to them
+  // (owner matrix, delegation, out of office): the owners column refetches as the viewer.
+  useLiveEvent(
+    'owners:changed',
+    (p) => {
+      if (!collection || p?.queues) return
+      if (Array.isArray(p?.collections) && !p.collections.includes(collection)) return
+      void qc.invalidateQueries({ queryKey: ['cbv-owners', collection] })
+    },
+    { debounceMs: 600 }
+  )
   const [lockTick, setLockTick] = useState(0)
   // Live pill (#240): changes the client cannot place (off-page, bulk writes)
   // count into a pill the viewer clicks to refresh — a paging table that
@@ -5926,6 +5937,8 @@ export function CollectionBrowserView({
         viewCountCo.poke()
       }
       if (fields.includes(LIVE_ASPECTS.lock)) setLockTick((n) => n + 1)
+      // rt2 #17 — a row's owners moved (owner matrix, delegation): its owners cell.
+      if (fields.includes(LIVE_ASPECTS.owners)) add(['cbv-owners', collection])
       if (aspectTimer) return
       aspectTimer = setTimeout(() => {
         aspectTimer = null

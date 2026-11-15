@@ -299,6 +299,11 @@ export async function buildServer() {
     setAppRef(app)
     const { wireOpsLive } = await import('./services/ops-live.js')
     wireOpsLive()
+    // rt2 #17 / #19 — owner changes announce per open record; the people directory goes live.
+    const { wireOwnerChangeLive } = await import('./services/owner-change-live.js')
+    wireOwnerChangeLive()
+    const { wirePeopleLive } = await import('./services/people-live.js')
+    wirePeopleLive()
     const { setJournalRedis } = await import('./services/event-journal.js')
     setJournalRedis(app.redis)
     const { setExtensionRoutes, startTrafficMapEmitter } = await import('./services/traffic-map.js')
@@ -1522,6 +1527,11 @@ export async function buildServer() {
           .whereNotNull('ooo_end')
           .where('ooo_end', '<=', now)
           .update({ is_out_of_office: false, ooo_start: null, ooo_end: null })
+        // rt2 #17 — a delegation that simply ran out (delegate_expires_at passed) moves owners
+        // back without any write: open records, My Work and worklists hear it. The window
+        // overlaps the previous tick a little; a repeat announcement is harmless.
+        const { sweepEndedDelegations } = await import('./services/owner-change-live.js')
+        await sweepEndedDelegations(new Date(now.getTime() - 16 * 60_000), now)
       })
 
       // Instant queue-entry notifications (#121/#379): */5 diff pass over

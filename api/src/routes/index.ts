@@ -6,8 +6,8 @@ import { clearMetadataCache } from '../services/collections.js'
 import { announceConfigChanged, collectionHint, isConfigWrite } from '../services/config-live.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
 import { bustLayoutReferences } from '../services/layout-references.js'
+import { announcePermissionChange, permissionTarget } from '../services/permission-live.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
-import { accessAnnouncement, announceAccessChanged } from '../services/record-events.js'
 import { clearRelationLimitCache } from '../services/relation-limits.js'
 import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { bustSectionLockCache } from '../services/section-locks.js'
@@ -424,10 +424,12 @@ export async function registerRoutes(app: FastifyInstance) {
   })
   // #1925: a write that may change who reads which records tells open record
   // pages to re-check their own access (payload-free, coalesced).
+  // rt2 #18: only the people the change can touch (a role's holders, the person named, the
+  // requester's role) — services/permission-live.ts; the tenant when it cannot say.
   app.addHook('onResponse', async (req, reply) => {
     if (reply.statusCode >= 400) return
-    const who = accessAnnouncement(req)
-    if (who) announceAccessChanged(who === 'tenant' ? {} : who)
+    const target = permissionTarget(req)
+    if (target) void announcePermissionChange(target)
   })
   // The Online list shows each person's role, name and zones from their user row: a write that
   // may change them refreshes every open list (after each replica's short answer cache).

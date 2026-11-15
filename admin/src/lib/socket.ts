@@ -497,7 +497,14 @@ export function getSocket(): Socket {
   // Notices for the signed-in person or the whole tenant (payload-free or ids only): handed to
   // the shared live hooks (lib/live.ts useLiveEvent) — jobs tray #1724, bulk rows #1827,
   // announcements #1744, feature flags #1741.
-  for (const ev of ['job:progress', 'bulk:rows', 'announcements:changed', 'flags:changed']) {
+  for (const ev of [
+    'job:progress',
+    'bulk:rows',
+    'announcements:changed',
+    'flags:changed',
+    // rt2 #19 — the people directory moved (pickers, mentions, avatars; ids only).
+    'people:changed'
+  ]) {
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   }
   // A record opened in a drill-down sheet joins its room on THIS socket (adminRealtime.emit

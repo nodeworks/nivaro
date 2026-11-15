@@ -86,7 +86,7 @@ import {
   sanitizeQueueLinkState
 } from '../../lib/list-link'
 import { arrivedByListReturn, ensureHistoryKey, historyKey } from '../../lib/list-page-memory'
-import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
+import { expandCoalesced, LIVE_ASPECTS, useLiveEvent } from '../../lib/live'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
 import { listTrailDetail, setTrailDetail } from '../../lib/nav-trail'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
@@ -855,6 +855,8 @@ export function QueueWorklist({
   // Set while a live-triggered refetch is in flight: the table keeps its rows
   // (no enter replay), and the rows that changed / arrived flash when it lands.
   const liveRefetchRef = useRef(false)
+  /** The live effect's quiet refetch (falls back to the pill mid-selection or mid-drag). */
+  const scheduleRefetchRef = useRef<(() => void) | null>(null)
   const livePendingRef = useRef<Array<{ key: string; by: string | null }>>([])
   const prevKeysRef = useRef<Set<string> | null>(null)
   const draggingRef = useRef(false)
@@ -1100,6 +1102,7 @@ export function QueueWorklist({
         void qc.invalidateQueries({ queryKey: ['queue-workload', queueId] })
       }, 900)
     }
+    scheduleRefetchRef.current = scheduleRefetch
     const handle = (evs: LiveEv[]) => {
       let refresh = false
       let pill = 0
@@ -1121,6 +1124,8 @@ export function QueueWorklist({
           // A clock passed its line (server flip pass): the counts move; the row's pill has
           // already recoloured on the page clock, so the rows themselves are not re-read.
           if (fields.includes(LIVE_ASPECTS.sla)) stats = true
+          // rt2 #17 — a row's owners moved: its owners cell (and "My items") on screen.
+          if (fields.includes(LIVE_ASPECTS.owners) && visible) refresh = true
           if (fields.includes(LIVE_ASPECTS.state)) {
             // Off screen = the pill (a record entering by a pipeline start, army 4 a06-1).
             const fx = stateAspectEffect(visible, viewRef.current === 'kanban')
@@ -1149,6 +1154,7 @@ export function QueueWorklist({
     }
     const unsub = subscribe(collections, (ev) => deliverLive(liveOwner, [ev ?? {}], handle))
     return () => {
+      scheduleRefetchRef.current = null
       unsub()
       releaseLiveOwner(liveOwner)
       if (aspectTimer) clearTimeout(aspectTimer)
@@ -1156,6 +1162,25 @@ export function QueueWorklist({
       if (statsTimer) clearTimeout(statsTimer)
     }
   }, [ctxRealtime, realtime, queue?.sources, qc, queueId, userId, liveOwner])
+
+  // rt2 #17 — who owns records changed without those records being written (owner matrix,
+  // delegation, out of office): rows may enter or leave "My items" and owner cells move. A
+  // materialized worklist waits for its owner rows to re-sync (`queues: true`); a live one
+  // refetches now — quietly, as the viewer, never under a selection or a drag.
+  useLiveEvent(
+    'owners:changed',
+    (p) => {
+      if (queue?.materialized ? !p?.queues : p?.queues) return
+      if (Array.isArray(p?.collections)) {
+        const mine = (queue?.sources ?? []).some(
+          (src) => src.type === 'collection' && p.collections.includes(src.collection)
+        )
+        if (!mine) return
+      }
+      scheduleRefetchRef.current?.()
+    },
+    { debounceMs: 600 }
+  )
 
   // Inputs stay bound to filterValues (instant UI); the items query keys off
   // this trailing copy so text filters don't fire a request per keystroke.
