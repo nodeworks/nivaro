@@ -117,7 +117,9 @@ export const LIVE_RECONCILE_HEADS: readonly string[] = [
   'my-work',
   'widget-data',
   'live-record',
-  'live-list'
+  'live-list',
+  // Realtime round 2 (rt2-record): the record page's SLA clock re-reads after a reconnect too.
+  'sla-breach'
 ]
 
 export interface LiveQueryBridgeOptions {
