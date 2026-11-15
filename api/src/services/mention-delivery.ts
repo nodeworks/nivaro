@@ -241,7 +241,15 @@ async function wouldBeSilenced(
       new Date()
     )
     if (d.dropped || !d.inapp) {
-      const why = d.reasons.find((r) => r.channel === 'all' || r.channel === 'inapp')
+      // The reason that silenced it — not the bypass notes (always_inbox / critical) before it.
+      const why = [...d.reasons]
+        .reverse()
+        .find(
+          (r) =>
+            (r.channel === 'all' || r.channel === 'inapp') &&
+            r.code !== 'always_inbox' &&
+            r.code !== 'critical'
+        )
       return { muted: true, reason: why?.text ?? null }
     }
     return { muted: false, reason: 'No notification was sent: they cannot open this.' }
