@@ -8,7 +8,29 @@ import { canUpdateItem, describeWriteRefusal, readOne, updateOne } from '../serv
 import { can, getAllowedFields, isAdminRole } from '../services/permissions.js'
 import { announceRecordAspect } from '../services/record-events.js'
 import { recordToolRefusal } from '../services/record-tool-gate.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 import type { User } from '../types.js'
+
+/**
+ * The record a scheduled change is for, judged AS THE CALLER: hidden = 404, not theirs to
+ * update = 403. Skipped only for an administrator no restrict-mode User Scope narrows
+ * (seesAllRecords) — a restricted administrator is judged like anyone (items service: their
+ * scopes, never their policies). `update: false` checks reading only.
+ */
+export async function scheduledRecordRefusal(
+  req: Pick<FastifyRequest, 'user' | 'isAdmin' | 'workspaceId'>,
+  collection: string,
+  itemId: string,
+  opts: { update?: boolean } = {}
+): Promise<{ status: 403 | 404; error: string } | null> {
+  if (await seesAllRecords(req.isAdmin, req.user)) return null
+  const workspaceId = req.workspaceId ?? undefined
+  const visible = await readOne(req.user!, collection, itemId, workspaceId).catch(() => null)
+  if (!visible) return { status: 404, error: 'Not found' }
+  if (opts.update !== false && !(await canUpdateItem(req.user!, collection, itemId, workspaceId)))
+    return { status: 403, error: 'Forbidden' }
+  return null
+}
 
 /**
  * rt7 #12 — a record page counts down to its pending scheduled changes. Every change to a
@@ -171,14 +193,9 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
     const { collection, itemId } = req.params as { collection: string; itemId: string }
 
     let readable: Set<string> | null = null
+    const hidden = await scheduledRecordRefusal(req, collection, itemId, { update: false })
+    if (hidden) return reply.code(404).send({ error: 'Not found' })
     if (!(req.isAdmin ?? false)) {
-      const visible = await readOne(
-        req.user!,
-        collection,
-        itemId,
-        req.workspaceId ?? undefined
-      ).catch(() => null)
-      if (!visible) return reply.code(404).send({ error: 'Not found' })
       const fields = await getAllowedFields(req.user!, 'read', collection)
       readable = fields === null || fields.includes('*') ? null : new Set(fields)
     }
@@ -248,6 +265,11 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       }
     )
     if (refusal) return reply.code(refusal.status).send({ error: refusal.error })
+    // recordToolRefusal passes administrators through; a scope-restricted one is still judged.
+    if (isAdmin) {
+      const scoped = await scheduledRecordRefusal(req, body.collection, String(body.item_id))
+      if (scoped) return reply.code(scoped.status).send({ error: scoped.error })
+    }
     if (!(await can(req.user!, 'update', body.collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
@@ -329,20 +351,19 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
     // Own or admin — and a non-admin only while they can still see and
     // update the record the change is for.
     const isAdmin = req.isAdmin ?? false
-    if (!isAdmin) {
-      if (existing.created_by !== req.user!.id) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
-      const workspaceId = req.workspaceId ?? undefined
-      const itemId = String(existing.item_id)
-      const visible = await readOne(req.user!, existing.collection, itemId, workspaceId).catch(
-        () => null
-      )
-      if (!visible) return reply.code(404).send({ error: 'Not found' })
-      if (!(await canUpdateItem(req.user!, existing.collection, itemId, workspaceId))) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
+    if (
+      !isAdmin &&
+      String(existing.created_by ?? '').toUpperCase() !== String(req.user!.id).toUpperCase()
+    ) {
+      return reply.code(403).send({ error: 'Forbidden' })
     }
+    // Judged as the caller — administrators too, unless no restrict scope narrows them.
+    const delRefusal = await scheduledRecordRefusal(
+      req,
+      existing.collection,
+      String(existing.item_id)
+    )
+    if (delRefusal) return reply.code(delRefusal.status).send({ error: delRefusal.error })
 
     if (existing.status === 'executed') {
       return reply.code(409).send({ error: 'Cannot cancel an already executed change' })
@@ -377,20 +398,19 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
     }
     const existing = await db('nivaro_scheduled_changes').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
-    if (!(req.isAdmin ?? false)) {
-      if (String(existing.created_by ?? '').toUpperCase() !== String(req.user!.id).toUpperCase()) {
-        return reply.code(403).send({ error: 'Only the person who scheduled it can move it' })
-      }
-      const workspaceId = req.workspaceId ?? undefined
-      const itemId = String(existing.item_id)
-      const visible = await readOne(req.user!, existing.collection, itemId, workspaceId).catch(
-        () => null
-      )
-      if (!visible) return reply.code(404).send({ error: 'Not found' })
-      if (!(await canUpdateItem(req.user!, existing.collection, itemId, workspaceId))) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
+    if (
+      !(req.isAdmin ?? false) &&
+      String(existing.created_by ?? '').toUpperCase() !== String(req.user!.id).toUpperCase()
+    ) {
+      return reply.code(403).send({ error: 'Only the person who scheduled it can move it' })
     }
+    // Judged as the caller — administrators too: Restrict User Scopes bind admins.
+    const moveRefusal = await scheduledRecordRefusal(
+      req,
+      existing.collection,
+      String(existing.item_id)
+    )
+    if (moveRefusal) return reply.code(moveRefusal.status).send({ error: moveRefusal.error })
     if (existing.status !== 'pending') {
       return reply.code(409).send({ error: `Change is already ${existing.status}` })
     }

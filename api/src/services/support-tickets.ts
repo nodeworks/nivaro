@@ -98,6 +98,12 @@ export async function canWorkTicket(viewer: TicketViewer, t: TicketRow): Promise
 
 /** The people told about a new, unclaimed ticket: its team, else every active
  *  administrator. Machine accounts and people who cannot sign in are skipped. */
+/** Every active administrator (a person, not a machine account), upper-cased ids. Never a
+ *  team or desk member: callers that need someone who may DECIDE use this, not the desk. */
+export async function activeAdministratorIds(): Promise<string[]> {
+  return supportAudience(null)
+}
+
 export async function supportAudience(teamId: number | null): Promise<string[]> {
   const base = () =>
     db('nivaro_users as u')

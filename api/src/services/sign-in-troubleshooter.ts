@@ -355,6 +355,35 @@ export async function signInHelpAudience(viewer: {
 }
 
 /**
+ * Whose sign-in history the support desk may NOT read (pure): administrators and machine
+ * accounts (service/integration identities). Those are for administrators only.
+ */
+export function deskRefusedTarget(t: {
+  account_kind?: string | null
+  admin_access?: unknown
+}): boolean {
+  return !!t.account_kind || t.admin_access === true || t.admin_access === 1
+}
+
+/**
+ * True when `userId` is an administrator or a machine account. Unknown person = false (the
+ * reader answers 404 for it). A lookup that fails counts as refused (fail closed).
+ */
+export async function isDeskRefusedTarget(userId: string): Promise<boolean> {
+  try {
+    const row = (await db('nivaro_users as u')
+      .leftJoin('nivaro_roles as r', 'r.id', 'u.role')
+      .where('u.id', userId)
+      .first('u.account_kind as account_kind', 'r.admin_access as admin_access')) as
+      | { account_kind?: string | null; admin_access?: unknown }
+      | undefined
+    return row ? deskRefusedTarget(row) : false
+  } catch {
+    return true
+  }
+}
+
+/**
  * The answer a support-desk member gets: every IP address removed. "Probably them" was already
  * decided on the server from address + browser; the browser shows only as its plain name
  * ("Chrome on Windows"), which is all `browser` ever carries.

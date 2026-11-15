@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 
 /**
  * Team availability strip on a queue page (rt7 #17).
@@ -127,9 +128,10 @@ export async function loadTeamUsers(
   ids: string[]
 ): Promise<{ users: UserRow[]; delegates: Map<string, string> }> {
   if (ids.length === 0) return { users: [], delegates: new Map() }
-  const users = (await db('nivaro_users')
-    .whereIn('id', ids)
-    .select(
+  // Every seated person can be thousands of ids: chunked under the bound-parameter cap, one
+  // OPENJSON list per chunk (services/db-batch.ts).
+  const users = (await selectInChunks(ids, 1000, (chunk) =>
+    whereInList(db('nivaro_users'), 'id', chunk).select(
       'id',
       'first_name',
       'last_name',
@@ -141,7 +143,8 @@ export async function loadTeamUsers(
       'ooo_end',
       'delegate_id',
       'delegate_expires_at'
-    )) as UserRow[]
+    )
+  )) as UserRow[]
   const delegateIds = [
     ...new Set(
       users.filter((u) => !!u.is_out_of_office && u.delegate_id).map((u) => String(u.delegate_id))
@@ -149,12 +152,13 @@ export async function loadTeamUsers(
   ]
   const delegates = new Map<string, string>()
   if (delegateIds.length) {
-    const rows = (await db('nivaro_users')
-      .whereIn('id', delegateIds)
-      .where((q) => q.whereNull('status').orWhereNot('status', 'suspended'))
-      .where((q) => q.whereNull('is_redacted').orWhere('is_redacted', false))
-      .whereNull('account_kind')
-      .select('id', 'first_name', 'last_name', 'email')) as Array<{
+    const rows = (await selectInChunks(delegateIds, 1000, (chunk) =>
+      whereInList(db('nivaro_users'), 'id', chunk)
+        .where((q) => q.whereNull('status').orWhereNot('status', 'suspended'))
+        .where((q) => q.whereNull('is_redacted').orWhere('is_redacted', false))
+        .whereNull('account_kind')
+        .select('id', 'first_name', 'last_name', 'email')
+    )) as Array<{
       id: string
       first_name: string | null
       last_name: string | null

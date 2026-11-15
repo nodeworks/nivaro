@@ -12,6 +12,9 @@ const state = vi.hoisted(() => ({
     down: boolean
   },
   rules: null as unknown,
+  calls: [] as Array<[string, string, unknown[]]>,
+  gated: [] as string[],
+  partial: [] as string[],
   run: { id: 'run-1', current_state: 's', key: 'approved', label: 'Approved', completed_at: null }
 }))
 
@@ -25,7 +28,10 @@ vi.mock('../db/index.js', () => {
           return (res: (v: unknown) => unknown) => Promise.resolve(rows()).then(res)
         if (prop === 'catch') return () => Promise.resolve(rows())
         if (prop === 'first') return () => Promise.resolve(rows()[0])
-        return () => proxy
+        return (...args: unknown[]) => {
+          state.calls.push([table.split(' ')[0], String(prop), args])
+          return proxy
+        }
       }
     })
     return proxy
@@ -97,14 +103,27 @@ vi.mock('./notification-channels.js', () => ({
   }
 }))
 vi.mock('./filter-check.js', () => ({ choicesOf: () => null }))
+vi.mock('./read-gate.js', () => ({
+  withReadGate: async (_w: unknown, fn: () => Promise<unknown>, o?: { label?: string }) => {
+    state.gated.push(String(o?.label))
+    return fn()
+  }
+}))
+vi.mock('./partial-reads.js', () => ({
+  notePartialRead: (what: string) => state.partial.push(what)
+}))
 
 import {
+  APPROVAL_CHANGED_FIELD,
   APPROVAL_CHANGES_CATEGORY,
+  approvalChangedIds,
   approvalChangedWanted,
   approvalChangesFor,
   burstChangers,
   claimOnce,
+  LIST_ROW_CAP,
   noticeRecipients,
+  resolveApprovalChangedCondition,
   sendApprovalNotices
 } from './approval-changes.js'
 
@@ -271,5 +290,43 @@ describe('list condition', () => {
     expect(approvalChangedWanted({ op: '_eq', value: true })).toBe(true)
     expect(approvalChangedWanted({ op: '_eq', value: false })).toBe(false)
     expect(approvalChangedWanted({ op: '_neq', value: true })).toBe(false)
+  })
+})
+
+describe('list condition read (security review 2026-11-15)', () => {
+  const wire = (n: number) => {
+    state.tables.nivaro_workflow_bindings = [{ template: 't' }]
+    state.tables.nivaro_workflow_states = [{ id: 's-approved' }]
+    state.tables.nivaro_revisions = Array.from({ length: n }, (_, i) => ({
+      item: String(i + 1),
+      delta: JSON.stringify({ amount: i }),
+      timestamp: recent,
+      moment: approvedAt
+    }))
+    state.calls = []
+    state.gated = []
+    state.partial = []
+  }
+
+  it('is gated, newest first in a fixed order, and complete under the cap', async () => {
+    wire(3)
+    const out = await approvalChangedIds('requests', null, 'U1')
+    expect(out).toEqual({ ids: ['1', '2', '3'], partial: false })
+    expect(state.gated).toEqual(['approval-changed-filter'])
+    const orders = state.calls.filter(([t, m]) => t === 'nivaro_revisions' && m === 'orderBy')
+    expect(orders.map(([, , a]) => a)).toEqual([
+      ['a.timestamp', 'desc'],
+      ['r.id', 'desc']
+    ])
+  })
+
+  it('says partial when more rows match than the cap, and the list is told', async () => {
+    wire(LIST_ROW_CAP + 1)
+    const out = await approvalChangedIds('requests', null, 'U1')
+    expect(out.partial).toBe(true)
+    expect(out.ids).toHaveLength(LIST_ROW_CAP)
+    const ids = await resolveApprovalChangedCondition({}, 'requests', 'U1')
+    expect(ids).toHaveLength(LIST_ROW_CAP)
+    expect(state.partial).toEqual([APPROVAL_CHANGED_FIELD])
   })
 })

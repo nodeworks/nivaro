@@ -36,11 +36,38 @@ export async function loadUndoLog(mergeId: string): Promise<MergeUndoLog | null>
   }
 }
 
-export async function markUndone(log: MergeUndoLog, userId: string): Promise<void> {
+/**
+ * Claim the undo of a merge: one compare-and-set on the stored log (its row id AND
+ * its exact text as read), so two undos racing each other cannot both run — the
+ * second finds the text changed and changes nothing. False = already undone or
+ * claimed by someone else.
+ */
+export async function claimUndo(mergeId: string, userId: string): Promise<boolean> {
+  const row = (await db('nivaro_revisions')
+    .where({ collection: MERGE_LOG_COLLECTION, item: mergeId })
+    .orderBy('id', 'desc')
+    .first('id', 'data')) as { id?: number; data?: string } | undefined
+  if (!row?.id || !row.data) return false
+  let log: MergeUndoLog
+  try {
+    log = JSON.parse(row.data) as MergeUndoLog
+  } catch {
+    return false
+  }
+  if (!log || log.undone_at) return false
   const next: MergeUndoLog = { ...log, undone_at: new Date().toISOString(), undone_by: userId }
+  const n = await db('nivaro_revisions')
+    .where({ id: row.id })
+    .where('data', row.data)
+    .update({ data: JSON.stringify(next) })
+  return Number(n) > 0
+}
+
+/** Give a claimed undo back when the undo itself failed (the merge stays undoable). */
+export async function releaseUndo(log: MergeUndoLog): Promise<void> {
   await db('nivaro_revisions')
     .where({ collection: MERGE_LOG_COLLECTION, item: log.merge_id })
-    .update({ data: JSON.stringify(next) })
+    .update({ data: JSON.stringify({ ...log, undone_at: null, undone_by: null }) })
 }
 
 /** The newest merge into this record still inside the undo window (for the record page). */

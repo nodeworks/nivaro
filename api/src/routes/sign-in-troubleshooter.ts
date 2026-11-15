@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { withReadGate } from '../services/read-gate.js'
 import {
   forAudience,
+  isDeskRefusedTarget,
   readSignInRefusals,
   readSignInTroubleshooter,
   type SignInHelpAudience,
@@ -27,6 +28,10 @@ const FORBIDDEN = {
   error: 'Only administrators and the support desk can see why someone cannot sign in.',
   code: 'FORBIDDEN'
 }
+const DESK_TARGET_FORBIDDEN = {
+  error: 'Only administrators can see sign-in history for administrators and machine accounts.',
+  code: 'FORBIDDEN'
+}
 
 /** The caller's audience, or null after answering 403 / 400. */
 async function gate(
@@ -38,7 +43,15 @@ async function gate(
     return null
   }
   const audience = await signInHelpAudience({ id: String(req.user!.id), isAdmin: !!req.isAdmin })
-  if (!audience) void reply.code(403).send(FORBIDDEN)
+  if (!audience) {
+    void reply.code(403).send(FORBIDDEN)
+    return null
+  }
+  // The desk helps people sign in; administrators' and machine accounts' history is admin-only.
+  if (audience !== 'admin' && (await isDeskRefusedTarget(req.params.userId))) {
+    void reply.code(403).send(DESK_TARGET_FORBIDDEN)
+    return null
+  }
   return audience
 }
 

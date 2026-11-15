@@ -13,6 +13,13 @@ vi.mock('../../../services/chat-records.js', () => ({
 }))
 vi.mock('../../../services/items.js', () => ({ readOne: vi.fn() }))
 vi.mock('../../../services/record-events.js', () => ({ emitRecordEvent: vi.fn() }))
+const gate = vi.hoisted(() => ({ labels: [] as string[] }))
+vi.mock('../../../services/read-gate.js', () => ({
+  withReadGate: async (_who: unknown, fn: () => Promise<unknown>, o?: { label?: string }) => {
+    gate.labels.push(String(o?.label))
+    return fn()
+  }
+}))
 
 import {
   announceRecordMentions,
@@ -138,14 +145,26 @@ describe('record mentions in chat', () => {
         { id: 1, room: 'ch:open', message: 'CM26-1 hello', sender_name: 'A', date_created: 'x' }
       ]
       const chain: Record<string, unknown> = {}
-      for (const k of ['where', 'whereNot', 'whereNull', 'orderBy', 'limit']) chain[k] = () => chain
+      const wheres: unknown[][] = []
+      for (const k of ['whereNot', 'whereNull', 'orderBy', 'limit']) chain[k] = () => chain
+      chain.where = (...a: unknown[]) => {
+        wheres.push(a)
+        return chain
+      }
       chain.select = async () => rows
+      gate.labels = []
       ;(db as unknown as ReturnType<typeof vi.fn>).mockReturnValue(chain)
       const canSee = async (_u: unknown, room: string) => room === 'ch:open'
       for (const viewer of [{ id: 'C' }, { id: 'ADMIN', role: 'admin' }]) {
         const out = await recordMentionMessages(viewer as never, 'workflows', '1', { canSee })
         expect(out?.map((r) => r.room)).toEqual(['ch:open'])
       }
+      // Bounded: the last 14 days only, behind the read gate.
+      const window = wheres.find((w) => w[0] === 'date_created') as [string, string, Date]
+      expect(window?.[1]).toBe('>')
+      expect(Date.now() - window[2].getTime()).toBeGreaterThan(13.9 * 86_400_000)
+      expect(Date.now() - window[2].getTime()).toBeLessThan(14.1 * 86_400_000)
+      expect(gate.labels).toContain('record-chat-mention-messages')
     })
 
     it('an unreadable record answers null (404)', async () => {

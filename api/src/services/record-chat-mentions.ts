@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { canSeeRoom, channelByKey, newRoomVisibilityCache, parseRoom } from './chat.js'
 import { roomForRecord, roomTypes } from './chat-records.js'
+import { withReadGate } from './read-gate.js'
 import { emitRecordEvent } from './record-events.js'
 
 /**
@@ -215,26 +216,32 @@ export async function recordMentionsFor(
       (r) => !r.startsWith(`${target.type.prefix}:`)
     )
     const me = uid.toUpperCase()
-    const messages = (await db('chat_messages')
-      .whereNull('deleted_at')
-      .where('date_created', '>', since)
-      .where((qb) =>
-        qb
-          .where('message', 'like', `%${likeLiteral(token)}%`)
-          .orWhere(
-            'message',
-            'like',
-            `%/${likeLiteral(collection)}/${likeLiteral(encodeURIComponent(itemId))}%`
+    // A contains-search over chat_messages: an expensive read, so it holds a read-gate slot.
+    const messages = (await withReadGate(
+      uid,
+      () =>
+        db('chat_messages')
+          .whereNull('deleted_at')
+          .where('date_created', '>', since)
+          .where((qb) =>
+            qb
+              .where('message', 'like', `%${likeLiteral(token)}%`)
+              .orWhere(
+                'message',
+                'like',
+                `%/${likeLiteral(collection)}/${likeLiteral(encodeURIComponent(itemId))}%`
+              )
           )
-      )
-      .where((qb) => {
-        if (memberRooms.length) qb.whereIn('room', memberRooms)
-        qb.orWhere('room', 'like', `dm:${me}:%`).orWhere('room', 'like', `dm:%:${me}`)
-      })
-      .where((qb) => qb.whereNull('is_system').orWhere('is_system', false))
-      .orderBy('id', 'desc')
-      .limit(MESSAGE_CAP)
-      .select('id', 'room', 'sender', 'message', 'date_created')) as MsgRow[]
+          .where((qb) => {
+            if (memberRooms.length) qb.whereIn('room', memberRooms)
+            qb.orWhere('room', 'like', `dm:${me}:%`).orWhere('room', 'like', `dm:%:${me}`)
+          })
+          .where((qb) => qb.whereNull('is_system').orWhere('is_system', false))
+          .orderBy('id', 'desc')
+          .limit(MESSAGE_CAP)
+          .select('id', 'room', 'sender', 'message', 'date_created'),
+      { label: 'record-chat-mentions' }
+    )) as MsgRow[]
     if (messages.length === 0) return EMPTY
 
     const cache = newRoomVisibilityCache()
@@ -326,23 +333,30 @@ export async function recordMentionMessages(
   if (!target || target.type.match_field === 'id') return []
   const token = target.room.slice(target.type.prefix.length + 1)
   if (!token || token.length < 4) return []
-  const rows = (await db('chat_messages')
-    .where((qb) =>
-      qb
-        .where('message', 'like', `%${likeLiteral(token)}%`)
-        .orWhere(
-          'message',
-          'like',
-          `%/${likeLiteral(collection)}/${likeLiteral(encodeURIComponent(itemId))}%`
+  // The same window as the chip (the last MENTION_WINDOW_DAYS days), and behind the read
+  // gate: a contains-search over every chat message is never unbounded.
+  const since = new Date(Date.now() - MENTION_WINDOW_DAYS * 86_400_000)
+  const rows = (await withReadGate(
+    String(viewer.id),
+    () =>
+      db('chat_messages')
+        .where('date_created', '>', since)
+        .where((qb) =>
+          qb
+            .where('message', 'like', `%${likeLiteral(token)}%`)
+            .orWhere(
+              'message',
+              'like',
+              `%/${likeLiteral(collection)}/${likeLiteral(encodeURIComponent(itemId))}%`
+            )
         )
-    )
-    .whereNot('room', target.room)
-    .whereNull('deleted_at')
-    .orderBy('id', 'desc')
-    .limit(200)
-    .select('id', 'room', 'message', 'sender_name', 'date_created')) as Array<
-    Record<string, unknown>
-  >
+        .whereNot('room', target.room)
+        .whereNull('deleted_at')
+        .orderBy('id', 'desc')
+        .limit(200)
+        .select('id', 'room', 'message', 'sender_name', 'date_created'),
+    { label: 'record-chat-mention-messages' }
+  )) as Array<Record<string, unknown>>
   const verdict = new Map<string, boolean>()
   const out: Array<Record<string, unknown>> = []
   for (const r of rows) {

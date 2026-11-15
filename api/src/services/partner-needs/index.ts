@@ -561,6 +561,20 @@ export async function partnerNeeds(
     (!opts.ignoreSwitch && !partnerBadgesOn((meta as { browser_config?: unknown }).browser_config))
   )
     return emptyAnswer(false)
+  // The rest walks the pipeline, reads saved lines and lookups: an expensive read body, so it
+  // holds a read-gate slot (re-entrant — the reads inside never wait on a second one).
+  const { withReadGate } = await import('../read-gate.js')
+  return withReadGate(who.user ? String(who.user.id) : null, () => needsFor(req, who, item), {
+    label: 'partner-needs'
+  })
+}
+
+async function needsFor(
+  req: PartnerNeedsRequest,
+  who: Who,
+  item: string | null
+): Promise<PartnerNeedsAnswer | null> {
+  const { collection } = req
   // The saved record AS THE CALLER (User Scopes, row filters, field policy): null = not theirs.
   let saved: Record<string, unknown> = {}
   if (item) {

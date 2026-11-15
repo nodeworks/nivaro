@@ -28,7 +28,12 @@ import {
 import { markConfigRead } from '../services/config-live.js'
 import { whereInList } from '../services/db-batch.js'
 import { agentBadgesForActivity } from '../services/mcp-attribution.js'
-import { agentBadgeLabel, agentDisplayName, readMcpSettings } from '../services/mcp-calls.js'
+import {
+  agentBadgeLabel,
+  agentDisplayName,
+  cleanBadge,
+  readMcpSettings
+} from '../services/mcp-calls.js'
 import { myRecordSet, whereInRecordSet } from '../services/overview/my-records.js'
 import { getAllowedFields } from '../services/permissions.js'
 import { withReadGate } from '../services/read-gate.js'
@@ -112,8 +117,11 @@ async function enrichRows(rows: Array<Record<string, unknown>>, hasVia: boolean)
   const badge = settings
     ? (via: string | null, conn?: string | null) => agentBadgeLabel(via, settings, conn)
     : undefined
+  // The name stored at write time wins; the connection's current name only fills a row that
+  // stored none (a rename never relabels history).
   const agentName = settings
-    ? (conn: string, fallback: string | null) => agentDisplayName(conn, fallback, settings)
+    ? (conn: string, stored: string | null) =>
+        (stored ? cleanBadge(stored) : '') || agentDisplayName(conn, null, settings)
     : undefined
   return unique.map((r) =>
     enrichActivityRow(r as never, {

@@ -232,12 +232,15 @@ describe('agent names', () => {
     expect(() => mergeMcpSettings(s, { connection_names: { k7: '<>' } })).toThrow()
   })
 
-  it('names the agent by its connection everywhere, relabelling history', () => {
+  it('names the agent by its connection now, but history keeps the name it was stored with', () => {
     const s = { ...MCP_SETTINGS_DEFAULTS, connection_names: { k7: 'Ops bot' } }
     expect(agentDisplayName('k7', 'My key', s)).toBe('Ops bot')
     expect(agentDisplayName('k8', 'My key', s)).toBe('My key')
     expect(agentDisplayName(null, '', s)).toBe('Assistant')
-    expect(agentBadgeLabel('My key', s, 'k7')).toBe('via Ops bot')
+    // A row stored as "My key" stays "My key" after the connection is renamed.
+    expect(agentBadgeLabel('My key', s, 'k7')).toBe('via My key')
+    // A row that stored no name falls back to the connection's current name.
+    expect(agentBadgeLabel(null, s, 'k7')).toBe('via Ops bot')
     expect(agentBadgeLabel('My key', s, 'k8')).toBe('via My key')
     expect(agentBadgeLabel('My key', { ...s, agent_label_mode: 'fixed' }, 'k7')).toBe(
       'via assistant'

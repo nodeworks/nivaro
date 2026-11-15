@@ -36,7 +36,7 @@ import {
   UNDO_WINDOW_MS,
   undoRefusal
 } from './rules.js'
-import { loadUndoLog, markUndone, saveUndoLog } from './store.js'
+import { claimUndo, loadUndoLog, releaseUndo, saveUndoLog } from './store.js'
 
 export interface MergeBody {
   survivor?: unknown
@@ -122,7 +122,10 @@ export interface MergeDeps {
   ): Promise<number | null>
   saveLog(log: MergeUndoLog, activityId: number | null): Promise<void>
   loadLog(mergeId: string): Promise<MergeUndoLog | null>
-  markUndone(log: MergeUndoLog, userId: string): Promise<void>
+  /** Atomically claim the undo; false = already undone (or another undo won the race). */
+  claimUndo(log: MergeUndoLog, userId: string): Promise<boolean>
+  /** Hand a claim back when the undo failed. */
+  releaseUndo(log: MergeUndoLog): Promise<void>
   /** Wrap the writes (a unit of work: effects released only when it returns). */
   unit<T>(fn: (discard: () => void) => Promise<T>): Promise<T>
 }
@@ -431,8 +434,16 @@ export async function undoMerge(
   const isAdmin = req.isAdmin === true || (await isAdminRole(user).catch(() => false))
   const why = undoRefusal(log, { id: String(user.id), isAdmin })
   if (why || !log) throw new MergeRefusal(log ? 409 : 404, 'UNDO_REFUSED', why ?? 'Not found.')
-  const back = await deps.unit(() => runUndo(req, log, deps))
-  await deps.markUndone(log, String(user.id))
+  // Claim first, so an undo can only ever run once (two clicks, two tabs, two people).
+  if (!(await deps.claimUndo(log, String(user.id))))
+    throw new MergeRefusal(409, 'UNDO_REFUSED', 'This merge was already undone.')
+  let back: Awaited<ReturnType<typeof runUndo>>
+  try {
+    back = await deps.unit(() => runUndo(req, log, deps))
+  } catch (err) {
+    await deps.releaseUndo(log).catch(() => undefined)
+    throw err
+  }
   const label = (id: string) => log.labels[id] ?? id
   await deps
     .note(
@@ -661,7 +672,8 @@ export const defaultMergeDeps: MergeDeps = {
   },
   saveLog: (log, activityId) => saveUndoLog(log, activityId),
   loadLog: (id) => loadUndoLog(id),
-  markUndone: (log, userId) => markUndone(log, userId),
+  claimUndo: (log, userId) => claimUndo(log.merge_id, userId),
+  releaseUndo: (log) => releaseUndo(log),
   async unit(fn) {
     const { runUnit } = await import('../unit-of-work.js')
     return runUnit('record-merge', (unit) => fn(() => unit.discard()))
