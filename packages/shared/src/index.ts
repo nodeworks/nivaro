@@ -103,7 +103,7 @@ export { BulkRowMark } from './components/bulk/BulkRowMark'
 export type { PushItemAction, PushRunOutcome } from './components/bulk/PushBulkButtons'
 export { PushBulkButtons, PushResultList } from './components/bulk/PushBulkButtons'
 export type { CacheInfo, CustomQueryEnvelope } from './components/CacheStamp'
-export { CacheStamp, cacheStampTip } from './components/CacheStamp'
+export { CacheStamp, cacheStampTip, LiveCacheStamp } from './components/CacheStamp'
 export { CellCopyLayer } from './components/CellCopyLayer'
 export {
   CLIENT_CHAOS_SHORTCUT,
@@ -139,6 +139,12 @@ export {
   CustomStatusEditor,
   formatStatusExpiry
 } from './components/CustomStatusEditor'
+export {
+  ChangeProposalsPanel,
+  ProposeChangeButton,
+  ProposeChangeDialog,
+  useRecordProposals
+} from './components/change-proposals'
 export { DeclareIncidentButton } from './components/chaos/DeclareIncidentButton'
 export {
   ARMED_FAULTS_KEY,
@@ -234,6 +240,7 @@ export {
 export { ErrorDetails, ErrorNotice } from './components/ErrorNotice'
 export { ErrorSurface } from './components/ErrorSurface'
 export { canPreviewFile, FilePreviewLightbox } from './components/FilePreviewLightbox'
+export { FindingFixedMark } from './components/FindingFixedMark'
 export { FirstLoginChecklist } from './components/FirstLoginChecklist'
 export { FocusModeToggle } from './components/FocusModeToggle'
 export {
@@ -337,6 +344,7 @@ export {
 export { FieldRenderer } from './components/item-edit/FieldRenderer'
 export { buildCascadeFilter, seedQuickPickerSteps } from './components/item-edit/helpers'
 export { InlineTableField } from './components/item-edit/InlineTableField'
+export { ListNeighborNav } from './components/item-edit/ListNeighborNav'
 export {
   LAYOUT_PUSH_SETTLE_MS,
   useLayoutEditingQuiet
@@ -373,6 +381,12 @@ export {
 export { RecordRecapStrip } from './components/item-edit/RecordRecapStrip'
 export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeButton'
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
+export {
+  FieldMergePanel,
+  RemoteChangeMark,
+  RemoteChangesButton,
+  RemoteConflictNotice
+} from './components/item-edit/RemoteChangeUi'
 export { type RelatedMissing, relatedMissing } from './components/item-edit/related-missing'
 export { UserChip, UserRosterCluster } from './components/item-edit/UserChip'
 export {
@@ -385,6 +399,11 @@ export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
 export { ListLoadError } from './components/ListLoadError'
+export { LiveAnnouncer } from './components/LiveAnnouncer'
+export { LiveCount, type LiveCountProps } from './components/LiveCount'
+export { LiveNewMatchesPill } from './components/LiveNewMatchesPill'
+export { LIVE_OFF_TIP, LiveOffNote } from './components/LiveOffNote'
+export { LivePreferenceHost } from './components/LivePreferenceHost'
 export { LiveRowMark } from './components/LiveRowMark'
 export { LoadErrorNote } from './components/LoadErrorNote'
 export * from './components/layout-editor'
@@ -512,6 +531,7 @@ export type {
   QueryWidgetConfig
 } from './components/PageRenderer'
 export { PageRenderer, QueryWidgetView, RecordGridWidgetBody } from './components/PageRenderer'
+export { PresenceDot } from './components/PresenceDot'
 export {
   commonPretendDownOptions,
   dashboardPretendDownOptions,
@@ -615,10 +635,13 @@ export {
 } from './components/RecordGraph'
 export type { RecordGridEditorConfig } from './components/RecordGridEditor'
 export { RecordGridEditor } from './components/RecordGridEditor'
+export { RecordPeekHost } from './components/RecordPeekHost'
 export { type ReadViewLayout, RecordReadView } from './components/RecordReadView'
+export { RelativeTime } from './components/RelativeTime'
 export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
 export { RowPresence } from './components/RowPresence'
+export { ScreenRefreshButton } from './components/ScreenRefreshButton'
 export { SearchHighlight } from './components/SearchHighlight'
 export { SignOutNoteAfterSignIn, SignOutNoteBanner } from './components/SignOutNoteBanner'
 // #3229 shape-matched skeletons · #3231 slow-read reasons
@@ -651,11 +674,13 @@ export type {
   SupportTicket,
   SupportTicketDetail
 } from './components/support/types'
+export { TabCountHost } from './components/TabCountHost'
 export { Term } from './components/Term'
 export { TickerNumber } from './components/TickerNumber'
 export { TipLayer, useOverflowTip } from './components/TipLayer'
 export { UndoButton, type UndoPreviewAnswer } from './components/UndoButton'
 export { UserAvatar } from './components/UserAvatar'
+export { WidgetImageMenu } from './components/WidgetImageMenu'
 export type { InputBinding } from './components/WidgetSlot'
 export { WidgetSlot } from './components/WidgetSlot'
 export type {
@@ -739,6 +764,8 @@ export {
   startApiVersionWatch,
   useApiUpdate
 } from './lib/api-version'
+export * from './lib/attention-prefs'
+export * from './lib/attention-prefs'
 export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
 export {
@@ -838,6 +865,7 @@ export {
   isCrashWorthy,
   scrubCrashText
 } from './lib/crash-report'
+export * from './lib/deadline-ticker'
 export { useAfterIdle } from './lib/defer'
 export { deliveryAckFor } from './lib/delivery-ack'
 export {
@@ -898,6 +926,15 @@ export * from './lib/expression'
 export { formulaConstant, networkdaysBetween, setFormulaConstants } from './lib/expression'
 export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'
 export * from './lib/field-interfaces'
+export {
+  autoMerge,
+  diffTextBlocks,
+  type FieldMergeKind,
+  fieldMergeKind,
+  mergedSet,
+  mergedText,
+  mergeSetValues
+} from './lib/field-merge'
 export * from './lib/filter-sentence'
 export {
   fiscalPeriodOf,
@@ -916,12 +953,23 @@ export {
   useGlossary,
   withCoreGlossary
 } from './lib/glossary'
+export {
+  CURSOR_LEAVE_MS,
+  CURSOR_SETTLE_MS,
+  createCellAnnouncer,
+  cursorColor,
+  markRemoteCell
+} from './lib/grid-cursors'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
 export {
   type BuildStatus,
+  type DataResyncSettings,
   decideIdleReload,
+  decideIdleResync,
   type IdleReloadDecision,
-  type IdleReloadInput
+  type IdleReloadInput,
+  type IdleResyncDecision,
+  type IdleResyncInput
 } from './lib/idle-reload'
 export type { ChipSubmission, IntegrationChipSummary } from './lib/integration-chip'
 export { integrationChipSummary } from './lib/integration-chip'
@@ -931,14 +979,45 @@ export { type LayoutGrantFlags, layoutGrantedTools } from './lib/layout-grants'
 export { currentViewport } from './lib/layout-resolve'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
+export { LineLockContext, lineLockView, useLineLocks } from './lib/line-locks'
 export * from './lib/list-inline-edit'
 export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
+export * from './lib/list-return'
 export * from './lib/list-viewers'
 export * from './lib/live'
+export * from './lib/live-announcer'
+export * from './lib/live-announcer'
+export * from './lib/live-counts'
+export * from './lib/live-data-changed'
+export * from './lib/live-findings'
 export * from './lib/live-list'
+export * from './lib/live-moves'
 export * from './lib/live-ops'
+// Realtime round 3 #24 — Live updates: Normal / Calm / Off (Profile → Display, role defaults)
+export {
+  __resetLivePreferenceForTests,
+  LIVE_CALM_PAUSE_MS,
+  LIVE_DATA_EVENTS,
+  LIVE_MODE_LABELS,
+  LIVE_MODES,
+  LIVE_PRESENCE_EVENTS,
+  type LiveModeSource,
+  type LivePreference,
+  liveCollectionEventPasses,
+  liveEventQuiet,
+  livePausedAt,
+  livePreferenceOf,
+  parseLiveMode,
+  resolveLiveMode,
+  setLiveMode,
+  subscribeLiveMode
+} from './lib/live-preference'
 export * from './lib/live-queries'
+export * from './lib/live-screen'
+export * from './lib/live-search'
+export { lastLiveSeen, noteLiveSeen } from './lib/live-seen'
+export * from './lib/live-views'
 export * from './lib/live-widgets'
 export {
   isListTimeout,
@@ -960,6 +1039,14 @@ export {
   startMetadataPersistence,
   wipeMetadataCache
 } from './lib/metadata-persist'
+export {
+  compareSnapshot,
+  hashValue,
+  type MissedRecord,
+  registerShownRecords,
+  type ShownRecord,
+  useShownRecords
+} from './lib/missed-updates'
 export { MONEY_INPUT_MAX, type MoneyParse, parseMoneyInput } from './lib/money-input'
 export {
   displayTrail,
@@ -1052,7 +1139,11 @@ export {
   type SignalPeers,
   signalSentence,
   type TopicPresence,
+  TYPING_IDLE_MS,
+  typistsByThread,
+  useDraftTypingSignal,
   useMyUserId,
+  useNoteTypists,
   useRecordSignalPeers,
   useRecordSignalSender,
   useRecordSignalWhile,
@@ -1094,6 +1185,7 @@ export {
   type RecordOutboxEntry,
   retryRecordOutbox
 } from './lib/record-outbox'
+export * from './lib/record-peek'
 export {
   focusPopoutOpener,
   isRecordPopout,
@@ -1103,6 +1195,12 @@ export {
 } from './lib/record-popout'
 export * from './lib/record-ref'
 export { announceRecordTabs, useRecordTabs, useRecordTabsSignal } from './lib/record-tabs'
+export {
+  relativeTickSubscribers,
+  subscribeRelativeTick,
+  tickRelativeNow,
+  useRelativeText
+} from './lib/relative-ticker'
 export { registerReloadHold, reloadHoldLabels } from './lib/reload-holds'
 export {
   captureReplayClip,
@@ -1220,6 +1318,16 @@ export {
   statusTitle,
   userErrorMessage
 } from './lib/safe-error'
+export {
+  refreshScreenData,
+  registerScreenLoader,
+  type ScreenRefreshResult,
+  type ScreenRefreshState,
+  screenRefreshMatches,
+  setScreenRefreshClient,
+  useScreenLoader,
+  useScreenRefreshState
+} from './lib/screen-refresh'
 export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'
 export * from './lib/search-log'
 export {
@@ -1321,7 +1429,11 @@ export {
   translateScopeValues,
   useMyScopes
 } from './lib/use-my-scopes'
-export { useOnlineUsers } from './lib/use-online-users'
+export {
+  type PresenceState,
+  useOnlineUsers,
+  usePresenceStates
+} from './lib/use-online-users'
 export { pageAtPayload, usePageAt } from './lib/use-page-at'
 export {
   announceLocalPrefs,
@@ -1339,6 +1451,27 @@ export {
   viewAs,
   viewAsPath
 } from './lib/view-as'
+export * from './lib/waiting-count'
+export * from './lib/waiting-count'
+export {
+  buildWidgetImageLabel,
+  describeDateRangeFilter,
+  describeEntityFilters,
+  describeGlobalFilters,
+  describeWidgetOwnFilter,
+  describeWidgetRules,
+  formatAsOf,
+  type WidgetImageInput,
+  type WidgetImageLabel,
+  widgetImageFileName,
+  widgetImageSubtitleLines
+} from './lib/widget-image'
+export {
+  copyPngOrSave,
+  downloadBlob,
+  renderWidgetImage,
+  WIDGET_IMAGE_IGNORE_ATTR
+} from './lib/widget-image-render'
 export * from './lib/worker-socket'
 export * from './lib/write-formula'
 export * from './types'

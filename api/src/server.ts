@@ -299,6 +299,11 @@ export async function buildServer() {
     setAppRef(app)
     const { wireOpsLive } = await import('./services/ops-live.js')
     wireOpsLive()
+    // rt2 #17 / #19 — owner changes announce per open record; the people directory goes live.
+    const { wireOwnerChangeLive } = await import('./services/owner-change-live.js')
+    wireOwnerChangeLive()
+    const { wirePeopleLive } = await import('./services/people-live.js')
+    wirePeopleLive()
     const { setJournalRedis } = await import('./services/event-journal.js')
     setJournalRedis(app.redis)
     const { setExtensionRoutes, startTrafficMapEmitter } = await import('./services/traffic-map.js')
@@ -1135,6 +1140,22 @@ export async function buildServer() {
         const { runSlaEscalations } = await import('./services/sla-escalations.js')
         await runSlaEscalations(app)
       })
+      // Realtime round 2: SLA clocks that turned amber / red with no write — announce `$sla`
+      // on each so open lists and records recolour (only collections someone has open).
+      app.cron.schedule(
+        'sla-live-flips',
+        '* * * * *',
+        async () => {
+          const { runSlaFlipPass } = await import('./services/sla-flips.js')
+          await runSlaFlipPass()
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Tells open pages when a record’s SLA clock passes its warning or breach line, so colours change without a reload. Reads only collections someone has open.'
+        }
+      )
 
       // Cumulative flow (#2758): a year of daily state counts per pipeline
       // template + collection, so long ranges read a stored series.
@@ -1506,6 +1527,11 @@ export async function buildServer() {
           .whereNotNull('ooo_end')
           .where('ooo_end', '<=', now)
           .update({ is_out_of_office: false, ooo_start: null, ooo_end: null })
+        // rt2 #17 — a delegation that simply ran out (delegate_expires_at passed) moves owners
+        // back without any write: open records, My Work and worklists hear it. The window
+        // overlaps the previous tick a little; a repeat announcement is harmless.
+        const { sweepEndedDelegations } = await import('./services/owner-change-live.js')
+        await sweepEndedDelegations(new Date(now.getTime() - 16 * 60_000), now)
       })
 
       // Instant queue-entry notifications (#121/#379): */5 diff pass over
@@ -1892,6 +1918,17 @@ export async function buildServer() {
         },
         { quiet: true }
       )
+      // Outside-write watcher: the safety net for writers that never announce. Ticks every 5 s,
+      // looks once its interval setting has passed (default 10 s); off in cloud mode.
+      app.cron.schedule(
+        'outside-write-watch',
+        '*/5 * * * * *',
+        async () => {
+          const { outsideWriteTick } = await import('./services/outside-write-watch.js')
+          await outsideWriteTick()
+        },
+        { quiet: true }
+      )
       // Durable event journal (#1673): keep 24 hours.
       app.cron.schedule('event-journal-prune', '17 */1 * * *', async () => {
         const { pruneEventJournal } = await import('./services/event-journal-store.js')
@@ -1938,6 +1975,11 @@ export async function buildServer() {
       app.cron.schedule('chat-drafts-prune', '20 4 * * *', async () => {
         const { pruneDrafts } = await import('./services/chat-drafts.js')
         await pruneDrafts()
+      })
+      // Record-form drafts kept for a person's other devices live 7 days (rt4 #21).
+      app.cron.schedule('record-drafts-prune', '25 4 * * *', async () => {
+        const { pruneExpiredDrafts } = await import('./services/record-drafts.js')
+        await pruneExpiredDrafts()
       })
       // Close chat polls whose time has passed and post their summary line (#2337).
       app.cron.schedule(
@@ -2601,13 +2643,17 @@ export async function buildServer() {
         'ops-daily-report',
         '5 * * * *',
         async () => {
-          const [{ getOpsReportSettings }, { dayIn, hourIn, instanceZone }, store, { startOpsReport }] =
-            await Promise.all([
-              import('./services/ops-report/settings.js'),
-              import('./services/ops-report/window.js'),
-              import('./services/ops-report/store.js'),
-              import('./services/ops-report/run.js')
-            ])
+          const [
+            { getOpsReportSettings },
+            { dayIn, hourIn, instanceZone },
+            store,
+            { startOpsReport }
+          ] = await Promise.all([
+            import('./services/ops-report/settings.js'),
+            import('./services/ops-report/window.js'),
+            import('./services/ops-report/store.js'),
+            import('./services/ops-report/run.js')
+          ])
           if (!(await store.reportsTableReady())) return
           await store.failStaleRuns()
           const s = await getOpsReportSettings()
@@ -2626,7 +2672,28 @@ export async function buildServer() {
           heavy: true,
           idempotent: 'safe',
           description:
-            'Hourly at :05 — once the day\'s report window has closed (Health → Daily report settings; 6 AM–11 PM by default, so 11:05 PM), builds the daily operations report: the day\'s numbers from the request log, issues, jobs, partner sends, mail, work and security (read-only SQL), the bug tracker and the comparison with earlier days, then an AI investigation that drills into the rows behind them; stores it and tells administrators (in-app and email). Off until turned on in its settings.'
+            "Hourly at :05 — once the day's report window has closed (Health → Daily report settings; 6 AM–11 PM by default, so 11:05 PM), builds the daily operations report: the day's numbers from the request log, issues, jobs, partner sends, mail, work and security (read-only SQL), the bug tracker and the comparison with earlier days, then an AI investigation that drills into the rows behind them; stores it and tells administrators (in-app and email). Off until turned on in its settings."
+        }
+      )
+      // Idea 37 — ready-to-send board: every open record whose next manual move pushes to a
+      // partner, preflighted in batches; the result is stored on this job's run row.
+      app.cron.schedule(
+        'ready-to-send',
+        '20 4 * * *',
+        async () => {
+          const { readyToSendTick } = await import('./services/ready-to-send/run.js')
+          const r = await readyToSendTick('cron')
+          app.log.info(
+            `ready-to-send: ${r.checked} of ${r.candidates} checked, ${r.entries.length} moves with problems`
+          )
+        },
+        {
+          heavy: true,
+          idempotent: 'safe',
+          // Every open record is checked however long it takes (chunked, yields between chunks).
+          watchdogMs: 6 * 3_600_000,
+          description:
+            "Nightly 04:20 — finds every open record whose next manual step sends to a partner API and checks that send the way the record's own Push readiness chip does (requirements, conditions, push guards, payload build, partner contract), many records at a time. Stores what would be refused on Integrations → Ready to send. Reads only: nothing is sent or written back. Checks every such record, 100 at a time, letting requests through between chunks; a run cut short (deploy, restart) leaves the last complete board in place and the board says where it stopped."
         }
       )
       // #2801 — nightly restore drill: restores the newest database backup into a scratch

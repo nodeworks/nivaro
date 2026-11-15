@@ -33,7 +33,6 @@ import { FOCUSABLE } from './entry/entry-keys'
 import {
   LockReasonBadge,
   PresenceSoftLockStrip,
-  RemoteChangeGhost,
   useFieldAffordances,
   useFieldContextMenu,
   usePresenceSoftLock
@@ -54,6 +53,7 @@ import { isDerivedForRecord } from './live-rollups'
 import { useM2MStaging } from './M2MStagingContext'
 import { PersonalDefaultSlot, personalDefaultSlotFor } from './PersonalDefaultControl'
 import { PersonalDefaultHint } from './PersonalDefaultPill'
+import { isEmptyValue, PartnerNeedBadge, PartnerNeedHint, usePartnerNeeds } from './partner-needs'
 import {
   DisplayFormulaValue,
   FieldCounter,
@@ -65,6 +65,7 @@ import {
   RepeatLastButton,
   usePlacementTextContext
 } from './placement-behaviour'
+import { RemoteChangeMark, RemoteConflictNotice } from './RemoteChangeUi'
 import { jsonEqual, keepIfEqual } from './render-stability'
 import { softRuleWarning } from './soft-rules'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
@@ -757,6 +758,10 @@ export const FieldRow = memo(function FieldRow({
   const lockReason = affordances?.lockReasons[field.field]
   const applyToLines = affordances?.applyToLines[field.field]
   const duplicateHint = affordances?.duplicates?.[field.field]
+  // Idea 43: "Needed by <partner>" while empty; a hint on the field that picks the partner.
+  const partnerNeeds = usePartnerNeeds()
+  const partnerNeed = partnerNeeds?.fields[field.field]
+  const partnerHint = partnerNeeds?.hints[field.field]
   // Personal defaults (new records): pill + undo while the field holds its default, or a
   // quiet hint saying why the saved default was not applied.
   const personalDefaults = usePersonalDefaultsApi()
@@ -950,6 +955,13 @@ export const FieldRow = memo(function FieldRow({
     : value
   const cascadeRelatedCollection =
     m2mFarEndRel?.one_collection ?? m2oRelForField?.one_collection ?? undefined
+  // An M2M field reads filled from its links (saved, per the server, or staged here).
+  const partnerNeedShown =
+    !!partnerNeed &&
+    !locked &&
+    !field.readonly &&
+    (m2mRelForField ? !(partnerNeed.filled || m2mStagedForCascade.length > 0) : isEmptyValue(value))
+  const partnerHintShown = !!partnerHint && !locked && isEmptyValue(value)
 
   // Cascade filter computation — compiled by the SAME builder the quick
   // picker uses (helpers.buildCascadeFilter); this component only resolves
@@ -1138,6 +1150,9 @@ export const FieldRow = memo(function FieldRow({
               {fieldIsRecommended(field) && <RecommendedMarker />}
             </Label>
           )}
+          {partnerNeedShown && partnerNeed && (
+            <PartnerNeedBadge field={field.field} mark={partnerNeed} />
+          )}
           {shownText.note && (
             <TooltipProvider delayDuration={100}>
               <Tooltip>
@@ -1257,6 +1272,15 @@ export const FieldRow = memo(function FieldRow({
             name={field.field}
             label={label}
           />
+          {remoteChange && !remoteChange.conflict && (
+            <RemoteChangeMark
+              change={remoteChange}
+              now={draft[field.field]}
+              field={field}
+              relatedCollection={cascadeRelatedCollection ?? null}
+              onDismiss={() => affordances?.dismissRemoteChange(field.field)}
+            />
+          )}
           {(locked || field.readonly) && lockReason ? (
             <LockReasonBadge reason={lockReason} onHover={affordances?.onLockHover} />
           ) : locked ? (
@@ -1439,18 +1463,29 @@ export const FieldRow = memo(function FieldRow({
           {softWarning}
         </p>
       )}
+      {partnerHintShown && (
+        <PartnerNeedHint field={field.field} label={label || titleCase(field.field)} />
+      )}
       {personalDefaultHint && !personalDefaultApplied && (
         <PersonalDefaultHint field={field.field} text={personalDefaultHint} />
       )}
       {duplicateHint && <DuplicateNotice field={field.field} hint={duplicateHint} />}
-      {remoteChange && (
-        <RemoteChangeGhost
+      {remoteChange?.conflict && (
+        <RemoteConflictNotice
           change={remoteChange}
+          mine={draft[field.field]}
+          field={field}
           relatedCollection={cascadeRelatedCollection ?? null}
-          onDismiss={() => affordances?.dismissRemoteChange(field.field)}
+          locked={locked || !!field.readonly}
+          onKeepMine={() => affordances?.dismissRemoteChange(field.field)}
           onTakeTheirs={
             affordances?.takeRemoteChange
               ? () => affordances.takeRemoteChange?.(field.field)
+              : undefined
+          }
+          onMerge={
+            affordances?.mergeRemoteChange
+              ? (v) => affordances.mergeRemoteChange?.(field.field, v)
               : undefined
           }
         />

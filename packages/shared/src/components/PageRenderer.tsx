@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import {
+  createContext,
   useCallback,
   useContext,
   useDeferredValue,
@@ -22,6 +23,8 @@ import {
 import { useDebounced } from '../hooks/useDebounced'
 import { get, post } from '../lib/commands'
 import { describeError } from '../lib/error-message'
+import { type LiveQueryMeta, liveQueryMeta } from '../lib/live-queries'
+import { useLiveFade } from '../lib/live-screen'
 import { visiblePageWidgets } from '../lib/page-widget-access'
 import {
   explicitAllUrlParams,
@@ -39,7 +42,7 @@ import {
   useMyScopes
 } from '../lib/use-my-scopes'
 import { formatNumber, formatRelative, titleCase } from '../lib/utils'
-import { CacheStamp, type CustomQueryEnvelope } from './CacheStamp'
+import { type CustomQueryEnvelope, LiveCacheStamp } from './CacheStamp'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { MatrixEditor, type MatrixEditorConfig } from './MatrixEditor'
 import { QueryStatStrip, type QueryWidgetStat } from './QueryStatStrip'
@@ -222,6 +225,24 @@ function MarkdownBody({ content }: { content: string }) {
   )
 }
 
+// ─── Live figures (realtime screens 2026-11-14) ───────────────────────────────
+
+/**
+ * The collections a page's figures come from (`liveReads` on PageRenderer). A write to one of
+ * them — another person's save, an announced import — refetches the page's query and widget
+ * reads through their normal (cached, permission-checked) routes, coalesced and spread out.
+ * Editors (matrix, record grid) keep their own reads, so a cell someone is typing in is never
+ * replaced.
+ */
+const PageLiveContext = createContext<LiveQueryMeta | null>(null)
+
+function usePageLiveMeta(): { live: LiveQueryMeta } | undefined {
+  const live = useContext(PageLiveContext)
+  return live ? liveQueryMeta(live) : undefined
+}
+
+const PAGE_LIVE_HEADS = new Set(['page-renderer-query', 'page-renderer-widget-data'])
+
 // ─── Widget data (table / kpi / recent-activity) ──────────────────────────────
 
 type WidgetData = { rows?: Record<string, unknown>[]; value?: number | null; label?: string | null }
@@ -236,7 +257,8 @@ function useWidgetData(slug: string, widget: PageRendererWidget, enabled: boolea
         .then((r) => r.data),
     enabled,
     retry: false,
-    staleTime: 30_000
+    staleTime: 30_000,
+    meta: usePageLiveMeta()
   })
 }
 
@@ -683,6 +705,7 @@ function SheetHeader({
   note?: string
 }) {
   const client = useNivaroClient()
+  const pageLive = usePageLiveMeta()
   const params = (config.params ?? {}) as Record<string, unknown>
   const { data, isPending, isError } = useQuery<CustomQueryEnvelope>({
     queryKey: ['page-renderer-query', config.query_slug, JSON.stringify(params)],
@@ -691,7 +714,8 @@ function SheetHeader({
         post(`/custom-queries/${config.query_slug}/execute`, { params })
       ),
     enabled: !!config.query_slug,
-    staleTime: 60_000
+    staleTime: 60_000,
+    meta: pageLive
   })
   return (
     <div
@@ -1279,6 +1303,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
   const [actionRun, setActionRun] = useState<ActionRunState | null>(null)
   const actionBusy = actionRun?.phase === 'running'
   const qcRef = useQueryClient()
+  const pageLive = usePageLiveMeta()
   // Live elapsed ticker while an action runs — visible progress for the long
   // stored-proc actions (a recalculation can run for tens of seconds).
   useEffect(() => {
@@ -1412,6 +1437,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
     },
     enabled: !!cfg.query_slug && scopeGateOpen,
     staleTime: 60_000,
+    meta: pageLive,
     // A filter change (FY, zone) keeps the table on screen, dimmed, until the
     // new answer lands: swapping it for the loader unmounted QueryTable and
     // reset its view state — "Hide empty rows" switched itself off (L13).
@@ -1487,7 +1513,8 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
     }
   }
   const cacheStamp = (
-    <CacheStamp
+    <LiveCacheStamp
+      scope={`query:${cfg.query_slug}`}
       envelope={envelope}
       onRefresh={refreshNow}
       refreshing={isFetching && !isPending}
@@ -1950,10 +1977,52 @@ export interface PageRendererProps {
   /** Hide the page-name header row (host renders its own chrome). */
   hideHeader?: boolean
   className?: string
+  /**
+   * Collections the page's figures are computed from. Set, the query and widget figures
+   * refresh when one of them changes (coalesced, at most every `liveGapMs`, spread over a few
+   * seconds across viewers) and changed figures fade in. Absent: no live refresh (as before).
+   */
+  liveReads?: string[]
+  /** Least time between two live refreshes of one figure (default 15 s). */
+  liveGapMs?: number
 }
 
-export function PageRenderer({ slug, hideHeader, className }: PageRendererProps) {
+export function PageRenderer({
+  slug,
+  hideHeader,
+  className,
+  liveReads,
+  liveGapMs
+}: PageRendererProps) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
+  const readsKey = (liveReads ?? []).filter(Boolean).join(',')
+  const liveMeta = useMemo<LiveQueryMeta | null>(
+    () =>
+      readsKey
+        ? {
+            reads: readsKey.split(','),
+            minGapMs: liveGapMs ?? 15_000,
+            // Server-cached figures are dropped a moment after the write (a few seconds'
+            // window): read after that, and spread the viewers out.
+            delayMs: 3500,
+            jitterMs: 3000
+          }
+        : null,
+    [readsKey, liveGapMs]
+  )
+  // Changed figures fade in after a live refresh (never on first load, never in an editor).
+  const [liveArm, setLiveArm] = useState(0)
+  useEffect(() => {
+    if (!liveMeta) return
+    return qc.getQueryCache().subscribe((e) => {
+      if (e.type !== 'updated' || e.action.type !== 'success') return
+      const q = e.query
+      if (!PAGE_LIVE_HEADS.has(String(q.queryKey[0])) || q.state.dataUpdateCount < 2) return
+      setLiveArm(Date.now())
+    })
+  }, [qc, liveMeta])
+  const fadeRef = useLiveFade(liveArm, { enabled: !!liveMeta })
   const { isAdmin } = useItemEditAuth()
   const outerDrill = useDrilldown()
   // The stack for the sheet PageRenderer hosts itself (see the outerDrill guard
@@ -2017,7 +2086,7 @@ export function PageRenderer({ slug, hideHeader, className }: PageRendererProps)
   const fillWidget = gridWidgets.find((w) => (w.config as { full_height?: boolean })?.full_height)
 
   const body = (
-    <div className={`flex h-full min-h-0 flex-col ${className ?? ''}`}>
+    <div ref={fadeRef} className={`flex h-full min-h-0 flex-col ${className ?? ''}`}>
       {!hideHeader && (
         <div className='shrink-0 pb-4'>
           <h1 className='text-lg font-semibold text-slate-900 dark:text-slate-100'>{page.name}</h1>
@@ -2099,8 +2168,9 @@ export function PageRenderer({ slug, hideHeader, className }: PageRendererProps)
     </div>
   )
 
+  const livePage = <PageLiveContext.Provider value={liveMeta}>{body}</PageLiveContext.Provider>
   // Host a drill sheet when the consumer didn't provide one.
-  if (outerDrill) return body
+  if (outerDrill) return livePage
   return (
     <DrilldownContext.Provider value={{ open: (t) => drill.push([t]) }}>
       {drillStack?.length ? (
@@ -2117,7 +2187,7 @@ export function PageRenderer({ slug, hideHeader, className }: PageRendererProps)
           onClose={() => drill.back(drillStack.length)}
         />
       ) : null}
-      {body}
+      {livePage}
     </DrilldownContext.Provider>
   )
 }

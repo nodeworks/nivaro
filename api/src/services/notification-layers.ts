@@ -20,6 +20,7 @@ export type RuleLayer = 'person' | 'role' | 'system'
 export const NOTIFY_CATEGORIES: NotifyCategory[] = [
   'mentions',
   'workflow',
+  'proposals',
   'sla',
   'watch',
   'alerts',

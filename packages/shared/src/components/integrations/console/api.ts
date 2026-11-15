@@ -7,6 +7,8 @@ import {
 } from '@tanstack/react-query'
 import { useNivaroClient } from '../../../context'
 import { del, get, patch, post } from '../../../lib/commands'
+import { useLiveRefresh } from '../../../lib/live-counts'
+import { useLiveRefetchInterval } from '../../../lib/live-queries'
 import { IMPORT_HEALTH_KEY } from '../../imports/ImportStalenessControl'
 import type {
   ActionResult,
@@ -20,6 +22,8 @@ import type {
   PartnerCard,
   PartnerDetailData,
   PartnersSummary,
+  ReadyBoard,
+  ReadyCheckAnswer,
   RowView,
   SignalSettingsEntry,
   SignalsSnapshot,
@@ -27,8 +31,51 @@ import type {
   SubmissionDetail
 } from './types'
 
+export const READY_BOARD_KEY = ['ready-to-send'] as const
+
+/** The newest ready-to-send board, only the records the viewer may read (idea 37). Polls while
+ *  a run is going so the board fills in when it finishes. */
+export function useReadyBoard() {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: READY_BOARD_KEY,
+    queryFn: () => client.request<{ data: ReadyBoard }>(get('/ready-to-send')).then((r) => r.data),
+    refetchInterval: (q) => (q.state.data?.running ? 5_000 : false)
+  })
+}
+
+/** Administrators: run the check now (202 — the board polls until it lands). */
+export function useRunReadyCheck() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => client.request(post('/ready-to-send/run')),
+    onSettled: () => qc.invalidateQueries({ queryKey: READY_BOARD_KEY })
+  })
+}
+
+/** "Check again" for one record, live, as the person asking. */
+export function useCheckReadyRecord() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (b: { collection: string; item: string }) =>
+      client
+        .request<{ data: ReadyCheckAnswer }>(post('/ready-to-send/check', b))
+        .then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: READY_BOARD_KEY })
+  })
+}
+
+/** The console's reads poll every minute; while its `integrations` topic is live that is only a
+ *  slow safety net (the pokes refresh them — see `useLiveIntegrations`). */
+function useConsolePoll(): number | false | undefined {
+  return useLiveRefetchInterval(60_000, { safetyMs: 5 * 60_000 })
+}
+
 export function useSignals(tab?: string) {
   const client = useNivaroClient()
+  const poll = useConsolePoll()
   return useQuery({
     queryKey: ['integration-signals', tab ?? 'all'],
     queryFn: () =>
@@ -37,7 +84,7 @@ export function useSignals(tab?: string) {
           get(`/integration-signals${tab ? `?tab=${encodeURIComponent(tab)}` : ''}`)
         )
         .then((r) => r.data),
-    refetchInterval: 60_000
+    refetchInterval: poll
   })
 }
 
@@ -155,6 +202,7 @@ export function useDismissRows() {
 
 export function usePartners() {
   const client = useNivaroClient()
+  const poll = useConsolePoll()
   return useQuery({
     queryKey: ['integration-partners'],
     queryFn: () =>
@@ -163,7 +211,7 @@ export function usePartners() {
           get('/integration-partners')
         )
         .then((r) => r.data),
-    refetchInterval: 60_000
+    refetchInterval: poll
   })
 }
 
@@ -220,6 +268,7 @@ export interface IntegrationEventFilters {
  */
 export function useIntegrationEvents(filters: IntegrationEventFilters) {
   const client = useNivaroClient()
+  const poll = useConsolePoll()
   return useInfiniteQuery({
     queryKey: [
       'integration-events',
@@ -255,7 +304,7 @@ export function useIntegrationEvents(filters: IntegrationEventFilters) {
     // A filter change keeps the old list on screen (dimmed) instead of
     // collapsing to skeletons.
     placeholderData: keepPreviousData,
-    refetchInterval: 60_000
+    refetchInterval: poll
   })
 }
 
@@ -423,5 +472,20 @@ export function useToggleSubscription() {
       }
     },
     onSettled: () => qc.invalidateQueries({ queryKey: ALERT_SUBSCRIPTIONS_KEY })
+  })
+}
+
+/**
+ * Keeps every tab of the console current: the server pokes the admin-only `integrations` topic
+ * when a signal row, a partner call, a submission or an obligation is written, and the open
+ * reads are re-read once per quiet window, in place (the lists keep their rows on screen while
+ * they refetch). Mount once, at the console root.
+ */
+export function useLiveIntegrations(): void {
+  useLiveRefresh({
+    topic: 'integrations',
+    keys: [['integration-signals'], ['integration-partners'], ['integration-events']],
+    quietMs: 3000,
+    maxWaitMs: 20_000
   })
 }

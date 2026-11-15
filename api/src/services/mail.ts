@@ -15,6 +15,7 @@ import {
   type MailBrandingLookup,
   resolveMailBranding
 } from './mail-branding.js'
+import { stampMailRecordLinks } from './mail-since-links.js'
 import { filterSuppressed, recordBouncesFromError } from './mail-suppressions.js'
 import type { NotifyCategory } from './notification-channels.js'
 import { overlaySettings } from './settings-overrides.js'
@@ -559,7 +560,11 @@ async function applyDigestDeferral(
   /** Filled with the addresses left out because their rules say "No email". */
   offOut?: string[],
   /** The record the mail is about: the daily summary links the held line to it. */
-  record?: { collection?: string | null; item?: string | number | null }
+  record?: {
+    collection?: string | null
+    item?: string | number | null
+    notification?: number | null
+  }
 ): Promise<string[]> {
   if (skip || recipients.length === 0) return recipients
   try {
@@ -774,6 +779,9 @@ export interface MailOptions {
   /** The record the email is about, when it differs from the logged
    *  `collection`/`item` context (otherwise those two already decide). */
   record?: { collection: string; id: string | number } | null
+  /** The inbox row this mail rides with (notifyUser): a mail held for the daily
+   *  summary is left out of it once that row was handled. */
+  notification_id?: number | null
 }
 
 /** The branding lookup a send derives from its options (#1463). */
@@ -915,6 +923,11 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
       html: safeHtml(safe ? `<p style="margin:0;white-space:pre-wrap;">${safe}</p>` : '')
     })
   }
+  // Realtime round 3 #2 — record links carry the send time (`?since=`), so the record page
+  // opened from this email can say what changed since it was sent.
+  const stamped = await stampMailRecordLinks(html, opts.text)
+  html = stamped.html
+  const text = stamped.text
   // Digest deferral FIRST, against the ORIGINAL recipients — the preference
   // belongs to the intended reader; test-mode redirection happens after, on
   // whatever still sends.
@@ -935,7 +948,7 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
     opts.category,
     opts.cadence === 'sender',
     off,
-    { collection: opts.collection, item: opts.item }
+    { collection: opts.collection, item: opts.item, notification: opts.notification_id ?? null }
   )
   await logSkipped(
     off.map((address) => ({ address, reason: NO_EMAIL_REASON })),
@@ -969,7 +982,7 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
         from: applySenderName(smtp.from, brand.from_name),
         subject: withEnvLabel(smtp, routed.subject),
         html,
-        text: opts.text
+        text
       },
       {
         subject: opts.subject,
@@ -1001,7 +1014,7 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
       from: applySenderName(smtp.from, brand.from_name),
       subject: withEnvLabel(smtp, routed.subject),
       html,
-      text: opts.text
+      text
     }
     await buildTransporter(smtp).sendMail({ ...message, to: routed.to })
     const id = await logMail(routed.to, opts.subject, 'sent', {
@@ -1092,6 +1105,8 @@ export async function sendRawMail(opts: {
       // Template missing/broken — the unwrapped fragment still sends.
     }
   }
+  // Realtime round 3 #2 — record links carry the send time (`?since=`).
+  html = (await stampMailRecordLinks(html, undefined)).html
   // Digest deferral FIRST, against the ORIGINAL recipients; test-mode
   // redirection applies to whatever still sends.
   const original = (Array.isArray(opts.to) ? opts.to : String(opts.to).split(','))

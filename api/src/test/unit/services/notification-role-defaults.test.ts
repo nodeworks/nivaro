@@ -186,3 +186,42 @@ describe('decideDelivery layers', () => {
     expect(l.merged.matrix?.workflow).toEqual({ inapp: false, push: false, email: 'daily' })
   })
 })
+
+describe('Change proposals category (idea 6)', () => {
+  const proposal = {
+    subject: 'Change proposed on REQ-1 — review it',
+    category: 'proposals' as const,
+    channels: { inapp: true, email: true }
+  }
+
+  it('is its own category: stored per person, defaults like Workflow with no rules', async () => {
+    expect(sanitizeNotifyRules({ matrix: { proposals: { push: false } } }).matrix).toEqual({
+      proposals: { push: false }
+    })
+    state.roleRows = []
+    bustRoleDefaultsCache()
+    const p = await decideDelivery('u1', proposal, NOON)
+    const w = await decideDelivery('u1', { ...proposal, category: 'workflow' }, NOON)
+    expect({ inapp: p.inapp, push: p.push, email: p.email }).toEqual({
+      inapp: w.inapp,
+      push: w.push,
+      email: w.email
+    })
+    expect(p.inapp).toBe(true)
+    expect(p.push).toBe(true)
+  })
+
+  it('muting Change proposals leaves Workflow alone, and the other way round', async () => {
+    state.roleRows = []
+    bustRoleDefaultsCache()
+    state.user.preferences = prefs({ matrix: { proposals: { inapp: false } } })
+    bustNotifyPrefsCache()
+    expect((await decideDelivery('u1', proposal, NOON)).inapp).toBe(false)
+    expect((await decideDelivery('u1', { ...proposal, category: 'workflow' }, NOON)).inapp).toBe(
+      true
+    )
+    state.user.preferences = prefs({ matrix: { workflow: { inapp: false } } })
+    bustNotifyPrefsCache()
+    expect((await decideDelivery('u1', proposal, NOON)).inapp).toBe(true)
+  })
+})

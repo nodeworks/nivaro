@@ -6,8 +6,8 @@ import { clearMetadataCache } from '../services/collections.js'
 import { announceConfigChanged, collectionHint, isConfigWrite } from '../services/config-live.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
 import { bustLayoutReferences } from '../services/layout-references.js'
+import { announcePermissionChange, permissionTarget } from '../services/permission-live.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
-import { accessAnnouncement, announceAccessChanged } from '../services/record-events.js'
 import { clearRelationLimitCache } from '../services/relation-limits.js'
 import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { bustSectionLockCache } from '../services/section-locks.js'
@@ -61,6 +61,7 @@ import { bulkActionsRoutes } from './bulk-actions.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { cacheConfigRoutes } from './cache-config.js'
 import { catalogRelatedRoutes } from './catalog-related.js'
+import { changeProposalRoutes } from './change-proposals.js'
 import { changeSetsRoutes } from './change-sets.js'
 import { changesRoutes } from './changes.js'
 import { chaosRoutes } from './chaos.js'
@@ -185,6 +186,7 @@ import { layoutUsageRoutes } from './layout-usage.js'
 import { layoutWhyRoutes } from './layout-why.js'
 import { legalHoldRoutes } from './legal-holds.js'
 import { lineageRoutes } from './lineage.js'
+import { livePreferenceRoutes } from './live-preference.js'
 import { mailRoutes } from './mail.js'
 import { mailLogReadRoutes, mailLogRoutes } from './mail-log.js'
 import { mailSuppressionRoutes } from './mail-suppressions.js'
@@ -228,6 +230,7 @@ import { overviewRoutes } from './overview.js'
 import { overviewPageRoutes } from './overview-page.js'
 import { pagesRoutes } from './pages.js'
 import { partnerDependencyRoutes } from './partner-dependencies.js'
+import { partnerNeedsRoutes } from './partner-needs.js'
 import { payloadTemplateRoutes } from './payload-templates.js'
 import { pdfTemplatesRoutes } from './pdf-templates.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
@@ -254,15 +257,20 @@ import { pushRoutes } from './push.js'
 import { qualityCheckRoutes } from './quality-checks.js'
 import { queuesRoutes } from './queues.js'
 import { readinessRoutes } from './readiness.js'
+import { readyToSendRoutes } from './ready-to-send.js'
 import { realtimeBuildRoutes, realtimeRoutes, recordViewersRoutes } from './realtime.js'
+import { realtimeOutsideWritesRoutes } from './realtime-outside-writes.js'
+import { realtimeTrustRoutes } from './realtime-trust.js'
 import { realtimeVerifyRoutes } from './realtime-verify.js'
 import { realtimeWorkerRoutes } from './realtime-worker.js'
+import { recordGlanceRoutes } from './record-glance.js'
 import { recordGraphRoutes } from './record-graph.js'
 import { recordIntegrationsRoutes } from './record-integrations.js'
 import { recordLinkRoutes } from './record-links.js'
 import { recordMergeRoutes } from './record-merge.js'
 import { recordMetaRoutes } from './record-meta.js'
 import { recordPromotionRoutes } from './record-promotion.js'
+import { recordSplitRoutes } from './record-split.js'
 import { recordTemplatesRoutes } from './record-templates.js'
 import { recordViewRoutes } from './record-views.js'
 import { referencedByRoutes } from './referenced-by.js'
@@ -301,6 +309,7 @@ import { sessionReplaySpecRoutes } from './session-replay-spec.js'
 import { settingsRoutes } from './settings.js'
 import { setupRoutes } from './setup.js'
 import { shareLinksRoutes } from './share-links.js'
+import { signInTroubleshooterRoutes } from './sign-in-troubleshooter.js'
 import { slaRoutes } from './sla.js'
 import { slowScreensRoutes } from './slow-screens.js'
 import { sqlChecksRoutes } from './sql-checks.js'
@@ -418,10 +427,12 @@ export async function registerRoutes(app: FastifyInstance) {
   })
   // #1925: a write that may change who reads which records tells open record
   // pages to re-check their own access (payload-free, coalesced).
+  // rt2 #18: only the people the change can touch (a role's holders, the person named, the
+  // requester's role) — services/permission-live.ts; the tenant when it cannot say.
   app.addHook('onResponse', async (req, reply) => {
     if (reply.statusCode >= 400) return
-    const who = accessAnnouncement(req)
-    if (who) announceAccessChanged(who === 'tenant' ? {} : who)
+    const target = permissionTarget(req)
+    if (target) void announcePermissionChange(target)
   })
   // The Online list shows each person's role, name and zones from their user row: a write that
   // may change them refreshes every open list (after each replica's short answer cache).
@@ -470,6 +481,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // /delegation/:userId/remind, /access-requests/:id/vouch.
   await app.register(teamMiscRoutes)
   await app.register(myWorkRoutes)
+  // Propose a change on a record locked after approval (idea 6, migration 527).
+  await app.register(changeProposalRoutes, { prefix: '/change-proposals' })
   // The admin Overview page (route `/`): figures, last-visit digest, layout + pins.
   await app.register(overviewPageRoutes, { prefix: '/overview' })
   await app.register(roleChecklistRoutes)
@@ -482,9 +495,16 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(catalogRelatedRoutes)
   // What the record form shows about partner integrations (#609 #615 #616 #617).
   await app.register(recordIntegrationsRoutes)
+  await app.register(partnerNeedsRoutes, { prefix: '/partner-needs' })
+  // Idea 37: Integrations console → Ready to send (nightly partner-send preflight board).
+  await app.register(readyToSendRoutes)
   await app.register(recordViewRoutes)
+  // rt3 #14/#16/#17 — unseen changes before a move, record hover cards, file processing status.
+  await app.register(recordGlanceRoutes)
   // #3227 — role starter sidebar layouts (a person's own rides preferences.nav_layout)
   await app.register(navLayoutRoutes, { prefix: '/nav-layout' })
+  // Realtime round 3 #24 — Live updates role defaults (a person's own rides preferences.live_mode)
+  await app.register(livePreferenceRoutes, { prefix: '/live-preference' })
   // Collections page: collections an admin pins to the top for everyone
   await app.register(collectionPinRoutes, { prefix: '/collection-pins' })
   await app.register(meNotificationRoutes)
@@ -556,8 +576,12 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(realtimeRoutes, { prefix: '/realtime' })
   // #2937 — sign-in only: is this tab on an old build (reload old tabs when idle).
   await app.register(realtimeBuildRoutes, { prefix: '/realtime' })
+  // Realtime ideas 14/15 — missed-update beacons (signed in) + their report (admin).
+  await app.register(realtimeTrustRoutes, { prefix: '/realtime' })
   // #2463 / #2477 / #2478 / #2760 — realtime verification tooling (admin).
   await app.register(realtimeVerifyRoutes, { prefix: '/realtime' })
+  // Outside-write watcher setting + what it caught (admin).
+  await app.register(realtimeOutsideWritesRoutes, { prefix: '/realtime' })
   // #2475 — the SharedWorker script (no sign-in: code, not data); apart from the admin routes.
   await app.register(realtimeWorkerRoutes, { prefix: '/realtime' })
   await app.register(trafficMapRoutes, { prefix: '/traffic-map' })
@@ -730,6 +754,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(collectionPresetsRoutes, { prefix: '/collection-presets' })
   await app.register(fieldTranslationsRoutes, { prefix: '/field-translations' })
   await app.register(subRowsRoutes, { prefix: '/sub-rows' })
+  // Idea 4: move a record's ticked lines to a new record (browser_config.line_split).
+  await app.register(recordSplitRoutes, { prefix: '/record-split' })
   await app.register(addendumsRoutes, { prefix: '/addendums' })
   await app.register(tasksRoutes, { prefix: '/tasks' })
   await app.register(supportRoutes, { prefix: '/support' })
@@ -816,6 +842,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(oauthConnectionRoutes)
   // Signed-in phones (device grants): list + sign out, own and admin.
   await app.register(deviceRoutes)
+  await app.register(signInTroubleshooterRoutes)
   await app.register(mcpConnectionRoutes, { prefix: '/mcp-connections' })
   // #3205 / #3214 connection limits + tool kits, #3206 composite tool suggestions,
   // #3215 tool contract tests.

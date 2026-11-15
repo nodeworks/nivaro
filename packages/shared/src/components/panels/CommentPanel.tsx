@@ -16,25 +16,26 @@ import { toast } from 'sonner'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post } from '../../lib/commands'
+import { stripCommentImages } from '../../lib/comment-images'
 import { usePresenceOnlinePoll } from '../../lib/presence-live'
-import {
-  signalSentence,
-  useRecordSignalPeers,
-  useRecordSignalSender
-} from '../../lib/presence-signals'
+import { signalSentence, useDraftTypingSignal, useNoteTypists } from '../../lib/presence-signals'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
+import { type SeenEntry, useNewSince } from '../../lib/seen-since'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import { formatDateTime, formatRelative, titleCase } from '../../lib/utils'
 import { AgentBadge } from '../AgentBadge'
 import { AutolinkedText } from '../AutolinkedText'
 import { InboundRequestPopover } from '../integrations/InboundRequest'
 import { useFieldComments } from '../item-edit/field-comments-context'
+import { RelativeTime } from '../RelativeTime'
 import { UserAvatar } from '../UserAvatar'
 import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Button } from '../ui/button'
 import { Separator } from '../ui/separator'
 import { Textarea } from '../ui/textarea'
+import { CommentBody, CommentImageStrip, imageDropProps, useCommentImages } from './CommentImages'
 import { RecordEventPathSheet } from './IntegrationActivitySection'
+import { NewSinceChip } from './NewSinceChip'
 
 interface Comment {
   id: string
@@ -182,10 +183,13 @@ function mentionHandle(u: MentionUser): string {
 export function MentionTextarea({
   value,
   onChange,
+  onImages,
   ...textareaProps
 }: {
   value: string
   onChange: (v: string) => void
+  /** Pasted or dropped images (a screenshot); omit and the box takes text only. */
+  onImages?: (files: File[]) => void
 } & Omit<React.ComponentProps<typeof Textarea>, 'value' | 'onChange'>) {
   const client = useNivaroClient()
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -204,7 +208,7 @@ export function MentionTextarea({
     enabled: !!mention && debouncedQuery.length >= 2,
     staleTime: 30_000
   })
-  // Online people first (#2405). Same query key + shape as the chat panel's
+  // The online dot (#2405, rt4 #22). Same query key + shape as the chat panel's
   // presence read, so the two share one cache entry.
   const presencePoll = usePresenceOnlinePoll(15_000, !!mention)
   const { data: presence } = useQuery({
@@ -221,7 +225,9 @@ export function MentionTextarea({
     const p = presence?.data?.find((r) => String(r.user_id).toUpperCase() === id.toUpperCase())
     return !p ? 2 : p.is_idle || p.away ? 1 : 0
   }
-  const users = [...fetchedUsers].sort((a, b) => onlineState(a.id) - onlineState(b.id))
+  // A dot only (rt4 #22): the list keeps the server's order — people never jump about as
+  // others come and go.
+  const users = fetchedUsers
   // Role mentions (#441): "@finance-approvers" fans server-side to every
   // member of the role. /chat/roles is the non-admin-readable role list.
   const { data: allRoles = [] } = useQuery<Array<{ id: string; name: string }>>({
@@ -333,6 +339,7 @@ export function MentionTextarea({
     <div className='relative'>
       <Textarea
         {...textareaProps}
+        {...(onImages ? imageDropProps(onImages) : {})}
         ref={ref}
         value={value}
         onChange={(e) => {
@@ -536,7 +543,7 @@ export function notePreviewText(
     | { kind: 'related' | 'note'; note: { text: string } }
 ): string {
   const raw = e.kind === 'comment' ? e.comment.text : e.note.text
-  const flat = e.kind === 'comment' ? raw.replace(/<[^>]*>/g, ' ') : raw
+  const flat = e.kind === 'comment' ? stripCommentImages(raw).replace(/<[^>]*>/g, ' ') : raw
   return flat
     .replace(/@\[([^\]]+)\]/g, '@$1')
     .replace(/\s+/g, ' ')
@@ -676,7 +683,7 @@ function RecordedNote({
               <span className='truncate text-[11px] text-slate-400'>{note.context}</span>
             ))}
           <span className='text-[11px] text-slate-400' data-tip={formatDateTime(note.created_at)}>
-            {formatRelative(note.created_at)}
+            <RelativeTime value={note.created_at} />
           </span>
           {note.source === 'inbound' && note.inbound && (
             <InboundRequestPopover
@@ -823,6 +830,7 @@ export function CommentPanel({
   // Follows the layout's "Starts open" whenever it changes (the editor's toggle, live).
   const [expanded, setExpanded] = useStartsOpen(defaultExpanded, false)
   const [draft, setDraft] = useState('')
+  const images = useCommentImages()
   const onUnsentDraftRef = useRef(onUnsentDraft)
   onUnsentDraftRef.current = onUnsentDraft
   useEffect(() => {
@@ -844,23 +852,12 @@ export function CommentPanel({
       setCleaning(false)
     }
   }
-  // Typing (#263, #1721): co-viewers' "writing a note…" and our own signal while the draft
-  // changes (throttled; the signal lapses on its own a few seconds after the last keystroke).
-  const typingNames = useRecordSignalPeers(collection, item, 'note')
-  const sendNoteSignal = useRecordSignalSender(collection, item, 'note')
-  const lastTypedOutRef = useRef(0)
-  useEffect(() => {
-    if (!draft.trim()) {
-      if (lastTypedOutRef.current) sendNoteSignal('stop')
-      lastTypedOutRef.current = 0
-      return
-    }
-    const now = Date.now()
-    if (now - lastTypedOutRef.current < 2500) return
-    lastTypedOutRef.current = now
-    sendNoteSignal('start')
-  }, [draft, sendNoteSignal])
-  useEffect(() => () => sendNoteSignal('stop'), [sendNoteSignal])
+  // Typing (#263, #1721, realtime round 2): co-viewers' "Beth is replying…" — on this thread
+  // and on the field threads this viewer may read (the server sends a field's signal only to
+  // its readers) — and our own signal while the draft changes: throttled, `stop` after 6 s
+  // without a keystroke and on send.
+  const typists = useNoteTypists(collection, item)
+  useDraftTypingSignal(collection, item, draft)
   const [editingId, setEditingId] = useState<string | null>(null)
   // Delete asks first (in place, second click deletes): one stray click on
   // the trash icon used to remove a comment with no way back.
@@ -920,6 +917,20 @@ export function CommentPanel({
     return c
   }, [threadEntries])
   const badgeCount = isNew ? (queuedComments ?? []).length : kindCounts.people
+  // "2 new" while folded shut: comments others wrote since you last had it open.
+  const commentsSeen = useMemo<SeenEntry[]>(
+    () => (data ?? []).map((c) => ({ at: c.created_at, by: c.user?.id ?? null })),
+    [data]
+  )
+  const newComments = useNewSince({
+    userId,
+    collection,
+    item,
+    tab: 'comments',
+    open: expanded,
+    entries: commentsSeen,
+    ready: !isNew && !!data
+  })
   const visibleEntries = useMemo(() => {
     const q = noteQuery.trim().toLowerCase()
     return threadEntries.filter((e) => {
@@ -946,6 +957,7 @@ export function CommentPanel({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey })
       setDraft('')
+      images.reset()
     },
     onError: () => toast.error('Failed to post comment')
   })
@@ -999,12 +1011,15 @@ export function CommentPanel({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!draft.trim()) return
     if (isNew && onQueueComment) {
+      if (!draft.trim()) return
       onQueueComment(draft.trim())
       setDraft('')
     } else {
-      create.mutate(draft.trim())
+      if (images.uploading) return
+      const text = images.compose(draft)
+      if (!text) return
+      create.mutate(text)
     }
   }
 
@@ -1038,6 +1053,7 @@ export function CommentPanel({
               {badgeCount}
             </span>
           )}
+          <NewSinceChip count={newComments} tab='comments' />
           <ChevronDown
             className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
           />
@@ -1114,10 +1130,12 @@ export function CommentPanel({
                 <MentionTextarea
                   value={draft}
                   onChange={setDraft}
-                  placeholder='Write a comment…'
+                  onImages={images.addFiles}
+                  placeholder='Write a comment… paste or drop a screenshot to attach it'
                   rows={3}
                   className='text-[13px]'
                 />
+                <CommentImageStrip images={images} />
                 <div className='flex items-center justify-between'>
                   <p className='text-[11px] text-slate-400'>
                     Type @ plus two letters to mention a teammate, or @owners to notify everyone
@@ -1133,21 +1151,35 @@ export function CommentPanel({
                     >
                       {cleaning ? '…' : '✨ Polish'}
                     </button>
-                    <Button type='submit' size='sm' disabled={!draft.trim() || create.isPending}>
-                      {create.isPending ? 'Posting…' : 'Comment'}
+                    <Button
+                      type='submit'
+                      size='sm'
+                      disabled={
+                        (!draft.trim() && !images.hasReady) || images.uploading || create.isPending
+                      }
+                    >
+                      {create.isPending ? 'Posting…' : images.uploading ? 'Uploading…' : 'Comment'}
                     </Button>
                   </span>
                 </div>
               </form>
-              {typingNames.length > 0 && (
+              {typists.map((t) => (
                 <p
-                  className='flex items-center gap-1.5 text-[11.5px] italic text-slate-400'
-                  data-note-typing
+                  key={t.field ?? ''}
+                  className='flex items-center gap-1.5 text-[11.5px] italic text-slate-400 dark:text-slate-500'
+                  data-note-typing={t.field ?? ''}
+                  aria-live='polite'
                 >
-                  <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
-                  {signalSentence(typingNames, 'writing a note')}…
+                  <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan motion-reduce:animate-none' />
+                  {signalSentence(
+                    t.names,
+                    t.field
+                      ? `replying on ${fieldComments?.labelOf(t.field) ?? titleCase(t.field)}`
+                      : 'replying'
+                  )}
+                  …
                 </p>
-              )}
+              ))}
               <Separator className='my-4' />
               {threadEntries.length > 0 && (
                 <div className='mb-3 flex flex-wrap items-center gap-1.5' data-notes-filters>
@@ -1260,7 +1292,7 @@ export function CommentPanel({
                               className='text-[11px] text-slate-400'
                               data-tip={formatDateTime(c.created_at)}
                             >
-                              {formatRelative(c.created_at)}
+                              <RelativeTime value={c.created_at} />
                             </span>
                             {c.updated_at && c.updated_at !== c.created_at && (
                               <span className='text-[10px] text-slate-300'>(edited)</span>
@@ -1375,9 +1407,10 @@ export function CommentPanel({
                               </div>
                             </div>
                           ) : (
-                            <p className='mt-0.5 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-600'>
-                              <AutolinkedText text={c.text} />
-                            </p>
+                            <CommentBody
+                              text={c.text}
+                              className='mt-0.5 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-600'
+                            />
                           )}
                           {!isEditing && <MentionReceipts comment={c} />}
                           {/* Reactions: aggregated chips + hover palette */}

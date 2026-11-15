@@ -1,5 +1,6 @@
 import {
   AutofillRunsChip,
+  announceLocalPrefs,
   applyDisplayPrefs,
   configureTabSound,
   configureUserSync,
@@ -88,9 +89,12 @@ import {
   HelpVideoRecordingProvider,
   HuddleCallLayer,
   IncidentBanner,
+  ItemEditAuthContext,
   isCodeError,
   isRecordPopout,
   JobsTray,
+  LiveAnnouncer,
+  LivePreferenceHost,
   NavigationContext,
   NivaroProvider,
   OfflineBanner,
@@ -98,13 +102,16 @@ import {
   RealtimeContext,
   RealtimeStatusBanner,
   RecordOutboxHost,
+  RecordPeekHost,
   recordNavigation,
   restoreTrailScroll,
+  ScreenRefreshButton,
   SentViewCards,
   SOMETHING_WENT_WRONG,
   scrollPathOf,
   scrollToRestore,
   setTrailScroll,
+  TabCountHost,
   TipLayer,
   useClientChaosGate,
   useLiveQueryBridge
@@ -127,6 +134,7 @@ import { reportRenderCrash } from '@/lib/global-error-report'
 import { hubForPath, isPathDisabled } from '@/lib/hubs'
 import { useT } from '@/lib/i18n'
 import { openViewAsTab, readMasquerade } from '@/lib/masquerade'
+import { registerThemePersist, useTheme } from '@/lib/theme'
 import { usePagePresence } from '@/lib/use-page-presence'
 import { useSessionRecorder } from '@/lib/use-session-recorder'
 import { useSettings } from '@/lib/useSettings'
@@ -302,6 +310,26 @@ export function AppLayout() {
   // Timezone preference (#31): the shared formatters render in the user's
   // chosen zone once set; browser default otherwise.
   const { user: authUser } = useAuth()
+  // Theme follows the person across devices (rt4 #19): a choice made here is saved to their
+  // account, and one made elsewhere (authUser.preferences.theme, refetched on prefs:changed)
+  // is applied here. Other tabs of this browser follow through the storage event.
+  // A "View as" tab is someone else on this browser's storage: it neither saves nor adopts.
+  const viewingAs = !!readMasquerade()
+  const { adoptServerTheme } = useTheme()
+  useEffect(() => {
+    if (viewingAs) return
+    registerThemePersist((t) => {
+      void api
+        .patch('/users/me/preferences', { theme: t })
+        .then(() => announceLocalPrefs(['theme']))
+        .catch(() => {})
+    })
+    return () => registerThemePersist(null)
+  }, [viewingAs])
+  const serverTheme = (authUser?.preferences as Record<string, unknown> | undefined)?.theme
+  useEffect(() => {
+    if (!viewingAs) adoptServerTheme(serverTheme)
+  }, [serverTheme, adoptServerTheme, viewingAs])
   useEffect(() => {
     // Display prefs (#229/#230/#232/#411): the shared formatters honor them and
     // Text size scales the root — the same applyDisplayPrefs efp-new's shell runs.
@@ -720,6 +748,8 @@ export function AppLayout() {
                 {/* Footer utilities */}
                 <div className='flex shrink-0 flex-col items-center gap-0.5 border-t border-white/[0.07] px-1.5 py-2'>
                   <TeamChatDock />
+                  {/* Realtime idea 12: refresh this page's data in place (never the page). */}
+                  <ScreenRefreshButton variant='rail' />
                   <NotificationBell collapsed compact />
                   {/* Beside chat and the bell rather than buried in System: "what
                   changed" is something people reach for from anywhere, not a
@@ -982,6 +1012,10 @@ export function AppLayout() {
         <KeyboardShortcuts />
         <ForceRefreshBanner />
         <LiveQueryBridge />
+        {/* Realtime round 2: the waiting-on-you count in the tab title + icon (#20) and one
+            polite screen-reader region for live changes (#22). Both honour Profile → Display. */}
+        <TabCountHost />
+        <LiveAnnouncer />
         <SystemBusy />
         <AutofillChips />
         <JobsTrayHost />
@@ -990,8 +1024,28 @@ export function AppLayout() {
         <OutboxHost userId={authUser?.id ?? null} />
         <HuddleCallHost />
         <SentViewHost />
+        {/* Realtime #17: one record sheet for the whole app (My Work, the bell, notifications,
+            search, record links in comments open records in it). */}
+        <RecordPeekHost wrapSheet={(sheet) => <PeekSheetProviders>{sheet}</PeekSheetProviders>} />
       </TooltipProvider>
     </RealtimeContext.Provider>
+  )
+}
+
+/** What the app record sheet's form needs (realtime #17): the pages provide these lower down. */
+function PeekSheetProviders({ children }: { children: ReactNode }) {
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <NavigationContext.Provider value={{ navigate, itemUrl: defaultItemUrl }}>
+        <ItemEditAuthContext.Provider
+          value={{ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }}
+        >
+          {children}
+        </ItemEditAuthContext.Provider>
+      </NavigationContext.Provider>
+    </NivaroProvider>
   )
 }
 
@@ -1198,6 +1252,8 @@ function UserSyncHost() {
   return (
     <NivaroProvider client={announcementsClient}>
       <UserSyncInner onPrefsChanged={() => void refetch()} />
+      {/* Realtime round 3 #24 — Profile → Display → Live updates (Normal / Calm / Off). */}
+      <LivePreferenceHost />
     </NivaroProvider>
   )
 }

@@ -4,7 +4,10 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { toast } from 'sonner'
 import { useApiFetchConfig, useItemEditAuth, useNivaroClient } from '../../context'
 import { get, patch, post } from '../../lib/commands'
+import { startFileUpload } from '../../lib/upload-file'
+import type { PresenceState } from '../../lib/use-online-users'
 import { cn } from '../../lib/utils'
+import { PresenceDot } from '../PresenceDot'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
   type ChatMessage,
@@ -240,18 +243,17 @@ export const ChatComposer = forwardRef<
       if (matches(name) || (u.email ?? '').toLowerCase().startsWith(q))
         push({ user_id: u.id, display_name: name, sub: null, kind: 'person' })
     }
-    // People who can answer now come first (#2405): online, then idle, then the rest.
-    // Array.prototype.sort is stable, so the existing ranking holds within each tier.
-    const tier = (c: Candidate) => {
-      if (c.kind !== 'person') return -1
-      const u = (cfg.onlineUsers as ChatOnlineUser[]).find(
-        (o) => String(o.user_id).toUpperCase() === c.user_id.toUpperCase()
-      )
-      return u ? (u.is_idle ? 1 : 0) : 2
-    }
-    const ranked = out.map((c, i) => ({ c, i, t: tier(c) })).sort((a, b) => a.t - b.t || a.i - b.i)
-    return ranked.map((r) => r.c).slice(0, 8)
+    // Order is the ranking above; presence shows as a dot only (rt4 #22).
+    return out.slice(0, 8)
   }, [mentionQuery, info, dmPeers, cfg.onlineUsers, searched, botName, isChannel, canBroadcast, me])
+  // The dot beside a person in the @ list (rt4 #22) — read from the same presence list the
+  // chat already holds, so it follows the viewer's own visibility rules.
+  const presenceOf = (id: string): PresenceState | undefined => {
+    const u = (cfg.onlineUsers as ChatOnlineUser[]).find(
+      (o) => String(o.user_id).toUpperCase() === id.toUpperCase()
+    )
+    return u ? (u.is_idle ? 'idle' : 'online') : undefined
+  }
 
   // ── # record picker (#934) ────────────────────────────────────────────────
   const { data: roomTypes } = useQuery(chatRoomTypesQuery(client))
@@ -324,53 +326,25 @@ export const ChatComposer = forwardRef<
   const startUploads = (list: File[], after?: (id: string) => Promise<void>) => {
     for (const f of list.slice(0, 10)) {
       const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
-      const xhr = new XMLHttpRequest()
-      const entry: PendingFile = {
-        key,
-        name: f.name,
-        type: f.type || null,
-        progress: 0,
-        id: null,
-        xhr,
-        error: null
-      }
-      setFiles((prev) => [...prev, entry])
       const update = (patch: Partial<PendingFile>) =>
         setFiles((prev) => prev.map((p) => (p.key === key ? { ...p, ...patch } : p)))
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) update({ progress: e.loaded / e.total })
-      }
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const id = (JSON.parse(xhr.responseText) as { data: { id: string } }).data.id
-            if (after) {
-              after(id)
-                .catch(() => null)
-                .then(() => update({ id, progress: 1, xhr: null }))
-            } else {
-              update({ id, progress: 1, xhr: null })
-            }
-          } catch {
-            update({ error: 'Upload failed', xhr: null })
+      const { xhr } = startFileUpload(fetchCfg, f, {
+        onProgress: (progress) => update({ progress }),
+        onDone: (id) => {
+          if (after) {
+            after(id)
+              .catch(() => null)
+              .then(() => update({ id, progress: 1, xhr: null }))
+          } else {
+            update({ id, progress: 1, xhr: null })
           }
-        } else {
-          let msg = 'Upload failed'
-          try {
-            msg = (JSON.parse(xhr.responseText) as { error?: string }).error ?? msg
-          } catch {
-            /* keep the generic message */
-          }
-          update({ error: msg, xhr: null })
-        }
-      }
-      xhr.onerror = () => update({ error: 'Upload failed', xhr: null })
-      xhr.open('POST', `${fetchCfg.apiBase}/files/upload`)
-      for (const [k, v] of Object.entries(fetchCfg.authHeaders)) xhr.setRequestHeader(k, v)
-      xhr.withCredentials = fetchCfg.credentials === 'include'
-      const fd = new FormData()
-      fd.append('file', f)
-      xhr.send(fd)
+        },
+        onError: (error) => update({ error, xhr: null })
+      })
+      setFiles((prev) => [
+        ...prev,
+        { key, name: f.name, type: f.type || null, progress: 0, id: null, xhr, error: null }
+      ])
     }
   }
   // A screen clip (#2458): the poster goes up first as its own file, then the
@@ -765,6 +739,7 @@ export const ChatComposer = forwardRef<
                       @
                     </span>
                   )}
+                  {c.kind === 'person' && <PresenceDot state={presenceOf(c.user_id)} />}
                   <span className='min-w-0 flex-1 truncate'>
                     {c.kind === 'here' || c.kind === 'channel'
                       ? `@${c.display_name}`

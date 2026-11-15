@@ -18,6 +18,7 @@ import { AccessSummaryCard } from './PersonAccessSummary'
 import { ActivityFeedCard, JourneyCard, SignInsCard, StatsCard } from './PersonActivity'
 import {
   ForceReloadCard,
+  LiveTraceCard,
   MergeCard,
   OffboardingCard,
   SignOutEverywhereCard
@@ -30,6 +31,7 @@ import { PersonHeader } from './PersonHeader'
 import { AboutCard, AvailabilityCard, PeopleCard, ResponsibilitiesCard } from './PersonOverview'
 import { PersonWeekCard } from './PersonWeek'
 import { SignedInDevices } from './SignedInDevices'
+import { SignInTroubleshooterCard } from './SignInTroubleshooter'
 import { SlowScreensCard } from './SlowScreensCard'
 import { useInvalidatePerson, usePersonProfile } from './types'
 
@@ -132,7 +134,11 @@ export function PersonProfile({
       <PersonHeader profile={profile} isAdmin={isAdmin} />
       {isAdmin && <SuspensionBanner profile={profile} />}
       {!isAdmin ? (
-        overview
+        <>
+          {/* Idea 32 — the support desk sees why someone cannot sign in (no network details). */}
+          {profile.sign_in_help && <SignInTroubleshooterCard profile={profile} />}
+          {overview}
+        </>
       ) : (
         <Tabs value={tab} onValueChange={(v) => setTab(v as PersonProfileTab)}>
           <TabsList
@@ -235,9 +241,12 @@ export function PersonProfile({
             )}
           </TabsContent>
           <TabsContent value='tools' className='mt-4 focus-visible:outline-none'>
-            <div className='grid gap-4 lg:grid-cols-2'>
+            {/* Idea 32 — why their sign-ins fail; reads an admin-only route, so only on this tab. */}
+            {tab === 'tools' && <SignInTroubleshooterCard profile={profile} />}
+            <div className='mt-4 grid gap-4 lg:grid-cols-2'>
               <div className='space-y-4'>
                 <ForceReloadCard profile={profile} />
+                <LiveTraceCard profile={profile} />
                 <SignOutEverywhereCard profile={profile} />
                 <MergeCard profile={profile} />
               </div>

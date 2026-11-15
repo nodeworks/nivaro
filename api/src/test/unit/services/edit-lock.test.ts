@@ -116,6 +116,7 @@ import {
   EditLockedError,
   editLockVerdictFor,
   forgetEditLockPlan,
+  lineLockChildrenOf,
   lockHolderVerdict,
   ownRowLinks,
   parseEditLock,
@@ -902,5 +903,23 @@ describe('move-requirement writes', () => {
         reqAs('U-RODNEY')
       )
     ).rejects.toThrow(/only the person who created it/)
+  })
+})
+
+describe('line locks (realtime item 7) — which rows lock on their own', () => {
+  it('lines of a parent with line locks are judged by their own lock; others stay with the record', () => {
+    const { heldLinks } = ownRowLinks(new Map(), RELATIONS, new Set(['orders.lines']))
+    const children = lineLockChildrenOf(heldLinks, new Set(['orders']))
+    expect([...children]).toEqual(
+      [...heldLinks.entries()]
+        .filter(([, ls]) => ls.some((l) => l.parent === 'orders'))
+        .map(([c]) => c)
+    )
+    expect(children.has('order_lines')).toBe(true)
+    expect(children.has('workflows_divisions')).toBe(false)
+  })
+  it('no parent with line locks = nothing changes', () => {
+    const { heldLinks } = ownRowLinks(new Map(), RELATIONS, new Set(['orders.lines']))
+    expect(lineLockChildrenOf(heldLinks, new Set()).size).toBe(0)
   })
 })

@@ -23,6 +23,7 @@ import { userErrorMessage } from '../../lib/safe-error'
 import { formatRelative } from '../../lib/utils'
 import { CollectionImportBanner } from '../CollectionImportBanner'
 import { markLiveRecordWrite } from './live-record-marks'
+import { fileQueryOfRecord, relatedQueryOfRecord, wideSpreadDelay } from './live-related'
 
 /** Why an open record can no longer be saved (#1871 deleted, #1925 access). */
 export interface RecordGone {
@@ -110,7 +111,9 @@ export const RECORD_QUERY_HEADS = [
   'record-integrity',
   // Per-state extension actions (Push to Fusion): someone else's move changes them (army 11 F-12).
   'item-actions',
-  'ext-item-actions'
+  'ext-item-actions',
+  // The SLA clock (SlaClock.tsx slaStatusKey).
+  'sla-breach'
 ] as const
 
 /** Remove every cached query about one record (any id spelling). */
@@ -227,6 +230,7 @@ export function RecordLiveSync({
   const [importing, setImporting] = useState(false)
   const importTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const relatedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const openedAt = useRef(Date.now())
   const lastMoveToast = useRef<number | null>(null)
   const onGoneRef = useRef(onGoneChange)
@@ -339,6 +343,16 @@ export function RecordLiveSync({
       ])
       if (batch.changedFields?.includes(LIVE_ASPECTS.state)) void announceMove()
     }
+    // rt2 #17 — who owns this record moved (owner matrix, delegation, out of office) while
+    // nobody wrote it: the owners chip and approval chain refetch quietly.
+    if (touched(LIVE_ASPECTS.owners) && !touched(LIVE_ASPECTS.state))
+      invalidate([
+        ['pipeline-all-owners', collection, itemId],
+        ['pipeline-instance-owners', collection, itemId],
+        ['pipeline-owners-resolved', collection, itemId],
+        ['approval-brief', collection, itemId]
+      ])
+    if (batch.aspectsOnly && batch.changedFields?.every((f) => f === LIVE_ASPECTS.owners)) return
     if (touched(LIVE_ASPECTS.addendums)) invalidate([['addendums', collection, itemId]])
     if (touched(LIVE_ASPECTS.comments))
       invalidate([
@@ -360,6 +374,23 @@ export function RecordLiveSync({
         ['erp-submissions', collection, itemId],
         ['record-integrations', collection, itemId]
       ])
+    // Realtime 3: the record's files changed (a file linked, renamed, replaced or removed by
+    // someone else) — its Files panels and file fields re-read as the viewer, quietly.
+    if (touched(LIVE_ASPECTS.files)) {
+      const isFiles = fileQueryOfRecord(collection, String(itemId))
+      void qc.invalidateQueries({ predicate: (q) => isFiles(q.queryKey) })
+    }
+    // Realtime 18: a child or linked record changed — line grids, link lists, the related
+    // panel and record widgets re-read. A collection-wide notice ('*', a burst past the
+    // server's cap) waits a random moment so every open record does not ask at once.
+    if (touched(LIVE_ASPECTS.related)) {
+      const isRelated = relatedQueryOfRecord(collection, String(itemId))
+      const run = () => void qc.invalidateQueries({ predicate: (q) => isRelated(q.queryKey) })
+      if (batch.ids.length > 0 && batch.ids.every((id) => id === '*')) {
+        if (relatedTimer.current) clearTimeout(relatedTimer.current)
+        relatedTimer.current = setTimeout(run, wideSpreadDelay())
+      } else run()
+    }
     // Header figures and "= 5 lines · …" captions are sums over this record's
     // lines and links: a remote write to the record OR its lines (a `$` aspect)
     // leaves them stale until the next reload (b09-N1 / b06-N10 / b01-N7).
@@ -369,6 +400,12 @@ export function RecordLiveSync({
         q.queryKey[1] === collection &&
         String(q.queryKey[2]) === String(itemId)
     })
+    // Realtime round 2: a child row (a line) of this record moved — the grids and captions
+    // that read them refresh; the record's own columns did not change.
+    if (batch.changedFields?.includes(LIVE_ASPECTS.related))
+      void qc.invalidateQueries({
+        predicate: (q) => q.queryKey[0] === 'o2m-rows' && String(q.queryKey[3]) === String(itemId)
+      })
     // A `$` aspect says a related surface moved, not the record's columns.
     if (batch.aspectsOnly) return
     // A raw bulk write (#1875, item '*') may include this record: refetch it
@@ -439,15 +476,19 @@ export function RecordLiveSync({
     () => () => {
       if (flashTimer.current) clearTimeout(flashTimer.current)
       if (importTimer.current) clearTimeout(importTimer.current)
+      if (relatedTimer.current) clearTimeout(relatedTimer.current)
     },
     []
   )
 
-  // #1870: who owns records changed somewhere (matrix, delegation, OOO, teams).
+  // #1870: who owns records changed somewhere (matrix, delegation, OOO, teams). rt2 #17: when
+  // the server checked the open records one by one (`checked`), this record already heard
+  // `$owners` if its owners moved; `queues` is the worklist re-sync, not about this page.
   useLiveEvent(
     'owners:changed',
-    () => {
-      if (goneRef.current) return
+    (p) => {
+      if (goneRef.current || p?.checked || p?.queues) return
+      if (Array.isArray(p?.collections) && !p.collections.includes(collection)) return
       invalidate([
         ['pipeline-instance-owners', collection, itemId],
         ['pipeline-owners-resolved', collection, itemId],

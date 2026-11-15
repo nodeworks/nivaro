@@ -7,6 +7,7 @@ import { chunkArray } from './db-batch.js'
 import { type DeferredSnippet, decodeDeferredSnippet } from './deferred-snippet.js'
 import { sendRawMail } from './mail.js'
 import { classifyNotification, emailModeFor, type NotifyPrefs } from './notification-channels.js'
+import { isHandledRow } from './notification-resolve.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
@@ -102,18 +103,31 @@ async function buildNotificationDigestSection(
     .where('timestamp', '>', window)
     .orderBy('timestamp', 'desc')
     .limit(MAX_DIGEST_NOTIFICATIONS)
-    .select('id', 'subject', 'message', 'collection', 'item', 'timestamp')) as Array<{
+    .select(
+      'id',
+      'subject',
+      'message',
+      'collection',
+      'item',
+      'timestamp',
+      'status',
+      'detail'
+    )) as Array<{
     id: number
     subject: string | null
     message: string | null
     collection: string | null
     item: string | null
     timestamp: Date | string
+    status: string | null
+    detail: unknown
   }>
   const np = (prefs?.['notification_prefs'] ?? null) as NotifyPrefs | null
   const legacy = prefs?.['email_digest']
+  // Handled since (settled by someone, retired, archived): no longer news.
   const kept = rows.filter(
-    (n) => emailModeFor(np, classifyNotification(n.subject ?? ''), legacy) !== 'off'
+    (n) =>
+      !isHandledRow(n) && emailModeFor(np, classifyNotification(n.subject ?? ''), legacy) !== 'off'
   )
   if (kept.length === 0) return null
   const lines: DigestLine[] = []
@@ -191,6 +205,48 @@ async function recordLinkFor(
   query?: string
 ): Promise<string | null> {
   return recordLink(collection, item, { recipientUserId: userId, query }).catch(() => null)
+}
+
+/**
+ * Pure: split held mails into the ones still worth listing and the ones whose
+ * inbox row was handled before the summary went out (`handled` = row ids).
+ * A mail with no row to check stays.
+ */
+export function splitHandledDeferred<R extends { snippet: string | null }>(
+  rows: R[],
+  handled: Set<number>
+): { kept: R[]; dropped: R[] } {
+  const kept: R[] = []
+  const dropped: R[] = []
+  for (const r of rows) {
+    const n = decodeDeferredSnippet(r.snippet).notification
+    if (n != null && handled.has(n)) dropped.push(r)
+    else kept.push(r)
+  }
+  return { kept, dropped }
+}
+
+/** The recipient's own inbox rows among `ids` that were handled since. */
+export async function handledNotificationIds(userId: string, ids: number[]): Promise<Set<number>> {
+  const out = new Set<number>()
+  const want = [...new Set(ids.filter((n) => Number.isFinite(n)))]
+  if (want.length === 0) return out
+  try {
+    for (let i = 0; i < want.length; i += 500) {
+      const rows = (await db('nivaro_notifications')
+        .where({ recipient: userId })
+        .whereIn('id', want.slice(i, i + 500))
+        .select('id', 'status', 'detail')) as Array<{
+        id: number
+        status: string | null
+        detail: unknown
+      }>
+      for (const r of rows) if (isHandledRow(r)) out.add(Number(r.id))
+    }
+  } catch {
+    // Unknown = keep everything (a line too many beats a lost one).
+  }
+  return out
 }
 
 /**
@@ -565,10 +621,20 @@ export async function runDailyActionDigest(
 
   let sent = 0
   const flushedIds: number[] = []
+  // Held mails whose inbox row was handled before now: never listed, still flushed.
+  const handledFlush: number[] = []
   for (const [userId, email] of digestUsers) {
     const sections: DigestSection[] = []
 
-    const mine = deferredByUser.get(userId) ?? []
+    const held = deferredByUser.get(userId) ?? []
+    const handled = await handledNotificationIds(
+      userId,
+      held
+        .map((d) => decodeDeferredSnippet(d.snippet).notification)
+        .filter((n): n is number => n != null)
+    )
+    const { kept: mine, dropped } = splitHandledDeferred(held, handled)
+    if (!opts?.preserveDeferred) handledFlush.push(...dropped.map((d) => d.id))
     if (mine.length > 0) {
       sections.push({
         title: `Updates since your last summary (${mine.length})`,
@@ -679,6 +745,7 @@ export async function runDailyActionDigest(
     }
   }
 
+  flushedIds.push(...handledFlush)
   if (flushedIds.length > 0) {
     for (let i = 0; i < flushedIds.length; i += 1000) {
       await db('nivaro_deferred_emails')

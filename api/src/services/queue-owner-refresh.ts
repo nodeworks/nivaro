@@ -1,7 +1,8 @@
 import { AsyncResource } from 'node:async_hooks'
 import { db } from '../db/index.js'
-import { runInBackgroundPool } from '../db/pool-context.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
+import { emitToTenant } from './record-events.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -29,7 +30,12 @@ export function scheduleMaterializedOwnerRefresh(): void {
   // the change was made in (cloud mode keys its database off that context).
   const run = AsyncResource.bind(() => {
     pending.delete(tenant)
-    void runInBackgroundPool(() => refreshMaterializedOwners()).catch(() => {})
+    void runInBackgroundPool(() => refreshMaterializedOwners())
+      .then((n) => {
+        // rt2 #17 — the cached owner rows are current now: open worklists refetch ("My items").
+        if (n > 0) emitToTenant(tenant, 'owners:changed', { at: Date.now(), queues: true })
+      })
+      .catch(() => {})
   })
   const timer = setTimeout(run, Math.max(0, Math.min(QUIET_MS, first + MAX_WAIT_MS - now)))
   timer.unref?.()

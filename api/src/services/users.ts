@@ -10,6 +10,7 @@ import { resolveRoleFromAdGroups } from './microsoft.js'
 import { notificationRowMeta, notifyUser } from './notification-channels.js'
 import { rawWriterReason, reasonColumn } from './notification-reason.js'
 import { queueOfficeGeocode } from './office-geocode.js'
+import { notePeopleChanged, signInChangedDirectory } from './people-live.js'
 import { orderByPeopleRelevance } from './people-search-rank.js'
 import { DIRECTORY_USER_COLS } from './user-directory-cols.js'
 
@@ -42,6 +43,12 @@ export function withoutCredentials<T extends Record<string, unknown>>(
 /** A sign-in whose identity may not be linked to the account its email names (H7). */
 export class AccountLinkRefusedError extends Error {
   readonly code = 'ACCOUNT_LINK_REFUSED'
+  /** The account the refused sign-in's email names (the sign-in troubleshooter files it there). */
+  readonly userId: string | null
+  constructor(message: string, userId?: string | null) {
+    super(message)
+    this.userId = userId ?? null
+  }
 }
 
 function sameEmail(a: unknown, b: unknown): boolean {
@@ -202,7 +209,8 @@ export async function findOrCreateFromOIDC(profile: {
             `[oidc] refused (${decision.reason}): email matches user ${byEmail.id}, which is linked to another sign-in identity`
           )
           throw new AccountLinkRefusedError(
-            'This email belongs to an account linked to a different sign-in. Ask an administrator.'
+            'This email belongs to an account linked to a different sign-in. Ask an administrator.',
+            String(byEmail.id)
           )
         }
         console.info(`[oidc] linked by email to user ${byEmail.id} (${decision.reason})`)
@@ -242,6 +250,9 @@ export async function findOrCreateFromOIDC(profile: {
     }
     if (adRole) updates.role = adRole
     await db('nivaro_users').where({ id: existing.id }).update(updates)
+    // Every sign-in rewrites the row; pickers and avatars hear only a real change (rt2 #19).
+    if (signInChangedDirectory(existing as unknown as Record<string, unknown>, updates))
+      notePeopleChanged([String(existing.id)])
     if (adRole && String(adRole).toUpperCase() !== String(existing.role ?? '').toUpperCase())
       void joinDefaultChannelsSoon([existing.id], 'role from directory groups')
     if (profile.office_location) queueOfficeGeocode(existing.id)
@@ -297,6 +308,8 @@ export async function findOrCreateFromOIDC(profile: {
   // Welcome auto-broadcast (#389): a configured message greets brand-new
   // users on first login — in-app row, fire-and-forget.
   const newId = typeof id === 'object' ? (id as { id?: string }).id : id
+  // A new person shows in pickers and mentions without a reload (rt2 #19).
+  if (newId) notePeopleChanged([String(newId)], { created: true })
   if (newId) await captureEntraIdentity(newId, profile)
   if (newId && profile.office_location) queueOfficeGeocode(newId)
   if (newId && assignedRole) void joinDefaultChannelsSoon([newId], 'new account')

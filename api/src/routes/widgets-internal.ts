@@ -3,13 +3,13 @@ import { db } from '../db/index.js'
 import { emitTrigger } from '../flows/registry.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { customQueryCacheValue } from '../services/custom-query-cache.js'
+import { customQueryCacheValue, hitFreshness } from '../services/custom-query-cache.js'
 import { cachedDefinition } from '../services/definition-cache.js'
 import { recordWriteRefusal } from '../services/edit-lock.js'
 import { readOne, updateOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import { recordCacheOutcome, recordSharedRun } from '../services/query-cache-stats.js'
-import { queryFreshness } from '../services/query-freshness.js'
+import { liveReadSources, queryFreshness } from '../services/query-freshness.js'
 import { clientGoneSignal, gateServerTiming, sharedGatedRead } from '../services/read-gate.js'
 import {
   type DateRange,
@@ -571,7 +571,13 @@ async function renderWidget(
           if (cachedRows) {
             const expiresIn = await redis.ttl(cacheKey).catch(() => -1)
             recordCacheOutcome(cq.slug, 'hit', { cacheTtl })
-            const fresh = await queryFreshness(cq).catch(() => null)
+            // The probe's facts plus the change warm's stale mark for this query.
+            const fresh = await hitFreshness(
+              redis,
+              cq.slug,
+              await queryFreshness(cq).catch(() => null),
+              cachedAt
+            )
             cacheInfo = {
               cached: true,
               cached_at: cachedAt,
@@ -580,9 +586,9 @@ async function renderWidget(
                 : null,
               expires_in_seconds: expiresIn >= 0 ? expiresIn : null,
               cache_ttl: cacheTtl,
-              data_changed_at: fresh?.data_changed_at ?? null,
-              freshness_sources: fresh?.sources ?? [],
-              stale: !!(fresh?.data_changed_at && cachedAt && fresh.data_changed_at > cachedAt)
+              data_changed_at: fresh.data_changed_at,
+              freshness_sources: fresh.freshness_sources,
+              stale: fresh.stale
             }
           }
         }
@@ -644,6 +650,20 @@ async function renderWidget(
           freshness_sources: fresh?.sources ?? [],
           stale: false
         }
+      } else {
+        // Uncached: no stamp to show, but the page still learns which collections the query
+        // reads so it can raise "data changed since run" live.
+        const sources = await liveReadSources(cq).catch(() => [])
+        if (sources.length > 0)
+          cacheInfo = {
+            cached: false,
+            cached_at: null,
+            executed_at: cachedAt,
+            age_seconds: 0,
+            cache_ttl: 0,
+            freshness_sources: sources,
+            stale: false
+          }
       }
     }
     const valueFields = config.value_fields as

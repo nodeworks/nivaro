@@ -25,7 +25,8 @@ export interface CollectionSummary {
   last_edit: { at: string; user: string | null } | null
 }
 
-const CACHE_TTL_MS = 60_000
+// 15 s: the facts are DMV reads (cheap), and the directory re-reads them on a live poke.
+const CACHE_TTL_MS = 15_000
 const SUMMARY_FIELD_MAX = 8
 const RELATION_MAX = 12
 const SYSTEM_FIELDS = new Set([

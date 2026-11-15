@@ -6,6 +6,7 @@ import { emitNotification } from '../plugins/socketio.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { sendMail } from './mail.js'
+import { foldIntoRecent } from './notification-fold.js'
 import {
   effectiveRules,
   emailLayerOf,
@@ -17,6 +18,7 @@ import {
   sanitizeNotifyRules
 } from './notification-layers.js'
 import { buildDeliveryReason, derivePathKind, reasonColumn } from './notification-reason.js'
+import { resolveKeyFor } from './notification-resolve.js'
 import { snapshotRevisionFor } from './notification-snapshot.js'
 import {
   actionsFor,
@@ -26,6 +28,7 @@ import {
   resolveTargetUrl
 } from './notification-target.js'
 import { currentTenantKey } from './tenant-rooms.js'
+import { announceNotificationsRead } from './user-sync.js'
 import { sendDevicePush } from './web-push.js'
 
 export type { NotificationDetail, NotifyCategory, NotifyUserOptions } from '@nivaro/extension-kit'
@@ -97,6 +100,7 @@ export function detailColumn(detail: NotificationDetail | null | undefined): str
   if (detail.ack_required === true) out.ack_required = true
   if (typeof detail.ack_at === 'string') out.ack_at = clip(detail.ack_at, 40)
   if (typeof detail.ack_by === 'string') out.ack_by = clip(detail.ack_by, 40)
+  if (typeof detail.resolve_key === 'string') out.resolve_key = clip(detail.resolve_key, 300)
   try {
     return JSON.stringify(out)
   } catch {
@@ -144,6 +148,7 @@ export { NOTIFY_CATEGORIES }
 export const NOTIFY_CATEGORY_LABELS: Record<NotifyCategory, string> = {
   mentions: 'Mentions',
   workflow: 'Workflow',
+  proposals: 'Change proposals',
   sla: 'SLA',
   watch: 'Record watches',
   alerts: 'Alerts',
@@ -1093,14 +1098,59 @@ export async function notifyUser(
     ack_by: _ab,
     ...safeDetail
   } = (opts.detail ?? {}) as Record<string, unknown>
+  // What settles this row once someone handles it (notification-resolve.ts).
+  const resolveKey = resolveKeyFor({
+    category: decision.category,
+    lane,
+    target,
+    source: opts.source ?? null,
+    subject: opts.subject,
+    ackRequired: !!opts.ack_required,
+    owns: ownsRecord
+  })
+  const {
+    resolve_key: _rk,
+    resolved: _rs,
+    fold: _fd,
+    ...ownDetail
+  } = safeDetail as Record<string, unknown>
   const detail = detailColumn({
-    ...safeDetail,
+    ...(ownDetail as NotificationDetail),
     why,
-    ...(opts.ack_required ? { ack_required: true } : {})
+    ...(opts.ack_required ? { ack_required: true } : {}),
+    ...(resolveKey ? { resolve_key: resolveKey } : {})
   })
 
+  // Several FYI updates on one record inside the fold window become one row
+  // (notification-fold.ts): no new row, no push, the open bells re-read.
+  const folded = channels.inapp
+    ? await foldIntoRecent({
+        recipient: userId,
+        collection: opts.collection,
+        item: opts.item,
+        category: decision.category,
+        lane,
+        subject: opts.subject,
+        message: opts.message,
+        sender: opts.sender ?? null,
+        now,
+        ackRequired: !!opts.ack_required,
+        resolveKey,
+        label: async () => {
+          const { recordDisplayRef } = await import('./record-display-ref.js')
+          return recordDisplayRef(String(opts.collection), String(opts.item), {
+            recipient: userId
+          })
+        }
+      })
+    : null
+
   try {
-    if (channels.inapp) {
+    if (folded != null) {
+      notifId = folded
+      announceNotificationsRead(userId)
+    }
+    if (channels.inapp && folded == null) {
       // #1385 — the record's revision current right now, so "as it was" can
       // open what the person saw. Column-probed: null on a tenant behind
       // migration 393, and the key is then left off the insert entirely.
@@ -1277,6 +1327,8 @@ export async function notifyUser(
         try {
           const mail = await sendMail({
             to: user.email,
+            // The daily summary re-checks this row before it lists the held mail.
+            notification_id: notifId,
             // A notification goes to a PERSON: a machine account is never mailed one.
             rolePicked: true,
             subject: opts.subject,

@@ -1,12 +1,14 @@
 import { type ReactNode, useState } from 'react'
 import { cn } from '../../../lib/utils'
+import { LiveCount } from '../../LiveCount'
 import { TipLayer } from '../../TipLayer'
 import { AlertsView } from './AlertsView'
-import { useSignals } from './api'
+import { useLiveIntegrations, useSignals } from './api'
 import { EventsView } from './EventsView'
 import { FirefightView } from './FirefightView'
 import { InboundView } from './InboundView'
 import { PartnersView } from './PartnersView'
+import { ReadyToSendView } from './ReadyToSendView'
 import { TONE_SOFT, TONE_TEXT } from './tone'
 
 export interface ConsoleTab {
@@ -48,6 +50,7 @@ export function IntegrationsConsole({
   const active = tab ?? localTab
   const [partnerId, setPartnerId] = useState<number | null>(null)
   const signals = useSignals()
+  useLiveIntegrations()
 
   const go = (key: string) => {
     if (tab == null) setLocalTab(key)
@@ -82,6 +85,11 @@ export function IntegrationsConsole({
       key: 'events',
       label: 'Events',
       render: () => <EventsView onOpenRecord={onOpenRecord} />
+    },
+    {
+      key: 'ready',
+      label: 'Ready to send',
+      render: () => <ReadyToSendView onOpenRecord={onOpenRecord} />
     },
     ...extraTabs,
     {
@@ -138,7 +146,7 @@ export function IntegrationsConsole({
                       : cn(TONE_SOFT.warning, TONE_TEXT.warning)
                   )}
                 >
-                  {openCount}
+                  <LiveCount value={openCount} />
                 </span>
               )}
             </button>

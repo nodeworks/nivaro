@@ -56,6 +56,7 @@ import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import { useSlowReason } from '../../hooks/useSlowReason'
 import { useBulkProgressFeed } from '../../lib/bulk-progress'
 import { del, get, patch, post, put } from '../../lib/commands'
+import { dueInText, liveDeadlineStatus, useDeadlineNow } from '../../lib/deadline-ticker'
 import { deepenForLightSurface } from '../../lib/display-prefs'
 import { evaluateExpression } from '../../lib/expression'
 import {
@@ -85,7 +86,17 @@ import {
   sanitizeQueueLinkState
 } from '../../lib/list-link'
 import { arrivedByListReturn, ensureHistoryKey, historyKey } from '../../lib/list-page-memory'
-import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
+import {
+  type AwayLog,
+  markReturnRow,
+  noteListOpen,
+  peekListAway,
+  planListReturn,
+  returnRowFor,
+  standbyListAway,
+  takeListAway
+} from '../../lib/list-return'
+import { expandCoalesced, LIVE_ASPECTS, useLiveEvent } from '../../lib/live'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
 import { listTrailDetail, setTrailDetail } from '../../lib/nav-trail'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
@@ -104,6 +115,7 @@ import { copyIdText } from '../../lib/record-ref'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { userErrorMessage } from '../../lib/safe-error'
 import { listViewInput } from '../../lib/send-view'
+import { useTableDensity } from '../../lib/table-density'
 import { matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
 import {
@@ -143,6 +155,7 @@ import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/In
 import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { queueReturnApplies, readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { ListLoadError } from '../ListLoadError'
+import { LiveCount } from '../LiveCount'
 import { LiveRowMark } from '../LiveRowMark'
 import { CopyListLinkButton } from '../list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from '../list/InlineEdit'
@@ -157,7 +170,6 @@ import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
 import { RowPresence } from '../RowPresence'
 import { SendViewButton } from '../send-view/SendViewButton'
-import { TickerNumber } from '../TickerNumber'
 import { UnseenDot } from '../UnseenDot'
 import { Badge } from '../ui/badge'
 import { Checkbox } from '../ui/checkbox'
@@ -255,6 +267,9 @@ export interface QueueItemRow {
   predicted_risk?: boolean
   predicted_note?: string | null
   aging_hours: number | null
+  /** When the SLA clock turns amber / red (ISO) — the pill counts down to them live. */
+  sla_warning_at?: string | null
+  sla_due_at?: string | null
   /** When the record entered its current state (ISO; absent on older servers). */
   state_entered_at?: string | null
   claimed_by: QueueOwner | null
@@ -498,15 +513,45 @@ function formatAging(hours: number | null): string {
   return humanHours(hours)
 }
 
-function SlaPill({ status }: { status: QueueItemRow['sla_status'] }) {
+/**
+ * The SLA cell. With the clock's instants (realtime round 2) it counts down on the page's shared
+ * clock — "due in 1 h 59 m", amber and red at the rule's lines — without re-reading the list;
+ * without them (an older server, a due-date basis) it shows the status the list was read with.
+ */
+function SlaPill({
+  status: readStatus,
+  warningAt,
+  dueAt
+}: {
+  status: QueueItemRow['sla_status']
+  warningAt?: string | null
+  dueAt?: string | null
+}) {
+  const lines = { warning_at: warningAt ?? null, due_at: dueAt ?? null }
+  const counting = !!readStatus && !!dueAt
+  const now = useDeadlineNow(counting)
+  const live = counting ? liveDeadlineStatus(lines, now) : null
+  const status: QueueItemRow['sla_status'] = live ? (live === 'on_track' ? 'ok' : live) : readStatus
   if (!status) return <span className='text-slate-300'>—</span>
+  const text = counting ? dueInText(lines, now) : null
   const cls =
     status === 'breached'
       ? 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400'
       : status === 'warning'
         ? 'bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400'
         : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'
-  return <span className={cn('rounded px-1.5 py-0.5 text-[11px] font-medium', cls)}>{status}</span>
+  return (
+    <span
+      data-sla-pill={status}
+      data-tip={text ? `SLA ${status === 'ok' ? 'on track' : status}` : undefined}
+      className={cn(
+        'whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium tabular-nums transition-colors duration-500',
+        cls
+      )}
+    >
+      {text ?? status}
+    </span>
+  )
 }
 
 function Sparkline({ points, inline = false }: { points: number[]; inline?: boolean }) {
@@ -607,14 +652,14 @@ function StatTile({
             {filteredCount != null ? (
               <>
                 <span className='text-nvr-navy dark:text-nvr-cyan'>
-                  <TickerNumber value={filteredCount} format={formatNumber} />
+                  <LiveCount value={filteredCount} format={(v) => formatNumber(Number(v))} />
                 </span>
                 <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>
-                  / <TickerNumber value={count} format={formatNumber} />
+                  / <LiveCount value={count} format={(v) => formatNumber(Number(v))} />
                 </span>
               </>
             ) : (
-              <TickerNumber value={count} format={formatNumber} />
+              <LiveCount value={count} format={(v) => formatNumber(Number(v))} />
             )}
           </span>
           <span
@@ -762,14 +807,8 @@ export function QueueWorklist({
   const [page, setPage] = useState(1)
   // #2447 — cursors that reach the next table pages of the current view.
   const cursorBookRef = useRef(createCursorBook())
-  // Row density — shares the per-browser preference the collection browser uses.
-  const [density, setDensity] = useState<'compact' | 'comfortable'>(() => {
-    try {
-      return localStorage.getItem('nvr_table_density') === 'comfortable' ? 'comfortable' : 'compact'
-    } catch {
-      return 'compact'
-    }
-  })
+  // Row density — shares the preference the collection browser uses (rt4 #19).
+  const [density, setDensity] = useTableDensity()
   const [view, setView] = useState<'table' | 'kanban' | 'workload'>('table')
   const [sort, setSort] = useState('')
   const [filterValues, setFilterValues] = useState<Record<string, string | string[]>>({})
@@ -824,6 +863,8 @@ export function QueueWorklist({
   // Set while a live-triggered refetch is in flight: the table keeps its rows
   // (no enter replay), and the rows that changed / arrived flash when it lands.
   const liveRefetchRef = useRef(false)
+  /** The live effect's quiet refetch (falls back to the pill mid-selection or mid-drag). */
+  const scheduleRefetchRef = useRef<(() => void) | null>(null)
   const livePendingRef = useRef<Array<{ key: string; by: string | null }>>([])
   const prevKeysRef = useRef<Set<string> | null>(null)
   const draggingRef = useRef(false)
@@ -1051,7 +1092,7 @@ export function QueueWorklist({
       statsTimer = setTimeout(() => {
         statsTimer = null
         setStatsTick((n) => n + 1)
-      }, 1500)
+      }, 2500)
     }
     const scheduleRefetch = () => {
       if (refetchTimer) return
@@ -1069,6 +1110,7 @@ export function QueueWorklist({
         void qc.invalidateQueries({ queryKey: ['queue-workload', queueId] })
       }, 900)
     }
+    scheduleRefetchRef.current = scheduleRefetch
     const handle = (evs: LiveEv[]) => {
       let refresh = false
       let pill = 0
@@ -1087,6 +1129,11 @@ export function QueueWorklist({
             aspectKeys.add('queue-integrations-summary')
           if (fields.includes(LIVE_ASPECTS.addendums)) aspectKeys.add('queue-collection-addendums')
           if (fields.includes(LIVE_ASPECTS.lock)) setLockTick((n) => n + 1)
+          // A clock passed its line (server flip pass): the counts move; the row's pill has
+          // already recoloured on the page clock, so the rows themselves are not re-read.
+          if (fields.includes(LIVE_ASPECTS.sla)) stats = true
+          // rt2 #17 — a row's owners moved: its owners cell (and "My items") on screen.
+          if (fields.includes(LIVE_ASPECTS.owners) && visible) refresh = true
           if (fields.includes(LIVE_ASPECTS.state)) {
             // Off screen = the pill (a record entering by a pipeline start, army 4 a06-1).
             const fx = stateAspectEffect(visible, viewRef.current === 'kanban')
@@ -1115,6 +1162,7 @@ export function QueueWorklist({
     }
     const unsub = subscribe(collections, (ev) => deliverLive(liveOwner, [ev ?? {}], handle))
     return () => {
+      scheduleRefetchRef.current = null
       unsub()
       releaseLiveOwner(liveOwner)
       if (aspectTimer) clearTimeout(aspectTimer)
@@ -1122,6 +1170,25 @@ export function QueueWorklist({
       if (statsTimer) clearTimeout(statsTimer)
     }
   }, [ctxRealtime, realtime, queue?.sources, qc, queueId, userId, liveOwner])
+
+  // rt2 #17 — who owns records changed without those records being written (owner matrix,
+  // delegation, out of office): rows may enter or leave "My items" and owner cells move. A
+  // materialized worklist waits for its owner rows to re-sync (`queues: true`); a live one
+  // refetches now — quietly, as the viewer, never under a selection or a drag.
+  useLiveEvent(
+    'owners:changed',
+    (p) => {
+      if (queue?.materialized ? !p?.queues : p?.queues) return
+      if (Array.isArray(p?.collections)) {
+        const mine = (queue?.sources ?? []).some(
+          (src) => src.type === 'collection' && p.collections.includes(src.collection)
+        )
+        if (!mine) return
+      }
+      scheduleRefetchRef.current?.()
+    },
+    { debounceMs: 600 }
+  )
 
   // Inputs stay bound to filterValues (instant UI); the items query keys off
   // this trailing copy so text filters don't fire a request per keystroke.
@@ -1370,6 +1437,14 @@ export function QueueWorklist({
     /** The live read stopped at its row ceiling — the totals cover the rows it read. */
     totals_partial?: boolean
   }
+  // Back to the worklist keeps its place (realtime #16, lib/list-return.ts): when nothing in
+  // its collections changed while the person was on a record, the cached rows stay as they are.
+  const [queueAwayPeek] = useState(() => peekListAway(`queue:${queueId}`))
+  // Any return holds the cache through the first settle (no dimmed mount refetch); what the
+  // log says then decides whether a quiet re-read follows (see the return effect below).
+  const [holdQueueCache, setHoldQueueCache] = useState(
+    () => planListReturn(queueAwayPeek) !== 'fresh'
+  )
   const {
     data,
     isLoading,
@@ -1435,7 +1510,9 @@ export function QueueWorklist({
       !!queueId && displayReady && scopeGateOpen && (firstFetchedRef.current || filtersSettled),
     // Keep the previous page rendered while a sort/filter/page change refetches —
     // swapping to skeletons collapsed the table height and jittered the page.
-    placeholderData: (prev) => prev
+    placeholderData: (prev) => prev,
+    gcTime: 20 * 60_000,
+    ...(holdQueueCache ? { staleTime: Number.POSITIVE_INFINITY } : {})
   })
 
   if (data && !firstFetchedRef.current) firstFetchedRef.current = true
@@ -1853,6 +1930,25 @@ export function QueueWorklist({
     prevKeysRef.current = keys
   }, [dataUpdatedAt])
 
+  // ── Back to the worklist keeps its place (realtime #16, lib/list-return.ts) ──
+  // A quiet standby subscription to the queue's collections records what changed while the
+  // person was on a record. Coming back: nothing changed → the cached rows stay (no read);
+  // anything changed → one quiet re-read (the server re-judges membership as the viewer) that
+  // flashes only the rows that changed, like any live refresh.
+  const queueAwayRef = useRef<AwayLog | null>(null)
+  const awayCollectionsKey = [
+    ...new Set(
+      (queue?.sources ?? [])
+        .filter((s) => s.type === 'collection' && s.collection)
+        .map((s) => s.collection as string)
+    )
+  ].join(',')
+  useEffect(() => {
+    if (!awayCollectionsKey) return
+    const log = takeListAway(`queue:${queueId}`)
+    if (log && !queueAwayRef.current) queueAwayRef.current = log
+    return standbyListAway(ctxRealtime, `queue:${queueId}`, awayCollectionsKey.split(','))
+  }, [ctxRealtime, queueId, awayCollectionsKey])
   // Any completed refetch clears the pending-updates pill — the data on screen
   // is current again, however the refetch was triggered. Keyed on the fetch
   // time, not the data object (army 8 b08-N6): a re-read that came back equal
@@ -2224,6 +2320,8 @@ export function QueueWorklist({
   const [sheetItem, setSheetItem] = useState<QueueItemRow | null>(null)
   const [workNext, setWorkNext] = useState(false)
   const [highlightedId, setHighlightedId] = useState<string | null>(null)
+  /** Row key to mark once the rows are on screen after a return (realtime #16). */
+  const returnMarkRef = useRef<string | null>(null)
 
   // Item edit-page opener with the queue's configured layout pinned. Goes
   // through useItemNavigation so an embedding host's itemUrl/openItem
@@ -2256,8 +2354,19 @@ export function QueueWorklist({
   // chip (and the browser's Back) returns here with the same filters, page and
   // scroll position. Every way out to a record goes through this (army 11 Q1-4:
   // the side sheet's Open record skipped it, so Back landed on My Items page 1).
-  const rememberPlace = () => {
+  const rememberPlace = (opened?: { collection: string; id: string }) => {
     if (!queue) return
+    // The rows in order, for the record's Previous / Next in list (realtime #16).
+    if (opened)
+      noteListOpen({
+        list: `queue:${queueId}`,
+        label: queue.name,
+        rows: items
+          .filter((r) => r.collection !== ADDENDUM_ROW_COLLECTION)
+          .map((r) => ({ collection: r.collection, id: String(r.item_id) })),
+        opened,
+        entry: ensureHistoryKey()
+      })
     writeQueueReturn({
       queue_id: queueId,
       name: queue.name,
@@ -2269,12 +2378,12 @@ export function QueueWorklist({
     })
   }
   const openItemPage = (row: QueueItemRow) => {
-    rememberPlace()
+    rememberPlace({ collection: row.collection, id: String(row.item_id) })
     itemNav.open(rowTarget(row))
   }
   /** "Open record" in a side sheet: the root record keeps the queue's pinned layout. */
   const openFromSheet = (target: { collection: string; itemId: string }) => {
-    rememberPlace()
+    rememberPlace({ collection: target.collection, id: String(target.itemId) })
     const root = drillStack?.[0]
     const isRoot =
       !!root && root.collection === target.collection && String(root.itemId) === target.itemId
@@ -2496,10 +2605,52 @@ export function QueueWorklist({
     if (s.view) setView(s.view as 'table' | 'kanban' | 'workload')
     if (s.page) setPage(s.page)
     pendingScrollRef.current = stash.scroll ?? 0
+    // The row the person comes back to (opened, or walked to with Next) is the keyboard row
+    // again and gets a brief quiet mark once the rows are on screen (realtime #16).
+    const back = returnRowFor(`queue:${queueId}`)
+    if (back) {
+      const key = `${back.collection}:${back.id}`
+      setHighlightedId(key)
+      returnMarkRef.current = key
+    }
     // Back from a record opened out of a side sheet lands on the sheet's history
     // entry: the list comes back as it was, the sheet does not (army 11 Q1-4).
     if (drillStack && drillStack.length > 0) drill.back(drillStack.length)
   }, [displayReady, queueId])
+  // Once the restored view (scope, filters, page) is on screen — one render after the view is
+  // ready, so the stash restore above has landed — decide what the return re-reads.
+  const queueReturnDoneRef = useRef(false)
+  const [queueReturnTick, setQueueReturnTick] = useState(0)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot once the restored page is on screen
+  useEffect(() => {
+    if (queueReturnDoneRef.current || !displayReady || !awayCollectionsKey) return
+    if (queueReturnTick === 0) {
+      setQueueReturnTick(1)
+      return
+    }
+    if (!data || isPlaceholderData) return
+    queueReturnDoneRef.current = true
+    const log = queueAwayRef.current
+    const fromCache = !!log && dataUpdatedAt > 0 && dataUpdatedAt <= log.leftAt
+    const plan = fromCache ? planListReturn(log) : 'fresh'
+    if (plan === 'replay' || plan === 'refetch') {
+      livePendingRef.current = (log?.events ?? [])
+        .filter((e) => !e.own)
+        .map((e) => ({ key: `${e.collection}:${String(e.item)}`, by: null }))
+      liveRefetchRef.current = true
+      void qc
+        .invalidateQueries({
+          queryKey: serverGrouped ? ['queue-items', queueId] : ['queue-items', queueId, scope]
+        })
+        .finally(() => {
+          liveRefetchRef.current = false
+        })
+    }
+    setHoldQueueCache(false)
+    const key = returnMarkRef.current
+    returnMarkRef.current = null
+    if (key) setTimeout(() => markReturnRow(rowChanges.rootRef.current, key), 260)
+  }, [data, isPlaceholderData, displayReady, awayCollectionsKey, queueReturnTick])
   // army 5 b16-N3 — a dashboard link carries ?scope=all|mine so "Your
   // worklists" opens the scope the number was counted in (not an empty My
   // Items). Applied once after the default view landed, then dropped like
@@ -2980,7 +3131,9 @@ export function QueueWorklist({
       key: 'sla_status',
       header: aliasFor('sla_status', 'SLA'),
       sortable: true,
-      render: (row) => <SlaPill status={row.sla_status} />
+      render: (row) => (
+        <SlaPill status={row.sla_status} warningAt={row.sla_warning_at} dueAt={row.sla_due_at} />
+      )
     },
     {
       key: 'at_risk',
@@ -4716,13 +4869,7 @@ export function QueueWorklist({
               <button
                 type='button'
                 onClick={() => {
-                  const next = density === 'compact' ? 'comfortable' : 'compact'
-                  setDensity(next)
-                  try {
-                    localStorage.setItem('nvr_table_density', next)
-                  } catch {
-                    /* private mode */
-                  }
+                  setDensity(density === 'compact' ? 'comfortable' : 'compact')
                 }}
                 aria-label='Row density'
                 title={

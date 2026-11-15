@@ -189,3 +189,94 @@ export function customQueryCachedAt(raw: string | null): number | null {
     return null
   }
 }
+
+// ─── Stale marks (change-driven warm, services/cache-warm-on-change.ts) ─────
+//
+// When a collection a cached query reads changes, the change warm stamps the
+// query: `cqstale:<slug>[.<tenant tag>]` = {at, c} (when, and which collection).
+// A cache hit older than the stamp says so (`stale`, and the collection in
+// `freshness_sources`) even when the table has no timestamp column the
+// freshness probe could read. The warm then recomputes the most-viewed entries
+// in the background; an entry it rewrote is newer than the stamp and reads
+// fresh. Not under `cq:` — a drop or a cache flush never takes it.
+
+/** How long a stale mark lives. */
+export const CUSTOM_QUERY_STALE_MARK_TTL_S = 24 * 3600
+
+export function customQueryStaleKey(slug: string): string {
+  return `cqstale:${slug}${tenantKeyTag()}`
+}
+
+export interface CustomQueryStaleMark {
+  /** ISO time of the change. */
+  at: string
+  /** The collection that changed. */
+  collection: string
+}
+
+export function customQueryStaleMarkValue(at: number | string, collection: string): string {
+  return JSON.stringify({
+    at: typeof at === 'string' ? at : new Date(at).toISOString(),
+    c: collection
+  })
+}
+
+export function parseCustomQueryStaleMark(
+  raw: string | null | undefined
+): CustomQueryStaleMark | null {
+  if (!raw) return null
+  try {
+    const p = JSON.parse(raw) as { at?: unknown; c?: unknown }
+    if (typeof p?.at !== 'string' || Number.isNaN(Date.parse(p.at))) return null
+    return { at: p.at, collection: typeof p.c === 'string' ? p.c : '' }
+  } catch {
+    return null
+  }
+}
+
+interface FreshnessLike {
+  data_changed_at: string | null
+  sources: Array<{ table: string; column: string; changed_at: string | null }>
+}
+
+/**
+ * A cache hit's freshness with the query's stale mark folded in: the mark's time
+ * becomes `data_changed_at` when newer, and its collection a freshness source (so
+ * the stamp can name it: "workflows changed 2m ago — newer than this figure").
+ * `stale` = something changed after the entry was computed.
+ */
+export function withStaleMark(
+  fresh: FreshnessLike | null,
+  mark: CustomQueryStaleMark | null,
+  cachedAt: string | null
+): {
+  data_changed_at: string | null
+  freshness_sources: Array<{ table: string; column: string; changed_at: string | null }>
+  stale: boolean
+} {
+  let changedAt = fresh?.data_changed_at ?? null
+  const sources = [...(fresh?.sources ?? [])]
+  if (mark && (!changedAt || mark.at > changedAt)) changedAt = mark.at
+  if (mark?.collection) {
+    const i = sources.findIndex((s) => s.table.toLowerCase() === mark.collection.toLowerCase())
+    if (i < 0) sources.push({ table: mark.collection, column: '', changed_at: mark.at })
+    else if (!sources[i].changed_at || mark.at > (sources[i].changed_at as string))
+      sources[i] = { ...sources[i], changed_at: mark.at }
+  }
+  return {
+    data_changed_at: changedAt,
+    freshness_sources: sources,
+    stale: !!(changedAt && cachedAt && changedAt > cachedAt)
+  }
+}
+
+/** A cache hit's freshness, stale mark included. A Redis failure reads as no mark. */
+export async function hitFreshness(
+  redis: { get(key: string): Promise<string | null> } | null | undefined,
+  slug: string,
+  fresh: FreshnessLike | null,
+  cachedAt: string | null
+): Promise<ReturnType<typeof withStaleMark>> {
+  const raw = redis ? await redis.get(customQueryStaleKey(slug)).catch(() => null) : null
+  return withStaleMark(fresh, parseCustomQueryStaleMark(raw), cachedAt)
+}

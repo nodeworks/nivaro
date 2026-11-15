@@ -14,6 +14,7 @@ import {
   hasFieldCommentColumns,
   plainFieldLabel
 } from '../services/field-comments.js'
+import { commentTextForPreview } from '../services/comment-images.js'
 import { agentBadgesForComments } from '../services/mcp-attribution.js'
 import { mentionReceipts, receiptKey } from '../services/mention-receipts.js'
 import { sendTeamsNotification } from '../services/microsoft.js'
@@ -685,7 +686,8 @@ export async function commentsRoutes(app: FastifyInstance) {
       // The record by its readable id, read as the person mentioned (#776).
       const recordRef = await recordDisplayRef(body.collection, body.item, { recipient: u.id })
       let subject = `You were mentioned on ${recordRef}`
-      let message = body.text.slice(0, 100)
+      const readable = commentTextForPreview(body.text)
+      let message = readable.slice(0, 100)
       const actorName =
         [req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ').trim() ||
         req.user?.email ||
@@ -694,14 +696,14 @@ export async function commentsRoutes(app: FastifyInstance) {
       // the wording; the hardcoded line stays the default.
       if (fieldLabel) {
         subject = `You were mentioned on ${fieldLabel} in ${recordRef}`
-        message = `On ${fieldLabel}: ${body.text}`.slice(0, 100)
+        message = `On ${fieldLabel}: ${readable}`.slice(0, 100)
       }
       const templated = await renderNotificationTemplate('comment_mention', {
         actor: actorName,
         collection: body.collection,
         record: body.item,
         record_ref: recordRef,
-        text: body.text.slice(0, 300),
+        text: readable.slice(0, 300),
         field: field ?? '',
         field_label: fieldLabel ?? ''
       }).catch(() => null)

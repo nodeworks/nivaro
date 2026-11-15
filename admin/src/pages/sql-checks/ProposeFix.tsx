@@ -190,12 +190,16 @@ export function ProposeFix({ finding }: { finding: FindingDetail }) {
           <p className='m-0 text-[12.5px] text-foreground/90'>
             {p.class === 'xact-abort'
               ? 'Adds SET XACT_ABORT ON as the first statement, so a failed statement rolls the whole transaction back.'
-              : 'Treats two empty keys as a match, so a row with an empty key updates its stored row instead of being added again.'}{' '}
-            {p.target.kind === 'managed_procedure'
-              ? 'The fix is checked first, then saved as a new version of the procedure in config and deployed from there; Revert saves the previous version back the same way.'
-              : p.deploys
-                ? 'The procedure is changed in the database and checked again at once; if the check finds anything new, the previous version goes back automatically.'
-                : 'Only the stored body changes; deploy it from the import definition when you are ready.'}
+              : p.class === 'announce'
+                ? 'Collects the ids of the records each write changes and, at the end, tells open screens about them (or that many records changed). The announcement can never make the procedure fail.'
+                : 'Treats two empty keys as a match, so a row with an empty key updates its stored row instead of being added again.'}{' '}
+            {p.apply_refused
+              ? ''
+              : p.target.kind === 'managed_procedure'
+                ? 'The fix is checked first, then saved as a new version of the procedure in config and deployed from there; Revert saves the previous version back the same way.'
+                : p.deploys
+                  ? 'The procedure is changed in the database and checked again at once; if the check finds anything new, the previous version goes back automatically.'
+                  : 'Only the stored body changes; deploy it from the import definition when you are ready.'}
           </p>
 
           <p
@@ -275,52 +279,78 @@ export function ProposeFix({ finding }: { finding: FindingDetail }) {
           <DiffView hunks={p.diff} label={`Proposed change to ${p.target.label}`} />
           <p className='m-0 text-[11.5px] text-muted-foreground'>{p.note}</p>
 
-          <div className='flex flex-wrap items-center gap-2'>
-            <Button
-              size='sm'
-              className={cn(
-                'h-8 text-[12.5px] [&_svg]:size-3.5',
-                armed
-                  ? 'bg-amber-500 text-white hover:bg-amber-500/90'
-                  : 'bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
-              )}
-              disabled={
-                apply.isPending ||
-                !compile.data?.ok ||
-                !p.new_definition_hash ||
-                (p.risky && !confirmed)
-              }
-              onClick={() => {
-                if (!armed) return setArmed(true)
-                setArmed(false)
-                apply.mutate(p)
-              }}
-            >
-              {apply.isPending && <Loader2 className='animate-spin' aria-hidden='true' />}
-              {apply.isPending
-                ? 'Applying…'
-                : armed
-                  ? 'Click again to apply'
-                  : p.deploys
-                    ? 'Apply fix'
-                    : 'Save to stored body'}
-            </Button>
-            <Button
-              size='sm'
-              variant='ghost'
-              className='h-8 text-[12.5px]'
-              disabled={apply.isPending}
-              onClick={() => {
-                setAsked(false)
-                setOutcome(null)
-                // a later Propose fix checks the compile afresh
-                qc.removeQueries({ queryKey: ['sql-checks', 'proposal-compile', finding.id] })
-                setConfirmedFor(null)
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
+          {p.apply_refused ? (
+            <div className='flex flex-wrap items-center gap-2'>
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-8 text-[12.5px]'
+                onClick={() => {
+                  void navigator.clipboard?.writeText(p.unified).then(
+                    () => toast.success('Change copied'),
+                    () => toast.error('Couldn’t copy the change')
+                  )
+                }}
+              >
+                Copy the change
+              </Button>
+              <Button
+                size='sm'
+                variant='ghost'
+                className='h-8 text-[12.5px]'
+                onClick={() => setAsked(false)}
+              >
+                Close
+              </Button>
+            </div>
+          ) : (
+            <div className='flex flex-wrap items-center gap-2'>
+              <Button
+                size='sm'
+                className={cn(
+                  'h-8 text-[12.5px] [&_svg]:size-3.5',
+                  armed
+                    ? 'bg-amber-500 text-white hover:bg-amber-500/90'
+                    : 'bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
+                )}
+                disabled={
+                  apply.isPending ||
+                  !compile.data?.ok ||
+                  !p.new_definition_hash ||
+                  (p.risky && !confirmed)
+                }
+                onClick={() => {
+                  if (!armed) return setArmed(true)
+                  setArmed(false)
+                  apply.mutate(p)
+                }}
+              >
+                {apply.isPending && <Loader2 className='animate-spin' aria-hidden='true' />}
+                {apply.isPending
+                  ? 'Applying…'
+                  : armed
+                    ? 'Click again to apply'
+                    : p.deploys
+                      ? 'Apply fix'
+                      : 'Save to stored body'}
+              </Button>
+              <Button
+                size='sm'
+                variant='ghost'
+                className='h-8 text-[12.5px]'
+                disabled={apply.isPending}
+                onClick={() => {
+                  setAsked(false)
+                  setOutcome(null)
+                  // a later Propose fix checks the compile afresh
+                  qc.removeQueries({ queryKey: ['sql-checks', 'proposal-compile', finding.id] })
+                  setConfirmedFor(null)
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

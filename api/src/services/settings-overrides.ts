@@ -68,6 +68,8 @@ export const INSTANCE_RESERVED_KEYS = [
   'sso_link_by_email',
   // Reload old tabs when idle (services/idle-reload.ts, #2937).
   'idle_reload',
+  // Outside-write watcher: on/off, interval, which collections (services/outside-write-watch.ts).
+  'outside_writes',
   // Audience confirm threshold for configs that send to people (services/audience-gate.ts, #3080).
   'audience_confirm',
   // "This is staging" sign-in notice (services/environment-notice.ts).

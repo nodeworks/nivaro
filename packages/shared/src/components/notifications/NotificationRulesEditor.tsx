@@ -48,6 +48,11 @@ export const NOTIFY_RULE_CATS: Array<{ key: string; label: string; help: string 
     help: 'A record you own or follow moves state, needs your approval, is sent back, or an approval chain reaches your step. Also support requests you work on the desk (new, assigned, replied).'
   },
   {
+    key: 'proposals',
+    label: 'Change proposals',
+    help: 'Someone proposed new values on a locked record whose step you own (to accept or decline), and whether a change you proposed was accepted or declined.'
+  },
+  {
     key: 'sla',
     label: 'SLA & escalations',
     help: 'A record you own is nearing or past its SLA, and escalation-ladder notices as they climb. SLA escalations always email immediately.'

@@ -11,7 +11,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **RBAC** — roles, policies, per-field permissions, workspace isolation
 - **Microsoft OIDC** — PKCE login, AD group sync
 - **Workflow Engine** — state machine with role-gated transitions, history
-- **Pipeline / Owner Matrix** — multi-dimensional ownership per workflow state
+- **Pipeline / Owner Matrix** — multi-dimensional ownership per workflow state; edit the whole matrix in Excel (download, upload, review the changes per step, apply)
 - **Queues** — cross-collection worklists unioning pipeline ownership, Tasks, and Approvals; stat strip, scope tabs, Table/Kanban/Workload views, transition-on-drop, claim/release, SLA-filtered sources, per-owner WIP limits, Socket.io live-refresh, digest subscriptions, embeddable widget
 - **GraphQL API + Subscriptions** — auto-built from metadata registry; subscriptions over WebSocket or Server-Sent Events (with Last-Event-ID resume), and `@live` queries that re-run as the subscriber when a write touches what they read
 - **Real-time** — Socket.io + Redis adapter (notifications, item events)
@@ -121,6 +121,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **App-managed procedures** — the stored procedures Nivaro deploys have one writer: import procedures via their import definition, all others via config (full text plus version history, create / edit / adopt / drop / restore on the Procedures page); promote carries changes and drops to other environments, and SQL checks, tuning and scripts respect the owner
 - **Data Quality & Issue Log** — per-collection quality rules with run history; central operational issue triage
 - **Orphan Finder** — Data Integrity tab that finds rows whose links point at records that no longer exist (missing link targets, children without a parent, link-table rows with a side gone, removed files): a time-boxed background sweep over every link the schema really has, then previewed, logged repairs through the normal save path
+- **Sign-in Troubleshooter** — on someone's people page (Admin tools) an admin sees 30 days of that person's sign-in attempts with a plain reason per failure (suspended here, disabled in Microsoft, another organisation's account, access policy, stale sign-in page, blocked cookie, provider down…), what to do and who can fix it, plus their account checks, last sign-in, sessions and phones
 - **Slow Screens per Person** — on someone's people page (and on support tickets about slowness) an admin sees that person's slowest pages over 7 or 30 days: median and p95 load time, how often, browser and screen size, the slowest calls behind each page and a replay of a slow visit when one was recorded
 - **Privacy & Retention Policies** — configurable inactivity-based user redaction/deletion with dry-run preview, cron scheduling, PII field selection, exclusion lists, and full run audit log; redacted users automatically excluded from all pickers
 - **AI Content Validation** — natural-language rules per collection, soft warn or hard block (server-enforced 422)

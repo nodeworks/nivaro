@@ -29,8 +29,10 @@ export function sheetHeaderNames(sheet: XLSX.WorkSheet, headerRow: number): stri
 export function readSpreadsheet(
   buffer: Buffer,
   fileName: string,
-  config: Pick<ImportTemplateConfig, 'sheet_match' | 'header_row' | 'file_types'>
+  config: Pick<ImportTemplateConfig, 'sheet_match' | 'header_row' | 'file_types'>,
+  opts: { rowCap?: number } = {}
 ): SheetReadResult {
+  const rowCap = opts.rowCap ?? IMPORT_ROW_CAP
   const issues: SheetReadResult['issues'] = []
   const ext = (fileName.split('.').pop() || '').toLowerCase()
   if (!config.file_types.includes(ext as 'xlsx' | 'xlsm' | 'xls' | 'csv')) {
@@ -72,12 +74,12 @@ export function readSpreadsheet(
   })
   if (rows.length === 0)
     issues.push({ severity: 'error', message: `Sheet "${sheetName}" has no data rows` })
-  if (rows.length > IMPORT_ROW_CAP) {
+  if (rows.length > rowCap) {
     issues.push({
       severity: 'warn',
-      message: `Sheet has ${rows.length} rows; only the first ${IMPORT_ROW_CAP} were imported`
+      message: `Sheet has ${rows.length} rows; only the first ${rowCap} were imported`
     })
-    rows = rows.slice(0, IMPORT_ROW_CAP)
+    rows = rows.slice(0, rowCap)
   }
   return { rows, issues, columns: sheetHeaderNames(workbook.Sheets[sheetName], config.header_row) }
 }

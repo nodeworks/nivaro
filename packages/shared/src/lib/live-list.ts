@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { get, post } from './commands'
 import { useLiveCollection } from './live'
+import { liveMotionAllowed, useLivePreference } from './live-preference'
 import { loadUserCard } from './user-cards'
 
 /**
@@ -57,11 +58,8 @@ export function flashRows(
   opts: { strong?: boolean } = {}
 ): void {
   if (!root || ids.length === 0 || typeof window === 'undefined') return
-  try {
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
-  } catch {
-    /* no matchMedia — flash anyway */
-  }
+  // Reduced motion, or live updates set to Calm/Off: no flash.
+  if (!liveMotionAllowed()) return
   const tint = opts.strong ? 0.34 : 0.22
   for (const id of ids) {
     const esc = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id.replace(/"/g, '\\"')
@@ -82,7 +80,7 @@ export function flashRows(
 }
 
 /** Display name of a user id, from the (authenticated) contact-card route. */
-function useActorNames(ids: string[]): Map<string, string> {
+export function useActorNames(ids: string[]): Map<string, string> {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [names, setNames] = useState<Map<string, string>>(() => new Map())
@@ -200,7 +198,12 @@ export function useRowChanges(): RowChanges {
     // names changing re-renders the list; tooltips are read at render time
     [names]
   )
-  const isNew = useCallback((id: string) => changesRef.current.get(id)?.kind === 'create', [])
+  // Calm/Off: no "new" dot (the row is simply there).
+  const { quiet } = useLivePreference()
+  const isNew = useCallback(
+    (id: string) => !quiet && changesRef.current.get(id)?.kind === 'create',
+    [quiet]
+  )
   const forget = useCallback((ids: string[]) => {
     for (const id of ids) changesRef.current.delete(id)
   }, [])

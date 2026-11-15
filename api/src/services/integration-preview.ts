@@ -36,13 +36,13 @@ import {
   parseConditionRules
 } from './workflow-conditions.js'
 
-interface InstanceRow {
+export interface InstanceRow {
   id: string
   template: string
   current_state: string | null
   completed_at: Date | string | null
 }
-interface TransitionRow {
+export interface TransitionRow {
   id: string
   label: string
   from_state: string | null
@@ -53,7 +53,7 @@ interface TransitionRow {
   requirements: string | null
   sort: number | null
 }
-interface StateRow {
+export interface StateRow {
   id: string
   key: string
   label: string
@@ -90,7 +90,27 @@ async function apiNames(ids: number[]): Promise<Map<number, string>> {
   return out
 }
 
-function hasPushes(actions: string | null): boolean {
+/** apiNames through a preview cache: each API's name is read once for every record. */
+async function cachedApiNames(
+  ids: number[],
+  cache?: Map<string, Promise<unknown>>
+): Promise<Map<number, string>> {
+  if (!cache) return apiNames(ids)
+  const out = new Map<number, string>()
+  for (const id of new Set(ids.filter((n) => Number.isFinite(n)))) {
+    const key = `apilabel:${id}`
+    let p = cache.get(key) as Promise<string | undefined> | undefined
+    if (!p) {
+      p = apiNames([id]).then((m) => m.get(id))
+      cache.set(key, p)
+    }
+    const name = await p
+    if (name) out.set(id, name)
+  }
+  return out
+}
+
+export function hasPushes(actions: string | null): boolean {
   if (!actions) return false
   try {
     const parsed = JSON.parse(actions)
@@ -292,6 +312,13 @@ export interface PreflightIssue {
    *  problem. */
   severity: 'block' | 'warn' | 'ask'
   message: string
+  /** Where it comes from: the step's requirements dialog, its conditions, a push (guard /
+   *  build), or a push's contract. The ready-to-send board groups and filters by it. */
+  kind?: 'requirement' | 'condition' | 'push' | 'contract'
+  /** The partner a push issue is about. */
+  partner?: string
+  /** An earlier push on the same step writes back first and may fill what is missing. */
+  after_earlier_push?: boolean
   /** Record field to bring into view. */
   field?: string
   /** Child rows to bring into view: the grid's collection + FK to the record. */
@@ -303,7 +330,12 @@ export interface PreflightIssue {
 export interface PreflightResult {
   ready: boolean
   issues: PreflightIssue[]
-  pushes: Array<{ api_name: string; status: ErpActionPreview['status']; reason: string | null }>
+  pushes: Array<{
+    api_id?: number | null
+    api_name: string
+    status: ErpActionPreview['status']
+    reason: string | null
+  }>
 }
 
 function isEmpty(v: unknown): boolean {
@@ -320,7 +352,12 @@ export function requirementIssues(blocks: TransitionRequirementBlock[]): Preflig
       if (b.optional) continue
       for (const f of b.fields) {
         if (!isEmpty(b.values?.[f.field])) continue
-        issues.push({ severity: 'ask', message: `Asks for ${f.label}`, field: f.field })
+        issues.push({
+          severity: 'ask',
+          kind: 'requirement',
+          message: `Asks for ${f.label}`,
+          field: f.field
+        })
       }
       continue
     }
@@ -346,6 +383,7 @@ export function requirementIssues(blocks: TransitionRequirementBlock[]): Preflig
       if (!rows?.length) continue
       issues.push({
         severity: 'ask',
+        kind: 'requirement',
         message: `Asks for ${f.label} on ${rows.length} line${rows.length === 1 ? '' : 's'}`,
         collection: block.collection,
         fk_field: block.fk_field,
@@ -415,6 +453,35 @@ export async function transitionPreflight(
       'sort'
     )) as TransitionRow | undefined
   if (!t) return null
+  const to = t.to_state
+    ? ((await db('nivaro_workflow_states')
+        .where({ id: t.to_state })
+        .first('id', 'key', 'label', 'external_label')) as StateRow | undefined)
+    : undefined
+  return preflightTransitionRow(collection, item, t, to ?? null, userId)
+}
+
+/**
+ * The preflight of one transition row for one record — the body of transitionPreflight, which
+ * the ready-to-send board runs for many records with ONE `cache` (previewErpActions' read
+ * memo: the record, its context lookups and its last landed pushes seeded from set reads, and
+ * every record-independent read shared). `to` = the transition's target state row.
+ * `opts.database` = the requirements evaluator's reads (a memoizing knex in the batch);
+ * `opts.conditionRecord` = the record read for conditions once for all of a record's moves
+ * (fetchRecordForConditions over every move's rules).
+ */
+export async function preflightTransitionRow(
+  collection: string,
+  item: string,
+  t: TransitionRow,
+  to: StateRow | null,
+  userId: string | null,
+  cache?: Map<string, Promise<unknown>>,
+  opts: {
+    database?: typeof db
+    conditionRecord?: Promise<Record<string, unknown>>
+  } = {}
+): Promise<PreflightResult> {
   const issues: PreflightIssue[] = []
   // Record fields the requirements dialog collects on press: a push guard
   // waiting on one of them is satisfied by the dialog, not a blocker.
@@ -422,7 +489,7 @@ export async function transitionPreflight(
 
   if (t.requirements) {
     const blocks = await evaluateTransitionRequirements(
-      db,
+      opts.database ?? db,
       t.requirements,
       String(item),
       undefined,
@@ -438,15 +505,17 @@ export async function transitionPreflight(
 
   if (t.condition_rules) {
     const rules = parseConditionRules(t.condition_rules) ?? []
-    const rec = await fetchRecordForConditions(collection, String(item), [t.condition_rules]).catch(
-      () => ({}) as Record<string, unknown>
-    )
+    const rec = await (
+      opts.conditionRecord ??
+      fetchRecordForConditions(collection, String(item), [t.condition_rules])
+    ).catch(() => ({}) as Record<string, unknown>)
     if (!evaluateConditionRules(t.condition_rules, rec)) {
       const unmet = rules.filter(
         (r) => r && typeof r.field === 'string' && !evaluateConditionRules(JSON.stringify([r]), rec)
       )
       issues.push({
         severity: 'block',
+        kind: 'condition',
         message:
           unmet.length > 0
             ? unmet.map(describeCondition).join('; ')
@@ -456,45 +525,54 @@ export async function transitionPreflight(
     }
   }
 
-  const to = t.to_state
-    ? ((await db('nivaro_workflow_states')
-        .where({ id: t.to_state })
-        .first('id', 'key', 'label', 'external_label')) as StateRow | undefined)
-    : undefined
   const previews = await previewErpActions({
     transition: { id: t.id, label: t.label, actions: t.actions },
     instance: { collection, item: String(item) },
     newStateObj: pushState(to),
-    userId
+    userId,
+    cache
   })
-  const names = await apiNames(previews.map((p) => p.api_id ?? Number.NaN))
+  const names = await cachedApiNames(
+    previews.map((p) => p.api_id ?? Number.NaN),
+    cache
+  )
   const pushes: PreflightResult['pushes'] = []
   for (const p of previews) {
     const name = p.api_id != null ? (names.get(p.api_id) ?? `API #${p.api_id}`) : 'A partner'
-    pushes.push({ api_name: name, status: p.status, reason: p.reason })
+    pushes.push({ api_id: p.api_id, api_name: name, status: p.status, reason: p.reason })
     const later = p.after_earlier_writeback ? ' (an earlier push on this step may fill it)' : ''
     if (p.status === 'guard' && p.guard_failed && asked.has(p.guard_failed.field)) {
       issues.push({
         severity: 'ask',
+        kind: 'push',
+        partner: name,
         message: `${name} goes once ${humanizePayloadKey(p.guard_failed.field)} is entered in the dialog`,
         field: p.guard_failed.field
       })
     } else if (p.status === 'guard' && p.guard_failed) {
       issues.push({
         severity: p.blocking ? 'block' : 'warn',
+        kind: 'push',
+        partner: name,
         message: `${name} will not be sent: ${describeGuard(p.guard_failed)}${later}`,
+        ...(later ? { after_earlier_push: true } : {}),
         field: p.guard_failed.field.includes('.') ? undefined : p.guard_failed.field
       })
     } else if (p.status === 'template_error' || p.status === 'not_configured') {
       issues.push({
         severity: p.blocking ? 'block' : 'warn',
+        kind: 'push',
+        partner: name,
         message: `${name} cannot be built: ${p.reason ?? 'the push is misconfigured'}`
       })
     }
     if (p.contract_missing.length > 0) {
       issues.push({
         severity: 'warn',
-        message: `${name} would receive no ${p.contract_missing.map(humanizePayloadKey).join(', ')}${later}`
+        kind: 'contract',
+        partner: name,
+        message: `${name} would receive no ${p.contract_missing.map(humanizePayloadKey).join(', ')}${later}`,
+        ...(later ? { after_earlier_push: true } : {})
       })
     }
   }

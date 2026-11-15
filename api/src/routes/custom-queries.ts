@@ -2,7 +2,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
-import { customQueryCacheKey, customQueryCacheValue } from '../services/custom-query-cache.js'
+import {
+  customQueryCacheKey,
+  customQueryCacheValue,
+  hitFreshness
+} from '../services/custom-query-cache.js'
 import {
   customQueryDependents,
   shapeChecks,
@@ -24,6 +28,7 @@ import {
 } from '../services/query-cache-stats.js'
 import {
   bustFreshnessInference,
+  liveReadSources,
   parseFreshnessSources,
   queryFreshness
 } from '../services/query-freshness.js'
@@ -988,7 +993,13 @@ export async function customQueriesRoutes(app: FastifyInstance) {
             const expiresIn = await app.redis.ttl(cacheKey).catch(() => -1)
             recordCacheOutcome(slug, 'hit', { cacheTtl: ttl })
             markCacheHit(req)
-            const fresh = await queryFreshness(query).catch(() => null)
+            // The probe's facts plus the change warm's stale mark for this query.
+            const fresh = await hitFreshness(
+              app.redis,
+              slug,
+              await queryFreshness(query).catch(() => null),
+              cachedAt
+            )
             return {
               data: rows,
               cached: true,
@@ -999,9 +1010,9 @@ export async function customQueriesRoutes(app: FastifyInstance) {
               expires_in_seconds: expiresIn >= 0 ? expiresIn : null,
               cache_ttl: ttl,
               executed_at: cachedAt,
-              data_changed_at: fresh?.data_changed_at ?? null,
-              freshness_sources: fresh?.sources ?? [],
-              stale: !!(fresh?.data_changed_at && cachedAt && fresh.data_changed_at > cachedAt)
+              data_changed_at: fresh.data_changed_at,
+              freshness_sources: fresh.freshness_sources,
+              stale: fresh.stale
             }
           }
         } catch (err) {
@@ -1050,6 +1061,12 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         req
       })
       const fresh = ttl > 0 ? await queryFreshness(query).catch(() => null) : null
+      // Uncached queries still say which collections they read (no clock, no probe) so a page
+      // can tell the viewer "data changed since run" live.
+      const liveSources =
+        ttl > 0
+          ? (fresh?.sources ?? [])
+          : await liveReadSources(query).catch(() => [] as Array<{ table: string }>)
       return {
         data: rows,
         cached: false,
@@ -1059,7 +1076,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         cache_ttl: ttl,
         executed_at: cachedAt,
         data_changed_at: fresh?.data_changed_at ?? null,
-        freshness_sources: fresh?.sources ?? [],
+        freshness_sources: liveSources,
         stale: false
       }
     }

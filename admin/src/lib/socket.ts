@@ -10,6 +10,8 @@ import {
   deliveryAckFor,
   forgetSettledReads,
   guardIdentityCall,
+  liveCollectionEventPasses,
+  liveEventQuiet,
   measureClockOffset,
   parseSignOutNote,
   type RealtimeAdapter,
@@ -497,7 +499,18 @@ export function getSocket(): Socket {
   // Notices for the signed-in person or the whole tenant (payload-free or ids only): handed to
   // the shared live hooks (lib/live.ts useLiveEvent) — jobs tray #1724, bulk rows #1827,
   // announcements #1744, feature flags #1741.
-  for (const ev of ['job:progress', 'bulk:rows', 'announcements:changed', 'flags:changed']) {
+  for (const ev of [
+    'job:progress',
+    'bulk:rows',
+    'announcements:changed',
+    'flags:changed',
+    // rt2 #19 — the people directory moved (pickers, mentions, avatars; ids only).
+    'people:changed',
+    // rt4 #20 — the person's own lists (saved views, searches, Overview pins) and the shared
+    // collection pins moved.
+    'mine:changed',
+    'pins:changed'
+  ]) {
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   }
   // A record opened in a drill-down sheet joins its room on THIS socket (adminRealtime.emit
@@ -580,6 +593,10 @@ const RELAYED_EVENTS = new Set([
   'prefs:changed',
   // Send my view: a poke on the person's own room (the card reads the view as them).
   'view:sent',
+  // rt4 #20 — a person's own lists and the shared pins, to follower tabs too (the same notice
+  // reaching a tab twice inside 150 ms is delivered once by useLiveEvent).
+  'mine:changed',
+  'pins:changed',
   // #1675 — pushed widgets: the figure computed as this sign-in, for this tab's own watch key.
   'widget:watching',
   'widget:data',
@@ -685,7 +702,12 @@ function viaWorker(): SocketRealtime | null {
 
 /** RealtimeAdapter for shared components (CBV patches, RecordLiveSync, MyWork). */
 export const adminRealtime: RealtimeAdapter = {
-  subscribeCollections(collections, cb) {
+  subscribeCollections(collections, deliver) {
+    // Live updates Off (Profile → Display): others' writes stop here for the admin's direct
+    // subscribers too (the shared tap filters what reads through the context).
+    const cb: typeof deliver = (ev) => {
+      if (liveCollectionEventPasses(ev as never)) deliver(ev)
+    }
     const w = viaWorker()
     if (w) return w.subscribeCollections(collections, cb)
     const handle = ensureLeaderSocket()
@@ -702,7 +724,14 @@ export const adminRealtime: RealtimeAdapter = {
     })
     return off
   },
-  on(event, cb) {
+  on(event, deliver) {
+    const cb = (payload: any) => {
+      if (
+        event === 'collection:update' ? !liveCollectionEventPasses(payload) : liveEventQuiet(event)
+      )
+        return
+      deliver(payload)
+    }
     const w = viaWorker()
     if (w) return w.on(event, cb)
     const handle = ensureLeaderSocket()

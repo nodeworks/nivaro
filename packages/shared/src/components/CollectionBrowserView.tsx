@@ -117,14 +117,31 @@ import {
   sanitizeCbvLinkState
 } from '../lib/list-link'
 import {
+  arrivedByListReturn,
+  ensureHistoryKey,
+  historyKey,
   pageWhileSettling,
   rememberedListPage,
   rememberListPage,
   restoreWindowOutcome
 } from '../lib/list-page-memory'
-import { expandCoalesced, LIVE_ASPECTS } from '../lib/live'
+import {
+  type AwayLog,
+  changedRowIds,
+  markReturnRow,
+  noteListOpen,
+  peekListAway,
+  planListReturn,
+  readListReturn,
+  rowInView,
+  standbyListAway,
+  takeListAway
+} from '../lib/list-return'
+import { expandCoalesced, LIVE_ASPECTS, useLiveEvent } from '../lib/live'
+import { createCoalescer } from '../lib/live-counts'
 import {
   conditionFields,
+  flashRows,
   lockLabel,
   mayAffectMatch,
   useRowChanges,
@@ -133,6 +150,7 @@ import {
   writerOf
 } from '../lib/live-list'
 import { listLoadErrorText, loadErrorStatus } from '../lib/load-error'
+import { useShownRecords } from '../lib/missed-updates'
 import { listTrailDetail, setTrailDetail } from '../lib/nav-trail'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
@@ -161,6 +179,7 @@ import { type CellShape, type SkeletonColumn, shapeForField } from '../lib/skele
 import { knownTotalFrom } from '../lib/slow-reason'
 import { nextSortValue } from '../lib/sort-cycle'
 import { isFileCollection } from '../lib/system-collections'
+import { useTableDensity } from '../lib/table-density'
 import { templateRelationPaths } from '../lib/template-paths'
 import {
   effectiveScopeSeedIds,
@@ -245,6 +264,7 @@ import { usePickerExclusion } from './item-edit/RecordGrantTools'
 import { invalidateRecordQueries } from './item-edit/RecordLiveSync'
 import { relatedMissing } from './item-edit/related-missing'
 import { UserChip, UserRosterCluster } from './item-edit/UserChip'
+import { LiveCount } from './LiveCount'
 import { LiveRowMark } from './LiveRowMark'
 import { CopyListLinkButton } from './list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from './list/InlineEdit'
@@ -256,10 +276,12 @@ import {
   usePickerExcludedRows
 } from './PickerExcludedRows'
 import {
+  AccessGrantedNote,
   ItemActionChoiceList,
   type ItemActionChoiceOption,
   itemActionChoiceStep,
-  RevisionsPanel
+  RevisionsPanel,
+  useAccessRegained
 } from './panels'
 import { ConfirmButton } from './profile/primitives'
 import { pruneQuickSelection, type QuickFilterDef } from './quick-filters/config'
@@ -267,6 +289,8 @@ import { QuickFilterBarEditor, QuickFilterEditButton } from './quick-filters/Qui
 import { useQuickFilterEditing } from './quick-filters/useQuickFilterEditing'
 import { RealtimeStaleMark } from './RealtimeStatusBanner'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
+import { RecordHoverCard } from './RecordHoverCard'
+import { RelativeTime } from './RelativeTime'
 import { RowHighlightLegend } from './RowHighlightLegend'
 import { RowPresence } from './RowPresence'
 import { TableSkeletonRows } from './Skeletons'
@@ -871,7 +895,12 @@ function RecordRelationLabel({
         [item.first_name, item.last_name].filter(Boolean).join(' ') || item.email || item.id || ''
       )
     : renderDisplayTemplate(meta?.display_template ?? null, item)
-  return <span className='text-[12px] text-slate-700 dark:text-slate-200'>{label}</span>
+  // rt3 #16 — hover shows the linked record's current step, owners and amounts.
+  return (
+    <RecordHoverCard collection={relatedCollection} id={id} disabled={userCol}>
+      <span className='text-[12px] text-slate-700 dark:text-slate-200'>{label}</span>
+    </RecordHoverCard>
+  )
 }
 
 // ─── Cell renderer (admin CellValue port, same precedence) ────────────────────
@@ -1848,7 +1877,11 @@ function CellValue({
     }
     // Rendered as human text ("2 days ago", "08/05/2026"), so it reads as prose;
     // tabular figures keep the column's digits aligned.
-    return <span className='text-[12px] tabular-nums text-slate-400'>{formatRelative(value)}</span>
+    return (
+      <span className='text-[12px] tabular-nums text-slate-400'>
+        <RelativeTime value={String(value)} format={formatRelative} />
+      </span>
+    )
   }
   if (typeof value === 'string') {
     // Long text (names, descriptions) ellipses at a sane width — the full
@@ -4495,6 +4528,23 @@ const CBV_KIND_SHAPE: Partial<Record<string, CellShape>> = {
   addendums: 'short'
 }
 
+/** How often a live collection re-reads quietly in case a write was never announced. */
+const CBV_SAFETY_MS = 2 * 60_000
+
+/** True when a quiet re-read of the list cannot disturb the person: tab visible, nothing
+ *  selected, no field focused in the table, pointer not over it. Exported for tests. */
+export function cbvQuietNow(selectedCount: number): boolean {
+  if (typeof document === 'undefined') return false
+  if (document.visibilityState === 'hidden' || selectedCount > 0) return false
+  const scroller = document.querySelector('[data-cbv-scroll]')
+  if (!scroller) return true
+  if (scroller.matches(':hover')) return false
+  const active = document.activeElement
+  if (active && scroller.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || ''))
+    return false
+  return true
+}
+
 export function CollectionBrowserView({
   collection,
   quickFilters = [],
@@ -4529,6 +4579,11 @@ export function CollectionBrowserView({
     sharedLink ? null : rememberedListPage(`cbv:${collection}`)
   )
   const [page, setPage] = useState(sharedLink?.p ?? restoredPage ?? 1)
+  // Back to the list keeps your place (realtime #16, lib/list-return.ts): what changed while
+  // the list was away decides whether its cached rows stay as they are (nothing changed),
+  // only the changed rows are re-read, or the page is read once more under the kept rows.
+  const [awayPeek] = useState(() => peekListAway(`cbv:${collection}`))
+  const [holdCache, setHoldCache] = useState(() => planListReturn(awayPeek) !== 'fresh')
   // Army 9 b14: the async scope seed (Funding Year / Zone defaults) changes the conditions
   // right after mount, and that automatic reset to page 1 deleted the remembered page.
   // Until the first settled page has loaded, a reset to 1 goes back to the restored page.
@@ -4615,23 +4670,10 @@ export function CollectionBrowserView({
   const drillStack = recordDrill.value
   const [auditId, setAuditId] = useState<string | null>(null)
   const [colsOpen, setColsOpen] = useState(false)
-  // Row density — a per-browser preference shared by every table surface.
-  const [density, setDensity] = useState<'compact' | 'comfortable'>(() => {
-    try {
-      return localStorage.getItem('nvr_table_density') === 'comfortable' ? 'comfortable' : 'compact'
-    } catch {
-      return 'compact'
-    }
-  })
-  const toggleDensity = () => {
-    const next = density === 'compact' ? 'comfortable' : 'compact'
-    setDensity(next)
-    try {
-      localStorage.setItem('nvr_table_density', next)
-    } catch {
-      /* private mode */
-    }
-  }
+  // Row density — shared by every table surface; follows the person between tabs and
+  // devices (lib/table-density.ts, rt4 #19).
+  const [density, setDensity] = useTableDensity()
+  const toggleDensity = () => setDensity(density === 'compact' ? 'comfortable' : 'compact')
   // Group rows under collapsible section headers by one column's value.
   // Per-collection preference; grouping fetches up to 500 rows in one page so
   // sections cover the (filtered) set rather than one page of it.
@@ -5499,10 +5541,37 @@ export function CollectionBrowserView({
     queryFn: () => fetchItemsPage(page),
     enabled: !!collection && scopeGateOpen,
     placeholderData: (prev) => prev,
+    // A list someone comes back to within the away window shows its cached page at once
+    // (realtime #16): kept as long as the away log can vouch for it (see the return effect).
+    gcTime: 20 * 60_000,
+    ...(holdCache ? { staleTime: Number.POSITIVE_INFINITY } : {}),
     // #2490 — a collection whose live record events are off polls instead (visible tabs only).
     refetchInterval: bc.live_events === 'off' ? 30_000 : false,
     retry: false
   })
+  // rt4 #11: the list answered 403 and now reads (an access request granted while it stayed
+  // open — access:changed refetched it): the rows appear with one quiet line saying so.
+  const listAccessRegained = useAccessRegained(
+    (error as { status?: number } | null)?.status === 403 && !isFilterRefusal(error),
+    !!itemsRes && !error,
+    collection
+  )
+  // Live collections keep a slow, quiet safety read for writes nothing announces (a procedure
+  // or a script that wrote set-based). It never runs while the person has rows selected, a field
+  // focused in the table, or the pointer over it, so rows never move under them; a hidden tab
+  // does not read at all.
+  const selectedIdsRef = useRef<Array<string | number>>([])
+  selectedIdsRef.current = selectedIds
+  const refetchRef = useRef(refetch)
+  refetchRef.current = refetch
+  const livePolling = !!collection && bc.live_events !== 'off'
+  useEffect(() => {
+    if (!livePolling) return
+    const t = setInterval(() => {
+      if (cbvQuietNow(selectedIdsRef.current.length)) void refetchRef.current()
+    }, CBV_SAFETY_MS)
+    return () => clearInterval(t)
+  }, [livePolling])
   // The prefetched page's relation labels + dotted columns are warmed with it, or Next paints the
   // rows, then their placeholders fill a second later (assigned below, once the columns are known).
   const warmPageRef = useRef<(pageRows: Array<Record<string, unknown>>) => void>(() => {})
@@ -5548,6 +5617,20 @@ export function CollectionBrowserView({
     if (out.page != null) setPage(out.page)
   }, [scopeGateOpen, itemsRes, isFetching, isPlaceholderData, page, effPageSize, error])
   const rows = aiResult ? aiResult.rows : (itemsRes?.data ?? [])
+  // Realtime idea 14: after a reload, were these rows really stale? (hashes only, first 200)
+  useShownRecords(() =>
+    !aiResult && collection && !isPlaceholderData && dataUpdatedAt > 0
+      ? rows
+          .slice(0, 200)
+          .filter((r) => r && r.id != null)
+          .map((r) => ({
+            collection,
+            id: r.id as string | number,
+            values: r as Record<string, unknown>,
+            loadedAt: dataUpdatedAt
+          }))
+      : null
+  )
   const total = aiResult ? aiResult.total : (itemsRes?.total ?? 0)
   // The rows are complete but the count gave up (200 + total_timed_out): no total to state.
   const totalUnknown =
@@ -5853,11 +5936,24 @@ export function CollectionBrowserView({
     grouped: !!groupBy
   }
   const liveOwner = useRef({}).current
+  // rt2 #17 — owners of this collection's records may have moved without a write to them
+  // (owner matrix, delegation, out of office): the owners column refetches as the viewer.
+  useLiveEvent(
+    'owners:changed',
+    (p) => {
+      if (!collection || p?.queues) return
+      if (Array.isArray(p?.collections) && !p.collections.includes(collection)) return
+      void qc.invalidateQueries({ queryKey: ['cbv-owners', collection] })
+    },
+    { debounceMs: 600 }
+  )
   const [lockTick, setLockTick] = useState(0)
   // Live pill (#240): changes the client cannot place (off-page, bulk writes)
   // count into a pill the viewer clicks to refresh — a paging table that
   // silently reshuffles rows under the cursor reads as a glitch, not freshness.
   const [pendingLive, setPendingLive] = useState(0)
+  // The live handler, for replaying what changed while the list was away (realtime #16).
+  const replayRef = useRef<((evs: CollectionUpdateEvent[]) => void) | null>(null)
   useEffect(() => {
     if (!realtime || !collection) return
     const countPill = (n = 1) => setPendingLive((c) => c + n)
@@ -5875,10 +5971,12 @@ export function CollectionBrowserView({
       if (fields.includes(LIVE_ASPECTS.state)) {
         add(['cbv-pipeline-instances', collection])
         add(['cbv-owners', collection])
-        // A state move can put a record into / out of a saved view.
-        add(['cbv-view-count', collection])
+        // A state move can put a record into / out of a saved view (coalesced with the rest).
+        viewCountCo.poke()
       }
       if (fields.includes(LIVE_ASPECTS.lock)) setLockTick((n) => n + 1)
+      // rt2 #17 — a row's owners moved (owner matrix, delegation): its owners cell.
+      if (fields.includes(LIVE_ASPECTS.owners)) add(['cbv-owners', collection])
       if (aspectTimer) return
       aspectTimer = setTimeout(() => {
         aspectTimer = null
@@ -5901,7 +5999,12 @@ export function CollectionBrowserView({
 
     let buf: CollectionUpdateEvent[] = []
     let flushTimer: ReturnType<typeof setTimeout> | null = null
-    let countsTimer: ReturnType<typeof setTimeout> | null = null
+    // Saved-view pill counts: one re-read per 3 s quiet window (never later than 15 s into a
+    // steady stream of writes), however many writes the feed delivers.
+    const viewCountCo = createCoalescer(
+      () => void qc.invalidateQueries({ queryKey: ['cbv-view-count', collection] }),
+      { quietMs: 3000, maxWaitMs: 15_000 }
+    )
     let disposed = false
 
     const flush = async () => {
@@ -5910,11 +6013,7 @@ export function CollectionBrowserView({
       buf = []
       if (events.length === 0 || disposed) return
       // Saved-view pills count as the viewer; re-ask once the burst settles.
-      if (!countsTimer)
-        countsTimer = setTimeout(() => {
-          countsTimer = null
-          void qc.invalidateQueries({ queryKey: ['cbv-view-count', collection] })
-        }, 1500)
+      viewCountCo.poke()
       const latest = new Map<string, CollectionUpdateEvent>()
       let bulk = false
       for (const ev of events) {
@@ -5940,7 +6039,9 @@ export function CollectionBrowserView({
       }
       if (bulk) countPill()
       const visible = visibleIdsRef.current
-      const own = (ev: CollectionUpdateEvent) => isOwnWrite(collection, ev.item as string)
+      // A replayed away event carries whether it was the viewer's own save when it arrived.
+      const own = (ev: CollectionUpdateEvent) =>
+        (ev as { own?: boolean }).own === true || isOwnWrite(collection, ev.item as string)
       // The writer is only ever read back from the viewer's own /items read
       // (user_updated, field-permission checked) — events never name them.
       const byOf = (row?: Record<string, unknown> | null) => {
@@ -6062,15 +6163,83 @@ export function CollectionBrowserView({
     const unsub = realtime.subscribeCollections([collection], (ev) =>
       deliverLive(liveOwner, [ev], handle)
     )
+    replayRef.current = handle
     return () => {
       disposed = true
+      if (replayRef.current === handle) replayRef.current = null
       unsub()
       releaseLiveOwner(liveOwner)
       if (aspectTimer) clearTimeout(aspectTimer)
       if (flushTimer) clearTimeout(flushTimer)
-      if (countsTimer) clearTimeout(countsTimer)
+      viewCountCo.cancel()
     }
   }, [realtime, collection, qc, client, selfUserId, rowChanges, liveOwner])
+
+  // ── Back to the list keeps your place (realtime #16, lib/list-return.ts) ──
+  // While mounted, a quiet standby subscription waits; once the list unmounts it records what
+  // changed (ids + field names) until the list comes back and takes the log.
+  const awayLogRef = useRef<AwayLog | null>(null)
+  useEffect(() => {
+    if (!collection) return
+    const log = takeListAway(`cbv:${collection}`)
+    if (log && !awayLogRef.current) awayLogRef.current = log
+    return standbyListAway(realtime, `cbv:${collection}`, [collection])
+  }, [realtime, collection])
+  // Once the page on screen settles: nothing changed → leave it; a few rows changed → re-read
+  // only those (the live handler, as the viewer); the log cannot vouch → read the page once
+  // under the kept rows and fade only the rows that came back different.
+  const returnRef = useRef<{
+    phase: 'wait' | 'refetching' | 'done'
+    before?: Array<Record<string, unknown>>
+  }>({ phase: 'wait' })
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a one-shot settle step; refetch, rowChanges and the refs are read as they are then
+  useEffect(() => {
+    const r = returnRef.current
+    if (r.phase === 'done' || !scopeGateOpen || !itemsRes || isPlaceholderData) return
+    if (r.phase === 'refetching') {
+      if (isFetching) return
+      r.phase = 'done'
+      flashRows(rowChanges.rootRef.current, changedRowIds(r.before, itemsRes.data))
+      return
+    }
+    const log = awayLogRef.current
+    const fromCache = !!log && dataUpdatedAt > 0 && dataUpdatedAt <= log.leftAt
+    const plan = fromCache ? planListReturn(log) : 'fresh'
+    if (plan === 'replay' && log && replayRef.current) {
+      replayRef.current(log.events)
+    } else if (plan === 'refetch' || (plan === 'replay' && !replayRef.current)) {
+      r.phase = 'refetching'
+      r.before = itemsRes.data
+      if (!isFetching) void refetch()
+      setHoldCache(false)
+      return
+    }
+    r.phase = 'done'
+    setHoldCache(false)
+  }, [scopeGateOpen, itemsRes, isPlaceholderData, isFetching, dataUpdatedAt])
+  // The row the person comes back to (the one they opened, or walked to with Next) gets a
+  // brief quiet mark — on a Back to this list's own history entry or a "return to the list".
+  const returnMarkRef = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on the first settled page
+  useEffect(() => {
+    if (returnMarkRef.current || !scopeGateOpen || !itemsRes || isPlaceholderData) return
+    returnMarkRef.current = true
+    const stash = readListReturn()
+    if (!stash || stash.list !== `cbv:${collection}`) return
+    const entry = historyKey()
+    if (!((stash.entry && entry && stash.entry === entry) || arrivedByListReturn())) return
+    const id = String(stash.current.id)
+    const walked = String(stash.opened?.id ?? id) !== id
+    // After the restored scroll has landed (nav-trail puts it back as soon as rows are there).
+    setTimeout(() => {
+      const root = rowChanges.rootRef.current
+      if (!markReturnRow(root, id) || !walked) return
+      const esc = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id
+      const row = root?.querySelector(`[data-row-key="${esc}"]`)
+      // Walked to a row further down with Next: bring it into view, once, on arrival.
+      if (row && !rowInView(row, null)) row.scrollIntoView?.({ block: 'nearest' })
+    }, 260)
+  }, [scopeGateOpen, itemsRes, isPlaceholderData, collection])
   const rowLocks = useRowLocks(
     collection,
     rows.map((r) => String(r.id)),
@@ -7465,6 +7634,16 @@ export function CollectionBrowserView({
         item: id === 'new' ? null : id
       })
     }
+    // Keep the page's order so the record can offer Previous / Next in list, and the list can
+    // mark this row when the person comes back (realtime #16).
+    if (id !== 'new')
+      noteListOpen({
+        list: `cbv:${collection}`,
+        label: meta?.display_name ?? titleCase(collection),
+        rows: rows.map((r) => ({ collection, id: String(r.id) })),
+        opened: { collection, id: String(id) },
+        entry: ensureHistoryKey()
+      })
     if (onOpenItem) onOpenItem(id)
     else openTarget({ collection, itemId: String(id) })
   }
@@ -9369,7 +9548,10 @@ export function CollectionBrowserView({
                 data-tip='Records matching this view right now (as you see them)'
                 className='rounded-full bg-slate-100 px-1.5 text-[10.5px] font-medium tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400'
               >
-                {(viewCounts.get(v.id) as number).toLocaleString()}
+                <LiveCount
+                  value={viewCounts.get(v.id) as number}
+                  format={(n) => Number(n).toLocaleString()}
+                />
               </span>
             )}
             {v.default_for_role && (
@@ -9522,6 +9704,9 @@ export function CollectionBrowserView({
         )}
       </div>
 
+      {listAccessRegained && !error && (
+        <AccessGrantedNote collection={collection} className='mx-4 mt-3' />
+      )}
       {/* Error — a permission wall offers the access-request path (#55). */}
       {error != null && (
         <div className='mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700 dark:border-red-900/40 dark:bg-red-900/10 dark:text-red-400'>

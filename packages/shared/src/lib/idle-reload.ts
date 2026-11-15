@@ -35,6 +35,15 @@ export interface BuildStatus {
   id: string | null
   reason: string
   auto_reload: { enabled: boolean; idle_seconds: number }
+  /** Realtime idea 13 — when a returning tab refreshes its data (absent on older APIs). */
+  data_resync?: DataResyncSettings
+}
+
+export interface DataResyncSettings {
+  /** How far back the server can still replay missed live events (the durable journal). */
+  replay_window_s: number
+  /** A tab nobody used for this long refreshes its data on return. */
+  idle_hours: number
 }
 
 export interface IdleReloadInput {
@@ -90,6 +99,64 @@ export function decideIdleReload(i: IdleReloadInput): IdleReloadDecision {
   if (!s.older || !s.id) return { action: 'wait', reason: 'current' }
   if (i.reloadedFor(s.id) >= IDLE_RELOADS_PER_TARGET) return { action: 'wait', reason: 'already' }
   return { action: 'reload', id: s.id }
+}
+
+// ─── Data resync: stale DATA refreshes in place, only a new BUILD reloads (idea 13) ─────────
+
+/** The durable event journal keeps 24 hours (event-journal-store.ts). */
+export const DEFAULT_REPLAY_WINDOW_MS = 24 * 3_600_000
+export const DEFAULT_IDLE_RESYNC_MS = 4 * 3_600_000
+/** Two automatic resyncs are at least this far apart. */
+export const RESYNC_MIN_GAP_MS = 60_000
+/** A gap between two watcher ticks longer than this means the machine slept. */
+export const SLEEP_GAP_MS = 60_000
+
+export interface IdleResyncInput {
+  now: number
+  /** Last typing / click / touch / wheel in this tab (ms). */
+  lastInput: number
+  /** How long the tab was out of sight or the machine asleep, measured at its return (ms). */
+  awayMs: number
+  /** While away, the socket said it lost events it could not replay (catchup-full, stale). */
+  missed: boolean
+  /** The last data resync (0 = none on this page load). */
+  lastResyncAt: number
+  /** The last build-status answer (its data_resync settings; null = defaults). */
+  status: BuildStatus | null
+  /** The build reload is about to run (decideIdleReload said reload): it reloads everything. */
+  reloadDue?: boolean
+}
+
+export type IdleResyncDecision =
+  | { action: 'resync'; reason: 'replay-window' | 'missed-events' | 'idle-hours' }
+  | { action: 'none'; reason: 'build' | 'recent' | 'fresh' }
+
+export function replayWindowMsFor(status: BuildStatus | null): number {
+  const s = Number(status?.data_resync?.replay_window_s)
+  return Number.isFinite(s) && s > 0 ? s * 1000 : DEFAULT_REPLAY_WINDOW_MS
+}
+
+export function idleResyncMsFor(status: BuildStatus | null): number {
+  const h = Number(status?.data_resync?.idle_hours)
+  return Number.isFinite(h) && h > 0 ? h * 3_600_000 : DEFAULT_IDLE_RESYNC_MS
+}
+
+/**
+ * Pure: should a returning (or long-idle) tab refresh its DATA? Never a page reload — the build
+ * reload above is the only reload. In order: a build reload is due (it covers everything), a
+ * resync just ran, then why the data may be stale: away longer than the server can replay,
+ * events lost while away, or nobody used the tab for hours.
+ */
+export function decideIdleResync(i: IdleResyncInput): IdleResyncDecision {
+  if (i.reloadDue) return { action: 'none', reason: 'build' }
+  if (i.lastResyncAt > 0 && i.now - i.lastResyncAt < RESYNC_MIN_GAP_MS)
+    return { action: 'none', reason: 'recent' }
+  if (i.awayMs >= replayWindowMsFor(i.status)) return { action: 'resync', reason: 'replay-window' }
+  if (i.missed) return { action: 'resync', reason: 'missed-events' }
+  const idleMs = idleResyncMsFor(i.status)
+  const quietSince = Math.max(i.lastInput, i.lastResyncAt)
+  if (i.now - quietSince >= idleMs) return { action: 'resync', reason: 'idle-hours' }
+  return { action: 'none', reason: 'fresh' }
 }
 
 // ─── Input tracking (typing and clicking; mousemove alone is not "using the tab") ───────────

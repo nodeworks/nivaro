@@ -85,6 +85,8 @@ export function useStableFieldAffordances(next: FieldAffordances): FieldAffordan
     () => ({
       dismissRemoteChange: (field: string) => latest.current.dismissRemoteChange(field),
       takeRemoteChange: (field: string) => latest.current.takeRemoteChange?.(field),
+      mergeRemoteChange: (field: string, value: unknown) =>
+        latest.current.mergeRemoteChange?.(field, value),
       onLockHover: () => latest.current.onLockHover?.(),
       openRelated: (collection: string, id: string) => latest.current.openRelated?.(collection, id)
     }),
@@ -103,6 +105,7 @@ export function useStableFieldAffordances(next: FieldAffordances): FieldAffordan
     return out
   }, [applyData])
   const hasTake = !!next.takeRemoteChange
+  const hasMerge = !!next.mergeRemoteChange
   const hasHover = !!next.onLockHover
   const hasOpen = !!next.openRelated
   const { remoteChanges, layoutId, pickerMisses, fromAutofill, glossaryHelp, placementText } = next
@@ -115,6 +118,7 @@ export function useStableFieldAffordances(next: FieldAffordances): FieldAffordan
       remoteChanges,
       dismissRemoteChange: fns.dismissRemoteChange,
       takeRemoteChange: hasTake ? fns.takeRemoteChange : undefined,
+      mergeRemoteChange: hasMerge ? fns.mergeRemoteChange : undefined,
       lockReasons,
       onLockHover: hasHover ? fns.onLockHover : undefined,
       applyToLines,
@@ -130,6 +134,7 @@ export function useStableFieldAffordances(next: FieldAffordances): FieldAffordan
       remoteChanges,
       fns,
       hasTake,
+      hasMerge,
       lockReasons,
       hasHover,
       applyToLines,

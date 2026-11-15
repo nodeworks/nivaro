@@ -131,6 +131,10 @@ function serialize(row: Record<string, unknown>) {
     ack: detail?.ack_required
       ? { required: true, at: detail.ack_at ?? null, by: detail.ack_by ?? null }
       : null,
+    // Someone handled what the row asked ("Approved by Beth"): notification-resolve.ts.
+    resolved: detail?.resolved ?? null,
+    // Several FYI updates on the record folded into this row (notification-fold.ts).
+    fold_count: detail?.fold?.count ?? null,
     collection: (row.collection as string | null) ?? null,
     item: row.item != null && row.item !== '' ? String(row.item) : null,
     sender: row.sender ?? null,

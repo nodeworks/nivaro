@@ -329,6 +329,15 @@ export const userComments: DocSection = {
       type: 'p',
       text: 'Type in the comment input and submit. Use `@email-prefix` or `@first_name` to mention Nivaro users — the server resolves handles on submit, so no autocomplete is required.'
     },
+    { type: 'h3', text: 'Pasting a screenshot' },
+    {
+      type: 'p',
+      text: 'Paste an image (Ctrl or Cmd + V) or drop an image file into the comment box, on the record or on a single field. It uploads at once with a progress bar and shows as a small thumbnail under the box. Click the X on a thumbnail to remove it. Up to six images go with one comment, and the Comment button waits until they have finished uploading.'
+    },
+    {
+      type: 'p',
+      text: 'In the posted comment the image shows inline. Click it to open it full size. Anyone who can open the record can see the picture, and nobody else can. For a comment on a single field, only people who can read that field see the picture. Notifications and previews show it as a short "[image]" note.'
+    },
     { type: 'h3', text: 'Mentions' },
     { type: 'p', text: 'When a user is mentioned they receive:' },
     {

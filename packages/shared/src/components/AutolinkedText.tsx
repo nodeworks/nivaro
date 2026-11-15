@@ -3,7 +3,9 @@ import { useMemo } from 'react'
 import { defaultItemUrl, useNavigation, useNivaroClient } from '../context'
 import { get } from '../lib/commands'
 import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../lib/live'
+import { peekDecision, useRecordPeek } from '../lib/record-peek'
 import { chatRoomTypesQuery } from './chat/chat-core'
+import { RecordHoverCard } from './RecordHoverCard'
 
 /**
  * Renders plain text with entity-registry-shaped record ids (e.g. AB26-12345,
@@ -33,6 +35,7 @@ function useRoomTypes(): RoomType[] {
 function RecordToken({ token, plain }: { token: string; plain?: boolean }) {
   const client = useNivaroClient()
   const nav = useNavigation()
+  const peek = useRecordPeek()
   const types = useRoomTypes()
 
   const { data: card } = useQuery({
@@ -95,30 +98,40 @@ function RecordToken({ token, plain }: { token: string; plain?: boolean }) {
   if (!card) return <>{token}</>
   if (plain) return <span className='font-medium'>{token}</span>
   const target = { collection: card.collection, itemId: String(card.id) }
-  const open = () => {
+  const open = (e: React.MouseEvent) => {
+    // Realtime #17: a record link in a comment opens in the app's record sheet when the host
+    // has one (the comment thread stays put); Cmd / Ctrl-click opens a new tab.
+    const what = peek ? peekDecision(e, true, target.collection) : null
+    if (what === 'peek' && peek) return peek.open(target)
+    if (what === 'new-tab') {
+      window.open((nav.itemUrl ?? defaultItemUrl)(target), '_blank', 'noopener')
+      return
+    }
     if (nav.openItem?.(target)) return
     nav.navigate((nav.itemUrl ?? defaultItemUrl)(target))
   }
   return (
-    <button
-      type='button'
-      onClick={open}
-      className='inline-flex max-w-full items-center gap-1 align-baseline font-medium text-nvr-navy underline decoration-nvr-cyan/50 decoration-[1.5px] underline-offset-2 hover:decoration-nvr-cyan dark:text-nvr-cyan'
-      data-record-token={token}
-    >
-      {token}
-      {card.state && (
-        <span
-          className='inline-flex items-center rounded-full px-1.5 py-px text-[9px] font-semibold leading-tight'
-          style={{
-            backgroundColor: card.color ? `${card.color}26` : 'rgba(100,116,139,.15)',
-            color: card.color ?? undefined
-          }}
-        >
-          {card.state}
-        </span>
-      )}
-    </button>
+    <RecordHoverCard collection={card.collection} id={card.id}>
+      <button
+        type='button'
+        onClick={open}
+        className='inline-flex max-w-full items-center gap-1 align-baseline font-medium text-nvr-navy underline decoration-nvr-cyan/50 decoration-[1.5px] underline-offset-2 hover:decoration-nvr-cyan dark:text-nvr-cyan'
+        data-record-token={token}
+      >
+        {token}
+        {card.state && (
+          <span
+            className='inline-flex items-center rounded-full px-1.5 py-px text-[9px] font-semibold leading-tight'
+            style={{
+              backgroundColor: card.color ? `${card.color}26` : 'rgba(100,116,139,.15)',
+              color: card.color ?? undefined
+            }}
+          >
+            {card.state}
+          </span>
+        )}
+      </button>
+    </RecordHoverCard>
   )
 }
 
@@ -153,6 +166,7 @@ function RecordPathToken({
 }) {
   const client = useNivaroClient()
   const nav = useNavigation()
+  const peek = useRecordPeek()
   const { data } = useQuery({
     queryKey: ['nvr-record-path', collection, id],
     queryFn: async () => {
@@ -183,20 +197,29 @@ function RecordPathToken({
   if (!data) return <>{raw}</>
   if (plain) return <span className='font-medium'>{data.label}</span>
   const target = { collection, itemId: id }
-  const open = () => {
+  const open = (e: React.MouseEvent) => {
+    // Realtime #17: a record link in a comment opens in the app's record sheet when the host
+    // has one (the comment thread stays put); Cmd / Ctrl-click opens a new tab.
+    const what = peek ? peekDecision(e, true, target.collection) : null
+    if (what === 'peek' && peek) return peek.open(target)
+    if (what === 'new-tab') {
+      window.open((nav.itemUrl ?? defaultItemUrl)(target), '_blank', 'noopener')
+      return
+    }
     if (nav.openItem?.(target)) return
     nav.navigate((nav.itemUrl ?? defaultItemUrl)(target))
   }
   return (
-    <button
-      type='button'
-      onClick={open}
-      className='inline-flex max-w-full items-center align-baseline font-medium text-nvr-navy underline decoration-nvr-cyan/50 decoration-[1.5px] underline-offset-2 hover:decoration-nvr-cyan dark:text-nvr-cyan'
-      data-record-path={raw}
-      data-tip={raw}
-    >
-      {data.label}
-    </button>
+    <RecordHoverCard collection={collection} id={id}>
+      <button
+        type='button'
+        onClick={open}
+        className='inline-flex max-w-full items-center align-baseline font-medium text-nvr-navy underline decoration-nvr-cyan/50 decoration-[1.5px] underline-offset-2 hover:decoration-nvr-cyan dark:text-nvr-cyan'
+        data-record-path={raw}
+      >
+        {data.label}
+      </button>
+    </RecordHoverCard>
   )
 }
 

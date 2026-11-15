@@ -27,6 +27,10 @@ export const integrationsConsole: DocSection = {
           'A chronological feed from every integration that registers a notes source — what happened, on which record, and whether it can be replayed. Full detail in the "Integration Events & Replay" section.'
         ],
         [
+          'Ready to send',
+          'Records whose next step sends to a partner, checked every night: what the partner would refuse, or receive incomplete, grouped by partner and by problem. Full detail in the "Ready to Send" section.'
+        ],
+        [
           '(host tabs)',
           "A hosting app or extension's own tab, passed in via `extraTabs` — e.g. a partner-specific operations tab (errors by cause, stuck-order reasons, flow charts)."
         ],

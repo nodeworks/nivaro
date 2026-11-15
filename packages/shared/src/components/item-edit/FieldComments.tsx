@@ -5,8 +5,13 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { fieldDeepLinkQuery, fieldThread, openFieldCommentCounts } from '../../lib/field-comments'
+import {
+  signalSentence,
+  useDraftTypingSignal,
+  useRecordSignalPeers
+} from '../../lib/presence-signals'
 import { cn, formatRelative } from '../../lib/utils'
-import { AutolinkedText } from '../AutolinkedText'
+import { CommentBody, CommentImageStrip, useCommentImages } from '../panels/CommentImages'
 import { MentionTextarea } from '../panels/CommentPanel'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { type FieldCommentsApi, useFieldComments } from './field-comments-context'
@@ -149,6 +154,11 @@ function FieldThread({
   const thread = useMemo(() => fieldThread(data ?? [], field), [data, field])
   const [showResolved, setShowResolved] = useState(false)
   const [draft, setDraft] = useState('')
+  const images = useCommentImages()
+  // Realtime round 2: "Beth is replying…" on this field's thread — only people who may read
+  // the field hear it (the server judges each one); stops after 6 s idle and on send.
+  useDraftTypingSignal(ctx.collection, ctx.item, draft, field)
+  const typing = useRecordSignalPeers(ctx.collection, ctx.item, 'note', { field })
   const refresh = () => qc.invalidateQueries({ queryKey: commentsKey(ctx.collection, ctx.item) })
   const errorText = (err: unknown, fallback: string) =>
     (err as { response?: { data?: { error?: string } }; data?: { error?: string } })?.response?.data
@@ -169,6 +179,7 @@ function FieldThread({
       ),
     onSuccess: () => {
       setDraft('')
+      images.reset()
       void refresh()
     },
     onError: (err) => toast.error(errorText(err, 'Could not post the comment'))
@@ -180,8 +191,8 @@ function FieldThread({
     onError: (err) => toast.error(errorText(err, 'Could not update the comment'))
   })
   const send = () => {
-    const text = draft.trim()
-    if (text && !postMut.isPending) postMut.mutate(text)
+    const text = images.compose(draft)
+    if (text && !images.uploading && !postMut.isPending) postMut.mutate(text)
   }
   const copyLink = () => {
     const url = new URL(window.location.href)
@@ -219,16 +230,15 @@ function FieldThread({
           {resolved ? 'Reopen' : 'Resolve'}
         </button>
       </div>
-      <p
+      <CommentBody
+        text={c.text}
         className={cn(
           'm-0 mt-0.5 whitespace-pre-wrap text-[12.5px] leading-snug [overflow-wrap:anywhere]',
           resolved
             ? 'text-slate-400 dark:text-muted-foreground'
             : 'text-slate-600 dark:text-slate-300'
         )}
-      >
-        <AutolinkedText text={c.text} />
-      </p>
+      />
     </li>
   )
 
@@ -274,10 +284,21 @@ function FieldThread({
           </button>
         )}
       </div>
+      {typing.length > 0 && (
+        <p
+          data-field-comment-typing={field}
+          aria-live='polite'
+          className='m-0 flex items-center gap-1.5 border-t border-slate-100 px-3 py-1.5 text-[11.5px] italic text-slate-400 dark:border-border dark:text-slate-500'
+        >
+          <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan motion-reduce:animate-none' />
+          {signalSentence(typing, 'replying')}…
+        </p>
+      )}
       <div className='space-y-1.5 border-t border-slate-200 p-2 dark:border-border'>
         <MentionTextarea
           value={draft}
           onChange={setDraft}
+          onImages={images.addFiles}
           rows={2}
           aria-label={`Comment on ${label}`}
           placeholder='Write a comment… type @ to mention someone'
@@ -289,6 +310,7 @@ function FieldThread({
             }
           }}
         />
+        <CommentImageStrip images={images} />
         <div className='flex items-center justify-between gap-2'>
           <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>
             Only people who can open this record are notified.
@@ -296,10 +318,10 @@ function FieldThread({
           <button
             type='button'
             onClick={send}
-            disabled={!draft.trim() || postMut.isPending}
+            disabled={(!draft.trim() && !images.hasReady) || images.uploading || postMut.isPending}
             className='inline-flex h-7 shrink-0 items-center rounded-md bg-nvr-cyan px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-nvr-cyan-dark disabled:opacity-50'
           >
-            {postMut.isPending ? 'Posting…' : 'Comment'}
+            {postMut.isPending ? 'Posting…' : images.uploading ? 'Uploading…' : 'Comment'}
           </button>
         </div>
       </div>

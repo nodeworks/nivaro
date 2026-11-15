@@ -37,6 +37,19 @@ const SAMPLES: Array<{
     target: { kind: 'task', action: 'open' }
   },
   {
+    category: 'proposals',
+    subject: 'Sample: Change proposed on REQ-00001 — review it',
+    message:
+      'Jane Doe proposed new values for Ship-to Address and End Date: "Vendor moved the delivery."',
+    target: { kind: 'my_work', action: 'open' }
+  },
+  {
+    category: 'proposals',
+    subject: 'Sample: Your proposed change to REQ-00001 was accepted',
+    message: 'The new values are on the record now.',
+    target: { kind: 'my_work', action: 'open' }
+  },
+  {
     category: 'sla',
     subject: 'Sample: SLA escalation (tier 1): Level 2 approval within 2 days',
     message: 'REQ-00001 has been in "Waiting on Level 2 Approval" 2h past its SLA.',

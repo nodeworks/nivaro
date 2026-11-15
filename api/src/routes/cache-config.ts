@@ -10,6 +10,7 @@ import {
   startCacheConfigRefresh,
   stopCacheConfigRefresh
 } from '../services/cache-config.js'
+import { changeWarmStats, startChangeWarm } from '../services/cache-warm-on-change.js'
 import { instanceKey } from '../services/instance-key.js'
 import { permissionCacheStats, providePermissionCacheWiring } from '../services/permission-cache.js'
 import { layoutBundleStats } from './collection-layouts.js'
@@ -45,6 +46,12 @@ export async function cacheConfigRoutes(app: FastifyInstance) {
   })
   startCacheConfigRefresh()
   app.addHook('onClose', async () => stopCacheConfigRefresh())
+  // Change-driven cache warm (services/cache-warm-on-change.ts): hears record changes in this
+  // process and recomputes the most-viewed cached queries / widgets that read them.
+  const stopChangeWarm = startChangeWarm(
+    (app as { redis?: unknown }).redis as Parameters<typeof startChangeWarm>[0]
+  )
+  app.addHook('onClose', async () => stopChangeWarm())
 
   app.get('/', { preHandler: requireAdmin }, async (_req, reply) => {
     return reply.send({
@@ -55,7 +62,11 @@ export async function cacheConfigRoutes(app: FastifyInstance) {
         permission: permissionCacheStats(),
         identity: identityCacheStats(),
         layout_bundles: layoutBundleStats()
-      }
+      },
+      // Warms triggered by data changes, last 24 h, every replica.
+      change_warm: await changeWarmStats(
+        (app as { redis?: unknown }).redis as Parameters<typeof changeWarmStats>[0]
+      ).catch(() => null)
     })
   })
 

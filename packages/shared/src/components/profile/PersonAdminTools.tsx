@@ -1,10 +1,11 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { GitMerge, LogOut, RefreshCw, UserMinus } from 'lucide-react'
+import { GitMerge, LogOut, Radio, RefreshCw, UserMinus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
+import { LiveTraceView } from '../LiveTraceView'
 import { EmptyLine, SectionCard } from './primitives'
 import { SignOutMessageInput } from './SignOutMessageInput'
 import { SIGN_OUT_ARM_MS, useReloadTheirTabs, useSignOutEverywhere } from './session-actions'
@@ -459,6 +460,22 @@ export function MergeCard({ profile: p }: { profile: PersonProfile }) {
           </>
         )}
       </div>
+    </SectionCard>
+  )
+}
+
+// ─── Why didn't their page update? ───────────────────────────────────────────
+
+/** Admin trace of what is being pushed to this person's tabs (read-only, no values). */
+export function LiveTraceCard({ profile: p }: { profile: PersonProfile }) {
+  return (
+    <SectionCard
+      icon={<Radio className='h-4 w-4' />}
+      title="Why didn't their page update?"
+      hint='Their live connections, the rooms they are in and the events sent to them'
+      testId='live-trace'
+    >
+      <LiveTraceView userId={p.id} />
     </SectionCard>
   )
 }

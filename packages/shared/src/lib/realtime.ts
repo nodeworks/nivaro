@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react'
+import { liveCollectionEventPasses, liveEventQuiet } from './live-preference'
+import { noteLiveSeen } from './live-seen'
 
 /**
  * Realtime sprint client contract. A HOST (admin, a portal app) owns the actual
@@ -83,7 +85,53 @@ export interface RealtimeAdapter {
 export const RealtimeContext = createContext<RealtimeAdapter | null>(null)
 
 export function useOptionalRealtime(): RealtimeAdapter | null {
-  return useContext(RealtimeContext)
+  const adapter = useContext(RealtimeContext)
+  return adapter ? withLiveSeenTap(adapter) : null
+}
+
+const tapped = new WeakMap<RealtimeAdapter, RealtimeAdapter>()
+
+/**
+ * Realtime idea 14: every collection event a shared surface receives is noted (ids and times
+ * only, lib/live-seen.ts) so the missed-update detector can tell "changed and we heard" from
+ * "changed and nobody told this tab". One stable wrapper per host adapter; every other member
+ * reads through to the host's own.
+ */
+export function withLiveSeenTap(adapter: RealtimeAdapter): RealtimeAdapter {
+  const known = tapped.get(adapter)
+  if (known) return known
+  const bound = new Map<PropertyKey, unknown>()
+  const subscribeCollections: RealtimeAdapter['subscribeCollections'] = (collections, cb) =>
+    adapter.subscribeCollections(collections, (ev) => {
+      noteLiveSeen('collection:update', ev)
+      // The person's live-updates setting (lib/live-preference.ts): Off drops others' writes
+      // here, once, for every surface that reads through the adapter.
+      if (!liveCollectionEventPasses(ev as never)) return
+      cb(ev)
+    })
+  // Named events the setting quiets (presence in Calm/Off, data notices in Off).
+  const on: RealtimeAdapter['on'] = (event, cb) =>
+    adapter.on(event, (payload) => {
+      if (event === 'collection:update' && !liveCollectionEventPasses(payload)) return
+      if (event !== 'collection:update' && liveEventQuiet(event)) return
+      cb(payload)
+    })
+  const wrapped = new Proxy(adapter, {
+    get(target, prop) {
+      if (prop === 'subscribeCollections') return subscribeCollections
+      if (prop === 'on') return on
+      const v = Reflect.get(target, prop, target)
+      if (typeof v !== 'function') return v
+      let fn = bound.get(prop)
+      if (!fn) {
+        fn = (v as (...a: unknown[]) => unknown).bind(target)
+        bound.set(prop, fn)
+      }
+      return fn
+    }
+  })
+  tapped.set(adapter, wrapped)
+  return wrapped
 }
 
 /** The host's connection state, or null when the host gives none (no realtime, or no status). */

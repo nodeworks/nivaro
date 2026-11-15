@@ -17,6 +17,20 @@ export interface ImportDuplicates {
     existing_value?: string
     first_row?: number
   }>
+  /** Sets of rules the preview could not check, in plain words (2026-11-14). */
+  skipped?: string[]
+}
+
+function SkippedLine({ skipped, className }: { skipped?: string[]; className?: string }) {
+  if (!skipped?.length) return null
+  return (
+    <p
+      data-import-duplicates-skipped
+      className={cn('text-[11px] text-slate-500 dark:text-muted-foreground', className)}
+    >
+      Not checked for duplicates: {skipped.join('; ')}.
+    </p>
+  )
 }
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many)
@@ -28,7 +42,7 @@ const plural = (n: number, one: string, many: string) => (n === 1 ? one : many)
  */
 export function ImportDuplicatesNotice({ dup }: { dup: ImportDuplicates }) {
   const total = dup.exact_rows + dup.close_rows + dup.in_file_rows
-  if (total === 0) return null
+  if (total === 0) return <SkippedLine skipped={dup.skipped} />
   const parts = [
     dup.exact_rows > 0 &&
       `${formatNumber(dup.exact_rows)} ${plural(dup.exact_rows, 'copies', 'copy')} an existing record`,
@@ -80,6 +94,7 @@ export function ImportDuplicatesNotice({ dup }: { dup: ImportDuplicates }) {
           First {formatNumber(dup.rows.length)} shown.
         </p>
       )}
+      <SkippedLine skipped={dup.skipped} className='mt-0.5 pl-5' />
     </div>
   )
 }

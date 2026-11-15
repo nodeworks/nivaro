@@ -52,8 +52,32 @@ export const collabLiveRecords: DocSection = {
         ],
         ['The history panel is open', 'New changes appear at the top, marked New.'],
         [
+          'Someone links, renames, replaces or removes one of the record’s files',
+          'The Files panel and file fields refresh quietly. A new file fades in where it lands; a file someone else removed stays a few seconds as a faded "Removed" row instead of vanishing. Your own uploads and removals never do either. You only ever see files you may read.'
+        ],
+        [
+          'A child or linked record changes (a line added, a PO created from the record, an invoice matched to it)',
+          'The record’s line grids, link lists, related panel and record widgets refresh quietly, without a flash and without touching what you are typing. Totals the change moves (stored rollups) refresh on their own. A burst of many records (an import) arrives as one refresh.'
+        ],
+        [
+          'Someone adds, renames or removes a record a dropdown lists (a vendor, a project, a lookup value)',
+          'The dropdown reads its options again the next time you open it, so the new record is there. An open dropdown never reshuffles under you; picker filters, cascades and your permissions still apply.'
+        ],
+        [
           'A flow run is working on the record',
           'A banner names the flow ("Automation is updating this record") until the run ends.'
+        ],
+        [
+          'Who owns the record changes without anyone editing it (owner matrix, a delegation or out-of-office starting or ending, a hand-over)',
+          'The owners chip and approval chain update quietly. Lists, queues and My Work pick up records that became (or stopped being) yours.'
+        ],
+        [
+          'An administrator changes your role, policies, field access or User Scopes',
+          'Menus, buttons, fields and list rows appear or go without signing out. A record you can no longer read says so calmly instead of erroring.'
+        ],
+        [
+          'Someone joins, or changes their name, title, photo or out-of-office status',
+          'Pickers, @mentions, people cards and avatars show the change.'
         ],
         [
           'The same record is open with unsaved changes in another tab of your browser',
@@ -73,7 +97,7 @@ export const collabLiveRecords: DocSection = {
         [
           '`collection:update`',
           '`collection:<name>`',
-          '`{collection, item, action?, changed_fields?}`. A notice with no `action` whose fields are all `$` names (`$state`, `$addendums`, `$comments`, `$tasks`, `$integrations`) says a related surface moved, not the record’s columns.'
+          "`{collection, item, action?, changed_fields?}`. A notice with no `action` whose fields are all `$` names (`$state`, `$addendums`, `$comments`, `$tasks`, `$integrations`, `$files`, `$related`) says a related surface moved, not the record’s columns. `$files` and `$related` ride other records’ writes: they are coalesced per collection over one second, and a second that names more than 50 records of one collection arrives as one collection-wide notice (`item: '*'`)."
         ],
         ['`record:integrity`', '`record:<collection>:<id>`', '`{collection, item}`'],
         [
@@ -82,20 +106,34 @@ export const collabLiveRecords: DocSection = {
           '`{collection, item, flow_id, flow_name, state: start|end}`'
         ],
         [
+          '`collection:update` with `$owners`',
+          '`collection:<name>` + `record:<name>:<id>`',
+          "`{collection, item, changed_fields: ['$owners']}` — sent only for OPEN records (live viewers, at most 300) whose resolved owners moved; owners are never computed for every record"
+        ],
+        [
           '`owners:changed`',
-          'the tenant (cloud: `t:<tenant>:all`; self-hosted: every socket) — coalesced 5 s, at most one per 15 s',
-          '`{at}`'
+          'the tenant (cloud: `t:<tenant>:all`; self-hosted: every socket) — one per burst of owner changes',
+          '`{at, collections?, checked?, queues?}` — `checked`: open records were told one by one; `queues`: materialized worklists finished re-syncing their owners'
         ],
         [
           '`access:changed`',
-          'the tenant for an administrator’s access write; only the person’s own sockets for their own scope pick — coalesced',
-          '`{at}`'
+          'only the people a change can touch: the person named, a role’s holders (a policy’s role, an access request’s role), or the tenant when it cannot say — coalesced',
+          '`{at, perms: true}` — the client refetches the signed-in user and what is on screen as them'
+        ],
+        [
+          '`people:changed`',
+          'every fully signed-in socket of the tenant — coalesced 1 s, at most one per 3 s',
+          '`{at, user_ids?, created?}` — ids only (never a name, value or credential); no `user_ids` = anyone'
         ]
       ]
     },
     {
       type: 'p',
       text: '`GET /api/trash/record?collection=&item=` answers the latest deletion of one record (`deleted_at`, `deleted_by_name`, `can_restore`, and `trash_id` only when you may restore it) — to an unrestricted administrator or to the person who deleted it. Everyone else gets `{ "data": null }`, the same answer as "not deleted": the trash snapshot cannot be checked against your row filter or User Scopes.'
+    },
+    {
+      type: 'p',
+      text: 'Owner changes are heard where they are written (the owner tables, delegate and out-of-office columns) and by the 15-minute out-of-office sweep, which also catches a delegation that simply ran out. A bulk owner change (an owner-matrix spreadsheet apply) may call `ownerChangeBaseline()` before it writes and `announceOwnerChange({collections})` after (services/owner-change-live.ts) so each open record is told exactly whether its owners moved.'
     },
     { type: 'h3', id: 'live-records-hooks', text: 'Building a live panel (shared hooks)' },
     {
@@ -158,12 +196,37 @@ useQuery({
     {
       type: 'ul',
       items: [
-        'Meta keys: `reads` (collections), `record` (`{collection, id}`), `fields` (only writes naming one of them count; creates, deletes and writes naming no fields always do), `aspects` (`$state`, `$comments`… — aspect notices are ignored otherwise), `includeOwn` (default on for `reads`, off for `record`, whose save already refreshed it), `minGapMs` (default 10 s for `reads`, 0 for `record`; a trailing refresh is never dropped), `reconcileOnly`.',
+        'Meta keys: `reads` (collections), `record` (`{collection, id}`), `fields` (only writes naming one of them count; creates, deletes and writes naming no fields always do), `aspects` (`$state`, `$comments`… — aspect notices are ignored otherwise), `includeOwn` (default on for `reads`, off for `record`, whose save already refreshed it), `minGapMs` (default 10 s for `reads`, 0 for `record`; a trailing refresh is never dropped), `reconcileOnly`, `staleOnly` (events only mark it stale and it reads again the next time it is shown — picker option lists use it through `pickerOptionsMeta(collection)`, so an open dropdown never reshuffles).',
         'The bridge joins the collection rooms that active tagged queries read and leaves them 30 s after the last one goes. Events coalesce for 300 ms per collection. Only queries on screen refetch; the rest are marked stale and refetch when they next mount. A hidden tab marks stale and refetches when it is shown again.',
         'Reconcile — every tagged query plus the active record, list, queue, My Work and widget reads refetch once — after a reconnect whose catch-up could not replay the gap (`status().resumed` is `unverified`), on `nvr:catchup-full`, and when a tab comes back after being hidden five minutes or more. A reconnect that replayed every missed event does not reconcile.',
         'At sign-in the server sends `catchup:cursor {seq}` — the event journal position — so a tab that has not received an event yet still replays its gap after a reconnect instead of missing it.',
         'Permissions: the refetch runs through the query’s own route as the viewer. An event naming a record the viewer cannot read only re-asks for what they could already see.',
         'The notification badge, the Issue log, broadcast receipts, a record’s partner submissions, a help video’s render status and the chat Online list follow socket events the same way: while the socket is live their polls drop to a safety net (five minutes; two for the badge, since a timed snooze coming back sends no event). Operations pages with no event behind them (Traffic Map, health, logs, jobs, crons) keep polling, and only while the tab is visible.'
+      ]
+    },
+    { type: 'h3', id: 'live-records-round2', text: 'Moves, deadlines, replies and widgets' },
+    {
+      type: 'ul',
+      items: [
+        'Move buttons follow other people’s changes. When someone else fills the field a move needs, a partner writes back a PO number, a file is uploaded or a line is added, the pipeline panel asks again which moves you may make and the button appears (or goes away) without a reload. It asks at most once every 1.5 seconds per record, and waits while you have a move’s confirm or requirements open.',
+        'Deadlines count down. The SLA line on a record, the SLA column on queues and the chips on My Work say "due in 1 h 59 m" or "overdue by 20 m" and turn amber and red at the rule’s own lines, from times the server already sent — nothing is re-read to tick. One page clock moves every 30 seconds and pauses while the tab is hidden.',
+        'Clocks that pass a line with nobody writing are announced. Every minute the server checks the SLA collections someone has open and tells their pages about records that just turned amber or red (the `$sla` notice, ids only), so counts and colours are right without a reload. Highlight (at-risk) rules compare field values, never the time, so they do not change by themselves.',
+        '"Beth is replying…" shows under a record’s comments and inside a field’s comment thread while someone types there. It stops 6 seconds after their last keystroke or when they send. A field thread’s signal reaches only people who may read that field; everyone else sees nothing.',
+        'Record widgets (custom query panels, roll-ups, review lists and widgets fed from the record) refresh when someone else changes the record or a line under it — the `$related` notice — at most once every 5 seconds each, worked out as you. A folded widget refreshes when it is opened.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'New notices on `collection:update`: `$sla` (an SLA clock passed its warning or breach line) and `$related` (a child row of the record changed; one per parent per 0.8 s). List pages ignore both for their rows. SLA answers (`GET /sla/status/:collection/:item`, `POST /sla/status/batch`, queue rows, My Work) now carry `warning_at` and `due_at` (queue rows: `sla_warning_at`, `sla_due_at`). A `record:signal` of kind `note` may carry `field`.'
+    },
+    { type: 'h3', id: 'live-records-access', text: 'Access, maintenance and search' },
+    {
+      type: 'ul',
+      items: [
+        'A record or list that said "You can\'t view this" opens by itself when an administrator grants the access request while it is still on screen. The content appears with one quiet line, "Access granted by Beth" (who decided comes from `GET /api/access-requests/mine`, the person\'s own request only). Nothing pops up.',
+        'The Request access page a new person waits on (efp-new) opens the portal by itself the moment an administrator approves them. The approval reaches their own socket as `access:changed`; the page still checks every minute while the connection is down.',
+        'The full maintenance page returns to the app by itself when maintenance ends — switched off by an administrator, a scheduled window closing, or a rebuild job deleting its Redis flag. The server notices the change (within a few seconds for the Redis flag) and sends `announcements:changed`; each tab re-reads `/announcements/active` as itself. The 30-second check stays as the fallback. The maintenance strip administrators see goes away the same way.',
+        'A record saved a moment ago is found by search on the next look. The server keeps a search answer for 20 seconds only until any collection it searched is written, here or on another server; where SQL Server full-text indexes are in use, the newest 200 rows of a collection are also matched by plain text until the index catches up.'
       ]
     },
     { type: 'h3', id: 'live-ops-pages', text: 'Live operations pages' },
@@ -350,7 +413,7 @@ export const collabPresence: DocSection = {
       head: ['You see', 'Where', 'Who sees it'],
       rows: [
         [
-          '"Beth is writing a note"',
+          '"Beth is replying"',
           'Under the Notes thread while someone has an unsent note',
           'Everyone viewing that record (the record read gate, row filters and User Scopes included)'
         ],
@@ -416,7 +479,11 @@ export const collabPresence: DocSection = {
       type: 'ul',
       items: [
         'Reading a notification, or a chat room, clears its unread state on every other tab and device at once (`read:changed` on your `user:<id>` room), instead of on their next poll.',
-        'Saving a display preference (font size, time format, sound, density, do not disturb…) applies in your other tabs and windows immediately: over a BroadcastChannel in the same browser, over `prefs:changed` on your user room across devices. The theme follows across tabs of one browser.',
+        'Saving a display preference (font size, time format, sound, density, do not disturb…) applies in your other tabs and windows immediately: over a BroadcastChannel in the same browser, over `prefs:changed` on your user room across devices.',
+        'The theme (light, dark or system) and the row density of lists and queue worklists (Compact or Comfortable) are saved on your account as `theme` and `table_density`, so a choice made on your laptop shows on your phone and in your other tabs without a reload. A tab opened with "View as" neither saves nor adopts them.',
+        'Your saved views, saved searches and Overview pins refetch quietly in your other tabs and devices when you change them (`mine:changed {kind}` on your user room); favorites ride `prefs:changed`, and the shared collection pins reach everyone signed in (`pins:changed`). Nothing blanks or jumps: lists keep what they show until the fresh answer lands.',
+        'Relative times ("2m ago", "Last changed 5m ago") move forward by themselves in lists, records, notes, tasks and the inbox. Every one of them rides one shared ticker per tab (30 seconds, paused while the tab is hidden, caught up when you return), so a list of a hundred rows costs one timer; times older than a week read as a date and never tick. Hosts use `<RelativeTime value={...} />` or `useRelativeText(value)` instead of calling `formatRelative` in JSX.',
+        'A dot beside a name in people pickers (record people and task assignee), the @ mention list in notes and the chat @ list shows who is online (green) or idle (hollow amber). It is only a dot: nobody moves up the list for being online. It comes from the same presence read as the Online tab, so you only see a dot for people you may see as present.',
         'With several tabs open, a notification or chat sound plays once, from the tab you used last. Tabs that stop answering are ignored, so a frozen tab never takes the sound with it. A "View as" tab keeps its own channels.'
       ]
     },
