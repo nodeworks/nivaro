@@ -85,6 +85,7 @@ import {
   boardKnowsEveryone,
   boardLive,
   boardMergeOn,
+  boardPeerPages,
   boardPeerViewers,
   boardReaderOn,
   boardRealtimeStats,
@@ -169,6 +170,20 @@ export function usersOnPath(path: string): Array<{ id: string; name: string; sin
     if (!cur || u.since < cur.since) seen.set(u.id, u)
   }
   return [...seen.values()]
+}
+
+let pageSnapshotReader: ((tenant: string) => Array<PageAtData & { socket: string }>) | null = null
+/**
+ * rt5 team board — every open tab's latest page ping in the caller's tenant (this process's
+ * sockets plus, with several processes, the others' from the realtime board). One entry per
+ * socket; ids, names, paths and times only.
+ */
+export function getPagePresenceSnapshot(): Array<PageAtData & { socket: string }> {
+  const tenant = currentTenantKey()
+  const local = pageSnapshotReader ? pageSnapshotReader(tenant) : []
+  if (!boardMergeOn()) return local
+  const seen = new Set(local.map((p) => p.socket))
+  return [...local, ...boardPeerPages(tenant).filter((p) => !seen.has(p.socket))]
 }
 
 let pagePrefixReader: ((prefixes: string[]) => string[]) | null = null
@@ -867,6 +882,13 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (!cur || p.since < cur.since) seen.set(p.user.id, { ...p.user, since: p.since })
     }
     return [...seen.values()]
+  }
+
+  pageSnapshotReader = (tenant: string) => {
+    const out: Array<PageAtData & { socket: string }> = []
+    for (const [socket, p] of pagePresence)
+      if (p.tenant === tenant) out.push({ ...p, app: p.app ?? null, socket })
+    return out
   }
 
   pagePrefixReader = (prefixes: string[]) => {
