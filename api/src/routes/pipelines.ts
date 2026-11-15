@@ -3515,9 +3515,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const hist = (await selectInChunks(
         rows.map((r: { instance_id: unknown }) => String(r.instance_id)),
         2000,
+        // One read per page (≤500 ids); one bound list, so the plan is shared across lengths.
         (chunk) =>
-          db('nivaro_workflow_history')
-            .whereIn('instance', chunk)
+          whereInList(db('nivaro_workflow_history'), 'instance', chunk)
             .select('instance', 'to_state')
             .max('timestamp as at')
             .groupBy('instance', 'to_state')

@@ -515,6 +515,7 @@
           <a class="docs-nav-item" data-section="live-coedit" href="#live-coedit">Writing together in long text</a>
           <a class="docs-nav-item" data-section="live-sync" href="#live-sync">Offline saves and shared budget grids</a>
           <a class="docs-nav-item" data-section="live-outside" href="#live-outside">Live Beyond the App</a>
+          <a class="docs-nav-item" data-section="live-selection" href="#live-selection">Live Selections &amp; Time in Step</a>
           <a class="docs-nav-item" data-section="notifications-center" href="#notifications-center">Notifications Center</a>
           <a class="docs-nav-item" data-section="user-activity-feed" href="#user-activity-feed">User Activity Feed</a>
           <a class="docs-nav-item" data-section="keyboard-shortcuts" href="#keyboard-shortcuts">Keyboard Shortcuts</a>
@@ -17644,6 +17645,20 @@ PATCH /api/item-locks/config/:collection
           </ul>
           <div class="doc-note">Matrix and grid pages can name what they edit with the <code class="doc-code">presence_noun</code> option (for example <code class="doc-code">allocations</code>); without it the line uses the collection name.</div>
           <!-- /SYNC:live-sync -->
+        <!-- LIVE SELECTIONS & TIME IN STEP -->
+        <div class="doc-section" id="s-live-selection" data-toc='[{"id":"live-selection","label":"Live Selections & Time in Step"},{"id":"live-selection-open","label":"Someone has them open"},{"id":"live-selection-changed","label":"Changed since you picked them"},{"id":"live-selection-sums","label":"Selection count and sums"},{"id":"live-selection-in-step","label":"In step: time in the current step"}]'>
+          <!-- SYNC:live-selection -->
+          <h1 class="doc-h1" id="live-selection">Live Selections &amp; Time in Step</h1>
+          <p class="doc-p">When you select rows for a bulk action, the list keeps an eye on them until you act. The bulk bar tells you, in one quiet line, if someone else has those records open or has changed them since you picked them. Everything is worked out as you: only records you can read, only people you are allowed to see, only fields you can read.</p>
+          <h3 class="doc-h3" id="live-selection-open">Someone has them open</h3>
+          <p class="doc-p">"2 of these are open by Beth right now" (or "being edited by Beth" when she holds the edit lock). Skip those takes them out of your selection; Continue keeps them and stops saying so until someone else opens one. With live updates set to Calm, who-is-here signals are quiet, so only edit locks are mentioned.</p>
+          <h3 class="doc-h3" id="live-selection-changed">Changed since you picked them</h3>
+          <p class="doc-p">The list remembers when you picked each row. If someone else edits, moves or deletes one of them afterwards, the bar says "3 selected rows changed since you picked them". Review lists each one with a link to open it. Continue keeps them and counts them as seen as they are now.</p>
+          <h3 class="doc-h3" id="live-selection-sums">Selection count and sums</h3>
+          <p class="doc-p">The bulk bar shows how many rows are selected and the sum of the columns the totals row sums (otherwise the money and decimal columns on screen). The figures follow the rows as they change.</p>
+          <h3 class="doc-h3" id="live-selection-in-step">In step: time in the current step</h3>
+          <p class="doc-p">An optional In step column in collection lists and queue worklists ("Finance · 3 d 4 h", sortable), and "for 3 d 4 h" beside the step on the record's pipeline panel. They tick on one shared page clock and reset when the record moves.</p>
+          <!-- /SYNC:live-selection -->
         </div>
 
         <!-- NOTIFICATIONS CENTER -->

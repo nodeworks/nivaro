@@ -31,6 +31,7 @@ import { useItemEditAuth, useNivaroClient } from '../../context'
 import { chainStepText } from '../../lib/approval-progress'
 import { del, get, post } from '../../lib/commands'
 import { errorToastOptions, toastError } from '../../lib/error-toast'
+import { enteredAtFromHistory } from '../../lib/in-step'
 import { useLiveMoves } from '../../lib/live-moves'
 import { useLiveFade } from '../../lib/live-screen'
 import { partnerMoveFailure, partnerMoveReading } from '../../lib/move-failure'
@@ -53,6 +54,7 @@ import {
   titleCase,
   toLocalDateString
 } from '../../lib/utils'
+import { StepForLine } from '../InStep'
 import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
 import { SendStatusLines } from '../integrations/SendStatus'
 import { useHeaderFold } from '../item-edit/HeaderTools'
@@ -3713,6 +3715,17 @@ function PipelinePanelInner({
               </span>
             )}
             {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
+            {/* rt8 — how long it has been in this step, on the page's shared clock. */}
+            {currentState && !instance?.completed_at && (
+              <StepForLine
+                stepLabel={currentState.label}
+                enteredAt={enteredAtFromHistory(
+                  instance?.current_state,
+                  history,
+                  (instance as { started_at?: string | null } | null)?.started_at ?? null
+                )}
+              />
+            )}
             <RecordFlagChips flags={data?.flags} />
             {(data?.auto_held?.length ?? 0) > 0 && (
               <span

@@ -434,6 +434,13 @@ export { ListLoadError } from './components/ListLoadError'
 export { LiveBurstPill, LivePauseButton } from './components/LiveListControls'
 export { LiveAnnouncer } from './components/LiveAnnouncer'
 export { LiveCount, type LiveCountProps } from './components/LiveCount'
+// rt8 — time in step, and the bulk bar's selection watch.
+export { InStepCell, StepForLine } from './components/InStep'
+export {
+  BulkSelectionNotices,
+  type OpenInput as BulkOpenInput,
+  SelectionFigures
+} from './components/bulk/BulkSelectionNotices'
 export { LiveNewMatchesPill } from './components/LiveNewMatchesPill'
 export { LIVE_OFF_TIP, LiveOffNote } from './components/LiveOffNote'
 export { LivePreferenceHost } from './components/LivePreferenceHost'
@@ -922,6 +929,8 @@ export {
   scrubCrashText
 } from './lib/crash-report'
 export * from './lib/deadline-ticker'
+export * from './lib/in-step'
+export * from './lib/selection-watch'
 export { useAfterIdle } from './lib/defer'
 export { deliveryAckFor } from './lib/delivery-ack'
 export {

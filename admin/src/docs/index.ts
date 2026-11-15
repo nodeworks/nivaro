@@ -70,6 +70,7 @@ export * from './sections/live-progress.js'
 export * from './sections/live-records.js'
 export * from './sections/live-saves.js'
 export * from './sections/live-screens.js'
+export * from './sections/live-selection.js'
 export * from './sections/live-setting.js'
 export * from './sections/live-sync.js'
 export * from './sections/low-code.js'
@@ -353,6 +354,7 @@ import {
   collabPresence
 } from './sections/live-records.js'
 import { liveScreensDocs } from './sections/live-screens.js'
+import { liveSelectionDocs } from './sections/live-selection.js'
 import { collabLiveSetting } from './sections/live-setting.js'
 import { collabLiveSync } from './sections/live-sync.js'
 import { loadingFeelDocs } from './sections/loading-feel'
@@ -973,6 +975,7 @@ export const navSections: NavGroup[] = [
       liveSavesDocs,
       collabOfflinePopout,
       collabLiveLists,
+      liveSelectionDocs,
       collabChangedByOthers,
       collabChangedAfterApproval,
       liveScreensDocs,

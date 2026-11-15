@@ -277,3 +277,40 @@ export function applyAgingFilter(
     if (enteredAfter) this.whereRaw(`${entered} >= ?`, [enteredAfter])
   })
 }
+
+/**
+ * `sort=$in_step` / `-$in_step` — order a list by how long each record has sat in its current
+ * pipeline step (the lists' optional "In step" column, realtime round 8). Ascending = the
+ * shortest time first (the most recent move), descending = the longest; records with no open
+ * step sort last both ways. Entered = the newest history row into the current step, else the
+ * instance start — the same moment `$aging` and the Aging column count from.
+ *
+ * One correlated aggregate per row over the open instance ⨝ its history rows into the current
+ * step (no subquery inside the aggregate: SQL Server refuses that). It only orders rows the
+ * list read already admits through the caller's read gate (role, row filters, User Scopes),
+ * and a step is a fact every reader of the record may see (/pipelines/instances).
+ */
+export const IN_STEP_SORT = '$in_step'
+
+/** Far-future stand-in so a record with no open step sorts last in an ascending order. */
+const NO_STEP_LAST = new Date('9999-12-31T00:00:00.000Z')
+
+const IN_STEP_ENTERED =
+  'SELECT MAX(COALESCE(ish.timestamp, isi.started_at)) FROM nivaro_workflow_instances isi ' +
+  'LEFT JOIN nivaro_workflow_history ish ON ish.instance = isi.id AND ish.to_state = isi.current_state ' +
+  'WHERE isi.collection = ? AND isi.completed_at IS NULL ' +
+  'AND isi.item = CAST(??.?? AS NVARCHAR(255))'
+
+export function applyInStepSort(q: Knex.QueryBuilder, collection: string, desc: boolean): void {
+  // Longest in step first = entered earliest first; a NULL (no open step) would lead that
+  // ascending order, so it reads as the far future. Shortest first = entered latest first,
+  // where NULL already sorts last.
+  if (desc)
+    q.orderByRaw(`COALESCE((${IN_STEP_ENTERED}), ?) ASC`, [
+      collection,
+      collection,
+      'id',
+      NO_STEP_LAST
+    ])
+  else q.orderByRaw(`(${IN_STEP_ENTERED}) DESC`, [collection, collection, 'id'])
+}

@@ -93,6 +93,7 @@ import {
   formatMultiValue,
   formatValue
 } from '../lib/format-value'
+import { IN_STEP_COLUMN, IN_STEP_SORT, inStepText } from '../lib/in-step'
 import type { JobProgressPayload } from '../lib/jobs-tray'
 import {
   createCursorBook,
@@ -186,6 +187,14 @@ import {
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import { userErrorMessage } from '../lib/safe-error'
 import { logSearch, logSearchOpen } from '../lib/search-log'
+import {
+  selectionSums,
+  selKey,
+  useSelectedRowMemory,
+  useSelectionChanges,
+  useSelectionLiveMarks,
+  useSelectionPicks
+} from '../lib/selection-watch'
 import type { SendStatusFact } from '../lib/send-status'
 import { listViewInput } from '../lib/send-view'
 import { type CellShape, type SkeletonColumn, shapeForField } from '../lib/skeleton-shapes'
@@ -218,6 +227,7 @@ import {
 import { BulkCompareButton } from './bulk/BulkCompareButton'
 import { BulkFieldUpdate } from './bulk/BulkFieldUpdate'
 import { BulkRowMark } from './bulk/BulkRowMark'
+import { BulkSelectionNotices, type OpenInput, SelectionFigures } from './bulk/BulkSelectionNotices'
 import { type BulkUpdateAnswer, bulkUpdateOutcome } from './bulk/bulk-update-preview'
 import { MessageStakeholdersForm } from './bulk/MessageStakeholders'
 import { type RowPushOp, runRowPush, useRowPushActions } from './bulk/RowPushActions'
@@ -285,6 +295,7 @@ import { FilterControl } from './DataTable'
 import { FocusModeToggle } from './FocusModeToggle'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill, fulfilmentFigures } from './FulfilmentPill'
 import { HScrollProxy } from './HScrollProxy'
+import { InStepCell } from './InStep'
 import { startDocumentExtraction, useDocumentAutofillConfig } from './import/DocumentAutofillButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from './integrations/IntegrationDots'
 import { SendStatusMarks } from './integrations/SendStatus'
@@ -3865,11 +3876,20 @@ function BulkBar({
   relations,
   registryKeys,
   pointField,
+  figures,
+  notices,
+  onFormOpen,
   onClear,
   onSuccess
 }: {
   collection: string
   selectedIds: Array<string | number>
+  /** rt8 — the count and live sums of the selection (replaces the plain count). */
+  figures?: React.ReactNode
+  /** rt8 — "open by Beth" / "changed since you picked them", a full-width line in the bar. */
+  notices?: React.ReactNode
+  /** rt8 — a bulk form (move, delete, message, merge) opened or closed. */
+  onFormOpen?: (open: boolean) => void
   /** The column header's "Set <column> on N selected rows…" (2026-11-13). */
   pointField?: { field: string; nonce: number } | null
   transitions: Array<{
@@ -3898,6 +3918,12 @@ function BulkBar({
   const [mergeOpen, setMergeOpen] = useState(false)
   const mergedRef = useRef(false)
   const mergeAllowed = useMergeAllowed(collection, null, selectedIds.length >= 2)
+  const onFormOpenRef = useRef(onFormOpen)
+  onFormOpenRef.current = onFormOpen
+  useEffect(() => {
+    onFormOpenRef.current?.(mode !== 'actions')
+  }, [mode])
+  useEffect(() => () => onFormOpenRef.current?.(false), [])
   // Built-in operations are registry entries too (Data Model → Settings →
   // Bulk actions): a collection can switch them off or restrict who sees them.
   const builtin = useBuiltinGate([collection], registryKeys)
@@ -4097,9 +4123,11 @@ function BulkBar({
       >
         ✕
       </button>
-      <span className='text-[13px] font-medium text-nvr-cyan dark:text-nvr-cyan'>
-        {selectedIds.length} item{selectedIds.length === 1 ? '' : 's'} selected
-      </span>
+      {figures ?? (
+        <span className='text-[13px] font-medium text-nvr-cyan dark:text-nvr-cyan'>
+          {selectedIds.length} item{selectedIds.length === 1 ? '' : 's'} selected
+        </span>
+      )}
       {note && (
         <span className='text-[12px] text-slate-300 dark:text-muted-foreground'>{note}</span>
       )}
@@ -4476,6 +4504,7 @@ function BulkBar({
           </button>
         </span>
       )}
+      {notices}
     </div>
   )
 }
@@ -4493,7 +4522,8 @@ const CBV_KIND_SHAPE: Partial<Record<string, CellShape>> = {
   fulfilment: 'badge',
   integrations: 'badge',
   tasks: 'short',
-  addendums: 'short'
+  addendums: 'short',
+  in_step: 'short'
 }
 
 /** Rows changed since the person last opened the active view: opaque, so pinned cells match. */
@@ -5180,7 +5210,11 @@ export function CollectionBrowserView({
     // Dotted keys are related-value columns resolved server-side; plain keys
     // must exist on the collection.
     return wanted.filter(
-      (k) => k.includes('.') || fieldByName.has(k) || (k.startsWith('__f:') && !!columnFormulas[k])
+      (k) =>
+        k.includes('.') ||
+        fieldByName.has(k) ||
+        k === IN_STEP_COLUMN ||
+        (k.startsWith('__f:') && !!columnFormulas[k])
     )
   }, [displayColumns, nonHidden, fieldByName, columnFormulas])
 
@@ -5208,13 +5242,15 @@ export function CollectionBrowserView({
   /** Header label: user rename → dotted breadcrumb → title-cased field. */
   const columnLabel = (key: string) =>
     columnLabels[key] ??
-    (key.startsWith('__f:')
-      ? (columnFormulas[key] ?? 'Formula')
-      : key.includes('.')
-        ? key.split('.').map(titleCase).join(' › ')
-        : key === 'id'
-          ? 'ID'
-          : titleCase(key))
+    (key === IN_STEP_COLUMN
+      ? 'In step'
+      : key.startsWith('__f:')
+        ? (columnFormulas[key] ?? 'Formula')
+        : key.includes('.')
+          ? key.split('.').map(titleCase).join(' › ')
+          : key === 'id'
+            ? 'ID'
+            : titleCase(key))
 
   // #644 — a formula column's value for one row. Plain tokens read the row;
   // dotted ones read the bulk resolve-paths answer. Numeric-looking strings
@@ -5907,10 +5943,19 @@ export function CollectionBrowserView({
   const visibleIdsRef = useRef<Set<string>>(new Set())
   visibleIdsRef.current = new Set(rows.map((r) => String(r.id)))
   // Who has each row open (#2486): pushed through the presence room; the mark slot shows it.
-  const presenceRows = useMemo(
-    () => rows.slice(0, 100).map((r) => ({ collection, item: String(r.id) })),
-    [rows, collection]
-  )
+  // rt8: plus selected rows that are not on this page, so the bulk bar can say who has them
+  // open (≤ 200 watched in all; the server caps a socket at 300).
+  const presenceRows = useMemo(() => {
+    const onPage = rows.slice(0, 100).map((r) => String(r.id))
+    const seen = new Set(onPage)
+    const offPage = bulkMode
+      ? selectedIds
+          .map(String)
+          .filter((id) => !seen.has(id))
+          .slice(0, 100)
+      : []
+    return [...onPage, ...offPage].map((item) => ({ collection, item }))
+  }, [rows, collection, bulkMode, selectedIds])
   const rowViewers = useRowPresence(presenceRows)
   const itemsKeyRef = useRef<unknown[]>([])
   itemsKeyRef.current = [
@@ -7069,7 +7114,9 @@ export function CollectionBrowserView({
         if (typeof c !== 'string' && c.formula && c.key.startsWith('__f:'))
           formulas[c.key] = c.formula
       setColumnFormulas(formulas)
-      const valid = keys.filter((k) => k.includes('.') || fieldByName.has(k) || !!formulas[k])
+      const valid = keys.filter(
+        (k) => k.includes('.') || fieldByName.has(k) || k === IN_STEP_COLUMN || !!formulas[k]
+      )
       if (valid.length > 0) setDisplayColumns(valid)
       const labels: Record<string, string> = {}
       const formats: Record<string, ColumnFormatConfig> = {}
@@ -7622,6 +7669,13 @@ export function CollectionBrowserView({
       }
       const cellFor = (r: Record<string, unknown>, c: string) => {
         const cfg = columnFormats[c]
+        if (c === IN_STEP_COLUMN) {
+          // Known for the rows the list has read the steps of (the page on screen).
+          const inst = pipelineData?.instances?.[String(r.id)]
+          return inst && !inst.completed_at
+            ? (inStepText(inst.state_label, inst.entered_at, Date.now()) ?? '')
+            : ''
+        }
         if (c.startsWith('__f:')) {
           const f = columnFormulas[c]
           const num = f
@@ -7926,6 +7980,65 @@ export function CollectionBrowserView({
   const toggleRow = (id: string | number) =>
     setSelectedIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
 
+  // ── The selection, watched while it is held (rt8 items 5–7, lib/selection-watch.ts) ──────
+  const selectionKeys = useMemo(
+    () => (bulkMode && collection ? selectedIds.map((id) => selKey(collection, String(id))) : []),
+    [bulkMode, collection, selectedIds]
+  )
+  const selPicks = useSelectionPicks(selectionKeys)
+  const selMarks = useSelectionLiveMarks(collection ? [collection] : [], selPicks.picks)
+  // A bulk form (move, delete, message…) is open: check every selected row once, not only
+  // the ones a live event marked (live updates Off sends no marks).
+  const [bulkFormOpen, setBulkFormOpen] = useState(false)
+  const selCheckKeys = useMemo(
+    () => (bulkFormOpen ? selectionKeys : selectionKeys.filter((k) => selMarks.marked.has(k))),
+    [bulkFormOpen, selectionKeys, selMarks.marked]
+  )
+  const selChanges = useSelectionChanges(selCheckKeys, selPicks.picks)
+  const selChangedRows = selChanges.rows.filter((r) => selPicks.picks.has(r.key))
+  const selLocks = useRowLocks(
+    bulkMode ? collection : null,
+    bulkMode ? selectedIds.map(String) : [],
+    lockTick
+  )
+  const selOpen: OpenInput[] = selectionKeys
+    .map((key) => {
+      const id = key.slice(collection.length + 1)
+      const v = rowViewers[rowPresenceKey(collection, id)]
+      const lock = selLocks.get(id)
+      return {
+        key,
+        viewerIds: v?.ids ?? [],
+        viewerCount: v?.count ?? 0,
+        lockName: lock && !lock.is_mine ? (lock.locked_by_name ?? 'someone') : null
+      }
+    })
+    .filter((o) => o.viewerCount > 0 || !!o.lockName)
+  const selRows = useSelectedRowMemory(
+    rows as Array<Record<string, unknown>>,
+    (r) => String(r.id),
+    bulkMode ? selectedIds.map(String) : []
+  )
+  // The sums: the columns the totals row sums, else the money / decimal columns on screen.
+  const sumCols = (() => {
+    const summed = effectiveColumns.filter(
+      (k) =>
+        columnAggs[k] === 'sum' && (isNumericCol(k) || k.startsWith('__f:')) && !k.includes('.')
+    )
+    if (summed.length) return summed
+    return effectiveColumns
+      .filter((k) => {
+        if (k.includes('.') || k === 'id' || k.startsWith('__')) return false
+        if (columnFormats[k]?.type === 'number' && columnFormats[k]?.prefix === '$') return true
+        const t = fieldByName.get(k)?.type
+        return (t === 'decimal' || t === 'float') && !isM2OField(relations, collection, k)
+      })
+      .slice(0, 2)
+  })()
+  const selSums = selectionSums(selRows, sumCols, (r, k) =>
+    k.startsWith('__f:') ? formulaValue(r, k) : r[k]
+  )
+
   // Select every row the CURRENT filters match, not just this page (#77) —
   // an id-only fetch capped at 2000 so the selection stays a real id list the
   // existing bulk endpoints already understand.
@@ -7972,12 +8085,15 @@ export function CollectionBrowserView({
       | 'tasks'
       | 'actions'
       | 'formula'
+      | 'in_step'
   }
   const baseColDescs: CbvColDesc[] = [
     ...effectiveColumns.map((k) =>
       k.startsWith('__f:')
         ? { key: k, kind: 'formula' as const }
-        : { key: k, kind: 'data' as const }
+        : k === IN_STEP_COLUMN
+          ? { key: k, kind: 'in_step' as const }
+          : { key: k, kind: 'data' as const }
     ),
     ...(hasPipeline
       ? [
@@ -9313,6 +9429,22 @@ export function CollectionBrowserView({
                 <p className='mt-2 border-t border-slate-100 px-1.5 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:border-slate-800'>
                   Add column
                 </p>
+                {hasPipeline && !effectiveColumns.includes(IN_STEP_COLUMN) && (
+                  <button
+                    type='button'
+                    data-cbv-add-in-step=''
+                    onClick={() => setDisplayColumns([...effectiveColumns, IN_STEP_COLUMN])}
+                    className='flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                  >
+                    <span aria-hidden className='text-slate-400'>
+                      ＋
+                    </span>
+                    <span className='truncate'>In step</span>
+                    <span className='ml-auto shrink-0 text-[10.5px] text-slate-400'>
+                      step · time there
+                    </span>
+                  </button>
+                )}
                 {nonHidden
                   .filter((f) => !effectiveColumns.includes(f.field))
                   .map((f) => (
@@ -10240,6 +10372,41 @@ export function CollectionBrowserView({
                       const pinned = !!pinOf(key)
                       const baseTh = `group/hcell sticky top-0 h-8 select-none whitespace-nowrap bg-slate-50 px-3 py-0 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:bg-slate-800 dark:text-slate-400 ${pinned ? 'z-[4]' : 'z-[2]'}`
                       const pinPart = pinCls(key, '', '')
+                      // rt8 — In step sorts on the server by time in the current step.
+                      if (col.kind === 'in_step') {
+                        const active = sort === IN_STEP_SORT || sort === `-${IN_STEP_SORT}`
+                        const desc = sort === `-${IN_STEP_SORT}`
+                        return (
+                          <th
+                            key={key}
+                            ref={pinned ? pinRef(key) : undefined}
+                            style={{ ...widthStyle(key), ...pinStyle(key) }}
+                            onClick={() => nextSort(IN_STEP_SORT)}
+                            aria-sort={active ? (desc ? 'descending' : 'ascending') : 'none'}
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.target !== e.currentTarget) return
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault()
+                                nextSort(IN_STEP_SORT)
+                              }
+                            }}
+                            data-tip='How long each record has been in its current step. Sort: shortest first, then longest.'
+                            className={`${baseTh} relative cursor-pointer text-left hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan ${pinPart}`}
+                          >
+                            {columnLabel(key)}
+                            <span
+                              aria-hidden
+                              className={`ml-1 inline-block transition-colors duration-200 ${
+                                active ? 'text-[#00a5cc]' : 'text-slate-300 dark:text-slate-500'
+                              }`}
+                            >
+                              {active ? (desc ? '▼' : '▲') : '⇅'}
+                            </span>
+                            {pinButton(key)}
+                          </th>
+                        )
+                      }
                       if (col.kind !== 'data') {
                         const label =
                           col.kind === 'state'
@@ -10869,6 +11036,22 @@ export function CollectionBrowserView({
                                 </td>
                               )
                             }
+                            if (col.kind === 'in_step') {
+                              const inst = pipelineData?.instances?.[String(id)]
+                              return (
+                                <td
+                                  key={key}
+                                  style={{ ...widthStyle(key), ...pinStyle(key) }}
+                                  className={`whitespace-nowrap px-3 py-1.5 text-[12px] ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                >
+                                  <InStepCell
+                                    stepLabel={inst?.state_label}
+                                    enteredAt={inst?.entered_at}
+                                    done={!!inst?.completed_at}
+                                  />
+                                </td>
+                              )
+                            }
                             if (col.kind === 'entered') {
                               const inst = pipelineData?.instances?.[String(id)]
                               return (
@@ -11456,6 +11639,36 @@ export function CollectionBrowserView({
           relations={meta?.relations ?? []}
           registryKeys={bc.bulk_actions ?? null}
           pointField={pointField}
+          onFormOpen={setBulkFormOpen}
+          figures={
+            <SelectionFigures
+              tone='dark'
+              total={selectedIds.length}
+              sums={selSums.sums}
+              known={selSums.known}
+              labelOf={columnLabel}
+              format={(k, v) => formatTotal(v, 'sum', columnFormats[k])}
+            />
+          }
+          notices={
+            <BulkSelectionNotices
+              tone='dark'
+              total={selectedIds.length}
+              open={selOpen}
+              changed={selChangedRows}
+              onSkip={(keys) => {
+                const drop = new Set(keys.map((k) => k.slice(collection.length + 1)))
+                setSelectedIds((s) => s.filter((id) => !drop.has(String(id))))
+              }}
+              onAcknowledgeChanged={(keys) => {
+                selPicks.restamp(keys)
+                selMarks.clear(keys)
+              }}
+              onOpenRecord={({ id }) =>
+                window.open(urlFor({ collection, itemId: id }), '_blank', 'noopener')
+              }
+            />
+          }
           onClear={() => setSelectedIds([])}
           onSuccess={() => invalidateCbvRowQueries(qc, collection)}
         />

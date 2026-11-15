@@ -1,6 +1,7 @@
 import knexFactory from 'knex'
 import { describe, expect, it } from 'vitest'
 import {
+  applyInStepSort,
   applyStateFilter,
   pickInstance,
   splitStateField,
@@ -114,5 +115,30 @@ describe('applyStateFilter', () => {
       expect(sql).toContain('1 = 0')
       expect(sql).not.toMatch(/exists/i)
     }
+  })
+})
+
+describe('applyInStepSort', () => {
+  const qb = () => knexFactory({ client: 'mssql' })('workflows')
+
+  it('orders shortest-in-step first by the newest entry, NULLs last naturally', () => {
+    const q = qb()
+    applyInStepSort(q, 'workflows', false)
+    const { sql, bindings } = q.toSQL()
+    expect(sql).toMatch(/order by \(select max\(coalesce\(ish\.timestamp, isi\.started_at\)\)/i)
+    expect(sql).toMatch(/\) DESC$/)
+    expect(sql).toContain('CAST([workflows].[id] AS NVARCHAR(255))')
+    expect(sql).toContain('isi.completed_at IS NULL')
+    expect(bindings).toEqual(['workflows'])
+  })
+
+  it('orders longest-in-step first, with no-step records after everyone', () => {
+    const q = qb()
+    applyInStepSort(q, 'workflows', true)
+    const { sql, bindings } = q.toSQL()
+    expect(sql).toMatch(/order by COALESCE\(\(SELECT MAX/i)
+    expect(sql).toMatch(/\) ASC$/)
+    expect(bindings[0]).toBe('workflows')
+    expect((bindings[1] as Date).getUTCFullYear()).toBe(9999)
   })
 })
