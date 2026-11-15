@@ -336,6 +336,8 @@ export const RECEIPT_MAILS_PER_FORM_HOUR = 60
 /** Receipt emails one recipient domain gets per hour from one form (not our own domains, not
  *  free-mail providers). */
 export const RECEIPT_MAILS_PER_DOMAIN_HOUR = 30
+/** Receipt emails one recipient domain gets per hour from all forms together (same exemptions). */
+export const RECEIPT_MAILS_PER_DOMAIN_ALL_FORMS_HOUR = 100
 /** Receipt emails this instance sends per hour, all forms together. */
 export const RECEIPT_MAILS_PER_INSTANCE_HOUR = 300
 
@@ -429,9 +431,10 @@ type LimitRedis = Parameters<typeof overWindowLimit>[0]
 
 /**
  * May the receipt go to this address now? Caps, in order: the mailbox (a day), the form (an
- * hour), the whole instance (an hour), then the recipient domain on this form (an hour) — the
- * domain unit is taken last, so a send refused by an earlier cap never spends one. Our own
- * sending domains and free-mail providers have no domain cap.
+ * hour), the whole instance (an hour), then the recipient domain on this form (30 an hour) and
+ * across all forms (100 an hour) — the domain units are taken last, so a send refused by an
+ * earlier cap never spends one. Our own sending domains and free-mail providers have no domain
+ * caps.
  */
 export async function mayMailReceipt(
   redis: LimitRedis,
@@ -458,11 +461,22 @@ export async function mayMailReceipt(
   if (!domain || FREE_MAIL_DOMAINS.has(domain)) return true
   const own = opts.ownDomains ?? (await ownMailDomains())
   if (own.has(domain)) return true
-  // Keys are tenant-qualified by windowed-limit; per form, so one form's flood stays there.
+  // Keys are tenant-qualified by windowed-limit. Per form first (one form's flood stays there),
+  // then across every form (many forms cannot together flood one domain).
+  const d = hashKey(domain)
+  if (
+    await overWindowLimit(
+      redis,
+      `subform-rcpt-dom:${formId}:${d}`,
+      RECEIPT_MAILS_PER_DOMAIN_HOUR,
+      3600
+    )
+  )
+    return false
   return !(await overWindowLimit(
     redis,
-    `subform-rcpt-dom:${formId}:${hashKey(domain)}`,
-    RECEIPT_MAILS_PER_DOMAIN_HOUR,
+    `subform-rcpt-dom-all:${d}`,
+    RECEIPT_MAILS_PER_DOMAIN_ALL_FORMS_HOUR,
     3600
   ))
 }
