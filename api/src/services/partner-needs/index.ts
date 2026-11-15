@@ -28,10 +28,10 @@
 import { db } from '../../db/index.js'
 import type { CMSField, CMSRelation, User } from '../../types.js'
 import { getCollection, getFields, getPhysicalColumns, getRelations } from '../collections.js'
+import { readItems, readOne } from '../items.js'
 import { publishedTemplateBody } from '../payload-templates/index.js'
 import { can, getAllowedFields } from '../permissions.js'
 import {
-  buildContext,
   type ContextQueryDef,
   contextDefsFor,
   erpActionGateDetail,
@@ -46,6 +46,8 @@ import { analyzeLiquid, analyzeTemplate, pathSegments, type TemplateNeeds } from
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 /** Saved lines read per child relation when the form has not reported its own. */
 const LINE_READ_LIMIT = 500
+/** A row the form has not saved yet. */
+const PENDING_KEY = /^pending:\d{1,4}$/
 
 export interface LineDraft {
   /** The saved row id, or the form's `pending:<n>` for a row not saved yet. */
@@ -337,10 +339,71 @@ interface GateEnv {
   item: string | null
   record: Record<string, unknown>
   relations: CMSRelation[]
+  /** The rows of a child relation the caller may read; null = cannot be read. */
   linesFor: (list: ChildList) => Promise<LineDraft[] | null>
   userId: string | null
-  /** One read per distinct lookup across every push of the request. */
-  lookups: Map<string, Promise<Record<string, unknown>>>
+  /** May the caller read this field of the record? */
+  mayReadField: (field: string) => boolean
+  /** A gate lookup read AS THE CALLER; null = the caller cannot read what it needs. */
+  lookup: (def: ContextQueryDef, cols: string[]) => Promise<Array<Record<string, unknown>> | null>
+  /** May the caller read every line column this lookup (and list) judges lines by? */
+  lineColsReadable: (
+    list: ChildList,
+    def: ContextQueryDef,
+    where: ConditionRule[],
+    alias: string
+  ) => Promise<boolean>
+}
+
+/** The line columns a lookup's own filters and a list's `where` rules read. */
+export function lineJudgeColumns(
+  list: { fk: string },
+  def: ContextQueryDef,
+  where: ConditionRule[],
+  alias: string
+): string[] {
+  const out = new Set<string>()
+  for (const [k, v] of Object.entries(def.filter ?? {}))
+    if (k !== list.fk && v !== '$user') out.add(k)
+  for (const rule of where) {
+    let segs = pathSegments(String(rule?.field ?? ''))
+    if (alias && segs[0] === alias) segs = segs.slice(1)
+    if (segs.length === 1) out.add(segs[0])
+  }
+  return [...out]
+}
+
+/**
+ * Every record field an action's gates read: guard fields, `record.x` any-of refs, and the
+ * `$record.x` values its gate lookups filter on (the field that picks the partner).
+ */
+export function gateFieldsOf(
+  action: TransitionActionDef,
+  defs: Record<string, ContextQueryDef>
+): string[] {
+  const out = new Set<string>()
+  for (const rule of Array.isArray(action.guard) ? action.guard : []) {
+    const f = pathSegments(String(rule?.field ?? ''))[0]
+    if (f) out.add(f)
+  }
+  for (const ref of Array.isArray(action.skip_unless_any) ? action.skip_unless_any : []) {
+    const segs = pathSegments(String(ref))
+    if (segs[0] === 'record' && segs[1]) out.add(segs[1])
+  }
+  for (const key of gateKeysOf(action)) for (const f of recordRefsOf(defs[key])) out.add(f)
+  return [...out]
+}
+
+/** The lookup columns an any-of ref reads after the row index (`context.k.0.col` → col). */
+function anyOfColumns(action: TransitionActionDef, key: string): string[] {
+  const out: string[] = []
+  for (const ref of Array.isArray(action.skip_unless_any) ? action.skip_unless_any : []) {
+    const segs = pathSegments(String(ref))
+    if (segs[0] !== 'context' || segs[1] !== key) continue
+    const col = /^\d+$/.test(segs[2] ?? '') ? segs[3] : segs[2]
+    if (col && IDENT.test(col)) out.push(col)
+  }
+  return out
 }
 
 /** The context keys an action's gates read. */
@@ -361,6 +424,9 @@ async function judgePush(
   env: GateEnv
 ): Promise<Judged> {
   const context: Record<string, unknown> = {}
+  // A gate (or the partner choice) that reads a field this person may not read is never judged
+  // for them: its verdict would say what the hidden value is. No badge, no hint.
+  if (gateFieldsOf(action, defs).some((f) => !env.mayReadField(f))) return { status: 'skip' }
   // The lookup that picks the partner filters on an empty field: cannot judge yet.
   const decider = action.skip_when_empty ? defs[action.skip_when_empty] : undefined
   const undecidedBy = decider
@@ -375,10 +441,13 @@ async function judgePush(
       continue
     }
     const list = childListOf(env.collection, def, env.relations)
+    if (list && !list.junctionAlias && !(await env.lineColsReadable(list, def, [], '')))
+      return { status: 'skip' }
     if (list) {
-      const rows = await env.linesFor(list)
-      if (rows) {
-        context[key] = rows
+      if (!env.item && !list.junctionAlias) {
+        // A new record: its lines are only what the form reported.
+        const rows = await env.linesFor(list)
+        context[key] = (rows ?? [])
           .filter((r) => lineIncluded(r.values, def, env.record, [], '', undefined))
           .map((r) => r.values)
         continue
@@ -387,16 +456,18 @@ async function judgePush(
         context[key] = []
         continue
       }
+      if (!list.junctionAlias) {
+        const rows = await env.linesFor(list)
+        if (!rows) return { status: 'skip' }
+        context[key] = rows
+          .filter((r) => lineIncluded(r.values, def, env.record, [], '', undefined))
+          .map((r) => r.values)
+        continue
+      }
     }
-    const sig = JSON.stringify(def)
-    let read = env.lookups.get(sig)
-    if (!read) {
-      read = buildContext({ k: def }, env.item ?? '', env.record, env.userId).catch(() => ({
-        k: []
-      }))
-      env.lookups.set(sig, read)
-    }
-    context[key] = (await read).k ?? []
+    const rows = await env.lookup(def, anyOfColumns(action, key))
+    if (!rows) return { status: 'skip' }
+    context[key] = rows
   }
   const gate = erpActionGateDetail(action, env.record, context, { apiId })
   if (undecidedBy.length > 0)
@@ -447,6 +518,7 @@ export function badgeable(f: CMSField | undefined): boolean {
 interface Who {
   user: User | null
   isAdmin: boolean
+  workspaceId?: string
 }
 
 async function readableFields(who: Who, collection: string): Promise<Set<string> | null> {
@@ -480,7 +552,7 @@ export async function partnerNeeds(
   req: PartnerNeedsRequest,
   who: Who,
   opts: { ignoreSwitch?: boolean } = {}
-): Promise<PartnerNeedsAnswer> {
+): Promise<PartnerNeedsAnswer | null> {
   const { collection } = req
   const item = req.item ? String(req.item) : null
   const meta = await getCollection(collection)
@@ -489,6 +561,16 @@ export async function partnerNeeds(
     (!opts.ignoreSwitch && !partnerBadgesOn((meta as { browser_config?: unknown }).browser_config))
   )
     return emptyAnswer(false)
+  // The saved record AS THE CALLER (User Scopes, row filters, field policy): null = not theirs.
+  let saved: Record<string, unknown> = {}
+  if (item) {
+    if (!who.user) return null
+    const row = (await readOne(who.user, collection, item, who.workspaceId).catch(
+      () => null
+    )) as Record<string, unknown> | null
+    if (!row) return null
+    saved = row
+  }
 
   const start = await startOf(collection, item)
   if (!start) return emptyAnswer(true)
@@ -519,16 +601,10 @@ export async function partnerNeeds(
   ])
   const fieldBy = new Map(fields.map((f) => [f.field, f]))
 
-  // The record as the form holds it: saved values with the person's edits over them.
-  let saved: Record<string, unknown> = {}
-  if (item) {
-    saved =
-      ((await db(collection)
-        .where({ id: item })
-        .first()
-        .catch(() => undefined)) as Record<string, unknown> | undefined) ?? {}
-  }
-  const record: Record<string, unknown> = { ...saved }
+  // The record as the form holds it: what the caller may read of the saved row, with the
+  // person's edits over it. A field they may not read is simply not there.
+  const record: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(saved)) if (mayRead(readable, k)) record[k] = v
   for (const [k, v] of Object.entries(req.values ?? {})) {
     if (IDENT.test(k) && fieldBy.has(k) && mayRead(readable, k)) record[k] = v
   }
@@ -549,30 +625,129 @@ export async function partnerNeeds(
     return p
   }
 
-  // Lines: the form's report first; else the saved rows (read once per relation).
-  const savedLines = new Map<string, Promise<LineDraft[]>>()
-  const linesFor = async (list: ChildList): Promise<LineDraft[] | null> => {
-    const reported = req.lines?.[list.relKey]
-    if (Array.isArray(reported)) return reported.filter((r) => r && typeof r.key === 'string')
-    if (!item) return null
+  /** The saved child rows of `item` the caller may read (as the caller), or null. */
+  const savedLines = new Map<string, Promise<LineDraft[] | null>>()
+  const savedLinesOf = (list: ChildList): Promise<LineDraft[] | null> => {
     let p = savedLines.get(list.relKey)
     if (!p) {
       p = (async () => {
-        const { fields: cols } = await metaOf(list.collection)
+        if (!item || !who.user) return []
+        const { fields: cols, readable: childReadable } = await metaOf(list.collection)
+        if (childReadable && childReadable.size === 0) return null
         // Columns only: an alias field (M2M, O2M) has no column, whatever its type says.
         const physical = await getPhysicalColumns(list.collection).catch(() => null)
         const want = new Set<string>(['id'])
         for (const c of cols.keys())
-          if (IDENT.test(c) && (physical ? physical.has(c.toLowerCase()) : c === 'id')) want.add(c)
-        const rows = (await db(list.collection)
-          .where(list.fk, item)
-          .orderBy('id')
-          .limit(LINE_READ_LIMIT)
-          .select([...want])
-          .catch(() => [])) as Array<Record<string, unknown>>
+          if (
+            IDENT.test(c) &&
+            mayRead(childReadable, c) &&
+            (physical ? physical.has(c.toLowerCase()) : false)
+          )
+            want.add(c)
+        const res = await readItems(
+          who.user,
+          list.collection,
+          {
+            filter: { [list.fk]: { _eq: item } },
+            fields: [...want],
+            limit: LINE_READ_LIMIT,
+            sort: ['id'],
+            count: false
+          },
+          undefined,
+          who.workspaceId
+        ).catch(() => null)
+        if (!res) return null
+        const rows = (res.data ?? []) as Array<Record<string, unknown>>
         return rows.map((r) => ({ key: String(r.id), values: r }))
       })()
       savedLines.set(list.relKey, p)
+    }
+    return p
+  }
+  /**
+   * Lines: the form's report first, else the saved rows. A reported row counts only as a new
+   * row (`pending:<n>`) or as a saved child of this record the caller may read, and only with
+   * columns the caller may read.
+   */
+  const linesFor = async (list: ChildList): Promise<LineDraft[] | null> => {
+    const saved = await savedLinesOf(list)
+    const reported = req.lines?.[list.relKey]
+    if (!Array.isArray(reported)) return saved
+    const known = new Set((saved ?? []).map((r) => r.key))
+    const { readable: childReadable } = await metaOf(list.collection)
+    if (childReadable && childReadable.size === 0) return null
+    const out: LineDraft[] = []
+    for (const r of reported) {
+      if (!r || typeof r.key !== 'string') continue
+      if (!PENDING_KEY.test(r.key) && !known.has(r.key)) continue
+      const values: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(r.values ?? {}))
+        if (IDENT.test(k) && mayRead(childReadable, k)) values[k] = v
+      out.push({ key: r.key, values })
+    }
+    return out
+  }
+
+  /** Lines are judged only on columns the caller may read (a hidden value never decides). */
+  const lineColsReadable = async (
+    list: ChildList,
+    def: ContextQueryDef,
+    where: ConditionRule[],
+    alias: string
+  ): Promise<boolean> => {
+    const { readable: r } = await metaOf(list.collection)
+    if (r && r.size === 0) return false
+    const jf = def.junction_filter
+    if (jf) {
+      const jr = (await metaOf(jf.junction)).readable
+      if (jr && (jr.size === 0 || !jr.has(jf.field))) return false
+    }
+    return lineJudgeColumns(list, def, where, alias).every((c) => mayRead(r, c))
+  }
+
+  /** A gate lookup AS THE CALLER, on fields they may read; cached per filter. */
+  const lookups = new Map<string, Promise<Array<Record<string, unknown>> | null>>()
+  const lookup = (
+    def: ContextQueryDef,
+    cols: string[]
+  ): Promise<Array<Record<string, unknown>> | null> => {
+    const filter: Record<string, unknown> = {}
+    for (const [f, v] of Object.entries(def.filter ?? {})) {
+      if (!IDENT.test(f)) return Promise.resolve(null)
+      let resolved: unknown = v
+      if (v === '$id') resolved = item
+      else if (v === '$user') resolved = who.user?.id ?? null
+      else if (typeof v === 'string' && v.startsWith('$record.')) {
+        const rf = v.slice('$record.'.length)
+        if (!mayRead(readable, rf)) return Promise.resolve(null)
+        resolved = fkValue(record[rf])
+      }
+      filter[f] = resolved == null || resolved === '' ? { _null: true } : { _eq: resolved }
+    }
+    const sig = JSON.stringify([def.collection, filter, def.junction_filter ?? null, cols])
+    let p = lookups.get(sig)
+    if (!p) {
+      p = (async () => {
+        if (!who.user || !IDENT.test(def.collection ?? '') || def.junction_filter) return null
+        const { readable: r } = await metaOf(def.collection)
+        const need = [...new Set([...Object.keys(filter), ...cols])]
+        if (r && (r.size === 0 || need.some((c) => !r.has(c)))) return null
+        const res = await readItems(
+          who.user,
+          def.collection,
+          {
+            filter,
+            fields: ['id', ...need.filter((c) => c !== 'id')],
+            limit: Math.min(Number(def.limit ?? 50) || 50, 50),
+            count: false
+          },
+          undefined,
+          who.workspaceId
+        ).catch(() => null)
+        return res ? ((res.data ?? []) as Array<Record<string, unknown>>) : null
+      })()
+      lookups.set(sig, p)
     }
     return p
   }
@@ -611,11 +786,22 @@ export async function partnerNeeds(
       } else if (r.key.startsWith('pending:')) out.set(r.key, [])
       else savedIds.push(r.key)
     }
-    if (savedIds.length > 0) {
-      const jr = (await db(jf.junction)
-        .whereIn(jf.fk_to_row, savedIds.slice(0, LINE_READ_LIMIT))
-        .select(jf.fk_to_row, jf.field)
-        .catch(() => [])) as Array<Record<string, unknown>>
+    if (savedIds.length > 0 && who.user) {
+      // Only ids linesFor already proved are this record's lines the caller may read.
+      const jRes = await readItems(
+        who.user,
+        jf.junction,
+        {
+          filter: { [jf.fk_to_row]: { _in: savedIds.slice(0, LINE_READ_LIMIT) } },
+          fields: [jf.fk_to_row, jf.field],
+          limit: LINE_READ_LIMIT * 4,
+          count: false
+        },
+        undefined,
+        who.workspaceId
+      ).catch(() => null)
+      if (!jRes) return out
+      const jr = (jRes.data ?? []) as Array<Record<string, unknown>>
       for (const id of savedIds) out.set(id, [])
       for (const j of jr) out.get(String(j[jf.fk_to_row]))?.push(j[jf.field])
     }
@@ -629,7 +815,9 @@ export async function partnerNeeds(
     relations,
     linesFor,
     userId: who.user?.id ?? null,
-    lookups: new Map()
+    mayReadField: (f) => mayRead(readable, f),
+    lookup,
+    lineColsReadable
   }
   const apiNames = new Map<number, string>()
   const inputsRecord = new Set<string>()
@@ -749,6 +937,7 @@ export async function partnerNeeds(
           const c = ref.alias && segs[0] === ref.alias ? segs[1] : segs[0]
           if (c && segs.length <= (ref.alias && segs[0] === ref.alias ? 2 : 1)) lineInput(list, c)
         }
+        if (!(await lineColsReadable(list, def, where, ref.alias))) continue
         const rows = (await linesFor(list)) ?? []
         const jv = await junctionValuesFor(list, def, rows)
         let entry = lineMarks.get(list.relKey)
@@ -781,11 +970,16 @@ export async function partnerNeeds(
       answer.fields[f].filled = false
       continue
     }
-    const row = (await db(rel.many_collection)
-      .where(rel.many_field, item)
-      .first(db.raw('1 as one'))
-      .catch(() => undefined)) as unknown
-    answer.fields[f].filled = !!row
+    // Read as the caller; unreadable links leave `filled` unset (the form judges its staging).
+    if (!who.user) continue
+    const res = await readItems(
+      who.user,
+      rel.many_collection,
+      { filter: { [rel.many_field]: { _eq: item } }, fields: ['id'], limit: 1, count: false },
+      undefined,
+      who.workspaceId
+    ).catch(() => null)
+    if (res) answer.fields[f].filled = (res.data ?? []).length > 0
   }
   for (const f of hintBy) {
     if (!mayRead(readable, f) || !fieldBy.has(f)) continue
