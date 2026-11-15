@@ -91,7 +91,8 @@ export function buildTeam(
   users: UserRow[],
   delegates: Map<string, string>,
   visible: Set<string>,
-  now: number = Date.now()
+  now: number = Date.now(),
+  visibleDelegates: Set<string> = new Set()
 ): QueueTeamAnswer {
   const listed = users
     .filter((u) => isListablePerson(u) && visible.has(String(u.id).toUpperCase()))
@@ -101,7 +102,9 @@ export function buildTeam(
         out &&
         !!u.delegate_id &&
         (!u.delegate_expires_at || new Date(u.delegate_expires_at).getTime() > now)
-      const dName = live ? delegates.get(String(u.delegate_id).toUpperCase()) : undefined
+      const dKey = String(u.delegate_id).toUpperCase()
+      // A delegate is named only when the viewer may see them in presence too.
+      const dName = live && visibleDelegates.has(dKey) ? delegates.get(dKey) : undefined
       return {
         id: String(u.id),
         name: nameOf(u),

@@ -1660,7 +1660,11 @@ export async function queuesRoutes(app: FastifyInstance) {
     const { visibleToViewer } = await import('./presence.js')
     const visible = await visibleToViewer(req.user!, !!req.isAdmin, seated)
     const { users, delegates } = await loadTeamUsers([...visible])
-    return reply.send({ data: buildTeam(users, delegates, visible) })
+    const delegateIds = [...delegates.keys()]
+    const visibleDelegates = await visibleToViewer(req.user!, !!req.isAdmin, delegateIds)
+    return reply.send({
+      data: buildTeam(users, delegates, visible, Date.now(), visibleDelegates)
+    })
   })
 
   // POST /:id/claim — self-assign an item within this queue; write-through to the

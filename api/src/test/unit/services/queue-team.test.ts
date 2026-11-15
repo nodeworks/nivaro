@@ -46,10 +46,22 @@ describe('queue team strip', () => {
       delegate_id: 'D',
       delegate_expires_at: '2026-11-10T00:00:00Z'
     })
-    const away = buildTeam([live, lapsed], delegates, new Set(['A', 'B']), now).members
+    const away = buildTeam(
+      [live, lapsed],
+      delegates,
+      new Set(['A', 'B']),
+      now,
+      new Set(['D'])
+    ).members
     expect(away.find((m) => m.id === 'A')?.covered_by).toEqual({ id: 'D', name: 'Dee Cover' })
     expect(away.find((m) => m.id === 'A')?.ooo_end).toBe('2026-11-19T00:00:00.000Z')
     expect(away.find((m) => m.id === 'B')?.covered_by).toBeNull()
+  })
+
+  it('a delegate the viewer cannot see is not named', () => {
+    const o = u('A', { is_out_of_office: true, delegate_id: 'D' })
+    const out = buildTeam([o], new Map([['D', 'Dee']]), new Set(['A']), Date.now(), new Set())
+    expect(out.members[0].covered_by).toBeNull()
   })
 
   it('a delegate who cannot act is not offered', () => {
