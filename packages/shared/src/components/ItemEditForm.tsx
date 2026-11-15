@@ -163,6 +163,7 @@ import { matchesVisibleWhen } from '../lib/visible-when'
 import type { AvailableBulkAction } from './bulk/BulkActionButtons'
 import { FieldSourcesContext } from './ConfigReadBack'
 import { CopyAsButton } from './CopyAsButton'
+import { ChangeProposalsPanel, ProposeChangeButton } from './change-proposals'
 import { useHuddleFollowSurface } from './chat/huddle/huddle-follow-bus'
 import { FormWhatsNew } from './FormWhatsNew'
 import { showFormVideosButton } from './help-videos/viewer/format'
@@ -5947,6 +5948,11 @@ function ItemEditFormView({
   // (403 EDIT_LOCKED). Same key + reader as the lock-conditions query below.
   const editLockConfigured = useMemo(
     () => !!normalizeSummaryModeRules(colMeta?.summary_mode_rules).edit_lock,
+    [colMeta?.summary_mode_rules]
+  )
+  // Idea 6 — the collection lets people propose a change on a record locked after approval.
+  const changeProposalsOn = useMemo(
+    () => normalizeSummaryModeRules(colMeta?.summary_mode_rules).change_proposals === true,
     [colMeta?.summary_mode_rules]
   )
   // The lock lookups below read the same /pipelines/instance answer the
@@ -14891,6 +14897,19 @@ function ItemEditFormView({
                                             Request help
                                           </button>
                                         )}
+                                        {/* Idea 6 — on a record locked after approval, propose
+                                        new values instead of describing them in a ticket. */}
+                                        {!isNew &&
+                                          itemId &&
+                                          changeProposalsOn &&
+                                          !!editLockMessage && (
+                                            <ProposeChangeButton
+                                              collection={collection}
+                                              itemId={String(itemId)}
+                                              enabled={!designOn}
+                                              recordLabel={itemTitle ? String(itemTitle) : null}
+                                            />
+                                          )}
                                         {/* Record actions stay inline beside Save, never in the
                                         folded ⋯ panel: on a narrower screen Push to Fusion was
                                         only reachable behind an unlabeled ⋯ and read as gone. */}
@@ -16160,6 +16179,15 @@ function ItemEditFormView({
                                           <Lock className='mt-0.5 h-4 w-4 shrink-0 text-amber-500' />
                                           <span>{editLockMessage}</span>
                                         </div>
+                                      )}
+                                      {/* Proposed changes waiting on the step's owners (idea 6);
+                                      null unless the collection has proposals on and there are some. */}
+                                      {!isNew && itemId && !designOn && changeProposalsOn && (
+                                        <ChangeProposalsPanel
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                          enabled
+                                        />
                                       )}
                                       {showLockBanner && lockEnabled && lockHolder && (
                                         <div className='nvr-expand-in'>

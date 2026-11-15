@@ -77,6 +77,14 @@ export async function myWorkRoutes(app: FastifyInstance) {
             .catch(() => [])
         : Promise.resolve([])
     ])
+    // Change proposals waiting on my decision (idea 6) — read beside the rest.
+    const proposalsP = import('../services/change-proposals.js')
+      .then(async (m) => {
+        const { isAdminRole } = await import('../services/permissions.js')
+        const isAdmin = !!req.isAdmin || (await isAdminRole(req.user!))
+        return m.decidableProposalsFor(req.user!, isAdmin, req.workspaceId ?? undefined)
+      })
+      .catch(() => [])
     const [ownedResult, tasks, approvalSteps, notifications, teamTasks, requested] =
       await Promise.all([
         // Owned records + SLA, most urgent first — the same set Ask AI's
@@ -151,6 +159,7 @@ export async function myWorkRoutes(app: FastifyInstance) {
       }))
 
     const owned = ownedResult.owned
+    const proposals = await proposalsP
     const qNames = await questionNames(
       [...questionRows, ...answerRows].flatMap((q) => [q.asker, q.recipient])
     ).catch(() => new Map<string, string | null>())
@@ -192,6 +201,8 @@ export async function myWorkRoutes(app: FastifyInstance) {
         questions,
         on_a_team: teamIds.length > 0,
         approvals: approvalSteps,
+        // Proposed changes on locked records I may accept or decline (idea 6).
+        proposals,
         notifications,
         counts: {
           owned: owned.length,
@@ -201,6 +212,7 @@ export async function myWorkRoutes(app: FastifyInstance) {
           team_tasks: teamTasks.length,
           requested: requested.length,
           approvals: approvalSteps.length,
+          proposals: proposals.length,
           notifications: notifications.length,
           questions: questions.length,
           ...(agentConn ? { agent_tasks: agentTasks.length, answers: answers.length } : {})

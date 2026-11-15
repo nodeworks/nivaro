@@ -54,6 +54,9 @@ export interface SummaryModeRules {
       open_children: string[]
     }
   }
+  /** Propose a change on a record locked after approval (api change-proposals.ts);
+   *  carried through so a Form UX save never drops it. Default off. */
+  change_proposals?: true
 }
 
 export const NO_STATE = '__none__'
@@ -62,7 +65,12 @@ export const EMPTY_SUMMARY_RULES: SummaryModeRules = { default: 'edit', rules: [
 
 export function normalizeSummaryModeRules(raw: unknown): SummaryModeRules {
   if (!raw || typeof raw !== 'object') return EMPTY_SUMMARY_RULES
-  const o = raw as { default?: unknown; rules?: unknown; edit_lock?: SummaryModeRules['edit_lock'] }
+  const o = raw as {
+    default?: unknown
+    rules?: unknown
+    edit_lock?: SummaryModeRules['edit_lock']
+    change_proposals?: unknown
+  }
   const def: SummaryMode = o.default === 'summary' ? 'summary' : 'edit'
   const rules: SummaryModeRule[] = []
   if (Array.isArray(o.rules)) {
@@ -78,7 +86,12 @@ export function normalizeSummaryModeRules(raw: unknown): SummaryModeRules {
       })
     }
   }
-  return { default: def, rules, ...(o.edit_lock ? { edit_lock: o.edit_lock } : {}) }
+  return {
+    default: def,
+    rules,
+    ...(o.edit_lock ? { edit_lock: o.edit_lock } : {}),
+    ...(o.change_proposals === true ? { change_proposals: true as const } : {})
+  }
 }
 
 /** True when any rule mentions roles — the evaluator then needs the viewer's role. */
