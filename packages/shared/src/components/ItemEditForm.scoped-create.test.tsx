@@ -650,7 +650,11 @@ describe('a record in a locked approval step', () => {
     })
     await settle(() => !!host.querySelector('[data-edit-lock-banner]'))
     expect(host.querySelector('[data-edit-lock-banner]')?.textContent).toBe(message)
-    expect(host.querySelector('[data-field="title"] .pointer-events-none')).not.toBeNull()
+    expect(
+      host.querySelector(
+        '[data-field="title"] .pointer-events-none:not([data-field-source-anchor])'
+      )
+    ).not.toBeNull()
   })
 
   it('stays editable for someone the lock allows', async () => {
@@ -663,6 +667,10 @@ describe('a record in a locked approval step', () => {
     })
     await settle(() => false, 10)
     expect(host.querySelector('[data-edit-lock-banner]')).toBeNull()
-    expect(host.querySelector('[data-field="title"] .pointer-events-none')).toBeNull()
+    expect(
+      host.querySelector(
+        '[data-field="title"] .pointer-events-none:not([data-field-source-anchor])'
+      )
+    ).toBeNull()
   })
 })
