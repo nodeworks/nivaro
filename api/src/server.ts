@@ -1157,6 +1157,23 @@ export async function buildServer() {
         }
       )
 
+      // Scheduled changes apply themselves at their time, as the person who scheduled them
+      // (services/scheduled-apply.ts; claimed per row, so a double run never applies twice).
+      app.cron.schedule(
+        'scheduled-changes-apply',
+        '* * * * *',
+        async () => {
+          const { runScheduledChanges } = await import('./services/scheduled-apply.js')
+          await runScheduledChanges(app)
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Applies scheduled field changes when their time comes, as the person who scheduled them; refused or conflicting changes are marked failed and that person is told.'
+        }
+      )
+
       // Cumulative flow (#2758): a year of daily state counts per pipeline
       // template + collection, so long ranges read a stored series.
       app.cron.schedule(

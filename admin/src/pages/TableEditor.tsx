@@ -7476,6 +7476,9 @@ interface BrowserConfig {
   bulk_actions?: string[] | null
   /** #2490 — live record events: on (default), batched id lists, or off (lists poll). */
   live_events?: 'on' | 'batched' | 'off'
+  /** Scheduled changes apply themselves at their time (default); false = an administrator
+   *  applies them (api services/scheduled-apply.ts). */
+  scheduled_auto_apply?: boolean
   /** List search (`?search=`) only over these columns; absent = every string/text field. */
   search_fields?: string[]
   /** Search item 23 — extra text fields a labels-only global search also matches. */
@@ -7777,6 +7780,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
       'record_tabs',
       'bulk_actions',
       'live_events',
+      'scheduled_auto_apply',
       'search_fields',
       'label_search_fields',
       'inline_edit'
@@ -7799,6 +7803,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (Array.isArray(next.bulk_actions)) clean.bulk_actions = next.bulk_actions
     if (next.live_events === 'batched' || next.live_events === 'off')
       clean.live_events = next.live_events
+    if (next.scheduled_auto_apply === false) clean.scheduled_auto_apply = false
     if (next.search_fields?.length) clean.search_fields = next.search_fields
     if (next.label_search_fields?.length) clean.label_search_fields = next.label_search_fields
     if (next.inline_edit) {
@@ -7878,6 +7883,21 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           <Switch
             checked={cfg.record_tabs === true}
             onCheckedChange={(v) => void patch({ record_tabs: v })}
+          />
+        </div>
+        <div className='flex items-center justify-between gap-4'>
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>
+              Apply scheduled changes on time
+            </p>
+            <p className='text-[11.5px] text-slate-500'>
+              A scheduled change applies by itself at its time, as the person who scheduled it. Off:
+              an administrator applies it from Deadlines → Scheduled changes
+            </p>
+          </div>
+          <Switch
+            checked={cfg.scheduled_auto_apply !== false}
+            onCheckedChange={(v) => void patch({ scheduled_auto_apply: v })}
           />
         </div>
         <InlineEditSetting

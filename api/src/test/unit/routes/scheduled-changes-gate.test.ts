@@ -26,7 +26,9 @@ const state = vi.hoisted(() => ({
   writeRefusal: null as { status: number; body: Record<string, unknown> } | null,
   updateThrows: null as Error | null,
   updateCalls: [] as Array<{ user: unknown; collection: string; id: unknown; data: unknown }>,
-  statusWrites: [] as Array<Record<string, unknown>>
+  statusWrites: [] as Array<Record<string, unknown>>,
+  // The record a change targets (undo reads its current values).
+  record: undefined as Record<string, unknown> | undefined
 }))
 
 const FIELDS = [
@@ -50,7 +52,9 @@ vi.mock('../../../db/index.js', () => {
         ? (state.existing ?? { id: 1, changes: '{}' })
         : table === 'nivaro_users'
           ? state.creator
-          : undefined
+          : table === 'orders'
+            ? state.record
+            : undefined
     q.insert = () => {
       state.inserts++
       return { returning: async () => [{ id: 1 }] }
@@ -75,8 +79,17 @@ vi.mock('../../../middleware/authenticate.js', () => ({
   requireAdmin: async () => undefined
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
+// Applying tells the scheduler (scheduled-apply.ts): stubbed — no inbox, push or label reads.
+vi.mock('../../../services/notification-channels.js', () => ({
+  notifyUser: vi.fn(async () => ({ id: null, decision: {}, lane: null }))
+}))
+vi.mock('../../../services/record-labels-as-viewer.js', () => ({
+  recordLabelsAsViewer: vi.fn(async () => ({}))
+}))
+vi.mock('../../../services/record-events.js', () => ({ announceRecordAspect: vi.fn() }))
 vi.mock('../../../services/collections.js', () => ({
   getFields: vi.fn(async () => state.fields),
+  getCollection: vi.fn(async () => ({ collection: 'orders' })),
   getPhysicalColumns: vi.fn(async () => state.columns)
 }))
 vi.mock('../../../services/edit-lock.js', () => ({
@@ -147,6 +160,7 @@ beforeEach(() => {
   state.updateThrows = null
   state.updateCalls = []
   state.statusWrites = []
+  state.record = undefined
 })
 
 describe('POST /scheduled-changes', () => {
@@ -419,5 +433,69 @@ describe('POST /scheduled-changes/:id/execute', () => {
       status: 'failed',
       error_message: 'Status is not allowed'
     })
+  })
+})
+
+// Undo (scheduled changes apply themselves, 2026-11-15): the values a change replaced go back,
+// as the person pressing Undo, only within a day and only while nobody moved the field again.
+describe('POST /scheduled-changes/:id/undo', () => {
+  const executed = (over: Record<string, unknown> = {}) => ({
+    id: 1,
+    created_by: 'U1',
+    collection: 'orders',
+    item_id: '7',
+    status: 'executed',
+    changes: '{"status":"closed"}',
+    inngest_event_id: JSON.stringify({
+      v: 1,
+      before: { status: 'open' },
+      undo_until: new Date(Date.now() + 3600_000).toISOString(),
+      applied_by: 'schedule'
+    }),
+    ...over
+  })
+  const run = async () =>
+    (await app()).inject({ method: 'POST', url: '/api/scheduled-changes/1/undo' })
+
+  it('puts the previous values back as the caller and marks it undone', async () => {
+    state.existing = executed()
+    state.record = { status: 'closed' }
+    const res = await run()
+    expect(res.statusCode).toBe(200)
+    expect(state.updateCalls).toHaveLength(1)
+    expect(state.updateCalls[0]).toMatchObject({
+      user: { id: 'U1' },
+      collection: 'orders',
+      id: '7',
+      data: { status: 'open' }
+    })
+    expect(state.statusWrites.at(-1)).toMatchObject({ status: 'undone' })
+  })
+
+  it('refuses when the field was changed again since', async () => {
+    state.existing = executed()
+    state.record = { status: 'on_hold' }
+    const res = await run()
+    expect(res.statusCode).toBe(409)
+    expect(state.updateCalls).toHaveLength(0)
+  })
+
+  it('refuses after the day to undo has passed', async () => {
+    state.existing = executed({
+      inngest_event_id: JSON.stringify({
+        v: 1,
+        before: { status: 'open' },
+        undo_until: new Date(Date.now() - 1000).toISOString()
+      })
+    })
+    state.record = { status: 'closed' }
+    expect((await run()).statusCode).toBe(409)
+    expect(state.updateCalls).toHaveLength(0)
+  })
+
+  it('refuses someone who neither scheduled it nor administers', async () => {
+    state.existing = executed({ created_by: 'U9' })
+    state.record = { status: 'closed' }
+    expect((await run()).statusCode).toBe(403)
   })
 })
