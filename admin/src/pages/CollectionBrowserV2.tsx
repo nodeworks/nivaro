@@ -161,23 +161,39 @@ export function CollectionBrowserV2Page() {
               collection={collection}
               initialSearch={searchParams.get('search') ?? ''}
               initialFilters={
-                // Import batch view (#128): ?ids=1,2,3 opens the browser
-                // filtered to exactly those records.
-                searchParams.get('ids')
+                // Pipeline editor's step chip: ?state=started,in_review opens the browser on the
+                // records sitting in those pipeline steps.
+                searchParams.get('state')
                   ? [
                       {
-                        id: 'batch-ids',
-                        path: ['id'],
-                        pathLabels: ['ID'],
-                        fieldType: 'integer',
+                        id: 'pipeline-state',
+                        path: ['$state'],
+                        pathLabels: ['State'],
+                        fieldType: 'string',
                         op: '_in',
-                        value: (searchParams.get('ids') ?? '')
+                        value: (searchParams.get('state') ?? '')
                           .split(',')
                           .filter(Boolean)
-                          .slice(0, 500)
+                          .slice(0, 50)
                       }
                     ]
-                  : undefined
+                  : // Import batch view (#128): ?ids=1,2,3 opens the browser
+                    // filtered to exactly those records.
+                    searchParams.get('ids')
+                    ? [
+                        {
+                          id: 'batch-ids',
+                          path: ['id'],
+                          pathLabels: ['ID'],
+                          fieldType: 'integer',
+                          op: '_in',
+                          value: (searchParams.get('ids') ?? '')
+                            .split(',')
+                            .filter(Boolean)
+                            .slice(0, 500)
+                        }
+                      ]
+                    : undefined
               }
               initialAiPrompt={aiPrompt}
               extraViews={extraViews}
