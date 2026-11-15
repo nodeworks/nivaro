@@ -20,6 +20,13 @@ import {
 import { useOptionalRealtime } from '../../lib/realtime'
 import { otherTabNote, useRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
 import { userErrorMessage } from '../../lib/safe-error'
+import {
+  applyRemoteUpload,
+  UPLOAD_STATE_EVENT,
+  type UploadStateDetail,
+  uploadSentence,
+  useRemoteUploads
+} from '../../lib/upload-presence'
 import { cn, formatRelative } from '../../lib/utils'
 import { CollectionImportBanner } from '../CollectionImportBanner'
 import { markLiveRecordWrite } from './live-record-marks'
@@ -221,7 +228,8 @@ export function RecordLiveSync({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [flash, setFlash] = useState(false)
-  const [uploads, setUploads] = useState<Array<{ user: string; name: string }>>([])
+  // Co-viewers' uploads no mounted file field shows itself (rt9 #9, lib/upload-presence.ts).
+  const uploads = useRemoteUploads(collection, String(itemId), 'unclaimed')
   const [gone, setGoneState] = useState<RecordGone | null>(null)
   const [automation, setAutomation] = useState<Record<string, string>>({})
   const [restoring, setRestoring] = useState(false)
@@ -581,23 +589,16 @@ export function RecordLiveSync({
   useEffect(() => {
     if (!realtime) return
     const onLocal = (e: Event) => {
-      const d = (e as CustomEvent).detail as { name: string; state: 'start' | 'done' }
-      if (d?.name)
-        realtime.emit('record:uploading', {
-          collection,
-          item: String(itemId),
-          name: d.name,
-          state: d.state
-        })
+      const d = (e as CustomEvent).detail as UploadStateDetail
+      if (!d?.name) return
+      // An upload that names its record goes only to that record's room.
+      if (d.collection && (d.collection !== collection || String(d.item) !== String(itemId))) return
+      realtime.emit('record:uploading', { ...d, collection, item: String(itemId) })
     }
-    window.addEventListener('nvr:upload-state', onLocal)
+    window.addEventListener(UPLOAD_STATE_EVENT, onLocal)
     const applyRemote = (p: any) => {
       if (p?.collection !== collection || String(p?.item) !== String(itemId)) return
-      const user = String(p.user_name ?? p.user ?? 'Someone')
-      setUploads((prev) => {
-        const rest = prev.filter((u) => !(u.user === user && u.name === p.name))
-        return p.state === 'start' ? [...rest, { user, name: String(p.name) }] : rest
-      })
+      applyRemoteUpload(p)
     }
     const unsub = realtime.on('record:uploading', applyRemote)
     // Live comments (#280): comment broadcasts refresh the thread instantly. Typing and the
@@ -612,7 +613,7 @@ export function RecordLiveSync({
     const onRelayed = (e: Event) => applyRemote((e as CustomEvent).detail)
     window.addEventListener('nvr:record-uploading', onRelayed)
     return () => {
-      window.removeEventListener('nvr:upload-state', onLocal)
+      window.removeEventListener(UPLOAD_STATE_EVENT, onLocal)
       window.removeEventListener('nvr:record-uploading', onRelayed)
       unsub()
       unsubComment()
@@ -741,11 +742,12 @@ export function RecordLiveSync({
           )}
           {uploads.map((u) => (
             <span
-              key={`${u.user}:${u.name}`}
+              key={u.key}
+              data-remote-upload-chip={u.key}
               className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
             >
-              <UploadCloud className='h-3 w-3 animate-pulse text-nvr-cyan' />
-              {u.user} is uploading “{u.name.length > 32 ? `${u.name.slice(0, 32)}…` : u.name}”
+              <UploadCloud className='h-3 w-3 animate-pulse text-nvr-cyan motion-reduce:animate-none' />
+              {uploadSentence(u)}
             </span>
           ))}
         </div>

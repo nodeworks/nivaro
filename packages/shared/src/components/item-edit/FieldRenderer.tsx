@@ -304,6 +304,7 @@ export const FieldRenderer = memo(function FieldRenderer({
     const fOpts = parseJson<{ allow_upload?: boolean; allow_pick?: boolean }>(field.options)
     return (
       <FilePickerField
+        field={field.field}
         value={value}
         onChange={onChange}
         disabled={field.readonly}

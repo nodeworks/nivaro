@@ -6,8 +6,10 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { singular as singularTitle } from '../services/access-words.js'
 import { logActivity } from '../services/activity.js'
 import { getCollection } from '../services/collections.js'
+import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { readOne } from '../services/items.js'
 import { cleanAppLabel } from '../services/page-at.js'
+import { announceRecordHelp, loadRecordHelp } from '../services/record-help.js'
 import { collectionTitle } from '../services/record-label-fallback.js'
 import { DEFAULT_TARGETS, loadSupportAnalytics } from '../services/support-analytics.js'
 import {
@@ -353,6 +355,7 @@ export async function raiseTicket(
   const id = Number(typeof row === 'object' ? row.id : row)
   await logTicketEvent(id, req.user!.id, 'Raised the request', req, 'create')
   const t = (await loadTicket(id))!
+  announceRecordHelp(t)
   const [s] = await serializeTickets([t])
   const where = s.record_label ? ` on ${s.record_label}` : ' (General Support)'
   const who = s.requester_name ?? 'Someone'
@@ -537,6 +540,25 @@ export async function supportRoutes(app: FastifyInstance) {
     })
     return reply.send({ data })
   })
+
+  // GET /record/:collection/:item — open requests raised from one record (rt9 #19): the count
+  //   for anyone who can read the record, details only for those support lets see the ticket.
+  app.get<{ Params: { collection: string; item: string } }>(
+    '/record/:collection/:item',
+    async (req, reply) => {
+      const { collection, item } = req.params
+      if (!collection || !item || collection.length > 128 || item.length > 128)
+        return reply.code(400).send({ error: 'Bad request' })
+      try {
+        await assertInstanceAccess(req.user, !!req.isAdmin, collection, item, undefined, 'read')
+      } catch (err) {
+        if (err instanceof InstanceAccessError)
+          return reply.code(err.statusCode).send({ error: err.message })
+        throw err
+      }
+      return reply.send({ data: await loadRecordHelp(viewerOf(req), collection, item) })
+    }
+  )
 
   // GET /tickets?scope=mine|desk&status=open|closed|all|<status>&category=&assignee=me|unassigned&q=&page=&limit=
   app.get<{
@@ -948,6 +970,7 @@ export async function supportRoutes(app: FastifyInstance) {
       .update({ assignee: req.user!.id, status: 'in_progress', updated_at: new Date() })
     const me = (await nameOf(req.user!.id)) ?? 'Someone'
     await logTicketEvent(t.id, req.user!.id, `Picked up by ${me} · In progress`, req)
+    announceRecordHelp(t)
     const updated = (await loadTicket(t.id))!
     await notifyTicket(app, updated, [t.created_by], {
       subject: `Your request is in progress: ${t.title}`,
@@ -1040,6 +1063,7 @@ export async function supportRoutes(app: FastifyInstance) {
     }
     if (!events.length) return reply.send({ data: (await serializeTickets([t]))[0] })
     await db('nivaro_tasks').where({ id: t.id }).update(patch)
+    announceRecordHelp(t)
     // Closing settles the request's notifications: "Closed by <who>".
     if (patch.status === 'done' || patch.status === 'cancelled') {
       const { resolveNotifications } = await import('../services/notification-resolve.js')

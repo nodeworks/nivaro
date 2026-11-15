@@ -43,6 +43,10 @@ export type RecordAspect =
   | '$approvals'
   /** rt4 #6 — the record was hidden from or shown in pickers again (routes/picker-exclusions.ts). */
   | '$picker'
+  /** rt9 #19 — a support request raised from the record opened, moved or closed (record-help.ts). */
+  | '$support'
+  /** rt9 #19 — a support request raised from the record opened, moved or closed (record-help.ts). */
+  | '$support'
 
 export function announceRecordAspect(
   collection: string | null | undefined,

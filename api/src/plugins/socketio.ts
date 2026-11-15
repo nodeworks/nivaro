@@ -30,7 +30,8 @@ import { ownUserRoom, scopeUserRoomsPerTenant } from '../services/cloud-user-roo
 import {
   fieldChangeDelivery,
   relayableValue,
-  relayViewers
+  relayViewers,
+  uploadNameDelivery
 } from '../services/field-change-relay.js'
 import { fieldFocusTracker } from '../services/field-focus.js'
 import {
@@ -154,6 +155,12 @@ import {
 import { attachSocketVerification } from '../services/socket-verify.js'
 import { type RefreshPayload, refreshOwedOnConnect } from '../services/sticky-refresh.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
+import {
+  parseUploadReport,
+  type UploadReport,
+  uploadEvent,
+  uploadTracker
+} from '../services/upload-presence.js'
 import { registerWidgetLive } from '../services/widget-live.js'
 
 let pagePresenceReader:
@@ -2029,6 +2036,28 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // for co-viewers on leave and disconnect (via leaveOneRoom) and when they lapse.
     const announceBlur = (room: string, field: string) =>
       socket.to(room).emit('field:editing', { ...recordOf(room), field, user: null })
+    const uploads = uploadTracker()
+    const relayUpload = inSocketTenant(socket, (r: UploadReport) => {
+      const user = authenticatedUser
+      if (!user) return
+      const record = recordOf(r.room)
+      const me = String(user.id).toLowerCase()
+      const viewers = relayViewers(
+        recordViewers.get(r.room)?.entries() ?? [],
+        (sid) => socketBindKind(io, sid),
+        boardPeerViewers(r.room)
+      ).filter((v) => v.socket !== socket.id && v.id.toLowerCase() !== me)
+      if (viewers.length === 0 || !record.collection) return
+      const who = { id: user.id, name: displayName(user) }
+      void uploadNameDelivery(viewers, record.collection, r.field)
+        .catch(() => ({ valueTo: [] as string[], nameTo: viewers.map((v) => v.socket) }))
+        .then((d) => {
+          if (d.valueTo.length)
+            io.to(d.valueTo).emit('record:uploading', uploadEvent(r, record, who, true))
+          if (d.nameTo.length)
+            io.to(d.nameTo).emit('record:uploading', uploadEvent(r, record, who, false))
+        })
+    })
     const focusMarks = fieldFocusTracker({
       ttlMs: FIELD_FOCUS_TTL_MS,
       max: FIELD_FOCUS_MAX,
@@ -2036,6 +2065,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     })
     const leaveOneRoom = (room: string) => {
       for (const field of focusMarks.releaseRoom(room)) announceBlur(room, field)
+      // rt9 #9: an upload still running here ends for the others (no chip left spinning).
+      for (const r of uploads.drop(room)) void relayUpload(r)
       joinedRecordRooms.delete(room)
       if (joinedRecordRoom === room) joinedRecordRoom = [...joinedRecordRooms].pop() ?? null
       socket.leave(room)
@@ -2363,22 +2394,22 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       announceBlur(room, payload.field)
     })
 
-    // Upload presence (#282): "Beth is uploading quote.pdf" chips for
-    // co-viewers. Start/done only — fetch-based uploads have no progress.
-    socket.on('record:uploading', (payload: { name?: string; state?: string }) => {
-      const user = authenticatedUser
-      if (!user || !joinedRecordRoom) return
-      const state = payload?.state === 'done' ? 'done' : 'start'
-      const [, roomCollection, ...roomItem] = splitTenantRoom(joinedRecordRoom).room.split(':')
-      socket.to(joinedRecordRoom).emit('record:uploading', {
-        collection: roomCollection,
-        item: roomItem.join(':'),
-        user: user.id,
-        user_name: displayName(user),
-        name: String(payload?.name ?? 'a file').slice(0, 200),
-        state
+    // Upload presence (#282, rt9 #9): "Beth is uploading quote.pdf (60%)" for co-viewers.
+    // Start, progress (at most ~1.4 a second per upload), finish and cancel. The file NAME goes
+    // only to viewers who may read the field it is going into (uploadNameDelivery); everyone
+    // else sees "Beth is uploading a file". Socket ids only — a person's other tabs that are not
+    // on the record get nothing.
+    socket.on(
+      'record:uploading',
+      inSocketTenant(socket, (payload: unknown) => {
+        const user = authenticatedUser
+        const room = roomFor(payload as { collection?: string; item?: unknown })
+        if (!user || !room) return
+        const report = parseUploadReport(room, payload, `s${socket.id.slice(0, 12)}`)
+        if (!report || !uploads.accept(report)) return
+        void relayUpload(report)
       })
-    })
+    )
 
     // #1720 — what socket-access needs from this closure: the signed-in user, a way to swap
     // in a fresh row (role changed), and a room leave that keeps the record viewer list right.

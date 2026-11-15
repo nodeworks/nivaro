@@ -28,6 +28,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { useAddendumFields } from './AddendumFieldContext'
 import { AutoIdPreviewField } from './AutoIdPreviewField'
 import { useCascadeClearNotifier } from './cascade-clear-notice'
+import { DerivedCauseNote } from './DerivedCauseNote'
 import { DuplicateNotice } from './DuplicateNotice'
 import { FOCUSABLE } from './entry/entry-keys'
 import {
@@ -1441,6 +1442,15 @@ export const FieldRow = memo(function FieldRow({
         </div>
       )}
       {counter && <FieldCounter value={draft[field.field]} config={counter} />}
+      {itemId && itemId !== 'new' && (
+        // rt9 #10: "Moved 2 days later because PO due date changed" when the app re-derived it.
+        <DerivedCauseNote
+          collection={collection}
+          itemId={itemId}
+          field={field.field}
+          type={field.type}
+        />
+      )}
       {error && (
         // The message under the field: a red border alone never said WHY (Service End before
         // Start, b01-N5). The form's summary at the top lists it too — and is

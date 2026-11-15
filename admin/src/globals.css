@@ -405,6 +405,11 @@ tr.nvr-row-flash > td {
 .nvr-shake { animation: nvr-shake 260ms ease-out 1; }
 @keyframes nvr-fade-in { from { opacity: 0; } to { opacity: 1; } }
 .nvr-fade-in { animation: nvr-fade-in 160ms ease-out both; }
+/* rt9 #10: a derived-value note that just happened: one faint cyan wash that settles. */
+@keyframes nvr-derived-fresh { from { background-color: rgb(var(--nvr-cyan-rgb, 0 206 255) / 0.14); } to { background-color: transparent; } }
+.nvr-derived-fresh { animation: nvr-derived-fresh 2400ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+@media (prefers-reduced-motion: reduce) { .nvr-derived-fresh { animation: none; } }
+html[data-live-mode] .nvr-derived-fresh { animation: none; }
 
 /* Item editor polish, round 2 */
 /* Pinned header lifts once the body has scrolled under it. */

@@ -101,7 +101,9 @@ export const LIVE_ASPECTS = {
   /** An approval chain on the record was started or a step decided (rt4 #8). */
   approvals: '$approvals',
   /** The record was hidden from pickers or shown again (rt4 #6): forms that link to it re-check. */
-  picker: '$picker'
+  picker: '$picker',
+  /** A support request raised from the record opened, moved or closed (rt9 #19). */
+  support: '$support'
 } as const
 
 // The person's live-updates setting (Normal / Calm / Off): the transport tap and the hooks

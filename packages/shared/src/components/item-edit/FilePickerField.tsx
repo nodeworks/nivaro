@@ -14,9 +14,10 @@ import {
   X
 } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
-import { useGridFlush, useNivaroClient, useParentDraft } from '../../context'
+import { useApiFetchConfig, useGridFlush, useNivaroClient, useParentDraft } from '../../context'
 import { useFileHealth } from '../../hooks/useFileHealth'
 import { del, get, post } from '../../lib/commands'
+import { trackedUpload } from '../../lib/upload-presence'
 import { cn, formatDateTime } from '../../lib/utils'
 import { FileDownloadCount, useFileDownloadStats } from './FileDownloadCount'
 import { FileUsageChip, useFileUsage, useOnceVisible } from './FileUsage'
@@ -37,6 +38,7 @@ import {
 } from './file-processing'
 import { liveRecordWrite } from './live-record-marks'
 import { useM2MStaging } from './M2MStagingContext'
+import { RemoteUploadRows } from './RemoteUploads'
 import type { CMSRelation } from './types'
 
 /** The name a file shows by: its title, with the stored file's extension when the title lacks one
@@ -270,6 +272,7 @@ function FileBrowserPanel({
 // ─── Single file (M2O → nivaro_files) ────────────────────────────────────────
 
 export function FilePickerField({
+  field,
   value,
   onChange,
   disabled,
@@ -278,6 +281,8 @@ export function FilePickerField({
   showUsage = true,
   showDownloads = true
 }: {
+  /** The record field this picker edits — names the field co-viewers see an upload go into. */
+  field?: string
   value: unknown
   onChange: (v: unknown) => void
   disabled?: boolean
@@ -289,11 +294,13 @@ export function FilePickerField({
   showDownloads?: boolean
 }) {
   const client = useNivaroClient()
+  const uploadCfg = useApiFetchConfig()
   const qc = useQueryClient()
   const flush = useGridFlush()
   const flushKey = useId()
   const [open, setOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
@@ -409,20 +416,24 @@ export function FilePickerField({
       setPendingFile(f)
     } else {
       setUploading(true)
-      window.dispatchEvent(
-        new CustomEvent('nvr:upload-state', { detail: { name: f.name, state: 'start' } })
-      )
+      setUploadPct(null)
       try {
-        const result = await client.upload(f)
+        // rt9 #9: co-viewers see "Beth is uploading quote.pdf (60%)" on this field.
+        const result = await trackedUpload(f, {
+          cfg: uploadCfg,
+          fallback: (file) => client.upload(file),
+          field,
+          collection: parentDraft?.collection,
+          item: recordId ?? undefined,
+          onProgress: setUploadPct
+        })
         onChange(result.id)
         qc.invalidateQueries({ queryKey: ['file-browser'] })
       } catch {
         /* ignore */
       } finally {
         setUploading(false)
-        window.dispatchEvent(
-          new CustomEvent('nvr:upload-state', { detail: { name: f.name, state: 'done' } })
-        )
+        setUploadPct(null)
       }
     }
   }
@@ -578,7 +589,9 @@ export function FilePickerField({
                     ) : (
                       <Upload className='h-3 w-3' />
                     )}
-                    Upload
+                    <span className='tabular-nums'>
+                      {uploading && uploadPct != null ? `${uploadPct}%` : 'Upload'}
+                    </span>
                   </button>
                   <input ref={uploadRef} type='file' className='hidden' onChange={handleUpload} />
                 </>
@@ -619,13 +632,16 @@ export function FilePickerField({
                 ) : (
                   <Upload className='h-3.5 w-3.5' />
                 )}
-                Upload
+                <span className='tabular-nums'>
+                  {uploading && uploadPct != null ? `${uploadPct}%` : 'Upload'}
+                </span>
               </button>
               <input ref={uploadRef} type='file' className='hidden' onChange={handleUpload} />
             </>
           )}
         </div>
       )}
+      <RemoteUploadRows collection={parentDraft?.collection} item={recordId} field={field} />
 
       {open && (
         <div
@@ -678,6 +694,8 @@ export function FileM2MField({
   const staging = useM2MStaging()
   const [open, setOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const uploadCfg = useApiFetchConfig()
+  const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [pendingFiles, setPendingFiles] = useState<{ file: File; url: string }[]>([])
   const uploadRef = useRef<HTMLInputElement>(null)
   // pending-save mode: track local adds/removes without hitting API until parent saves
@@ -909,7 +927,16 @@ export function FileM2MField({
       setUploading(true)
       try {
         for (const f of files) {
-          const result = await client.upload(f)
+          setUploadPct(null)
+          // rt9 #9: co-viewers see each file going in, by name only if they may read this field.
+          const result = await trackedUpload(f, {
+            cfg: uploadCfg,
+            fallback: (file) => client.upload(file),
+            field: relation.one_field ?? undefined,
+            collection: relation.one_collection ?? undefined,
+            item: isNew ? undefined : String(parentId),
+            onProgress: setUploadPct
+          })
           await addFile(result.id)
         }
         qc.invalidateQueries({ queryKey: ['file-browser'] })
@@ -917,12 +944,18 @@ export function FileM2MField({
         /* ignore */
       } finally {
         setUploading(false)
+        setUploadPct(null)
       }
     }
   }
 
   return (
     <div className='space-y-2'>
+      <RemoteUploadRows
+        collection={relation.one_collection}
+        item={isNew ? null : String(parentId)}
+        field={relation.one_field}
+      />
       {(allFileIds.length > 0 || pendingFiles.length > 0 || removedRows.length > 0) && (
         <div ref={usageRef} className='flex flex-col gap-1.5'>
           {allFileIds.map((id) => {
@@ -1114,7 +1147,9 @@ export function FileM2MField({
                 ) : (
                   <Upload className='h-3.5 w-3.5' />
                 )}
-                Upload…
+                <span className='tabular-nums'>
+                  {uploading && uploadPct != null ? `Uploading ${uploadPct}%` : 'Upload…'}
+                </span>
               </button>
               <input
                 ref={uploadRef}

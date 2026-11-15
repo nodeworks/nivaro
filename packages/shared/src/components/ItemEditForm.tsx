@@ -59,6 +59,7 @@ import { useSlowReason } from '../hooks/useSlowReason'
 import { formatApiPayload } from '../lib/api-payload'
 import { del, get, getActiveLayout, patch, post, put } from '../lib/commands'
 import type { FieldSource } from '../lib/config-sentences'
+import { useDerivedCausesLive } from '../lib/derived-causes'
 import {
   deleteDraft,
   draftCreatedAs,
@@ -116,6 +117,7 @@ import {
   linkedChangeSentence,
   useLinkedRecordWatch
 } from '../lib/linked-changes'
+import { linkDepsOfPaths, useLiveLinkLabels } from '../lib/live-link-labels'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useShownRecords } from '../lib/missed-updates'
 import { requestMoveState } from '../lib/move-state'
@@ -343,6 +345,7 @@ import {
   RecordHeaderActionDialog,
   useRecordHeaderActions
 } from './item-edit/RecordHeaderActions'
+import { RecordHelpChip } from './item-edit/RecordHelpChip'
 import {
   invalidateRecordInsights,
   invalidateRecordNotes,
@@ -2424,8 +2427,21 @@ function ItemEditFormView({
         .catch(() => null),
     enabled: !isNew && !recordGone && !designOn && headingPaths.length > 0,
     staleTime: 30_000,
-    retry: false
+    retry: false,
+    // rt9 #8: the linked records the heading names — a rename there re-reads this.
+    meta: {
+      linkLabels: linkDepsOfPaths(
+        collection,
+        headingPaths,
+        itemData as Record<string, unknown> | undefined,
+        relations
+      )
+    }
   })
+  // rt9 #8: relation chips, link cells and this heading follow renames of linked records.
+  useLiveLinkLabels(!designOn)
+  // rt9 #10: notes on why derived values moved, kept live for this record's fields.
+  useDerivedCausesLive(collection, isNew || designOn ? null : String(itemId))
   const headingRow = withLinkedFields(
     itemData as Record<string, unknown> | undefined,
     headingLinked
@@ -13910,6 +13926,13 @@ function ItemEditFormView({
                                                 <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
                                               </button>
                                             ))}
+                                          {/* rt9 #19: an open support request raised from this record. */}
+                                          {!isNew && !designMode && (
+                                            <RecordHelpChip
+                                              collection={collection}
+                                              itemId={String(itemId)}
+                                            />
+                                          )}
                                         </div>
                                         {lastTouchText && (
                                           <p
