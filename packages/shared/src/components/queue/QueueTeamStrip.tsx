@@ -98,7 +98,7 @@ const DOT: Record<TeamStatus, string> = {
   online: 'bg-emerald-500',
   away: 'bg-amber-500',
   offline: 'bg-slate-300 dark:bg-slate-600',
-  out: 'border border-slate-400 bg-white dark:border-slate-500 dark:bg-slate-900'
+  out: 'border border-slate-400 bg-white dark:border-slate-500 dark:bg-card'
 }
 
 const GROUP_LABEL: Record<TeamStatus, string> = {
@@ -133,7 +133,7 @@ function Face({
 }) {
   const { member, status } = row
   const px = `${size}px`
-  const ring = surface === 'popover' ? 'ring-popover' : 'ring-white dark:ring-slate-900'
+  const ring = surface === 'popover' ? 'ring-popover' : 'ring-white dark:ring-card'
   return (
     <span
       className={cn('relative inline-flex shrink-0', status === 'out' && 'opacity-75')}
