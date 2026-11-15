@@ -437,6 +437,16 @@ export {
   type McpAdminTab,
   McpConnectionsAdminView
 } from './components/McpConnectionsAdminView'
+export {
+  type MergeDoneInfo,
+  MergeRecordsDialog
+} from './components/merge/MergeRecordsDialog'
+export {
+  MergePicker,
+  MergeRecordMenuItems,
+  MergeWithFlow,
+  useMergeAllowed
+} from './components/merge/MergeWithFlow'
 export { MyWorkView } from './components/MyWorkView'
 // rt5 #15 — "You're covering for Jane today — 4 of Jane's records need you".
 export {
