@@ -298,8 +298,8 @@ export function MergePicker({
         className='flex max-h-[min(80vh,640px)] w-[min(34rem,96vw)] max-w-none flex-col overflow-hidden p-0 dark:bg-card max-sm:h-[100dvh] max-sm:max-h-none max-sm:w-screen max-sm:rounded-none'
         data-merge-picker
       >
-        <div className='shrink-0 px-5 pb-3 pt-5 pr-12'>
-          <DialogTitle className='flex min-w-0 items-center gap-2 text-[15px] font-semibold text-slate-900 dark:text-foreground'>
+        <div className='shrink-0 px-5 pb-3 pt-5'>
+          <DialogTitle className='flex min-w-0 items-center gap-2 pr-8 text-[15px] font-semibold text-slate-900 dark:text-foreground'>
             <GitMerge className='h-4 w-4 shrink-0 text-nvr-cyan' aria-hidden />
             <span className='truncate'>
               Merge {cand.data?.self ?? itemLabel ?? `this ${noun}`} with…
@@ -309,7 +309,7 @@ export function MergePicker({
             Pick up to {max} {plural} that are the same thing. Next you choose each value and which
             record to keep.
           </DialogDescription>
-          <div className='relative mt-3'>
+          <div className='relative mt-3 w-full'>
             <Search
               className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400'
               aria-hidden
@@ -371,7 +371,7 @@ export function MergePicker({
             type='button'
             size='sm'
             disabled={chosen.length === 0}
-            className='bg-nvr-cyan text-white hover:bg-nvr-cyan-dark'
+            className='bg-nvr-cyan text-white hover:bg-nvr-cyan-dark disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:bg-muted dark:disabled:text-muted-foreground'
             onClick={() => {
               onContinue(chosen.map((c) => c.id))
               setChosen([])
