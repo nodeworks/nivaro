@@ -108,7 +108,9 @@ export const LIVE_ASPECTS = {
   /** A scheduled change on the record was made, moved, cancelled or applied (rt7 #12). */
   scheduled: '$scheduled',
   /** A banner-enabled threshold alert fired on the record (rt9 #20): banners re-read. */
-  alerts: '$alerts'
+  alerts: '$alerts',
+  /** A support request raised from the record opened, moved or closed (rt9 #19). */
+  support: '$support'
 } as const
 
 // The person's live-updates setting (Normal / Calm / Off): the transport tap and the hooks

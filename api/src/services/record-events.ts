@@ -51,6 +51,8 @@ export type RecordAspect =
   | '$scheduled'
   /** rt9 #20 — a banner-enabled threshold alert fired on the record (hooks/alerts.ts). */
   | '$alerts'
+  /** rt9 #19 — a support request raised from the record opened, moved or closed (record-help.ts). */
+  | '$support'
 
 export function announceRecordAspect(
   collection: string | null | undefined,

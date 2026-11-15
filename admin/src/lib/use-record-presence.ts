@@ -83,11 +83,18 @@ export function useRecordPresence(collection: string | undefined, item: string |
     // the record room, so it carries upload announcements both ways —
     // outbound from the file fields' window event, inbound re-dispatched as
     // a window event RecordLiveSync renders as chips.
+    // rt9 #9: the whole report travels (upload id, field, phase, percent) — the server names the
+    // file only to people who may read that field. An upload naming another record stays out.
     const onLocalUpload = (e: Event) => {
-      const d = (e as CustomEvent).detail as { name?: string; state?: string }
-      if (d?.name) socket.emit('record:uploading', { name: d.name, state: d.state })
+      const d = (e as CustomEvent).detail as
+        | { name?: string; state?: string; collection?: string; item?: string }
+        | undefined
+      if (!d?.name) return
+      if (d.collection && (d.collection !== collection || String(d.item) !== String(item))) return
+      socket.emit('record:uploading', { ...d, collection, item: String(item) })
     }
-    window.addEventListener('nvr:upload-state', onLocalUpload)
+    // On the shared socket the record form's own `realtime.emit` already reaches the room.
+    if (!shared) window.addEventListener('nvr:upload-state', onLocalUpload)
     // Signals (a note being written, a transition dialog open — lib/presence-signals.ts) leave
     // through this socket too: it, not the feed socket, sits in the record room.
     const onSignalOut = (e: Event) => {

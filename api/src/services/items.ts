@@ -29,7 +29,11 @@ import {
   valueFitsSqlType
 } from '../lib/sql-value-fit.js'
 import { getAncestors, getTreeConfig, type TreeConfig } from '../lib/tree.js'
-import { shouldRecomputeWriteField } from '../lib/write-formula.js'
+import {
+  sameStoredValue as sameFormulaInput,
+  shouldRecomputeWriteField,
+  writeFormulaInputs
+} from '../lib/write-formula.js'
 import { fetchDefaultWorkspaceId } from '../middleware/workspace.js'
 import { deferEffect, withUnitOfWork } from '../services/unit-of-work.js'
 import type { CMSField, CMSRelation, ItemsQuery, User } from '../types.js'
@@ -53,6 +57,7 @@ import { isPresencePageChange } from './collection-live-mode.js'
 import { getCollection, getFields, getRelations as getRegisteredRelations } from './collections.js'
 import { applyCrossRecordDefaults } from './cross-record-defaults.js'
 import { whereInList } from './db-batch.js'
+import { type DerivedNote, noteDerivedCauses } from './derived-causes.js'
 import { assertNotEditLocked } from './edit-lock.js'
 import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
@@ -1649,7 +1654,11 @@ export async function applyWriteComputedFields(
   collection: string,
   payload: Record<string, unknown>,
   context?: Record<string, unknown>,
-  opts?: { previous?: Record<string, unknown> | null }
+  opts?: {
+    previous?: Record<string, unknown> | null
+    /** rt9 #10: collects why a stored value re-derived on an UPDATE (services/derived-causes.ts). */
+    derived?: DerivedNote[]
+  }
 ): Promise<void> {
   const fields = await getComputedFields(collection)
   const writeFields = fields.filter((f) => f.computed_type === 'write' && f.computed_formula)
@@ -1683,7 +1692,20 @@ export async function applyWriteComputedFields(
         .where({ id: fkVal })
         .select(cfg.source_field)
         .first()
-      if (target && cfg.source_field in target) payload[f.field] = target[cfg.source_field]
+      if (target && cfg.source_field in target) {
+        payload[f.field] = target[cfg.source_field]
+        if (opts?.derived && opts.previous)
+          opts.derived.push({
+            field: f.field,
+            kind: 'lookup',
+            from: opts.previous[f.field],
+            to: payload[f.field],
+            inputs: [
+              { collection, field: cfg.fk_field },
+              { collection: rel.one_collection, field: cfg.source_field, item: String(fkVal) }
+            ]
+          })
+      }
     } catch {
       // bad config or unreadable target — leave the column alone
     }
@@ -1713,6 +1735,18 @@ export async function applyWriteComputedFields(
     const result = evalFormula(f.computed_formula as string, evalCtx)
     if (store && result !== null) {
       payload[f.field] = result
+      if (opts?.derived && opts.previous) {
+        const prev = opts.previous
+        opts.derived.push({
+          field: f.field,
+          kind: 'computed',
+          from: prev[f.field],
+          to: result,
+          inputs: writeFormulaInputs(f.computed_formula as string)
+            .filter((k) => k in payload && !sameFormulaInput(payload[k], prev[k]))
+            .map((k) => ({ collection, field: k }))
+        })
+      }
     }
   }
 }
@@ -7931,8 +7965,10 @@ export async function updateOne(
   }
   // Layout row rules flagged on_update re-derive their targets when the PATCH
   // changed one of their triggers (caller-sent targets still win).
+  // rt9 #10: why stored values re-derive in this write (noted once the write lands).
+  const derivedNotes: DerivedNote[] = []
   await span('row-rules:update', () =>
-    applyRowRulesOnUpdate(collection, ctx.payload, callerFields, previousData ?? null)
+    applyRowRulesOnUpdate(collection, ctx.payload, callerFields, previousData ?? null, derivedNotes)
   )
 
   // Datetime auto-fields — on_update: 'now' sets the field to current timestamp
@@ -7941,7 +7977,10 @@ export async function updateOne(
   // Write-time computed fields — merge previous data as context so formula can read existing fields
   const writeCtx = { ...(previousData ?? {}), ...ctx.payload }
   await span('computed-fields:write', () =>
-    applyWriteComputedFields(collection, ctx.payload, writeCtx, { previous: previousData ?? null })
+    applyWriteComputedFields(collection, ctx.payload, writeCtx, {
+      previous: previousData ?? null,
+      derived: derivedNotes
+    })
   )
 
   // Field validation rules on the caller's fields (see createOne), judged on
@@ -8039,6 +8078,12 @@ export async function updateOne(
       writeScope.apply(updQ)
       await updQ.update(columnPayload)
     })
+    if (derivedNotes.length > 0)
+      void noteDerivedCauses(
+        collection,
+        id,
+        derivedNotes.filter((n) => n.field in columnPayload)
+      )
   }
   // Alias M2M links (additive) before the read-back — see extractAliasM2MWrites
   const linkFailures: string[] = []

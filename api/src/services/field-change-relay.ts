@@ -50,6 +50,8 @@ export interface RelayDeps {
   /** The fields of `collection` whose typed value may be relayed to anyone. */
   valueFields: (collection: string) => Promise<Set<string>>
   now: () => number
+  /** Keeps a different `valueFields` list in its own cache slot (rt9 upload names). */
+  cacheTag?: string
 }
 
 /** A socket viewing the record. `kind` = what signed it in (SocketBind kind), when known. */
@@ -136,7 +138,7 @@ function remember<T>(cache: Map<string, Cached<T>>, key: string, value: T, now: 
 }
 
 async function valueFieldsOf(collection: string, deps: RelayDeps): Promise<Set<string>> {
-  const key = `${currentTenantKey()}|${collection}`
+  const key = `${currentTenantKey()}|${deps.cacheTag ?? ''}|${collection}`
   const t = deps.now()
   const hit = valueFieldCache.get(key)
   if (hit && hit.expires > t) return hit.value
@@ -216,4 +218,50 @@ export async function fieldChangeDelivery(
 export function __resetFieldChangeRelay(): void {
   readCache.clear()
   valueFieldCache.clear()
+}
+
+// ─── rt9 #9: what an upload into a file field may say ──────────────────────────
+
+/**
+ * The fields of `collection` whose UPLOAD may be named to readers of that field: any real field
+ * of a business collection (a single-file link or a to-many files alias alike), never on a
+ * system collection, never an encrypted or credential column.
+ */
+async function loadNameableFields(collection: string): Promise<Set<string>> {
+  if (isInternalCollection(collection)) return new Set()
+  const [fields, encrypted] = await Promise.all([
+    getFields(collection),
+    getEncryptedFields(collection)
+  ])
+  const blocked = new Set(
+    [...encrypted, ...sensitiveColumns(collection)].map((f) => String(f).toLowerCase())
+  )
+  const out = new Set<string>()
+  for (const f of fields) {
+    const name = String(f.field)
+    if (blocked.has(name.toLowerCase()) || isSecretColumn(name) || maskedByDefinition(f)) continue
+    out.add(name)
+  }
+  return out
+}
+
+/**
+ * Split a record's viewers for "Beth is uploading quote.pdf (60%)": the file NAME goes only to
+ * sockets whose person may read `field` on this collection (a file follows where it is used —
+ * services/file-access.ts reads a record's files through its fields), everyone else is told an
+ * upload is happening without the name. No field, or one that cannot be judged = no name for
+ * anyone. Same sign-in-kind rule as typed values (an API-key or unknown socket gets no name).
+ */
+export function uploadNameDelivery(
+  viewers: RelayViewer[],
+  collection: string,
+  field: string | null | undefined,
+  deps: RelayDeps = { ...defaultDeps, valueFields: loadNameableFields }
+): Promise<{ valueTo: string[]; nameTo: string[] }> {
+  if (!field) {
+    const all = [...new Set(viewers.map((v) => String(v.socket)))]
+    return Promise.resolve({ valueTo: [], nameTo: all })
+  }
+  // Its own cache slot: the nameable list is wider than the typed-value one (aliases included).
+  return fieldChangeDelivery(viewers, collection, field, { ...deps, cacheTag: 'upload' })
 }

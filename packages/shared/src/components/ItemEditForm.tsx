@@ -62,6 +62,7 @@ import { coeditCovers } from '../lib/coedit-registry'
 import { del, get, getActiveLayout, patch, post, put } from '../lib/commands'
 import type { FieldSource } from '../lib/config-sentences'
 import { childCopySkip, fetchCopySkip, headerCopySkip } from '../lib/copy-rules'
+import { useDerivedCausesLive } from '../lib/derived-causes'
 import {
   deleteDraft,
   draftCreatedAs,
@@ -120,6 +121,7 @@ import {
   useLinkedRecordWatch
 } from '../lib/linked-changes'
 import { useLiveEvent } from '../lib/live'
+import { linkDepsOfPaths, useLiveLinkLabels } from '../lib/live-link-labels'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useShownRecords } from '../lib/missed-updates'
 import { requestMoveState } from '../lib/move-state'
@@ -375,6 +377,7 @@ import {
   RecordHeaderActionDialog,
   useRecordHeaderActions
 } from './item-edit/RecordHeaderActions'
+import { RecordHelpChip } from './item-edit/RecordHelpChip'
 import {
   invalidateRecordInsights,
   invalidateRecordNotes,
@@ -2477,8 +2480,21 @@ function ItemEditFormView({
         .catch(() => null),
     enabled: !isNew && !recordGone && !designOn && headingPaths.length > 0,
     staleTime: 30_000,
-    retry: false
+    retry: false,
+    // rt9 #8: the linked records the heading names — a rename there re-reads this.
+    meta: {
+      linkLabels: linkDepsOfPaths(
+        collection,
+        headingPaths,
+        itemData as Record<string, unknown> | undefined,
+        relations
+      )
+    }
   })
+  // rt9 #8: relation chips, link cells and this heading follow renames of linked records.
+  useLiveLinkLabels(!designOn)
+  // rt9 #10: notes on why derived values moved, kept live for this record's fields.
+  useDerivedCausesLive(collection, isNew || designOn ? null : String(itemId))
   const headingRow = withLinkedFields(
     itemData as Record<string, unknown> | undefined,
     headingLinked
@@ -14146,6 +14162,13 @@ function ItemEditFormView({
                                               collection={collection}
                                               itemId={String(itemId)}
                                               enabled
+                                            />
+                                          )}
+                                          {/* rt9 #19: an open support request raised from this record. */}
+                                          {!isNew && !designMode && (
+                                            <RecordHelpChip
+                                              collection={collection}
+                                              itemId={String(itemId)}
                                             />
                                           )}
                                         </div>

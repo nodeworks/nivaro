@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAuth } from '../middleware/authenticate.js'
+import { causesForViewer, defaultCauseDeps, readDerivedCauses } from '../services/derived-causes.js'
 import { unreadableFileIds } from '../services/file-access.js'
 import { readProcessingStates } from '../services/file-processing.js'
 import { clampSince, recordChangesSince } from '../services/move-unseen.js'
@@ -14,6 +15,7 @@ import { recordVisibleTo } from '../services/revision-access.js'
  *   GET /api/records/:collection/:id/card                — hover card: name, step, owners,
  *       key amounts (#16)
  *   GET /api/files/processing?ids=a,b                    — file processing status (#17)
+ *   GET /api/records/:collection/:id/derived             — why derived values moved (rt9 #10)
  *
  * Every one reads AS THE CALLER: a record they cannot read is 404 (never "exists but hidden"),
  * values are cut to their field list, a file they cannot read is left out of the answer.
@@ -51,6 +53,31 @@ export async function recordGlanceRoutes(app: FastifyInstance) {
       const card = await recordCard(req.user!, collection, id, req.workspaceId ?? undefined)
       if (!card) return reply.code(404).send({ error: 'Not found' })
       return reply.send({ data: card })
+    }
+  )
+
+  // rt9 #10: "Moved 2 days later because PO due date changed" — the notes the app kept when it
+  // re-derived a stored value, judged for the caller (services/derived-causes.ts).
+  app.get<{ Params: { collection: string; id: string } }>(
+    '/records/:collection/:id/derived',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, id } = req.params
+      if (!NAME.test(collection) || !ID.test(id))
+        return reply.code(400).send({ error: 'Name a record' })
+      if (/^(nivaro_|directus_)/i.test(collection)) return reply.send({ data: [] })
+      const stored = await readDerivedCauses(collection, id)
+      // Nothing kept: the same empty answer for a record that does not exist or is hidden.
+      if (stored.length === 0) return reply.send({ data: [] })
+      const { readOne } = await import('../services/items.js')
+      const fields = [...new Set(stored.map((c) => c.field))]
+      const row = (await readOne(req.user!, collection, id, req.workspaceId ?? undefined, [
+        'id',
+        ...fields
+      ]).catch(() => null)) as Record<string, unknown> | null
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const data = await causesForViewer(collection, row, stored, await defaultCauseDeps(req.user!))
+      return reply.send({ data })
     }
   )
 

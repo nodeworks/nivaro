@@ -139,6 +139,7 @@ import {
 } from '../lib/list-return'
 import { expandCoalesced, LIVE_ASPECTS, useLiveEvent } from '../lib/live'
 import { createCoalescer } from '../lib/live-counts'
+import { useLiveLinkLabels } from '../lib/live-link-labels'
 import {
   conditionFields,
   flashRows,
@@ -6599,6 +6600,8 @@ export function CollectionBrowserView({
     () => (resolvedRead ? { ...resolvedRead, rows: keptResolvedRows ?? {} } : resolvedRead),
     [resolvedRead, keptResolvedRows]
   )
+  // rt9 #8: link cells and dotted columns follow renames of the records they name.
+  useLiveLinkLabels()
   const resolvedFor = (rowId: unknown, key: string): string | null => {
     const path = key.includes('.') ? key : aliasPathByField[key]
     if (!path) return null

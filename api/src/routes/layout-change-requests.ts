@@ -13,6 +13,7 @@ import {
   parseFormChangeLink
 } from '../services/layout-change-requests.js'
 import { getLayoutOwnerId, ownerFirst } from '../services/layout-notify.js'
+import { announceRecordHelp } from '../services/record-help.js'
 import {
   logTicketEvent,
   nameOf,
@@ -310,6 +311,8 @@ export async function layoutChangeRequestRoutes(app: FastifyInstance) {
     const { taskColumns } = await import('../services/tasks.js')
     if ((await taskColumns()).completedBy) patch.completed_by = accepted ? req.user!.id : null
     await db('nivaro_tasks').where({ id: t.id }).update(patch)
+    // rt9 #19: a decided request on a record leaves its "Help requested" chip.
+    announceRecordHelp(t)
     if (note) {
       const { randomUUID } = await import('node:crypto')
       await db('nivaro_comments').insert({
