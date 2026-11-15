@@ -186,6 +186,12 @@ import {
   shareableRecordId
 } from '../lib/record-ref'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
+import {
+  PINNED_CELL_SURFACE,
+  ROW_SURFACE,
+  ROW_SURFACE_HOVER,
+  ROW_SURFACE_SELECTED
+} from '../lib/row-surface'
 import { userErrorMessage } from '../lib/safe-error'
 import { logSearch, logSearchOpen } from '../lib/search-log'
 import {
@@ -294,6 +300,7 @@ import { mergeFilterOptions, relationFilterRequests } from './cbv-relation-filte
 import { canOpenChatRoom, discussRecord, useRecordRoomTypes } from './chat/chat-core'
 import { FilterControl } from './DataTable'
 import { FocusModeToggle } from './FocusModeToggle'
+import { OverflowRail } from './OverflowRail'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill, fulfilmentFigures } from './FulfilmentPill'
 import { HScrollProxy } from './HScrollProxy'
 import { InStepCell } from './InStep'
@@ -4527,13 +4534,10 @@ const CBV_KIND_SHAPE: Partial<Record<string, CellShape>> = {
   in_step: 'short'
 }
 
-/** Rows changed since the person last opened the active view: opaque, so pinned cells match. */
-const VIEW_CHANGED_ROW_CLASS = 'bg-[#f4fcfe] dark:bg-[#10232b]'
-/** …and on its pinned cells: the same tint, and on hover the colour the row's own hover wash
- *  comes to over the table (cyan 4% light / 8% dark, flattened and measured), so a hovered
- *  changed row never looks split at the pinned edge. */
-const VIEW_CHANGED_STICKY_CLASS =
-  'bg-[#f4fcfe] group-hover:bg-[#f5fdff] dark:bg-[#10232b] dark:group-hover:bg-[#233741]'
+/** Rows changed since the person last opened the active view: a pale accent tint over the card
+ *  (opaque, so pinned cells inherit it), a step under the hover wash. */
+const VIEW_CHANGED_ROW_CLASS =
+  'bg-[color:color-mix(in_srgb,hsl(var(--card))_97%,rgb(var(--nvr-cyan-rgb)))] dark:bg-[color:color-mix(in_srgb,hsl(var(--card))_94%,rgb(var(--nvr-cyan-rgb)))]'
 
 /** The leading mark for such a row (the unseen dot's slot; a hollow ring, quieter than it). */
 function ViewChangedMark() {
@@ -8828,215 +8832,6 @@ export function CollectionBrowserView({
             setPage(1)
           }}
         />
-        {/* Changed by others (realtime 2026-11-14): a pill with a period picker, kept in the
-            list's filters so saved views and links carry it. */}
-        <ChangedByOthersChip
-          filter={filters.find(isChangedFilter)}
-          onChange={(next) => {
-            const rest = filters.filter((x) => !isChangedFilter(x))
-            setFilters(next ? [...rest, next] : rest)
-            setPage(1)
-          }}
-        />
-        {approvalFilterOn &&
-          (() => {
-            const active = filters.find(isApprovalChangedFilter)
-            return (
-              <button
-                type='button'
-                data-approval-changed-filter
-                onClick={() => {
-                  const rest = filters.filter((x) => !isApprovalChangedFilter(x))
-                  setFilters(active ? rest : [...rest, approvalChangedEntry()])
-                  setPage(1)
-                }}
-                aria-pressed={!!active}
-                data-tip={
-                  active
-                    ? 'Showing records changed in the app after they were approved. Click to show all.'
-                    : 'Only records changed in the app after they were approved'
-                }
-                className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
-                  active
-                    ? 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
-                }`}
-              >
-                <FileDiff className='h-3.5 w-3.5' />
-                {active?.not
-                  ? `Not ${APPROVAL_CHANGED_LABEL.toLowerCase()}`
-                  : APPROVAL_CHANGED_LABEL}
-              </button>
-            )
-          })()}
-        {addendumsEnabled && (
-          <button
-            type='button'
-            onClick={() => setAddendumsOnly((v) => !v)}
-            aria-pressed={addendumsOnly}
-            title='Only records with an addendum still in review'
-            className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
-              addendumsOnly
-                ? 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300'
-                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
-            }`}
-          >
-            <FileDiff className='h-3.5 w-3.5' />
-            Active addendums
-          </button>
-        )}
-        {riskRules.map((rule) => {
-          const on = riskFilter.includes(rule.id)
-          return (
-            <button
-              key={rule.id}
-              type='button'
-              onClick={() => {
-                setRiskFilter((v) => (on ? v.filter((id) => id !== rule.id) : [...v, rule.id]))
-                setPage(1)
-              }}
-              aria-pressed={on}
-              data-cbv-risk-pill={rule.id}
-              title={`Only records highlighted by "${rule.name}"`}
-              className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
-                on
-                  ? 'border-slate-400 bg-slate-100 text-slate-900 dark:border-slate-500 dark:bg-slate-700 dark:text-slate-100'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
-              }`}
-            >
-              <span
-                className={`h-2 w-2 rounded-full ${rowHighlightDotClass(rule.highlight_color ?? 'red')}`}
-              />
-              {rule.name}
-            </button>
-          )
-        })}
-        <RealtimeStaleMark className='h-8' />
-        <FocusModeToggle />
-        {realtime && collection && (
-          <LivePauseButton
-            paused={livePause.paused}
-            held={livePause.held}
-            onToggle={livePause.toggle}
-          />
-        )}
-        {pendingLive > 0 && !liveBurst.label && (
-          <button
-            type='button'
-            onClick={showLiveChanges}
-            className='flex h-8 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2.5 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
-          >
-            {pendingLive} update{pendingLive === 1 ? '' : 's'} · Refresh
-          </button>
-        )}
-        <button
-          type='button'
-          onClick={showLiveChanges}
-          aria-label='Refresh'
-          title='Refresh'
-          className='flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
-        >
-          <RotateCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
-        </button>
-        <CopyListLinkButton listKey={`cbv:${collection}`} getState={listLinkState} />
-        <SendViewButton
-          getView={() =>
-            listViewInput(
-              'list',
-              collection,
-              `cbv:${collection}`,
-              listLinkState() as unknown as Record<string, unknown>,
-              sendViewSummary()
-            )
-          }
-          describe={() => {
-            const name = meta?.display_name || titleCase(collection)
-            const s = sendViewSummary()
-            return s ? `${name} — ${s}` : name
-          }}
-        />
-        {!viewersInHeader && <ListViewers kind='list' id={collection} />}
-        {isAdmin && bc.copy_as !== false && (
-          <CopyAsButton
-            collection={collection}
-            list={{
-              conditions: conditionsParam,
-              search: appliedSearch || undefined,
-              sort: sort || undefined,
-              limit: effPageSize,
-              page
-            }}
-            fields={effectiveColumns}
-          />
-        )}
-        {hierarchy.parent && (
-          <HierarchyScopePicker
-            parent={hierarchy.parent}
-            value={hierarchyParentId}
-            onChange={(id) => {
-              setHierarchyParentId(id)
-              setPage(1)
-            }}
-          />
-        )}
-        {[
-          ...(treeConfig
-            ? [{ key: 'tree', label: 'Tree', icon: <Network className='h-3.5 w-3.5' /> }]
-            : []),
-          ...(extraViews ?? []).map((v) => ({ key: v.key, label: v.label, icon: v.icon }))
-        ].map((v) => (
-          <button
-            key={v.key}
-            type='button'
-            onClick={() => {
-              setMapMode(false)
-              setAltView((cur) => (cur === v.key ? null : v.key))
-            }}
-            aria-pressed={altView === v.key}
-            data-cbv-view-toggle={v.key}
-            title={altView === v.key ? 'Back to the table' : `Show as ${v.label.toLowerCase()}`}
-            className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
-              altView === v.key
-                ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
-                : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
-            }`}
-          >
-            {v.icon}
-            {v.label}
-          </button>
-        ))}
-        {geo && (
-          <button
-            type='button'
-            onClick={() => {
-              setAltView(null)
-              setMapMode((v) => !v)
-            }}
-            title={mapMode ? 'Back to the table' : 'Show these records on a map'}
-            className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
-              mapMode
-                ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
-                : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
-            }`}
-            data-cbv-map-toggle
-          >
-            <MapIcon className='h-3.5 w-3.5' />
-            Map
-          </button>
-        )}
-        <button
-          type='button'
-          onClick={() => setAiOpen((o) => !o)}
-          title='Ask the table a question'
-          className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
-            aiOpen || aiResult
-              ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
-              : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
-          }`}
-        >
-          <Sparkles className='h-3.5 w-3.5' />
-          Ask
-        </button>
         {aiOpen && (
           <div className='order-last flex w-full items-center gap-2'>
             <Sparkles className='h-4 w-4 shrink-0 text-[#00a5cc]' />
@@ -9101,729 +8896,1106 @@ export function CollectionBrowserView({
             </button>
           </span>
         )}
-        <div className='relative' ref={groupRef}>
-          <button
-            type='button'
-            onClick={() => setGroupOpen((o) => !o)}
-            className={`flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium ${
-              groupBy
-                ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
-                : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
-            }`}
-          >
-            <Rows3 className='h-3.5 w-3.5' />
-            {groupBy
-              ? `Group: ${groupBy === '__state__' ? 'State' : columnLabel(groupBy)}`
-              : 'Group'}
-          </button>
-          {groupOpen && (
-            <div className='nvr-pop-in absolute right-0 top-full z-50 mt-1 max-h-[360px] w-56 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg dark:border-slate-700 dark:bg-slate-900'>
-              <button
-                type='button'
-                onClick={() => pickGroupBy(null)}
-                className={`block w-full rounded px-2 py-1.5 text-left text-[12px] ${
-                  groupBy === null
-                    ? 'bg-nvr-cyan/[0.08] font-semibold text-slate-800 dark:text-slate-100'
-                    : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
-                }`}
-              >
-                No grouping
-              </button>
-              {groupableCols.map((c) => (
+        {/* The actions: one line at any width. The primary action stays at the right; lower
+            priority ones move into ⋯ as the toolbar narrows (measured, OverflowRail). */}
+        <OverflowRail
+          moreLabel='More list actions'
+          items={[
+            {
+              key: 'changed',
+              priority: filters.some(isChangedFilter) ? 90 : 48,
+              node: (
+                <>
+                  {/* Changed by others (realtime 2026-11-14): a pill with a period picker, kept in the
+            list's filters so saved views and links carry it. */}
+                  <ChangedByOthersChip
+                    filter={filters.find(isChangedFilter)}
+                    onChange={(next) => {
+                      const rest = filters.filter((x) => !isChangedFilter(x))
+                      setFilters(next ? [...rest, next] : rest)
+                      setPage(1)
+                    }}
+                  />
+                </>
+              )
+            },
+            ...(approvalFilterOn
+              ? [
+                  {
+                    key: 'approval',
+                    priority: filters.some(isApprovalChangedFilter) ? 90 : 40,
+                    node: (() => {
+                      const active = filters.find(isApprovalChangedFilter)
+                      return (
+                        <button
+                          type='button'
+                          data-approval-changed-filter
+                          onClick={() => {
+                            const rest = filters.filter((x) => !isApprovalChangedFilter(x))
+                            setFilters(active ? rest : [...rest, approvalChangedEntry()])
+                            setPage(1)
+                          }}
+                          aria-pressed={!!active}
+                          data-tip={
+                            active
+                              ? 'Showing records changed in the app after they were approved. Click to show all.'
+                              : 'Only records changed in the app after they were approved'
+                          }
+                          className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
+                            active
+                              ? 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300'
+                              : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+                          }`}
+                        >
+                          <FileDiff className='h-3.5 w-3.5' />
+                          {active?.not
+                            ? `Not ${APPROVAL_CHANGED_LABEL.toLowerCase()}`
+                            : APPROVAL_CHANGED_LABEL}
+                        </button>
+                      )
+                    })()
+                  }
+                ]
+              : []),
+            ...(addendumsEnabled
+              ? [
+                  {
+                    key: 'addendums',
+                    priority: addendumsOnly ? 90 : 40,
+                    node: (
+                      <button
+                        type='button'
+                        onClick={() => setAddendumsOnly((v) => !v)}
+                        aria-pressed={addendumsOnly}
+                        title='Only records with an addendum still in review'
+                        className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
+                          addendumsOnly
+                            ? 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300'
+                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+                        }`}
+                      >
+                        <FileDiff className='h-3.5 w-3.5' />
+                        Active addendums
+                      </button>
+                    )
+                  }
+                ]
+              : []),
+            ...riskRules.map((rule) => {
+              const on = riskFilter.includes(rule.id)
+              return {
+                key: `risk-${rule.id}`,
+                priority: on ? 90 : 35,
+                node: (
+                  <button
+                    key={rule.id}
+                    type='button'
+                    onClick={() => {
+                      setRiskFilter((v) =>
+                        on ? v.filter((id) => id !== rule.id) : [...v, rule.id]
+                      )
+                      setPage(1)
+                    }}
+                    aria-pressed={on}
+                    data-cbv-risk-pill={rule.id}
+                    title={`Only records highlighted by "${rule.name}"`}
+                    className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
+                      on
+                        ? 'border-slate-400 bg-slate-100 text-slate-900 dark:border-slate-500 dark:bg-slate-700 dark:text-slate-100'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+                    }`}
+                  >
+                    <span
+                      className={`h-2 w-2 rounded-full ${rowHighlightDotClass(rule.highlight_color ?? 'red')}`}
+                    />
+                    {rule.name}
+                  </button>
+                )
+              }
+            }),
+            {
+              key: 'stale',
+              priority: 95,
+              node: <RealtimeStaleMark className='h-8' />
+            },
+            {
+              key: 'focus',
+              priority: 30,
+              node: <FocusModeToggle />
+            },
+            ...(realtime && collection
+              ? [
+                  {
+                    key: 'live-pause',
+                    priority: livePause.paused ? 90 : 45,
+                    node: (
+                      <LivePauseButton
+                        paused={livePause.paused}
+                        held={livePause.held}
+                        onToggle={livePause.toggle}
+                      />
+                    )
+                  }
+                ]
+              : []),
+            ...(pendingLive > 0 && !liveBurst.label
+              ? [
+                  {
+                    key: 'pending-live',
+                    priority: 100,
+                    node: (
+                      <button
+                        type='button'
+                        onClick={showLiveChanges}
+                        className='flex h-8 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2.5 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
+                      >
+                        {pendingLive} update{pendingLive === 1 ? '' : 's'} · Refresh
+                      </button>
+                    )
+                  }
+                ]
+              : []),
+            {
+              key: 'refresh',
+              priority: 60,
+              node: (
                 <button
-                  key={c.key}
                   type='button'
-                  onClick={() => pickGroupBy(c.key)}
-                  className={`block w-full truncate rounded px-2 py-1.5 text-left text-[12px] ${
-                    groupBy === c.key
-                      ? 'bg-nvr-cyan/[0.08] font-semibold text-slate-800 dark:text-slate-100'
-                      : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                  onClick={showLiveChanges}
+                  aria-label='Refresh'
+                  title='Refresh'
+                  className='flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
+                >
+                  <RotateCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+                </button>
+              )
+            },
+            {
+              key: 'copy-link',
+              priority: 25,
+              node: <CopyListLinkButton listKey={`cbv:${collection}`} getState={listLinkState} />
+            },
+            {
+              key: 'send-view',
+              priority: 20,
+              node: (
+                <SendViewButton
+                  getView={() =>
+                    listViewInput(
+                      'list',
+                      collection,
+                      `cbv:${collection}`,
+                      listLinkState() as unknown as Record<string, unknown>,
+                      sendViewSummary()
+                    )
+                  }
+                  describe={() => {
+                    const name = meta?.display_name || titleCase(collection)
+                    const s = sendViewSummary()
+                    return s ? `${name} — ${s}` : name
+                  }}
+                />
+              )
+            },
+            ...(!viewersInHeader
+              ? [
+                  {
+                    key: 'viewers',
+                    priority: 50,
+                    node: <ListViewers kind='list' id={collection} />
+                  }
+                ]
+              : []),
+            ...(isAdmin && bc.copy_as !== false
+              ? [
+                  {
+                    key: 'copy-as',
+                    priority: 15,
+                    node: (
+                      <CopyAsButton
+                        collection={collection}
+                        list={{
+                          conditions: conditionsParam,
+                          search: appliedSearch || undefined,
+                          sort: sort || undefined,
+                          limit: effPageSize,
+                          page
+                        }}
+                        fields={effectiveColumns}
+                      />
+                    )
+                  }
+                ]
+              : []),
+            ...(hierarchy.parent
+              ? [
+                  {
+                    key: 'hierarchy',
+                    priority: 75,
+                    node: (
+                      <HierarchyScopePicker
+                        parent={hierarchy.parent}
+                        value={hierarchyParentId}
+                        onChange={(id) => {
+                          setHierarchyParentId(id)
+                          setPage(1)
+                        }}
+                      />
+                    )
+                  }
+                ]
+              : []),
+            ...[
+              ...(treeConfig
+                ? [{ key: 'tree', label: 'Tree', icon: <Network className='h-3.5 w-3.5' /> }]
+                : []),
+              ...(extraViews ?? []).map((v) => ({ key: v.key, label: v.label, icon: v.icon }))
+            ].map((v) => ({
+              key: `view-${v.key}`,
+              priority: altView === v.key ? 85 : 55,
+              node: (
+                <button
+                  key={v.key}
+                  type='button'
+                  onClick={() => {
+                    setMapMode(false)
+                    setAltView((cur) => (cur === v.key ? null : v.key))
+                  }}
+                  aria-pressed={altView === v.key}
+                  data-cbv-view-toggle={v.key}
+                  title={
+                    altView === v.key ? 'Back to the table' : `Show as ${v.label.toLowerCase()}`
+                  }
+                  className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
+                    altView === v.key
+                      ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
+                      : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
                   }`}
                 >
-                  {c.label}
+                  {v.icon}
+                  {v.label}
                 </button>
-              ))}
-            </div>
-          )}
-        </div>
-        {enableCheckboxes && (
-          <button
-            type='button'
-            onClick={toggleBulkMode}
-            aria-pressed={bulkMode}
-            data-cbv-bulk-mode={bulkMode ? 'on' : 'off'}
-            data-tip={
-              bulkMode
-                ? 'Leave bulk mode — clears the selection and turns row actions back on'
-                : 'Select rows to act on several at once'
-            }
-            className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
-              bulkMode
-                ? 'border-nvr-cyan bg-nvr-cyan/10 text-slate-800 dark:text-slate-100'
-                : 'border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
-            }`}
-          >
-            <ListChecks className='h-3.5 w-3.5' />
-            {bulkMode ? 'Done' : 'Bulk select'}
-          </button>
-        )}
-        <button
-          type='button'
-          onClick={toggleDensity}
-          aria-label='Row density'
-          title={density === 'compact' ? 'Switch to comfortable rows' : 'Switch to compact rows'}
-          className='flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
-        >
-          {density === 'compact' ? <Rows3 className='h-4 w-4' /> : <Rows2 className='h-4 w-4' />}
-        </button>
-        {/* Column picker */}
-        <div className='relative' ref={colsRef}>
-          <button
-            type='button'
-            onClick={() => setColsOpen((o) => !o)}
-            className='h-8 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
-          >
-            Columns
-          </button>
-          {colsOpen && (
-            <div className='nvr-pop-in absolute right-0 top-full z-50 mt-1 flex max-h-[440px] w-72 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900'>
-              <div className='flex-1 overflow-y-auto p-1.5'>
-                <p className='px-1.5 pb-1 pt-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                  Visible columns
-                </p>
-                {effectiveColumns.map((k, idx) => (
-                  <div key={k}>
-                    <div
-                      draggable={renamingCol !== k}
-                      onDragStart={() => {
-                        dragIdxRef.current = idx
-                      }}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => {
-                        e.preventDefault()
-                        const from = dragIdxRef.current
-                        dragIdxRef.current = null
-                        if (from == null || from === idx) return
-                        const next = [...effectiveColumns]
-                        const [moved] = next.splice(from, 1)
-                        next.splice(idx, 0, moved)
-                        setDisplayColumns(next)
-                      }}
-                      className='group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-slate-50 dark:hover:bg-slate-800'
-                    >
-                      <span
-                        aria-hidden
-                        className='cursor-grab text-[10px] leading-none text-slate-300 group-hover:text-slate-400'
-                      >
-                        ⠿
-                      </span>
-                      {renamingCol === k ? (
-                        <input
-                          autoFocus
-                          value={columnLabels[k] ?? ''}
-                          placeholder={
-                            k.includes('.') ? k.split('.').map(titleCase).join(' › ') : titleCase(k)
-                          }
-                          onChange={(e) =>
-                            setColumnLabels((l) => {
-                              const next = { ...l }
-                              if (e.target.value) next[k] = e.target.value
-                              else delete next[k]
-                              return next
-                            })
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === 'Escape') setRenamingCol(null)
-                          }}
-                          onBlur={() => setRenamingCol(null)}
-                          className='h-5 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1 text-[11.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
-                        />
-                      ) : (
-                        <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-slate-200'>
-                          {columnLabel(k)}
-                        </span>
-                      )}
-                      {renamingCol !== k && (
-                        <button
-                          type='button'
-                          onClick={() => setRenamingCol(k)}
-                          title='Rename column'
-                          aria-label={`Rename ${k}`}
-                          className='text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
-                        >
-                          ✎
-                        </button>
-                      )}
+              )
+            })),
+            ...(geo
+              ? [
+                  {
+                    key: 'map',
+                    priority: mapMode ? 85 : 55,
+                    node: (
                       <button
                         type='button'
-                        onClick={() => setFormattingCol(formattingCol === k ? null : k)}
-                        title='Format column'
-                        aria-label={`Format ${k}`}
-                        className={
-                          columnFormats[k]
-                            ? 'text-[11px] font-bold text-[#00a5cc]'
-                            : 'text-[11px] text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
-                        }
+                        onClick={() => {
+                          setAltView(null)
+                          setMapMode((v) => !v)
+                        }}
+                        title={mapMode ? 'Back to the table' : 'Show these records on a map'}
+                        className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
+                          mapMode
+                            ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
+                            : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+                        }`}
+                        data-cbv-map-toggle
                       >
-                        $
+                        <MapIcon className='h-3.5 w-3.5' />
+                        Map
                       </button>
-                      {(() => {
-                        // Only where the list can show the figure (2026-11-14): a number
-                        // column it totals on the server, or a calculated sum of them.
-                        const s = isNumericCol(k) ? totalsSupportOf(k) : null
-                        return s?.kind === 'server' || s?.kind === 'derived'
-                      })() && (
-                        <button
-                          type='button'
-                          onClick={() => setColumnTotal(k, columnAggs[k] ? null : 'sum')}
-                          title='Sum this column in a footer row (across all matching records)'
-                          aria-label={`Toggle sum for ${k}`}
-                          className={
-                            columnAggs[k]
-                              ? 'text-[11px] font-bold text-[#00a5cc]'
-                              : 'text-[11px] text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
-                          }
-                        >
-                          Σ
-                        </button>
-                      )}
+                    )
+                  }
+                ]
+              : []),
+            {
+              key: 'ask',
+              priority: aiOpen || aiResult ? 85 : 50,
+              node: (
+                <button
+                  type='button'
+                  onClick={() => setAiOpen((o) => !o)}
+                  title='Ask the table a question'
+                  className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
+                    aiOpen || aiResult
+                      ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
+                      : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+                  }`}
+                >
+                  <Sparkles className='h-3.5 w-3.5' />
+                  Ask
+                </button>
+              )
+            },
+            {
+              key: 'group',
+              priority: groupBy ? 80 : 52,
+              node: (
+                <div className='relative' ref={groupRef}>
+                  <button
+                    type='button'
+                    onClick={() => setGroupOpen((o) => !o)}
+                    className={`flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium ${
+                      groupBy
+                        ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
+                        : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+                    }`}
+                  >
+                    <Rows3 className='h-3.5 w-3.5' />
+                    {groupBy
+                      ? `Group: ${groupBy === '__state__' ? 'State' : columnLabel(groupBy)}`
+                      : 'Group'}
+                  </button>
+                  {groupOpen && (
+                    <div className='nvr-pop-in absolute right-0 top-full z-50 mt-1 max-h-[360px] w-56 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg dark:border-slate-700 dark:bg-slate-900'>
                       <button
                         type='button'
-                        onClick={() => setDisplayColumns(effectiveColumns.filter((x) => x !== k))}
-                        title='Remove column'
-                        aria-label={`Remove ${k}`}
-                        className='text-slate-300 hover:text-slate-500'
+                        onClick={() => pickGroupBy(null)}
+                        className={`block w-full rounded px-2 py-1.5 text-left text-[12px] ${
+                          groupBy === null
+                            ? 'bg-nvr-cyan/[0.08] font-semibold text-slate-800 dark:text-slate-100'
+                            : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                        }`}
                       >
-                        ✕
+                        No grouping
                       </button>
+                      {groupableCols.map((c) => (
+                        <button
+                          key={c.key}
+                          type='button'
+                          onClick={() => pickGroupBy(c.key)}
+                          className={`block w-full truncate rounded px-2 py-1.5 text-left text-[12px] ${
+                            groupBy === c.key
+                              ? 'bg-nvr-cyan/[0.08] font-semibold text-slate-800 dark:text-slate-100'
+                              : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {c.label}
+                        </button>
+                      ))}
                     </div>
-                    {formattingCol === k && (
-                      <div className='mb-1 ml-5 mr-1 rounded-md border border-slate-100 bg-slate-50 p-1.5 dark:border-slate-800 dark:bg-slate-800/60'>
-                        <div className='flex flex-wrap gap-1'>
-                          {FORMAT_PRESETS.map((pz) => {
-                            const active =
-                              JSON.stringify(columnFormats[k] ?? null) === JSON.stringify(pz.cfg)
-                            return (
-                              <button
-                                key={pz.label}
-                                type='button'
-                                onClick={() => {
-                                  setColumnFormats((f) => {
-                                    const next = { ...f }
-                                    if (pz.cfg) next[k] = pz.cfg
-                                    else delete next[k]
-                                    return next
-                                  })
-                                  setFormattingCol(null)
-                                }}
-                                className={`rounded border px-1.5 py-0.5 text-[10.5px] ${
-                                  active
-                                    ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-slate-800 dark:text-slate-100'
-                                    : 'border-slate-200 bg-white text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
-                                }`}
-                              >
-                                {pz.label}
-                              </button>
-                            )
-                          })}
-                        </div>
-                        <input
-                          placeholder='Custom date… e.g. DD MMM YY hh:mm A — Enter'
-                          defaultValue={
-                            columnFormats[k]?.type === 'datetime'
-                              ? (columnFormats[k] as { template: string }).template
-                              : ''
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              const t = (e.target as HTMLInputElement).value.trim()
-                              if (t)
-                                setColumnFormats((f) => ({
-                                  ...f,
-                                  [k]: { type: 'datetime', template: t }
-                                }))
-                              setFormattingCol(null)
-                            }
-                            if (e.key === 'Escape') setFormattingCol(null)
-                          }}
-                          className='mt-1 h-5 w-full rounded border border-slate-200 bg-white px-1 text-[10.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
-                        />
-                        {/* Conditional tint (#84): first matching rule colors the cell. */}
-                        <div className='mt-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
-                          <p className='mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-                            Conditional color
-                          </p>
-                          {(columnTints[k] ?? []).map((r, ri) => (
+                  )}
+                </div>
+              )
+            },
+            ...(enableCheckboxes
+              ? [
+                  {
+                    key: 'bulk',
+                    priority: bulkMode ? 95 : 58,
+                    node: (
+                      <button
+                        type='button'
+                        onClick={toggleBulkMode}
+                        aria-pressed={bulkMode}
+                        data-cbv-bulk-mode={bulkMode ? 'on' : 'off'}
+                        data-tip={
+                          bulkMode
+                            ? 'Leave bulk mode — clears the selection and turns row actions back on'
+                            : 'Select rows to act on several at once'
+                        }
+                        className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
+                          bulkMode
+                            ? 'border-nvr-cyan bg-nvr-cyan/10 text-slate-800 dark:text-slate-100'
+                            : 'border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        <ListChecks className='h-3.5 w-3.5' />
+                        {bulkMode ? 'Done' : 'Bulk select'}
+                      </button>
+                    )
+                  }
+                ]
+              : []),
+            {
+              key: 'density',
+              priority: 22,
+              node: (
+                <button
+                  type='button'
+                  onClick={toggleDensity}
+                  aria-label='Row density'
+                  title={
+                    density === 'compact' ? 'Switch to comfortable rows' : 'Switch to compact rows'
+                  }
+                  className='flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
+                >
+                  {density === 'compact' ? (
+                    <Rows3 className='h-4 w-4' />
+                  ) : (
+                    <Rows2 className='h-4 w-4' />
+                  )}
+                </button>
+              )
+            },
+            {
+              key: 'columns',
+              priority: 62,
+              node: (
+                <div className='relative' ref={colsRef}>
+                  <button
+                    type='button'
+                    onClick={() => setColsOpen((o) => !o)}
+                    className='h-8 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+                  >
+                    Columns
+                  </button>
+                  {colsOpen && (
+                    <div className='nvr-pop-in absolute right-0 top-full z-50 mt-1 flex max-h-[440px] w-72 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900'>
+                      <div className='flex-1 overflow-y-auto p-1.5'>
+                        <p className='px-1.5 pb-1 pt-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                          Visible columns
+                        </p>
+                        {effectiveColumns.map((k, idx) => (
+                          <div key={k}>
                             <div
-                              // biome-ignore lint/suspicious/noArrayIndexKey: positional rule list
-                              key={ri}
-                              className='mb-1 flex items-center gap-1'
+                              draggable={renamingCol !== k}
+                              onDragStart={() => {
+                                dragIdxRef.current = idx
+                              }}
+                              onDragOver={(e) => e.preventDefault()}
+                              onDrop={(e) => {
+                                e.preventDefault()
+                                const from = dragIdxRef.current
+                                dragIdxRef.current = null
+                                if (from == null || from === idx) return
+                                const next = [...effectiveColumns]
+                                const [moved] = next.splice(from, 1)
+                                next.splice(idx, 0, moved)
+                                setDisplayColumns(next)
+                              }}
+                              className='group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-slate-50 dark:hover:bg-slate-800'
                             >
-                              <SimpleSelectXs
-                                ariaLabel='Rule operator'
-                                value={r.op}
-                                onChange={(v) =>
-                                  setColumnTints((t) => ({
-                                    ...t,
-                                    [k]: (t[k] ?? []).map((x, i) =>
-                                      i === ri ? { ...x, op: v as TintRule['op'] } : x
-                                    )
-                                  }))
-                                }
-                                options={[
-                                  { value: 'gt', label: '>' },
-                                  { value: 'lt', label: '<' },
-                                  { value: 'eq', label: '=' },
-                                  { value: 'neq', label: '≠' },
-                                  { value: 'contains', label: 'contains' },
-                                  { value: 'empty', label: 'is empty' },
-                                  { value: 'nempty', label: 'is set' }
-                                ]}
-                              />
-                              {!['empty', 'nempty'].includes(r.op) && (
+                              <span
+                                aria-hidden
+                                className='cursor-grab text-[10px] leading-none text-slate-300 group-hover:text-slate-400'
+                              >
+                                ⠿
+                              </span>
+                              {renamingCol === k ? (
                                 <input
-                                  value={r.value ?? ''}
+                                  autoFocus
+                                  value={columnLabels[k] ?? ''}
+                                  placeholder={
+                                    k.includes('.')
+                                      ? k.split('.').map(titleCase).join(' › ')
+                                      : titleCase(k)
+                                  }
                                   onChange={(e) =>
-                                    setColumnTints((t) => ({
-                                      ...t,
-                                      [k]: (t[k] ?? []).map((x, i) =>
-                                        i === ri ? { ...x, value: e.target.value } : x
-                                      )
-                                    }))
+                                    setColumnLabels((l) => {
+                                      const next = { ...l }
+                                      if (e.target.value) next[k] = e.target.value
+                                      else delete next[k]
+                                      return next
+                                    })
                                   }
-                                  placeholder='value'
-                                  className='h-5 w-16 rounded border border-slate-200 bg-white px-1 text-[10.5px] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === 'Escape')
+                                      setRenamingCol(null)
+                                  }}
+                                  onBlur={() => setRenamingCol(null)}
+                                  className='h-5 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1 text-[11.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
                                 />
+                              ) : (
+                                <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-slate-200'>
+                                  {columnLabel(k)}
+                                </span>
                               )}
-                              {(['red', 'amber', 'green', 'blue'] as const).map((c) => (
+                              {renamingCol !== k && (
                                 <button
-                                  key={c}
                                   type='button'
-                                  aria-label={c}
-                                  onClick={() =>
-                                    setColumnTints((t) => ({
-                                      ...t,
-                                      [k]: (t[k] ?? []).map((x, i) =>
-                                        i === ri ? { ...x, color: c } : x
-                                      )
-                                    }))
-                                  }
-                                  className={cn(
-                                    'h-3.5 w-3.5 rounded-full border',
-                                    c === 'red' && 'bg-red-500',
-                                    c === 'amber' && 'bg-amber-400',
-                                    c === 'green' && 'bg-emerald-500',
-                                    c === 'blue' && 'bg-sky-500',
-                                    r.color === c
-                                      ? 'border-slate-700 ring-1 ring-slate-400 dark:border-white'
-                                      : 'border-transparent opacity-50'
-                                  )}
-                                />
-                              ))}
+                                  onClick={() => setRenamingCol(k)}
+                                  title='Rename column'
+                                  aria-label={`Rename ${k}`}
+                                  className='text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
+                                >
+                                  ✎
+                                </button>
+                              )}
                               <button
                                 type='button'
-                                aria-label='Remove rule'
-                                onClick={() =>
-                                  setColumnTints((t) => ({
-                                    ...t,
-                                    [k]: (t[k] ?? []).filter((_, i) => i !== ri)
-                                  }))
+                                onClick={() => setFormattingCol(formattingCol === k ? null : k)}
+                                title='Format column'
+                                aria-label={`Format ${k}`}
+                                className={
+                                  columnFormats[k]
+                                    ? 'text-[11px] font-bold text-[#00a5cc]'
+                                    : 'text-[11px] text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
                                 }
-                                className='ml-auto text-slate-300 hover:text-slate-500'
+                              >
+                                $
+                              </button>
+                              {(() => {
+                                // Only where the list can show the figure (2026-11-14): a number
+                                // column it totals on the server, or a calculated sum of them.
+                                const s = isNumericCol(k) ? totalsSupportOf(k) : null
+                                return s?.kind === 'server' || s?.kind === 'derived'
+                              })() && (
+                                <button
+                                  type='button'
+                                  onClick={() => setColumnTotal(k, columnAggs[k] ? null : 'sum')}
+                                  title='Sum this column in a footer row (across all matching records)'
+                                  aria-label={`Toggle sum for ${k}`}
+                                  className={
+                                    columnAggs[k]
+                                      ? 'text-[11px] font-bold text-[#00a5cc]'
+                                      : 'text-[11px] text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
+                                  }
+                                >
+                                  Σ
+                                </button>
+                              )}
+                              <button
+                                type='button'
+                                onClick={() =>
+                                  setDisplayColumns(effectiveColumns.filter((x) => x !== k))
+                                }
+                                title='Remove column'
+                                aria-label={`Remove ${k}`}
+                                className='text-slate-300 hover:text-slate-500'
                               >
                                 ✕
                               </button>
                             </div>
-                          ))}
+                            {formattingCol === k && (
+                              <div className='mb-1 ml-5 mr-1 rounded-md border border-slate-100 bg-slate-50 p-1.5 dark:border-slate-800 dark:bg-slate-800/60'>
+                                <div className='flex flex-wrap gap-1'>
+                                  {FORMAT_PRESETS.map((pz) => {
+                                    const active =
+                                      JSON.stringify(columnFormats[k] ?? null) ===
+                                      JSON.stringify(pz.cfg)
+                                    return (
+                                      <button
+                                        key={pz.label}
+                                        type='button'
+                                        onClick={() => {
+                                          setColumnFormats((f) => {
+                                            const next = { ...f }
+                                            if (pz.cfg) next[k] = pz.cfg
+                                            else delete next[k]
+                                            return next
+                                          })
+                                          setFormattingCol(null)
+                                        }}
+                                        className={`rounded border px-1.5 py-0.5 text-[10.5px] ${
+                                          active
+                                            ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-slate-800 dark:text-slate-100'
+                                            : 'border-slate-200 bg-white text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
+                                        }`}
+                                      >
+                                        {pz.label}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                                <input
+                                  placeholder='Custom date… e.g. DD MMM YY hh:mm A — Enter'
+                                  defaultValue={
+                                    columnFormats[k]?.type === 'datetime'
+                                      ? (columnFormats[k] as { template: string }).template
+                                      : ''
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      const t = (e.target as HTMLInputElement).value.trim()
+                                      if (t)
+                                        setColumnFormats((f) => ({
+                                          ...f,
+                                          [k]: { type: 'datetime', template: t }
+                                        }))
+                                      setFormattingCol(null)
+                                    }
+                                    if (e.key === 'Escape') setFormattingCol(null)
+                                  }}
+                                  className='mt-1 h-5 w-full rounded border border-slate-200 bg-white px-1 text-[10.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+                                />
+                                {/* Conditional tint (#84): first matching rule colors the cell. */}
+                                <div className='mt-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
+                                  <p className='mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                                    Conditional color
+                                  </p>
+                                  {(columnTints[k] ?? []).map((r, ri) => (
+                                    <div
+                                      // biome-ignore lint/suspicious/noArrayIndexKey: positional rule list
+                                      key={ri}
+                                      className='mb-1 flex items-center gap-1'
+                                    >
+                                      <SimpleSelectXs
+                                        ariaLabel='Rule operator'
+                                        value={r.op}
+                                        onChange={(v) =>
+                                          setColumnTints((t) => ({
+                                            ...t,
+                                            [k]: (t[k] ?? []).map((x, i) =>
+                                              i === ri ? { ...x, op: v as TintRule['op'] } : x
+                                            )
+                                          }))
+                                        }
+                                        options={[
+                                          { value: 'gt', label: '>' },
+                                          { value: 'lt', label: '<' },
+                                          { value: 'eq', label: '=' },
+                                          { value: 'neq', label: '≠' },
+                                          { value: 'contains', label: 'contains' },
+                                          { value: 'empty', label: 'is empty' },
+                                          { value: 'nempty', label: 'is set' }
+                                        ]}
+                                      />
+                                      {!['empty', 'nempty'].includes(r.op) && (
+                                        <input
+                                          value={r.value ?? ''}
+                                          onChange={(e) =>
+                                            setColumnTints((t) => ({
+                                              ...t,
+                                              [k]: (t[k] ?? []).map((x, i) =>
+                                                i === ri ? { ...x, value: e.target.value } : x
+                                              )
+                                            }))
+                                          }
+                                          placeholder='value'
+                                          className='h-5 w-16 rounded border border-slate-200 bg-white px-1 text-[10.5px] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+                                        />
+                                      )}
+                                      {(['red', 'amber', 'green', 'blue'] as const).map((c) => (
+                                        <button
+                                          key={c}
+                                          type='button'
+                                          aria-label={c}
+                                          onClick={() =>
+                                            setColumnTints((t) => ({
+                                              ...t,
+                                              [k]: (t[k] ?? []).map((x, i) =>
+                                                i === ri ? { ...x, color: c } : x
+                                              )
+                                            }))
+                                          }
+                                          className={cn(
+                                            'h-3.5 w-3.5 rounded-full border',
+                                            c === 'red' && 'bg-red-500',
+                                            c === 'amber' && 'bg-amber-400',
+                                            c === 'green' && 'bg-emerald-500',
+                                            c === 'blue' && 'bg-sky-500',
+                                            r.color === c
+                                              ? 'border-slate-700 ring-1 ring-slate-400 dark:border-white'
+                                              : 'border-transparent opacity-50'
+                                          )}
+                                        />
+                                      ))}
+                                      <button
+                                        type='button'
+                                        aria-label='Remove rule'
+                                        onClick={() =>
+                                          setColumnTints((t) => ({
+                                            ...t,
+                                            [k]: (t[k] ?? []).filter((_, i) => i !== ri)
+                                          }))
+                                        }
+                                        className='ml-auto text-slate-300 hover:text-slate-500'
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  ))}
+                                  <button
+                                    type='button'
+                                    onClick={() =>
+                                      setColumnTints((t) => ({
+                                        ...t,
+                                        [k]: [
+                                          ...(t[k] ?? []),
+                                          { op: 'gt', value: '', color: 'red' }
+                                        ]
+                                      }))
+                                    }
+                                    className='text-[10.5px] text-slate-400 hover:text-slate-600'
+                                  >
+                                    ＋ Add color rule
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                        <p className='mt-2 border-t border-slate-100 px-1.5 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:border-slate-800'>
+                          Add column
+                        </p>
+                        {hasPipeline && !effectiveColumns.includes(IN_STEP_COLUMN) && (
                           <button
                             type='button'
-                            onClick={() =>
-                              setColumnTints((t) => ({
-                                ...t,
-                                [k]: [...(t[k] ?? []), { op: 'gt', value: '', color: 'red' }]
-                              }))
-                            }
-                            className='text-[10.5px] text-slate-400 hover:text-slate-600'
+                            data-cbv-add-in-step=''
+                            onClick={() => setDisplayColumns([...effectiveColumns, IN_STEP_COLUMN])}
+                            className='flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
                           >
-                            ＋ Add color rule
+                            <span aria-hidden className='text-slate-400'>
+                              ＋
+                            </span>
+                            <span className='truncate'>In step</span>
+                            <span className='ml-auto shrink-0 text-[10.5px] text-slate-400'>
+                              step · time there
+                            </span>
                           </button>
+                        )}
+                        {nonHidden
+                          .filter((f) => !effectiveColumns.includes(f.field))
+                          .map((f) => (
+                            <button
+                              key={f.field}
+                              type='button'
+                              onClick={() => setDisplayColumns([...effectiveColumns, f.field])}
+                              className='flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                            >
+                              <span aria-hidden className='text-slate-400'>
+                                ＋
+                              </span>
+                              <span className='truncate'>{titleCase(f.field)}</span>
+                            </button>
+                          ))}
+                        {meta && (
+                          <div className='mt-1 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
+                            <p className='px-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                              ＋ Related column
+                            </p>
+                            <RelatedColumnRoot
+                              collection={collection}
+                              meta={meta}
+                              onPick={(path) => {
+                                const key = path.join('.')
+                                if (!effectiveColumns.includes(key)) {
+                                  setDisplayColumns([...effectiveColumns, key])
+                                }
+                                setColsOpen(false)
+                              }}
+                            />
+                          </div>
+                        )}
+                        <div className='mt-1 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
+                          <p className='px-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                            ＋ Formula column
+                          </p>
+                          <FormulaColumnAdder
+                            fields={nonHidden.map((f) => f.field)}
+                            onAdd={(label, formula) => {
+                              let n = 1
+                              while (columnFormulas[`__f:${n}`]) n++
+                              const key = `__f:${n}`
+                              setColumnFormulas((m) => ({ ...m, [key]: formula }))
+                              setColumnLabels((l) => ({ ...l, [key]: label }))
+                              setDisplayColumns([...effectiveColumns, key])
+                            }}
+                          />
                         </div>
                       </div>
-                    )}
-                  </div>
-                ))}
-                <p className='mt-2 border-t border-slate-100 px-1.5 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:border-slate-800'>
-                  Add column
-                </p>
-                {hasPipeline && !effectiveColumns.includes(IN_STEP_COLUMN) && (
-                  <button
-                    type='button'
-                    data-cbv-add-in-step=''
-                    onClick={() => setDisplayColumns([...effectiveColumns, IN_STEP_COLUMN])}
-                    className='flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
-                  >
-                    <span aria-hidden className='text-slate-400'>
-                      ＋
-                    </span>
-                    <span className='truncate'>In step</span>
-                    <span className='ml-auto shrink-0 text-[10.5px] text-slate-400'>
-                      step · time there
-                    </span>
-                  </button>
-                )}
-                {nonHidden
-                  .filter((f) => !effectiveColumns.includes(f.field))
-                  .map((f) => (
-                    <button
-                      key={f.field}
-                      type='button'
-                      onClick={() => setDisplayColumns([...effectiveColumns, f.field])}
-                      className='flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
-                    >
-                      <span aria-hidden className='text-slate-400'>
-                        ＋
-                      </span>
-                      <span className='truncate'>{titleCase(f.field)}</span>
-                    </button>
-                  ))}
-                {meta && (
-                  <div className='mt-1 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
-                    <p className='px-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                      ＋ Related column
-                    </p>
-                    <RelatedColumnRoot
-                      collection={collection}
-                      meta={meta}
-                      onPick={(path) => {
-                        const key = path.join('.')
-                        if (!effectiveColumns.includes(key)) {
-                          setDisplayColumns([...effectiveColumns, key])
-                        }
-                        setColsOpen(false)
-                      }}
-                    />
-                  </div>
-                )}
-                <div className='mt-1 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
-                  <p className='px-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                    ＋ Formula column
-                  </p>
-                  <FormulaColumnAdder
-                    fields={nonHidden.map((f) => f.field)}
-                    onAdd={(label, formula) => {
-                      let n = 1
-                      while (columnFormulas[`__f:${n}`]) n++
-                      const key = `__f:${n}`
-                      setColumnFormulas((m) => ({ ...m, [key]: formula }))
-                      setColumnLabels((l) => ({ ...l, [key]: label }))
-                      setDisplayColumns([...effectiveColumns, key])
-                    }}
-                  />
+                      {/* Presets footer — save current layout, or write it as the collection default */}
+                      <div className='shrink-0 border-t border-slate-100 p-1.5 dark:border-slate-800'>
+                        <p className='px-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                          Presets
+                        </p>
+                        {presetOpen ? (
+                          <div className='flex items-center gap-1.5 px-1.5 pb-0.5'>
+                            <input
+                              autoFocus
+                              value={saveName}
+                              placeholder='Preset name…'
+                              onChange={(e) => setSaveName(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && saveName.trim()) {
+                                  saveView.mutate()
+                                  setPresetOpen(false)
+                                }
+                                if (e.key === 'Escape') setPresetOpen(false)
+                              }}
+                              className='h-6 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 text-[11.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                            />
+                            <button
+                              type='button'
+                              disabled={!saveName.trim() || saveView.isPending}
+                              onClick={() => {
+                                saveView.mutate()
+                                setPresetOpen(false)
+                              }}
+                              className='text-[11.5px] font-medium text-[#00a5cc] disabled:opacity-40'
+                            >
+                              Save
+                            </button>
+                          </div>
+                        ) : (
+                          <div className='flex items-center justify-between px-1.5 pb-0.5'>
+                            <button
+                              type='button'
+                              onClick={() => setPresetOpen(true)}
+                              className='inline-flex items-center gap-1 text-[11.5px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                            >
+                              <span aria-hidden>🖫</span> Save as preset…
+                            </button>
+                            {isAdmin && (
+                              <button
+                                type='button'
+                                onClick={() => upsertDefault.mutate()}
+                                disabled={upsertDefault.isPending}
+                                title='Save the current columns/filters/sort as the collection default view'
+                                className='inline-flex items-center gap-1 text-[11.5px] text-slate-500 hover:text-[#00a5cc] disabled:opacity-40 dark:text-slate-400'
+                              >
+                                <span aria-hidden>☆</span> Set default
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-              {/* Presets footer — save current layout, or write it as the collection default */}
-              <div className='shrink-0 border-t border-slate-100 p-1.5 dark:border-slate-800'>
-                <p className='px-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                  Presets
-                </p>
-                {presetOpen ? (
-                  <div className='flex items-center gap-1.5 px-1.5 pb-0.5'>
-                    <input
-                      autoFocus
-                      value={saveName}
-                      placeholder='Preset name…'
-                      onChange={(e) => setSaveName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && saveName.trim()) {
-                          saveView.mutate()
-                          setPresetOpen(false)
-                        }
-                        if (e.key === 'Escape') setPresetOpen(false)
-                      }}
-                      className='h-6 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 text-[11.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
-                    />
-                    <button
-                      type='button'
-                      disabled={!saveName.trim() || saveView.isPending}
-                      onClick={() => {
-                        saveView.mutate()
-                        setPresetOpen(false)
-                      }}
-                      className='text-[11.5px] font-medium text-[#00a5cc] disabled:opacity-40'
-                    >
-                      Save
-                    </button>
-                  </div>
-                ) : (
-                  <div className='flex items-center justify-between px-1.5 pb-0.5'>
-                    <button
-                      type='button'
-                      onClick={() => setPresetOpen(true)}
-                      className='inline-flex items-center gap-1 text-[11.5px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
-                    >
-                      <span aria-hidden>🖫</span> Save as preset…
-                    </button>
-                    {isAdmin && (
-                      <button
-                        type='button'
-                        onClick={() => upsertDefault.mutate()}
-                        disabled={upsertDefault.isPending}
-                        title='Save the current columns/filters/sort as the collection default view'
-                        className='inline-flex items-center gap-1 text-[11.5px] text-slate-500 hover:text-[#00a5cc] disabled:opacity-40 dark:text-slate-400'
-                      >
-                        <span aria-hidden>☆</span> Set default
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-        <div className='relative' ref={exportMenuRef}>
-          <button
-            type='button'
-            onClick={() => setExportMenuOpen((v) => !v)}
-            disabled={exporting}
-            className='h-8 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400'
-          >
-            {exporting ? 'Exporting…' : 'Export'}
-          </button>
-          {exportMenuOpen && (
-            <div className='nvr-pop-in absolute right-0 top-full z-[60] mt-1 w-[240px] rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-border dark:bg-card'>
-              <button
-                type='button'
-                onClick={() => {
-                  setExportMenuOpen(false)
-                  void exportCsv()
-                }}
-                className='block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
-              >
-                CSV — visible columns
-              </button>
-              <button
-                type='button'
-                onClick={() => {
-                  setExportMenuOpen(false)
-                  // Copy to clipboard (#202): current page, visible columns,
-                  // TSV — pastes straight into Excel/Sheets as cells.
-                  const cols = effectiveColumns
-                  const header = cols.map((c) => columnLabel(c)).join('\t')
-                  const body = rows
-                    .map((r) =>
-                      cols
-                        .map((c) => {
-                          const v = isResolvedCol(c)
-                            ? fmtCell(resolvedFor(r.id, c) ?? '', c, r.id)
-                            : fmtCell(String(r[c] ?? ''), c, r.id)
-                          return String(v ?? '').replace(/[\t\n]/g, ' ')
-                        })
-                        .join('\t')
-                    )
-                    .join('\n')
-                  void navigator.clipboard?.writeText(`${header}\n${body}`).then(() => {
-                    setCopiedTable(true)
-                    setTimeout(() => setCopiedTable(false), 2000)
-                  })
-                }}
-                className='block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
-              >
-                {copiedTable ? 'Copied ✓' : 'Copy table to clipboard'}
-              </button>
-              {exportPresets.length > 0 && (
-                <p className='border-t border-slate-100 px-2.5 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:border-border/60'>
-                  Presets (server, current filters apply)
-                </p>
-              )}
-              {exportPresets.map((pr) => (
-                <div key={pr.id} className='flex items-center'>
+              )
+            },
+            {
+              key: 'export',
+              priority: exporting ? 95 : 65,
+              node: (
+                <div className='relative' ref={exportMenuRef}>
                   <button
                     type='button'
-                    onClick={() => {
-                      setExportMenuOpen(false)
-                      runExportPreset(pr.id, pr.name)
-                    }}
-                    className='block min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                    onClick={() => setExportMenuOpen((v) => !v)}
+                    disabled={exporting}
+                    className='h-8 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400'
                   >
-                    {pr.name}
-                    <span className='ml-1.5 text-[10px] uppercase text-slate-400'>
-                      {pr.config?.format ?? 'xlsx'}
-                    </span>
+                    {exporting ? 'Exporting…' : 'Export'}
                   </button>
-                  <button
-                    type='button'
-                    data-export-background={pr.id}
-                    data-tip='Run in the background — a download appears in the Jobs tray'
-                    onClick={() => {
-                      setExportMenuOpen(false)
-                      runExportPreset(pr.id, pr.name, 'always')
-                    }}
-                    className='mr-1 shrink-0 rounded px-1.5 py-1 text-[10.5px] font-medium text-slate-500 hover:bg-muted hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
-                  >
-                    Background
-                  </button>
-                </div>
-              ))}
-              <div className='mt-0.5 flex items-center gap-1 border-t border-slate-100 px-1.5 pb-1 pt-1.5 dark:border-border/60'>
-                <input
-                  value={presetName}
-                  onChange={(e) => setPresetName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void saveExportPreset()
-                  }}
-                  placeholder='Save columns as preset…'
-                  className='h-6 min-w-0 flex-1 rounded border border-slate-200 bg-background px-1.5 text-[11.5px] dark:border-border'
-                />
-                <button
-                  type='button'
-                  disabled={!presetName.trim()}
-                  onClick={() => void saveExportPreset()}
-                  className='h-6 shrink-0 rounded bg-nvr-cyan px-2 text-[11px] font-semibold text-white disabled:opacity-40'
-                >
-                  Save
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-        {canCreate &&
-          !meta?.singleton &&
-          (newItemLayouts ? (
-            <div className='relative' data-cbv-newitem-menu ref={newItemMenuRef}>
-              <button
-                type='button'
-                onClick={() => setNewItemMenuOpen((v) => !v)}
-                className='flex h-8 items-center gap-1 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white hover:brightness-105'
-              >
-                + {createLabel}
-                <ChevronDown className='h-3.5 w-3.5' />
-              </button>
-              {newItemMenuOpen && (
-                <div className='nvr-pop-in absolute right-0 top-9 z-[60] w-64 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-border dark:bg-card'>
-                  {[
-                    {
-                      key: 'default',
-                      slug: null as string | null,
-                      label:
-                        newItemLayouts.active?.create_label ??
-                        newItemLayouts.active?.name ??
-                        'Default layout',
-                      isDefault: true,
-                      steps: defaultQuickSteps
-                    },
-                    ...newItemLayouts.options.map((l) => ({
-                      key: String(l.id),
-                      slug: l.slug,
-                      label: l.create_label ?? l.name,
-                      isDefault: false,
-                      steps: stepsFor(l)
-                    }))
-                  ].map((row) => (
-                    <div
-                      key={row.key}
-                      className='group/newrow flex items-center rounded hover:bg-slate-100 dark:hover:bg-muted'
-                    >
+                  {exportMenuOpen && (
+                    <div className='nvr-pop-in absolute right-0 top-full z-[60] mt-1 w-[240px] rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-border dark:bg-card'>
                       <button
                         type='button'
                         onClick={() => {
-                          setNewItemMenuOpen(false)
-                          // Goes through openTarget (not onOpenItem) so the
-                          // layout slug rides the host's itemUrl mapping.
-                          startNew(row.slug)
+                          setExportMenuOpen(false)
+                          void exportCsv()
                         }}
-                        className='flex min-w-0 flex-1 items-center px-2 py-1.5 text-left text-[12px] text-slate-700 dark:text-slate-200'
+                        className='block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
                       >
-                        <span className='truncate'>{row.label}</span>
-                        {row.isDefault && (
-                          <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>
-                            default
-                          </span>
-                        )}
+                        CSV — visible columns
                       </button>
-                      {row.steps.length > 0 && (
+                      <button
+                        type='button'
+                        onClick={() => {
+                          setExportMenuOpen(false)
+                          // Copy to clipboard (#202): current page, visible columns,
+                          // TSV — pastes straight into Excel/Sheets as cells.
+                          const cols = effectiveColumns
+                          const header = cols.map((c) => columnLabel(c)).join('\t')
+                          const body = rows
+                            .map((r) =>
+                              cols
+                                .map((c) => {
+                                  const v = isResolvedCol(c)
+                                    ? fmtCell(resolvedFor(r.id, c) ?? '', c, r.id)
+                                    : fmtCell(String(r[c] ?? ''), c, r.id)
+                                  return String(v ?? '').replace(/[\t\n]/g, ' ')
+                                })
+                                .join('\t')
+                            )
+                            .join('\n')
+                          void navigator.clipboard?.writeText(`${header}\n${body}`).then(() => {
+                            setCopiedTable(true)
+                            setTimeout(() => setCopiedTable(false), 2000)
+                          })
+                        }}
+                        className='block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                      >
+                        {copiedTable ? 'Copied ✓' : 'Copy table to clipboard'}
+                      </button>
+                      {exportPresets.length > 0 && (
+                        <p className='border-t border-slate-100 px-2.5 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:border-border/60'>
+                          Presets (server, current filters apply)
+                        </p>
+                      )}
+                      {exportPresets.map((pr) => (
+                        <div key={pr.id} className='flex items-center'>
+                          <button
+                            type='button'
+                            onClick={() => {
+                              setExportMenuOpen(false)
+                              runExportPreset(pr.id, pr.name)
+                            }}
+                            className='block min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                          >
+                            {pr.name}
+                            <span className='ml-1.5 text-[10px] uppercase text-slate-400'>
+                              {pr.config?.format ?? 'xlsx'}
+                            </span>
+                          </button>
+                          <button
+                            type='button'
+                            data-export-background={pr.id}
+                            data-tip='Run in the background — a download appears in the Jobs tray'
+                            onClick={() => {
+                              setExportMenuOpen(false)
+                              runExportPreset(pr.id, pr.name, 'always')
+                            }}
+                            className='mr-1 shrink-0 rounded px-1.5 py-1 text-[10.5px] font-medium text-slate-500 hover:bg-muted hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
+                          >
+                            Background
+                          </button>
+                        </div>
+                      ))}
+                      <div className='mt-0.5 flex items-center gap-1 border-t border-slate-100 px-1.5 pb-1 pt-1.5 dark:border-border/60'>
+                        <input
+                          value={presetName}
+                          onChange={(e) => setPresetName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void saveExportPreset()
+                          }}
+                          placeholder='Save columns as preset…'
+                          className='h-6 min-w-0 flex-1 rounded border border-slate-200 bg-background px-1.5 text-[11.5px] dark:border-border'
+                        />
                         <button
                           type='button'
-                          data-cbv-quick-pick={row.slug ?? 'default'}
-                          title='Quick pick — choose the related fields step by step, then open the form prefilled'
-                          onClick={() => {
-                            setNewItemMenuOpen(false)
-                            setQuickPick({ slug: row.slug })
-                          }}
-                          className='mr-1 flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] font-medium text-slate-400 hover:bg-nvr-cyan/10 hover:text-nvr-navy dark:hover:text-nvr-cyan'
+                          disabled={!presetName.trim()}
+                          onClick={() => void saveExportPreset()}
+                          className='h-6 shrink-0 rounded bg-nvr-cyan px-2 text-[11px] font-semibold text-white disabled:opacity-40'
                         >
-                          <Wand2 className='h-3 w-3' />
-                          Quick pick
+                          Save
                         </button>
-                      )}
+                      </div>
                     </div>
-                  ))}
-                  {autofillCfg.data?.enabled && (
-                    <>
-                      <div className='my-1 border-t border-slate-100 dark:border-border' />
-                      <button
-                        type='button'
-                        data-cbv-new-from-document
-                        disabled={autofillBusy}
-                        onClick={() => {
-                          setNewItemMenuOpen(false)
-                          newFromDocument(null)
-                        }}
-                        className='flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 disabled:opacity-60 dark:text-slate-200 dark:hover:bg-muted'
-                        title='Upload a SOW, quote or spreadsheet — the new record opens with what it says proposed'
-                      >
-                        <FileText className='h-3.5 w-3.5 text-slate-400' />
-                        New from document…
-                      </button>
-                    </>
                   )}
                 </div>
-              )}
-            </div>
-          ) : (
-            <div className='flex items-stretch' data-cbv-newitem-split>
-              <button
-                type='button'
-                ref={newItemBtnRef}
-                onClick={() => startNew(null)}
-                className={cn(
-                  'h-8 bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white hover:brightness-105',
-                  defaultQuickSteps.length > 0 || autofillCfg.data?.enabled
-                    ? 'rounded-l-md'
-                    : 'rounded-md'
-                )}
-              >
-                + {createLabel}
-              </button>
-              {defaultQuickSteps.length > 0 && (
+              )
+            }
+          ]}
+          trail={
+            canCreate &&
+            !meta?.singleton &&
+            (newItemLayouts ? (
+              <div className='relative' data-cbv-newitem-menu ref={newItemMenuRef}>
                 <button
                   type='button'
-                  data-cbv-quick-pick='default'
-                  title='Quick pick — choose the related fields step by step, then open the form prefilled'
-                  aria-label='Quick pick'
-                  onClick={() => setQuickPick({ slug: null })}
+                  onClick={() => setNewItemMenuOpen((v) => !v)}
+                  className='flex h-8 items-center gap-1 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white hover:brightness-105'
+                >
+                  + {createLabel}
+                  <ChevronDown className='h-3.5 w-3.5' />
+                </button>
+                {newItemMenuOpen && (
+                  <div className='nvr-pop-in absolute right-0 top-9 z-[60] w-64 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-border dark:bg-card'>
+                    {[
+                      {
+                        key: 'default',
+                        slug: null as string | null,
+                        label:
+                          newItemLayouts.active?.create_label ??
+                          newItemLayouts.active?.name ??
+                          'Default layout',
+                        isDefault: true,
+                        steps: defaultQuickSteps
+                      },
+                      ...newItemLayouts.options.map((l) => ({
+                        key: String(l.id),
+                        slug: l.slug,
+                        label: l.create_label ?? l.name,
+                        isDefault: false,
+                        steps: stepsFor(l)
+                      }))
+                    ].map((row) => (
+                      <div
+                        key={row.key}
+                        className='group/newrow flex items-center rounded hover:bg-slate-100 dark:hover:bg-muted'
+                      >
+                        <button
+                          type='button'
+                          onClick={() => {
+                            setNewItemMenuOpen(false)
+                            // Goes through openTarget (not onOpenItem) so the
+                            // layout slug rides the host's itemUrl mapping.
+                            startNew(row.slug)
+                          }}
+                          className='flex min-w-0 flex-1 items-center px-2 py-1.5 text-left text-[12px] text-slate-700 dark:text-slate-200'
+                        >
+                          <span className='truncate'>{row.label}</span>
+                          {row.isDefault && (
+                            <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>
+                              default
+                            </span>
+                          )}
+                        </button>
+                        {row.steps.length > 0 && (
+                          <button
+                            type='button'
+                            data-cbv-quick-pick={row.slug ?? 'default'}
+                            title='Quick pick — choose the related fields step by step, then open the form prefilled'
+                            onClick={() => {
+                              setNewItemMenuOpen(false)
+                              setQuickPick({ slug: row.slug })
+                            }}
+                            className='mr-1 flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] font-medium text-slate-400 hover:bg-nvr-cyan/10 hover:text-nvr-navy dark:hover:text-nvr-cyan'
+                          >
+                            <Wand2 className='h-3 w-3' />
+                            Quick pick
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    {autofillCfg.data?.enabled && (
+                      <>
+                        <div className='my-1 border-t border-slate-100 dark:border-border' />
+                        <button
+                          type='button'
+                          data-cbv-new-from-document
+                          disabled={autofillBusy}
+                          onClick={() => {
+                            setNewItemMenuOpen(false)
+                            newFromDocument(null)
+                          }}
+                          className='flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 disabled:opacity-60 dark:text-slate-200 dark:hover:bg-muted'
+                          title='Upload a SOW, quote or spreadsheet — the new record opens with what it says proposed'
+                        >
+                          <FileText className='h-3.5 w-3.5 text-slate-400' />
+                          New from document…
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className='flex items-stretch' data-cbv-newitem-split>
+                <button
+                  type='button'
+                  ref={newItemBtnRef}
+                  onClick={() => startNew(null)}
                   className={cn(
-                    'flex h-8 items-center border-l border-white/30 bg-nvr-cyan px-2 text-white hover:brightness-105',
-                    !autofillCfg.data?.enabled && 'rounded-r-md'
+                    'h-8 bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white hover:brightness-105',
+                    defaultQuickSteps.length > 0 || autofillCfg.data?.enabled
+                      ? 'rounded-l-md'
+                      : 'rounded-md'
                   )}
                 >
-                  <Wand2 className='h-3.5 w-3.5' />
+                  + {createLabel}
                 </button>
-              )}
-              {autofillCfg.data?.enabled && (
-                <button
-                  type='button'
-                  data-cbv-new-from-document
-                  disabled={autofillBusy}
-                  title='New from document — upload a SOW, quote or spreadsheet and review what it proposes'
-                  aria-label='New from document'
-                  onClick={() => newFromDocument(null)}
-                  className='flex h-8 items-center rounded-r-md border-l border-white/30 bg-nvr-cyan px-2 text-white hover:brightness-105 disabled:opacity-60'
-                >
-                  <FileText className='h-3.5 w-3.5' />
-                </button>
-              )}
-            </div>
-          ))}
+                {defaultQuickSteps.length > 0 && (
+                  <button
+                    type='button'
+                    data-cbv-quick-pick='default'
+                    title='Quick pick — choose the related fields step by step, then open the form prefilled'
+                    aria-label='Quick pick'
+                    onClick={() => setQuickPick({ slug: null })}
+                    className={cn(
+                      'flex h-8 items-center border-l border-white/30 bg-nvr-cyan px-2 text-white hover:brightness-105',
+                      !autofillCfg.data?.enabled && 'rounded-r-md'
+                    )}
+                  >
+                    <Wand2 className='h-3.5 w-3.5' />
+                  </button>
+                )}
+                {autofillCfg.data?.enabled && (
+                  <button
+                    type='button'
+                    data-cbv-new-from-document
+                    disabled={autofillBusy}
+                    title='New from document — upload a SOW, quote or spreadsheet and review what it proposes'
+                    aria-label='New from document'
+                    onClick={() => newFromDocument(null)}
+                    className='flex h-8 items-center rounded-r-md border-l border-white/30 bg-nvr-cyan px-2 text-white hover:brightness-105 disabled:opacity-60'
+                  >
+                    <FileText className='h-3.5 w-3.5' />
+                  </button>
+                )}
+              </div>
+            ))
+          }
+        />
         <input
           ref={autofillInputRef}
           type='file'
@@ -10930,14 +11102,17 @@ export function CollectionBrowserView({
                           : !isSelected && viewChangedRow
                             ? VIEW_CHANGED_ROW_CLASS
                             : undefined
-                      // Pinned cells need an OPAQUE bg — tinted rows carry the tint
-                      // into their sticky cells so pinned columns match the row.
-                      const stickyBg = isSelected
-                        ? 'bg-[#e6fafe] dark:bg-[#0c2a33]'
-                        : !risk && viewChangedRow
-                          ? VIEW_CHANGED_STICKY_CLASS
-                          : (riskTint ??
-                            'bg-white group-hover:bg-[#f2fcff] dark:bg-slate-900 dark:group-hover:bg-[#0e2d3a]')
+                      // Every row state paints an OPAQUE colour on the row itself and the
+                      // pinned cells inherit it (lib/row-surface.ts), so pinned columns
+                      // match the row in every state, hovered or not, light and dark.
+                      const rowBg = isSelected
+                        ? ROW_SURFACE_SELECTED
+                        : risk
+                          ? (riskTint ?? ROW_SURFACE)
+                          : viewChangedRow
+                            ? `${VIEW_CHANGED_ROW_CLASS} ${ROW_SURFACE_HOVER}`
+                            : `${ROW_SURFACE} ${ROW_SURFACE_HOVER}`
+                      const stickyBg = PINNED_CELL_SURFACE
                       return (
                         <tr
                           key={String(id)}
@@ -10957,9 +11132,7 @@ export function CollectionBrowserView({
                           data-picker-excluded={pickerExcluded ? '' : undefined}
                           data-row-gone={rowGone(String(id)) ? '' : undefined}
                           style={enterStyle}
-                          className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-nvr-cyan/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan dark:border-slate-800 dark:hover:bg-nvr-cyan/[0.08] ${
-                            isSelected ? 'bg-nvr-cyan/[0.08]' : (riskTint ?? '')
-                          } ${pickerExcluded ? PICKER_EXCLUDED_ROW_CLASS : ''} ${
+                          className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan dark:border-slate-800 ${rowBg} ${pickerExcluded ? PICKER_EXCLUDED_ROW_CLASS : ''} ${
                             rowGone(String(id)) ? GONE_ROW_CLASS : ''
                           }`}
                         >

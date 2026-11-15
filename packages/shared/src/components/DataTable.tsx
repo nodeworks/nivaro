@@ -25,6 +25,7 @@ import {
   parseNumberFilter
 } from '../lib/number-filter'
 import type { CascadeSelection } from '../lib/quick-filter-cascade'
+import { ROW_SURFACE, ROW_SURFACE_HOVER, ROW_SURFACE_SELECTED } from '../lib/row-surface'
 import { fitPins } from '../lib/table-pins'
 import { cn, formatNumber } from '../lib/utils'
 import { CellCopyLayer } from './CellCopyLayer'
@@ -1077,18 +1078,18 @@ export function DataTable<T = Record<string, unknown>>({
           'group/row nvr-row-enter border-slate-100 transition-colors duration-150',
           onRowFocus &&
             'focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-nvr-cyan',
-          (pinFirstColumn || pinsActive) && 'bg-white dark:bg-card',
+          // Pinned: opaque surface AND opaque hover (the base row's hover:bg-muted/50 is
+          // translucent, so the pinned cells would go see-through under the pointer).
+          (pinFirstColumn || pinsActive) && `${ROW_SURFACE} ${ROW_SURFACE_HOVER}`,
           onRowClick &&
             (pinFirstColumn || pinsActive
-              ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted'
+              ? 'cursor-pointer'
               : 'cursor-pointer hover:bg-slate-50/80'),
           rowClassName?.(row),
           // Pinned sticky cells use bg-inherit, so a selected row's bg must be
           // OPAQUE or horizontally-scrolled content bleeds through the pinned
-          // column. bg-nvr-cyan/5 is semi-transparent — use an opaque equivalent
-          // (5% nvr-cyan #00ceff over white / card) when pinning.
-          isSelected &&
-            (pinFirstColumn || pinsActive ? 'bg-[#f2fdff] dark:bg-[#20303a]' : 'bg-nvr-cyan/5')
+          // column (lib/row-surface.ts: the accent mixed over the card).
+          isSelected && (pinFirstColumn || pinsActive ? ROW_SURFACE_SELECTED : 'bg-nvr-cyan/5')
         )}
         style={{ animationDelay: `${Math.min(i, 14) * 16}ms` }}
         data-row-key={rowId}

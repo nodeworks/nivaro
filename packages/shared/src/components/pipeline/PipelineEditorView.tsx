@@ -992,7 +992,7 @@ function RelationValueCombobox({
               value.map((id) => (
                 <span
                   key={id}
-                  className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-nvr-navy'
+                  className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
                 >
                   {labelFor(id)}
                   <span
@@ -1008,7 +1008,7 @@ function RelationValueCombobox({
                         toggle(id)
                       }
                     }}
-                    className='cursor-pointer text-nvr-navy/50 hover:text-red-500'
+                    className='cursor-pointer text-nvr-navy/50 hover:text-red-500 dark:text-nvr-cyan/60'
                   >
                     ×
                   </span>
@@ -1152,7 +1152,7 @@ function TransitionConditionsSection({
         <Filter className='h-3 w-3' />
         Conditions <span className='font-normal text-slate-400'>(optional)</span>
         {rules.length > 0 && (
-          <span className='rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy'>
+          <span className='rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
             {rules.length}
           </span>
         )}
@@ -1479,7 +1479,7 @@ function TransitionRequirementsSection({
         <ListChecks className='h-3 w-3' />
         Requirements <span className='font-normal text-slate-400'>(optional)</span>
         {requirements.length > 0 && (
-          <span className='rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy'>
+          <span className='rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
             {requirements.length}
           </span>
         )}
@@ -2098,7 +2098,7 @@ function TransitionForm({
               className={cn(
                 'rounded-md border px-2 py-1 text-[11px] font-medium transition-colors',
                 (form.comment_mode ?? 'none') === opt.value
-                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy'
+                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
                   : 'border-slate-200 text-slate-600 hover:border-slate-400'
               )}
             >
@@ -2262,14 +2262,40 @@ function getBaseOwners(groups: PipelineOwnerGroup[]): PipelineOwnerGroupUser[] {
   return out
 }
 
+/** One value-specific owner group in words: "Zone = East · 2 people" (its name when it has one). */
+function ownerGroupLine(g: PipelineOwnerGroup): string {
+  const when = (g.filters ?? [])
+    .map((f) => {
+      const field = titleCase(f.field.split('.').pop() ?? f.field)
+      const v = Array.isArray(f.value) ? f.value.join(', ') : String(f.value ?? '')
+      const op =
+        f.op === '_eq' || f.op === 'eq' ? '=' : f.op === '_in' || f.op === 'in' ? 'is' : f.op
+      return `${field} ${op} ${v}`.trim()
+    })
+    .join(' and ')
+  const people = g.users.length + (g.teams?.length ?? 0)
+  const who = people === 0 ? 'nobody yet' : `${people} ${people === 1 ? 'owner' : 'owners'}`
+  return `${g.name?.trim() || when || 'Owner group'}${g.name?.trim() && when ? ` (${when})` : ''} · ${who}`
+}
+
 function OwnerAvatarStack({
   users,
-  filteredCount
+  valueGroups
 }: {
   users: PipelineOwnerGroupUser[]
-  filteredCount: number
+  /** Owner groups that apply only to records with certain values (Zone = East, …). */
+  valueGroups: PipelineOwnerGroup[]
 }) {
+  const filteredCount = valueGroups.length
   if (!users.length && !filteredCount) return null
+  // "+6 by Zone" when every such group splits on the same field, else "+6 more groups".
+  const splitFields = new Set(
+    valueGroups.flatMap((g) => (g.filters ?? []).map((f) => f.field.split('.').pop() ?? f.field))
+  )
+  const valueLabel =
+    splitFields.size === 1
+      ? `+${filteredCount} by ${titleCase([...splitFields][0])}`
+      : `+${filteredCount} more ${filteredCount === 1 ? 'group' : 'groups'}`
   const visible = users.slice(0, 4)
   const rest = users.length - visible.length
   return (
@@ -2280,13 +2306,13 @@ function OwnerAvatarStack({
             <div
               key={u.user}
               title={`${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email}
-              className='h-5 w-5 rounded-full bg-nvr-cyan/20 border border-white flex items-center justify-center text-[9px] font-semibold text-nvr-cyan'
+              className='flex h-5 w-5 items-center justify-center rounded-full border border-white bg-nvr-cyan/20 text-[9px] font-semibold text-[#007a99] dark:border-card dark:bg-nvr-cyan/25 dark:text-nvr-cyan'
             >
               {userInitials(u)}
             </div>
           ))}
           {rest > 0 && (
-            <div className='h-5 w-5 rounded-full bg-slate-100 border border-white flex items-center justify-center text-[9px] font-medium text-slate-500'>
+            <div className='flex h-5 w-5 items-center justify-center rounded-full border border-white bg-slate-100 text-[9px] font-medium text-slate-500 dark:border-card dark:bg-muted dark:text-slate-300'>
               +{rest}
             </div>
           )}
@@ -2294,10 +2320,12 @@ function OwnerAvatarStack({
       )}
       {filteredCount > 0 && (
         <span
-          className='text-[10px] text-slate-400'
-          title={`${filteredCount} dimension-filtered group${filteredCount !== 1 ? 's' : ''}`}
+          data-owner-value-groups={filteredCount}
+          data-tip={`Owners for particular records:\n${valueGroups.map(ownerGroupLine).join('\n')}`}
+          className='relative whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
         >
-          +{filteredCount} ctx
+          {valueLabel}
+          <span className='sr-only'> owner groups for particular records</span>
         </span>
       )}
     </div>
@@ -2435,7 +2463,7 @@ function SortableStateRow({
         </div>
         <OwnerAvatarStack
           users={getBaseOwners(groups)}
-          filteredCount={groups.filter((g) => g.filters && g.filters.length > 0).length}
+          valueGroups={groups.filter((g) => g.filters && g.filters.length > 0)}
         />
         <div className='flex items-center gap-1 opacity-0 group-hover:opacity-100 [&:has([data-armed])]:opacity-100 transition-opacity shrink-0'>
           <button
@@ -3866,9 +3894,9 @@ export function PipelineEditorView({
                           .filter((r): r is RouteEntry => !!r)
                         return (
                           <SortableTransitionItem key={grp.label} id={grp.label}>
-                            <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+                            <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
                               {/* Label group header */}
-                              <div className='group/hdr flex items-center gap-2.5 border-b border-slate-100 bg-slate-50/60 px-3 py-2'>
+                              <div className='group/hdr flex items-center gap-2.5 border-b border-slate-100 bg-slate-50/60 px-3 py-2 dark:border-border dark:bg-muted/50'>
                                 <TransitionDragHandle />
                                 {/* Group color swatch — click to change */}
                                 <Popover>
@@ -4021,7 +4049,7 @@ export function PipelineEditorView({
                                     <span className='flex-1' />
                                   </>
                                 )}
-                                <span className='text-[11px] text-slate-400 tabular-nums'>
+                                <span className='text-[11px] text-slate-500 tabular-nums dark:text-slate-400'>
                                   {grp.routes.length} route{grp.routes.length !== 1 ? 's' : ''}
                                 </span>
                                 <button
@@ -4176,7 +4204,7 @@ export function PipelineEditorView({
                                             )}
                                             {(route.condition_rules ?? []).length > 0 && (
                                               <span
-                                                className='ml-1 inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy'
+                                                className='ml-1 inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
                                                 title={(route.condition_rules ?? [])
                                                   .map(
                                                     (r) =>
