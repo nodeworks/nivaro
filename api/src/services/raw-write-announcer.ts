@@ -9,6 +9,7 @@ import {
 } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { noteCatalogChange } from './catalog-impact.js'
+import { noteRawWriteSources } from './field-write-sources.js'
 import { getIo } from './io-holder.js'
 import { fanOutRawWrites } from './raw-write-fanout.js'
 import { broadcastCollectionUpdate } from './realtime.js'
@@ -158,9 +159,12 @@ const stats = {
   lastDrainAt: null as string | null
 }
 
-function broadcastPlanned(list: RawWriteAnnouncement[]): number {
+function broadcastPlanned(list: RawWriteAnnouncement[], fromInbox = false): number {
   const io = getIo() ?? undefined
   const planned = planBroadcasts(list)
+  // Realtime round 7 #7 — keep who wrote each record field ("Set by procedure reforecast"),
+  // since a raw write leaves no revision. Fire and forget; the broadcast never waits on it.
+  void noteRawWriteSources(list, fromInbox)
   for (const p of planned) {
     try {
       broadcastCollectionUpdate(io, p.collection, p.item, {
@@ -337,7 +341,7 @@ export async function drainRawWrites(): Promise<{ rows: number; broadcasts: numb
     const batch = await claimBatch()
     if (!batch.length) break
     rows += batch.length
-    broadcasts += broadcastPlanned(rowsToAnnouncements(batch))
+    broadcasts += broadcastPlanned(rowsToAnnouncements(batch), true)
     if (batch.length < DRAIN_BATCH) break
   }
   stats.drained += rows

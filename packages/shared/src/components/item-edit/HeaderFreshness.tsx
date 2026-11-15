@@ -15,7 +15,8 @@ import { InboundRequestPopover } from '../integrations/InboundRequest'
 export type FieldTouch = {
   at: string
   who: string
-  via: 'import' | 'integration' | 'system' | 'user'
+  /** `procedure` / `outside`: an announced raw write newer than the last revision (rt7 #7). */
+  via: 'import' | 'integration' | 'system' | 'user' | 'procedure' | 'outside'
   /** The activity row that wrote it — opens the inbound request (#617). */
   activity_id?: number
   /** An inbound token / API-key write: the caller's name (key name, else

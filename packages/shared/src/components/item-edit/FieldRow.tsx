@@ -3,6 +3,7 @@ import {
   Bell,
   BellRing,
   ChartLine,
+  Crosshair,
   History,
   Info,
   Loader2,
@@ -17,6 +18,7 @@ import { memo, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient, useParentDraft } from '../../context'
 import { AUTOFILL_CHECK_KEY, readAiFill, showsAiButton } from '../../lib/ai-fill'
+import { useCoViewers } from '../../lib/co-edit'
 import { del, get, post } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
 import { cn, formatDateTime, titleCase, toLocalDateString } from '../../lib/utils'
@@ -39,6 +41,7 @@ import {
 } from './FieldAffordances'
 import { FieldCommentButton } from './FieldComments'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
+import { FieldSourceBadge } from './FieldSourceBadge'
 import { FormHelpVideoButton } from './FormHelpVideoButton'
 import { applyFieldA11y, primaryControl } from './field-a11y'
 import {
@@ -752,6 +755,8 @@ export const FieldRow = memo(function FieldRow({
     editable: editableHere
   })
   const softLock = usePresenceSoftLock(wrapperRef)
+  // Realtime round 7 #4 — people on this record right now (none in Calm/Off).
+  const coViewers = useCoViewers(collection, itemId && itemId !== 'new' ? itemId : null)
   // #2703: labels and help that change with the record's state or the viewer's role.
   const textCtx = usePlacementTextContext()
   const remoteChange = affordances?.remoteChanges[field.field]
@@ -1184,6 +1189,31 @@ export const FieldRow = memo(function FieldRow({
           {!isCalc && itemId && itemId !== 'new' && (
             <FieldCommentButton field={field.field} label={label || titleCase(field.field)} />
           )}
+          {itemId && itemId !== 'new' && coViewers.length > 0 && (
+            // Realtime round 7 #4 — "Point Beth to this field": opens the field menu, whose
+            // Point items name each person on the record now. Revealed on hover/focus; the
+            // slot is kept (opacity) so the row never shifts.
+            <button
+              type='button'
+              data-field-menu-trigger=''
+              data-field-point-trigger=''
+              aria-label={`Point someone to ${label || titleCase(field.field)}`}
+              data-tip={
+                coViewers.length === 1
+                  ? `Point ${coViewers[0].name} to this field`
+                  : 'Point someone on this record to this field'
+              }
+              onClick={(e) => openFieldMenuFrom(e.currentTarget)}
+              className={cn(
+                'inline-flex items-center rounded p-0.5 text-slate-400 transition-opacity hover:text-nvr-cyan focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-slate-400 dark:hover:text-nvr-cyan',
+                fieldMenuOpen
+                  ? 'opacity-100 text-nvr-cyan'
+                  : 'opacity-0 group-hover/fieldrow:opacity-100'
+              )}
+            >
+              <Crosshair className='h-3 w-3' />
+            </button>
+          )}
           {itemId && itemId !== 'new' && isActuallyComputed && (
             <FieldLineageButton collection={collection} itemId={itemId} field={field.field} />
           )}
@@ -1335,6 +1365,20 @@ export const FieldRow = memo(function FieldRow({
                 </TooltipProvider>
               )
             })()}
+          {!isCalc &&
+            itemId &&
+            itemId !== 'new' &&
+            field.type !== 'alias' &&
+            !field.field.startsWith('__') && (
+              // Realtime round 7 #7 — where the value came from ("Set by ERP Sync · 2 m ago"):
+              // while it has just changed live, and when the pointer rests on the field.
+              <FieldSourceBadge
+                collection={collection}
+                itemId={itemId}
+                field={field.field}
+                live={!!remoteChange && !remoteChange.conflict}
+              />
+            )}
           {personalDefaultSlot && (
             // Right-anchored: the personal-default control flush with the field's right edge
             // (it carries Make / Update / Clear itself — no ⋯ button; right-click and

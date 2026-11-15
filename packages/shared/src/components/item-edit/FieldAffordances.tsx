@@ -1,5 +1,6 @@
 import {
   Copy,
+  Crosshair,
   ExternalLink,
   Eye,
   History,
@@ -23,6 +24,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
+import { pointCoViewer, useCoViewers } from '../../lib/co-edit'
 import type { TextContext } from '../../lib/placement-behaviour'
 import { htmlToText } from '../../lib/sanitize-html'
 import { cn } from '../../lib/utils'
@@ -181,6 +183,8 @@ export function useFieldContextMenu({
   editable?: boolean
 }) {
   const [at, setAt] = useState<{ x: number; y: number } | null>(null)
+  // Realtime round 7 #4 — the other people on this record right now (none in Calm/Off).
+  const coViewers = useCoViewers(collection, itemId && itemId !== 'new' ? itemId : null)
   // Personal defaults: "Save as my default" asks inline (in the menu panel) before it saves.
   const personalDefaults = usePersonalDefaultsApi()
   // 'save' = Make default / Save as my default; 'update' = Update default (same slot, new value).
@@ -385,6 +389,19 @@ export function useFieldContextMenu({
         clickInside('[data-field-lineage]')
       }
     },
+    // Realtime round 7 #4 — "Point Beth to this field": a transient nudge to someone viewing
+    // the record right now (the server checks they can read the field and rate-limits it).
+    ...(saved && !field.field.startsWith('__')
+      ? coViewers.slice(0, 5).map(
+          (p) =>
+            ({
+              key: `point-${p.id}`,
+              label: `Point ${p.name} here`,
+              icon: <Crosshair className='h-3.5 w-3.5' />,
+              run: () => pointCoViewer(collection, itemId, field.field, p.id)
+            }) satisfies MenuItem
+        )
+      : []),
     ...(m2o && openRelated
       ? [
           {
@@ -510,7 +527,11 @@ export function useFieldContextMenu({
   // The ⋯ button shows only where the menu offers something about this field beyond the copy
   // items every field has: today, Save / Clear my default.
   const hasFieldItems = items.some(
-    (i) => i.key === 'save-default' || i.key === 'update-default' || i.key === 'clear-default'
+    (i) =>
+      i.key === 'save-default' ||
+      i.key === 'update-default' ||
+      i.key === 'clear-default' ||
+      i.key.startsWith('point-')
   )
   return {
     onContextMenu,

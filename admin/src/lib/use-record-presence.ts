@@ -1,4 +1,4 @@
-import { liveEventQuiet, markRemoteCell, useLivePreference } from '@nivaro/shared'
+import { bindRecordCoEdit, liveEventQuiet, markRemoteCell, useLivePreference } from '@nivaro/shared'
 import { useEffect, useRef, useState } from 'react'
 import type { Socket } from 'socket.io-client'
 import { useAuth } from '@/lib/auth'
@@ -55,6 +55,9 @@ export function useRecordPresence(collection: string | undefined, item: string |
     const join = () => {
       if (!disposed) socket.emit('record:join', { collection, item })
     }
+    // Realtime round 7 — the shared form's section presence and "Point Beth to this field"
+    // ride this record-room socket (shared lib/co-edit.ts).
+    const unbindCoEdit = bindRecordCoEdit(socket, collection, item, user?.id ?? null)
     bind('auth:ok', join)
     // The socket is usually signed in already: join now, and again after each auth:ok.
     if (socket.connected) join()
@@ -213,6 +216,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
       window.removeEventListener('nvr:upload-state', onLocalUpload)
       window.removeEventListener('nvr:record-signal-out', onSignalOut)
       disposed = true
+      unbindCoEdit()
       window.removeEventListener('nvr:cell-editing', onCellEditing)
       window.removeEventListener('nvr:row-editing', onRowEditing)
       document.removeEventListener('focusin', onFocusIn)

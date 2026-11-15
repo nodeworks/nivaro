@@ -6,6 +6,12 @@ import { getFields } from '../services/collections.js'
 import { chunkArray, selectInChunks, whereInList } from '../services/db-batch.js'
 import { assertNotEditLocked } from '../services/edit-lock.js'
 import {
+  describeRawSource,
+  mergeRawSources,
+  readRawWriteSources,
+  sourceForField
+} from '../services/field-write-sources.js'
+import {
   apiKeyNames,
   callerOf,
   inboundSelectColumns,
@@ -565,7 +571,7 @@ export async function revisionsRoutes(app: FastifyInstance) {
       {
         at: string
         who: string
-        via: 'import' | 'integration' | 'system' | 'user'
+        via: 'import' | 'integration' | 'system' | 'user' | 'procedure' | 'outside'
         activity_id?: number
         caller?: { name: string; kind: string; key: string } | null
       }
@@ -627,7 +633,95 @@ export async function revisionsRoutes(app: FastifyInstance) {
         }
       }
     }
+    // Realtime round 7 #7 — a procedure, rollup, flow refresh or outside write leaves no
+    // revision, only its announcement (services/field-write-sources.ts): when that is newer
+    // than the field's last revision, it is where the value came from.
+    mergeRawSources(out, readableFields, await readRawWriteSources(q.collection, String(q.item)))
     return reply.send({ data: out })
+  })
+
+  // GET /revisions/o2m-removed?collection=<child>&many_field=&parent_id=&item=<line id>
+  // Realtime round 7 #6 — "Beth removed this line": who removed ONE line of a record the caller
+  // can see, and when. The newest delete activity for that line taken while it belonged to
+  // this parent, else the raw-write source a procedure announced, else nothing known.
+  app.get('/o2m-removed', async (req, reply) => {
+    const q = req.query as {
+      collection?: string
+      many_field?: string
+      parent_id?: string
+      item?: string
+    }
+    const { collection, many_field, parent_id, item } = q
+    if (!collection || !many_field || !parent_id || !item) {
+      return reply
+        .code(400)
+        .send({ error: 'collection, many_field, parent_id and item are required' })
+    }
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(many_field) || String(item).length > 255) {
+      return reply.code(400).send({ error: 'Invalid many_field or item' })
+    }
+    if (!(await o2mParentVisibleTo(req, collection, many_field, String(parent_id)))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    // Still there (a filter moved it off the grid, not a delete): nothing to say.
+    const still = await db(collection)
+      .where({ id: String(item) })
+      .first(many_field)
+      .catch(() => null)
+    if (still && String(still[many_field] ?? '') === String(parent_id)) {
+      return reply.send({ data: null })
+    }
+    const row = (await db('nivaro_activity as a')
+      .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+      .leftJoin('nivaro_revisions as r', 'r.activity', 'a.id')
+      .where('a.collection', collection)
+      .where('a.item', String(item))
+      .where('a.action', 'delete')
+      .orderBy('a.id', 'desc')
+      .first(
+        'a.timestamp',
+        'a.user as user_id',
+        'u.first_name',
+        'u.last_name',
+        'u.email',
+        'u.account_kind',
+        'r.data'
+      )) as Record<string, unknown> | undefined
+    if (row) {
+      // The line must have belonged to THIS parent when it went (ids alone could name a line
+      // of a record the caller cannot see).
+      let data: Record<string, unknown> | null = null
+      try {
+        data =
+          typeof row.data === 'string'
+            ? (JSON.parse(row.data) as Record<string, unknown>)
+            : ((row.data as Record<string, unknown> | null) ?? null)
+      } catch {
+        data = null
+      }
+      if (data && String(data[many_field] ?? '') !== String(parent_id)) {
+        return reply.send({ data: null })
+      }
+      const ts = row.timestamp instanceof Date ? row.timestamp : new Date(String(row.timestamp))
+      const email = String(row.email ?? '').toLowerCase()
+      const machine = isMachineAccount({ account_kind: row.account_kind as string | null, email })
+      return reply.send({
+        data: {
+          at: Number.isNaN(ts.getTime()) ? String(row.timestamp) : ts.toISOString(),
+          who: [row.first_name, row.last_name].filter(Boolean).join(' ') || email || 'the system',
+          user_id: row.user_id ? String(row.user_id) : null,
+          via: !row.user_id ? 'system' : machine ? 'integration' : 'user'
+        }
+      })
+    }
+    const raw = sourceForField(await readRawWriteSources(collection, String(item)), '*')
+    if (raw) {
+      const d = describeRawSource(raw.source)
+      return reply.send({
+        data: { at: new Date(raw.at).toISOString(), who: d.who, user_id: null, via: d.via }
+      })
+    }
+    return reply.send({ data: null })
   })
 
   // POST /revisions/o2m-restore — put a parent's O2M rows back as they were
