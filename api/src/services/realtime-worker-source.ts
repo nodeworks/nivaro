@@ -20,7 +20,13 @@
  *   like live ones, then every tab hears `catchup:events {events: []}` to settle its state;
  * - routing: `collection:update` only to tabs holding that collection, record-room events to
  *   tabs holding that record, chat messages to tabs in that room, everything else to all;
- * - presence per tab: `page:at` is forwarded for the tab the person used last.
+ * - presence per tab: `page:at` is forwarded for the tab the person used last;
+ * - silent self-repair (realtime 24, twin of packages/shared lib/socket-liveness.ts): a socket
+ *   that says it is connected but hears nothing is probed (`time:sync`) and reopened when it
+ *   does not answer; a heartbeat timeout or a drop right after a wake (tabs send `wake` on
+ *   online / network change / back in sight; the worker's own tick sees a sleep) is reopened at
+ *   once. Tabs hear `{t:'repair', on}` and keep the banner away meanwhile; after two failed
+ *   repairs in a row the worker stops being quiet until the socket signs in again.
  *
  * Kept in a string (not a .ts module) because the API ships it as a file, not as code it runs:
  * tsc never sees it, so realtime-worker-source.test.ts parses and exercises it in a vm.
@@ -77,6 +83,18 @@ var everConnected = false
 var downSince = 0
 var lastAttemptAt = 0
 var STALL_MS = 25000
+/* Silent self-repair (realtime 24): the same numbers as socket-liveness.ts. */
+var LIVE_SILENCE_MS = 40000
+var LIVE_PROBE_MS = 5000
+var LIVE_TICK_MS = 5000
+var LIVE_SLEEP_GAP_MS = 75000
+var LIVE_WAKE_WINDOW_MS = 15000
+var LIVE_REPAIR_WINDOW_MS = 12000
+var LIVE_MAX_REPAIRS = 2
+var live = {
+  heard: Date.now(), tick: Date.now(), wakeAt: 0, probing: false, probeTimer: null,
+  repairing: false, attempts: 0, gaveUp: false, repairTimer: null, downReason: null, everUp: false
+}
 
 /* Room-shaped emits: event -> [leave event, key of payload]. The worker keeps the server
    membership as the union of every tab's. */
@@ -157,6 +175,91 @@ function route(event, args) {
 
 function emitRaw(event, payload) {
   if (socket && socket.connected) socket.emit(event, payload)
+}
+
+/* ── Silent self-repair (realtime 24) ── */
+function liveSetRepairing(on, outcome) {
+  if (live.repairing === on) return
+  live.repairing = on
+  broadcast(outcome ? { t: 'repair', on: on, outcome: outcome } : { t: 'repair', on: on })
+}
+function liveClearRepairTimer() {
+  if (live.repairTimer) clearTimeout(live.repairTimer)
+  live.repairTimer = null
+}
+function liveRepair() {
+  if (live.gaveUp || tokenIdle || tokenParked || !socket) return
+  if (live.attempts >= LIVE_MAX_REPAIRS) {
+    live.gaveUp = true
+    live.attempts = 0
+    liveClearRepairTimer()
+    liveSetRepairing(false, 'gave-up')
+    return
+  }
+  live.attempts += 1
+  /* Flag first: the drop this reconnect causes reads as part of the repair. */
+  liveSetRepairing(true)
+  liveClearRepairTimer()
+  live.repairTimer = setTimeout(function () {
+    live.repairTimer = null
+    if (live.repairing) liveRepair()
+  }, LIVE_REPAIR_WINDOW_MS)
+  try { socket.disconnect(); socket.connect() } catch (e) { /* the window timer tries again */ }
+}
+function liveCheck() {
+  if (live.probing || live.repairing || live.gaveUp || !socket || !socket.connected) return
+  live.probing = true
+  var settled = false
+  live.probeTimer = setTimeout(function () {
+    live.probeTimer = null
+    if (settled) return
+    settled = true
+    live.probing = false
+    if (socket && socket.connected) liveRepair()
+  }, LIVE_PROBE_MS)
+  /* time:sync is answered by every server version; volatile = never queued behind a dead link. */
+  var target = socket.volatile || socket
+  target.emit('time:sync', { c: Date.now() }, function () {
+    if (settled) return
+    settled = true
+    live.probing = false
+    if (live.probeTimer) clearTimeout(live.probeTimer)
+    live.probeTimer = null
+    live.heard = Date.now()
+  })
+}
+function liveIntentional(reason) {
+  return reason === 'io client disconnect' || reason === 'io server disconnect'
+}
+function liveWake() {
+  live.wakeAt = Date.now()
+  if (!live.everUp || live.gaveUp || live.repairing || !socket) return
+  if (socket.connected) {
+    if (authed) liveCheck()
+    return
+  }
+  if (liveIntentional(live.downReason) || tokenIdle || tokenParked) return
+  liveRepair()
+}
+function liveDown(reason) {
+  live.downReason = reason || null
+  if (live.probeTimer) clearTimeout(live.probeTimer)
+  live.probeTimer = null
+  live.probing = false
+  if (live.repairing || !live.everUp || live.gaveUp || liveIntentional(reason)) return
+  if (reason === 'ping timeout' || Date.now() - live.wakeAt <= LIVE_WAKE_WINDOW_MS) liveRepair()
+}
+function liveUp() {
+  live.everUp = true
+  live.heard = Date.now()
+  live.downReason = null
+  live.gaveUp = false
+  live.attempts = 0
+  liveClearRepairTimer()
+  liveSetRepairing(false, 'repaired')
+}
+function liveHeard() {
+  live.heard = Date.now()
 }
 
 function joinServer(key) {
@@ -398,6 +501,7 @@ function ensureSocket() {
     var wasAuthed = authed
     authed = false
     downSince = Date.now()
+    liveDown(reason)
     /* Dropped by the server before signing in (the 45 s zombie reaper): no reconnect until a
        token is likely — the backoff timer, a new tab or a sign-in brings it back. */
     if (!wasAuthed && reason === 'io server disconnect') {
@@ -409,6 +513,7 @@ function ensureSocket() {
   })
   socket.on('auth:ok', function () {
     authed = true
+    liveUp()
     tokenRetryMs = TOKEN_RETRY_MIN_MS
     sendHello()
     rejoinAll()
@@ -427,7 +532,9 @@ function ensureSocket() {
     var events = (p && p.events) || []
     events.forEach(function (ev) {
       if (ev.seq > lastSeq) lastSeq = ev.seq
-      var payload = Object.assign({}, ev.payload, { _seq: ev.seq })
+      var extra = { _seq: ev.seq }
+      if (typeof ev.iseq === 'number') extra._iseq = ev.iseq
+      var payload = Object.assign({}, ev.payload, extra)
       route(ev.event, [payload])
     })
     deliver('catchup:events', [{ events: [] }])
@@ -437,6 +544,9 @@ function ensureSocket() {
     deliver('session:ended', [p])
   })
   socket.io.on('reconnect_attempt', function () { lastAttemptAt = Date.now(); broadcast(status()) })
+  /* The server is heard: its heartbeat and every packet (silent self-repair). */
+  socket.io.on('ping', liveHeard)
+  socket.io.on('packet', liveHeard)
   socket.io.engine && socket.io.engine.on && socket.io.engine.on('upgrade', function () { broadcast(status()) })
   socket.onAny(function (event) {
     var args = Array.prototype.slice.call(arguments, 1)
@@ -527,6 +637,7 @@ function onMessage(port, ev) {
       if (!activePort || msg.active) activePort = port
       ensureSocket()
       post(port, status())
+      if (live.repairing) post(port, { t: 'repair', on: true })
       if (socket && socket.connected) {
         post(port, { t: 'ev', event: 'connect', args: [] })
         if (authed) post(port, { t: 'ev', event: 'auth:ok', args: [] })
@@ -541,6 +652,9 @@ function onMessage(port, ev) {
       return
     case 'signed-in':
       wakeToken(true)
+      return
+    case 'wake':
+      liveWake()
       return
     case 'token':
       if (msg.req !== tokenReq.id) return
@@ -586,6 +700,15 @@ setInterval(function () {
   try { if (socket.io.engine) socket.io.engine.close() } catch (e) { /* already closed */ }
   socket.connect()
 }, 5000)
+
+/* Silent self-repair: a tick far too late means the machine slept; long silence means probe. */
+setInterval(function () {
+  var now = Date.now()
+  var gap = now - live.tick
+  live.tick = now
+  if (gap > LIVE_SLEEP_GAP_MS) return liveWake()
+  if (authed && socket && socket.connected && now - live.heard > LIVE_SILENCE_MS) liveCheck()
+}, LIVE_TICK_MS)
 
 /* Tabs that vanished without a bye (a crashed tab, a killed process) stop answering pings. */
 setInterval(function () {

@@ -35,6 +35,7 @@ import {
   _resetEmitScriptForTests,
   EMIT_SCRIPT,
   journaledEmit,
+  recordSeqKey,
   replayReadStats,
   replaySince,
   setJournalRedis
@@ -140,6 +141,71 @@ describe('one-step emit (fake Redis)', () => {
   })
 })
 
+describe('per-record sequence (realtime 23)', () => {
+  it('takes the record counter in the same script call and carries _iseq', async () => {
+    const calls: unknown[][] = []
+    setJournalRedis({
+      evalsha: vi.fn(async (...args: unknown[]) => {
+        calls.push(args)
+        return [200, 9, 0, 1, 4]
+      }),
+      eval: vi.fn(),
+      multi: vi.fn()
+    } as never)
+    await journaledEmit('collection:orders', 'collection:update', {
+      collection: 'orders',
+      item: 77,
+      action: 'update'
+    })
+    const [, nKeys, ...rest] = calls[0] as [string, number, ...string[]]
+    expect(nKeys).toBe(5)
+    expect(rest[4]).toBe('nvr:ev:iseq:collection:orders:77')
+    expect(emits[0].payload).toMatchObject({ item: 77, _seq: 200, _rseq: 9, _iseq: 4 })
+  })
+
+  it('counts one record only: never bulk notices or other events', () => {
+    const key = (room: string, event: string, payload: Record<string, unknown>) =>
+      recordSeqKey(room, event, payload)
+    expect(key('collection:o', 'collection:update', { collection: 'o', item: '*' })).toBe(null)
+    expect(key('collection:o', 'collection:update', { collection: 'o', item: null })).toBe(null)
+    expect(key('chat:x', 'chat:message', { collection: 'o', item: 1 })).toBe(null)
+    expect(key('t:acme:collection:o', 'collection:update', { collection: 'o', item: 'a' })).toBe(
+      'nvr:ev:iseq:t:acme:collection:o:a'
+    )
+  })
+
+  it('the plain steps take the record counter too', async () => {
+    const m: Record<string, unknown> = {}
+    const incrs: string[] = []
+    let n = 0
+    for (const k of ['expire', 'zadd', 'zremrangebyrank', 'set']) m[k] = () => m
+    m.incr = (key: string) => {
+      incrs.push(key)
+      return m
+    }
+    m.exec = async () =>
+      ++n % 2 === 1
+        ? [
+            [null, 300],
+            [null, 2],
+            [null, 1],
+            [null, 6],
+            [null, 1]
+          ]
+        : []
+    process.env.REALTIME_ATOMIC_EMIT = 'off'
+    setJournalRedis({ evalsha: vi.fn(), eval: vi.fn(), multi: () => m } as never)
+    stream.active = false
+    await journaledEmit('collection:orders', 'collection:update', { collection: 'orders', item: 5 })
+    expect(incrs).toEqual([
+      'nvr:ev:seq',
+      'nvr:ev:rseq:collection:orders',
+      'nvr:ev:iseq:collection:orders:5'
+    ])
+    expect(emits[0].payload).toMatchObject({ _seq: 300, _rseq: 2, _iseq: 6 })
+  })
+})
+
 describe('shared catch-up reads', () => {
   it('catch-ups in one cursor bucket share one journal read, each with its own rooms', async () => {
     const entry = (seq: number, room: string) =>
@@ -208,6 +274,20 @@ describe.skipIf(!IT)('one-step emit (real Redis)', async () => {
     expect(await redis.ttl('nvr:ev:rseq:collection:o/r"d')).toBeGreaterThan(0)
     const replay = await replaySince(15, new Set(['collection:o/r"d']))
     expect(replay.events.map((e) => e.seq)).toEqual([16, 17, 18, 19, 20])
+  })
+
+  it("counts each record's changes on its own (realtime 23), in the entry and the replay", async () => {
+    await redis.flushdb()
+    setJournalRedis(redis as never)
+    const one = (item: number) =>
+      journaledEmit('collection:orders', 'collection:update', { collection: 'orders', item })
+    await one(1)
+    await one(2)
+    await one(1)
+    expect(emits.map((e) => (e.payload as { _iseq?: number })._iseq)).toEqual([1, 1, 2])
+    const replay = await replaySince(0, new Set(['collection:orders']))
+    expect(replay.events.map((e) => e.iseq)).toEqual([1, 1, 2])
+    expect(await redis.ttl('nvr:ev:iseq:collection:orders:1')).toBeGreaterThan(0)
   })
 
   it('trims the journal to REALTIME_JOURNAL_MAX', async () => {

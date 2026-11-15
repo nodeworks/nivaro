@@ -12,13 +12,21 @@ const RESUMED_MS = 6000
  * updates are paused; after the reconnect and catch-up it says so (and, when catch-up had to
  * reload, what was refreshed), then clears itself. Renders nothing for hosts without a
  * realtime status, and nothing while the browser is offline (OfflineBanner says that).
+ *
+ * Realtime 24: nothing at all while the connection repairs itself quietly (`status.repair`) —
+ * neither the paused strip nor the "resumed" line; the strip shows only once that repair has
+ * failed twice and the flag clears.
  */
 export function RealtimeStatusBanner() {
   const status = useRealtimeStatus()
   const [paused, setPaused] = useState(false)
   const [resumed, setResumed] = useState<string | null>(null)
   const pausedRef = useRef(false)
-  const down = status?.state === 'reconnecting'
+  const quiet = status?.repair === 'silent'
+  const down = status?.state === 'reconnecting' && !quiet
+  // Read by the "resumed" effect, never watched: the end of a quiet repair is no news.
+  const quietRef = useRef(quiet)
+  quietRef.current = quiet
 
   useEffect(() => {
     if (!down) return
@@ -37,6 +45,8 @@ export function RealtimeStatusBanner() {
     // Only a banner that was showing earns a "resumed" line; a blip stays silent unless
     // catch-up had to reload, which the viewer should hear about either way.
     const refreshed = status?.refreshed ?? null
+    // A quiet repair (and its catch-up, which reloads in place) is no news.
+    if (quietRef.current) return
     if (!pausedRef.current && !refreshed) return
     pausedRef.current = false
     setPaused(false)
@@ -77,7 +87,7 @@ export function RealtimeStatusBanner() {
  */
 export function RealtimeStaleMark({ className }: { className?: string }) {
   const status = useRealtimeStatus()
-  if (status?.state !== 'reconnecting') return null
+  if (status?.state !== 'reconnecting' || status.repair === 'silent') return null
   return (
     <span
       data-realtime-stale
