@@ -5,6 +5,8 @@ import {
   Binoculars,
   Check,
   CheckCheck,
+  ChevronRight,
+  CircleCheck,
   Hourglass,
   LogOut,
   Minus,
@@ -12,6 +14,7 @@ import {
   Pencil,
   Pin,
   Trash2,
+  Undo2,
   UserCheck,
   Users,
   X
@@ -44,10 +47,12 @@ import {
   WATCH_WIDTH_MIN,
   type WaitingRowData,
   type WatchPrefs,
+  type WatchRemovedRef,
   type WatchRowData,
   type WatchTeam,
   watchKeys,
   watchUi,
+  withCompleted,
   withLocalSeen
 } from '../../lib/watch-list'
 import { ConfirmButton } from '../profile/primitives'
@@ -264,6 +269,28 @@ export function WatchDock() {
     },
     { includeOwn: true, debounceMs: 300 }
   )
+
+  // ── Completed rows the person has seen leave the list once it is out of sight ──
+  const shownDone = useRef(new Set<string>())
+  useEffect(() => {
+    if (!visible) return
+    for (const p of prefs.pins) if (p.done_at) shownDone.current.add(p.key)
+  }, [visible, prefs.pins])
+  const wasVisible = useRef(visible)
+  const seenRef = useRef(actions.markSeen)
+  seenRef.current = actions.markSeen
+  useEffect(() => {
+    const flush = () => {
+      const keys = [...shownDone.current].filter((k) => prefs.pins.some((p) => p.key === k))
+      shownDone.current.clear()
+      if (keys.length > 0) seenRef.current(keys)
+    }
+    if (wasVisible.current && !visible) flush()
+    wasVisible.current = visible
+    const onHide = () => document.visibilityState === 'hidden' && flush()
+    document.addEventListener('visibilitychange', onHide)
+    return () => document.removeEventListener('visibilitychange', onHide)
+  }, [visible, prefs.pins])
 
   // ── What changed (for the dot, the rail and the header) ───────────────────
   const seenRows = useMemo(
@@ -849,18 +876,24 @@ function WatchingTab({
     // Rows follow the pins as they are now (an unpin disappears at once; a new pin waits).
     const byKey = new Map(withLocalSeen(answer?.rows ?? [], seenLocal).map((r) => [r.key, r]))
     const inOrder = prefs.pins.map((p) => byKey.get(p.key)).filter((r): r is WatchRowData => !!r)
-    return sortWatchRows(inOrder, prefs.dock.sort)
+    return sortWatchRows(withCompleted(inOrder, prefs.pins), prefs.dock.sort)
   }, [answer, prefs.pins, prefs.dock.sort, seenLocal])
 
   if (prefs.pins.length === 0)
     return (
-      <Empty icon={<Pin className='h-4 w-4' />} title='Nothing on your watch list yet'>
-        <p>
-          Pin a record to follow it here, live, on every page: use the pin beside a record’s title,{' '}
-          <span className='whitespace-nowrap'>a list row’s menu,</span> or press <Kbd>W</Kbd> on a
-          record.
-        </p>
-      </Empty>
+      <>
+        <Empty icon={<Pin className='h-4 w-4' />} title='Nothing on your watch list yet'>
+          <p>
+            Pin a record to follow it here, live, on every page: use the pin beside a record’s
+            title, <span className='whitespace-nowrap'>a list row’s menu,</span> or press{' '}
+            <Kbd>W</Kbd> on a record.
+          </p>
+        </Empty>
+        <RecentlyRemoved
+          removed={prefs.removed}
+          onUndo={(r) => void actions.restoreRemoved(r.collection, r.id).catch(() => {})}
+        />
+      </>
     )
   if (data.rows.isError && !answer)
     return <LoadError error={data.rows.error} onRetry={() => void data.rows.refetch()} />
@@ -874,7 +907,9 @@ function WatchingTab({
         onReorder={actions.reorder}
         onUnpin={(r) => void actions.unpin(r.collection, r.id).catch(() => {})}
         onSeen={(key) => {
-          if (rows.find((r) => r.key === key)?.change?.changed) actions.markSeen([key])
+          const r = rows.find((x) => x.key === key)
+          // Opening a completed record is seeing it: it leaves the list (Undo below).
+          if (r?.change?.changed || r?.completed_at) actions.markSeen([key])
         }}
         rowActions={(r) => <AlertButton row={r} actions={actions} />}
       />
@@ -882,6 +917,10 @@ function WatchingTab({
       <p className='px-4 py-3 text-[11px] text-slate-500 dark:text-slate-400'>
         {prefs.pins.length} of {prefs.max} pinned
       </p>
+      <RecentlyRemoved
+        removed={prefs.removed}
+        onUndo={(r) => void actions.restoreRemoved(r.collection, r.id).catch(() => {})}
+      />
     </>
   )
 }
@@ -1023,7 +1062,10 @@ function TeamTab({
   const mayChangeRecords = team.is_member || team.can_manage
   const rows = useMemo(() => {
     const byKey = new Map((rowsQ.data?.rows ?? []).map((r) => [r.key, r]))
-    return team.pins.map((p) => byKey.get(p.key)).filter((r): r is WatchRowData => !!r)
+    return withCompleted(
+      team.pins.map((p) => byKey.get(p.key)).filter((r): r is WatchRowData => !!r),
+      team.pins
+    )
   }, [rowsQ.data, team.pins])
   const changedHere = rows.filter((r) => r.change?.changed).map((r) => r.key)
   return (
@@ -1034,7 +1076,7 @@ function TeamTab({
             {membersText(team, meId)}
           </p>
           <p className='truncate text-[11px] text-slate-500 dark:text-slate-400'>
-            {isOwner ? 'Your shared list' : `Made by ${team.owner.name}`}
+            {isOwner && !team.owner_gone ? 'Your shared list' : `Made by ${team.owner.name}`}
           </p>
         </div>
         <div className='flex shrink-0 items-center gap-0.5'>
@@ -1060,8 +1102,9 @@ function TeamTab({
       {team.pins.length === 0 ? (
         <Empty icon={<Users className='h-4 w-4' />} title='No records on this list yet'>
           <p>
-            Add a record from its page: the people icon beside the pin puts it on a shared list.
-            Everyone here sees it, each as far as they can open it.
+            {team.owner_gone
+              ? 'Records can be added again once the list has a new owner.'
+              : 'Add a record from its page: the people icon beside the pin puts it on a shared list. Everyone here sees it, each as far as they can open it.'}
           </p>
         </Empty>
       ) : rowsQ.isError && !rowsQ.data ? (
@@ -1088,7 +1131,88 @@ function TeamTab({
           }}
         />
       )}
+      <RecentlyRemoved
+        removed={team.removed ?? []}
+        canUndo={mayChangeRecords && !team.owner_gone}
+        onUndo={(r) => void actions.restoreRemoved(r.collection, r.id, team.id).catch(() => {})}
+      />
     </div>
+  )
+}
+
+/**
+ * "Recently removed": completed records the list took off, kept 7 days. Folded by default (a
+ * quiet line at the bottom); Undo puts one back, and then it stays.
+ */
+function RecentlyRemoved({
+  removed,
+  onUndo,
+  canUndo = true
+}: {
+  removed: WatchRemovedRef[]
+  onUndo: (r: WatchRemovedRef) => void
+  canUndo?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  if (removed.length === 0) return null
+  return (
+    <section className='border-t border-slate-100 dark:border-white/[0.05]' data-watch-removed>
+      <button
+        type='button'
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className='flex w-full items-center gap-1.5 px-4 py-2.5 text-left text-[11.5px] font-medium text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan/60 dark:text-slate-300 dark:hover:bg-white/[0.03]'
+      >
+        <ChevronRight
+          aria-hidden
+          className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform motion-reduce:transition-none ${
+            open ? 'rotate-90' : ''
+          }`}
+        />
+        Recently removed
+        <span className='rounded-full bg-slate-100 px-1.5 text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-white/[0.07] dark:text-slate-400'>
+          {removed.length}
+        </span>
+        <span className='ml-auto text-[10.5px] font-normal text-slate-500 dark:text-slate-400'>
+          kept 7 days
+        </span>
+      </button>
+      {open && (
+        <ul className='pb-2' aria-label='Recently removed'>
+          {removed.map((r) => (
+            <li
+              key={r.key}
+              className='flex items-center gap-2 py-1.5 pl-9 pr-3'
+              data-watch-removed-row
+            >
+              <div className='min-w-0 flex-1'>
+                <p className='truncate text-[12px] text-slate-700 dark:text-slate-200'>
+                  {r.title ?? `${r.collection} ${r.id}`}
+                </p>
+                <p className='flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400'>
+                  <CircleCheck
+                    aria-hidden
+                    className='h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400'
+                  />
+                  Completed · removed {agoText(r.removed_at)}
+                </p>
+              </div>
+              {canUndo && (
+                <button
+                  type='button'
+                  onClick={() => onUndo(r)}
+                  aria-label={`Put ${r.title ?? 'this record'} back on the list`}
+                  className='inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-white/[0.12] dark:text-slate-200 dark:hover:bg-white/[0.05]'
+                >
+                  <Undo2 aria-hidden className='h-3 w-3' />
+                  Undo
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   )
 }
 

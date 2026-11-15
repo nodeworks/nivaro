@@ -10,7 +10,7 @@ import { onWatchListSaved, WATCH_KEY } from './user-store.js'
  * once (another process sees the change within 30 s).
  */
 
-export type WatchFlag = 'wl_alerts' | 'wl_auto' | 'wl_digest'
+export type WatchFlag = 'wl_alerts' | 'wl_auto' | 'wl_digest' | 'wl_done'
 
 const TTL_MS = 30_000
 const MAX_PEOPLE = 5000

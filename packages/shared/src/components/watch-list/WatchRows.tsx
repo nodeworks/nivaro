@@ -14,7 +14,7 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { GripVertical, X } from 'lucide-react'
+import { CircleCheck, GripVertical, X } from 'lucide-react'
 import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import { dueInText, liveDeadlineStatus, useDeadlineNow } from '../../lib/deadline-ticker'
 import { type PeekTarget, usePeekOrOpen } from '../../lib/record-peek'
@@ -139,6 +139,22 @@ function StepTimeline({
           {spanText(timing.usual_s)}
         </span>
       )}
+    </span>
+  )
+}
+
+/** The record is done: it says so (green check), then leaves the list on its own. */
+export function CompletedChip({ at }: { at: string }) {
+  return (
+    <span
+      className='inline-flex min-w-0 items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-px text-[11px] font-medium text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300'
+      data-watch-completed
+    >
+      <CircleCheck aria-hidden className='h-3 w-3 shrink-0' />
+      Completed
+      <span className='font-normal text-emerald-700/80 dark:text-emerald-300/70'>
+        · {agoText(at)}
+      </span>
     </span>
   )
 }
@@ -319,12 +335,18 @@ export function WatchRow({
                 )}
               </div>
               <div className='mt-1 flex min-w-0 items-center gap-2'>
-                <StepChip state={row.state} />
-                {row.timing && (
-                  <StepTimeline timing={row.timing} stepLabel={row.state?.label ?? null} />
+                {row.completed_at ? (
+                  <CompletedChip at={row.completed_at} />
+                ) : (
+                  <>
+                    <StepChip state={row.state} />
+                    {row.timing && (
+                      <StepTimeline timing={row.timing} stepLabel={row.state?.label ?? null} />
+                    )}
+                  </>
                 )}
                 <span className='flex-1' />
-                <OwnerStack owners={row.owners} />
+                {!row.completed_at && <OwnerStack owners={row.owners} />}
               </div>
               {(changeWords || row.sla?.due_at) && (
                 <div className='mt-1 flex min-w-0 items-center gap-2'>
@@ -353,7 +375,7 @@ export function WatchRow({
                   ) : (
                     <span className='flex-1' />
                   )}
-                  {row.sla?.due_at && <Countdown sla={row.sla} />}
+                  {row.sla?.due_at && !row.completed_at && <Countdown sla={row.sla} />}
                 </div>
               )}
             </div>

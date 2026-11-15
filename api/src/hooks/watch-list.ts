@@ -35,4 +35,29 @@ export function registerWatchListHooks(): void {
       )
     })
   })
+
+  // "Remove records when they're completed" for collections WITHOUT a pipeline: the picker
+  // badges' automatic Inactive / Archived rule decides. Gate: a collection someone watches with
+  // the switch on (in memory, 30 s); then one pipeline check (cached) and the rule on the row.
+  hooks.after('*', 'update', async (ctx) => {
+    if (ctx.dryRun || !ctx.result || !ctx.keys?.[0]) return
+    if (/^(nivaro_|directus_)/i.test(ctx.collection)) return
+    const { watchedForDone } = await import('../services/watch-list/completed.js')
+    const watched = await watchedForDone().catch(() => new Set<string>())
+    if (!watched.has(ctx.collection)) return
+    const collection = ctx.collection
+    const item = String(ctx.keys[0])
+    const row = ctx.result as Record<string, unknown>
+    void deferEffect('watch-list-completed', async () => {
+      const { runInBackgroundPool } = await import('../db/pool-context.js')
+      await runInBackgroundPool(async () => {
+        const { applyCompletion, closedByRule } = await import(
+          '../services/watch-list/completed.js'
+        )
+        const closed = await closedByRule(collection, row)
+        if (closed === null) return
+        await applyCompletion(collection, item, closed)
+      })
+    })
+  })
 }

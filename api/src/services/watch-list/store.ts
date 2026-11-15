@@ -37,6 +37,11 @@ export const TEAM_LISTS_OWNED_MAX = 10
 export const TEAM_REFS_MAX = 20
 export const TEAM_MEMBERS_MAX = 40
 export const TEAM_SEEN_MAX = 400
+/** A completed record leaves the list this long after completion (or once seen). */
+export const DONE_REMOVE_MS = 24 * 3600_000
+/** "Recently removed" keeps a pin this long for Undo. */
+export const REMOVED_KEEP_MS = 7 * 24 * 3600_000
+export const REMOVED_MAX = 60
 
 export type DockState = 'open' | 'minimized' | 'closed'
 /** A shared list's tab is `team:<list id>`. */
@@ -49,6 +54,24 @@ export interface WatchPin {
   at: string
   /** Added automatically when the record landed on the person's step. */
   auto?: boolean
+  /** When the record was completed (final step / closed), while the list removes those. */
+  done?: string
+  /** Put back from "Recently removed": never removed for being completed again. */
+  keep?: boolean
+}
+
+/** A pin taken off because its record was completed — kept 7 days so it can be put back. */
+export interface RemovedPin {
+  c: string
+  id: string
+  /** When it was first pinned (put back as it was). */
+  at: string
+  auto?: boolean
+  /** Who added it (shared lists). */
+  by?: string
+  done: string
+  /** When it was taken off. */
+  gone: string
 }
 
 export interface WatchSettings {
@@ -60,6 +83,8 @@ export interface WatchSettings {
   auto_remove: boolean
   /** One email a day of what changed on their pinned records (empty days: none). */
   digest: boolean
+  /** Records that are completed leave the list (24 h after, or once seen); 7 days to undo. */
+  remove_completed: boolean
 }
 
 export type AlertKind = 'step' | 'field' | 'overdue'
@@ -96,6 +121,8 @@ export interface TeamPin {
   at: string
   /** Who added it. */
   by: string
+  done?: string
+  keep?: boolean
 }
 
 export interface TeamList {
@@ -105,6 +132,9 @@ export interface TeamList {
   members: TeamMember[]
   pins: TeamPin[]
   at: string
+  /** Completed records leave the list (the owner's switch; new lists start on). */
+  remove_completed: boolean
+  removed: RemovedPin[]
 }
 
 export interface WatchDock {
@@ -125,6 +155,8 @@ export interface WatchListPrefs {
   team_refs: string[]
   team_seen: Record<string, string>
   digest_sent_on: string | null
+  /** Pins taken off because their record was completed (7 days, newest first). */
+  removed: RemovedPin[]
 }
 
 const COLLECTION = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
@@ -193,11 +225,14 @@ export function normalizeWatchList(raw: unknown): WatchListPrefs {
     const k = pinKey(String(r.c), String(r.id))
     if (keys.has(k)) continue
     keys.add(k)
+    const done = iso(r.done)
     pins.push({
       c: String(r.c),
       id: String(r.id),
       at: iso(r.at) ?? new Date(0).toISOString(),
-      ...(r.auto === true ? { auto: true } : {})
+      ...(r.auto === true ? { auto: true } : {}),
+      ...(done ? { done } : {}),
+      ...(r.keep === true ? { keep: true } : {})
     })
     if (pins.length >= WATCH_PINS_MAX) break
   }
@@ -229,15 +264,44 @@ export function normalizeWatchList(raw: unknown): WatchListPrefs {
     digest_sent_on:
       typeof o.digest_sent_on === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.digest_sent_on)
         ? o.digest_sent_on
-        : null
+        : null,
+    removed: normalizeRemoved(o.removed, keys)
   }
+}
+
+/** Stored "recently removed" pins (a pin back on the list is not also "removed"). Pure. */
+export function normalizeRemoved(raw: unknown, pinned: Set<string> = new Set()): RemovedPin[] {
+  const out: RemovedPin[] = []
+  const seenKeys = new Set<string>()
+  for (const x of Array.isArray(raw) ? raw : []) {
+    const r = x && typeof x === 'object' ? (x as Record<string, unknown>) : {}
+    if (!pinnable(r.c, r.id)) continue
+    const k = pinKey(String(r.c), String(r.id))
+    if (seenKeys.has(k) || pinned.has(k)) continue
+    const done = iso(r.done)
+    const gone = iso(r.gone)
+    if (!done || !gone) continue
+    seenKeys.add(k)
+    out.push({
+      c: String(r.c),
+      id: String(r.id),
+      at: iso(r.at) ?? done,
+      ...(r.auto === true ? { auto: true } : {}),
+      ...(typeof r.by === 'string' && USER_ID.test(r.by) ? { by: r.by } : {}),
+      done,
+      gone
+    })
+    if (out.length >= REMOVED_MAX) break
+  }
+  return out
 }
 
 export const DEFAULT_SETTINGS: WatchSettings = {
   desktop: false,
   auto_add: false,
   auto_remove: false,
-  digest: false
+  digest: false,
+  remove_completed: false
 }
 
 export function normalizeSettings(
@@ -250,7 +314,8 @@ export function normalizeSettings(
     desktop: pick('desktop'),
     auto_add: pick('auto_add'),
     auto_remove: pick('auto_remove'),
-    digest: pick('digest')
+    digest: pick('digest'),
+    remove_completed: pick('remove_completed')
   }
 }
 
@@ -325,11 +390,14 @@ export function normalizeTeam(raw: unknown): TeamList | null {
     const k = pinKey(String(r.c), String(r.id))
     if (pinKeys.has(k)) continue
     pinKeys.add(k)
+    const done = iso(r.done)
     pins.push({
       c: String(r.c),
       id: String(r.id),
       at: iso(r.at) ?? new Date(0).toISOString(),
-      by: typeof r.by === 'string' && USER_ID.test(r.by) ? r.by : t.owner
+      by: typeof r.by === 'string' && USER_ID.test(r.by) ? r.by : t.owner,
+      ...(done ? { done } : {}),
+      ...(r.keep === true ? { keep: true } : {})
     })
     if (pins.length >= WATCH_PINS_MAX) break
   }
@@ -339,7 +407,10 @@ export function normalizeTeam(raw: unknown): TeamList | null {
     owner: t.owner,
     members,
     pins,
-    at: iso(t.at) ?? new Date(0).toISOString()
+    at: iso(t.at) ?? new Date(0).toISOString(),
+    // A list stored before the switch existed reads as off (it was never turned on).
+    remove_completed: t.remove_completed === true,
+    removed: normalizeRemoved(t.removed, pinKeys)
   }
 }
 
@@ -363,6 +434,8 @@ export function serializeWatchList(list: WatchListPrefs): Record<string, unknown
   if (list.alerts.length > 0) out.wl_alerts = true
   if (list.settings.auto_add || list.settings.auto_remove) out.wl_auto = true
   if (list.settings.digest && list.pins.length > 0) out.wl_digest = true
+  if (list.settings.remove_completed || list.teams.some((t) => t.remove_completed))
+    out.wl_done = true
   return out
 }
 

@@ -29,6 +29,18 @@ export interface WatchSettings {
   auto_add: boolean
   auto_remove: boolean
   digest: boolean
+  /** Completed records leave the list (24 h after, or once seen); 7 days to undo. */
+  remove_completed: boolean
+}
+
+/** A record taken off because it was completed ("Recently removed", 7 days). */
+export interface WatchRemovedRef {
+  key: string
+  collection: string
+  id: string
+  title: string | null
+  done_at: string
+  removed_at: string
 }
 
 export type WatchAlertKind = 'step' | 'field' | 'overdue'
@@ -50,7 +62,17 @@ export interface WatchTeam {
   name: string
   owner: { id: string; name: string }
   members: Array<{ id: string; name: string }>
-  pins: Array<{ key: string; collection: string; id: string; pinned_at: string; by: string }>
+  pins: Array<{
+    key: string
+    collection: string
+    id: string
+    pinned_at: string
+    by: string
+    done_at?: string | null
+  }>
+  /** The owner's switch: completed records leave this list. */
+  remove_completed?: boolean
+  removed?: WatchRemovedRef[]
   can_manage: boolean
   is_member: boolean
   /** Its maker can no longer sign in: read-only until an administrator takes it over. */
@@ -78,6 +100,8 @@ export interface WatchPinRef {
   pinned_at: string
   /** Added automatically (the record landed on the person's step). */
   auto?: boolean
+  /** When the record was completed (the list removes completed records). */
+  done_at?: string | null
 }
 
 export interface WatchPrefs {
@@ -88,6 +112,8 @@ export interface WatchPrefs {
   settings: WatchSettings
   alerts: WatchAlertRef[]
   teams: WatchTeam[]
+  /** Taken off because they were completed (7 days, Undo puts one back). */
+  removed: WatchRemovedRef[]
   /** How many direct reports the person has (a manager may add their team in one go). */
   direct_reports?: number
   /** The signed-in person (only on the prefs read). */
@@ -122,6 +148,8 @@ export interface WatchRowData {
   timing: { in_step_s: number; usual_s: number | null; ratio: number | null } | null
   change: WatchChange | null
   updated_at: string | null
+  /** Client-side: when the record was completed (from the list), for the "Completed" mark. */
+  completed_at?: string | null
 }
 
 export interface WaitingRowData {
@@ -176,7 +204,8 @@ export const WATCH_SETTINGS_DEFAULT: WatchSettings = {
   desktop: false,
   auto_add: false,
   auto_remove: false,
-  digest: false
+  digest: false,
+  remove_completed: false
 }
 
 export const pinKeyOf = (collection: string, id: string | number) => `${collection}:${id}`
@@ -286,7 +315,8 @@ function emptyPrefs(): WatchPrefs {
     max: 50,
     settings: WATCH_SETTINGS_DEFAULT,
     alerts: [],
-    teams: []
+    teams: [],
+    removed: []
   }
 }
 
@@ -299,7 +329,8 @@ export function withPrefDefaults(p: Partial<WatchPrefs> | undefined): WatchPrefs
     ...p,
     settings: { ...base.settings, ...(p.settings ?? {}) },
     alerts: p.alerts ?? [],
-    teams: p.teams ?? []
+    teams: p.teams ?? [],
+    removed: p.removed ?? []
   }
 }
 
@@ -344,8 +375,14 @@ export interface WatchActions {
     name: string
     members: string[]
     reports?: boolean
+    remove_completed?: boolean
   }) => Promise<string | null>
-  editTeam: (id: string, patch: { name?: string; members?: string[] }) => Promise<void>
+  editTeam: (
+    id: string,
+    patch: { name?: string; members?: string[]; remove_completed?: boolean }
+  ) => Promise<void>
+  /** Undo a removal: the record goes back on the list (and stays). */
+  restoreRemoved: (collection: string, id: string, teamId?: string) => Promise<void>
   deleteTeam: (id: string) => Promise<void>
   leaveTeam: (id: string) => Promise<void>
   /** An administrator takes over a list whose maker is gone; answers the list's new id. */
@@ -534,10 +571,38 @@ export function useWatchActions(): WatchActions & { prefs: WatchPrefs } {
     [client, settle]
   )
   const editTeam = useCallback(
-    async (id: string, patchTeam: { name?: string; members?: string[] }) => {
+    async (
+      id: string,
+      patchTeam: { name?: string; members?: string[]; remove_completed?: boolean }
+    ) => {
       await run(patch(teamPath(id), patchTeam), 'Could not save the shared list')
     },
     [run]
+  )
+  const restoreRemoved = useCallback(
+    async (collection: string, id: string, teamId?: string) => {
+      const key = pinKeyOf(collection, id)
+      apply((p) =>
+        teamId
+          ? {
+              ...p,
+              teams: p.teams.map((t) =>
+                t.id === teamId
+                  ? { ...t, removed: (t.removed ?? []).filter((r) => r.key !== key) }
+                  : t
+              )
+            }
+          : { ...p, removed: p.removed.filter((r) => r.key !== key) }
+      )
+      await run(
+        post(teamId ? `${teamPath(teamId)}/removed/restore` : '/watch-list/removed/restore', {
+          collection,
+          id
+        }),
+        'Could not put it back'
+      )
+    },
+    [apply, run]
   )
   const deleteTeam = useCallback(
     async (id: string) => {
@@ -642,6 +707,7 @@ export function useWatchActions(): WatchActions & { prefs: WatchPrefs } {
     deleteTeam,
     leaveTeam,
     takeOverTeam,
+    restoreRemoved,
     teamPin,
     teamUnpin,
     teamSeen,
@@ -722,4 +788,14 @@ export function withLocalSeen(
     if (new Date(r.change.at).getTime() > at) return r
     return { ...r, change: { ...r.change, changed: false, unseen: 0 } }
   })
+}
+
+/** Rows with their list's completion stamp (the "Completed" mark). Pure. */
+export function withCompleted(
+  rows: WatchRowData[],
+  pins: Array<{ key: string; done_at?: string | null }>
+): WatchRowData[] {
+  const done = new Map(pins.filter((p) => p.done_at).map((p) => [p.key, p.done_at as string]))
+  if (done.size === 0) return rows
+  return rows.map((r) => (done.has(r.key) ? { ...r, completed_at: done.get(r.key) } : r))
 }

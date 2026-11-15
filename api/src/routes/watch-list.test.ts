@@ -137,7 +137,8 @@ describe('watch list routes', () => {
       desktop: true,
       auto_add: false,
       auto_remove: false,
-      digest: false
+      digest: false,
+      remove_completed: false
     })
     expect(JSON.parse(stored as string).theme_accent).toBe('teal')
   })
@@ -171,6 +172,35 @@ describe('watch list routes', () => {
     expect(JSON.parse(stored as string).watch_list.wl_alerts).toBe(true)
     const del = await app.inject({ method: 'DELETE', url: `/watch-list/alerts/${alerts[0].id}` })
     expect(del.json().data.alerts).toEqual([])
+  })
+
+  it('a completed record the person has now seen leaves the list, and Undo puts it back', async () => {
+    const done = new Date(Date.now() - 3600_000).toISOString()
+    stored = JSON.stringify({
+      watch_list: {
+        settings: { remove_completed: true },
+        pins: [{ c: 'orders', id: '5', at: '2026-11-01T00:00:00Z', done }]
+      }
+    })
+    const seen = await app.inject({
+      method: 'POST',
+      url: '/watch-list/seen',
+      payload: { keys: ['orders:5'] }
+    })
+    expect(seen.statusCode).toBe(200)
+    expect(seen.json().data.pins).toEqual([])
+    expect(seen.json().data.removed).toEqual([
+      expect.objectContaining({ key: 'orders:5', done_at: done })
+    ])
+    const back = await app.inject({
+      method: 'POST',
+      url: '/watch-list/removed/restore',
+      payload: { collection: 'orders', id: '5' }
+    })
+    expect(back.statusCode).toBe(200)
+    expect(back.json().data.pins.map((p: { key: string }) => p.key)).toEqual(['orders:5'])
+    expect(back.json().data.removed).toEqual([])
+    expect(JSON.parse(stored as string).watch_list.pins[0].keep).toBe(true)
   })
 
   it('answers 404 for a shared list that does not exist (never says whose it is)', async () => {

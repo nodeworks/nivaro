@@ -84,7 +84,10 @@ export function newTeam(args: {
     owner: args.owner,
     members: ids.slice(0, TEAM_MEMBERS_MAX).map((u) => ({ u, at })),
     pins: [],
-    at
+    at,
+    // New lists tidy themselves: completed records leave (the owner can turn it off).
+    remove_completed: true,
+    removed: []
   }
 }
 

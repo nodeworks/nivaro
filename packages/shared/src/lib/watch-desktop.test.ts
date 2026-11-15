@@ -40,7 +40,8 @@ describe('desktop alerts for watched records', () => {
       desktop: false,
       auto_add: false,
       auto_remove: false,
-      digest: false
+      digest: false,
+      remove_completed: false
     })
     expect(p.alerts).toEqual([])
     expect(p.teams).toEqual([])
