@@ -53,6 +53,11 @@ export const NOTIFY_RULE_CATS: Array<{ key: string; label: string; help: string 
     help: 'Someone proposed new values on a locked record whose step you own (to accept or decline), and whether a change you proposed was accepted or declined.'
   },
   {
+    key: 'approval_changes',
+    label: 'Changed after approval',
+    help: 'A record you approved was changed afterwards (by an administrator, a process or an accepted proposal). One notice per burst of changes, never for your own.'
+  },
+  {
     key: 'sla',
     label: 'SLA & escalations',
     help: 'A record you own is nearing or past its SLA, and escalation-ladder notices as they climb. SLA escalations always email immediately.'

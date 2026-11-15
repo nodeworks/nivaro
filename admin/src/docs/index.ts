@@ -14,6 +14,7 @@ export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/back-and-peek.js'
 export * from './sections/bulk-actions.js'
+export * from './sections/changed-after-approval.js'
 export * from './sections/changed-by-others.js'
 export * from './sections/chaos.js'
 export * from './sections/chaos-ci.js'
@@ -135,6 +136,7 @@ import {
 import { attributesGuide } from './sections/attributes.js'
 import { collabBackAndPeek } from './sections/back-and-peek.js'
 import { bulkActionsGuide } from './sections/bulk-actions.js'
+import { collabChangedAfterApproval } from './sections/changed-after-approval.js'
 import { collabChangedByOthers } from './sections/changed-by-others.js'
 import { chaosDocs } from './sections/chaos.js'
 import { chaosBuilderDocs } from './sections/chaos-builder.js'
@@ -940,6 +942,7 @@ export const navSections: NavGroup[] = [
       collabOfflinePopout,
       collabLiveLists,
       collabChangedByOthers,
+      collabChangedAfterApproval,
       liveScreensDocs,
       collabLiveCounts,
       collabLiveConfig,

@@ -176,7 +176,25 @@ function broadcastPlanned(list: RawWriteAnnouncement[]): number {
   // Realtime round 3 #6 — GraphQL events for action-less announcements, opted-in webhooks and
   // flows, alert re-evaluation (services/raw-write-fanout.ts). Never blocks the broadcast.
   void fanOutRawWrites(list, planned).catch(() => {})
+  noteApprovalBursts(list)
   return planned.length
+}
+
+/**
+ * "Changed after approval" (round 7, item 21): a procedure's or script's write to a few named
+ * records may open a change burst for their approvers (services/approval-changes.ts). Rollup
+ * recalcs follow an app write that already counted; creates and deletes are not "changed".
+ */
+function noteApprovalBursts(list: RawWriteAnnouncement[]): void {
+  for (const a of list) {
+    const named = (a.ids ?? []).filter((i) => i != null && String(i) !== '' && String(i) !== '*')
+    if (named.length === 0 || named.length > 20) continue
+    if (a.action === 'create' || a.action === 'delete') continue
+    if (/^rollup/i.test(String(a.source ?? ''))) continue
+    void import('./approval-changes.js')
+      .then((m) => m.noteApprovalWrite(a.collection, named, null))
+      .catch(() => {})
+  }
 }
 
 /** Broadcast everything queued now (tests, shutdown), each tenant in its own context. */

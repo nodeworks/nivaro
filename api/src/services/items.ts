@@ -35,6 +35,11 @@ import { deferEffect, withUnitOfWork } from '../services/unit-of-work.js'
 import type { CMSField, CMSRelation, ItemsQuery, User } from '../types.js'
 import { type AliasLink, dedupeAliasLinks, sameAliasLink } from './alias-links.js'
 import {
+  APPROVAL_CHANGED_FIELD,
+  approvalChangedWanted,
+  resolveApprovalChangedCondition
+} from './approval-changes.js'
+import {
   applyAutoIdsExt,
   autoIdFieldsFor,
   autoIdJunctionTargets,
@@ -4019,6 +4024,19 @@ export async function applyConditions(
     if (cond.path[0] === CHANGED_FIELD && cond.path.length === 1) {
       const { f, ids } = await resolveChangedCondition(cond, collection, userId ?? null)
       applyChangedFilter(q, collection, f, userId ?? null, ids)
+      continue
+    }
+    // Virtual path: changed after approval (round 7, item 21, services/approval-changes.ts) —
+    // records in an approved state with an app write since, in a field the reader may read.
+    if (cond.path[0] === APPROVAL_CHANGED_FIELD && cond.path.length === 1) {
+      const want = approvalChangedWanted(cond)
+      const ids = await resolveApprovalChangedCondition(cond, collection, userId ?? null)
+      if (ids === null) {
+        if (want) q.whereRaw('1 = 0')
+      } else if (ids.length === 0) {
+        if (want) q.whereRaw('1 = 0')
+      } else if (want) whereInList(q, `${collection}.id`, ids)
+      else q.whereNot((b) => whereInList(b, `${collection}.id`, ids))
       continue
     }
     // Virtual path: changed since the reader last opened it (#643) — edited,

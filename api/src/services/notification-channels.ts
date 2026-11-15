@@ -149,6 +149,7 @@ export const NOTIFY_CATEGORY_LABELS: Record<NotifyCategory, string> = {
   mentions: 'Mentions',
   workflow: 'Workflow',
   proposals: 'Change proposals',
+  approval_changes: 'Changed after approval',
   sla: 'SLA',
   watch: 'Record watches',
   alerts: 'Alerts',

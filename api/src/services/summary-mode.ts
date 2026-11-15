@@ -9,13 +9,23 @@
  *               conditions?: [{field, op, value}],   // #737, at-risk ops
  *               mode: 'edit' | 'summary' }],
  *     edit_lock?: { states: key[], children: collection[] },     // edit-lock.ts
- *     change_proposals?: true }                                  // change-proposals.ts
+ *     change_proposals?: true,                                   // change-proposals.ts
+ *     changed_after_approval?: false | { states: key[] } }       // approval-changes.ts
  *
  * `edit_lock` is not an opening mode: the server enforces it (edit-lock.ts);
  * it lives here because it is the same per-collection Form UX setting.
  * `change_proposals` (default off) lets a person propose new values on a
  * record its admin-only lock tier keeps them out of (change-proposals.ts).
+ * `changed_after_approval` (default ON where the admin-only tier exists) shows
+ * "Changed after approval" on records changed after they reached an approved
+ * state: `false` turns it off; `{ states }` names the approved states itself
+ * (a collection without a post-approval lock).
  */
+import {
+  type ChangedAfterApprovalSetting,
+  parseChangedAfterApproval,
+  validateChangedAfterApproval
+} from './approval-changes-core.js'
 import { type EditLockConfig, parseEditLock, validateEditLock } from './edit-lock.js'
 
 export type SummaryMode = 'summary' | 'edit'
@@ -43,6 +53,9 @@ export interface SummaryModeRules {
   /** Lines (a record's own child rows) lock one at a time instead of with the
    *  record (realtime item 7, item-lock-guard.ts / edit-lock.ts). Off by default. */
   line_locks?: boolean
+  /** "Changed after approval" (approval-changes.ts): absent = on where the admin-only
+   *  tier exists, `false` = off, `{ states }` = these approved states. */
+  changed_after_approval?: ChangedAfterApprovalSetting
 }
 
 export const NO_STATE = '__none__'
@@ -85,6 +98,7 @@ export function parseSummaryModeRules(raw: unknown): SummaryModeRules {
     edit_lock?: unknown
     change_proposals?: unknown
     line_locks?: unknown
+    changed_after_approval?: unknown
   }
   const rules: SummaryModeRule[] = []
   if (Array.isArray(o.rules)) {
@@ -108,12 +122,14 @@ export function parseSummaryModeRules(raw: unknown): SummaryModeRules {
     }
   }
   const lock = parseEditLock(o.edit_lock)
+  const approved = parseChangedAfterApproval(o.changed_after_approval)
   return {
     default: o.default === 'summary' ? 'summary' : 'edit',
     rules,
     ...(lock ? { edit_lock: lock } : {}),
     ...(o.change_proposals === true ? { change_proposals: true as const } : {}),
-    ...(o.line_locks === true ? { line_locks: true } : {})
+    ...(o.line_locks === true ? { line_locks: true } : {}),
+    ...(approved !== undefined ? { changed_after_approval: approved } : {})
   }
 }
 
@@ -135,8 +151,11 @@ export function validateSummaryModeRules(
     edit_lock?: unknown
     change_proposals?: unknown
     line_locks?: unknown
+    changed_after_approval?: unknown
   }
   const lock = validateEditLock(o.edit_lock)
+  const approved = validateChangedAfterApproval(o.changed_after_approval)
+  if (approved.error) return { error: approved.error }
   const lineLocks = o.line_locks === true
   if (lock.error) return { error: lock.error }
   if (o.change_proposals != null && typeof o.change_proposals !== 'boolean')
@@ -246,7 +265,14 @@ export function validateSummaryModeRules(
       mode: rr.mode
     })
   }
-  if (def === 'edit' && rules.length === 0 && !lock.value && !proposals && !lineLocks)
+  if (
+    def === 'edit' &&
+    rules.length === 0 &&
+    !lock.value &&
+    !proposals &&
+    !lineLocks &&
+    approved.value === undefined
+  )
     return { value: null }
   return {
     value: {
@@ -254,7 +280,8 @@ export function validateSummaryModeRules(
       rules,
       ...(lock.value ? { edit_lock: lock.value } : {}),
       ...(proposals ? { change_proposals: true as const } : {}),
-      ...(lineLocks ? { line_locks: true } : {})
+      ...(lineLocks ? { line_locks: true } : {}),
+      ...(approved.value !== undefined ? { changed_after_approval: approved.value } : {})
     }
   }
 }
