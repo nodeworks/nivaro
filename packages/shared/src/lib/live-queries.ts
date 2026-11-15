@@ -64,6 +64,12 @@ export interface LiveQueryMeta {
    * listens to nothing).
    */
   staleOnly?: boolean
+  /** Wait a random 0..jitterMs before an event refetch, so every open tab does not read in the
+   *  same second (a dashboard many people keep open). Default 0. */
+  jitterMs?: number
+  /** Wait at least this long before an event refetch (a server cache dropped a moment after
+   *  the write, e.g. a cached report). Default 0. */
+  delayMs?: number
 }
 
 /** `meta` for a query the bridge keeps current: `useQuery({ …, meta: liveQueryMeta({ reads: ['orders'] }) })`. */
@@ -315,6 +321,7 @@ export function createLiveQueryBridge(
   // ── Refetching: only active queries, min gap per query, hidden tabs defer ──
   const lastRefetch = new WeakMap<AnyQuery, number>()
   const trailing = new Map<AnyQuery, ReturnType<typeof setTimeout>>()
+  const jittered = new Map<AnyQuery, ReturnType<typeof setTimeout>>()
   const deferred = new Set<AnyQuery>()
 
   // `cancel`: a fetch already in flight may have started before the write — restart it. Off when
@@ -373,7 +380,29 @@ export function createLiveQueryBridge(
         )
       }
     }
-    refetchNow(ready, cancel)
+    // Spread over a random delay when the query asks for it; one pending spread per query.
+    const now0: AnyQuery[] = []
+    for (const q of ready) {
+      const jitter = metaOf(q)?.jitterMs ?? 0
+      const delay = metaOf(q)?.delayMs ?? 0
+      if (jitter <= 0 && delay <= 0) {
+        now0.push(q)
+        continue
+      }
+      if (jittered.has(q)) continue
+      lastRefetch.set(q, nowAt)
+      jittered.set(
+        q,
+        setTimeout(
+          () => {
+            jittered.delete(q)
+            if (!disposed) refetchNow([q], cancel)
+          },
+          delay + Math.floor(random() * Math.max(0, jitter))
+        )
+      )
+    }
+    refetchNow(now0, cancel)
   }
 
   const flush = (collection: string) => {
@@ -479,7 +508,12 @@ export function createLiveQueryBridge(
       offStatus?.()
       catchupWin?.removeEventListener('nvr:catchup-full', onCatchupFull)
       doc?.removeEventListener('visibilitychange', onVisibility)
-      for (const t of [...flushTimers.values(), ...lingering.values(), ...trailing.values()])
+      for (const t of [
+        ...flushTimers.values(),
+        ...lingering.values(),
+        ...trailing.values(),
+        ...jittered.values()
+      ])
         clearTimeout(t)
       if (reconcileTimer) clearTimeout(reconcileTimer)
       for (const off of subs.values()) off()
