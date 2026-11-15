@@ -105,7 +105,9 @@ export function CacheStamp({
     return () => clearInterval(id)
   }, [cachedAt])
 
-  if (!envelope || !envelope.cache_ttl) return null
+  // An uncached query has no age to show; it only speaks once the data it reads has changed.
+  const uncached = !envelope?.cache_ttl
+  if (!envelope || (uncached && !changedLive)) return null
 
   const ageSeconds = cachedAt
     ? Math.max(0, Math.round((Date.now() - cachedAt) / 1000))
@@ -116,19 +118,21 @@ export function CacheStamp({
       className={`flex items-center gap-1.5 text-[11px] text-muted-foreground ${className ?? ''}`}
       data-cache-stamp={envelope.cached ? 'cached' : 'fresh'}
     >
-      <span
-        data-tip={
-          envelope.expires_in_seconds != null
-            ? `Cached result — refreshes on its own in ${relative(envelope.expires_in_seconds).replace(' ago', '')}`
-            : 'Computed for this request'
-        }
-      >
-        {ageSeconds == null
-          ? envelope.cached
-            ? 'Cached'
-            : 'Updated just now'
-          : `Updated ${relative(ageSeconds)}`}
-      </span>
+      {!uncached && (
+        <span
+          data-tip={
+            envelope.expires_in_seconds != null
+              ? `Cached result — refreshes on its own in ${relative(envelope.expires_in_seconds).replace(' ago', '')}`
+              : 'Computed for this request'
+          }
+        >
+          {ageSeconds == null
+            ? envelope.cached
+              ? 'Cached'
+              : 'Updated just now'
+            : `Updated ${relative(ageSeconds)}`}
+        </span>
+      )}
       {envelope.stale ? (
         <span
           data-cache-stale

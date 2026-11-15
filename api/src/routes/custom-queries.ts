@@ -24,6 +24,7 @@ import {
 } from '../services/query-cache-stats.js'
 import {
   bustFreshnessInference,
+  liveReadSources,
   parseFreshnessSources,
   queryFreshness
 } from '../services/query-freshness.js'
@@ -1050,6 +1051,12 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         req
       })
       const fresh = ttl > 0 ? await queryFreshness(query).catch(() => null) : null
+      // Uncached queries still say which collections they read (no clock, no probe) so a page
+      // can tell the viewer "data changed since run" live.
+      const liveSources =
+        ttl > 0
+          ? (fresh?.sources ?? [])
+          : await liveReadSources(query).catch(() => [] as Array<{ table: string }>)
       return {
         data: rows,
         cached: false,
@@ -1059,7 +1066,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         cache_ttl: ttl,
         executed_at: cachedAt,
         data_changed_at: fresh?.data_changed_at ?? null,
-        freshness_sources: fresh?.sources ?? [],
+        freshness_sources: liveSources,
         stale: false
       }
     }
