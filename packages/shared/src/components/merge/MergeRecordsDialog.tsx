@@ -1017,7 +1017,7 @@ function FieldRow({
             </span>
             <span className='min-w-0 flex-1'>
               <span className='mb-0.5 block text-[10.5px] font-medium text-slate-400 md:hidden'>
-                {r.label}
+                {refOf(r)}
               </span>
               {text == null ? (
                 <span className='text-slate-400 dark:text-muted-foreground/70'>Empty</span>
