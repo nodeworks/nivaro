@@ -91,7 +91,8 @@ export function registerScreenShare(
   scope: ScreenShareScope,
   deps: ScreenShareSocketDeps
 ): void {
-  const watching = new Set<number>()
+  /** Ticket → the share this socket watches there (a new share on it is a first look again). */
+  const watching = new Map<number, string>()
   /** Tenant-bound, and a throw (Redis or database trouble) never escapes the handler. */
   const guarded = <A extends unknown[]>(fn: (...args: A) => Promise<unknown>) =>
     inSocketTenant(socket, async (...args: A) => {
@@ -250,8 +251,8 @@ export function registerScreenShare(
         })
         if (reason || !share) return deny(reason ?? 'NO_SHARE')
         const k = shareKeys(tenant, ticket)
-        const first = !watching.has(ticket)
-        watching.add(ticket)
+        const first = watching.get(ticket) !== share.id
+        watching.set(ticket, share.id)
         await deps.redis.hset(
           k.watchers,
           socket.id,
@@ -267,10 +268,12 @@ export function registerScreenShare(
           expires_at: share.expires_at
         })
         // A person's first look at this share goes in the ticket's history (once per share).
-        const seen = await deps.redis
-          .set(k.seen(user.id), '1', 'PX', Math.max(1_000, share.expires_at - deps.now()), 'NX')
-          .catch(() => null)
-        if (seen)
+        // Keyed by share, so a later share on the same ticket logs its first look again.
+        const seen = await deps.redis.hsetnx(k.seen(share.id), up(user.id), '1').catch(() => 0)
+        if (seen === 1) {
+          await deps.redis
+            .pexpire(k.seen(share.id), Math.max(1_000, share.expires_at - deps.now()))
+            .catch(() => undefined)
           await deps
             .log(
               ticket,
@@ -279,6 +282,7 @@ export function registerScreenShare(
               'screen-share-watch'
             )
             .catch(() => undefined)
+        }
         askSnapshot(share)
         await tellWatching(tenant, share)
       } catch {
@@ -324,7 +328,8 @@ export function registerScreenShare(
     guarded(async () => {
       const tenant = scope.tenantNow()
       if (tenant == null) return
-      for (const ticket of [...watching]) await unwatch(tenant, ticket).catch(() => undefined)
+      for (const ticket of [...watching.keys()])
+        await unwatch(tenant, ticket).catch(() => undefined)
     })
   )
 }

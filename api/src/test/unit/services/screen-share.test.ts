@@ -451,6 +451,41 @@ describe('registerScreenShare (room scoping)', () => {
     expect(io.sent.filter((e) => e.event === 'screenshare:frame')).toHaveLength(0)
   })
 
+  it('two shares on one ticket = two first-look history rows (marks are per share)', async () => {
+    const io = fakeIo()
+    const beth = fakeSocket('sock-beth', { id: BETH }, 'session')
+    wire(io, beth)
+    await beth.fire('screenshare:watch', { ticket: 7 })
+    await beth.fire('screenshare:watch', { ticket: 7 })
+    const watchRows = () => logs.filter((l) => l.action === 'screen-share-watch')
+    expect(watchRows()).toHaveLength(1)
+    // The requester stops; the share's marks go with it.
+    await endShare(
+      {
+        redis,
+        now: () => now,
+        log: async () => {},
+        tellPeople: () => {},
+        tellSockets: () => {}
+      },
+      '',
+      7,
+      'stopped',
+      REQ
+    )
+    expect(await redis.hgetall(shareKeys('', 7).seen('a'.repeat(32)))).toEqual({})
+    // A new share on the same ticket, a few minutes later, watched by the same socket.
+    now += 3 * 60_000
+    __resetScreenShareSocket()
+    await writeShare(redis, '', share({ id: 'b'.repeat(32) }, now), now)
+    beth.own.length = 0
+    await beth.fire('screenshare:watch', { ticket: 7 })
+    expect(watchRows()).toHaveLength(2)
+    expect(beth.own.map((e) => e.event)).toContain('screenshare:joined')
+    await beth.fire('screenshare:watch', { ticket: 7 })
+    expect(watchRows()).toHaveLength(2)
+  })
+
   it('a stale share (page gone) ends on the next look', async () => {
     const io = fakeIo()
     const beth = fakeSocket('sock-beth', { id: BETH }, 'session')

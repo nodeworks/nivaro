@@ -222,6 +222,8 @@ export interface ShareRedis {
   del(...keys: string[]): Promise<number>
   hset(key: string, field: string, value: string): Promise<unknown>
   hdel(key: string, ...fields: string[]): Promise<unknown>
+  /** 1 when the field was new (and is now set), 0 when it already existed. */
+  hsetnx(key: string, field: string, value: string): Promise<number>
   hgetall(key: string): Promise<Record<string, string>>
   pexpire(key: string, ms: number): Promise<unknown>
 }
@@ -262,6 +264,13 @@ export function memoryShareRedis(now: () => number = Date.now): ShareRedis {
       hashes.set(k, e)
       return 1
     },
+    async hsetnx(k, f, v) {
+      const e = live(hashes, k) ?? { h: new Map(), exp: Number.POSITIVE_INFINITY }
+      if (e.h.has(f)) return 0
+      e.h.set(f, v)
+      hashes.set(k, e)
+      return 1
+    },
     async hdel(k, ...fields) {
       const e = live(hashes, k)
       for (const f of fields) e?.h.delete(f)
@@ -282,7 +291,12 @@ export function memoryShareRedis(now: () => number = Date.now): ShareRedis {
 
 export function shareKeys(tenant: string, ticket: number) {
   const base = `nvr:ss:${tenant}:${ticket}`
-  return { share: base, watchers: `${base}:w`, seen: (user: string) => `${base}:seen:${up(user)}` }
+  return {
+    share: base,
+    watchers: `${base}:w`,
+    /** Per SHARE: the people whose first look at this share is already in the history. */
+    seen: (shareId: string) => `${base}:seen:${shareId}`
+  }
 }
 
 export async function readShare(
@@ -571,7 +585,8 @@ export async function endShare(
   if ((await deps.redis.del(k.share)) < 1) return false
   // Every socket still listed is told (a lapsed heartbeat may still have the view open).
   const watchers = Object.keys(await deps.redis.hgetall(k.watchers).catch(() => ({})))
-  await deps.redis.del(k.watchers).catch(() => 0)
+  // This share's watchers and its "already logged" marks go with it.
+  await deps.redis.del(k.watchers, k.seen(share.id)).catch(() => 0)
   const payload = { ticket, share: share.id, reason }
   deps.tellPeople([share.sharer], payload)
   if (watchers.length) deps.tellSockets(watchers, payload)
