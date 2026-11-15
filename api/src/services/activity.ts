@@ -5,6 +5,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import { noteActivityForPatterns } from './activity-pattern-gate.js'
 import { actorJson, resolveActivityStamp } from './activity-scope.js'
 import type { ActivityActor } from './activity-sentence.js'
+import { noteBulkWrite } from './bulk-change-notice.js'
 import { chainFields } from './chain-columns.js'
 import { attributionColumns } from './mcp-attribution.js'
 import { currentTraceCaller, currentTraceRequestObject, noteDerivedWrite } from './request-trace.js'
@@ -144,6 +145,21 @@ export async function logActivity(opts: {
     const row = rows[0] as { id: number } | number
     const id = typeof row === 'object' && row !== null ? row.id : (row as number)
     noteDerivedWrite('activity')
+    // rt5 — a write inside a bulk action or import is collected for ONE notice to the people who
+    // own or created the records (services/bulk-change-notice.ts); in-memory, no I/O.
+    noteBulkWrite({
+      groupKey: resolveActivityStamp({
+        req: liveReq as Parameters<typeof resolveActivityStamp>[0]['req'],
+        user: opts.user ?? null,
+        group_key: opts.group_key,
+        actor: opts.actor
+      }).group_key,
+      action: opts.action,
+      user: opts.user,
+      collection: opts.collection,
+      item: opts.item,
+      fields: opts.changed_fields
+    })
     // #23 — activity-pattern alerts: no I/O here without a matching rule; fire-and-forget.
     noteActivityForPatterns({
       activity_id: id ?? null,

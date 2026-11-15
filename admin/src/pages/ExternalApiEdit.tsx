@@ -1,4 +1,4 @@
-import { queryKeys } from '@nivaro/shared'
+import { queryKeys, useLiveRefetchInterval, useLiveRefresh } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
@@ -1251,6 +1251,10 @@ function LogDetailRow({ log }: { log: ExternalApiCallLog }) {
 
 function ApiCallLogsCard({ apiId }: { apiId: number }) {
   const queryClient = useQueryClient()
+  // Calls land in the log as they happen: the integrations topic re-reads it (a burst is one
+  // re-read); the 30 s poll stays as the net while the socket cannot reach this tab.
+  useLiveRefresh({ topic: 'integrations', keys: [['external-api-logs', apiId]] })
+  const logsPoll = useLiveRefetchInterval(30_000)
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['external-api-logs', apiId] })
 
   const { data, isLoading, isFetching } = useQuery<{ data: ExternalApiCallLog[]; total: number }>({
@@ -1261,7 +1265,7 @@ function ApiCallLogsCard({ apiId }: { apiId: number }) {
           `/external-apis/${apiId}/logs?limit=100`
         )
         .then((r) => r.data),
-    refetchInterval: 30_000
+    refetchInterval: logsPoll
   })
 
   const clearAll = useMutation({

@@ -16,6 +16,7 @@ import { sendRawMail } from '../services/mail.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { announceToTenant } from '../services/record-events.js'
 import { sendSms } from '../services/sms.js'
+import { emitToUserRoom } from '../services/user-sync.js'
 
 /**
  * Broadcasts — admin-authored messages to a chosen audience over any mix of
@@ -591,6 +592,30 @@ function announceBannersChanged(): void {
   announceToTenant('announcements:changed')
 }
 
+/**
+ * How many people opened each broadcast: distinct people whose in-app (`message`) delivery row
+ * is no longer `inbox` (read, archived, snoozed). The same rule as the receipts summary's
+ * "opened", counted in one grouped read for the sender's list. A missing table reads as zero.
+ */
+export async function openedCounts(ids: number[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>()
+  if (ids.length === 0) return out
+  try {
+    const rows = (await db('nivaro_announcement_deliveries as d')
+      .join('nivaro_notifications as n', 'n.id', 'd.notification_id')
+      .whereIn('d.announcement', ids.slice(0, 500))
+      .where('d.channel', 'message')
+      .whereNot('n.status', 'inbox')
+      .groupBy('d.announcement')
+      .select('d.announcement')
+      .countDistinct({ c: 'd.user' })) as Array<{ announcement: number; c: number | string }>
+    for (const r of rows) out.set(Number(r.announcement), Number(r.c))
+  } catch {
+    /* mid-migration: the list simply shows no opened figure */
+  }
+  return out
+}
+
 export async function announcementRoutes(app: FastifyInstance): Promise<void> {
   /** What the compose form can offer on this instance. */
   app.get('/config', { preHandler: requireAdmin }, async () => {
@@ -778,6 +803,9 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
           .insert({ announcement: row.id, user: req.user!.id, acked_at: new Date() })
           .catch(() => {}) // ack races are harmless
       }
+      // The person's OTHER tabs and devices drop the banner now, not on their next poll. Payload
+      // names nothing: each tab re-reads GET /announcements/active as itself.
+      emitToUserRoom(req.user!.id, 'announcements:changed', { dismissed: true })
       return { data: { acked: true } }
     }
   )
@@ -790,10 +818,14 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       .count({ c: '*' })
       .select('announcement')) as Array<{ announcement: number; c: number }>
     const ackMap = new Map(ackCounts.map((a) => [Number(a.announcement), Number(a.c)]))
+    // Opened = the person's in-app inbox row was read (receipts/summary counts the same way).
+    // Table-level read-only counts: the sender's list shows them tick up as people read.
+    const openedMap = await openedCounts(rows.map((r: Record<string, unknown>) => Number(r.id)))
     const summaries = await buildAudienceSummaries(rows as Array<Record<string, unknown>>)
     return {
       data: rows.map((r: Record<string, unknown>) => ({
         ...r,
+        opened_count: openedMap.get(Number(r.id)) ?? 0,
         roles: parseJsonSafe<string[]>(r.roles),
         channels: parseJsonSafe<Channel[]>(r.channels) ?? ['banner'],
         audience: parseJsonSafe<Audience>(r.audience),

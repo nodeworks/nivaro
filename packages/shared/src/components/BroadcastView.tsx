@@ -15,6 +15,7 @@ import { BroadcastDraftPanel } from './BroadcastDraft'
 import { useHelpVideoLibrary } from './help-videos/api'
 import { formatDuration } from './help-videos/viewer/format'
 import { PickList } from './imports/ServiceConfigBuilder'
+import { LiveFigure } from './LiveFigure'
 
 /**
  * Broadcasts — compose + history for admin messages to a chosen audience
@@ -53,6 +54,8 @@ interface Broadcast {
   ends_at: string | null
   created_at: string | null
   ack_count: number
+  /** People whose in-app inbox row was read (ticks up live as they open it). */
+  opened_count?: number
   scheduled_send_at?: string | null
   sent_at?: string | null
   click_count?: number
@@ -840,7 +843,19 @@ function HistoryRow({
           <p className='mt-0.5 text-[11px] text-slate-400'>
             {(a.channels ?? []).join(' + ')}
             {a.delivered_count != null && ` · reached ${a.delivered_count}`}
-            {` · seen by ${a.ack_count}`}
+            {/* Quiet live figures: they tick up in place as people read and dismiss. */}
+            {a.opened_count != null && (a.channels ?? []).includes('message') && (
+              <>
+                {' · opened '}
+                <LiveFigure value={a.opened_count} className='font-medium'>
+                  {a.opened_count}
+                </LiveFigure>
+              </>
+            )}
+            {' · seen by '}
+            <LiveFigure value={a.ack_count} className='font-medium'>
+              {a.ack_count}
+            </LiveFigure>
             {a.created_at && ` · ${new Date(a.created_at).toLocaleString()}`}
             {' · '}
             <button

@@ -44,8 +44,19 @@ describe('admin screen topics (2026-11-14)', () => {
     ])
   })
 
-  it('the three topics are admin-only rooms', () => {
-    for (const t of ['collections', 'integrations', 'access-requests'])
+  it('webhook deliveries and failed flow runs poke their own topics (2026-11-14)', () => {
+    expect(opsTopicsOfWrite('insert into nivaro_webhook_deliveries (webhook) values (?)')).toEqual([
+      'webhooks'
+    ])
+    expect(opsTopicsOfWrite("update nivaro_flow_runs set status = 'error' where id = ?")).toEqual([
+      'dead-letters'
+    ])
+    // A run STARTING is not a dead letter: only an update (the run ending) pokes.
+    expect(opsTopicsOfWrite('insert into nivaro_flow_runs (flow) values (?)')).toEqual([])
+  })
+
+  it('the five topics are admin-only rooms', () => {
+    for (const t of ['collections', 'integrations', 'access-requests', 'webhooks', 'dead-letters'])
       expect(opsTopicGate(t)).toEqual({ topic: t, gate: 'admin' })
   })
 })

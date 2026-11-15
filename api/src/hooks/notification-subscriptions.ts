@@ -152,6 +152,25 @@ function isRecordScoped(sub: { filter_field?: string | null; filters?: unknown }
   }
 }
 
+/**
+ * A subscription on a whole collection with nothing narrowing it (no field filter, no
+ * `filters`) — it already tells its owner about every update, so the one-notice-for-a-bulk-
+ * change (services/bulk-change-notice.ts) leaves that person alone.
+ */
+export function isCollectionWideSubscription(sub: {
+  filter_field?: string | null
+  filters?: unknown
+}): boolean {
+  if (sub.filter_field) return false
+  if (!sub.filters) return true
+  try {
+    const list = typeof sub.filters === 'string' ? JSON.parse(sub.filters) : sub.filters
+    return !Array.isArray(list) || list.length === 0
+  } catch {
+    return false
+  }
+}
+
 /** Friendly label for a record: the entity-room registry's match_field
  *  (CM26-79811 for workflows) first, then the collection's display template,
  *  then '#<id>'. Both resolvers are imported lazily — workflow-transitions.ts

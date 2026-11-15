@@ -47,10 +47,22 @@ export function AnnouncementBanner() {
   // again only after every one of them is explicitly acknowledged.
   const mustAck = items.filter((a) => (a as { require_ack?: boolean }).require_ack)
   const strip = items.filter((a) => !(a as { require_ack?: boolean }).require_ack)
-  const ack = (id: number) =>
+  // The banner leaves THIS tab at once; the server then tells the person's other tabs and
+  // devices (`announcements:changed`), which drop it through the same re-read. A failed ack
+  // re-reads, so the banner comes back rather than silently staying "dismissed".
+  const ack = (id: number) => {
+    const drop = () =>
+      qc.setQueryData<Array<{ id: number }> | undefined>(['announcements-active'], (cur) =>
+        cur?.filter((a) => a.id !== id)
+      )
+    drop()
+    // A read already in flight would put the banner back: stop it, then drop again.
+    void qc.cancelQueries({ queryKey: ['announcements-active'] }).then(drop)
     void client
       ?.request(post(`/announcements/${id}/ack`, {}))
       .then(() => qc.invalidateQueries({ queryKey: ['announcements-active'] }))
+      .catch(() => qc.invalidateQueries({ queryKey: ['announcements-active'] }))
+  }
   return (
     <div data-announcements data-nvr-recording-hide className='shrink-0'>
       {mustAck.length > 0 && (

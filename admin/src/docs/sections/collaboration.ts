@@ -646,6 +646,11 @@ POST /api/notifications/test-my-rules  { "category": "workflow", "email": true, 
       type: 'p',
       text: 'When updates about one record arrive close together, they fold into one notification instead of stacking up: "3 updates on CM26-79704: moved to Review, 2 comments". While the newest unread update about a record is less than 10 minutes old, the next one rewrites it: it moves to the top, the bell still counts one, and no second phone alert goes out. "3 updates" under the row lists each of them, newest first. Only FYI updates fold; anything that asks you to act, a mention, or an acknowledgement always stays its own notification. Once you have read it, the next update starts a new one.'
     },
+    { type: 'h3', id: 'bulk-change-notice', text: 'One notice for a bulk change to your records' },
+    {
+      type: 'p',
+      text: 'When someone else changes many of your records at once — a bulk update, a bulk move, an import — you get ONE notification instead of one per record: "Beth updated 12 of your records (Amount, Status)". "Your records" are the ones you created and the ones whose current step you own. The notice opens the collection list showing exactly those records (the first few dozen when there are very many). It appears a few seconds after the action settles, and only when at least 5 of your records were touched (the instance setting `BULK_NOTICE_MIN` changes the 5). It is an FYI in the "Watched records" category, so your notification rules, mutes, quiet hours and role defaults decide whether, and how, it reaches you — read at the moment it is sent. It only counts records you can open and names only fields you can read. You are never told about your own bulk changes, and anyone with an unfiltered subscription on the whole collection keeps getting that subscription\'s own per-record notices instead.'
+    },
     { type: 'h3', id: 'record-panel-new-count', text: '"2 new" on Comments and Tasks' },
     {
       type: 'p',
