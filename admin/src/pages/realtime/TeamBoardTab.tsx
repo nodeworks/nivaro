@@ -218,17 +218,25 @@ export function TeamBoardTab() {
       <div className='flex items-start justify-between gap-3'>
         <div className='min-w-0 flex-1'>
           <p className='text-[13px] text-slate-700 dark:text-foreground'>
-            <span className='font-semibold tabular-nums'>{c.online}</span> online
+            <span className='whitespace-nowrap'>
+              <span className='font-semibold tabular-nums'>{c.online}</span> online
+            </span>
             <Sep />
-            <span className='font-semibold tabular-nums'>{c.on_record}</span> on a record
+            <span className='whitespace-nowrap'>
+              <span className='font-semibold tabular-nums'>{c.on_record}</span> on a record
+            </span>
             <Sep />
-            <span className='font-semibold tabular-nums'>{c.editing}</span> editing
+            <span className='whitespace-nowrap'>
+              <span className='font-semibold tabular-nums'>{c.editing}</span> editing
+            </span>
             <Sep />
-            <span className='tabular-nums'>{c.idle}</span> idle
+            <span className='whitespace-nowrap'>
+              <span className='tabular-nums'>{c.idle}</span> idle
+            </span>
             {c.stuck > 0 && (
               <>
                 <Sep />
-                <span className='font-medium tabular-nums text-amber-700 dark:text-amber-300'>
+                <span className='whitespace-nowrap font-medium tabular-nums text-amber-700 dark:text-amber-300'>
                   {c.stuck} stuck
                 </span>
               </>

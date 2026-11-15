@@ -118,7 +118,7 @@ export function WriteToScreenTab() {
 
   return (
     <div className='space-y-6' data-write-to-screen={data ? 'ready' : 'loading'}>
-      <div className='flex flex-wrap items-end justify-between gap-3'>
+      <div className='flex flex-wrap items-start justify-between gap-3'>
         <div className='max-w-3xl text-[12px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
           <p>
             How long a change someone saves takes to show on other people's open screens: from the
