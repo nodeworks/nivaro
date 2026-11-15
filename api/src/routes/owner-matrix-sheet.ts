@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { markConfigRead } from '../services/config-live.js'
 import { readSpreadsheet } from '../services/import-spreadsheet.js'
+import { announceOwnerChange, ownerChangeBaseline } from '../services/owner-change-live.js'
 import {
   buildOwnerSheetWorkbook,
   type OwnerSheetContext,
@@ -37,6 +39,20 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024
 /** Read the whole Owners sheet: one big template carries 5,000+ groups. */
 const ROW_CAP = 20_000
 const MAX_ACTIVITY_ROWS = 500
+
+/** The collections this pipeline is bound to — the owners an apply can move. Null = unknown
+ *  (the announcement then covers every pipeline-bound collection). */
+async function boundCollections(templateId: string): Promise<string[] | null> {
+  try {
+    const rows = (await db('nivaro_workflow_bindings')
+      .where({ template: templateId })
+      .select('collection')) as Array<{ collection: string | null }>
+    const out = [...new Set(rows.map((r) => r.collection).filter((c): c is string => !!c))]
+    return out.length ? out : null
+  } catch {
+    return null
+  }
+}
 
 type Loaded = OwnerSheetContext & { lookUp: (w: Map<string, string[]>) => Promise<void> }
 
@@ -154,6 +170,10 @@ export async function ownerMatrixSheetRoutes(app: FastifyInstance): Promise<void
       'before spreadsheet upload',
       { force: true, logger: req.log }
     )
+    // Open record pages, queue Owners rows, owner chips and coverage hear the new owners: the
+    // owners of the records open now are remembered first, so the per-record answer is exact.
+    const collections = await boundCollections(id)
+    await ownerChangeBaseline().catch(() => 0)
     let result: Awaited<ReturnType<typeof applyOwnerSheetOps>>
     try {
       result = await applyOwnerSheetOps(id, ctx.matrixHash, plan.ops)
@@ -168,6 +188,10 @@ export async function ownerMatrixSheetRoutes(app: FastifyInstance): Promise<void
     } finally {
       bustOwnerGroupCache()
     }
+    announceOwnerChange({
+      collections: collections ?? undefined,
+      reason: 'owner-matrix-sheet'
+    })
 
     const c = plan.counts
     await logActivity({
