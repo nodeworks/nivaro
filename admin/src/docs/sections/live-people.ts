@@ -25,7 +25,7 @@ export const livePeopleDocs: DocSection = {
     { type: 'h2', id: 'record-chat-mentions', text: 'Being discussed in chat' },
     {
       type: 'p',
-      text: 'When a record has been named in a chat room you are in during the last 14 days, its header shows a small chip: “Being discussed in #ops (3 new)”. Click it to see each room with its message count and open the one you want. It counts a message when it carries the record’s number (the same text chat turns into a record chip, for example when someone uses Send to a room).'
+      text: 'When a record has been named in a chat room you are in during the last 14 days, its header shows a small chip: “Being discussed in #ops (3 new)”. Click it to see each room with its message count and open the one you want. It counts a message when it carries the record’s number (the same text chat turns into a record chip, for example when someone uses Send to a room) or a pasted link to the record.'
     },
     {
       type: 'ul',

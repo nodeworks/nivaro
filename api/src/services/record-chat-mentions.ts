@@ -74,6 +74,23 @@ export function likeLiteral(s: string): string {
   return s.replace(/[[%_]/g, (c) => `[${c}]`)
 }
 
+/**
+ * Does `text` carry a pasted link to this record — the admin (`/collections/<c>/<id>`) or
+ * portal (`/records/<c>/<id>`) shape, on any host? (pure)
+ */
+export function messageLinksRecord(
+  text: string | null | undefined,
+  collection: string,
+  id: string
+): boolean {
+  if (!text || !collection || !id) return false
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(
+    `/(?:records|collections)/${esc(collection)}/${esc(encodeURIComponent(id))}(?![A-Za-z0-9_-])`,
+    'i'
+  ).test(text)
+}
+
 /** Distinct candidate record tokens in a message, upper-cased (pure). */
 export function tokensIn(
   text: string | null | undefined,
@@ -101,7 +118,7 @@ export function tokensIn(
  */
 export function groupMentions(
   messages: MsgRow[],
-  token: string,
+  names: (text: string | null) => boolean,
   viewerId: string,
   memberships: Map<string, Membership>,
   visible: Map<string, { kind: MentionRoom['kind']; label: string }>
@@ -109,7 +126,7 @@ export function groupMentions(
   const me = viewerId.toUpperCase()
   const byRoom = new Map<string, MentionRoom>()
   for (const m of messages) {
-    if (!messageNamesToken(m.message, token)) continue
+    if (!names(m.message)) continue
     const info = visible.get(m.room)
     if (!info) continue
     const row = byRoom.get(m.room) ?? {
@@ -201,7 +218,15 @@ export async function recordMentionsFor(
     const messages = (await db('chat_messages')
       .whereNull('deleted_at')
       .where('date_created', '>', since)
-      .where('message', 'like', `%${likeLiteral(token)}%`)
+      .where((qb) =>
+        qb
+          .where('message', 'like', `%${likeLiteral(token)}%`)
+          .orWhere(
+            'message',
+            'like',
+            `%/${likeLiteral(collection)}/${likeLiteral(encodeURIComponent(itemId))}%`
+          )
+      )
       .where((qb) => {
         if (memberRooms.length) qb.whereIn('room', memberRooms)
         qb.orWhere('room', 'like', `dm:${me}:%`).orWhere('room', 'like', `dm:%:${me}`)
@@ -224,7 +249,13 @@ export async function recordMentionsFor(
       const info = await labelFor(viewer, room)
       if (info) visible.set(room, info)
     }
-    return groupMentions(messages, token, uid, memberships, visible)
+    return groupMentions(
+      messages,
+      (t) => messageNamesToken(t, token) || messageLinksRecord(t, collection, itemId),
+      uid,
+      memberships,
+      visible
+    )
   } catch {
     return EMPTY
   }
@@ -270,4 +301,61 @@ export async function announceRecordMentions(
   } catch {
     /* best-effort */
   }
+}
+
+export interface MentionMessageDeps {
+  canSee: (user: User, room: string) => Promise<boolean>
+}
+
+/**
+ * The messages (text included) that name this record outside its own room, for the Insights
+ * panel (#132). Read as the caller: the record must be readable (null → null, the route
+ * answers 404) and every message must come from a room the caller may see (`canSeeRoom` — no
+ * admin bypass for DMs and private channels).
+ */
+export async function recordMentionMessages(
+  viewer: User,
+  collection: string,
+  itemId: string,
+  deps: MentionMessageDeps = { canSee: (u, r) => canSeeRoom(u, r) }
+): Promise<Array<Record<string, unknown>> | null> {
+  const { readOne } = await import('./items.js')
+  const rec = await readOne(viewer, collection, itemId, undefined, ['id']).catch(() => null)
+  if (!rec) return null
+  const target = await roomForRecord(collection, itemId)
+  if (!target || target.type.match_field === 'id') return []
+  const token = target.room.slice(target.type.prefix.length + 1)
+  if (!token || token.length < 4) return []
+  const rows = (await db('chat_messages')
+    .where((qb) =>
+      qb
+        .where('message', 'like', `%${likeLiteral(token)}%`)
+        .orWhere(
+          'message',
+          'like',
+          `%/${likeLiteral(collection)}/${likeLiteral(encodeURIComponent(itemId))}%`
+        )
+    )
+    .whereNot('room', target.room)
+    .whereNull('deleted_at')
+    .orderBy('id', 'desc')
+    .limit(200)
+    .select('id', 'room', 'message', 'sender_name', 'date_created')) as Array<
+    Record<string, unknown>
+  >
+  const verdict = new Map<string, boolean>()
+  const out: Array<Record<string, unknown>> = []
+  for (const r of rows) {
+    const room = String(r.room)
+    if (!verdict.has(room)) verdict.set(room, await deps.canSee(viewer, room))
+    if (!verdict.get(room)) continue
+    if (
+      !messageNamesToken(String(r.message ?? ''), token) &&
+      !messageLinksRecord(String(r.message ?? ''), collection, itemId)
+    )
+      continue
+    out.push(r)
+    if (out.length >= 15) break
+  }
+  return out
 }
