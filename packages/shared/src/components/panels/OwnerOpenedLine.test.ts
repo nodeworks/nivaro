@@ -53,4 +53,40 @@ describe('ownerOpenedWords', () => {
     expect(ownerOpenedWords({ status: 'owner' }, rel)).toBeNull()
     expect(ownerOpenedWords({ status: 'none' }, rel)).toBeNull()
   })
+
+  it('a delegate reads "covering for" the owner in place of their department', () => {
+    expect(
+      ownerOpenedWords(
+        {
+          status: 'opened',
+          state,
+          entered_at: '2026-11-14T10:00:00Z',
+          opened_at: '2026-11-14T12:00:00Z',
+          by: { id: 'u2', name: 'Mark Lee', group: 'Ops', covering_for: 'Jane Smith' },
+          delegate: true,
+          others: 0
+        },
+        rel
+      )
+    ).toEqual({
+      lead: null,
+      name: 'Mark Lee',
+      group: 'covering for Jane Smith',
+      tail: ' opened this 2h ago'
+    })
+    expect(
+      ownerOpenedWords(
+        {
+          status: 'opened',
+          state,
+          entered_at: '2026-11-14T10:00:00Z',
+          opened_at: '2026-11-14T12:00:00Z',
+          by: null,
+          delegate: true,
+          others: 0
+        },
+        rel
+      )?.lead
+    ).toBe('Someone covering for an owner of this step')
+  })
 })

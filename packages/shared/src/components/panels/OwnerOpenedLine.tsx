@@ -22,7 +22,15 @@ export type OwnerOpenedData =
       state: { id: string; label: string }
       entered_at: string
       opened_at: string
-      by: { id: string; name: string; group: string | null } | null
+      by: {
+        id: string
+        name: string
+        group: string | null
+        /** A delegate's open: the out-of-office owner they covered for. */
+        covering_for?: string | null
+      } | null
+      /** The opener was a delegate covering an out-of-office owner. */
+      delegate?: boolean
       others: number
     }
 
@@ -44,10 +52,16 @@ export function ownerOpenedWords(
   if (data.status !== 'opened') return null
   const others =
     data.others > 0 ? ` · ${data.others} other owner${data.others === 1 ? '' : 's'} too` : ''
+  // A delegate reads "Mark Lee (covering for Jane Smith)" in place of their department.
+  const covering = data.by?.covering_for ? `covering for ${data.by.covering_for}` : null
   return {
-    lead: data.by ? null : 'An owner of this step',
+    lead: data.by
+      ? null
+      : data.delegate
+        ? 'Someone covering for an owner of this step'
+        : 'An owner of this step',
     name: data.by?.name ?? null,
-    group: data.by?.group ?? null,
+    group: covering ?? data.by?.group ?? null,
     tail: ` opened this ${rel(data.opened_at)}${others}`
   }
 }
