@@ -52,6 +52,7 @@ export function bundleHeadline(b: NotificationBundle): string {
 const CATEGORY_LABELS: Record<string, string> = {
   mentions: 'Mentions',
   workflow: 'Workflow',
+  proposals: 'Change proposals',
   sla: 'SLA',
   watch: 'Watches',
   alerts: 'Alerts',

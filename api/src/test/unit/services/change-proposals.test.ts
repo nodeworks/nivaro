@@ -173,6 +173,9 @@ vi.mock('../../../services/pipeline-engine.js', () => ({
 vi.mock('../../../services/record-access.js', () => ({
   ownsStep: (owners: Array<{ id: string }>, me: string) => owners.some((o) => o.id === me)
 }))
+vi.mock('../../../services/support-tickets.js', () => ({
+  supportAudience: async () => ['U-ADMIN', 'U-PROP']
+}))
 vi.mock('../../../services/workflow-transitions.js', () => ({
   resolveFriendlyIds: async (_c: string, ids: string[]) => new Map(ids.map((i) => [i, `REC-${i}`]))
 }))
@@ -315,7 +318,11 @@ describe('acceptProposal', () => {
     )
     expect(state.proposals[0]).toMatchObject({ status: 'accepted', decided_by: 'U-OWNER' })
     expect(state.notified).toEqual([
-      { to: 'U-PROP', subject: 'Your proposed change to REC-R1 was accepted', category: 'workflow' }
+      {
+        to: 'U-PROP',
+        subject: 'Your proposed change to REC-R1 was accepted',
+        category: 'proposals'
+      }
     ])
   })
 
@@ -382,7 +389,7 @@ describe('declineProposal / withdrawProposal', () => {
     })
     await svc.declineProposal(app, reqAs('U-OWNER'), 1, 'Quote expired')
     expect(state.proposals[0]).toMatchObject({ status: 'declined', decision_note: 'Quote expired' })
-    expect(state.notified[0]).toMatchObject({ to: 'U-PROP', category: 'workflow' })
+    expect(state.notified[0]).toMatchObject({ to: 'U-PROP', category: 'proposals' })
     expect(state.record.title).toBe('Old title')
   })
 
@@ -506,5 +513,33 @@ describe('security review: accept re-checks, encrypted fields', () => {
       'R1'
     )
     expect(p.changes.map((c) => c.field)).toEqual(['title'])
+  })
+})
+
+describe('reviewers are told (category Change proposals)', () => {
+  const appStub = {} as never
+  it('the step owners hear of a new proposal, never the proposer', async () => {
+    state.owners = ['U-OWNER', 'U-PROP']
+    await svc.createProposal(
+      reqAs('U-PROP'),
+      'orders',
+      'R1',
+      { values: { title: 'X' }, reason: 'Needed for the audit' },
+      appStub
+    )
+    expect(state.notified).toEqual([
+      {
+        to: 'U-OWNER',
+        subject: 'Change proposed on REC-R1 — review it',
+        category: 'proposals'
+      }
+    ])
+  })
+
+  it('a step nobody owns goes to the administrators', async () => {
+    state.owners = []
+    expect(
+      await svc.proposalReviewers('orders', 'R1', 'U-PROP', { id: 'I1', current_state: 'S' })
+    ).toEqual(['U-ADMIN'])
   })
 })
