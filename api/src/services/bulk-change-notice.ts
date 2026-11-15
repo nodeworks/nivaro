@@ -1,0 +1,553 @@
+import { db } from '../db/index.js'
+import {
+  getTenantDb,
+  getTenantId,
+  getTenantOrigin,
+  getTenantSlug,
+  runWithTenantDb
+} from '../db/tenant-context.js'
+import { hasColumn } from '../lib/column-probe.js'
+import { selectInChunks } from './db-batch.js'
+
+/**
+ * One notice for a bulk change to your records (rt5, 2026-11-14).
+ *
+ * When someone else's bulk update, bulk move or import touches several records you own or
+ * created, you get ONE notification — "Beth updated 12 of your records (Amount, Status)" —
+ * that opens a list of exactly those records, never one notification per record.
+ *
+ * How it works (no migration):
+ *  - logActivity() calls `noteBulkWrite` for every `update` / `pipeline-transition` row that
+ *    carries a bulk or import burst key (services/activity-scope.ts: `bulk:`, `import:`,
+ *    `import_job:`, `import_run:`). Flows, cron ticks and MCP calls are not bulk bursts.
+ *  - A burst is flushed when it has been quiet for IDLE_MS (a request ends, an import
+ *    finishes) — or after MAX_HOLD_MS, so a very long import still says something.
+ *  - At flush each record's recipients are its creator (`user_created`) and its current
+ *    pipeline owners, minus the person who did it. A recipient needs `bulkNoticeMin()` of
+ *    their records in the burst (default 5) — fewer stay silent, as they always were.
+ *  - Everything is re-read AS THE RECIPIENT: records they cannot see are not counted or
+ *    linked, field names they cannot read are not named.
+ *  - Explicit watchers and subscribers (hooks/notification-subscriptions.ts) fold in too: while a
+ *    burst runs, their per-record delivery is parked here (`deferWatcherDelivery`). At flush a
+ *    person with `bulkNoticeMin()` or more of their watched records in the burst gets ONE
+ *    "Beth updated 12 records you watch" notice; with fewer, the parked per-record deliveries
+ *    run exactly as they always did. Anyone parked is left out of the owner/creator notice.
+ *  - Cloud: the burst remembers the tenant it was written in (db, slug, id, origin) and is
+ *    flushed inside that tenant's context; keys carry the tenant so two tenants never merge.
+ *  - The notice goes through notifyUser, so the recipient's notification rules, mutes,
+ *    quiet hours, role defaults and channel choices apply live, at send time. It is an FYI
+ *    in the "Watched records" category and never folds (it names no single record).
+ *
+ * In-memory per process: a bulk request or import runs in one process, so its burst does
+ * too. Losing a pending notice on restart is the accepted cost of a courtesy message.
+ */
+
+/** Quiet time before a burst is settled. Past the record-watch coalescing window, so parked
+ *  watcher deliveries (which land when that window closes) arrive before the flush. */
+export function idleMs(): number {
+  const coalesce = Number(process.env.RECORD_WATCH_COALESCE_MS ?? 15_000)
+  return Math.max(4_000, (Number.isFinite(coalesce) ? coalesce : 15_000) + 5_000)
+}
+export const MAX_HOLD_MS = 15 * 60_000
+const MAX_IDS_PER_COLLECTION = 5_000
+const MAX_BURSTS = 200
+/** Most record ids the link carries (the target query is capped at 500 characters). */
+const LINK_QUERY_MAX = 460
+
+/** How many of a person's records one burst must touch before they hear about it. */
+export function bulkNoticeMin(): number {
+  const n = Math.floor(Number(process.env.BULK_NOTICE_MIN))
+  return Number.isFinite(n) && n >= 1 ? n : 5
+}
+
+/** Pure: does this burst key belong to a bulk action or an import? */
+export function isNoticeBurst(groupKey: string | null | undefined): boolean {
+  return !!groupKey && /^(bulk|import|import_job|import_run):/.test(groupKey)
+}
+
+/** Audit stamps move on every write; they are not what the person means by "changed". */
+const STAMP_FIELDS = new Set([
+  'updated_at',
+  'date_updated',
+  'user_updated',
+  'changed',
+  'modified_at',
+  'id'
+])
+
+/** Pure: the field names worth naming (stamps, internals and children left out). */
+export function noticeFields(fields: Iterable<string>): string[] {
+  const out: string[] = []
+  for (const f of fields) {
+    if (!f || STAMP_FIELDS.has(f) || f.startsWith('_') || f.startsWith('$')) continue
+    out.push(f)
+  }
+  return out
+}
+
+/** Pure: "Amount, Status" / "Amount, Status, Zone, +2 more". */
+export function fieldPhrase(labels: string[], show = 3): string {
+  if (labels.length === 0) return ''
+  const head = labels.slice(0, show).join(', ')
+  return labels.length > show ? `${head}, +${labels.length - show} more` : head
+}
+
+/** Pure: the notification's subject and message. */
+export function bulkNoticeText(opts: {
+  actor: string | null
+  count: number
+  /** "workflow" — the collection's singular word, lower-case; blank for a plain "records". */
+  word: string
+  fieldLabels: string[]
+  /** 'own' = records you created / own; 'watch' = records you watch. */
+  kind?: 'own' | 'watch'
+}): { subject: string; message: string } {
+  const who = opts.actor?.trim() || 'Someone'
+  const what = fieldPhrase(opts.fieldLabels)
+  const recs = opts.count === 1 ? 'record' : 'records'
+  const watch = opts.kind === 'watch'
+  const subject = watch
+    ? `${who} updated ${opts.count} ${recs} you watch${what ? ` (${what})` : ''}`
+    : `${who} updated ${opts.count} of your ${recs}${what ? ` (${what})` : ''}`
+  const kind = opts.word ? ` ${opts.word}` : ''
+  const message = watch
+    ? `${who} changed ${opts.count}${kind} ${recs} you watch${what ? `: ${what}` : ''}.`
+    : `${who} changed ${opts.count} of your${kind} ${recs}${what ? `: ${what}` : ''}.`
+  return { subject: subject.slice(0, 255), message: message.slice(0, 500) }
+}
+
+/** Pure: the `ids=` query that opens the collection list on exactly these records. */
+export function idsQuery(ids: string[]): { query: string; carried: number } {
+  const kept: string[] = []
+  let len = 'ids='.length
+  for (const id of ids) {
+    const add = encodeURIComponent(id).length + (kept.length ? 1 : 0)
+    if (len + add > LINK_QUERY_MAX) break
+    kept.push(id)
+    len += add
+  }
+  return {
+    query: kept.length ? `ids=${kept.map((i) => encodeURIComponent(i)).join(',')}` : '',
+    carried: kept.length
+  }
+}
+
+// ── The collector ──────────────────────────────────────────────────────────
+
+interface Touch {
+  ids: Set<string>
+  fields: Set<string>
+}
+
+interface Watched {
+  ids: Set<string>
+  fields: Set<string>
+  deliveries: Array<() => Promise<void>>
+}
+
+interface TenantCtx {
+  db: ReturnType<typeof getTenantDb>
+  slug: string
+  id: string
+  origin?: string
+}
+
+interface Burst {
+  key: string
+  actor: string | null
+  tenant: TenantCtx | null
+  touches: Map<string, Touch>
+  /** collection → person → their parked watch deliveries */
+  watchers: Map<string, Map<string, Watched>>
+  timer: ReturnType<typeof setTimeout> | null
+  firstAt: number
+}
+
+const bursts = new Map<string, Burst>()
+
+function tenantNow(): TenantCtx | null {
+  const db = getTenantDb()
+  const slug = getTenantSlug()
+  if (!db || !slug) return null
+  return { db, slug, id: getTenantId() ?? '', origin: getTenantOrigin() }
+}
+
+function burstFor(groupKey: string, user: string | null | undefined): Burst | null {
+  const tenant = tenantNow()
+  const key = `${tenant?.id ?? ''}|${groupKey}`
+  let burst = bursts.get(key)
+  if (!burst) {
+    if (bursts.size >= MAX_BURSTS) return null
+    burst = {
+      key,
+      actor: user ?? null,
+      tenant,
+      touches: new Map(),
+      watchers: new Map(),
+      timer: null,
+      firstAt: Date.now()
+    }
+    bursts.set(key, burst)
+  }
+  return burst
+}
+
+/**
+ * A watcher's per-record delivery during a bulk action or import: parked until the burst
+ * settles. Returns true when parked (the caller skips delivering now); false when it is not a
+ * bulk burst or the collector is full (deliver as usual).
+ */
+export function deferWatcherDelivery(w: {
+  burst: string | null | undefined
+  user: string
+  actor: string | null | undefined
+  collection: string
+  item: string
+  fields?: string[]
+  deliver: () => Promise<void>
+}): boolean {
+  if (!isNoticeBurst(w.burst) || !w.user || !w.item) return false
+  const burst = burstFor(String(w.burst), w.actor)
+  if (!burst) return false
+  let byUser = burst.watchers.get(w.collection)
+  if (!byUser) {
+    byUser = new Map()
+    burst.watchers.set(w.collection, byUser)
+  }
+  let mine = byUser.get(w.user)
+  if (!mine) {
+    mine = { ids: new Set(), fields: new Set(), deliveries: [] }
+    byUser.set(w.user, mine)
+  }
+  // Never hold more than a safety cap of closures: past it, deliver immediately.
+  if (mine.deliveries.length >= MAX_IDS_PER_COLLECTION) return false
+  mine.ids.add(String(w.item))
+  for (const f of noticeFields(w.fields ?? [])) mine.fields.add(f)
+  mine.deliveries.push(w.deliver)
+  schedule(burst)
+  return true
+}
+
+/** A write that belongs to a bulk action or import. Cheap; no I/O. */
+export function noteBulkWrite(w: {
+  groupKey: string | null | undefined
+  action: string
+  user: string | null | undefined
+  collection: string | null | undefined
+  item: string | null | undefined
+  fields?: string[]
+}): void {
+  if (!isNoticeBurst(w.groupKey) || !w.collection || w.item == null || w.item === '') return
+  if (w.action !== 'update' && w.action !== 'pipeline-transition') return
+  if (/^(nivaro_|directus_|__)/i.test(w.collection)) return
+  const burst = burstFor(String(w.groupKey), w.user)
+  if (!burst) return
+  let t = burst.touches.get(w.collection)
+  if (!t) {
+    t = { ids: new Set(), fields: new Set() }
+    burst.touches.set(w.collection, t)
+  }
+  if (t.ids.size < MAX_IDS_PER_COLLECTION) t.ids.add(String(w.item))
+  // A move says "Step"; an update says the fields it changed.
+  if (w.action === 'pipeline-transition') t.fields.add('__step')
+  else for (const f of noticeFields(w.fields ?? [])) t.fields.add(f)
+  schedule(burst)
+}
+
+function schedule(burst: Burst): void {
+  if (burst.timer) clearTimeout(burst.timer)
+  const held = Date.now() - burst.firstAt
+  const wait = held >= MAX_HOLD_MS ? 0 : idleMs()
+  burst.timer = setTimeout(() => {
+    void flushBulkNotices(burst.key)
+  }, wait)
+  burst.timer.unref?.()
+}
+
+/** Settle one burst now: send what it owes. Never throws. Exported for tests + shutdown. */
+export async function flushBulkNotices(key: string, deps: FlushDeps = realDeps): Promise<number> {
+  const burst = bursts.get(key) ?? bursts.get(`${getTenantId() ?? ''}|${key}`)
+  if (!burst) return 0
+  bursts.delete(burst.key)
+  if (burst.timer) clearTimeout(burst.timer)
+  const run = async () => {
+    let sent = 0
+    const collections = new Set([...burst.touches.keys(), ...burst.watchers.keys()])
+    for (const collection of collections) {
+      try {
+        sent += await noticeCollection(
+          burst.actor,
+          collection,
+          burst.touches.get(collection) ?? null,
+          burst.watchers.get(collection) ?? new Map(),
+          deps
+        )
+      } catch {
+        /* a courtesy notice never breaks the write that caused it */
+      }
+    }
+    return sent
+  }
+  // Cloud: the burst is settled inside the tenant it was written in.
+  const t = burst.tenant
+  if (!t || !t.db) return run()
+  return new Promise<number>((resolve) => {
+    runWithTenantDb(t.db!, t.slug, () => void run().then(resolve, () => resolve(0)), t.id, t.origin)
+  })
+}
+
+/** Drop every pending burst (tests). */
+export function resetBulkNotices(): void {
+  for (const b of bursts.values()) if (b.timer) clearTimeout(b.timer)
+  bursts.clear()
+}
+
+// ── Who is told, and what they may see ─────────────────────────────────────
+
+export interface FlushDeps {
+  /** record id → creator user id */
+  creators(collection: string, ids: string[]): Promise<Map<string, string>>
+  /** record id → current owners */
+  owners(collection: string, ids: string[]): Promise<Map<string, Set<string>>>
+  /** The recipient's own view: which of these records they may read, which fields, labels. */
+  view(
+    userId: string,
+    collection: string,
+    ids: string[]
+  ): Promise<{ ids: string[]; fields: string[] | null } | null>
+  fieldLabels(collection: string, fields: string[]): Promise<string[]>
+  actorName(userId: string | null): Promise<string | null>
+  word(collection: string): Promise<string>
+  send(
+    userId: string,
+    n: {
+      subject: string
+      message: string
+      collection: string
+      query: string
+      why: string
+      senderId: string | null
+    }
+  ): Promise<void>
+}
+
+/** Pure: recipient → their records, from the two relationships, the actor left out. */
+export function recipientsOf(
+  creators: Map<string, string>,
+  owners: Map<string, Set<string>>,
+  actor: string | null
+): Map<string, { ids: Set<string>; created: boolean; owned: boolean }> {
+  const out = new Map<string, { ids: Set<string>; created: boolean; owned: boolean }>()
+  const slot = (u: string) => {
+    let s = out.get(u)
+    if (!s) {
+      s = { ids: new Set(), created: false, owned: false }
+      out.set(u, s)
+    }
+    return s
+  }
+  const me = actor ? actor.toLowerCase() : null
+  for (const [id, u] of creators) {
+    if (!u || u.toLowerCase() === me) continue
+    const s = slot(u)
+    s.ids.add(id)
+    s.created = true
+  }
+  for (const [id, set] of owners) {
+    for (const u of set) {
+      if (!u || u.toLowerCase() === me) continue
+      const s = slot(u)
+      s.ids.add(id)
+      s.owned = true
+    }
+  }
+  return out
+}
+
+/** Pure: why the person is told. */
+export function whyText(created: boolean, owned: boolean): string {
+  if (created && owned) return 'You created or own these records.'
+  return created ? 'You created these records.' : 'You own these records.'
+}
+
+async function noticeCollection(
+  actor: string | null,
+  collection: string,
+  touch: Touch | null,
+  watched: Map<string, Watched>,
+  deps: FlushDeps
+): Promise<number> {
+  const min = bulkNoticeMin()
+  const name = await deps.actorName(actor).catch(() => null)
+  const word = (await deps.word(collection).catch(() => '')).toLowerCase()
+  let sent = 0
+
+  /** Labels for the fields a person may read (and "Step" for a move). */
+  const labelsFor = async (
+    fields: Set<string>,
+    allowed: string[] | null,
+    step: boolean
+  ): Promise<string[]> => {
+    const changed = noticeFields(fields).filter((f) => allowed === null || allowed.includes(f))
+    return [
+      ...(step ? ['Step'] : []),
+      ...(await deps.fieldLabels(collection, changed).catch(() => changed))
+    ]
+  }
+
+  // Watchers and subscribers: parked per-record deliveries. Enough of their watched records
+  // in this burst → ONE notice; otherwise the parked deliveries run as they always did.
+  for (const [userId, w] of watched) {
+    let told = false
+    if (w.ids.size >= min) {
+      const view = await deps.view(userId, collection, [...w.ids]).catch(() => null)
+      if (view && view.ids.length >= min) {
+        const labels = await labelsFor(w.fields, view.fields, false)
+        const text = bulkNoticeText({
+          actor: name,
+          count: view.ids.length,
+          word,
+          fieldLabels: labels,
+          kind: 'watch'
+        })
+        const q = idsQuery(view.ids)
+        told = await deps
+          .send(userId, {
+            ...text,
+            collection,
+            query: q.query,
+            why: 'You watch these records.',
+            senderId: actor
+          })
+          .then(() => true)
+          .catch(() => false)
+        if (told) sent++
+      }
+    }
+    if (!told) for (const deliver of w.deliveries) await deliver().catch(() => {})
+  }
+
+  // Creators and owners (people not already handled above).
+  if (!touch || touch.ids.size < min) return sent
+  const ids = [...touch.ids]
+  const [creators, owners] = await Promise.all([
+    deps.creators(collection, ids).catch(() => new Map<string, string>()),
+    deps.owners(collection, ids).catch(() => new Map<string, Set<string>>())
+  ])
+  const recipients = recipientsOf(creators, owners, actor)
+  for (const [userId, mine] of recipients) {
+    if (mine.ids.size < min) continue
+    if (watched.has(userId)) continue
+    // As the recipient: records they cannot read are not counted, fields they cannot read
+    // are not named — the notice tells them nothing they could not open themselves.
+    const view = await deps.view(userId, collection, [...mine.ids]).catch(() => null)
+    if (!view || view.ids.length < min) continue
+    const labels = await labelsFor(touch.fields, view.fields, touch.fields.has('__step'))
+    const text = bulkNoticeText({ actor: name, count: view.ids.length, word, fieldLabels: labels })
+    const q = idsQuery(view.ids)
+    await deps
+      .send(userId, {
+        ...text,
+        collection,
+        query: q.query,
+        why: whyText(mine.created, mine.owned),
+        senderId: actor
+      })
+      .then(() => {
+        sent++
+      })
+      .catch(() => {})
+  }
+  return sent
+}
+
+// ── The real dependencies (dynamic imports keep activity.ts free of import cycles) ─────────
+
+const CHUNK = 500
+
+const realDeps: FlushDeps = {
+  async creators(collection, ids) {
+    const out = new Map<string, string>()
+    if (!(await hasColumn(collection, 'user_created'))) return out
+    const rows = (await selectInChunks(ids, CHUNK, (chunk) =>
+      db(collection).whereIn('id', chunk).whereNotNull('user_created').select('id', 'user_created')
+    )) as Array<{ id: string | number; user_created: string }>
+    for (const r of rows) out.set(String(r.id), String(r.user_created))
+    return out
+  },
+  async owners(collection, ids) {
+    const out = new Map<string, Set<string>>()
+    const rows = (await selectInChunks(ids, CHUNK, (chunk) =>
+      db('nivaro_workflow_instances as i')
+        .join('nivaro_pipeline_instance_owners as o', 'o.instance', 'i.id')
+        .where('i.collection', collection)
+        .whereIn('i.item', chunk)
+        .where((qb) => qb.whereRaw('o.state = i.current_state').orWhereNull('o.state'))
+        .select('i.item', 'o.user')
+    )) as Array<{ item: string; user: string }>
+    for (const r of rows) {
+      const set = out.get(String(r.item)) ?? new Set<string>()
+      set.add(String(r.user))
+      out.set(String(r.item), set)
+    }
+    return out
+  },
+  async view(userId, collection, ids) {
+    const { getUser } = await import('./users.js')
+    const user = await getUser(userId)
+    if (!user) return null
+    const { getAllowedFields } = await import('./permissions.js')
+    const { readItems } = await import('./items.js')
+    const visible: string[] = []
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK)
+      const res = await readItems(user, collection, {
+        fields: ['id'],
+        filter: { id: { _in: chunk } },
+        limit: chunk.length
+      })
+      for (const r of (res.data ?? []) as Array<{ id: string | number }>) visible.push(String(r.id))
+    }
+    const fields = await getAllowedFields(user, 'read', collection).catch(() => [] as string[])
+    return { ids: visible, fields }
+  },
+  async fieldLabels(collection, fields) {
+    if (fields.length === 0) return []
+    const rows = (await db('nivaro_fields')
+      .where({ collection })
+      .whereIn('field', fields.slice(0, 50))
+      .select('field', 'label')) as Array<{ field: string; label: string | null }>
+    const byField = new Map(rows.map((r) => [r.field, r.label?.trim() || null]))
+    const { fallbackFieldLabel } = await import('./seat-labels.js')
+    return fields.map((f) => byField.get(f) ?? fallbackFieldLabel(f))
+  },
+  async actorName(userId) {
+    if (!userId) return null
+    const { getUser } = await import('./users.js')
+    const u = await getUser(userId)
+    if (!u) return null
+    return [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || u.email || null
+  },
+  async word(collection) {
+    const { collectionWord } = await import('./event-path/record-labels.js')
+    return collectionWord(collection)
+  },
+  async send(userId, n) {
+    const { pulseApp } = await import('./activity.js')
+    const app = pulseApp()
+    if (!app) throw new Error('server not ready')
+    const { notifyUser } = await import('./notification-channels.js')
+    await notifyUser(app, userId, {
+      subject: n.subject,
+      message: n.message,
+      collection: n.collection,
+      item: null,
+      sender: n.senderId,
+      category: 'watch',
+      lane: 'fyi',
+      why: n.why,
+      target: { kind: 'record', collection: n.collection, query: n.query || null, action: 'open' },
+      source: { kind: 'bulk_change', label: 'Bulk change to your records' }
+    })
+  }
+}

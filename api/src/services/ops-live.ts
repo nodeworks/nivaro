@@ -30,6 +30,8 @@ export type OpsTopic =
   | 'collections'
   | 'integrations'
   | 'access-requests'
+  | 'webhooks'
+  | 'dead-letters'
 
 /** 'ticket' — the person must be able to see that support ticket (canSeeTicket). */
 export type OpsGate = 'admin' | 'auth' | 'ticket'
@@ -47,7 +49,10 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   // through its own admin-only route.
   collections: 'admin',
   integrations: 'admin',
-  'access-requests': 'admin'
+  'access-requests': 'admin',
+  // Webhook deliveries and the dead-letter queue (2026-11-14): pokes only, admin pages.
+  webhooks: 'admin',
+  'dead-letters': 'admin'
 }
 
 /**

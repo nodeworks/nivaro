@@ -1,3 +1,4 @@
+import { useLiveRefetchInterval, useLiveRefresh } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, ChevronDown, ChevronRight, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
@@ -140,11 +141,14 @@ function DeadLetterRow({ letter }: { letter: DeadLetter }) {
 export function DeadLetterQueuePage() {
   const queryClient = useQueryClient()
 
+  // A run that fails (or is retried / discarded) pokes `dead-letters`: the queue re-reads at once.
+  useLiveRefresh({ topic: 'dead-letters', keys: [['dead-letters']] })
+  const poll = useLiveRefetchInterval(30_000)
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['dead-letters'],
     queryFn: () =>
       api.get<{ data: DeadLetter[]; error?: string }>('/dead-letters').then((r) => r.data),
-    refetchInterval: 30_000
+    refetchInterval: poll
   })
 
   const letters = data?.data ?? []

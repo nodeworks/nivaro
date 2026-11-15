@@ -1,3 +1,4 @@
+import { useLiveRefetchInterval, useLiveRefresh } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, ChevronsUpDown, Plus, RefreshCw, Trash2, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -198,6 +199,9 @@ export function WebhookEditPage() {
       return { ok: false as const, value: undefined }
     }
   })()
+  // Each delivery attempt (and every retry) pokes `webhooks`; the list re-reads, a burst as one.
+  useLiveRefresh({ topic: 'webhooks', keys: [['webhook-deliveries', id]], enabled: !isNew })
+  const deliveriesPoll = useLiveRefetchInterval(15_000, { safetyMs: 120_000 })
   const deliveries = useQuery({
     queryKey: ['webhook-deliveries', id],
     queryFn: () =>
@@ -206,7 +210,8 @@ export function WebhookEditPage() {
           params: { limit: 10 }
         })
         .then((r) => r.data),
-    enabled: !isNew
+    enabled: !isNew,
+    refetchInterval: deliveriesPoll
   })
   const testWebhook = useMutation({
     mutationFn: () =>
