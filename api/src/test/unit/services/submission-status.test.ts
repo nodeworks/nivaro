@@ -39,6 +39,9 @@ import {
   withoutStatusMeta
 } from '../../../services/submission-status.js'
 
+const SUB_A = '0f6e2c4a-1b2d-4e5f-8a9b-0c1d2e3f4a5b'
+const SUB_B = '9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d'
+
 const CFG = {
   status_page: {
     enabled: true,
@@ -77,38 +80,47 @@ beforeEach(() => {
 
 describe('status tokens', () => {
   it('resolve to the submission that minted them', async () => {
-    const a = mintStatusToken('sub-a', '101', 90)
-    seed([{ id: 'sub-a', meta: a.meta }])
+    const a = mintStatusToken(SUB_A, '101', 90)
+    seed([{ id: SUB_A, meta: a.meta }])
     const link = await resolveStatusLink(a.token)
-    expect(link?.submissionId).toBe('sub-a')
+    expect(link?.submissionId).toBe(SUB_A)
     expect(link?.item).toBe('101')
     expect(link?.formName).toBe('Site access request')
   })
 
+  it('fit a URL path segment (Fastify answers 414 past 100 characters)', () => {
+    const a = mintStatusToken(SUB_A, '101', 365)
+    expect(a.token.length).toBeLessThan(100)
+    expect(a.token).toMatch(/^[A-Za-z0-9_.-]+$/)
+    expect(readStatusToken(a.token)?.s).toBe(SUB_A)
+    expect(() => mintStatusToken('not-a-uuid', '1', 1)).toThrow()
+  })
+
   it('store only a SHA-256 of the token, never the token', () => {
-    const a = mintStatusToken('sub-a', '101', 90)
+    const a = mintStatusToken(SUB_A, '101', 90)
     expect(a.meta.hash).toBe(hashStatusToken(a.token))
     expect(JSON.stringify(a.meta)).not.toContain(a.token)
     expect(a.meta.hash).toMatch(/^[0-9a-f]{64}$/)
   })
 
   it('refuse a tampered body or signature', async () => {
-    const a = mintStatusToken('sub-a', '101', 90)
-    const b = mintStatusToken('sub-b', '202', 90)
+    const a = mintStatusToken(SUB_A, '101', 90)
+    const b = mintStatusToken(SUB_B, '202', 90)
     seed([
-      { id: 'sub-a', meta: a.meta },
-      { id: 'sub-b', meta: b.meta }
+      { id: SUB_A, meta: a.meta },
+      { id: SUB_B, meta: b.meta }
     ])
     const [bodyA, sigA] = a.token.split('.')
     const [bodyB] = b.token.split('.')
     // Another submission's body under A's signature.
     expect(readStatusToken(`${bodyB}.${sigA}`)).toBeNull()
     expect(await resolveStatusLink(`${bodyB}.${sigA}`)).toBeNull()
-    // A body edited to name sub-b, re-encoded, A's signature.
-    const forged = Buffer.from(
-      JSON.stringify({ ...JSON.parse(Buffer.from(bodyA, 'base64url').toString()), s: 'sub-b' })
-    ).toString('base64url')
+    // A's body edited to name B, A's signature.
+    const forged = SUB_B.replace(/-/g, '') + bodyA.slice(32)
     expect(await resolveStatusLink(`${forged}.${sigA}`)).toBeNull()
+    // A's expiry pushed out, A's signature.
+    const later = bodyA.slice(0, 32) + 'ffffffff' + bodyA.slice(40)
+    expect(readStatusToken(`${later}.${sigA}`)).toBeNull()
     // One character off in the signature.
     const flipped = sigA.slice(0, -1) + (sigA.endsWith('A') ? 'B' : 'A')
     expect(await resolveStatusLink(`${bodyA}.${flipped}`)).toBeNull()
@@ -118,19 +130,19 @@ describe('status tokens', () => {
 
   it('refuse an expired token', async () => {
     const past = Date.now() - 3 * 86_400_000
-    const a = mintStatusToken('sub-a', '101', 1, past)
-    seed([{ id: 'sub-a', meta: a.meta }])
+    const a = mintStatusToken(SUB_A, '101', 1, past)
+    seed([{ id: SUB_A, meta: a.meta }])
     expect(readStatusToken(a.token)).toBeNull()
     expect(await resolveStatusLink(a.token)).toBeNull()
   })
 
   it('never open another submission (a valid token is bound to its own)', async () => {
-    const a = mintStatusToken('sub-a', '101', 90)
-    const b = mintStatusToken('sub-b', '202', 90)
+    const a = mintStatusToken(SUB_A, '101', 90)
+    const b = mintStatusToken(SUB_B, '202', 90)
     // sub-b carries a's hash? No — each submission stores its own; a's token against b fails.
     seed([
-      { id: 'sub-a', meta: b.meta }, // swapped bindings
-      { id: 'sub-b', meta: a.meta }
+      { id: SUB_A, meta: b.meta }, // swapped bindings
+      { id: SUB_B, meta: a.meta }
     ])
     expect(await resolveStatusLink(a.token)).toBeNull()
     expect(await resolveStatusLink(b.token)).toBeNull()
@@ -138,17 +150,17 @@ describe('status tokens', () => {
   })
 
   it('stop working when the form owner turns the status page off', async () => {
-    const a = mintStatusToken('sub-a', '101', 90)
-    seed([{ id: 'sub-a', meta: a.meta }], { status_page: { ...CFG.status_page, enabled: false } })
+    const a = mintStatusToken(SUB_A, '101', 90)
+    seed([{ id: SUB_A, meta: a.meta }], { status_page: { ...CFG.status_page, enabled: false } })
     expect(await resolveStatusLink(a.token)).toBeNull()
   })
 
   it('stop working for a regenerated binding (the stored hash moved on)', async () => {
-    const a = mintStatusToken('sub-a', '101', 90)
-    const again = mintStatusToken('sub-a', '101', 90)
-    seed([{ id: 'sub-a', meta: again.meta }])
+    const a = mintStatusToken(SUB_A, '101', 90)
+    const again = mintStatusToken(SUB_A, '101', 90)
+    seed([{ id: SUB_A, meta: again.meta }])
     expect(await resolveStatusLink(a.token)).toBeNull()
-    expect((await resolveStatusLink(again.token))?.submissionId).toBe('sub-a')
+    expect((await resolveStatusLink(again.token))?.submissionId).toBe(SUB_A)
   })
 })
 
@@ -194,7 +206,7 @@ describe('what the submitter may read', () => {
   })
 
   it('hides the binding from admin reads', () => {
-    const a = mintStatusToken('sub-a', '101', 90)
+    const a = mintStatusToken(SUB_A, '101', 90)
     const data = { title: 'x', [STATUS_META_KEY]: a.meta }
     expect(withoutStatusMeta(data)).toEqual({ title: 'x' })
     expect(statusMetaOf(JSON.stringify(data))?.hash).toBe(a.meta.hash)
