@@ -232,6 +232,13 @@ import {
   useO2MStaging,
   useStagedRelations
 } from './O2MStagingContext'
+import {
+  isEmptyValue,
+  type PartnerLineReport,
+  PartnerNeedBadge,
+  PartnerNeedCellMark,
+  usePartnerNeeds
+} from './partner-needs'
 import { RelationCombobox } from './RelationCombobox'
 import { RowCommentButton, useRowCommentCounts } from './RowComments'
 import {
@@ -3647,6 +3654,49 @@ export function InlineTableField({
     }
     reportLiveRows(relatedCollection, manyField, rowsForRollup)
   }, [reportLiveRows, relatedCollection, manyField, rowsForRollup, rowsTruncated, rowsLoading])
+
+  // Idea 43 ("Needed by <partner>"): the lines this grid shows — saved rows with their staged
+  // edits, new rows as `pending:<n>`, the row being typed into — with the columns the answer
+  // depends on, so each line is judged on what it holds now. Signature-guarded by the form.
+  const partnerNeeds = usePartnerNeeds()
+  const partnerRelKey = `${relatedCollection}.${manyField}`
+  const partnerCols = partnerNeeds?.lineInputs(partnerRelKey)
+  const reportPartnerLines = partnerNeeds?.reportLines
+  useEffect(() => {
+    if (!reportPartnerLines || !partnerCols) return
+    const pick = (r: Record<string, unknown>) => {
+      const v: Record<string, unknown> = {}
+      for (const c of partnerCols) if (c in r) v[c] = r[c]
+      return v
+    }
+    const out: PartnerLineReport[] = []
+    for (const r of rows ?? []) {
+      const id = String(r.id)
+      if (pendingDeletes.has(id) || searchExtraIds.has(id)) continue
+      const merged = { ...r, ...(pendingEdits.get(id) ?? {}) } as Record<string, unknown>
+      out.push({
+        key: id,
+        values: pick(editState?.rowId === id ? { ...merged, ...editState.draft } : merged)
+      })
+    }
+    pendingRows.forEach((r, i) => {
+      const key = `pending:${i}`
+      const row = r as Record<string, unknown>
+      out.push({
+        key,
+        values: pick(editState?.rowId === key ? { ...row, ...editState.draft } : row)
+      })
+    })
+    reportPartnerLines(partnerRelKey, out)
+  })
+  const partnerWithdrawRef = useRef<() => void>(() => {})
+  partnerWithdrawRef.current = () => reportPartnerLines?.(partnerRelKey, null)
+  useEffect(() => () => partnerWithdrawRef.current(), [])
+  /** The mark an EMPTY, not-being-edited cell of this line carries, else null. */
+  const partnerMarkFor = (rowKey: string, field: string, value: unknown, editing: boolean) => {
+    if (editing || !isEmptyValue(value)) return null
+    return partnerNeeds?.lines[partnerRelKey]?.rows[rowKey]?.[field] ?? null
+  }
 
   // Unmount only (a tab closed, the field hidden): stop contributing, so a
   // rollup falls back to the stored value instead of a stale snapshot.
@@ -7855,6 +7905,15 @@ export function InlineTableField({
                   )}
                 >
                   <span id={labelId}>{label}</span>
+                  {(() => {
+                    const m =
+                      args.rowId && partnerMarkFor(args.rowId, c.field, args.draft[c.field], false)
+                    return m ? (
+                      <span className='normal-case tracking-normal'>
+                        <PartnerNeedBadge field={c.field} mark={m} />
+                      </span>
+                    ) : null
+                  })()}
                   {isRequiredMiss && (
                     <span className='ml-1 normal-case tracking-normal'>· required</span>
                   )}
@@ -9262,7 +9321,15 @@ export function InlineTableField({
                                   key={c.field}
                                   className={cn(
                                     'px-2 py-1 align-top',
-                                    (prov || (ci === 0 && firstLeadCell === 'data')) && 'relative',
+                                    (prov ||
+                                      (ci === 0 && firstLeadCell === 'data') ||
+                                      partnerMarkFor(
+                                        id,
+                                        c.field,
+                                        displayRow[c.field],
+                                        inlineEdit
+                                      )) &&
+                                      'relative',
                                     compareData &&
                                       compareColumnClosed(
                                         compareData,
@@ -9284,6 +9351,17 @@ export function InlineTableField({
                                   data-tip={provTip}
                                 >
                                   {ci === 0 && firstLeadCell === 'data' && sinceTick(id)}
+                                  {(() => {
+                                    const m = partnerMarkFor(
+                                      id,
+                                      c.field,
+                                      displayRow[c.field],
+                                      inlineEdit
+                                    )
+                                    return m ? (
+                                      <PartnerNeedCellMark field={c.field} mark={m} />
+                                    ) : null
+                                  })()}
                                   {prov?.reason && (
                                     // #513: a change made FOR a stated reason carries a
                                     // corner mark, like a spreadsheet comment — the
@@ -10247,6 +10325,8 @@ export function InlineTableField({
                                   key={c.field}
                                   className={cn(
                                     'px-2 py-1 align-top',
+                                    partnerMarkFor(pendingRowId, c.field, displayVal, isEditing) &&
+                                      'relative',
                                     ruleSet &&
                                       !isEditing &&
                                       '[&>div]:underline [&>div]:decoration-dotted [&>div]:decoration-amber-400 [&>div]:underline-offset-2'
@@ -10257,6 +10337,17 @@ export function InlineTableField({
                                       : undefined
                                   }
                                 >
+                                  {(() => {
+                                    const m = partnerMarkFor(
+                                      pendingRowId,
+                                      c.field,
+                                      displayVal,
+                                      isEditing
+                                    )
+                                    return m ? (
+                                      <PartnerNeedCellMark field={c.field} mark={m} />
+                                    ) : null
+                                  })()}
                                   {isComputedWrite ? (
                                     <div className='py-0.5 overflow-hidden text-slate-500 italic'>
                                       {renderCell(c, displayVal)}

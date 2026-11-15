@@ -54,6 +54,7 @@ import { isDerivedForRecord } from './live-rollups'
 import { useM2MStaging } from './M2MStagingContext'
 import { PersonalDefaultSlot, personalDefaultSlotFor } from './PersonalDefaultControl'
 import { PersonalDefaultHint } from './PersonalDefaultPill'
+import { isEmptyValue, PartnerNeedBadge, PartnerNeedHint, usePartnerNeeds } from './partner-needs'
 import {
   DisplayFormulaValue,
   FieldCounter,
@@ -757,6 +758,10 @@ export const FieldRow = memo(function FieldRow({
   const lockReason = affordances?.lockReasons[field.field]
   const applyToLines = affordances?.applyToLines[field.field]
   const duplicateHint = affordances?.duplicates?.[field.field]
+  // Idea 43: "Needed by <partner>" while empty; a hint on the field that picks the partner.
+  const partnerNeeds = usePartnerNeeds()
+  const partnerNeed = partnerNeeds?.fields[field.field]
+  const partnerHint = partnerNeeds?.hints[field.field]
   // Personal defaults (new records): pill + undo while the field holds its default, or a
   // quiet hint saying why the saved default was not applied.
   const personalDefaults = usePersonalDefaultsApi()
@@ -950,6 +955,13 @@ export const FieldRow = memo(function FieldRow({
     : value
   const cascadeRelatedCollection =
     m2mFarEndRel?.one_collection ?? m2oRelForField?.one_collection ?? undefined
+  // An M2M field reads filled from its links (saved, per the server, or staged here).
+  const partnerNeedShown =
+    !!partnerNeed &&
+    !locked &&
+    !field.readonly &&
+    (m2mRelForField ? !(partnerNeed.filled || m2mStagedForCascade.length > 0) : isEmptyValue(value))
+  const partnerHintShown = !!partnerHint && !locked && isEmptyValue(value)
 
   // Cascade filter computation — compiled by the SAME builder the quick
   // picker uses (helpers.buildCascadeFilter); this component only resolves
@@ -1137,6 +1149,9 @@ export const FieldRow = memo(function FieldRow({
               )}
               {fieldIsRecommended(field) && <RecommendedMarker />}
             </Label>
+          )}
+          {partnerNeedShown && partnerNeed && (
+            <PartnerNeedBadge field={field.field} mark={partnerNeed} />
           )}
           {shownText.note && (
             <TooltipProvider delayDuration={100}>
@@ -1438,6 +1453,9 @@ export const FieldRow = memo(function FieldRow({
         >
           {softWarning}
         </p>
+      )}
+      {partnerHintShown && (
+        <PartnerNeedHint field={field.field} label={label || titleCase(field.field)} />
       )}
       {personalDefaultHint && !personalDefaultApplied && (
         <PersonalDefaultHint field={field.field} text={personalDefaultHint} />

@@ -65,6 +65,7 @@ export * from './sections/ops-daily-report.js'
 export * from './sections/ops-observability.js'
 export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
+export * from './sections/partner-needs.js'
 export * from './sections/payload-templates.js'
 export * from './sections/platform.js'
 export * from './sections/platform-additions.js'
@@ -383,6 +384,7 @@ import {
 } from './sections/overview.js'
 import { overviewPageDocs } from './sections/overview-page'
 import { overviewSectionsDocs } from './sections/overview-sections'
+import { partnerNeedsDocs } from './sections/partner-needs.js'
 import { payloadTemplates } from './sections/payload-templates.js'
 import {
   aiContentValidation,
@@ -930,6 +932,7 @@ export const navSections: NavGroup[] = [
       adminUxSavedViews,
       adminUxFormCollaboration,
       duplicateWarningsDocs,
+      partnerNeedsDocs,
       adminUxListSignals,
       adminUxImportFromUrl,
       adminUxAiMapping,

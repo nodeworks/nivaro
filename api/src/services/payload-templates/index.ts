@@ -1038,6 +1038,19 @@ export async function publishedTemplateInfo(
   return row ? { lookups: row.lookups, external_api: row.external_api } : null
 }
 
+/**
+ * The PUBLISHED body a push renders (map spec JSON or Liquid), from the same cache: what a
+ * reader of a template's field references (services/partner-needs) must judge. Null = unknown
+ * key or nothing published.
+ */
+export async function publishedTemplateBody(
+  key: string
+): Promise<{ mode: PayloadMode; body: string } | null> {
+  const row = await cachedPublished(key)
+  if (!row?.published_mode || row.published_body == null) return null
+  return { mode: row.published_mode, body: row.published_body }
+}
+
 async function cachedPublished(key: string): Promise<PublishedTemplate | null> {
   const tenant = currentTenantKey()
   let m = publishedCache.get(tenant)

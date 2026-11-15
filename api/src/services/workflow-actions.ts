@@ -80,7 +80,7 @@ import { type ConditionRule, evalConditionRule } from './workflow-conditions.js'
 //   next_open_day          — skip weekends and nivaro_blackout_dates forward
 //   pad_start: N, 'c'      — left-pad to N chars with 'c' (default '0')
 
-interface ContextQueryDef {
+export interface ContextQueryDef {
   collection: string
   filter?: Record<string, unknown>
   /** Restrict rows to those with a matching junction row — expresses
@@ -179,7 +179,7 @@ const engine = payloadLiquid()
 
 export { addCalendarDays, calendarDay, registerPayloadFilters }
 
-function parseActions(raw: string | null | undefined): TransitionActionDef[] {
+export function parseActions(raw: string | null | undefined): TransitionActionDef[] {
   if (!raw) return []
   try {
     const parsed = JSON.parse(raw)
@@ -427,7 +427,7 @@ async function applyWriteback(
   return updateAsAction(await w.writer(), collection, itemId, patch, w.reason)
 }
 
-async function resolveExternalApiId(ref: number | string): Promise<number | null> {
+export async function resolveExternalApiId(ref: number | string): Promise<number | null> {
   if (typeof ref === 'number') return ref
   if (/^\d+$/.test(ref)) return Number(ref)
   try {
@@ -443,7 +443,7 @@ async function resolveExternalApiId(ref: number | string): Promise<number | null
 // ─── Payload body (inline Liquid or a saved payload template) ──────────────────
 
 /** The saved payload template an action names, or null (blank / not a string = none). */
-function templateKeyOf(action: Partial<TransitionActionDef>): string | null {
+export function templateKeyOf(action: Partial<TransitionActionDef>): string | null {
   const k = action.payload_template_key
   return typeof k === 'string' && k.trim() !== '' ? k.trim() : null
 }
@@ -604,7 +604,7 @@ async function templateInfo(key: string): Promise<TemplateInfo | null> {
  * The context query defs an action runs: its own `context`, over the referenced template's
  * `lookups` (same shape) — the action's keys win on a clash.
  */
-async function contextDefsFor(
+export async function contextDefsFor(
   action: TransitionActionDef
 ): Promise<TransitionActionDef['context']> {
   const key = templateKeyOf(action)
