@@ -97,6 +97,7 @@ import { configPlainSearchRoutes } from './config-search-plain.js'
 import { configSeedRoutes } from './config-seeds.js'
 import { connectionReportRoutes } from './connection-reports.js'
 import { contentExportRoutes } from './content-export.js'
+import { copyRulesRoutes } from './copy-rules.js'
 import { coverageGapsRoutes } from './coverage-gaps.js'
 import { cronRoutes } from './cron.js'
 import { cronTimelineRoutes } from './cron-timeline.js'
@@ -648,6 +649,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(fieldRulesRoutes, { prefix: '/field-rules' })
   await app.register(fieldDefaultsRoutes, { prefix: '/field-defaults' })
   await app.register(duplicateRoutes, { prefix: '/duplicates' })
+  await app.register(copyRulesRoutes, { prefix: '/copy-rules' })
   await app.register(pinnedRoutes, { prefix: '/pinned' })
   await app.register(dashboardsRoutes, { prefix: '/dashboards' })
   await app.register(reportsRoutes, { prefix: '/reports' })

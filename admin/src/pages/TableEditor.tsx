@@ -56,6 +56,7 @@ import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
 import { HeavyListColumnsCard } from '@/components/heavy-list-columns-card'
 import { InlineEditSetting } from '@/components/inline-edit-setting'
 import { LabelSearchFieldsSetting } from '@/components/label-search-fields-setting'
+import { NeverCopySetting } from '@/components/never-copy-setting'
 import { PagePresence } from '@/components/page-presence'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { Badge } from '@/components/ui/badge'
@@ -7354,6 +7355,8 @@ interface BrowserConfig {
   inline_edit?: InlineEditConfig | null
   /** Duplicate warnings on create (api services/duplicate-check.ts); absent = auto. */
   duplicate_check?: DuplicateCheckValue
+  /** Fields a copy (Clone, Duplicate, Save as template) never carries (api services/copy-rules.ts). */
+  never_copy?: string[]
   /** Keys edited elsewhere (export_filename, fulfilment, …) ride along untouched. */
   [key: string]: unknown
 }
@@ -7774,6 +7777,16 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           fields={col?.fields ?? []}
           value={cfg.duplicate_check}
           onChange={(v) => void patch({ duplicate_check: v })}
+        />
+        <NeverCopySetting
+          collection={tableName}
+          fields={col?.fields ?? []}
+          value={cfg.never_copy}
+          onChange={(v) =>
+            void patch({ never_copy: v }).then(() =>
+              qc.invalidateQueries({ queryKey: ['copy-rules', tableName] })
+            )
+          }
         />
         <div className='flex items-center justify-between gap-4'>
           <div>

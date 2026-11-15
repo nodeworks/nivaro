@@ -26,6 +26,7 @@ export * from './sections/collaboration.js'
 export * from './sections/command-center.js'
 export * from './sections/config-review.js'
 export * from './sections/content-ops.js'
+export * from './sections/copying-records.js'
 export * from './sections/data-safety.js'
 export * from './sections/db-tuning.js'
 export * from './sections/detail-sheets.js'
@@ -178,6 +179,7 @@ import {
   pickerFilterGuide,
   upsertKeysGuide
 } from './sections/content-ops.js'
+import { copyingRecordsDocs } from './sections/copying-records.js'
 import {
   auditLevelDocs,
   bugReporterDocs,
@@ -929,6 +931,7 @@ export const navSections: NavGroup[] = [
       adminUxSavedViews,
       adminUxFormCollaboration,
       duplicateWarningsDocs,
+      copyingRecordsDocs,
       adminUxListSignals,
       adminUxImportFromUrl,
       adminUxAiMapping,

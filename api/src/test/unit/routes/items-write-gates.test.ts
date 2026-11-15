@@ -21,22 +21,26 @@ vi.mock('../../../services/activity.js', async (orig) => ({
   ...(await orig<object>()),
   logActivity: vi.fn(async () => null)
 }))
-const raw = vi.hoisted(() => ({ tables: [] as string[] }))
+const raw = vi.hoisted(() => ({
+  tables: [] as string[],
+  rows: {} as Record<string, unknown[]>
+}))
 vi.mock('../../../db/index.js', () => {
-  const chain = (): unknown =>
+  const chain = (table?: string): unknown =>
     new Proxy(() => undefined, {
       get(_t, prop) {
         if (prop === 'then')
-          return (res: (v: unknown) => unknown) => Promise.resolve([{ ok: 1 }]).then(res)
+          return (res: (v: unknown) => unknown) =>
+            Promise.resolve((table && raw.rows[table]) || [{ ok: 1 }]).then(res)
         if (prop === 'first') return () => Promise.resolve(undefined)
-        return () => chain()
+        return () => chain(table)
       },
-      apply: () => chain()
+      apply: () => chain(table)
     })
   const db = Object.assign(
     (table: string) => {
       raw.tables.push(table)
-      return chain()
+      return chain(table)
     },
     { raw: async () => [{ ok: 1 }] }
   )
@@ -142,6 +146,7 @@ vi.mock('../../../services/item-lock-guard.js', async (orig) => ({
 
 import { draftPublishRoutes } from '../../../routes/draft-publish.js'
 import { itemsRoutes } from '../../../routes/items.js'
+import { getCollection, getFields } from '../../../services/collections.js'
 import { getAllowedFields } from '../../../services/permissions.js'
 
 async function app() {
@@ -153,6 +158,7 @@ async function app() {
 
 beforeEach(() => {
   raw.tables = []
+  raw.rows = {}
   svc.row = null
   svc.readable = ['W-SEEN']
   svc.created = []
@@ -196,6 +202,69 @@ describe('POST /items/:collection/:id/clone', () => {
     expect(res.statusCode).toBe(201)
     expect(res.json().data).toEqual({ id: 99 })
     expect(svc.created).toEqual([{ name: 'Line' }])
+  })
+
+  // Rob 2026-11-14: a copy carried the original's progress (partner status, order
+  // number, state mirror). The copy is a NEW record — its pipeline starts fresh.
+  it('never copies the pipeline state field, partner fields or the never-copy list', async () => {
+    raw.rows.nivaro_workflow_bindings = [{ state_field: 'request_state' }]
+    vi.mocked(getCollection).mockImplementation(
+      async (c: string) =>
+        ({
+          collection: c,
+          browser_config: JSON.stringify({ never_copy: ['ship_date'] })
+        }) as never
+    )
+    vi.mocked(getFields).mockImplementation(
+      async () =>
+        [
+          { field: 'name', special: null, readonly: false },
+          { field: 'request_state', special: null, readonly: false },
+          {
+            field: 'order_number',
+            special: null,
+            readonly: false,
+            options: { no_duplicate: true }
+          },
+          { field: 'trigger_push', special: null, readonly: false, hidden: true },
+          { field: 'partner_status', special: null, readonly: true },
+          { field: 'ship_date', special: null, readonly: false },
+          { field: 'last_state_change', special: null, readonly: false },
+          {
+            field: 'request_id',
+            special: null,
+            readonly: false,
+            options: { auto_id: { pattern: 'X' } }
+          }
+        ] as never
+    )
+    svc.row = {
+      id: 7,
+      name: 'Request',
+      request_state: 5,
+      order_number: 'SO-1',
+      trigger_push: true,
+      partner_status: 'shipped',
+      ship_date: '2026-11-01',
+      last_state_change: '2026-11-02',
+      request_id: 'REQ-1'
+    }
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/items/inventory_request/7/clone',
+      payload: { field_overrides: { request_state: 3, order_number: 'SO-2', name: 'Copy' } }
+    })
+    vi.mocked(getCollection).mockImplementation(async (c: string) => ({ collection: c }) as never)
+    vi.mocked(getFields).mockImplementation(
+      async () =>
+        [
+          { field: 'name', special: null, readonly: false },
+          { field: 'creator', special: ['user-created'], readonly: false },
+          { field: 'line_total', special: null, readonly: true }
+        ] as never
+    )
+    expect(res.statusCode).toBe(201)
+    expect(svc.created).toEqual([{ name: 'Copy' }])
   })
 })
 
