@@ -30,7 +30,7 @@ export const collabLiveCoedit: DocSection = {
         'People who may change the field type together and see each other’s cursors.',
         'People who may only read the field see the text change as it is written, without cursors.',
         'People who may not see the field get nothing at all — not the text, not that someone is writing there.',
-        'With record locking on, the person holding the lock is the one writing; everyone else watches the text live until the lock is released.'
+        'On a record someone else is editing (record locking), these rich-text fields stay open to everyone who may change them: you can write in them together, and saving changes to them alone goes through. Every other field follows the lock as usual. A step that locks the record after approval wins — then these fields are read-only too.'
       ]
     },
     { type: 'h3', id: 'live-coedit-apart', text: 'When your text stays separate' },

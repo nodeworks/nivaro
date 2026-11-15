@@ -62,6 +62,8 @@ export interface CoeditHost {
   resetTo(value: string): void
   /** The person's own unsaved edits stay apart from a session others started (UI hint). */
   onDiverged?(diverged: boolean): void
+  /** The editor joined (true) or left (false) a live session (marks the field wrapper). */
+  onLive?(live: boolean): void
   /** Who else is writing here (one entry per person), for the field's quiet "with Ana" mark. */
   onPeers?(peers: CoeditPeer[]): void
 }
@@ -121,6 +123,8 @@ export class CoeditSession {
   /** Cursors that arrived ahead of this editor's version. */
   private early: Array<{ p: any }> = []
   private peers = new Map<string, Peer>()
+  /** Writers of a session our own edits stay apart from (names for the note only). */
+  private apart = new Map<string, CoeditPeer>()
   private offs: Array<() => void> = []
   private disposed = false
 
@@ -299,7 +303,19 @@ export class CoeditSession {
   }
 
   private onCursor(p: any) {
-    if (!this.live || typeof p?.clientID !== 'string' || p.clientID === this.clientID) return
+    if (typeof p?.clientID !== 'string' || p.clientID === this.clientID) return
+    if (!this.live) {
+      // Our own edits stay apart: no cursors, but the note names who is writing.
+      if (!this.diverged) return
+      if (p.clear) this.apart.delete(p.clientID)
+      else
+        this.apart.set(p.clientID, {
+          name: String(p.user?.name ?? 'Someone').slice(0, 80),
+          color: coeditColor(String(p.user?.id ?? p.clientID))
+        })
+      this.host.onPeers?.(this.uniquePeople([...this.apart.values()]))
+      return
+    }
     if (p.clear) {
       if (this.peers.delete(p.clientID)) this.renderPeers()
       return
@@ -363,6 +379,7 @@ export class CoeditSession {
       this.resetTimer = null
     }
     this.live = true
+    this.host.onLive?.(true)
     this.sid = session.sid
     this.version = session.version
     this.unconfirmed = carry
@@ -377,6 +394,7 @@ export class CoeditSession {
   private leaveLive() {
     if (!this.live) return
     this.live = false
+    this.host.onLive?.(false)
     this.sid = null
     this.unconfirmed = []
     this.sentCount = 0
@@ -402,6 +420,10 @@ export class CoeditSession {
   private setDiverged(on: boolean) {
     if (this.diverged === on) return
     this.diverged = on
+    if (!on && this.apart.size) {
+      this.apart.clear()
+      this.host.onPeers?.([])
+    }
     this.host.onDiverged?.(on)
   }
 
@@ -584,11 +606,15 @@ export class CoeditSession {
       head: p.head
     }))
     setCoeditCursors(this.editor, list, wake)
-    const people = new Map<string, CoeditPeer>()
-    for (const p of this.peers.values())
-      if (!people.has(p.userId || p.name))
-        people.set(p.userId || p.name, { name: p.name, color: p.color })
-    this.host.onPeers?.([...people.values()])
+    this.host.onPeers?.(
+      this.uniquePeople([...this.peers.values()].map((p) => ({ name: p.name, color: p.color })))
+    )
+  }
+
+  private uniquePeople(list: CoeditPeer[]): CoeditPeer[] {
+    const seen = new Map<string, CoeditPeer>()
+    for (const p of list) if (!seen.has(p.name)) seen.set(p.name, p)
+    return [...seen.values()]
   }
 
   /** Remember the confirmed document state (a save of it is no conflict, coedit-registry). */

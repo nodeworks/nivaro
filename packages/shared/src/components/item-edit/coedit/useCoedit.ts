@@ -12,6 +12,8 @@ export interface CoeditBinding {
   diverged: boolean
   /** The others writing in the field right now. */
   peers: CoeditPeer[]
+  /** A live session is open on the field here. */
+  live: boolean
 }
 
 /**
@@ -29,6 +31,7 @@ export function useCoedit(
   const [session, setSession] = useState<CoeditSession | null>(null)
   const [diverged, setDiverged] = useState(false)
   const [peers, setPeers] = useState<CoeditPeer[]>([])
+  const [live, setLive] = useState(false)
   const valueRef = useRef(value)
   valueRef.current = value
   const savedRef = useRef(target?.saved)
@@ -57,7 +60,8 @@ export function useCoedit(
           if (editor.getHTML() !== html) editor.commands.setContent(html, { emitUpdate: false })
         },
         onDiverged: setDiverged,
-        onPeers: setPeers
+        onPeers: setPeers,
+        onLive: setLive
       }
     )
     s.start()
@@ -67,6 +71,7 @@ export function useCoedit(
       setSession(null)
       setDiverged(false)
       setPeers([])
+      setLive(false)
     }
   }, [editor, realtime, collection, item, field])
 
@@ -84,5 +89,5 @@ export function useCoedit(
     }
   }, [status?.state, session])
 
-  return { session, diverged, peers }
+  return { session, diverged, peers, live }
 }

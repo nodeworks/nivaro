@@ -17479,7 +17479,7 @@ PATCH /api/item-locks/config/:collection
             <li>People who may change the field type together and see each other’s cursors.</li>
             <li>People who may only read the field see the text change as it is written, without cursors.</li>
             <li>People who may not see the field get nothing at all — not the text, not that someone is writing there.</li>
-            <li>With record locking on, the person holding the lock is the one writing; everyone else watches the text live until the lock is released.</li>
+            <li>On a record someone else is editing (record locking), these rich-text fields stay open to everyone who may change them: you can write in them together, and saving changes to them alone goes through. Every other field follows the lock as usual. A step that locks the record after approval wins — then these fields are read-only too.</li>
           </ul>
           <h3 class="doc-h3" id="live-coedit-apart">When your text stays separate</h3>
           <p class="doc-p">If you had already changed the field (and not saved) before someone else started writing in it, your version stays yours. A line under the field says so. When one of you saves, the other gets the usual Keep mine / Take theirs / Merge choice (see Working on the same record).</p>

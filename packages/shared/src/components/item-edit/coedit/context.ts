@@ -53,3 +53,30 @@ export function isCoeditInterface(field: {
     field.type === 'rich_text'
   )
 }
+
+/**
+ * Shared text under a held record lock (Rob, 2026-11-14): the rich-text fields people write
+ * together stay open while someone else holds the record lock — every other field follows the
+ * lock — and a save that changes only them neither takes the lock nor is refused by it. A
+ * step's own edit lock (post-approval, admin-only) wins: then they are read-only too.
+ */
+export function sharedTextUnderLock(o: {
+  sharedFields: ReadonlySet<string>
+  /** Fields with unsaved changes. */
+  unsavedFields: readonly string[]
+  /** Unsaved changes that are not plain fields (lines, links, unlinks, line drafts). */
+  otherChanges: number
+  /** Someone else holds the record lock. */
+  heldByOther: boolean
+  /** The step's own edit lock refuses this person (post-approval / admin-only). */
+  stepLocked: boolean
+  recordGone: boolean
+}): { onlySharedUnsaved: boolean; open: boolean; saveOk: boolean } {
+  const onlySharedUnsaved =
+    o.sharedFields.size > 0 &&
+    o.unsavedFields.length > 0 &&
+    o.otherChanges === 0 &&
+    o.unsavedFields.every((f) => o.sharedFields.has(f))
+  const open = o.sharedFields.size > 0 && o.heldByOther && !o.recordGone && !o.stepLocked
+  return { onlySharedUnsaved, open, saveOk: open && onlySharedUnsaved }
+}

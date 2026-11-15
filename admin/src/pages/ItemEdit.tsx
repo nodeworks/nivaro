@@ -1,6 +1,7 @@
 import type { ImportParseResponse } from '@nivaro/sdk'
 import { createNivaro } from '@nivaro/sdk'
 import {
+  coeditLive,
   currentViewport,
   DrilldownContext,
   type DrilldownTarget,
@@ -1161,15 +1162,26 @@ export function ItemEditPage() {
                       <div className='ml-2 flex flex-wrap items-center gap-1'>
                         {Object.entries(presence.editing)
                           .slice(0, 3)
-                          .map(([field, v]) => (
-                            <span
-                              key={field}
-                              className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
-                            >
-                              <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400' />
-                              {v.name} editing {field.replace(/_/g, ' ')}
-                            </span>
-                          ))}
+                          .map(([field, v]) =>
+                            // Written together (realtime round 3 item 8): not a lock, a colleague.
+                            collection && id && coeditLive(collection, id, field) ? (
+                              <span
+                                key={field}
+                                className='inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
+                              >
+                                <span className='h-1.5 w-1.5 rounded-full bg-slate-400' />
+                                {v.name} is writing here too
+                              </span>
+                            ) : (
+                              <span
+                                key={field}
+                                className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
+                              >
+                                <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400' />
+                                {v.name} editing {field.replace(/_/g, ' ')}
+                              </span>
+                            )
+                          )}
                       </div>
                     )}
                     {user?.is_admin && layoutAiEnabled && id && !isNew && (

@@ -2296,8 +2296,12 @@ export async function itemsRoutes(app: FastifyInstance) {
       const sim = await simulateSandboxWrite(req, collection, 'update', id)
       return reply.code(sim.code).send(sim.body)
     }
-    // Edit locks are enforced: a person may not save over a record someone else holds the lock on.
-    const lockRefused = await editLockRefusal(req, collection, id)
+    // Edit locks are enforced: a person may not save over a record someone else holds the lock on
+    // — except a save of shared text alone (rich text people write together, coedit-fields.ts).
+    const { onlySharedText } = await import('../services/coedit-fields.js')
+    const lockRefused = (await onlySharedText(collection, req.body))
+      ? null
+      : await editLockRefusal(req, collection, id)
     if (lockRefused) return reply.code(lockRefused.status).send(lockRefused.body)
     // A child row edited from its parent's page: its values before, read as the caller, so
     // the parent's history can say "Qty 3 → 4" (army 6 H1) — never a column they cannot see.

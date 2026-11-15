@@ -75,10 +75,6 @@ export interface CoeditScope {
 /** Sign-in kinds that take part (a person at a screen); API keys and unknown kinds never. */
 const SCREEN_BINDS = new Set(['session', 'masq', 'token', 'device'])
 
-/** Interfaces of the fields that write together (the rich-text editor's, FieldRenderer). */
-const COEDIT_IFACES = new Set(['input-rich-text-html', 'rich_text', 'extension-editorjs'])
-const CONCEALED = /password|hash|secret|conceal/i
-
 /** Fields one socket may watch at once (a record page shows a handful of long-text fields). */
 export const COEDIT_WATCH_MAX = 60
 /** How long a "may still type here" answer is reused while someone types (per field watch). */
@@ -419,15 +415,8 @@ export function registerCoedit(
 export function coeditGates(): Omit<CoeditDeps, 'store' | 'now'> {
   return {
     async fieldMayTravel(collection, field) {
-      const { getFields } = await import('./collections.js')
-      const { isSecretColumn } = await import('./system-collections.js')
-      const f = (await getFields(collection)).find((x) => x.field === field)
-      if (!f || isSecretColumn(field)) return false
-      const any = f as unknown as Record<string, unknown>
-      if (any.is_encrypted || any.computed_type || any.computed_formula) return false
-      if (!COEDIT_IFACES.has(String(f.interface ?? '')) && f.type !== 'rich_text') return false
-      const special = Array.isArray(f.special) ? f.special.join(' ') : ''
-      return !CONCEALED.test(`${f.interface ?? ''} ${special}`)
+      const { isSharedTextField } = await import('./coedit-fields.js')
+      return isSharedTextField(collection, field)
     },
     async canSeeRecord(user, collection, item) {
       const { canSeeRecordRoom } = await import('./socket-access.js')
@@ -454,7 +443,13 @@ export function coeditGates(): Omit<CoeditDeps, 'store' | 'now'> {
         authMethod: 'session',
         headers: {}
       } as unknown as Parameters<typeof recordWriteRefusal>[0]
-      return !!(await recordWriteRefusal(req, collection, item, { fields: [field] }))
+      // Shared text is written together even while someone holds the record lock (Rob,
+      // 2026-11-14): the held-lock tier is skipped; the step's own edit lock (post-approval,
+      // admin-only) and the record gates still refuse.
+      return !!(await recordWriteRefusal(req, collection, item, {
+        fields: [field],
+        heldLock: false
+      }))
     }
   }
 }

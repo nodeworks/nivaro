@@ -206,6 +206,15 @@ export function RichTextEditor({
 
   const binding = useCoedit(editor, coedit ?? null, value, toEditorHtml)
   coeditRef.current = binding.session
+  // The field wrapper says when it is written together: its "someone is editing" lock ring and
+  // badge give way to the cursors (COEDIT_CURSOR_CSS), so there is one focus ring only.
+  const boxRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const wrap = boxRef.current?.closest('[data-field]')
+    if (!wrap) return
+    wrap.toggleAttribute('data-coedit-live', binding.live)
+    return () => wrap.removeAttribute('data-coedit-live')
+  }, [binding.live])
 
   const prevValue = useRef(value)
   useEffect(() => {
@@ -247,6 +256,7 @@ export function RichTextEditor({
 
   return (
     <div
+      ref={boxRef}
       className={cn(
         'overflow-hidden rounded-md border border-slate-200 bg-background focus-within:ring-1 focus-within:ring-nvr-cyan focus-within:border-nvr-cyan dark:border-border',
         disabled && 'opacity-60'
@@ -473,6 +483,8 @@ export function RichTextEditor({
 // One quiet line under the text: who else is writing here, or that the person's own unsaved
 // edits stay apart from a session others started. Nothing at all otherwise.
 
+const firstOf = (name: string) => name.trim().split(/\s+/)[0] || name
+
 function joinNames(names: string[]): string {
   if (names.length <= 1) return names[0] ?? ''
   if (names.length === 2) return `${names[0]} and ${names[1]}`
@@ -492,25 +504,25 @@ function CoeditNote({
       className='flex min-h-[26px] items-center gap-1.5 border-t border-slate-100 px-3 py-1 text-[11px] text-slate-500 dark:border-border dark:text-slate-400'
       aria-live='polite'
     >
+      <span className='flex -space-x-0.5' aria-hidden='true'>
+        {(peers.length ? peers : [{ name: '', color: '#94a3b8' }]).slice(0, 4).map((p) => (
+          <span
+            key={p.name || 'someone'}
+            className='h-2 w-2 rounded-full ring-2 ring-background'
+            style={{ backgroundColor: p.color }}
+          />
+        ))}
+      </span>
       {diverged ? (
-        <span>
-          Someone else is writing here too. Your unsaved changes stay separate until you save.
+        <span className='min-w-0'>
+          {peers.length ? joinNames(peers.map((p) => firstOf(p.name))) : 'Someone else'}{' '}
+          {peers.length > 1 ? 'are' : 'is'} writing here too. Your unsaved changes stay separate
+          until you save.
         </span>
       ) : (
-        <>
-          <span className='flex -space-x-0.5' aria-hidden='true'>
-            {peers.slice(0, 4).map((p) => (
-              <span
-                key={p.name}
-                className='h-2 w-2 rounded-full ring-2 ring-background'
-                style={{ backgroundColor: p.color }}
-              />
-            ))}
-          </span>
-          <span className='truncate'>
-            Writing together with {joinNames(peers.map((p) => p.name.split(/\s+/)[0] || p.name))}
-          </span>
-        </>
+        <span className='truncate'>
+          Writing together with {joinNames(peers.map((p) => firstOf(p.name)))}
+        </span>
       )}
     </div>
   )
