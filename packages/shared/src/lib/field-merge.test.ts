@@ -153,3 +153,16 @@ describe('autoMerge', () => {
     expect(autoMerge('none', 1, 2, 3)).toBe(2)
   })
 })
+
+describe('rich text merge kinds (round 8 review)', () => {
+  it("the record form's rich_text interfaces merge by paragraph", () => {
+    expect(fieldMergeKind({ interface: 'rich_text', type: 'text' }, '<p>a</p>', '<p>b</p>')).toBe(
+      'rich'
+    )
+    expect(fieldMergeKind({ interface: 'rich-text-html' }, '<p>a</p>', '<p>b</p>')).toBe('rich')
+  })
+  it('with no field meta yet, paragraph markup on both sides is still rich text', () => {
+    expect(fieldMergeKind(null, '<p>a</p><p>b</p>', '<p>a</p><p>c</p>')).toBe('rich')
+    expect(fieldMergeKind(null, 'plain', 'other')).toBe('none')
+  })
+})
