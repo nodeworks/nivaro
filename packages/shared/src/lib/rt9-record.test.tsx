@@ -262,9 +262,9 @@ const currentList = () => __remoteUploads()
 // ─── #19 help requested ─────────────────────────────────────────────────────
 
 describe('help requested chip (rt9 #19)', () => {
-  it('names the requester only when the viewer may see the request', () => {
+  it('shows only requests the viewer may see; nothing at all otherwise', () => {
     expect(helpChipText({ open: 0, tickets: [] })).toBeNull()
-    expect(helpChipText({ open: 1, tickets: [] })).toBe('Help requested')
+    expect(helpChipText(null)).toBeNull()
     const t = {
       id: 3,
       title: 'Wrong project',
@@ -274,10 +274,10 @@ describe('help requested chip (rt9 #19)', () => {
       assignee: 'Sam Lee',
       created_at: null
     }
-    expect(helpChipText({ open: 2, tickets: [t] })).toBe('Help requested by Beth Ames +1')
-    expect(helpChipTip({ open: 1, tickets: [t] })).toBe('“Wrong project” · Sam Lee is on it')
-    expect(helpChipTip({ open: 1, tickets: [] })).toBe(
-      'Someone asked the support team for help with this record.'
+    expect(helpChipText({ open: 1, tickets: [t] })).toBe('Help requested by Beth Ames')
+    expect(helpChipText({ open: 2, tickets: [t, { ...t, id: 4 }] })).toBe(
+      'Help requested by Beth Ames +1'
     )
+    expect(helpChipTip({ open: 1, tickets: [t] })).toBe('“Wrong project” · Sam Lee is on it')
   })
 })

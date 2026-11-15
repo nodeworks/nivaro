@@ -6,9 +6,9 @@ import { LIVE_ASPECTS, useLiveRecordQueries } from '../../lib/live'
 
 /**
  * "Help requested by Beth" in a record's header (realtime round 9, item 19): a support request
- * raised from this record is still open. Everyone who can read the record sees that help was
- * asked for; who asked, its status and the link to the request follow the support rules (the
- * requester, the assignee, the request's team and administrators — GET /support/record/:c/:id).
+ * raised from this record is still open. Only people the support rules let see the request —
+ * the requester, the assignee, the request's team and administrators — get the chip (GET
+ * /support/record/:c/:id answers nothing else); everyone else sees nothing.
  * Live: opening, picking up, reassigning or closing a request sends the record's `$support`
  * aspect; the chip re-reads and appears or goes quietly.
  */
@@ -36,10 +36,10 @@ export const recordHelpKey = (collection: string, itemId: string) => [
 
 /** The chip's words (pure). */
 export function helpChipText(help: RecordHelp | null | undefined): string | null {
-  if (!help || help.open <= 0) return null
-  const first = help.tickets[0]
-  const more = help.open - 1
-  const who = first?.requested_by
+  const first = help?.tickets[0]
+  if (!help || !first) return null
+  const more = help.tickets.length - 1
+  const who = first.requested_by
   const base = who ? `Help requested by ${who}` : 'Help requested'
   return more > 0 ? `${base} +${more}` : base
 }
@@ -47,11 +47,7 @@ export function helpChipText(help: RecordHelp | null | undefined): string | null
 /** The tip: what the viewer may know about the request(s) (pure). */
 export function helpChipTip(help: RecordHelp): string {
   const first = help.tickets[0]
-  if (!first) {
-    return help.open === 1
-      ? 'Someone asked the support team for help with this record.'
-      : `${help.open} open requests for help with this record.`
-  }
+  if (!first) return ''
   const state =
     first.status === 'in_progress'
       ? first.assignee

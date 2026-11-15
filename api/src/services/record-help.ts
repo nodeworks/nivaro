@@ -16,9 +16,9 @@ import {
  * shows as a quiet chip in the record's header while it is open. Who sees what follows the
  * support rules (support-tickets.ts `canSeeTicket`):
  *
- *  - anyone who can read the record sees THAT help was asked for ("Help requested"),
- *  - the requester, the assignee, the ticket's team and administrators also see who asked,
- *    its status and a link to the request.
+ *  - only people support lets see the request — the requester, the assignee, the ticket's
+ *    team and administrators — see the chip: who asked, its status and a link to it,
+ *  - everyone else who can read the record sees nothing (Rob 2026-11-15).
  *
  * Live: every write that opens, picks up, reassigns or closes a request on a record calls
  * `announceRecordHelp`, which sends the `$support` aspect (ids + an aspect name, never the
@@ -36,7 +36,7 @@ export interface RecordHelpTicket {
 }
 
 export interface RecordHelp {
-  /** Open requests on the record (all of them, seen or not). */
+  /** Open requests on the record this person may see (others are not counted). */
   open: number
   /** The open requests this person may see in full, oldest first. */
   tickets: RecordHelpTicket[]
@@ -82,10 +82,10 @@ export async function summarizeRecordHelp(
       created_at: r.created_at ? new Date(r.created_at).toISOString() : null
     })
   }
-  return { open: rows.length, tickets }
+  return { open: tickets.length, tickets }
 }
 
-/** Open support requests on one record, judged for `viewer`. The record gate is the caller's. */
+/** Open support requests on one record that `viewer` may see. The record gate is the caller's. */
 export async function loadRecordHelp(
   viewer: TicketViewer,
   collection: string,

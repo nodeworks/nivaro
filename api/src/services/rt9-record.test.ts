@@ -40,19 +40,19 @@ describe('record help (rt9 #19)', () => {
     ...extra
   })
 
-  it('counts every open request but details only the ones the viewer may see', async () => {
+  it('answers only the requests the viewer may see (others are not even counted)', async () => {
     const out = await summarizeRecordHelp(
       [row(1, 'U1'), row(2, 'U2')] as never,
       async (r) => Number(r.id) === 2
     )
-    expect(out.open).toBe(2)
+    expect(out.open).toBe(1)
     expect(out.tickets.map((t) => t.id)).toEqual([2])
     expect(out.tickets[0].requested_by).toBe('Beth Ames')
   })
 
-  it('a viewer who may see none gets the count only (no names, no titles)', async () => {
+  it('a viewer who may see none gets nothing at all', async () => {
     const out = await summarizeRecordHelp([row(1, 'U1')] as never, async () => false)
-    expect(out).toEqual({ open: 1, tickets: [] })
+    expect(out).toEqual({ open: 0, tickets: [] })
   })
 })
 

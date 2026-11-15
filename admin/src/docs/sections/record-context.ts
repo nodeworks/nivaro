@@ -31,7 +31,7 @@ export const collabRecordContext: DocSection = {
     { type: 'h3', id: 'record-context-help', text: 'Help requested' },
     {
       type: 'p',
-      text: 'When someone asks the support team for help from a record (⋯ → Request a change or Get help), the record\'s heading shows a "Help requested" chip until the request is closed. The person who asked, the person working on it, the support team and administrators see who asked and can open the request; everyone else who can read the record just sees that help was asked for. The chip appears and goes away live.'
+      text: 'When someone asks the support team for help from a record (⋯ → Request a change or Get help), the record heading shows a "Help requested by …" chip until the request is closed, but only for the people allowed to see that request: the person who asked, the person working on it, the support team and administrators. They can open the request from the chip. Everyone else sees nothing. The chip appears and goes away live.'
     },
     {
       type: 'table',
@@ -43,7 +43,7 @@ export const collabRecordContext: DocSection = {
         ],
         [
           'GET /api/support/record/:collection/:item',
-          'Open support requests raised from the record: the count for anyone who can read it, details only for those support lets see the request.'
+          "Open support requests raised from the record that you may see (requester, assignee, the request's team, administrators); nothing for anyone else."
         ],
         [
           'record:uploading (record room)',
