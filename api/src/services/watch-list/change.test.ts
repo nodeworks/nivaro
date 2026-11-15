@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('../../db/index.js', () => ({ db: Object.assign(() => ({}), { raw: async () => [] }) }))
 
 import { changeIndicator, fieldListText, stepTiming } from './change.js'
-import { mediansFromStays } from './step-medians.js'
+import { isRealStay, mediansFromStays } from './step-medians.js'
 
 const ME = 'AAAA-1'
 const BETH = 'bbbb-2'
@@ -76,14 +76,29 @@ describe('step timing', () => {
     expect(stepTiming(null, 10, now)).toBeNull()
   })
 
-  it('takes medians only for steps with enough finished stays', () => {
+  it('takes medians only for steps with enough real stays', () => {
+    const by = 'person-1'
     const stays = [
-      ...[10, 20, 30, 40, 50].map((secs) => ({ state: 'S1', secs })),
-      { state: 'S2', secs: 5 },
-      { state: 'S1', secs: null }
+      ...[600, 1200, 1800, 2400, 3000].map((secs) => ({ state: 'S1', secs, left_by: by })),
+      // Not waits: an automatic skip seconds after arriving, a move nobody made,
+      // an automation's move — none of these may drag the usual time down.
+      ...[2, 3, 5, 8].map((secs) => ({ state: 'S1', secs, left_by: by })),
+      { state: 'S1', secs: 30, left_by: null },
+      { state: 'S1', secs: 90, left_by: null },
+      { state: 'S1', secs: 120, left_by: by, left_origin: 'machine' },
+      { state: 'S2', secs: 600, left_by: by },
+      { state: 'S1', secs: null, left_by: by }
     ]
     const m = mediansFromStays(stays)
-    expect(m.get('s1')).toBe(30)
+    expect(m.get('s1')).toBe(1800)
     expect(m.has('s2')).toBe(false)
+  })
+
+  it('counts a stay only when a person ended it after at least a minute', () => {
+    expect(isRealStay({ state: 'S', secs: 60, left_by: 'p' })).toBe(true)
+    expect(isRealStay({ state: 'S', secs: 59, left_by: 'p' })).toBe(false)
+    expect(isRealStay({ state: 'S', secs: 600, left_by: null })).toBe(false)
+    expect(isRealStay({ state: 'S', secs: 600, left_by: 'p', left_origin: 'MACHINE' })).toBe(false)
+    expect(isRealStay({ state: 'S', secs: 600, left_by: 'p', left_origin: 'import' })).toBe(true)
   })
 })

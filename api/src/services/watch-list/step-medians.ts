@@ -6,7 +6,8 @@ import { tenantState } from '../ai-tenant-state.js'
 /**
  * "Usually 2 d" on a watch row's mini timeline: the median time records stay in each pipeline
  * step, from finished stays in the last year of workflow history (a stay = a history row into
- * the step until the instance's next history row). ONE read for every step at once, cached a
+ * the step until the instance's next history row). Only real waits count (isRealStay): a stay
+ * of at least a minute that a person ended — automatic skips and automation moves are left out. ONE read for every step at once, cached a
  * day per tenant, made on the background pool; a request never waits on it longer than
  * WAIT_MS — until it lands rows simply show the time in step without a comparison.
  */
@@ -25,18 +26,41 @@ interface MedianCache {
 
 const cache = tenantState<MedianCache>(() => ({ at: 0, medians: new Map(), flight: null }))
 
-/** Median of finished stays (seconds) per to-state id. Exported for tests. */
-export function mediansFromStays(
-  stays: Array<{ state: string; secs: number | null }>,
-  minStays = MEDIAN_MIN_STAYS
-): Map<string, number> {
+/** A stay shorter than this was never a wait (an automatic skip, a double click). */
+export const MIN_REAL_STAY_S = 60
+
+export interface Stay {
+  state: string
+  secs: number | null
+  /** Who made the move that ENDED the stay (null = no person: an automatic move). */
+  left_by?: string | null
+  /** That move's origin marker ('machine' = an automation moved it). */
+  left_origin?: string | null
+}
+
+/**
+ * Whether a finished stay counts toward "usually N": it lasted at least a minute and a person
+ * ended it. Automatic skips and automations (no person, or origin 'machine') and stays left
+ * within seconds of arriving say nothing about how long people take. The SQL in readMedians
+ * applies the same rule. Exported for tests.
+ */
+export function isRealStay(s: Stay): boolean {
+  if (s.secs == null || !Number.isFinite(s.secs) || s.secs < MIN_REAL_STAY_S) return false
+  if (s.left_by === null) return false
+  if (String(s.left_origin ?? '').toLowerCase() === 'machine') return false
+  return true
+}
+
+/** Median of real stays (seconds) per to-state id. Exported for tests. */
+export function mediansFromStays(stays: Stay[], minStays = MEDIAN_MIN_STAYS): Map<string, number> {
   const by = new Map<string, number[]>()
   for (const s of stays) {
-    if (s.secs == null || !Number.isFinite(s.secs) || s.secs < 0) continue
+    if (!isRealStay(s)) continue
+    const secs = Number(s.secs)
     const k = String(s.state).toLowerCase()
     const list = by.get(k)
-    if (list) list.push(s.secs)
-    else by.set(k, [s.secs])
+    if (list) list.push(secs)
+    else by.set(k, [secs])
   }
   const out = new Map<string, number>()
   for (const [k, list] of by) {
@@ -53,14 +77,16 @@ async function readMedians(): Promise<Map<string, number>> {
   if (!isMssql(db)) {
     // Other dialects: the stays come back and the median is taken here.
     const stays = (await db.raw(
-      `SELECT to_state AS state, secs FROM (
+      `SELECT to_state AS state, secs, left_by, left_origin FROM (
          SELECT h.to_state,
                 (julianday(LEAD(h.timestamp) OVER (PARTITION BY h.instance ORDER BY h.timestamp, h.id))
-                  - julianday(h.timestamp)) * 86400 AS secs
+                  - julianday(h.timestamp)) * 86400 AS secs,
+                LEAD(h."user") OVER (PARTITION BY h.instance ORDER BY h.timestamp, h.id) AS left_by,
+                LEAD(h.origin) OVER (PARTITION BY h.instance ORDER BY h.timestamp, h.id) AS left_origin
            FROM nivaro_workflow_history h WHERE h.timestamp >= ?) s
-       WHERE secs IS NOT NULL AND state IS NOT NULL`,
+       WHERE secs IS NOT NULL AND to_state IS NOT NULL`,
       [since.toISOString()]
-    )) as Array<{ state: string; secs: number | null }>
+    )) as Stay[]
     return mediansFromStays(Array.isArray(stays) ? stays : [])
   }
   // Median per step in SQL (PERCENTILE_CONT) so a big history never travels to the process.
@@ -71,12 +97,16 @@ async function readMedians(): Promise<Map<string, number>> {
        FROM (
          SELECT h.to_state,
                 DATEDIFF(SECOND, h.[timestamp],
-                  LEAD(h.[timestamp]) OVER (PARTITION BY h.instance ORDER BY h.[timestamp], h.id)) AS secs
+                  LEAD(h.[timestamp]) OVER (PARTITION BY h.instance ORDER BY h.[timestamp], h.id)) AS secs,
+                LEAD(h.[user]) OVER (PARTITION BY h.instance ORDER BY h.[timestamp], h.id) AS left_by,
+                LEAD(h.origin) OVER (PARTITION BY h.instance ORDER BY h.[timestamp], h.id) AS left_origin
            FROM nivaro_workflow_history h
           WHERE h.[timestamp] >= ?
        ) s
-      WHERE s.secs IS NOT NULL AND s.to_state IS NOT NULL`,
-    [since]
+      -- isRealStay(): at least a minute, ended by a person, not by an automation.
+      WHERE s.secs >= ? AND s.to_state IS NOT NULL AND s.left_by IS NOT NULL
+        AND (s.left_origin IS NULL OR s.left_origin <> 'machine')`,
+    [since, MIN_REAL_STAY_S]
   )) as Array<{ state: string; med: number | null; n: number }>
   const out = new Map<string, number>()
   for (const r of rows)
