@@ -5,8 +5,9 @@ import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
-import { queryKeys } from '../../lib/query-keys'
 import { toastError } from '../../lib/error-toast'
+import { queryKeys } from '../../lib/query-keys'
+import { ConfigReachNote } from '../ConfigReachNote'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -1211,6 +1212,13 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
               Save draft
             </Button>
           </div>
+          {delta.length > 0 && (
+            // rt8 #25 — who the saved owners reach right now (administrators).
+            <ConfigReachNote
+              className='basis-full'
+              collections={bindings.map((b) => b.collection)}
+            />
+          )}
         </div>
       )}
 

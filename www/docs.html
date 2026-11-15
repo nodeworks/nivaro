@@ -81,6 +81,7 @@
           <a class="docs-nav-item" data-section="activity" href="#activity">Activity</a>
           <a class="docs-nav-item" data-section="notifications" href="#notifications">Notifications</a>
           <a class="docs-nav-item" data-section="comments" href="#comments">Comments</a>
+          <a class="docs-nav-item" data-section="watch-list" href="#watch-list">Watch List</a>
           <a class="docs-nav-item" data-section="computed-fields" href="#computed-fields">Computed Fields</a>
           <a class="docs-nav-item" data-section="dashboards-guide" href="#dashboards-guide">Dashboards</a>
           <a class="docs-nav-item" data-section="reports-guide" href="#reports-guide">Reports</a>
@@ -367,7 +368,7 @@
           <a class="docs-nav-item" data-section="trash" href="#trash">Trash &amp; Restore</a>
           <a class="docs-nav-item" data-section="time-travel" href="#time-travel">Time-Travel Restore</a>
           <a class="docs-nav-item" data-section="audit-levels" href="#audit-levels">Audit Levels</a>
-          <a class="docs-nav-item" data-section="record-merge" href="#record-merge">Record Merge</a>
+          <a class="docs-nav-item" data-section="record-merge" href="#record-merge">Merge Records</a>
           <a class="docs-nav-item" data-section="spreadsheet-mode" href="#spreadsheet-mode">Spreadsheet Mode</a>
           <a class="docs-nav-item" data-section="layout-forms" href="#layout-forms">Layout-Backed Forms</a>
           <a class="docs-nav-item" data-section="content-ops-draft-publish" href="#content-ops-draft-publish">Draft / Publish</a>
@@ -512,6 +513,7 @@
           <a class="docs-nav-item" data-section="send-my-view" href="#send-my-view">Send My View</a>
           <a class="docs-nav-item" data-section="live-conflicts" href="#live-conflicts">Working on the same record</a>
           <a class="docs-nav-item" data-section="live-coedit" href="#live-coedit">Writing together in long text</a>
+          <a class="docs-nav-item" data-section="live-sync" href="#live-sync">Offline saves and shared budget grids</a>
           <a class="docs-nav-item" data-section="notifications-center" href="#notifications-center">Notifications Center</a>
           <a class="docs-nav-item" data-section="user-activity-feed" href="#user-activity-feed">User Activity Feed</a>
           <a class="docs-nav-item" data-section="keyboard-shortcuts" href="#keyboard-shortcuts">Keyboard Shortcuts</a>
@@ -541,6 +543,7 @@
           <a class="docs-nav-item" data-section="duplicate-warnings" href="#duplicate-warnings">Duplicate Warnings</a>
           <a class="docs-nav-item" data-section="partner-needs" href="#partner-needs">Partner Needs on the Form</a>
           <a class="docs-nav-item" data-section="line-split" href="#line-split">Move Lines to a New Record</a>
+          <a class="docs-nav-item" data-section="copying-records" href="#copying-records">Copying Records</a>
           <a class="docs-nav-item" data-section="list-signals" href="#list-signals">Fulfilment, Send-backs &amp; Back to Queue</a>
           <a class="docs-nav-item" data-section="import-from-url" href="#import-from-url">Bulk Import from URL</a>
           <a class="docs-nav-item" data-section="ai-field-mapping" href="#ai-field-mapping">AI Field Mapping</a>
@@ -1204,6 +1207,76 @@ emitNotification(app.io, targetUserId, {
           <h3 class="doc-h3">Machine markers</h3>
           <p class="doc-p">Comment strings written by machinery — a sync script's provenance tag, a stored procedure's marker — are never notes. Extensions declare theirs with <code class="doc-code">ctx.notes.registerMachineMarkers({ exact, prefixes })</code>; the thread drops matching comments and row history renders them as provenance. Core declares none itself.</p>
           <!-- /SYNC:comments -->
+        </div>
+
+        <div class="doc-section" id="s-watch-list" data-toc='[{"id":"watch-list","label":"Watch List"},{"id":"watch-list-pin","label":"Pin a record"},{"id":"watch-list-rows","label":"What a row shows"},{"id":"watch-list-dock","label":"Open, minimized or closed"},{"id":"watch-list-sort","label":"Order"},{"id":"watch-list-waiting","label":"Waiting on others"},{"id":"watch-list-mentions","label":"Mentions &amp; replies"},{"id":"watch-list-alerts","label":"Alerts on a pinned record"},{"id":"watch-list-settings","label":"Settings"},{"id":"watch-list-shared","label":"Shared lists for a team"}]'>
+          <!-- SYNC:watch-list -->
+          <h1 class="doc-h1" id="watch-list">Watch List</h1>
+          <p class="doc-p">The watch list keeps the records you care about in view on every page, a little like a stock watch list. Each row stays current on its own: you never reload a page to see where a record stands.</p>
+          <h3 class="doc-h3" id="watch-list-pin">Pin a record</h3>
+          <ul class="doc-ul">
+            <li>Click the pin beside a record’s title (on the record page or in the record sheet).</li>
+            <li>Or choose “Add to watch list” from a list row’s ⋯ menu or its right-click menu.</li>
+            <li>Or press W while a record is open. Press W again to unpin it.</li>
+            <li>You can pin up to 50 records. Unpin from the row’s × (hover the row), from the pin again, or from the row menu.</li>
+          </ul>
+          <h3 class="doc-h3" id="watch-list-rows">What a row shows</h3>
+          <ul class="doc-ul">
+            <li>The record’s name and its main figure (an amount, when the record has one).</li>
+            <li>Its current step and how long it has been there next to the usual time records spend on that step, for example “20 d / usually 17 m” (amber once it has been there longer than usual).</li>
+            <li>Who owns the current step.</li>
+            <li>What changed last, who did it and when, for example “Moved to Approved · Beth Lee · 2 m”.</li>
+            <li>A countdown when the step has a deadline, turning amber and red at the deadline’s own lines.</li>
+            <li>Hover a row for its card (step, owners, key amounts). Click it to look at the record in the side sheet; Cmd / Ctrl-click opens it in a new tab.</li>
+          </ul>
+          <p class="doc-p">When someone else changes a pinned record, its row gets a soft tint and a small dot until you look at it: open it, or use “Mark all as seen” (the double tick). Your own changes never light a row. A record you can no longer open shows as “No longer available” with a Remove button, and nothing else about it.</p>
+          <h3 class="doc-h3" id="watch-list-dock">Open, minimized or closed</h3>
+          <ul class="doc-ul">
+            <li>Open: a column at the right edge of the page. It takes its own space and never covers the page. Drag its left edge to make it wider or narrower (or focus the edge and use the arrow keys).</li>
+            <li>Minimized (the – button): a slim strip showing how many records you pin and how many changed. Click it to open the list again.</li>
+            <li>Closed (the × button): only the binoculars icon stays, in the sidebar (admin) or the top bar. A small dot on it means a pinned record changed, or a mention is waiting, while the list was closed.</li>
+            <li>Shift W opens or closes the list from anywhere.</li>
+            <li>On narrow windows and phones the list never takes a column: the binoculars icon opens it as a panel over the page.</li>
+            <li>Whether it is open, its width, the tab and the sort are remembered for you on every device.</li>
+          </ul>
+          <h3 class="doc-h3" id="watch-list-sort">Order</h3>
+          <p class="doc-p">“My order” keeps the order you choose: drag a row by the grip on its left edge. “Last change” puts the most recently changed records first; “Due soonest” puts the nearest deadlines first.</p>
+          <h3 class="doc-h3" id="watch-list-waiting">Waiting on others</h3>
+          <p class="doc-p">The Waiting tab lists records you raised that are sitting on a step someone else owns: who it is with and how long it has waited, longest first. “Raised” means you created the record (in the last 180 days), or the record’s “created by” field names you. It updates on its own as records move.</p>
+          <h3 class="doc-h3" id="watch-list-mentions">Mentions &amp; replies</h3>
+          <ul class="doc-ul">
+            <li>Mentions: every time someone @mentioned you in the last 30 days. These are your mention notifications, so reading one here also marks it read in the bell, and the other way round.</li>
+            <li>Replies: comments other people left after your own last comment on the same record (or the same field’s thread).</li>
+            <li>Click one to look at the record and mark it read. “Mark all read” clears the tab.</li>
+          </ul>
+          <h3 class="doc-h3" id="watch-list-alerts">Alerts on a pinned record</h3>
+          <p class="doc-p">Hover a pinned row and click the bell to be told when something happens to that record. The bell stays lit while the record has an alert.</p>
+          <ul class="doc-ul">
+            <li>It reaches a step: pick the step. You are told when the record arrives there (not when you moved it yourself).</li>
+            <li>A field changes: pick one of the fields you can see. You are told when someone else changes it.</li>
+            <li>It’s overdue: you are told when its current step passes its due time, once per step it runs late on.</li>
+            <li>Choose Once (the alert switches itself off after it fires) or Every time.</li>
+            <li>Alerts arrive as notifications under “Watch list alerts”, so Profile → Notification rules decides whether they also push or email. Unpinning a record removes its alerts.</li>
+          </ul>
+          <h3 class="doc-h3" id="watch-list-settings">Settings</h3>
+          <p class="doc-p">The settings button (the sliders, at the top of the list) holds switches that are yours alone. All of them start off.</p>
+          <ul class="doc-ul">
+            <li>Desktop alerts: a notice from your computer when someone else changes a pinned record while the page is in the background. Your browser asks for permission the first time you turn it on (never before). One notice per burst of changes, never for your own changes, and only one even with several tabs open.</li>
+            <li>Daily email: one email a day listing what changed on your pinned records in the last day, by someone other than you. It comes at your own daily-summary hour (Profile → Notifications) in your time zone, or at 7 AM Eastern when you have not set one. Nothing is sent on a quiet day.</li>
+            <li>Records that land on my step: when a record moves to a step you own, it is pinned for you.</li>
+            <li>Unpin them when they leave my step: a record pinned that way goes again when it moves on. A record you pinned yourself always stays.</li>
+          </ul>
+          <h3 class="doc-h3" id="watch-list-shared">Shared lists for a team</h3>
+          <ul class="doc-ul">
+            <li>Settings → New shared list: give it a name and add people. You are on it; a manager or an administrator can also make one for a team they are not on (“Add my direct reports” adds yours in one go).</li>
+            <li>Everyone on the list sees it as its own tab in the watch list, and can add records to it from a record page: the people icon beside the pin.</li>
+            <li>Each person only sees the records on it they are allowed to open. A record someone else cannot open is simply not in their tab.</li>
+            <li>Changes by others light rows the same way as your own list; your “seen” marks are yours alone.</li>
+            <li>The person who made it (or an administrator) can rename it, change its people or delete it from the list’s ⋯ menu. Anyone else can leave it there.</li>
+            <li>If the person who made it can no longer sign in (suspended, removed, or an integration account), the list stays visible but read-only. An administrator can choose Take ownership from its ⋯ menu to keep it going, or delete it.</li>
+          </ul>
+          <div class="doc-note">Everything in the list is read as you: only records, fields and comments you may see. Nothing in it polls; it follows the records over the live connection and refreshes at most once a second, however many changes arrive.</div>
+          <!-- /SYNC:watch-list -->
         </div>
 
         <div class="doc-section" id="s-computed-fields" data-toc='[{"id":"computed-fields","label":"Computed Fields"},{"id":"computed-rollup","label":"Rollup fields"},{"id":"computed-rollup-stored","label":"Stored rollups"},{"id":"computed-fields-where-from","label":"Where does this value come from?"}]'>
@@ -9221,7 +9294,7 @@ the layout review and view suggestions still run their rule checks without it.</
           <!-- /SYNC:ai-design -->
         </div>
 
-        <div class="doc-section" id="s-mcp" data-toc='[{"id":"mcp","label":"Connect an AI assistant (MCP)"},{"id":"mcp-chatgpt","label":"ChatGPT"},{"id":"mcp-claude","label":"Claude (claude.ai and Claude Desktop)"},{"id":"mcp-claude-code","label":"Claude Code"},{"id":"mcp-codex","label":"Codex"},{"id":"mcp-npm","label":"The npm server (stdio)"},{"id":"mcp-what","label":"What an assistant can do"},{"id":"mcp-records","label":"Checking, comparing and following records"},{"id":"mcp-instance-tools","label":"This instance’s own tools"},{"id":"mcp-tool-suggestions","label":"Suggested tools from how assistants work"},{"id":"mcp-keys","label":"Sign-in or API key"},{"id":"mcp-chat","label":"Chat needs its own permission"},{"id":"mcp-connections","label":"Connected apps"},{"id":"mcp-limits","label":"Limit what a connection may use"},{"id":"mcp-kits","label":"Tool kits"},{"id":"mcp-live","label":"Live record updates"},{"id":"mcp-console","label":"MCP console"},{"id":"mcp-contract-tests","label":"Tool contract tests"},{"id":"mcp-badge","label":"The “via assistant” badge"},{"id":"mcp-rollback","label":"Roll back a connection’s changes"},{"id":"mcp-schema-proposals","label":"Schema proposals"},{"id":"mcp-admin","label":"For administrators"},{"id":"mcp-settings","label":"Settings and how it works"}]'>
+        <div class="doc-section" id="s-mcp" data-toc='[{"id":"mcp","label":"Connect an AI assistant (MCP)"},{"id":"mcp-chatgpt","label":"ChatGPT"},{"id":"mcp-claude","label":"Claude (claude.ai and Claude Desktop)"},{"id":"mcp-claude-code","label":"Claude Code"},{"id":"mcp-codex","label":"Codex"},{"id":"mcp-npm","label":"The npm server (stdio)"},{"id":"mcp-what","label":"What an assistant can do"},{"id":"mcp-records","label":"Checking, comparing and following records"},{"id":"mcp-instance-tools","label":"This instance’s own tools"},{"id":"mcp-tool-suggestions","label":"Suggested tools from how assistants work"},{"id":"mcp-keys","label":"Sign-in or API key"},{"id":"mcp-chat","label":"Chat needs its own permission"},{"id":"mcp-connections","label":"Connected apps"},{"id":"mcp-limits","label":"Limit what a connection may use"},{"id":"mcp-kits","label":"Tool kits"},{"id":"mcp-live","label":"Live record updates"},{"id":"mcp-console","label":"MCP console"},{"id":"mcp-contract-tests","label":"Tool contract tests"},{"id":"mcp-badge","label":"The “via assistant” badge"},{"id":"mcp-agent-names","label":"Agent names, and agents on a record"},{"id":"mcp-rollback","label":"Roll back a connection’s changes"},{"id":"mcp-schema-proposals","label":"Schema proposals"},{"id":"mcp-admin","label":"For administrators"},{"id":"mcp-settings","label":"Settings and how it works"}]'>
           <!-- SYNC:mcp -->
           <h1 class="doc-h1" id="mcp">Connect an AI assistant (MCP)</h1>
           <p class="doc-p">Nivaro speaks the Model Context Protocol, so ChatGPT, Claude (claude.ai, Claude Desktop, Claude Code), Codex and Cursor can read and work with your data in a conversation: look up records and their history, run your custom queries, check My Work and queues, comment, create tasks and move records through their pipeline. The assistant always acts as **you** — your role, row rules and User Scopes apply exactly as in the app, and everything it changes is recorded as your change.</p>
@@ -9332,6 +9405,10 @@ bearer_token_env_var = "NIVARO_TOKEN"</code></pre>
           <p class="doc-p">In CI: <code class="doc-code">NIVARO_URL=… NIVARO_TOKEN=&lt;an administrator’s API key&gt; pnpm mcp:contract-tests</code> runs every test that is on and exits 1 when one fails (<code class="doc-code">--ids 3,7</code> for some, <code class="doc-code">--json</code> for the whole answer). Routes under <code class="doc-code">/api/mcp-console/tests</code> (administrators): <code class="doc-code">GET /</code>, <code class="doc-code">POST /</code> <code class="doc-code">{name, tool, arguments, output, is_error}</code>, <code class="doc-code">PATCH /:id</code> <code class="doc-code">{name?, enabled?, accept?}</code>, <code class="doc-code">DELETE /:id</code>, <code class="doc-code">POST /run</code> <code class="doc-code">{ids?}</code>. A connection’s top tools on **MCP → Connections** open the console on that tool, ready to save a test. Stored in <code class="doc-code">nivaro_mcp_contract_tests</code> (migration 509).</p>
           <h2 class="doc-h2" id="mcp-badge">The “via assistant” badge</h2>
           <p class="doc-p">Every edit and comment an assistant makes through the hosted endpoint carries a small badge beside the person’s name — in the record’s History, its comments and the Activity log, in the admin and in apps built on the shared components. By default it names the app (**via Claude**, **via Claude Code**: the name the app registered with, or the API key’s name); an administrator can switch it to one fixed label for every assistant (default **via assistant**) on **MCP → Connections**. The label is worked out when the record is read, so changing the setting relabels earlier changes too. The app’s name and the connection are stored on the Activity row (<code class="doc-code">nivaro_activity.via_app</code>, <code class="doc-code">mcp_conn</code>, migration 512) from server-known facts only — never from a header the app sends. Writes a person makes themselves, scripts using an API key directly, imports and scheduled jobs carry no badge.</p>
+          <h2 class="doc-h2" id="mcp-agent-names">Agent names, and agents on a record</h2>
+          <p class="doc-p">Each connection goes by a name — by default the app’s own (**Claude**, **Claude Code**, the API key’s name). The person who connected it can rename it on **Profile → What my agents did** (the pencil beside its name), and an administrator can rename anyone’s on **MCP → Connections**. Names are plain text, up to 40 characters; clearing one goes back to the app’s name. The name is used everywhere an agent’s work is shown: the badge on its changes and comments (**via Desk Claude**), notifications its changes cause, chat messages it posts, and on the record itself.</p>
+          <p class="doc-p">While an agent reads or changes a record, everyone who has that record open sees a quiet line beside its viewers: **Claude (for Rob) is updating this record** (or **is reading**). It shows only to people who can open the record, names only the agent and the person it works for, and goes away by itself a few seconds after the agent stops (about 15 seconds after a read, 25 after a change). People who chose **Calm** or **Off** for live updates do not see it.</p>
+          <p class="doc-p">How it works: names are kept per connection in the MCP settings (<code class="doc-code">connection_names</code>); <code class="doc-code">PATCH /api/mcp-connections/mine/:conn/name</code> <code class="doc-code">{name | null}</code> for the owner, <code class="doc-code">PATCH /api/mcp-connections/:conn/name</code> for administrators. A renamed agent relabels its earlier changes too. Each in-process tool call that reads or writes one record (<code class="doc-code">/api/items/:collection/:id</code>, a pipeline move, a comment) marks that record for a short time and tells the record’s room <code class="doc-code">record:agents</code>; a page opened later is told on joining. Nothing is sent for a record nobody has open.</p>
           <h2 class="doc-h2" id="mcp-rollback">Roll back a connection’s changes</h2>
           <p class="doc-p">**Roll back…** on a connection (your **What my agents did** tab for your own, **MCP → Connections** for administrators) undoes everything that connection wrote in a time window — the last hour, day, week, two weeks, or between two times (at most 90 days). First comes a preview: per record, what would happen — delete a record it created, put back the fields it changed (their names, never values) to how they were before its first change in the window, bring back a record it deleted (from the trash, while it is there), or remove a comment it posted. Records someone else changed since, or the same app changed again after the window, are **left alone** and listed with who changed them and when. Configuration changes are counted but never rolled back here.</p>
           <p class="doc-p">Applying runs every step through the items service **as the person the connection acts for** — their permissions, validation and rules apply, and every step gets its own history entry — newest change first, and logs one <code class="doc-code">mcp-rollback</code> Activity row with the counts. If anything changed between the preview and Apply, nothing runs and the new preview is shown (409). When the person can no longer sign in, an administrator’s rollback runs as the administrator and says so. Only a person signed in to Nivaro can apply a rollback: an API key or a connected app cannot roll back (or protect) its own writes. Routes: <code class="doc-code">POST /api/mcp-connections/mine/:conn/rollback/preview</code> and <code class="doc-code">…/rollback</code> (your own), <code class="doc-code">POST /api/mcp-connections/:conn/rollback/preview</code> and <code class="doc-code">…/rollback</code> (administrators), each with <code class="doc-code">{from, to?}</code> and, to apply, the preview’s <code class="doc-code">plan_hash</code>.</p>
@@ -13257,18 +13334,42 @@ PATCH /api/collections/chat_messages
           <!-- /SYNC:audit-levels -->
         </div>
 
-        <div class="doc-section" id="s-record-merge" data-toc='[{"id":"record-merge","label":"Record Merge"}]'>
+        <div class="doc-section" id="s-record-merge" data-toc='[{"id":"record-merge","label":"Merge Records"},{"id":"record-merge-start","label":"Where to start"},{"id":"record-merge-screen","label":"The merge screen"},{"id":"record-merge-rules","label":"What is checked"},{"id":"record-merge-setting","label":"Allow merging"},{"id":"record-merge-api","label":"API"}]'>
           <!-- SYNC:record-merge -->
-          <h1 class="doc-h1" id="record-merge">Record Merge</h1>
-          <p class="doc-p">Combine duplicate records into one survivor. Administrators select 2–5 rows in the collection browser and hit Merge: a side-by-side sheet shows every differing field, you pick the surviving record (defaults to the most-referenced) and which value wins per field.</p>
-          <pre class="doc-pre"><code>GET  /api/merge/preview?collection=&amp;ids=a,b   # field values + inbound reference counts
-POST /api/merge  { collection, survivor_id, loser_ids, field_choices }</code></pre>
+          <h1 class="doc-h1" id="record-merge">Merge Records</h1>
+          <p class="doc-p">Two or more records that are really the same thing become one. You choose each value from any of them — or combine or type it — which record survives, and what happens to everything linked to the others.</p>
+          <h2 class="doc-h2" id="record-merge-start">Where to start</h2>
           <ul class="doc-ul">
-            <li>Every inbound reference repoints to the survivor: M2O foreign keys in bulk, M2M junction rows individually (rows that would duplicate an existing pairing are dropped).</li>
-            <li>Chosen field values apply through the normal update path — hooks, validation and row security run.</li>
-            <li>Losers are deleted through the items service, so they land in Trash and stay restorable.</li>
-            <li>Administrators only — both routes (preview and merge) answer 403 to everyone else.</li>
+            <li>A list: select 2 to 5 records, then Merge… in the selection bar.</li>
+            <li>A record: ⋯ → Merge with… — likely duplicates are offered first, or search for the others.</li>
+            <li>The duplicate warning on a new record: Merge… folds what you typed into the existing record instead of saving a copy.</li>
           </ul>
+          <h2 class="doc-h2" id="record-merge-screen">The merge screen</h2>
+          <ul class="doc-ul">
+            <li>One column per record and a Result column. Click a value in any column to use it; Combine joins long text line by line, rich text by paragraph, and tags or multi-selects as a union; Edit lets you type a new value.</li>
+            <li>Per record: Keep (one record — it keeps its id, number, history and pipeline step), Discard (it goes to the trash with a “Merged into …” note and can be restored) or Not in this merge (it only lends values).</li>
+            <li>Lines, links from other lists, many-to-many links and files, comments, tasks and related-record links on the discarded records are counted. Each one moves to the kept record by default; choose Leave to keep it with the discarded record.</li>
+            <li>Review lists every field that changes (now → after, and where the value came from) and every move before anything is saved.</li>
+          </ul>
+          <h2 class="doc-h2" id="record-merge-rules">What is checked</h2>
+          <ul class="doc-ul">
+            <li>Everything is judged as you: you must be able to change the kept record and delete the discarded ones. Someone else editing a record, a post-approval lock or a record already sent along its process refuses with the plain reason.</li>
+            <li>Rows you cannot see or change are never moved by you — a list’s rows move only when you can move all of them; comments on fields you cannot see, other people’s tasks and links to records you cannot see stay with the discarded record.</li>
+            <li>A discarded record that was sent to a partner (it holds an id there) shows a warning; only an administrator can discard it.</li>
+            <li>Open approvals on the discarded records are closed and their open tasks closed with a merge note (moved tasks stay open on the kept record).</li>
+            <li>If someone changes one of the records while you are merging, the merge is refused with their name and the screen reads the records again, keeping your choices wherever that field did not change. If any step fails, what was already done is put back and nothing stays half-merged.</li>
+            <li>Undo is offered for 24 hours (on the done screen and in the kept record’s ⋯ menu): the discarded records come back from the trash, moved rows go back, and the kept record’s fields go back — a field someone changed after the merge keeps the newer value.</li>
+          </ul>
+          <h2 class="doc-h2" id="record-merge-setting">Allow merging</h2>
+          <p class="doc-p">Data Model → a collection → Settings → Allow merging. It is on by default for every collection, separately from the duplicate warning (a list can turn duplicate warnings off and still allow merging). Turn it off where people must never merge records; scripts/merge-records-mode.mjs does it for several collections at once (dry run first, then --execute).</p>
+          <h2 class="doc-h2" id="record-merge-api">API</h2>
+          <pre class="doc-pre"><code>GET  /api/record-merge/:collection/allowed?item=        # switch + may I merge here, undo offer
+GET  /api/record-merge/:collection/candidates?of=&amp;q=   # likely duplicates, then search
+GET  /api/record-merge/:collection/plan?ids=a,b        # the merge screen's data (as you)
+POST /api/record-merge/:collection/apply  { survivor, discard: [], keep?: [], values: {}, relations: { &lt;key&gt;: 'move' | 'leave' } }
+GET  /api/record-merge/undo/:mergeId                   # still undoable?
+POST /api/record-merge/undo/:mergeId                   # undo (24 h)</code></pre>
+          <div class="doc-note">The older administrator-only one-step merge (POST /api/record-merge/:collection {survivor_id, merged_id}, POST /api/merge) stays for scripts; it does not check the person, locks or partners.</div>
           <!-- /SYNC:record-merge -->
         </div>
 
@@ -17520,8 +17621,32 @@ PATCH /api/item-locks/config/:collection
           <!-- /SYNC:live-coedit -->
         </div>
 
+        <div class="doc-section" id="s-live-sync" data-toc='[{"id":"live-sync","label":"Offline saves and shared budget grids"},{"id":"live-sync-offline","label":"Saves made while you were offline"},{"id":"live-sync-grids","label":"Who is editing a budget or forecast grid"}]'>
+          <!-- SYNC:live-sync -->
+          <h1 class="doc-h1" id="live-sync">Offline saves and shared budget grids</h1>
+          <h3 class="doc-h3" id="live-sync-offline">Saves made while you were offline</h3>
+          <p class="doc-p">A Save pressed while the connection was down waits and goes out when you are back online. Before it goes, the app checks each field against what others changed while you were away. Fields nobody else touched are saved at once.</p>
+          <p class="doc-p">A field someone else changed is never sent on its own. A one-line note in the corner says how many wait (“1 offline change needs a look”); click it for the card that lists each one — for example “Beth changed Amount while you were offline” — with their value and yours, and three choices:</p>
+          <ul class="doc-ul">
+            <li>**Keep mine** — your value is saved over theirs.</li>
+            <li>**Take theirs** — your change to that field is dropped.</li>
+            <li>**Merge** — for long text and multi-value fields; combine both, then **Use merged**.</li>
+          </ul>
+          <p class="doc-p">Nothing on the card is sent until every field on it has a choice. If someone changes the same field again before it goes, it comes back to the card instead of being overwritten. The check reads the record as you: a field you may no longer see shows only that it changed, never its value. If the record is open in a form, the form’s own merge dialog handles it instead. The card also opens by itself if you press Save or leave a record while something still waits; fold it away with the arrow.</p>
+          <h3 class="doc-h3" id="live-sync-grids">Who is editing a budget or forecast grid</h3>
+          <p class="doc-p">On the forecast worksheet, allocation matrices and browse-then-edit grids, a quiet line near the top says who else is editing and where — “Beth is editing allocations for 4471 · East · Fiber” — and the cell they are in has a thin outline in their colour (point at it for their name). Moving quickly across cells shows only the cell they stop on.</p>
+          <ul class="doc-ul">
+            <li>You only see people on rows you are allowed to read; the server checks this for every row, as you. If your access changes, the page asks again, so a row you regain shows people again without a reload.</li>
+            <li>Names, rows and cells only — never the amounts someone is typing.</li>
+            <li>With live updates set to Calm or Off (Profile → Display) the line and outlines are hidden. Others still see you.</li>
+            <li>A mark fades by itself within a minute if the other person’s browser closes without saying goodbye.</li>
+          </ul>
+          <div class="doc-note">Matrix and grid pages can name what they edit with the <code class="doc-code">presence_noun</code> option (for example <code class="doc-code">allocations</code>); without it the line uses the collection name.</div>
+          <!-- /SYNC:live-sync -->
+        </div>
+
         <!-- NOTIFICATIONS CENTER -->
-        <div class="doc-section" id="s-notifications-center" data-toc='[{"id":"notifications-center","label":"Notifications Center"},{"id":"notification-role-defaults","label":"Default notification rules by role"},{"id":"notification-why","label":"Why did I get this?"},{"id":"notification-changes","label":"What changed, in the notification"},{"id":"notification-done-by-itself","label":"Done by itself when someone handles it"},{"id":"notification-fold","label":"Several updates, one notification"},{"id":"record-panel-new-count","label":"\"2 new\" on Comments and Tasks"}]'>
+        <div class="doc-section" id="s-notifications-center" data-toc='[{"id":"notifications-center","label":"Notifications Center"},{"id":"notification-role-defaults","label":"Default notification rules by role"},{"id":"notification-why","label":"Why did I get this?"},{"id":"notification-changes","label":"What changed, in the notification"},{"id":"notification-done-by-itself","label":"Done by itself when someone handles it"},{"id":"notification-fold","label":"Several updates, one notification"},{"id":"bulk-change-notice","label":"One notice for a bulk change to your records"},{"id":"record-panel-new-count","label":"\"2 new\" on Comments and Tasks"}]'>
           <!-- SYNC:notifications-center -->
           <h1 class="doc-h1" id="notifications-center">Notifications Center</h1>
           <p class="doc-p">Beyond the bell dropdown, the /notifications page is a full paginated inbox of every notification — filter by status, jump to the related record, and mark all as read in one click.</p>
@@ -17611,6 +17736,8 @@ POST /api/notifications/test-my-rules  { "category": "workflow", "email": true, 
           <p class="doc-p">The daily summary email checks again just before it goes out: anything handled since it was queued is left out, and a summary with nothing left in it is not sent.</p>
           <h3 class="doc-h3" id="notification-fold">Several updates, one notification</h3>
           <p class="doc-p">When updates about one record arrive close together, they fold into one notification instead of stacking up: "3 updates on CM26-79704: moved to Review, 2 comments". While the newest unread update about a record is less than 10 minutes old, the next one rewrites it: it moves to the top, the bell still counts one, and no second phone alert goes out. "3 updates" under the row lists each of them, newest first. Only FYI updates fold; anything that asks you to act, a mention, or an acknowledgement always stays its own notification. Once you have read it, the next update starts a new one.</p>
+          <h3 class="doc-h3" id="bulk-change-notice">One notice for a bulk change to your records</h3>
+          <p class="doc-p">When someone else changes many of your records at once — a bulk update, a bulk move, an import — you get ONE notification instead of one per record: "Beth updated 12 of your records (Amount, Status)". "Your records" are the ones you created and the ones whose current step you own. The notice opens the collection list showing exactly those records (the first few dozen when there are very many). It appears a few seconds after the action settles, and only when at least 5 of your records were touched (the instance setting <code class="doc-code">BULK_NOTICE_MIN</code> changes the 5). It is an FYI in the "Watched records" category, so your notification rules, mutes, quiet hours and role defaults decide whether, and how, it reaches you — read at the moment it is sent. It only counts records you can open and names only fields you can read. You are never told about your own bulk changes. Records you watch or subscribe to fold in the same way: when a bulk action touches at least that many of them you get one "Beth updated 12 records you watch (Amount, Status)" notice instead of one per record; with fewer you keep the per-record notices exactly as before. Because the per-record notices of a watch are held until the action settles, the single notice arrives about 20 seconds after it.</p>
           <h3 class="doc-h3" id="record-panel-new-count">"2 new" on Comments and Tasks</h3>
           <p class="doc-p">On a record, a folded Comments or Tasks panel shows "2 new" beside its name when other people added comments, or added or finished tasks, since you last had that panel open on that record. It updates live and clears when you open the panel. The mark is kept in your browser per record; the first time you see a record it starts from that moment, so an old record never opens on a pile of "new".</p>
           <pre class="doc-pre"><code>GET /api/notifications → each row carries
@@ -18473,11 +18600,9 @@ GET /api/duplicates/unit_types/test?record=&lt;id&gt;&amp;config=&lt;JSON&gt;   
             <li>Only fields the person may read are named. Read-only, calculated and generated fields are never badged.</li>
           </ul>
           <h2 class="doc-h2" id="partner-needs-which">Which steps count</h2>
-          <ul class="doc-ul">
             <li>Partner pushes on steps out of the record’s current step and out of every step it can reach by moving forward (to a step with a higher order). A new record starts at its pipeline’s first step. When the pipeline’s steps have no order, only the next steps count. Steps a person presses and automatic steps both count.</li>
             <li>A push counts only when its own conditions pass for the current values: the lookup that must find a row (<code class="doc-code">skip_when_empty</code>), the any-of check (<code class="doc-code">skip_unless_any</code>) and the guard rules. These are the same checks the push itself runs.</li>
             <li>What a push needs is read from its payload template: a value it always sends with no fallback. A value with a fallback, one sent only when it is not empty, or one inside an <code class="doc-code">if</code> in Liquid is not badged.</li>
-          </ul>
           <h2 class="doc-h2" id="partner-needs-setting">Turning it on</h2>
           <p class="doc-p">**Data Model → Settings → Form UX → Partner needs on the form**, per collection, off by default. Stored as <code class="doc-code">browser_config.partner_badges</code> on the collection (no migration):</p>
           <pre class="doc-pre"><code>PATCH /api/collections/stock_requests
@@ -18505,14 +18630,12 @@ GET /api/duplicates/unit_types/test?record=&lt;id&gt;&amp;config=&lt;JSON&gt;   
           <h1 class="doc-h1" id="line-split">Move Lines to a New Record</h1>
           <p class="doc-p">Sometimes part of a request ships now and the rest later, or some lines need a different warehouse. Instead of deleting lines and typing a second request by hand, people tick the lines and move them to a new record. The details are copied, the ticked lines move (they keep their history), and both records say where the lines went.</p>
           <h2 class="doc-h2" id="line-split-use">On a record</h2>
-          <ul class="doc-ul">
             <li>In the line grid, press **Select rows**, tick the lines to move, then **Move N to a new …**. A short panel says what will happen; **Move N lines** does it.</li>
             <li>The new record gets this record’s details and starts at the first step of its pipeline, like any new record. The ticked lines move onto it; the others stay.</li>
             <li>Both records get a note in their Notes thread — “Moved 3 lines to a new record” and “Created from another record — 3 lines moved here” — with a link to the other one. History shows the same.</li>
             <li>A message offers **Open the new …**. The record you were on stays open, without the moved lines.</li>
             <li>At least one line must stay and one must move. To take every line, use More → Duplicate instead.</li>
             <li>Only saved lines can move: save new lines and line changes first.</li>
-          </ul>
           <h2 class="doc-h2" id="line-split-who">Who may do it</h2>
           <p class="doc-p">The person must be able to change the record and its lines, and to create records of that kind. A record someone else is editing, or one locked while it waits on approvers (or locked for administrators after approval), refuses the move with the reason in plain words. Nothing is changed when any line is refused: the new record and every moved line are put back.</p>
           <h2 class="doc-h2" id="line-split-copy">What is copied</h2>
@@ -18522,6 +18645,34 @@ GET /api/duplicates/unit_types/test?record=&lt;id&gt;&amp;config=&lt;JSON&gt;   
           <h2 class="doc-h2" id="line-split-api">API</h2>
           <p class="doc-p"><code class="doc-code">POST /api/record-split/:collection/:id</code> with <code class="doc-code">{relation: "&lt;line collection&gt;.&lt;link field&gt;", line_ids: [...], values?: {...}}</code> answers <code class="doc-code">201 {data: {id, readable, moved, relation, field, link_failures}}</code>. <code class="doc-code">values</code> sets details of the new record that differ (only fields the copy itself could carry). Refusals answer a plain <code class="doc-code">error</code> and a <code class="doc-code">code</code>: <code class="doc-code">SPLIT_OFF</code>, <code class="doc-code">SPLIT_RELATION</code>, <code class="doc-code">SPLIT_NO_LINES</code>, <code class="doc-code">SPLIT_KEEP_ONE</code>, <code class="doc-code">SPLIT_LINE_NOT_ON_RECORD</code>, <code class="doc-code">EDIT_LOCKED</code>, <code class="doc-code">RECORD_LOCKED</code>. It is one write: the record is created with <code class="doc-code">{&lt;lines field&gt;: {move: [ids]}}</code>, the nested one-to-many shape any create or update can use to move existing rows onto a record.</p>
           <!-- /SYNC:line-split -->
+        <div class="doc-section" id="s-copying-records" data-toc='[{"id":"copying-records","label":"Copying Records"},{"id":"copying-records-paths","label":"Where people copy records"},{"id":"copying-records-never","label":"What is never copied"},{"id":"copying-records-setting","label":"Adding fields to the list"},{"id":"copying-records-api","label":"API"}]'>
+          <!-- SYNC:copying-records -->
+          <h1 class="doc-h1" id="copying-records">Copying Records</h1>
+          <p class="doc-p">A copy of a record is a new record. It starts at the first step of its workflow, like any record someone creates by hand: its owners are worked out again, its deadline clocks start now, and none of the original’s history, approvals or notes come along. Only the values a person would type again are copied.</p>
+          <h2 class="doc-h2" id="copying-records-paths">Where people copy records</h2>
+            <li>**Clone** on the record page (More menu, admin and efp-new) — a dialog to change or leave out fields, then <code class="doc-code">POST /api/items/:collection/:id/clone</code>; the copy opens at once, so nobody mistakes the original (still at its step) for the copy. Linked lists (Zone, Project Sub Type…) copy too; a list you may not set stays behind and the message names it.</li>
+            <li>**More → Duplicate** on the record page (admin and efp-new) — opens a new, filled-in form; nothing is saved until the person saves it.</li>
+            <li>**Save as template** — the template keeps the same values a copy would.</li>
+            <li>Lines copied with a record (a grid’s child rows) follow the same rule for their own collection.</li>
+          <h2 class="doc-h2" id="copying-records-never">What is never copied</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Kind of field</th><th>Why</th></tr></thead>
+            <tbody><tr><tr><td>The workflow step field (the pipeline’s state field)</td><td>The copy starts at the first step.</td></tr>
+              <tr><td>Id, created / changed stamps, creator, last step change</td><td>The copy gets its own.</td></tr>
+              <tr><td>Generated ids (auto-id fields)</td><td>A new number is given on save.</td></tr>
+              <tr><td>Calculated fields and totals from lines</td><td>Worked out again for the copy.</td></tr>
+              <tr><td>Read-only fields</td><td>Written by the system: partner statuses, shipped quantities.</td></tr>
+              <tr><td>Hidden fields</td><td>Integration and system state: external ids, triggers.</td></tr>
+              <tr><td>Fields marked “do not duplicate”</td><td>Partner numbers such as an order number.</td></tr>
+              <tr><td>Fields on the collection’s “Never copied” list</td><td>Anything else that belongs to the original only.</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="copying-records-setting">Adding fields to the list</h2>
+          <p class="doc-p">**Table Editor → Settings → Collection Browser → Never copied when duplicating**: pick the fields. Stored as <code class="doc-code">browser_config.never_copy</code> (a list of field names) on the collection; no migration. The card also lists the fields that are always left out and why.</p>
+          <h2 class="doc-h2" id="copying-records-api">API</h2>
+          <pre class="doc-pre"><code>GET /api/copy-rules/:collection
+→ { "data": { "skip": { "request_state": "pipeline-state", "order_number": "do-not-duplicate", … } } }</code></pre>
+          <p class="doc-p">Signed in, and only for collections the caller may read. Field names and reasons only, never values. The clone endpoint applies the same rule, so <code class="doc-code">field_overrides</code> cannot set a field that never copies. It also copies the many-to-many lists under the same rule, each link written as the caller; a list the caller may not set or a refused link comes back as <code class="doc-code">not_copied: [{ field, reason }]</code> (<code class="doc-code">no-access</code> | <code class="doc-code">refused</code>).</p>
+          <!-- /SYNC:copying-records -->
         </div>
 
         <div class="doc-section" id="s-list-signals" data-toc='[{"id":"list-signals","label":"Fulfilment, Send-backs &amp; Back to Queue"},{"id":"list-signals-fulfilment","label":"Shipped n / m on lists"},{"id":"list-signals-send-backs","label":"Sent back"},{"id":"list-signals-back","label":"Back to the queue"},{"id":"list-signals-open-tabs","label":"Open in tabs"},{"id":"list-signals-recent","label":"Recently viewed"},{"id":"list-signals-owner-load","label":"Owner load"},{"id":"list-signals-saved-view-widget","label":"Dashboard widgets from a saved view"},{"id":"list-signals-sla-presets","label":"SLA duration presets"},{"id":"list-signals-row-flags","label":"Row flags on a catalog picker"},{"id":"list-signals-facet-builder","label":"Facet builders on a catalog picker"},{"id":"list-signals-unseen","label":"Changed since you looked"},{"id":"list-signals-formula-columns","label":"Formula columns"},{"id":"list-signals-role-default","label":"Default view per role"},{"id":"list-signals-heavy-columns","label":"Heavy list columns"},{"id":"list-signals-tree","label":"Tree view and hierarchy scope"}]'>
@@ -20090,6 +20241,7 @@ await ctx.sql.announceWrites?.('forecasts', ids, { action: 'update', changed_fie
           <p class="doc-p">The outside-write watcher is the safety net for writers that never announce. Every 10 seconds (Realtime → Outside writes sets it, 5 seconds to 5 minutes), on the server that runs scheduled jobs, it looks at the collections people have open right now (or a list you choose) for rows whose changed-at time moved since the last look, and announces them like any other raw write. Rows the app itself announced a moment earlier are skipped, so no screen re-reads them twice.</p>
           <ul class="doc-ul">
             <li>Where SQL Server change tracking is on for the table, the watcher reads the tracked changes since the last version it saw instead: no changed-at column or index needed, and removals are seen too (announced as deletes). It stays one look behind, so a procedure that announces its own writes is never announced twice. If the kept history (2 days) no longer reaches the last version, one “many records changed” goes out and it starts again from now. Change tracking is set up per database with api/src/scripts/change-tracking-setup.ts. The Outside writes tab shows per collection which way it is watched.</li>
+            <li>With change tracking, rows that belong to another record reach that record: a pipeline move (instances, history) refreshes its state and owners, a task its Tasks (a support ticket the support desk), a comment its Comments, a file or file link its Files, an addendum or approval the parent’s Addendums, a child row (a line, an addendum) the parent’s related lists. People changes reach pickers and avatars (directory columns only — a sign-in is not a change). Only ids and aspect names are sent; a row whose record cannot be found any more is dropped.</li>
             <li>A collection is watched on its changed-at column: the field marked “date updated”, else date_updated, updated_at, modified and similar names. It needs an index that starts with that column and a one-column primary key; without them it is refused (the Outside writes tab says why), so the watcher never reads a whole table every few seconds.</li>
             <li>Each look reads a small window by the database’s own clock, in UTC and in local time (procedures often stamp GETDATE()), reaching two minutes back for transactions that commit late, and skips rows other transactions hold locked until a later look.</li>
             <li>More than 500 changed rows in one look become one “many records changed” announcement.</li>

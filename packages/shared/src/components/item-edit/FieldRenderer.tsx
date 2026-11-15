@@ -74,6 +74,7 @@ import {
   type QuickCreateConfig,
   useQuickCreateFollow
 } from './QuickCreateButton'
+import { RecalcValue, recalcStateOf } from './RecalcValue'
 import { RelationCombobox } from './RelationCombobox'
 import { RelationGroupedCombobox } from './RelationGroupedCombobox'
 import { RichTextEditor } from './RichTextEditor'
@@ -571,35 +572,40 @@ export const FieldRenderer = memo(function FieldRenderer({
     const liveDelta = (
       field.options as { __live_delta?: { original: unknown; live: number } } | null
     )?.__live_delta
+    // rt7 #9: a total the server is recalculating keeps its old figure, dimmed, beside a quiet
+    // "Updating…" until the new one lands (lib/rollup-recalc.ts).
+    const recalc = recalcStateOf(field.options)
     if (liveDelta && Number.isFinite(Number(liveDelta.live))) {
       const originalNum = Number(liveDelta.original)
       const rawDiff = Number(liveDelta.live) - (Number.isFinite(originalNum) ? originalNum : 0)
       // Round to cents: float sums drift, and a "+$0.00" chip is noise.
       const diff = Math.round(rawDiff * 100) / 100
       return (
-        <div className='flex min-h-[36px] flex-wrap items-center gap-x-2 gap-y-0.5'>
-          <span className='text-sm text-slate-400 line-through tabular-nums'>
-            {formatDisplayValue(liveDelta.original, field)}
-          </span>
-          <span className='text-slate-300' aria-hidden>
-            →
-          </span>
-          <span className='text-sm font-medium tabular-nums'>
-            {formatDisplayValue(liveDelta.live, field)}
-          </span>
-          {diff !== 0 && (
-            <span
-              className={`rounded px-1.5 py-px text-[11px] font-medium tabular-nums ${
-                diff > 0
-                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400'
-                  : 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400'
-              }`}
-            >
-              {diff > 0 ? '+' : '−'}
-              {formatDisplayValue(Math.abs(diff), field)}
+        <RecalcValue state={recalc} className='min-h-[36px]'>
+          <div className='flex min-h-[36px] flex-wrap items-center gap-x-2 gap-y-0.5'>
+            <span className='text-sm text-slate-400 line-through tabular-nums'>
+              {formatDisplayValue(liveDelta.original, field)}
             </span>
-          )}
-        </div>
+            <span className='text-slate-300' aria-hidden>
+              →
+            </span>
+            <span className='text-sm font-medium tabular-nums'>
+              {formatDisplayValue(liveDelta.live, field)}
+            </span>
+            {diff !== 0 && (
+              <span
+                className={`rounded px-1.5 py-px text-[11px] font-medium tabular-nums ${
+                  diff > 0
+                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400'
+                    : 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400'
+                }`}
+              >
+                {diff > 0 ? '+' : '−'}
+                {formatDisplayValue(Math.abs(diff), field)}
+              </span>
+            )}
+          </div>
+        </RecalcValue>
       )
     }
     // Structured interfaces keep their real rendering in read-only mode —
@@ -622,7 +628,11 @@ export const FieldRenderer = memo(function FieldRenderer({
       ) : (
         <span className='text-sm tabular-nums'>{formatDisplayValue(value, field)}</span>
       )
-    return <div className='min-h-[36px] flex items-center'>{display}</div>
+    return (
+      <div className='min-h-[36px] flex items-center'>
+        <RecalcValue state={recalc}>{display}</RecalcValue>
+      </div>
+    )
   }
 
   const strVal = value === null || value === undefined ? '' : String(value)

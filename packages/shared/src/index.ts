@@ -1,6 +1,21 @@
 export type { ActivityEntryProps } from './components/ActivityEntry'
 export { ActivityEntry, ActivityFeed, useActivityLabels } from './components/ActivityEntry'
+export type { FeedSourceInput } from './components/activity/RecordActivityStream'
+export { RecordActivityStream } from './components/activity/RecordActivityStream'
 export { AgentBadge } from './components/AgentBadge'
+export { AgentPresenceChip } from './components/AgentPresenceChip'
+export {
+  type ConfigReachAnswer,
+  ConfigReachNote,
+  configReachText
+} from './components/ConfigReachNote'
+export {
+  type AgentMode,
+  agentSentence,
+  agentsFromPayload,
+  type RecordAgent,
+  useRecordAgents
+} from './lib/agent-presence'
 export * from './components/AnnouncementBanner'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export * from './components/AudienceConfirmPanel'
@@ -435,6 +450,16 @@ export {
   type McpAdminTab,
   McpConnectionsAdminView
 } from './components/McpConnectionsAdminView'
+export {
+  type MergeDoneInfo,
+  MergeRecordsDialog
+} from './components/merge/MergeRecordsDialog'
+export {
+  MergePicker,
+  MergeRecordMenuItems,
+  MergeWithFlow,
+  useMergeAllowed
+} from './components/merge/MergeWithFlow'
 export { MyWorkView } from './components/MyWorkView'
 // rt5 #15 — "You're covering for Jane today — 4 of Jane's records need you".
 export {
@@ -676,6 +701,13 @@ export {
   type ReportProblemPayload
 } from './components/support/ReportProblem'
 export { SupportRequestDialog } from './components/support/SupportRequestDialog'
+export {
+  LiveScreenViewer,
+  ScreenShareBar,
+  ScreenShareHost,
+  type ScreenShareHostProps,
+  ScreenSharePanel
+} from './components/support/ScreenShare'
 export { SupportView } from './components/support/SupportView'
 export {
   StatusPill as SupportStatusPill,
@@ -696,6 +728,9 @@ export { UserAvatar } from './components/UserAvatar'
 export { WidgetImageMenu } from './components/WidgetImageMenu'
 export type { InputBinding } from './components/WidgetSlot'
 export { WidgetSlot } from './components/WidgetSlot'
+export { WatchDock } from './components/watch-list/WatchDock'
+export { WatchListButton } from './components/watch-list/WatchListButton'
+export { WatchPinButton } from './components/watch-list/WatchPinButton'
 export type {
   ReviewListConfig,
   ReviewListResult,
@@ -974,6 +1009,17 @@ export {
   cursorColor,
   markRemoteCell
 } from './lib/grid-cursors'
+// Who is editing on a budget / planning grid (realtime round 8, item 22).
+export { GridPresenceLine } from './components/GridPresenceLine'
+export {
+  type GridEditor,
+  type GridPresence,
+  type GridPresenceOptions,
+  gridPageKey,
+  gridPresenceCell,
+  parseGridPresenceCell,
+  useGridPresence
+} from './lib/grid-presence'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
 export {
   type BuildStatus,
@@ -997,6 +1043,16 @@ export { LineLockContext, lineLockView, useLineLocks } from './lib/line-locks'
 export { coeditCovers, coeditLive } from './lib/coedit-registry'
 export { linkedChangeSentence, useLinkedRecordWatch } from './lib/linked-changes'
 export * from './lib/list-inline-edit'
+// rt6 — status badges in pickers + soft locks on list cells.
+export * from './lib/cell-locks'
+export {
+  forgetPickerBadgeRules,
+  type PickerBadge,
+  type PickerBadgeTone,
+  useOptionBadges,
+  useRecordBadges
+} from './lib/picker-badges'
+export { PickerBadgeList, RecordPickerBadges } from './components/item-edit/PickerBadges'
 export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
 export * from './lib/list-return'
@@ -1006,6 +1062,7 @@ export * from './lib/live-announcer'
 export * from './lib/live-announcer'
 export * from './lib/live-counts'
 export * from './lib/live-data-changed'
+export * from './lib/live-deltas'
 export * from './lib/live-findings'
 export * from './lib/live-list'
 export * from './lib/live-list-flow'
@@ -1150,6 +1207,17 @@ export {
   useRowPresence,
   useTyping
 } from './lib/presence-hooks'
+// Realtime round 7 — co-editing on a record page (section presence, pointing a co-viewer).
+export {
+  bindRecordCoEdit,
+  type CoEditSocket,
+  type CoViewer,
+  type FieldPointer,
+  pointCoViewer,
+  useCoViewers,
+  useFieldEditors,
+  useFieldPointer
+} from './lib/co-edit'
 export {
   PRESENCE_ONLINE_KEY,
   PRESENCE_POLL_BACKSTOP_MS,
@@ -1371,6 +1439,18 @@ export {
   useScreenLoader,
   useScreenRefreshState
 } from './lib/screen-refresh'
+export {
+  createFrameAssembler as createScreenShareAssembler,
+  packBatch as packScreenShareBatch,
+  registerScreenShareRuntime,
+  type ScreenShareInfo,
+  type ScreenShareRuntime,
+  type ScreenShareStatus,
+  screenShareRunning,
+  startScreenShare,
+  stopScreenShare,
+  useScreenShareStatus
+} from './lib/screen-share'
 export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'
 export * from './lib/search-log'
 export {
@@ -1498,6 +1578,13 @@ export {
 export * from './lib/waiting-count'
 export * from './lib/waiting-count'
 export {
+  useWatchActions,
+  useWatchPrefs,
+  useWatchUi,
+  watchKeys,
+  watchUi
+} from './lib/watch-list'
+export {
   buildWidgetImageLabel,
   describeDateRangeFilter,
   describeEntityFilters,
@@ -1519,3 +1606,4 @@ export {
 export * from './lib/worker-socket'
 export * from './lib/write-formula'
 export * from './types'
+export * from './lib/state-census'

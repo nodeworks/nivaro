@@ -1,6 +1,7 @@
 import type { ImportParseResponse } from '@nivaro/sdk'
 import { createNivaro } from '@nivaro/sdk'
 import {
+  AgentPresenceChip,
   coeditLive,
   currentViewport,
   DrilldownContext,
@@ -1157,6 +1158,9 @@ export function ItemEditPage() {
                           viewing now
                         </span>
                       </div>
+                    )}
+                    {id && !isNew && collection && (
+                      <AgentPresenceChip collection={collection} item={id} className='ml-2' />
                     )}
                     {Object.keys(presence.editing).length > 0 && (
                       <div className='ml-2 flex flex-wrap items-center gap-1'>

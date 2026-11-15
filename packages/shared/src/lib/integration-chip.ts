@@ -7,7 +7,12 @@ import type { BannerLine } from './obligation-banner'
 export interface IntegrationChipSummary {
   /** One entry per partner, obligations first (they know about partners
    *  that were never sent anything), then partners only the log knows. */
-  partners: Array<{ name: string; status: 'ok' | 'attention' | 'pending' | 'neutral'; tip: string }>
+  partners: Array<{
+    name: string
+    /** `retrying`: failed, and a sweep will send it again by itself (rt6) — not a red problem. */
+    status: 'ok' | 'attention' | 'pending' | 'neutral' | 'retrying'
+    tip: string
+  }>
   /** Partners told successfully — the green badge. */
   ok: number
   /** Things a person needs to act on — the red badge: a partner not told
@@ -16,6 +21,8 @@ export interface IntegrationChipSummary {
   attention: number
   /** Sends still awaiting an acknowledgement. */
   pending: number
+  /** Failed sends that will be tried again by themselves (amber, not red). */
+  retrying: number
 }
 
 export interface ChipSubmission {
@@ -39,8 +46,13 @@ const submissionStatus = (s: string): IntegrationChipSummary['partners'][number]
 export function integrationChipSummary(
   lines: BannerLine[],
   submissions: ChipSubmission[],
-  relative: (iso: string | null | undefined) => string = () => ''
+  relative: (iso: string | null | undefined) => string = () => '',
+  /** Partner names (any case) whose latest failed send will be retried by itself. */
+  retrying: ReadonlySet<string> = new Set()
 ): IntegrationChipSummary {
+  const willRetry = new Set([...retrying].map((n) => n.toLowerCase()))
+  const settle = (name: string, status: IntegrationChipSummary['partners'][number]['status']) =>
+    status === 'attention' && willRetry.has(name.toLowerCase()) ? 'retrying' : status
   const partners: IntegrationChipSummary['partners'] = []
   const seen = new Set<string>()
   for (const l of lines) {
@@ -52,7 +64,7 @@ export function integrationChipSummary(
           : l.outcome === 'pending'
             ? 'pending'
             : 'neutral'
-    partners.push({ name: l.api, status, tip: `${l.api} · ${l.text}` })
+    partners.push({ name: l.api, status: settle(l.api, status), tip: `${l.api} · ${l.text}` })
     seen.add(l.api.toLowerCase())
   }
   // Newest submission per integration for partners the obligations do not
@@ -63,7 +75,7 @@ export function integrationChipSummary(
     seen.add(name.toLowerCase())
     partners.push({
       name,
-      status: submissionStatus(s.status),
+      status: settle(name, submissionStatus(s.status)),
       tip: `${name} · ${s.status} · ${relative(s.updated_at ?? s.created_at)}${s.last_error ? ` — ${s.last_error.slice(0, 120)}` : ''}`
     })
   }
@@ -71,7 +83,8 @@ export function integrationChipSummary(
     partners,
     ok: partners.filter((p) => p.status === 'ok').length,
     attention: partners.filter((p) => p.status === 'attention').length,
-    pending: partners.filter((p) => p.status === 'pending').length
+    pending: partners.filter((p) => p.status === 'pending').length,
+    retrying: partners.filter((p) => p.status === 'retrying').length
   }
 }
 

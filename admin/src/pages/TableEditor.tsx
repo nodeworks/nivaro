@@ -1,6 +1,7 @@
 import {
   ChangeImpactStrip,
   Combobox,
+  ConfigReachNote,
   ConfigReadBack,
   cleanQuickFilters,
   DataGuideCard,
@@ -54,7 +55,10 @@ import { HeavyListColumnsCard } from '@/components/heavy-list-columns-card'
 import { InlineEditSetting } from '@/components/inline-edit-setting'
 import { LabelSearchFieldsSetting } from '@/components/label-search-fields-setting'
 import { LineSplitCard } from '@/components/line-split-card'
+import { MergeRecordsSetting } from '@/components/merge-records-setting'
+import { NeverCopySetting } from '@/components/never-copy-setting'
 import { PagePresence } from '@/components/page-presence'
+import { PickerBadgesCard } from '@/components/picker-badges-card'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -2834,6 +2838,8 @@ function FieldMetaEditor({
           </Button>
         </div>
       </div>
+      {/* rt8 #25 — who a save of this field reaches right now (administrators). */}
+      <ConfigReachNote className='mt-2' collections={[tableName]} />
       {impactCheck && (
         <ChangeImpactStrip
           className='mt-2'
@@ -4370,9 +4376,11 @@ function SettingsTab({
       <ItemLockingSection tableName={tableName} />
       <AddendumsSection tableName={tableName} />
       <PickerFilterSection tableName={tableName} />
+      <PickerBadgesCard tableName={tableName} />
       <HeavyListColumnsCard collection={tableName} />
       <BrowserSettingsSection tableName={tableName} />
       <DuplicateCheckCard tableName={tableName} />
+      <MergeRecordsSetting tableName={tableName} />
       <EmptyStateSlugSection tableName={tableName} />
       <RenameCollectionSection tableName={tableName} />
       <AuditDepthSection tableName={tableName} />
@@ -7472,6 +7480,9 @@ interface BrowserConfig {
   /** Record workspace tabs in the portal: open records stack as tabs above
    *  the form, unsaved edits survive switching. Opt-in. */
   record_tabs?: boolean
+  /** rt6 #19 — a catalog / price / stock import tells the owners of open records whose
+   *  catalog lines it changed (api services/catalog-impact.ts). Off by default. */
+  catalog_notice?: boolean
   /** Registry bulk actions (keys) the bar shows; null/absent = all. */
   bulk_actions?: string[] | null
   /** #2490 — live record events: on (default), batched id lists, or off (lists poll). */
@@ -7485,6 +7496,8 @@ interface BrowserConfig {
   /** Duplicate warnings on create (DuplicateCheckCard; api services/duplicate-rules.ts);
    *  absent = on with the default criteria. Edited by its own card, kept as is here. */
   duplicate_check?: DuplicateCheckValue
+  /** Fields a copy (Clone, Duplicate, Save as template) never carries (api services/copy-rules.ts). */
+  never_copy?: string[]
   /** Keys edited elsewhere (export_filename, fulfilment, …) ride along untouched. */
   [key: string]: unknown
 }
@@ -7775,6 +7788,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
       'quick_filters',
       'default_sort',
       'record_tabs',
+      'catalog_notice',
       'bulk_actions',
       'live_events',
       'search_fields',
@@ -7796,6 +7810,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (next.quick_filters?.length) clean.quick_filters = next.quick_filters
     if (next.default_sort?.trim()) clean.default_sort = next.default_sort.trim()
     if (next.record_tabs === true) clean.record_tabs = true
+    if (next.catalog_notice === true) clean.catalog_notice = true
     if (Array.isArray(next.bulk_actions)) clean.bulk_actions = next.bulk_actions
     if (next.live_events === 'batched' || next.live_events === 'off')
       clean.live_events = next.live_events
@@ -7880,6 +7895,21 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
             onCheckedChange={(v) => void patch({ record_tabs: v })}
           />
         </div>
+        <div className='flex items-center justify-between gap-4' data-catalog-notice-setting>
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>
+              Tell owners about catalog updates
+            </p>
+            <p className='text-[11.5px] text-slate-500'>
+              When a catalog, price or stock import changes lines on open records, each record owner
+              gets one notice listing them. Only for collections with a catalog lines field.
+            </p>
+          </div>
+          <Switch
+            checked={cfg.catalog_notice === true}
+            onCheckedChange={(v) => void patch({ catalog_notice: v })}
+          />
+        </div>
         <InlineEditSetting
           value={normalizeInlineEdit(cfg.inline_edit)}
           candidates={inlineEditCandidates(col?.fields ?? [], tableName, col?.relations ?? [])}
@@ -7899,6 +7929,16 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           displayTemplate={col?.display_template}
           value={cfg.label_search_fields}
           onChange={(v) => void patch({ label_search_fields: v })}
+        />
+        <NeverCopySetting
+          collection={tableName}
+          fields={col?.fields ?? []}
+          value={cfg.never_copy}
+          onChange={(v) =>
+            void patch({ never_copy: v }).then(() =>
+              qc.invalidateQueries({ queryKey: ['copy-rules', tableName] })
+            )
+          }
         />
         <div className='flex items-center justify-between gap-4'>
           <div>

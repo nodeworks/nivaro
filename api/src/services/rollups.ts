@@ -841,6 +841,23 @@ export async function recalcOwnFilteredRollups(
   }
 }
 
+/**
+ * The stored rollup fields ON `parentCollection` that a write to any of `childCollections`
+ * re-derives (rt7 #9: an open page shows "Updating…" on exactly these while a nested set runs).
+ * Names only; [] when none.
+ */
+export async function rollupFieldsFedBy(
+  parentCollection: string,
+  childCollections: string[]
+): Promise<string[]> {
+  const out = new Set<string>()
+  for (const child of new Set(childCollections)) {
+    for (const entry of await getRollupContributors(child))
+      if (entry.parentCollection === parentCollection) out.add(entry.rollupField)
+  }
+  return [...out]
+}
+
 /** Clears the cached contributor map; the next lookup rebuilds it from nivaro_fields. */
 export function bustRollupContributorCache(): void {
   contributorCache = null

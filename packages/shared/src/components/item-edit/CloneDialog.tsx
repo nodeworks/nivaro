@@ -1,8 +1,10 @@
+import { useQuery } from '@tanstack/react-query'
 import { Copy, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { useNivaroClient } from '../../context'
+import { useItemNavigation, useNivaroClient } from '../../context'
 import { post } from '../../lib/commands'
+import { copyRulesQuery, headerCopySkip } from '../../lib/copy-rules'
 import { cn, titleCase } from '../../lib/utils'
 import { Button } from '../ui/button'
 import {
@@ -23,6 +25,8 @@ const SKIP_FIELDS = new Set(['id', 'created_at', 'updated_at', 'created_by', 'up
 
 function isCloneable(f: CMSField, relations: CMSRelation[], collection: string) {
   if (SKIP_FIELDS.has(f.field)) return false
+  // A related record's value (`unit.name`) is not this record's field.
+  if (f.field.includes('.')) return false
   if (f.computed_formula) return false
   const iface = f.interface ?? ''
   if (['sub_rows', 'repeater', 'rich_text', 'file', 'image', 'o2m', 'm2m', 'm2a'].includes(iface))
@@ -143,12 +147,22 @@ export function CloneDialog({
   onSuccess
 }: CloneDialogProps) {
   const client = useNivaroClient()
+  const itemNav = useItemNavigation()
   const [open, setOpen] = useState(false)
   const [cloning, setCloning] = useState(false)
   const [fieldStates, setFieldStates] = useState<Record<string, FieldState>>({})
   const [subRowIncludes, setSubRowIncludes] = useState<Record<string, boolean>>({})
 
-  const cloneableFields = fields.filter((f) => isCloneable(f, relations, collection))
+  // The one copy rule (api services/copy-rules.ts): the pipeline's state field,
+  // read-only / hidden / partner fields and the collection's never-copy list are
+  // not offered — the server leaves them out of the copy either way.
+  const rules = useQuery({ ...copyRulesQuery(client, collection), enabled: open })
+  const neverCopy = headerCopySkip(rules.data)
+  // Until the rule is known the list would offer fields that never copy.
+  const rulesPending = open && rules.isPending
+  const cloneableFields = fields.filter(
+    (f) => isCloneable(f, relations, collection) && !neverCopy.has(f.field)
+  )
   const subRowFields = fields.filter(isSubRowField)
 
   function openFresh() {
@@ -184,7 +198,9 @@ export function CloneDialog({
       const include_sub_rows = subRowFields
         .filter((f) => subRowIncludes[f.field])
         .map((f) => f.field)
-      const res = await client.request<{ data: { id: string | number } }>(
+      const res = await client.request<{
+        data: { id: string | number; not_copied?: Array<{ field: string; reason: string }> }
+      }>(
         post(`/items/${collection}/${itemId}/clone`, {
           field_overrides,
           exclude_fields,
@@ -198,8 +214,19 @@ export function CloneDialog({
         toast.success('Item cloned — open it from the list')
         return
       }
-      toast.success('Item cloned')
+      // Linked lists (Zone, sub types…) copy too; one the person may not set,
+      // or a link refused, stays behind and is named here.
+      const left = (res?.data?.not_copied ?? []).map((n) => titleCase(n.field))
+      if (left.length)
+        toast.warning(`Item cloned — not copied: ${left.join(', ')}`, {
+          description: 'You may not set these on a new record. Opening the copy.'
+        })
+      else toast.success('Item cloned — opening the copy')
       onSuccess(newId)
+      // Open the COPY. Hosts only navigate from a new-record form, so the person
+      // used to stay on the original (still at its workflow step) and read it as
+      // the copy (Rob 2026-11-14: "cloning an active workflow keeps its state").
+      itemNav.open({ collection, itemId: String(newId) })
     } catch {
       toast.error('Failed to clone item')
     } finally {
@@ -227,7 +254,15 @@ export function CloneDialog({
         </DialogHeader>
         <div className='min-h-0 flex-1 overflow-y-auto px-6 py-4'>
           <div className='space-y-4'>
-            {cloneableFields.length > 0 && (
+            {rulesPending && (
+              <p
+                className='text-[12px] text-slate-500 dark:text-muted-foreground'
+                data-clone-rules-pending
+              >
+                Checking which fields a copy keeps…
+              </p>
+            )}
+            {!rulesPending && cloneableFields.length > 0 && (
               <div>
                 <p className='mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-400'>
                   Field values
@@ -322,7 +357,7 @@ export function CloneDialog({
           <Button variant='outline' size='sm' onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button size='sm' disabled={cloning} onClick={handleClone}>
+          <Button size='sm' disabled={cloning || rulesPending} onClick={handleClone}>
             <Copy className='mr-1.5 h-3.5 w-3.5' />
             {cloning ? 'Cloning…' : 'Clone'}
           </Button>

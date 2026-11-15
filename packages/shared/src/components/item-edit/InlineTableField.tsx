@@ -243,6 +243,7 @@ import {
   usePartnerNeeds
 } from './partner-needs'
 import { RelationCombobox } from './RelationCombobox'
+import { RemovedLineNote, type RemovedLineState } from './RemovedLineNote'
 import { RowCommentButton, useRowCommentCounts } from './RowComments'
 import {
   parseImportStamp,
@@ -259,6 +260,12 @@ import {
 } from './RowMatchPanel'
 import { RowWatchButton } from './RowWatchButton'
 import { RuleProvenanceChip } from './RuleProvenancePopover'
+import {
+  type LineRemovedBy,
+  nextLineAfter,
+  restorableLine,
+  unsavedLineChanges
+} from './removed-line'
 import { type GridSetAllConfig, normalizeSetAllRows, SetAllRowsButton } from './SetAllRowsButton'
 import { SplitLinesButton } from './SplitLinesButton'
 import type { CMSField, CMSRelation, NestedOps } from './types'
@@ -4649,6 +4656,113 @@ export function InlineTableField({
     return out
     // biome-ignore lint/correctness/useExhaustiveDependencies: editState.draft is read for the "already equal" check; rawRows is the trigger
   }, [rawRows, editState?.rowId, editState?.draft, remoteDismissed, snapshotRow, cols])
+  // ── Realtime round 7 #6 — a line removed under you ──────────────────────
+  // Someone else (or a procedure) deletes the line whose editor is open here, or that has
+  // focus: focus goes to the next line, a calm note says who removed it, and what the person
+  // typed into it and had not saved is kept in a chip (Copy / Restore as a new line).
+  const [removedLine, setRemovedLine] = useState<RemovedLineState | null>(null)
+  const lineOrderRef = useRef<string[]>([])
+  const lineRowsRef = useRef(new Map<string, Record<string, unknown>>())
+  const focusedLineRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const prefix = `${relatedCollection}:`
+    const onIn = (e: FocusEvent) => {
+      const key = (e.target as HTMLElement | null)
+        ?.closest?.('[data-o2m-row]')
+        ?.getAttribute('data-o2m-row')
+      focusedLineRef.current = key?.startsWith(prefix) ? key.slice(prefix.length) : null
+    }
+    document.addEventListener('focusin', onIn)
+    return () => document.removeEventListener('focusin', onIn)
+  }, [relatedCollection])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once per rows fetch; the rest is read from refs
+  useEffect(() => {
+    if (isNew || rowsLoading) return
+    const order = loadedRows.map((r) => String(r.id))
+    const now = new Set(order)
+    const prevOrder = lineOrderRef.current
+    const prevRows = lineRowsRef.current
+    lineOrderRef.current = order
+    lineRowsRef.current = new Map(loadedRows.map((r) => [String(r.id), r]))
+    if (prevOrder.length === 0) return
+    const s = editStateRef.current
+    const editing = s && s.rowId !== 'new' && !s.rowId.startsWith('pending:') ? s.rowId : null
+    const focused = focusedLineRef.current
+    const at = Date.now()
+    for (const id of [editing, focused]) {
+      if (!id || now.has(id) || !prevOrder.includes(id)) continue
+      // Our own delete (staged or just sent) is not "removed under you".
+      if (pendingDeletes.has(id) || wroteRecently(id, at)) continue
+      const stored = prevRows.get(id) ?? {}
+      const changes = unsavedLineChanges(
+        stored,
+        id === editing ? (s?.draft ?? null) : null,
+        pendingEdits.get(id) ?? null,
+        new Set([manyField])
+      )
+      if (id === editing) {
+        setEditState(null)
+        setUniqueError(null)
+      }
+      if (pendingEdits.has(id)) staging?.cancelPendingEdit(relatedCollection, manyField, id)
+      const next = nextLineAfter(prevOrder, now, id)
+      const hadFocus =
+        typeof document !== 'undefined' &&
+        (document.activeElement === document.body || document.activeElement == null)
+      if (next && (focused === id || hadFocus))
+        window.setTimeout(() => {
+          document
+            .querySelector<HTMLElement>(`[data-o2m-row="${relatedCollection}:${next}"]`)
+            ?.focus({ preventScroll: true })
+        }, 0)
+      if (focused === id) focusedLineRef.current = next
+      setRemovedLine({
+        rowId: id,
+        label: rowIdentityLabel(stored),
+        row: restorableLine(stored, changes),
+        changes,
+        by: null,
+        at
+      })
+      client
+        .request<{ data: LineRemovedBy | null }>(
+          get('/revisions/o2m-removed', {
+            collection: relatedCollection,
+            many_field: manyField,
+            parent_id: String(parentId),
+            item: id
+          })
+        )
+        .then((r) =>
+          setRemovedLine((cur) => (cur && cur.rowId === id ? { ...cur, by: r.data ?? null } : cur))
+        )
+        .catch(() => {})
+      break
+    }
+  }, [rowsUpdatedAt, loadedRows])
+  // A note with nothing kept goes quietly after a while; a chip with input waits for the person.
+  useEffect(() => {
+    if (!removedLine || Object.keys(removedLine.changes).length > 0) return
+    const t = setTimeout(() => setRemovedLine(null), 10_000)
+    return () => clearTimeout(t)
+  }, [removedLine])
+  const { userId: removedSelfId } = useItemEditAuth()
+  const renderRemovedLineNote = () =>
+    removedLine ? (
+      <RemovedLineNote
+        state={removedLine}
+        labelOf={(f) => cols.find((c) => c.field === f)?.label || titleCase(f)}
+        selfId={removedSelfId}
+        readOnly={readOnly}
+        onRestore={(row) => {
+          restoreFromHistory(row, { rowDeleted: true, itemId: null })
+          setRemovedLine(null)
+        }}
+        onDismiss={() => setRemovedLine(null)}
+      />
+    ) : null
+
   const renderRemoteRowStrip = (rowId: string | undefined) => {
     if (!rowId || remoteRowChanges.length === 0 || editState?.rowId !== rowId) return null
     const fmt = (v: unknown) => (v == null || v === '' ? '∅' : String(v).slice(0, 40))
@@ -8838,6 +8952,7 @@ export function InlineTableField({
           )
         })()}
 
+      {!isNew && renderRemovedLineNote()}
       {(sinceOpened || remoteEditorLines.length > 0) &&
         !isNew &&
         activeView === 'original' &&

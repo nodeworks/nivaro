@@ -85,16 +85,27 @@ type Row = Record<string, unknown> & ActivityEntryInput
  */
 export function enrichActivityRow(
   row: Row,
-  extras: { badge?: (viaApp: string | null) => string | null; approval?: ActivityApproval | null }
+  extras: {
+    badge?: (viaApp: string | null, conn?: string | null) => string | null
+    approval?: ActivityApproval | null
+    /** rt8 #21: the name an agent's connection goes by now (renames relabel history). */
+    agentName?: (conn: string, fallback: string | null) => string
+  }
 ): Row {
   const { delta, ...rest } = row as Row & { delta?: unknown }
   const out: Row = { ...rest }
   if (rest.action === 'update' && delta != null) out.changes = changesFromDelta(delta)
   out.actor = actorOf(out)
+  const actor = out.actor
+  if (extras.agentName && actor && typeof actor === 'object' && actor.kind === 'mcp' && actor.id)
+    out.actor = { ...actor, name: extras.agentName(actor.id, actor.name ?? null) }
   const why = activityWhy({ ...out, why: extras.approval ? { approval: extras.approval } : null })
   out.why = { reason: why.reason, note: why.note, approval: extras.approval ?? null }
   if (extras.badge && (out.mcp_conn || out.via_app))
-    out.via_agent = extras.badge((out.via_app as string | null) ?? null)
+    out.via_agent = extras.badge(
+      (out.via_app as string | null) ?? null,
+      (out.mcp_conn as string | null) ?? null
+    )
   return out
 }
 

@@ -202,6 +202,7 @@ import {
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
 import { loadUserCard, userCardQuery } from '../lib/user-cards'
 import { cn, formatDateTime, humanHours } from '../lib/utils'
+import { useWatchActions } from '../lib/watch-list'
 import { useAskRecordDrag, usePublishAskContext } from './ai/ask-context'
 import {
   type AvailableBulkAction,
@@ -292,6 +293,8 @@ import { CopyListLinkButton } from './list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from './list/InlineEdit'
 import { ListViewers } from './list/ListViewers'
 import { MapView } from './MapView'
+import { MergeRecordsDialog } from './merge/MergeRecordsDialog'
+import { useMergeAllowed } from './merge/MergeWithFlow'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
   PICKER_EXCLUDED_TITLE,
@@ -1052,6 +1055,7 @@ export function RowActionsMenu({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const { isAdmin } = useItemEditAuth()
+  const watch = useWatchActions()
   const ref = rowMenuRef({
     label,
     meta: qc.getQueryData<CollectionMeta>(['cbv-collection-meta', collection]),
@@ -1635,6 +1639,17 @@ export function RowActionsMenu({
                     setOpen(false)
                     onPeek()
                   })}
+                {/* rt5: follow the record from the watch list dock. */}
+                {watch.isPinned(collection, id)
+                  ? item('Remove from watch list', () => {
+                      setOpen(false)
+                      void watch.unpin(collection, id).catch(() => {})
+                    })
+                  : !watch.full &&
+                    item('Add to watch list', () => {
+                      setOpen(false)
+                      void watch.pin(collection, id).catch(() => {})
+                    })}
                 {discussable &&
                   item('Discuss in chat', () => {
                     setOpen(false)
@@ -3827,116 +3842,6 @@ function RelatedColumnRoot({
   )
 }
 
-/** Bulk-bar merge form (#63): two selected duplicates — pick the survivor,
- *  preview reference counts (dry run), confirm. Every FK repoints, the
- *  duplicate deletes through trash. Admin-only (the server enforces too). */
-function RecordMergeForm({
-  collection,
-  ids,
-  onDone,
-  onCancel
-}: {
-  collection: string
-  ids: Array<string | number>
-  onDone: (msg: string) => void
-  onCancel: () => void
-}) {
-  const client = useNivaroClient()
-  const [survivor, setSurvivor] = useState<string | number>(ids[0])
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  const [preview, setPreview] = useState<{ references: Record<string, number> } | null>(null)
-  const merged = ids.find((x) => String(x) !== String(survivor))!
-
-  useEffect(() => {
-    setPreview(null)
-    let alive = true
-    void client
-      .request<{ data: { references: Record<string, number> } }>(
-        post(`/record-merge/${collection}`, {
-          survivor_id: survivor,
-          merged_id: merged,
-          dry_run: true
-        })
-      )
-      .then((r) => {
-        if (alive) setPreview(r.data)
-      })
-      .catch(() => {
-        if (alive) setPreview({ references: {} })
-      })
-    return () => {
-      alive = false
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [survivor])
-
-  const refTotal = preview ? Object.values(preview.references).reduce((a, b) => a + b, 0) : null
-  const run = async () => {
-    setBusy(true)
-    setErr(null)
-    try {
-      const r = await client.request<{ data: { delete_error: string | null } }>(
-        post(`/record-merge/${collection}`, { survivor_id: survivor, merged_id: merged })
-      )
-      onDone(
-        r.data.delete_error
-          ? `Merged — references repointed, but the duplicate was not deleted: ${r.data.delete_error}`
-          : `Merged ${merged} into ${survivor}`
-      )
-    } catch (e) {
-      setErr(
-        (e as { response?: { error?: string } })?.response?.error ??
-          userErrorMessage(e, 'Merge failed')
-      )
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <span className='flex flex-wrap items-center gap-2'>
-      <span className='text-[12px] text-slate-300 dark:text-muted-foreground'>Keep</span>
-      {ids.map((id) => (
-        <button
-          key={String(id)}
-          type='button'
-          onClick={() => setSurvivor(id)}
-          className={cn(
-            'h-8 rounded-md border px-3 font-mono text-[12px]',
-            String(survivor) === String(id)
-              ? 'border-nvr-cyan bg-nvr-cyan/[0.13] text-[#7fe7ff]'
-              : 'border-white/20 dark:border-border text-slate-300 dark:text-muted-foreground hover:bg-white/10 dark:hover:bg-muted'
-          )}
-        >
-          {String(id)}
-        </button>
-      ))}
-      <span className='text-[11.5px] text-slate-300 dark:text-muted-foreground'>
-        {refTotal == null
-          ? 'Scanning references…'
-          : `${refTotal.toLocaleString()} reference(s) will repoint · ${merged} goes to trash`}
-      </span>
-      {err && <span className='text-[11.5px] text-red-300'>{err}</span>}
-      <button
-        type='button'
-        disabled={busy || refTotal == null}
-        onClick={() => void run()}
-        className='h-8 rounded-md bg-red-500 px-3 text-[12.5px] font-semibold text-white dark:text-foreground disabled:opacity-50'
-      >
-        {busy ? 'Merging…' : 'Merge'}
-      </button>
-      <button
-        type='button'
-        onClick={onCancel}
-        className='h-8 px-2 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:text-white dark:hover:text-foreground'
-      >
-        Cancel
-      </button>
-    </span>
-  )
-}
-
 // ─── Bulk bar (admin components/bulk-action-bar.tsx port) ─────────────────────
 
 function BulkBar({
@@ -3974,9 +3879,13 @@ function BulkBar({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const itemNav = useItemNavigation()
-  const [mode, setMode] = useState<
-    'actions' | 'transition' | 'message' | 'confirm-delete' | 'merge'
-  >('actions')
+  const [mode, setMode] = useState<'actions' | 'transition' | 'message' | 'confirm-delete'>(
+    'actions'
+  )
+  // Merge records (2026-11-14): 2–5 selected records → the merge screen.
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const mergedRef = useRef(false)
+  const mergeAllowed = useMergeAllowed(collection, null, selectedIds.length >= 2)
   // Built-in operations are registry entries too (Data Model → Settings →
   // Bulk actions): a collection can switch them off or restrict who sees them.
   const builtin = useBuiltinGate([collection], registryKeys)
@@ -4166,7 +4075,7 @@ function BulkBar({
   return (
     <div
       data-cbv-bulkbar
-      className='nvr-slide-up flex shrink-0 flex-wrap items-center gap-3 border-t border-[#16233c] bg-[#0f1e2d] px-4 py-2.5 text-white dark:text-foreground shadow-[0_-2px_12px_rgba(0,0,0,0.25)] dark:border-border dark:bg-card dark:text-foreground dark:shadow-none'
+      className='nvr-slide-up flex shrink-0 flex-wrap items-center gap-3 border-t border-[#16233c] bg-[#0f1e2d] py-2.5 pl-4 pr-16 text-white dark:text-foreground shadow-[0_-2px_12px_rgba(0,0,0,0.25)] dark:border-border dark:bg-card dark:text-foreground dark:shadow-none'
     >
       <button
         type='button'
@@ -4184,7 +4093,9 @@ function BulkBar({
       )}
       <span className='flex-1' />
       {mode === 'actions' && (
-        <span className='flex flex-wrap items-center gap-1.5'>
+        // Wraps inside the bar instead of pushing the last actions (Delete) off the edge
+        // or under the floating corner button (the bar keeps room for it on the right).
+        <span className='flex min-w-0 shrink flex-wrap items-center justify-end gap-1.5'>
           {builtin('recipes') &&
             recipes.map((r) => (
               <span key={r.id} className='group/recipe relative inline-flex'>
@@ -4251,16 +4162,20 @@ function BulkBar({
               className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
             />
           )}
-          {builtin('merge') && selectedIds.length === 2 && auth.isAdmin && (
-            <button
-              type='button'
-              onClick={() => setMode('merge')}
-              title='Merge these two duplicates into one — every reference repoints to the survivor'
-              className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
-            >
-              Merge…
-            </button>
-          )}
+          {builtin('merge') &&
+            mergeAllowed.data?.may_merge &&
+            selectedIds.length >= 2 &&
+            selectedIds.length <= 5 && (
+              <button
+                type='button'
+                onClick={() => setMergeOpen(true)}
+                data-tip='Merge these into one record: pick each value, keep one, discard the rest'
+                className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
+                data-bulk-merge
+              >
+                Merge…
+              </button>
+            )}
           {/* Registry bulk actions (Data Model → Settings → Bulk actions):
               On Hold / Cancel / … — access + guards enforced server-side. */}
           <BulkActionButtons
@@ -4317,17 +4232,25 @@ function BulkBar({
           )}
         </span>
       )}
-      {mode === 'merge' && (
-        <RecordMergeForm
+      {mergeOpen && (
+        <MergeRecordsDialog
           collection={collection}
-          ids={selectedIds.slice(0, 2)}
-          onDone={(msg) => {
-            setNote(msg)
-            onSuccess()
-            onClear()
-            setMode('actions')
+          ids={selectedIds.slice(0, 5)}
+          open
+          onOpenChange={(o) => {
+            if (o) return
+            setMergeOpen(false)
+            // The selection (and this bar) stays until the dialog closes, so its Done
+            // step and Undo stay on screen.
+            if (mergedRef.current) {
+              mergedRef.current = false
+              onSuccess()
+              onClear()
+            }
           }}
-          onCancel={() => setMode('actions')}
+          onMerged={() => {
+            mergedRef.current = true
+          }}
         />
       )}
       {mode === 'message' && (
@@ -4619,6 +4542,7 @@ export function CollectionBrowserView({
   className
 }: CollectionBrowserViewProps) {
   const client = useNivaroClient()
+  const watchList = useWatchActions()
   const qc = useQueryClient()
   const { open: openTarget, urlFor } = useItemNavigation()
 
@@ -4862,7 +4786,9 @@ export function CollectionBrowserView({
   // A shared link IS the view: the collection / role default view never lands over it.
   // Same for a deep link's context (army 8 b16): a dashboard count opens the records it
   // counted, not those records further narrowed by a saved default view.
-  const deepLinked = !sharedLink && (initialConditions?.length ?? 0) > 0
+  // rt6 #19 — `?ids=` (an import batch, a catalog notice's "See which") is a deep link too.
+  const deepLinked =
+    !sharedLink && ((initialConditions?.length ?? 0) > 0 || (initialFilters?.length ?? 0) > 0)
   const defaultAppliedRef = useRef(!!sharedLink || deepLinked)
   const { isAdmin } = useItemEditAuth()
 
@@ -5228,6 +5154,9 @@ export function CollectionBrowserView({
         label={columnLabel(key)}
         choices={f ? inlineChoices(f) : undefined}
         target={kind === 'm2o' ? inlineM2oTarget(relations, collection, key) : null}
+        collection={collection}
+        itemId={row.id as string | number}
+        field={key}
         onCommit={(v, dir) => commitInlineCell(row, key, kind, v, dir)}
       >
         {node}
@@ -8629,6 +8558,28 @@ export function CollectionBrowserView({
                     label: 'Peek',
                     run: () => recordDrill.push([{ collection, itemId: String(cellMenu.row.id) }])
                   },
+                  // rt5: follow the record from the watch list dock.
+                  ...(watchList.isPinned(collection, cellMenu.row.id as string | number)
+                    ? [
+                        {
+                          label: 'Remove from watch list',
+                          run: () =>
+                            void watchList
+                              .unpin(collection, cellMenu.row.id as string | number)
+                              .catch(() => {})
+                        }
+                      ]
+                    : watchList.full
+                      ? []
+                      : [
+                          {
+                            label: 'Add to watch list',
+                            run: () =>
+                              void watchList
+                                .pin(collection, cellMenu.row.id as string | number)
+                                .catch(() => {})
+                          }
+                        ]),
                   // The friendly id, never the row id (army 7 N7); none = nothing to copy.
                   ...(rowMenuRef({
                     meta,
@@ -10818,39 +10769,47 @@ export function CollectionBrowserView({
                                   }}
                                   className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
                                 >
-                                  {state ? (
-                                    <span
-                                      className='inline-flex items-center gap-1.5 rounded-full py-0.5 pl-2 pr-2.5 text-[11px] font-semibold text-slate-700 dark:text-slate-200'
-                                      style={{
-                                        backgroundColor: `${state.state_color ?? '#6b7280'}1f`
-                                      }}
-                                    >
+                                  {/* rt6 — the pill gives way (truncates) before the send marks
+                                      do: the marks never run under the next column. */}
+                                  <div className='flex min-w-0 items-center'>
+                                    {state ? (
                                       <span
-                                        aria-hidden
-                                        className='h-1.5 w-1.5 shrink-0 rounded-full'
-                                        style={{ backgroundColor: state.state_color ?? '#6b7280' }}
-                                      />
-                                      {state.state_label ?? state.state_key ?? '?'}
-                                      {state.via_addendum && (
+                                        className='inline-flex min-w-0 items-center gap-1.5 rounded-full py-0.5 pl-2 pr-2.5 text-[11px] font-semibold text-slate-700 dark:text-slate-200'
+                                        style={{
+                                          backgroundColor: `${state.state_color ?? '#6b7280'}1f`
+                                        }}
+                                      >
                                         <span
-                                          data-tip={`Addendum "${state.via_addendum.title ?? ''}" in approval — record itself is ${state.record_state_label ?? 'unchanged'}`}
-                                          className='ml-0.5 rounded-sm bg-amber-500/15 px-1 text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300'
-                                        >
-                                          Addendum
+                                          aria-hidden
+                                          className='h-1.5 w-1.5 shrink-0 rounded-full'
+                                          style={{
+                                            backgroundColor: state.state_color ?? '#6b7280'
+                                          }}
+                                        />
+                                        <span className='truncate'>
+                                          {state.state_label ?? state.state_key ?? '?'}
                                         </span>
-                                      )}
-                                    </span>
-                                  ) : (
-                                    <span className='text-[12px] text-slate-300'>—</span>
-                                  )}
-                                  {/* rt4 #10 — the row's sends, beside its state when the list has
+                                        {state.via_addendum && (
+                                          <span
+                                            data-tip={`Addendum "${state.via_addendum.title ?? ''}" in approval — record itself is ${state.record_state_label ?? 'unchanged'}`}
+                                            className='ml-0.5 rounded-sm bg-amber-500/15 px-1 text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300'
+                                          >
+                                            Addendum
+                                          </span>
+                                        )}
+                                      </span>
+                                    ) : (
+                                      <span className='text-[12px] text-slate-300'>—</span>
+                                    )}
+                                    {/* rt4 #10 — the row's sends, beside its state when the list has
                                       no integrations column to carry them. */}
-                                  {!integrationsEnabled && (
-                                    <SendStatusMarks
-                                      facts={sendStatus?.[String(id)]}
-                                      className='ml-1.5 align-middle'
-                                    />
-                                  )}
+                                    {!integrationsEnabled && (
+                                      <SendStatusMarks
+                                        facts={sendStatus?.[String(id)]}
+                                        className='ml-1.5'
+                                      />
+                                    )}
+                                  </div>
                                 </td>
                               )
                             }

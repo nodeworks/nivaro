@@ -39,6 +39,8 @@ export interface ExternalApi {
   enabled: boolean
   integration_type: string | null
   integration_config: Record<string, unknown> | null
+  /** What this partner calls the number it gives back ("PO", "order"); null = "reference". */
+  reference_label?: string | null
   // Integration obligations (migration 343) — who the board/notifications
   // tell about this api's unmet sends, and the two grace windows the
   // reconcile sweep judges pending/skipped rows against.

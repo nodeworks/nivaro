@@ -197,6 +197,7 @@ import { QueueBulkMove } from './QueueBulkMove'
 import { QueueItemSheet } from './QueueItemSheet'
 import { QueueKanbanBoard } from './QueueKanbanBoard'
 import { QueueQuickFilters } from './QueueQuickFilters'
+import { QueueTeamStrip } from './QueueTeamStrip'
 import { QueueWorkloadView } from './QueueWorkloadView'
 import {
   formulaTotalFormat,
@@ -3571,6 +3572,9 @@ export function QueueWorklist({
         label={aliasFor(`extra.${field}`, formatColumnHeader(field))}
         choices={f ? inlineChoices(f) : undefined}
         target={kind === 'm2o' && m ? inlineM2oTarget(m.relations, row.collection, field) : null}
+        collection={row.collection}
+        itemId={row.item_id}
+        field={field}
         onCommit={(v, dir) => commitQueueCell(row, field, kind, v, dir)}
       >
         {node}
@@ -5245,6 +5249,7 @@ export function QueueWorklist({
             )}
           </div>
         )}
+        {view !== 'workload' && <QueueTeamStrip queueId={queueId} />}
         {view !== 'workload' && (
           <QueueQuickFilters
             defs={quickFilterDefs}

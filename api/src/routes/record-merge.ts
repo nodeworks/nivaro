@@ -1,10 +1,30 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
-import { requireAdmin } from '../middleware/authenticate.js'
+import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { deleteOne } from '../services/items.js'
+import { applyMerge, undoMerge } from '../services/record-merge/apply.js'
+import { mergeCandidates } from '../services/record-merge/candidates.js'
+import { buildMergePlan, MergeRefusal, mergeCollection } from '../services/record-merge/plan.js'
+import { UNDO_WINDOW_MS, undoRefusal } from '../services/record-merge/rules.js'
+import { latestMergeInto, loadUndoLog } from '../services/record-merge/store.js'
 
 /**
+ * Merge records (Rob 2026-11-14, services/record-merge/*) — for anyone who may change and
+ * delete the records, judged as them:
+ *
+ *   GET  /record-merge/:collection/allowed?item=   switch + may this person merge here, and
+ *                                                  the latest merge into `item` still undoable
+ *   GET  /record-merge/:collection/candidates?of=&q=   records to merge with (likely duplicates
+ *                                                  of `of`, then a search), read as the caller
+ *   GET  /record-merge/:collection/plan?ids=a,b    the merge screen's data
+ *   POST /record-merge/:collection/apply           {survivor, discard[], keep?[], values, relations}
+ *   GET  /record-merge/undo/:mergeId               is it still undoable, and by me
+ *   POST /record-merge/undo/:mergeId               undo (24 h)
+ *
+ * The older admin-only one-step merge below (POST /:collection {survivor_id, merged_id})
+ * stays for scripts.
+ *
  * Business-record merge (#63): two duplicate records (a vendor entered twice)
  * become one — every FK referencing the duplicate repoints to the survivor,
  * then the duplicate deletes THROUGH the items service (trash applies).
@@ -16,13 +36,140 @@ import { deleteOne } from '../services/items.js'
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+function sendRefusal(reply: FastifyReply, err: unknown) {
+  if (err instanceof MergeRefusal)
+    return reply
+      .code(err.statusCode)
+      .send({ error: err.message, code: err.code, ...(err.record ? { record: err.record } : {}) })
+  throw err
+}
+
+const isAdminReq = async (req: FastifyRequest) => {
+  if (req.isAdmin === true) return true
+  const { isAdminRole } = await import('../services/permissions.js')
+  return isAdminRole(req.user as never).catch(() => false)
+}
+
 export async function recordMergeRoutes(app: FastifyInstance): Promise<void> {
-  app.addHook('preHandler', requireAdmin)
+  app.get<{ Params: { collection: string }; Querystring: { item?: string } }>(
+    '/:collection/allowed',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      try {
+        const { collection } = req.params
+        const { allowed, noun, plural } = await mergeCollection(collection)
+        const { can } = await import('../services/permissions.js')
+        const user = req.user as never
+        const [mayUpdate, mayDelete] = await Promise.all([
+          can(user, 'update', collection).catch(() => false),
+          can(user, 'delete', collection).catch(() => false)
+        ])
+        let undo: { merge_id: string; until: string; discarded: string[] } | null = null
+        const item = String(req.query.item ?? '').trim()
+        if (allowed && item && item.length <= 64) {
+          const log = await latestMergeInto(collection, item, UNDO_WINDOW_MS).catch(() => null)
+          if (
+            log &&
+            !undoRefusal(log, { id: String(req.user?.id), isAdmin: await isAdminReq(req) })
+          )
+            undo = {
+              merge_id: log.merge_id,
+              until: new Date(Date.parse(log.at) + UNDO_WINDOW_MS).toISOString(),
+              discarded: log.discarded.map((id) => log.labels[id] ?? id)
+            }
+        }
+        return {
+          data: { allowed, may_merge: allowed && mayUpdate && mayDelete, noun, plural, undo }
+        }
+      } catch (err) {
+        return sendRefusal(reply, err)
+      }
+    }
+  )
+
+  app.get<{ Params: { collection: string }; Querystring: { of?: string; q?: string } }>(
+    '/:collection/candidates',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      try {
+        const { allowed } = await mergeCollection(req.params.collection)
+        if (!allowed) return { data: { self: null, likely: [], results: [] } }
+        return {
+          data: await mergeCandidates(req, req.params.collection, {
+            of: req.query.of ? String(req.query.of).slice(0, 64) : null,
+            q: String(req.query.q ?? '').slice(0, 120)
+          })
+        }
+      } catch (err) {
+        return sendRefusal(reply, err)
+      }
+    }
+  )
+
+  app.get<{ Params: { collection: string }; Querystring: { ids?: string; draft?: string } }>(
+    '/:collection/plan',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      try {
+        return {
+          data: await buildMergePlan(req, req.params.collection, req.query.ids, {
+            draft: req.query.draft === '1'
+          })
+        }
+      } catch (err) {
+        return sendRefusal(reply, err)
+      }
+    }
+  )
+
+  app.post<{ Params: { collection: string }; Body: Record<string, unknown> }>(
+    '/:collection/apply',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      try {
+        const out = await applyMerge(req, req.params.collection, req.body ?? {})
+        return { data: out }
+      } catch (err) {
+        return sendRefusal(reply, err)
+      }
+    }
+  )
+
+  app.get<{ Params: { mergeId: string } }>(
+    '/undo/:mergeId',
+    { preHandler: requireAuth },
+    async (req) => {
+      const log = await loadUndoLog(req.params.mergeId)
+      const reason = undoRefusal(log, {
+        id: String(req.user?.id),
+        isAdmin: await isAdminReq(req)
+      })
+      return {
+        data: {
+          undoable: !reason,
+          reason,
+          until: log ? new Date(Date.parse(log.at) + UNDO_WINDOW_MS).toISOString() : null
+        }
+      }
+    }
+  )
+
+  app.post<{ Params: { mergeId: string } }>(
+    '/undo/:mergeId',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      try {
+        return { data: await undoMerge(req, req.params.mergeId) }
+      } catch (err) {
+        return sendRefusal(reply, err)
+      }
+    }
+  )
 
   app.post<{
     Params: { collection: string }
     Body: { survivor_id?: string | number; merged_id?: string | number; dry_run?: boolean }
-  }>('/:collection', async (req, reply) => {
+  }>('/:collection', { preHandler: requireAdmin }, async (req, reply) => {
     const { collection } = req.params
     const { survivor_id, merged_id, dry_run } = req.body ?? {}
     if (!IDENT.test(collection) || /^(nivaro|directus)_/i.test(collection)) {

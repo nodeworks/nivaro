@@ -6,6 +6,7 @@ import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { externalRequestsShown, integrationChipSummary } from '../../lib/integration-chip'
 import { useLiveRefetchInterval } from '../../lib/live-queries'
+import { sendStatusWords } from '../../lib/send-status'
 import { cn, formatRelative } from '../../lib/utils'
 import { type ErpSubmission, SubmissionRow } from '../integrations/console/SubmissionRow'
 import {
@@ -13,6 +14,7 @@ import {
   useRecordObligations
 } from '../integrations/IntegrationStatusLines'
 import { OutboundPreviewSection } from '../integrations/RecordIntegrationPreview'
+import { useRecordSendStatus } from '../integrations/SendStatus'
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { RecordEventPathSheet } from './IntegrationActivitySection'
 
@@ -108,6 +110,7 @@ export function ExternalRequestsChip({
   // `$integrations` notice; the poll is a 5-minute safety net while the socket is live.
   const submissionsPoll = useLiveRefetchInterval(60_000)
   const { data, isLoading } = useRecordSubmissions(collection, itemId, submissionsPoll)
+  const { data: sendFacts } = useRecordSendStatus(collection, itemId)
   const retry = useMutation({
     mutationFn: (id: number) =>
       client.request<{ data: ErpSubmission }>(post(`/erp-submissions/${id}/retry`)),
@@ -145,7 +148,16 @@ export function ExternalRequestsChip({
       </span>
     )
   }
-  const summary = integrationChipSummary(lines, subs, (iso) => (iso ? formatRelative(iso) : ''))
+  // rt6 — a partner whose failed send will be retried by itself reads amber, not red.
+  const retrying = new Set(
+    (sendFacts ?? []).filter((f) => !!sendStatusWords(f).retry_at).map((f) => f.api)
+  )
+  const summary = integrationChipSummary(
+    lines,
+    subs,
+    (iso) => (iso ? formatRelative(iso) : ''),
+    retrying
+  )
   // Newest request per partner (rows arrive newest first) — what a partner
   // line's Retry / View act on when the obligation has no submission of its own.
   const newestSubmissionByApi = new Map<string, { id: number; status: string }>()
@@ -162,6 +174,7 @@ export function ExternalRequestsChip({
   const DOT: Record<(typeof summary.partners)[number]['status'], string> = {
     ok: 'bg-emerald-500',
     attention: 'bg-red-500',
+    retrying: 'bg-amber-500',
     pending: 'bg-sky-500',
     neutral: 'bg-slate-400 dark:bg-slate-500'
   }
@@ -191,15 +204,24 @@ export function ExternalRequestsChip({
             'flex shrink-0 items-center gap-1.5 self-center rounded-md border px-2 py-1 text-[11px] font-medium transition-colors',
             needs > 0
               ? 'border-red-200 text-slate-700 hover:bg-red-50/60 dark:border-red-500/40 dark:text-slate-200 dark:hover:bg-red-500/10'
-              : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-white/5'
+              : summary.retrying > 0
+                ? 'border-amber-200 text-slate-700 hover:bg-amber-50/60 dark:border-amber-500/40 dark:text-slate-200 dark:hover:bg-amber-500/10'
+                : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-white/5'
           )}
           title={
             needs > 0
               ? `${needs} integration ${needs === 1 ? 'issue needs' : 'issues need'} attention — click for details`
-              : 'Integrations for this record — partner status and every request sent'
+              : summary.retrying > 0
+                ? 'A send could not get through and will be tried again by itself — click for details'
+                : 'Integrations for this record — partner status and every request sent'
           }
         >
-          <Satellite className={cn('h-3.5 w-3.5', needs > 0 ? 'text-red-500' : 'text-nvr-cyan')} />
+          <Satellite
+            className={cn(
+              'h-3.5 w-3.5',
+              needs > 0 ? 'text-red-500' : summary.retrying > 0 ? 'text-amber-500' : 'text-nvr-cyan'
+            )}
+          />
           {summary.partners.length <= 3 ? (
             summary.partners.map((p) => (
               <span
@@ -216,8 +238,9 @@ export function ExternalRequestsChip({
           ) : (
             <span>Integrations</span>
           )}
-          {/* The badges: told OK (green) · needs attention (red) · awaiting ack (blue). */}
-          {summary.ok > 0 && (
+          {/* The badges: told OK (green) · needs attention (red) · awaiting ack (blue) — only
+              when the partners are folded into "Integrations"; named dots already say it. */}
+          {summary.partners.length > 3 && summary.ok > 0 && (
             <span
               data-integrations-badge='ok'
               className='rounded bg-emerald-50 px-1 text-[10.5px] font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
@@ -225,7 +248,7 @@ export function ExternalRequestsChip({
               {summary.ok}
             </span>
           )}
-          {summary.pending > 0 && (
+          {summary.partners.length > 3 && summary.pending > 0 && (
             <span
               data-integrations-badge='pending'
               className='rounded bg-sky-50 px-1 text-[10.5px] font-semibold text-sky-700 dark:bg-sky-500/10 dark:text-sky-400'
@@ -233,7 +256,7 @@ export function ExternalRequestsChip({
               {summary.pending}
             </span>
           )}
-          {needs > 0 && (
+          {summary.partners.length > 3 && needs > 0 && (
             <span
               data-integrations-badge='attention'
               className='rounded bg-red-50 px-1 text-[10.5px] font-semibold text-red-700 dark:bg-red-500/10 dark:text-red-400'

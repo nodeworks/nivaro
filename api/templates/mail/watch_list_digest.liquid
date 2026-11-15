@@ -1,0 +1,31 @@
+{% layout 'base' %}
+{% block content %}
+<p style="margin:0 0 6px;font-size:15px;font-weight:700;">
+  {% if first_name != '' %}{{ first_name }}, {% endif %}{{ count }} record{% if count != 1 %}s{% endif %} on your watch list changed
+</p>
+<p style="margin:0 0 18px;font-size:13px;color:#64748b;">
+  In the last day, by someone other than you.
+</p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
+  {% for item in items %}
+  <tr>
+    <td style="padding:10px 0;border-bottom:1px solid #e2e8f0;">
+      <p style="margin:0;font-size:14px;font-weight:600;">
+        {% if item.url %}<a href="{{ item.url }}" style="color:#172940;text-decoration:none;">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}
+      </p>
+      <p style="margin:2px 0 0;font-size:13px;color:#475569;">
+        {{ item.text }}{% if item.by %} · {{ item.by }}{% endif %} · {{ item.when }}
+      </p>
+      {% if item.step %}
+      <p style="margin:2px 0 0;font-size:12px;color:#64748b;">{{ item.collection_label }} · now on {{ item.step }}</p>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+<p style="margin:18px 0 0;"></p>
+{% render 'partials/button', url: home_url, label: 'Open your watch list' %}
+<p style="margin:12px 0 0;color:#64748b;font-size:12px;">
+  You get this once a day, and only on days something changed. Turn it off in the watch list's settings.
+</p>
+{% endblock %}

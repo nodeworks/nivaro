@@ -87,6 +87,8 @@ interface FormState {
   headers: { key: string; value: string }[]
   enabled: boolean
   integration_type: string
+  /** rt6 — the word before the partner's number in "accepted it — PO 12345". */
+  reference_label: string
   retry_max: string
   retry_backoff: string
   inline_retries: string
@@ -110,6 +112,7 @@ const EMPTY: FormState = {
   headers: [],
   enabled: true,
   integration_type: '',
+  reference_label: '',
   retry_max: '',
   retry_backoff: '',
   inline_retries: '',
@@ -142,6 +145,7 @@ function formFromApi(data: ExternalApi): FormState {
     })),
     enabled: data.enabled,
     integration_type: data.integration_type ?? '',
+    reference_label: data.reference_label ?? '',
     owner_user: data.owner_user ?? null,
     ack_grace_minutes: data.ack_grace_minutes != null ? String(data.ack_grace_minutes) : '',
     skip_grace_minutes: data.skip_grace_minutes != null ? String(data.skip_grace_minutes) : '',
@@ -280,6 +284,8 @@ export function ExternalApiEditPage() {
         headers: Object.keys(headersObj).length ? headersObj : null,
         enabled: form.enabled,
         integration_type: form.integration_type || null,
+        // Kept inside integration_config by the server (the rest of it stays as it is).
+        reference_label: form.reference_label.trim() || null,
         owner_user: form.owner_user || null,
         // NOT NULL columns with a schema default (60 / 30) — an empty field
         // sends that default explicitly rather than omitting the key, so
@@ -621,6 +627,22 @@ export function ExternalApiEditPage() {
             placeholder='e.g. sat-ng'
           />
           <p className='text-[12px] text-slate-400'>Tag this API for use by an extension plugin.</p>
+        </div>
+        <div className='space-y-1.5' data-api-reference-label>
+          <Label htmlFor='api-reference-label'>Reference label</Label>
+          <Input
+            id='api-reference-label'
+            value={form.reference_label}
+            maxLength={40}
+            onChange={(e) => setForm((f) => ({ ...f, reference_label: e.target.value }))}
+            placeholder='reference'
+            className='max-w-[240px]'
+          />
+          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+            What {form.name.trim() || 'this partner'} calls the number it gives back. Records say “
+            {form.name.trim() || 'Partner'} accepted it at 10:43 AM —{' '}
+            {form.reference_label.trim() || 'reference'} 12345”.
+          </p>
         </div>
       </Card>
 

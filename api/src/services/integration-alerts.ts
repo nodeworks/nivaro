@@ -118,7 +118,7 @@ export async function notificationsEnabled(): Promise<boolean> {
  * two spellings of their id, or silently miss that a digest row is theirs.
  * Every caller of this function compares against an ALSO-uppercased id.
  */
-async function batchRecordOwners(
+export async function batchRecordOwners(
   pairs: Array<{ collection: string; item: string }>
 ): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>()

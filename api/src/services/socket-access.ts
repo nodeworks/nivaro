@@ -459,6 +459,12 @@ export async function roomStillAllowed(
       if (!m) return false
       return await canSeeRecordRoom(user, m[1], m[2], await isAdmin())
     }
+    // Grid presence (grid-presence.ts): the watched record's own read gate.
+    if (room.startsWith('grid:')) {
+      const m = /^grid:([^:]+):(.+)$/.exec(room)
+      if (!m) return false
+      return await canSeeRecordRoom(user, m[1], m[2], await isAdmin())
+    }
     if (room.startsWith('chat:')) return await canSeeRoom(user, room.slice(5))
     // Co-editing long text (coedit-socket.ts): the record read gate, then the field's read
     // permission (and its write permission for the cursor room).

@@ -21,6 +21,9 @@ export const liveScreensDocs: DocSection = {
         'A value you are typing is never replaced. Grids and editors keep your unsaved edits; the saved value from someone else shows once you are done.',
         'The dashboard keeps its layout while it updates. A section never folds away (or opens up) under you because its figures changed.',
         'The support desk (My requests and Desk) shows new requests, replies, claims and status changes in place, and an open request shows new replies without touching the reply you are writing. A request someone else picked up stays in the list, greyed, until you move on.',
+        'A count on a dashboard tile shows how far it moved, quietly beside the number: "+3 since this morning", or, when nothing moved today, "−2 since yesterday". It compares with the first number this browser saw today (and the last number it saw the day before), so it appears on whole-number tiles only and starts from your first visit.',
+        'A project’s Activity stream (Project 360) lists every change on the project and its workflows, requests, invoices and purchase orders, newest first, as sentences you can open. You only ever see changes to records you can open yourself. Pick a type to narrow it. New changes slide in at the top while you are at the top; scroll down and a "3 new" button waits instead. "Show earlier" loads older changes.',
+        'In the pipeline editor, every step shows how many records are in it right now and how long the longest-waiting one has been there ("7 records · oldest 12 d"). The numbers follow moves as they happen; click one to open the list of exactly those records.',
         'Calendars, the workflow timeline and the Jobs pages (Runs & schedules, Timeline, Calendar, Repair tasks) follow the data the same way: an entry another person moves, or a run that starts or finishes, shows up in place once things settle, and entries keep their place while your pointer is on them.'
       ]
     },
@@ -71,6 +74,18 @@ export const liveScreensDocs: DocSection = {
         [
           '`PageRenderer liveReads={[…]}`',
           'A page-builder page whose query and widget figures follow those collections.'
+        ],
+        [
+          '`useChangeChip(storeKey, value)`',
+          'The "+3 since this morning" chip for a whole-number figure. Baseline kept in localStorage per person and figure (`<user id>:<figure key>`); pass `null` while loading. No read of its own.'
+        ],
+        [
+          '`<RecordActivityStream sources records typeLabels />`',
+          'The live activity stream over related records. `sources` are `{ collection, filter }` ("the workflows of project 12"), resolved as the viewer by `POST /api/activity/feed` (body `{ sources, records, collections, before, limit }`; answer `{ data, next, types }`). A scoped API key or connected app gets 403.'
+        ],
+        [
+          '`useStateCensus(templateId, collections)`',
+          'Records per pipeline step with the longest wait (`GET /api/pipelines/:id/instance-distribution`, administrators), live on the bound collections’ moves.'
         ]
       ]
     }

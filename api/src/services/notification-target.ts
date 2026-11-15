@@ -185,8 +185,8 @@ export async function resolveTargetUrl(
       case 'approval':
         if (spec.collection && spec.id != null)
           return withFocus(await recordLink(spec.collection, spec.id, opts))
-        // A collection list keeps its query: `ids=1,2,3` (a bulk-change notice), a view digest,
-        // a sent view's `lv=` settings.
+        // A collection list keeps its query: `ids=1,2,3` (a bulk-change notice, rt6 #19 catalog
+        // notice), a view digest, a sent view's `lv=` settings.
         if (spec.collection)
           return withFocus(
             `${await linkTo('home', {}, opts)}`.replace(/\/$/, '') +

@@ -28,6 +28,7 @@ import { withAutoOwnersTile } from '../../lib/owners-header-tile'
 import { useMyUserId } from '../../lib/presence-signals'
 import { useUnsavedWork } from '../../lib/unsaved-work'
 import { cn } from '../../lib/utils'
+import { ConfigReachNote } from '../ConfigReachNote'
 import {
   LAYOUT_PRETEND_SCOPE,
   layoutPretendDownOptions,
@@ -1792,6 +1793,7 @@ export function LayoutEditor({
           onChange={setNote}
           onSave={saveNow}
           onClose={() => setNoteAnchor(null)}
+          footer={<ConfigReachNote collections={[collection]} />}
         />
       )}
       {listAnchor && (
@@ -1808,6 +1810,7 @@ export function LayoutEditor({
             setListAnchor(null)
             setPanel('settings')
           }}
+          footer={<ConfigReachNote collections={[collection]} />}
           onClose={() => setListAnchor(null)}
         />
       )}

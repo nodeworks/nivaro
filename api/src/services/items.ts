@@ -119,14 +119,17 @@ import {
   type RollupSource,
   recalcAffectedRollups,
   recalcOwnFilteredRollups,
+  rollupFieldsFedBy,
   roundToScale
 } from './rollups.js'
+import { announceRecalc } from './recalc-announce.js'
 import {
   applyRowLocksOnWrite,
   applyRowRulesOnCreate,
   applyRowRulesOnUpdate,
   type VirtualParent
 } from './row-rules-autofill.js'
+import { openSaveProgress } from './save-progress.js'
 import { fallbackSearchColumns, narrowSearchColumns, parseSearchFields } from './search-fields.js'
 import { BINARY_COLLATION, fastContainsKind, fastLike, textKindOf } from './search-like.js'
 import {
@@ -6560,9 +6563,34 @@ async function applyAliasO2MWrites(
   req: FastifyRequest | undefined,
   workspaceId: string | undefined,
   isNewParent: boolean,
-  callerPayload = false
+  callerPayload = false,
+  parentCollection?: string
 ): Promise<NestedCreated> {
   const created: NestedCreated = []
+  // Save progress for big saves (rt7 #8): the saving tab hears "320/500 lines" over its own
+  // socket when it named the save (?save_progress=). A no-op otherwise.
+  const progress = openSaveProgress(
+    req,
+    writes.reduce(
+      (n, w) =>
+        n +
+        w.moves.length +
+        w.rows.length +
+        (isNewParent ? 0 : w.updates.length + (w.set ? 0 : w.deletes.length)),
+      0
+    )
+  )
+  // Open pages on an EXISTING parent hear that its totals are being recalculated while a
+  // nested set runs (rt7 #9): the per-row recalc is skipped until the whole set is in.
+  const recalcFields =
+    !isNewParent && parentCollection
+      ? await rollupFieldsFedBy(
+          parentCollection,
+          writes.map((w) => w.collection)
+        ).catch(() => [] as string[])
+      : []
+  if (recalcFields.length > 0 && parentCollection)
+    announceRecalc(parentCollection, parentId, 'start', recalcFields)
   // Rows changed in place, with what they held before, for the undo.
   const changed: Array<{
     collection: string
@@ -6671,6 +6699,7 @@ async function applyAliasO2MWrites(
             callerPayload
           })
           moved.push({ collection: w.collection, fk: w.fk, id: mid, from })
+          progress.step()
           // The link may be a field this caller's write drops (read-only, a
           // locked row rule): a move that did not land is a refusal, never a
           // silent no-op.
@@ -6704,6 +6733,7 @@ async function applyAliasO2MWrites(
             if (before && !k.startsWith('_') && k in before) prior[k] = before[k]
           await updateOne(user, w.collection, u.id, patch, req, workspaceId, { callerPayload })
           changed.push({ collection: w.collection, id: u.id, prior })
+          progress.step()
         } catch (err) {
           throw nestedError(err, w, `${w.field}[${u.id}]`)
         }
@@ -6726,6 +6756,7 @@ async function applyAliasO2MWrites(
           if (rid != null && !preExisting.has(String(rid)))
             created.push({ collection: w.collection, id: rid })
           if (row) last = row
+          progress.step()
         } catch (err) {
           throw nestedError(err, w, `${w.field}[${i}]`)
         }
@@ -6738,16 +6769,19 @@ async function applyAliasO2MWrites(
         const removals = w.set
           ? [...preExisting].filter((id) => !keep.has(id))
           : w.deletes.map(String)
+        if (w.set) progress.grow(removals.length)
         for (const id of removals) {
           ownedOrRefuse(id, 'row')
           try {
             await deleteOne(user, w.collection, id, req, workspaceId)
+            progress.step()
           } catch (err) {
             throw nestedError(err, w, `${w.field} delete ${id}`)
           }
         }
       }
       // One recalc for the whole set: every row shares the parent.
+      progress.phase('totals')
       if (last) await recalcAffectedRollups(w.collection, last)
       else if (updates.length > 0 || (w.deletes.length > 0 && !isNewParent)) {
         const any = (await db(w.collection)
@@ -6761,6 +6795,10 @@ async function applyAliasO2MWrites(
     const note = await undo()
     e.message = `${e.message} — nothing was changed${note}`
     throw e
+  } finally {
+    progress.end()
+    if (recalcFields.length > 0 && parentCollection)
+      announceRecalc(parentCollection, parentId, 'done', recalcFields)
   }
   return created
 }
@@ -7543,7 +7581,8 @@ export async function createOne(
           req,
           workspaceId,
           true,
-          opts?.callerPayload === true
+          opts?.callerPayload === true,
+          collection
         )
       } catch (err) {
         await undoNewParent(collection, returnedId as string | number, aliasWrites)
@@ -7996,7 +8035,8 @@ export async function updateOne(
       req,
       workspaceId,
       false,
-      opts?.callerPayload === true
+      opts?.callerPayload === true,
+      collection
     )
 
   // A field this row's OWN stored rollup filters on (projects.pub_amount_follows_cars)

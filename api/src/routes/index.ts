@@ -62,6 +62,7 @@ import { bulkActionsRoutes } from './bulk-actions.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { cacheConfigRoutes } from './cache-config.js'
 import { catalogRelatedRoutes } from './catalog-related.js'
+import { cellLockRoutes } from './cell-locks.js'
 import { changeProposalRoutes } from './change-proposals.js'
 import { changeSetsRoutes } from './change-sets.js'
 import { changesRoutes } from './changes.js'
@@ -93,12 +94,14 @@ import { configConformanceRecordRoutes, configConformanceRoutes } from './config
 import { configDiffRoutes } from './config-diff.js'
 import { configDriftRoutes } from './config-drift.js'
 import { configHealthRoutes } from './config-health.js'
+import { configReachRoutes } from './config-reach.js'
 import { configReviewRoutes } from './config-review.js'
 import { configSearchRoutes } from './config-search.js'
 import { configPlainSearchRoutes } from './config-search-plain.js'
 import { configSeedRoutes } from './config-seeds.js'
 import { connectionReportRoutes } from './connection-reports.js'
 import { contentExportRoutes } from './content-export.js'
+import { copyRulesRoutes } from './copy-rules.js'
 import { coverageGapsRoutes } from './coverage-gaps.js'
 import { cronRoutes } from './cron.js'
 import { cronTimelineRoutes } from './cron-timeline.js'
@@ -236,6 +239,7 @@ import { payloadTemplateRoutes } from './payload-templates.js'
 import { pdfTemplatesRoutes } from './pdf-templates.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
 import { personSummaryRoutes } from './person-summary.js'
+import { pickerBadgeRoutes } from './picker-badges.js'
 import { pickerExclusionRoutes } from './picker-exclusions.js'
 import { pickerMissRoutes } from './picker-misses.js'
 import { pickerNarrowingRoutes } from './picker-narrowing.js'
@@ -343,6 +347,7 @@ import { usersRoutes } from './users.js'
 import { viewStreamRoutes } from './view-stream.js'
 import { viewSubscriptionsRoutes } from './view-subscriptions.js'
 import { virtualCollectionsRoutes } from './virtual-collections.js'
+import { watchListRoutes } from './watch-list.js'
 import { webhooksRoutes } from './webhooks.js'
 import { buildWidgetScript, widgetRoutes } from './widget.js'
 import { widgetsInternalRoutes } from './widgets-internal.js'
@@ -508,6 +513,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(recordViewRoutes)
   // rt3 #14/#16/#17 — unseen changes before a move, record hover cards, file processing status.
   await app.register(recordGlanceRoutes)
+  // rt5 — the watch list dock: pinned records, waiting on others, mentions & replies.
+  await app.register(watchListRoutes, { prefix: '/watch-list' })
   // #3227 — role starter sidebar layouts (a person's own rides preferences.nav_layout)
   await app.register(navLayoutRoutes, { prefix: '/nav-layout' })
   // Realtime round 3 #24 — Live updates role defaults (a person's own rides preferences.live_mode)
@@ -581,6 +588,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(exportRunsRoutes, { prefix: '/export-runs' })
   await app.register(recordMergeRoutes, { prefix: '/record-merge' })
   await app.register(realtimeRoutes, { prefix: '/realtime' })
+  // rt8 #25 — "This reaches 34 open forms, 12 people right now" (administrators).
+  await app.register(configReachRoutes, { prefix: '/realtime' })
   // #2937 — sign-in only: is this tab on an old build (reload old tabs when idle).
   await app.register(realtimeBuildRoutes, { prefix: '/realtime' })
   // Realtime ideas 14/15 — missed-update beacons (signed in) + their report (admin).
@@ -685,6 +694,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(fieldRulesRoutes, { prefix: '/field-rules' })
   await app.register(fieldDefaultsRoutes, { prefix: '/field-defaults' })
   await app.register(duplicateRoutes, { prefix: '/duplicates' })
+  await app.register(copyRulesRoutes, { prefix: '/copy-rules' })
   await app.register(pinnedRoutes, { prefix: '/pinned' })
   await app.register(dashboardsRoutes, { prefix: '/dashboards' })
   await app.register(reportsRoutes, { prefix: '/reports' })
@@ -839,6 +849,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(scimRoutes, { prefix: '/scim/v2' })
   await app.register(pdfTemplatesRoutes, { prefix: '/pdf-templates' })
   await app.register(pickerExclusionRoutes, { prefix: '/picker-exclusions' })
+  // rt6 — status badges in pickers + soft locks on list cells being edited in place.
+  await app.register(pickerBadgeRoutes, { prefix: '/picker-badges' })
+  await app.register(cellLockRoutes, { prefix: '/cell-locks' })
   await app.register(erpSubmissionsRoutes, { prefix: '/erp-submissions' })
   await app.register(syncJobsRoutes, { prefix: '/sync-jobs' })
   await app.register(workflowsRoutes, { prefix: '/workflows' })

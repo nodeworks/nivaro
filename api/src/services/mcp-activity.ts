@@ -6,7 +6,13 @@ import { logActivity } from './activity.js'
 import { hasChainColumns } from './chain-columns.js'
 import { selectInChunks } from './db-batch.js'
 import { deleteOne, updateOne } from './items.js'
-import { CONN_RE, connectionLimit, hasMcpLogColumns, type McpSettings } from './mcp-calls.js'
+import {
+  agentDisplayName,
+  CONN_RE,
+  connectionLimit,
+  hasMcpLogColumns,
+  type McpSettings
+} from './mcp-calls.js'
 import { idleDays, revokeOn } from './mcp-idle-review.js'
 import { listAllGrants, listGrants, type OAuthGrant } from './oauth-store.js'
 
@@ -158,6 +164,10 @@ export interface ConnectionInfo {
   kind: ConnKind
   /** The app's registered name, the key's name, or "<person> token". */
   name: string
+  /** rt8 #21: the name the agent goes by — `custom_name` when set, else `name`. */
+  display_name?: string
+  /** The name its owner or an administrator chose (null = goes by the app's name). */
+  custom_name?: string | null
   user_id: string
   user_name?: string
   created_at: string | null
@@ -309,6 +319,10 @@ export async function listConnections(
         stats: st
       })
     }
+  }
+  for (const c of out) {
+    c.custom_name = settings.connection_names?.[c.conn] ?? null
+    c.display_name = agentDisplayName(c.conn, c.name, settings)
   }
   if (!opts.userId) {
     const names = await userNames([...out.map((c) => c.user_id).filter(Boolean), ...tokenUsers])

@@ -23,6 +23,7 @@ export const NOTIFY_CATEGORIES: NotifyCategory[] = [
   'proposals',
   'sla',
   'watch',
+  'watch_list',
   'alerts',
   'audit',
   'anomaly',

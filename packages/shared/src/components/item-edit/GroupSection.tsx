@@ -10,6 +10,7 @@ import {
   useNavigation,
   useOptionalNivaroClient
 } from '../../context'
+import { OPEN_SECTION_EVENT } from '../../lib/co-edit'
 import { get, post } from '../../lib/commands'
 import { isEmptyValue, isFolded, planFieldGrid, readGroupStructure } from '../../lib/form-structure'
 import { reportSectionUse } from '../../lib/form-usage-beacon'
@@ -41,6 +42,7 @@ import { applyDisplayTemplate, resolveColSpan, useContainerWidth } from './helpe
 import { SectionIntro } from './LayoutContentBlock'
 import { invalidateM2MFor } from './m2m-invalidate'
 import { groupSectionPropsEqual } from './render-stability'
+import { SectionPresence } from './SectionPresence'
 import type {
   CMSField,
   CMSRelation,
@@ -1228,6 +1230,24 @@ export const GroupSection = memo(function GroupSection({
   // Accordion mode: parent controls open/closed via isOpen + onToggle.
   const controlled = onToggle !== undefined
   const collapsed = designFolded ?? (controlled ? !isOpen : localCollapsed)
+  // Realtime round 7 #4 — a nudge's Go (or Find) opens the folded section that holds the field.
+  const openRef = useRef<() => void>(() => {})
+  openRef.current = () => {
+    if (!collapsed) return
+    if (designFolded !== null) setDesignFolded(false)
+    else if (controlled) onToggle?.()
+    else setLocalOpen(true)
+  }
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent).detail as { field?: string; key?: string } | undefined
+      if (d?.key === group.key || (d?.field && fields.some((f) => f.field === d.field)))
+        openRef.current()
+    }
+    window.addEventListener(OPEN_SECTION_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_SECTION_EVENT, onOpen)
+  }, [group.key, fields])
   useEffect(() => {
     if (deferred && !collapsed) onFirstOpen?.(group.key)
   }, [deferred, collapsed, onFirstOpen, group.key])
@@ -1348,6 +1368,15 @@ export const GroupSection = memo(function GroupSection({
             {group.label}
           </span>
           <span className='flex-1' />
+          {collapsed && !design && itemId && itemId !== 'new' && (
+            <SectionPresence
+              collection={collection}
+              itemId={itemId}
+              fields={fields}
+              relations={relations}
+              label={group.label || group.key}
+            />
+          )}
           {hasErrors && <span className='nvr-pop h-2 w-2 rounded-full bg-destructive shrink-0' />}
           <ChevronDown
             // Design mode: the chevron still folds the section; the rest of

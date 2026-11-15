@@ -9,6 +9,7 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { issuingAdminStillAdmin } from '../middleware/authenticate.js'
 import { accessPendingSignIn } from '../services/access-pending.js'
+import { agentSnapshot } from '../services/agent-presence.js'
 import { userHasSocket } from '../services/ai-stream-delivery.js'
 import { chaosRedisClient, chaosRedisSubscriber } from '../services/chaos/redis-hook.js'
 import { canSeeRoom } from '../services/chat.js'
@@ -35,10 +36,17 @@ import {
 } from '../services/field-change-relay.js'
 import { fieldFocusTracker } from '../services/field-focus.js'
 import {
+  cleanPointTarget,
+  createPointLimiter,
+  type PointRefusal,
+  pointTargetSockets
+} from '../services/field-point.js'
+import {
   cleanSignalField,
   fieldSignalSockets,
   mayReadSignalField
 } from '../services/field-signal-gate.js'
+import { registerGridPresence } from '../services/grid-presence.js'
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
 import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
@@ -107,6 +115,8 @@ import {
 import { emitToSignedIn, TENANT_ALL_ROOM } from '../services/record-events.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
 import { noteRealtimeEmit } from '../services/request-trace.js'
+import type { ShareRedis } from '../services/screen-share.js'
+import { defaultScreenShareDeps, registerScreenShare } from '../services/screen-share-socket.js'
 import {
   canJoinTicketTopic,
   canSeeRecordRoom,
@@ -156,6 +166,7 @@ import {
 } from '../services/socket-transport.js'
 import { attachSocketVerification } from '../services/socket-verify.js'
 import { type RefreshPayload, refreshOwedOnConnect } from '../services/sticky-refresh.js'
+import { logTicketEvent } from '../services/support-tickets.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 import { registerWidgetLive } from '../services/widget-live.js'
 
@@ -248,6 +259,16 @@ export function isUserViewing(collection: string, item: string, userId: string):
   for (const v of map?.values() ?? []) if (v.id === userId) return true
   // Post-mortem 3.3 — viewing on another process (the board, entries younger than 3 s).
   return boardMergeOn() && boardIsViewing(room, userId)
+}
+
+/**
+ * rt8 #21: has anyone this record's room open (`room` tenant-scoped)? This process's sockets,
+ * plus the other processes' from the board when it is merged. Lets agent presence skip the emit
+ * for a record nobody is looking at.
+ */
+export function recordRoomHasViewers(room: string): boolean {
+  if ((recordViewers.get(room)?.size ?? 0) > 0) return true
+  return boardMergeOn() && boardPeerViewers(room).length > 0
 }
 
 /**
@@ -1845,6 +1866,18 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     registerCoedit(io, socket, () => authenticatedUser, { scopedRoom, tenantNow }, coeditDeps)
     // #1399 — watch a session replay together (admin-only replay:<key> rooms).
     registerReplayWatch(io, socket, () => authenticatedUser)
+    // Realtime idea 24 — a support ticket's live screen share: frames judged per watcher socket.
+    registerScreenShare(
+      io,
+      socket,
+      () => authenticatedUser,
+      { tenantNow },
+      defaultScreenShareDeps(app.redis as unknown as ShareRedis, (ticket, user, text, action) =>
+        logTicketEvent(ticket, user, text, undefined, action)
+      )
+    )
+    // Who is editing on a budget / planning grid (realtime round 8, item 22).
+    registerGridPresence(io, socket, () => authenticatedUser)
     // #1675 — pushed dashboard/report widgets, computed as this socket's sign-in, sent to it alone.
     registerWidgetLive(socket, () => authenticatedUser)
 
@@ -2197,6 +2230,13 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       }
       map.set(socket.id, { id: user.id, name: displayName(user) })
       broadcastViewers(room)
+      // rt8 #21 — agents working on the record right now (their marks outlive no one's join).
+      void agentSnapshot(app.redis, room)
+        .then((agents) => {
+          if (agents.length && joinedRecordRooms.has(room))
+            socket.emit('record:agents', { collection, item: String(item), agents })
+        })
+        .catch(() => {})
     }
     // Cloud: in the socket's tenant, so the gate reads that tenant's database.
     socket.on('record:join', inSocketTenant(socket, onRecordJoin))
@@ -2387,6 +2427,66 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           if (delivery.valueTo.length)
             io.to(delivery.valueTo).emit('field:changed', { ...base, value })
           if (delivery.nameTo.length) io.to(delivery.nameTo).emit('field:changed', base)
+        }
+      )
+    )
+
+    // Realtime round 7 #4 — "Point Beth to this field": a transient nudge to one person who has
+    // this record open right now (services/field-point.ts). Nothing stored, no notification;
+    // both people must be able to read the field. The sender hears `field:point-result`.
+    const pointLimiter = createPointLimiter()
+    socket.on(
+      'field:point',
+      inSocketTenant(
+        socket,
+        async (payload: {
+          field?: unknown
+          collection?: string
+          item?: unknown
+          to?: unknown
+          ref?: unknown
+        }) => {
+          const user = authenticatedUser
+          const collection = payload?.collection
+          if (!user || typeof collection !== 'string' || payload?.item == null) return
+          const room = recordRoom(collection, payload.item)
+          if (!joinedRecordRooms.has(room)) return
+          const field = cleanSignalField(payload.field)
+          const to = cleanPointTarget(payload.to)
+          if (!field || !to) return
+          // The asking tab's own id for the request, echoed so only that tab says how it went
+          // (a shared socket hands record events to every tab holding the record).
+          const ref =
+            typeof payload.ref === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(payload.ref)
+              ? payload.ref
+              : null
+          const record = { collection, item: String(payload.item), field, to, ref }
+          const answer = (ok: boolean, reason?: PointRefusal): void => {
+            socket.emit('field:point-result', { ...record, ok, ...(reason ? { reason } : {}) })
+          }
+          if (String(user.id).toUpperCase() === to.toUpperCase()) return answer(false, 'self')
+          if (!pointLimiter.allow(to)) return answer(false, 'rate')
+          const viewers = [
+            ...[...(recordViewers.get(room) ?? new Map()).entries()].map(([sid, v]) => ({
+              socket: sid,
+              id: String(v.id)
+            })),
+            ...boardPeerViewers(room).map((v) => ({ socket: v.socket, id: String(v.id) }))
+          ]
+          const targets = pointTargetSockets(viewers, to, socket.id)
+          if (targets.length === 0) return answer(false, 'gone')
+          const readable =
+            (await mayReadSignalField(String(user.id), collection, field)) &&
+            (await mayReadSignalField(to, collection, field))
+          if (!readable) return answer(false, 'field')
+          io.to(targets).emit('field:pointed', {
+            collection,
+            item: String(payload.item),
+            field,
+            user: { id: user.id, name: displayName(user).slice(0, 80) },
+            at: Date.now()
+          })
+          answer(true)
         }
       )
     )

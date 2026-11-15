@@ -5,11 +5,13 @@ import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { parseAllowedCollections } from '../../lib/allowed-collections'
 import { get } from '../../lib/commands'
 import { pickerOptionsMeta } from '../../lib/live-pickers'
+import { useOptionBadges } from '../../lib/picker-badges'
 import { compareByMatch } from '../../lib/picker-rank'
 import { useRecordReader } from '../../lib/record-loader'
 import { useOnlineUsers } from '../../lib/use-online-users'
 import { cn, matchesAllTokens, userOptionFilter } from '../../lib/utils'
 import { UserAvatar } from '../UserAvatar'
+import { PickerBadgeList, RecordPickerBadges } from './PickerBadges'
 
 /** Initials from a rendered user label ("Jane Doe (jane@x)" → "JD"). */
 function labelInitials(label: string): string {
@@ -418,6 +420,13 @@ export function M2MCombobox({
     ...stagedLinkIds
   ])
 
+  // rt6 #12 — status badges beside the options, as the viewer (people have their own marks).
+  const optionBadges = useOptionBadges(
+    relatedCollection,
+    (options ?? []).map((o) => o.id as string | number),
+    open && relatedCollection !== 'nivaro_users'
+  )
+
   const onCountChangeRef = useRef(onCountChange)
   onCountChangeRef.current = onCountChange
   useEffect(() => {
@@ -557,6 +566,9 @@ export function M2MCombobox({
                             displayTemplate={colMeta?.display_template}
                           />
                         ))}
+                      {own && !foreign && own !== 'nivaro_users' && (
+                        <RecordPickerBadges collection={own} id={relId} />
+                      )}
                       <button
                         type='button'
                         aria-label='Remove'
@@ -681,6 +693,7 @@ export function M2MCombobox({
                             />
                           )}
                         <span className='truncate'>{getLabel(opt)}</span>
+                        <PickerBadgeList badges={optionBadges[optId]} />
                       </CommandItem>
                     )
                   })}

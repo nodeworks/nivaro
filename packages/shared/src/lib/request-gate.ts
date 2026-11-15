@@ -6,7 +6,7 @@ import {
   isBatchableGetPath,
   sharedGetLoader
 } from './batch-gets'
-import { isRehearsalCommand, noteOwnWriteFromCommand } from './own-writes'
+import { announceWriteCommand, isRehearsalCommand, noteOwnWriteFromCommand } from './own-writes'
 import {
   claimIdentityCall,
   isIdentityRead,
@@ -637,8 +637,10 @@ export function withGetCoalescing(
       if (busts) forgetSettledReads()
       const moves = movesWriteEpoch(c)
       if (moves) writeEpoch++
+      if (!rehearsal) announceWriteCommand('start', c._method, c._path)
       const sent = watchSignedOut(client.request<T>(command), false).finally(() => {
         if (moves) writeEpoch++
+        if (!rehearsal) announceWriteCommand('end', c._method, c._path)
       })
       return (busts ? sent.finally(forgetSettledReads) : sent).then((res) => {
         if (!rehearsal) noteOwnWriteFromCommand(c._method, c._path, c._body, res)

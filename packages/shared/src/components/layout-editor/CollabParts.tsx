@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowUpRight, History, Settings2 } from 'lucide-react'
-import { useMemo } from 'react'
+import { type ReactNode, useMemo } from 'react'
 import { cn, formatRelative } from '../../lib/utils'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import type { DesignTarget } from './design-context'
@@ -151,10 +151,13 @@ export function UnsavedList({
   describe,
   onJump,
   onSettings,
-  onClose
+  onClose,
+  footer
 }: {
   anchor: HTMLElement | null
   steps: UnsavedStep[]
+  /** Under the list (rt8 #25: who the save reaches). */
+  footer?: ReactNode
   /** Is the target still on the form (a later step may have taken it away)? */
   exists: (t: DesignTarget) => boolean
   describe: (t: DesignTarget) => string
@@ -220,6 +223,11 @@ export function UnsavedList({
               )
             })}
           </ol>
+        )}
+        {footer && steps.length > 0 && (
+          <div className='mt-1.5 border-t border-slate-100 px-1.5 pb-1 pt-2 dark:border-border'>
+            {footer}
+          </div>
         )}
       </PopoverContent>
     </Popover>

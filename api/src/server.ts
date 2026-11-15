@@ -43,7 +43,7 @@ import { metricsPlugin } from './plugins/metrics.js'
 import { callerRateLimitPlugin, rateLimitPlugin } from './plugins/rate-limit.js'
 import { redisPlugin } from './plugins/redis.js'
 import { REQUEST_ID_HEADER, requestTracePlugin } from './plugins/request-trace.js'
-import { socketioPlugin } from './plugins/socketio.js'
+import { recordRoomHasViewers, socketioPlugin } from './plugins/socketio.js'
 import { trafficActionsPlugin } from './plugins/traffic-actions.js'
 import { adminProvisionRoutes } from './routes/admin/provision.js'
 import { adminTrafficTenantRoutes } from './routes/admin/traffic-tenants.js'
@@ -56,6 +56,7 @@ import { purgeExpiredRecordings } from './routes/session-recordings.js'
 import { sharePublicRoutes } from './routes/share-links.js'
 import { statusPublicRoutes } from './routes/status.js'
 import { setPulseApp } from './services/activity.js'
+import { registerAgentPresence } from './services/agent-presence.js'
 import { pruneAiCalls } from './services/ai-log.js'
 import { bootPhase } from './services/boot-phases.js'
 import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
@@ -226,6 +227,8 @@ export async function buildServer() {
   await app.register(requestTracePlugin)
   // Before anything reads headers: an in-process MCP tool call's marker becomes a request flag.
   app.addHook('onRequest', markMcpInnerRequest)
+  // rt8 #21 — an agent's tool call that read or wrote one record shows on that record.
+  registerAgentPresence(app, recordRoomHasViewers)
   await app.register(rateLimitPlugin)
   // Traffic Map debug windows + temporary caches (#2215 / #2273) — timed rules every replica honours.
   await app.register(trafficActionsPlugin)
@@ -1154,6 +1157,36 @@ export async function buildServer() {
           idempotent: 'safe',
           description:
             'Tells open pages when a record’s SLA clock passes its warning or breach line, so colours change without a reload. Reads only collections someone has open.'
+        }
+      )
+
+      // Watch list (rt6): "tell me when it's overdue" rules (only the records that have one),
+      // and the opt-in daily email of what changed on a person's pinned records.
+      app.cron.schedule(
+        'watch-list-overdue',
+        '*/5 * * * *',
+        async () => {
+          const { runOverdueAlerts } = await import('./services/watch-list/alerts.js')
+          await runOverdueAlerts(app)
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Tells people who set a “when it’s overdue” alert on a watched record that its step passed its due time — once per breach. Reads only records that have such an alert.'
+        }
+      )
+      app.cron.schedule(
+        'watch-list-digest',
+        '0 * * * *',
+        async () => {
+          const { runWatchDigest } = await import('./services/watch-list/digest.js')
+          await runWatchDigest()
+        },
+        {
+          idempotent: 'safe',
+          description:
+            'Emails each person who turned it on what changed on their pinned records in the last day, read as them, at their own digest hour (else 7 AM Eastern). Days with no change send nothing; one email per person per day.'
         }
       )
 

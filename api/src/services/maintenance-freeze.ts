@@ -48,8 +48,12 @@ export function maintenanceExemptPath(url: string): boolean {
     url.startsWith('/api/users/cards') ||
     // Activity sentence labels (migration 516): a read carrying the page's refs.
     url.startsWith('/api/activity/labels') ||
+    // The activity stream over related records (Project 360): a read carrying the sources.
+    url.startsWith('/api/activity/feed') ||
     // "Needed by <partner>" badges (idea 43): a read carrying the form's values.
     /^\/api\/partner-needs\/[^/?]+(\?|$)/.test(url) ||
+    // Picker status badges and list cell-lock holders (rt6): reads carrying ids.
+    /^\/api\/(picker-badges|cell-locks\/read)(\?|$)/.test(url) ||
     // The promote chain's overwrite check (routes/config-drift.ts): a read carrying the
     // source's rows; promotions run while the target is in maintenance.
     /^\/api\/config-drift\/guard(\?|$)/.test(url) ||
