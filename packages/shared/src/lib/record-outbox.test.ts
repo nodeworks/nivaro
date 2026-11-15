@@ -16,6 +16,7 @@ import {
   RECORD_OUTBOX_TTL_MS,
   type RecordOutboxEvent,
   replayRecordOutbox,
+  resolveRecordOutboxField,
   settleRecordOutbox,
   sweepExpiredRecordOutbox
 } from './record-outbox'
@@ -170,6 +171,8 @@ describe('replay', () => {
   it('turns a mid-air collision into a conflict for the merge dialog', async () => {
     const client = fakeClient({
       'GET /auth/me': me('u1'),
+      // The value the review shows is the viewer's own read, never the 409's.
+      'GET /items/projects/7': () => ({ data: { name: 'Theirs (as read)' } }),
       'PATCH /items/projects/7': () => {
         throw Object.assign(new Error('Conflict'), {
           status: 409,
@@ -188,7 +191,7 @@ describe('replay', () => {
     await replayRecordOutbox()
     const e = getRecordOutbox()[0]
     expect(e.status).toBe('conflict')
-    expect(e.conflicts).toEqual([{ field: 'name', current_value: 'Theirs' }])
+    expect(e.conflicts).toEqual([{ field: 'name', current_value: 'Theirs (as read)' }])
     expect(e.latest_revision).toBe(52)
     expect(events.map((x) => x.type)).toEqual(['conflict'])
   })

@@ -134,6 +134,7 @@ import {
   enqueueRecordSave,
   isOfflineSaveError,
   midairCollisionOf,
+  nudgeOutboxReview,
   onRecordOutboxEvent,
   onRecordOutboxRetry,
   retryRecordOutbox,
@@ -2726,7 +2727,14 @@ function ItemEditFormView({
   }, [client, authUserId, qc])
   // Another record on this mount (or unmount): hand the entry back to the replayers.
   // biome-ignore lint/correctness/useExhaustiveDependencies: release on identity only
-  useEffect(() => releaseOutboxClaim, [collection, itemId])
+  useEffect(
+    () => () => {
+      releaseOutboxClaim()
+      // Leaving this record while an offline clash waits opens its review card (round 8 item 3).
+      nudgeOutboxReview()
+    },
+    [collection, itemId]
+  )
   const [isDirty, setIsDirty] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   // Remote-change ghosts (#2): field → what it was before someone else's
@@ -9401,6 +9409,7 @@ function ItemEditFormView({
   }
 
   function handleSave() {
+    nudgeOutboxReview()
     if (recordGone) return
     // The header Save is disabled on a read-only record; the host's triggers
     // (workspace "Save all", the entry keyboard) are not — they land here.

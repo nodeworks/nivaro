@@ -57,7 +57,11 @@ const short = (v: unknown, max = 80): string => {
 }
 
 /** A value as the person reads it: a related record's label, a choice's text, else short text. */
-function useShown(field: CMSField | null, relatedCollection: string | null, values: unknown[]) {
+export function useShown(
+  field: CMSField | null,
+  relatedCollection: string | null,
+  values: unknown[]
+) {
   const looked = useRecordLabels(relatedCollection, values, !!relatedCollection)
   const choices = useMemo(() => {
     const parsed = parseJson<{ choices?: Array<{ text: string; value: unknown }> }>(field?.options)

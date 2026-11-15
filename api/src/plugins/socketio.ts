@@ -45,6 +45,7 @@ import {
   fieldSignalSockets,
   mayReadSignalField
 } from '../services/field-signal-gate.js'
+import { registerGridPresence } from '../services/grid-presence.js'
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
 import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
@@ -1868,6 +1869,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         logTicketEvent(ticket, user, text, undefined, action)
       )
     )
+    // Who is editing on a budget / planning grid (realtime round 8, item 22).
+    registerGridPresence(io, socket, () => authenticatedUser)
     // #1675 — pushed dashboard/report widgets, computed as this socket's sign-in, sent to it alone.
     registerWidgetLive(socket, () => authenticatedUser)
 
