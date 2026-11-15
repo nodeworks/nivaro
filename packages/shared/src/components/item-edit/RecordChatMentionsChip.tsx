@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { MessagesSquare } from 'lucide-react'
+import { ChevronRight, MessagesSquare } from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useLiveAvailable, useLiveRecordEvent } from '../../lib/live'
 import { useLivePreference } from '../../lib/live-preference'
+import { formatRelative } from '../../lib/utils'
 import { canOpenChatRoom, openChatRoom } from '../chat/chat-core'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
@@ -89,14 +90,16 @@ export function RecordChatMentionsChip({
           type='button'
           data-record-chat-mentions
           data-new={hasNew ? data.new_total : undefined}
+          data-tip={mentionsText(data)}
+          aria-label={mentionsText(data)}
           className={
             hasNew
-              ? 'inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-px font-semibold text-[9.5px] text-sky-800 tabular-nums transition-colors hover:bg-sky-100 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300 dark:hover:bg-sky-500/20'
-              : 'inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-px font-medium text-[9.5px] text-slate-500 transition-colors hover:bg-slate-100 dark:border-border dark:bg-muted dark:text-muted-foreground dark:hover:bg-slate-800'
+              ? 'inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full border border-sky-200 bg-sky-50 px-1.5 py-px font-semibold text-[9.5px] text-sky-800 tabular-nums transition-colors hover:bg-sky-100 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300 dark:hover:bg-sky-500/20'
+              : 'inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-1.5 py-px font-medium text-[9.5px] text-slate-500 transition-colors hover:bg-slate-100 dark:border-border dark:bg-muted dark:text-muted-foreground dark:hover:bg-slate-800'
           }
         >
-          <MessagesSquare className='h-2.5 w-2.5' aria-hidden />
-          {mentionsText(data)}
+          <MessagesSquare className='h-2.5 w-2.5 shrink-0' aria-hidden />
+          <span className='min-w-0 truncate'>{mentionsText(data)}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent align='start' className='w-[280px] p-1'>
@@ -112,16 +115,34 @@ export function RecordChatMentionsChip({
                 }}
                 className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-slate-50 disabled:cursor-default disabled:hover:bg-transparent dark:hover:bg-slate-800'
               >
-                <span className='min-w-0 flex-1 truncate font-medium text-slate-800 dark:text-slate-100'>
-                  {r.label}
+                <span className='min-w-0 flex-1'>
+                  <span className='block truncate font-medium text-slate-800 dark:text-slate-100'>
+                    {r.label}
+                  </span>
+                  {r.last_at && (
+                    <span className='block text-[11px] text-slate-500 dark:text-slate-400'>
+                      latest {formatRelative(r.last_at)}
+                    </span>
+                  )}
                 </span>
-                <span className='shrink-0 text-[11px] text-slate-500 tabular-nums dark:text-slate-400'>
-                  {r.count} {r.count === 1 ? 'message' : 'messages'}
-                </span>
-                {r.new_count > 0 && (
+                {r.new_count > 0 && r.new_count === r.count ? (
                   <span className='shrink-0 rounded-full bg-sky-100 px-1.5 text-[10px] font-semibold text-sky-800 tabular-nums dark:bg-sky-500/20 dark:text-sky-300'>
                     {r.new_count} new
                   </span>
+                ) : (
+                  <>
+                    <span className='shrink-0 text-[11px] text-slate-500 tabular-nums dark:text-slate-400'>
+                      {r.count} {r.count === 1 ? 'message' : 'messages'}
+                    </span>
+                    {r.new_count > 0 && (
+                      <span className='shrink-0 rounded-full bg-sky-100 px-1.5 text-[10px] font-semibold text-sky-800 tabular-nums dark:bg-sky-500/20 dark:text-sky-300'>
+                        {r.new_count} new
+                      </span>
+                    )}
+                  </>
+                )}
+                {canOpen && (
+                  <ChevronRight className='h-3.5 w-3.5 shrink-0 text-slate-400' aria-hidden />
                 )}
               </button>
             </li>

@@ -19,7 +19,7 @@ export const livePeopleDocs: DocSection = {
       items: [
         'Everyone who can read the queue sees it. It shows only people you could see as online anywhere else (the same visibility rules as the Online list), and never service or bot accounts, suspended or former people.',
         'The dots move on their own while Live updates is Normal. In Calm or Off the strip stays as it was when the page loaded.',
-        'Large teams show the first 40 and say how many more.'
+        'A team of more than 200 people lists the first 200 and says how many more.'
       ]
     },
     { type: 'h2', id: 'record-chat-mentions', text: 'Being discussed in chat' },
