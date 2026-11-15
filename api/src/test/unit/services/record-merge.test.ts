@@ -18,6 +18,7 @@ import {
   isMergeField,
   type MergeUndoLog,
   mergeSettingOf,
+  singularOf,
   survivorPatch,
   UNDO_WINDOW_MS,
   undoRefusal
@@ -70,6 +71,17 @@ describe('merge switch', () => {
     ).toEqual({ allowed: true, source: 'configured' })
     expect(mergeSettingOf('vendors', { merge_records: { mode: 'off' } }).allowed).toBe(false)
     expect(mergeSettingOf('nivaro_users', null).allowed).toBe(false)
+  })
+})
+
+describe('singular names', () => {
+  it('makes the last word singular', () => {
+    expect(singularOf('Deployment Part Types')).toBe('Deployment Part Type')
+    expect(singularOf('contractor tasks')).toBe('contractor task')
+    expect(singularOf('Categories')).toBe('Category')
+    expect(singularOf('Boxes')).toBe('Box')
+    expect(singularOf('Status')).toBe('Status')
+    expect(singularOf('Inventory Request')).toBe('Inventory Request')
   })
 })
 

@@ -357,6 +357,17 @@ export function undoRefusal(
   return null
 }
 
+/** "Deployment Part Types" → "Deployment Part Type" (the last word; plain English plurals). */
+export function singularOf(name: string): string {
+  return name.replace(/([A-Za-z]+)$/, (w) => {
+    if (/ies$/i.test(w) && w.length > 4) return `${w.slice(0, -3)}y`
+    if (/(ss|us|is)$/i.test(w)) return w
+    if (/(xes|ches|shes|sses)$/i.test(w)) return w.slice(0, -2)
+    if (/s$/i.test(w) && w.length > 2) return w.slice(0, -1)
+    return w
+  })
+}
+
 /** "A, B and C" */
 export function listWords(items: string[]): string {
   if (items.length <= 1) return items[0] ?? ''
