@@ -66,7 +66,9 @@ export const LIVE_PRESENCE_EVENTS: ReadonlySet<string> = new Set([
   'field:editing',
   'field:changed',
   'presence:rows',
-  'record:uploading'
+  'record:uploading',
+  // Who is editing a budget / planning grid (round 8 item 22, lib/grid-presence.ts).
+  'grid:editing'
 ])
 
 /**

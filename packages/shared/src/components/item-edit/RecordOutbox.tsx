@@ -12,6 +12,7 @@ import {
 } from '../../lib/record-outbox'
 import { announceRecordTabs } from '../../lib/record-tabs'
 import { formatDate, formatRelative } from '../../lib/utils'
+import { OutboxReviewTray } from './OutboxReviewTray'
 
 /** Every pending offline save of the signed-in person. */
 export function useRecordOutbox(): RecordOutboxEntry[] {
@@ -64,19 +65,18 @@ export function RecordOutboxHost({
           )
           return
         }
+        // A clash waits in the review tray below (round 8 item 3) — no toast; one that ended
+        // with every field taking the other person's value needs no word either.
+        if (e.type === 'conflict' || e.type === 'resolved') return
         const open = onOpenRecord
           ? { action: { label: 'Review', onClick: () => onOpenRecord(collection, item) } }
           : {}
-        if (e.type === 'conflict')
-          toast.warning('Someone else changed a record you saved offline — review the merge', {
-            duration: 20_000,
-            ...open
-          })
-        else toast.error(`An offline change could not be saved: ${e.entry.error ?? ''}`, open)
+        toast.error(`An offline change could not be saved: ${e.entry.error ?? ''}`, open)
       }),
     [userId, onOpenRecord]
   )
-  return null
+  const entries = useRecordOutbox()
+  return <OutboxReviewTray entries={entries} onOpenRecord={onOpenRecord} />
 }
 
 const fmt = (v: unknown): string => {

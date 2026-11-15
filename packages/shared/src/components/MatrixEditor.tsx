@@ -4,9 +4,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { get, patch, post } from '../lib/commands'
 import { evaluateNumeric } from '../lib/expression'
+import { gridPageKey, gridPresenceCell, useGridPresence } from '../lib/grid-presence'
 import { userErrorMessage } from '../lib/safe-error'
 import { cn } from '../lib/utils'
+import { GridPresenceLine } from './GridPresenceLine'
 import { RelationCombobox } from './item-edit/RelationCombobox'
+import { useRecordLabels } from './item-edit/useRecordLabels'
 import { colorPair } from './QueryTable'
 
 // Generic tuple-scoped value editor. Base shape (budget-target form):
@@ -110,6 +113,9 @@ export interface MatrixEditorConfig {
      *  reconcile with the project-level figures. */
     unmatched?: { option_label?: string; group_label?: string } | false
   }
+  /** What the matrix edits, plural, for the "who is editing" line ("allocations"). Default:
+   *  the target collection's name in words. */
+  presence_noun?: string
 }
 
 const UNCAT = '__uncat__'
@@ -209,6 +215,33 @@ export function MatrixEditor({
   const scopeReady = config.scope_fields.every(
     (s) => scope[s.field] !== null && scope[s.field] !== undefined && scope[s.field] !== ''
   )
+  // Who else is editing this matrix (realtime round 8, item 22): keyed on the first scope
+  // record (the budget — a project, say); the server shows it only to people who may read that
+  // record. The other scope values are part of the page key, so a different year's matrix of
+  // the same project is a different page.
+  const rootRef = useRef<HTMLDivElement>(null)
+  const presenceScope = config.scope_fields[0]
+  const presenceId = presenceScope && scopeReady ? String(scope[presenceScope.field]) : null
+  const presencePage = gridPageKey(
+    'matrix',
+    config.target_collection,
+    ...config.scope_fields.slice(1).map((s) => String(scope[s.field] ?? ''))
+  )
+  const presenceItems = useMemo(() => (presenceId ? [presenceId] : []), [presenceId])
+  const { editors } = useGridPresence({
+    page: presencePage,
+    collection: presenceScope?.collection,
+    items: presenceItems,
+    containerRef: rootRef,
+    enabled: !!presenceId
+  })
+  const presenceLabels = useRecordLabels(
+    presenceScope?.collection,
+    presenceItems,
+    editors.length > 0
+  )
+  /** cell field → its row label, filled as the rows render. */
+  const cellLabels = useRef(new Map<string, string>())
   const labelField = config.option_label ?? 'name'
   const scopeKey = JSON.stringify(scope)
   const groupCfg = config.group
@@ -832,6 +865,9 @@ export function MatrixEditor({
 
   const renderRow = (groupId: string, key: string, label: string, italic = false, indent = 0) => {
     const cellKey = `${groupId}|${key}`
+    const presenceField = `${groupId}:${key}`
+    const groupLabel = groupId ? groupRows.find((g) => g.id === groupId)?.label : null
+    cellLabels.current.set(presenceField, groupLabel ? `${groupLabel} · ${label}` : label)
     const cur = cells.get(cellKey)?.total ?? 0
     const metrics = metricFor(groupId, key)
     const raw = edits[cellKey] ?? ''
@@ -885,7 +921,10 @@ export function MatrixEditor({
                 {fmtVal(Math.abs(delta), config.value_format)}
               </span>
             )}
-            <span className='relative'>
+            <span
+              className='relative rounded-md'
+              data-grid-cell={presenceId ? gridPresenceCell(presenceId, presenceField) : undefined}
+            >
               {config.value_format === 'currency' && (
                 <span className='pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-slate-400'>
                   $
@@ -969,7 +1008,7 @@ export function MatrixEditor({
     })
 
   return (
-    <div className='flex h-full min-h-0 flex-col' data-matrix-editor>
+    <div ref={rootRef} className='flex h-full min-h-0 flex-col' data-matrix-editor>
       {/* ── Scope + actions ── */}
       <div className='flex shrink-0 flex-wrap items-end gap-3 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
         {config.scope_fields
@@ -995,7 +1034,20 @@ export function MatrixEditor({
               </div>
             )
           })}
-        <span className='flex-1' />
+        {editors.length > 0 ? (
+          <GridPresenceLine
+            className='min-w-[12rem] flex-1 pb-2'
+            editors={editors}
+            noun={
+              config.presence_noun?.trim() ||
+              config.target_collection.replace(/_/g, ' ').toLowerCase()
+            }
+            rowLabel={(item) => presenceLabels.get(item)}
+            cellLabel={(field) => cellLabels.current.get(field)}
+          />
+        ) : (
+          <span className='flex-1' />
+        )}
         {status && <span className='pb-2 text-[12px] text-slate-500'>{status}</span>}
         {dirty && (
           <button

@@ -967,6 +967,17 @@ export {
   cursorColor,
   markRemoteCell
 } from './lib/grid-cursors'
+// Who is editing on a budget / planning grid (realtime round 8, item 22).
+export { GridPresenceLine } from './components/GridPresenceLine'
+export {
+  type GridEditor,
+  type GridPresence,
+  type GridPresenceOptions,
+  gridPageKey,
+  gridPresenceCell,
+  parseGridPresenceCell,
+  useGridPresence
+} from './lib/grid-presence'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
 export {
   type BuildStatus,

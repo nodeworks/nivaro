@@ -1,10 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Loader2, X } from 'lucide-react'
-import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react'
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
+import { gridPageKey, gridPresenceCell, useGridPresence } from '../lib/grid-presence'
 import { userErrorMessage } from '../lib/safe-error'
 import { cn } from '../lib/utils'
+import { GridPresenceLine } from './GridPresenceLine'
 import {
   type ChangeReasonChallenge,
   ChangeReasonDialog,
@@ -55,6 +57,9 @@ const MONTH_LABELS = [
 export interface RecordGridEditorConfig {
   collection: string
   title?: string
+  /** What the grid edits, plural, for the "who is editing" line of the browse grid
+   *  ("forecasts"). Default: the collection's name in words. */
+  presence_noun?: string
   /**
    * BROWSE-THEN-EDIT: the key columns become header pickers. Until every key
    * is chosen the grid shows read-only totals rolled up by the unpicked keys
@@ -793,6 +798,25 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
       ...added.map((k) => ({ key: k, record: null, isNew: true }))
     ]
   }, [filtered, allPicked, added, removed])
+  // Who else is editing these rows (realtime round 8, item 22): each saved row is its own
+  // record, so the server shows a person only to viewers who may read that row.
+  const rootRef = useRef<HTMLDivElement>(null)
+  const presenceItems = useMemo(
+    () => editRows.filter((r) => r.record?.id != null).map((r) => String(r.record?.id)),
+    [editRows]
+  )
+  const { editors } = useGridPresence({
+    page: gridPageKey(
+      'rgrid',
+      config.collection,
+      ...keys.map((k) => String(picked[k.field] ?? ''))
+    ),
+    collection: config.collection,
+    items: presenceItems,
+    containerRef: rootRef,
+    enabled: allPicked
+  })
+  const pickedLabel = keys.map((k) => labelOf(k.field, picked[k.field])).join(' · ')
   // Nothing exists for the chosen combination → offer one row to fill in.
   useEffect(() => {
     if (allPicked && filtered.length === 0 && added.length === 0 && removed.size === 0)
@@ -911,7 +935,7 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
   )
 
   return (
-    <div className='flex h-full min-h-0 flex-col' data-record-grid-browse>
+    <div ref={rootRef} className='flex h-full min-h-0 flex-col' data-record-grid-browse>
       <ChangeReasonDialog
         challenge={crChallenge}
         onCancel={() => setCrChallenge(null)}
@@ -978,7 +1002,21 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
             </strong>
             {editRows.length > 1 && ` — ${editRows.length} rows share this combination`}
           </span>
-        ) : (
+        ) : null}
+        {allPicked && editors.length > 0 ? (
+          <GridPresenceLine
+            className='ml-3 border-l border-slate-200 pl-3 dark:border-border'
+            editors={editors}
+            noun={
+              config.presence_noun?.trim() || config.collection.replace(/_/g, ' ').toLowerCase()
+            }
+            rowLabel={(item) =>
+              editRows.length > 1 ? `${pickedLabel} (#${item})` : pickedLabel || `#${item}`
+            }
+            cellLabel={(field) => valueCols.find((c) => c.field === field)?.label}
+          />
+        ) : null}
+        {allPicked ? null : (
           <span>
             Totals across{' '}
             <strong className='text-slate-700 dark:text-slate-200'>{filtered.length}</strong> row
@@ -1048,6 +1086,11 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
                       {valueCols.map((c, i) => (
                         <td
                           key={c.field}
+                          data-grid-cell={
+                            row.record?.id != null
+                              ? gridPresenceCell(String(row.record.id), c.field)
+                              : undefined
+                          }
                           className={cn(
                             'px-1 py-0.5 text-right',
                             quarterEdge(i) && 'border-l border-slate-100 dark:border-border/50',

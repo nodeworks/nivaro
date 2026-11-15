@@ -510,6 +510,7 @@
           <a class="docs-nav-item" data-section="collab-chat" href="#collab-chat">Chat &amp; Channels</a>
           <a class="docs-nav-item" data-section="item-locking" href="#item-locking">Item Locking &amp; Presence</a>
           <a class="docs-nav-item" data-section="live-conflicts" href="#live-conflicts">Working on the same record</a>
+          <a class="docs-nav-item" data-section="live-sync" href="#live-sync">Offline saves and shared budget grids</a>
           <a class="docs-nav-item" data-section="notifications-center" href="#notifications-center">Notifications Center</a>
           <a class="docs-nav-item" data-section="user-activity-feed" href="#user-activity-feed">User Activity Feed</a>
           <a class="docs-nav-item" data-section="keyboard-shortcuts" href="#keyboard-shortcuts">Keyboard Shortcuts</a>
@@ -17461,6 +17462,30 @@ PATCH /api/item-locks/config/:collection
           <h3 class="doc-h3" id="live-conflicts-cursors">Cursors in grids</h3>
           <p class="doc-p">In line grids and plan grids, the cell another person is in has a thin outline in their colour; point at it to see their name. Moving quickly across cells only shows the cell they stop on.</p>
           <!-- /SYNC:live-conflicts -->
+        </div>
+
+        <div class="doc-section" id="s-live-sync" data-toc='[{"id":"live-sync","label":"Offline saves and shared budget grids"},{"id":"live-sync-offline","label":"Saves made while you were offline"},{"id":"live-sync-grids","label":"Who is editing a budget or forecast grid"}]'>
+          <!-- SYNC:live-sync -->
+          <h1 class="doc-h1" id="live-sync">Offline saves and shared budget grids</h1>
+          <h3 class="doc-h3" id="live-sync-offline">Saves made while you were offline</h3>
+          <p class="doc-p">A Save pressed while the connection was down waits and goes out when you are back online. Before it goes, the app checks each field against what others changed while you were away. Fields nobody else touched are saved at once.</p>
+          <p class="doc-p">A field someone else changed is never sent on its own. A small card in the corner lists it — for example “Beth changed Amount while you were offline” — with their value and yours, and three choices:</p>
+          <ul class="doc-ul">
+            <li>**Keep mine** — your value is saved over theirs.</li>
+            <li>**Take theirs** — your change to that field is dropped.</li>
+            <li>**Merge** — for long text and multi-value fields; combine both, then **Use merged**.</li>
+          </ul>
+          <p class="doc-p">Nothing on the card is sent until every field on it has a choice. If someone changes the same field again before it goes, it comes back to the card instead of being overwritten. The check reads the record as you: a field you may no longer see shows only that it changed, never its value. If the record is open in a form, the form’s own merge dialog handles it instead. Fold the card away with the arrow; it stays as one line until something new needs a look.</p>
+          <h3 class="doc-h3" id="live-sync-grids">Who is editing a budget or forecast grid</h3>
+          <p class="doc-p">On the forecast worksheet, allocation matrices and browse-then-edit grids, a quiet line near the top says who else is editing and where — “Beth is editing allocations for 4471 · East · Fiber” — and the cell they are in has a thin outline in their colour (point at it for their name). Moving quickly across cells shows only the cell they stop on.</p>
+          <ul class="doc-ul">
+            <li>You only see people on rows you are allowed to read; the server checks this for every row, as you.</li>
+            <li>Names, rows and cells only — never the amounts someone is typing.</li>
+            <li>With live updates set to Calm or Off (Profile → Display) the line and outlines are hidden. Others still see you.</li>
+            <li>A mark fades by itself within a minute if the other person’s browser closes without saying goodbye.</li>
+          </ul>
+          <div class="doc-note">Matrix and grid pages can name what they edit with the <code class="doc-code">presence_noun</code> option (for example <code class="doc-code">allocations</code>); without it the line uses the collection name.</div>
+          <!-- /SYNC:live-sync -->
         </div>
 
         <!-- NOTIFICATIONS CENTER -->
