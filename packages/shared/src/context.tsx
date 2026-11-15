@@ -234,8 +234,10 @@ export function decodePrefill(raw: string | null | undefined): Record<string, un
 
 export type NavigationContextValue = {
   /** `options.state` rides along for hosts whose router supports it (e.g. react-router's
-   *  useNavigate) — hosts that ignore the second argument still navigate correctly. */
-  navigate: (path: string, options?: { state?: unknown }) => void
+   *  useNavigate) — hosts that ignore the second argument still navigate correctly.
+   *  `options.replace` replaces the current history entry (Previous / Next in list keeps
+   *  Back pointing at the list); a host that ignores it pushes, which still works. */
+  navigate: (path: string, options?: { state?: unknown; replace?: boolean }) => void
   /** Map item links onto the host app's own routes. Components fall back to
    *  the admin shape (/collections/:collection/:id?layout=…) when absent —
    *  external embeds supply one function and every open path follows. */

@@ -68,7 +68,8 @@ export function RecordDrilldownSheet({
   onPop,
   onClose,
   design,
-  onOpenRecord
+  onOpenRecord,
+  headerExtra
 }: {
   collection: string
   itemId: string
@@ -96,6 +97,8 @@ export function RecordDrilldownSheet({
    *  Back returns to it, army 11 Q1-4). Absent = plain item navigation. A
    *  modified click (Cmd/Ctrl/middle) always opens the link in a new tab. */
   onOpenRecord?: (target: { collection: string; itemId: string }) => void
+  /** Shown in the strip before "Open record" (the app record sheet's ↑ / ↓ position). */
+  headerExtra?: ReactNode
 }) {
   const qc = useQueryClient()
   const client = useNivaroClient()
@@ -203,6 +206,11 @@ export function RecordDrilldownSheet({
           </span>
         </span>
       )}
+      {!design && headerExtra ? (
+        <span className={viewers.length > 0 ? 'mr-1 flex shrink-0' : 'ml-auto mr-1 flex shrink-0'}>
+          {headerExtra}
+        </span>
+      ) : null}
       {!design && (
         // A real link (army 11 Q1-4): Cmd/Ctrl/middle-click opens the record in a new
         // tab and keeps this list where it is; a plain click goes through the host.

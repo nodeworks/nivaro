@@ -344,6 +344,7 @@ export {
 export { FieldRenderer } from './components/item-edit/FieldRenderer'
 export { buildCascadeFilter, seedQuickPickerSteps } from './components/item-edit/helpers'
 export { InlineTableField } from './components/item-edit/InlineTableField'
+export { ListNeighborNav } from './components/item-edit/ListNeighborNav'
 export {
   LAYOUT_PUSH_SETTLE_MS,
   useLayoutEditingQuiet
@@ -623,6 +624,7 @@ export {
 } from './components/RecordGraph'
 export type { RecordGridEditorConfig } from './components/RecordGridEditor'
 export { RecordGridEditor } from './components/RecordGridEditor'
+export { RecordPeekHost } from './components/RecordPeekHost'
 export { type ReadViewLayout, RecordReadView } from './components/RecordReadView'
 export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
@@ -947,6 +949,7 @@ export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket
 export * from './lib/list-inline-edit'
 export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
+export * from './lib/list-return'
 export * from './lib/live'
 export * from './lib/live-counts'
 export * from './lib/live-list'
@@ -1125,6 +1128,7 @@ export {
   type RecordOutboxEntry,
   retryRecordOutbox
 } from './lib/record-outbox'
+export * from './lib/record-peek'
 export {
   focusPopoutOpener,
   isRecordPopout,

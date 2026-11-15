@@ -1,8 +1,10 @@
 import {
   openAskPanel,
+  peekable,
   refreshScreenData,
   screenRefreshMatches,
   TipLayer,
+  useRecordPeek,
   userErrorMessage
 } from '@nivaro/shared'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -364,6 +366,7 @@ interface PaneEntry {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function CommandPalette() {
+  const peek = useRecordPeek()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const { user } = useAuth()
@@ -804,6 +807,17 @@ export function CommandPalette() {
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (pendingCmd) return
+    // Realtime #17: Alt+Enter peeks at the selected record in the app's record sheet (Enter
+    // still goes to it; the palette is a "take me there" box).
+    if (e.key === 'Enter' && e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+      const rec = entries.get(selectedValue)?.record
+      if (rec && peek && peekable(rec.collection)) {
+        e.preventDefault()
+        setOpen(false)
+        peek.open({ collection: rec.collection, itemId: String(rec.id), title: rec.label ?? null })
+      }
+      return
+    }
     if (isNewTabEnter(e)) {
       const entry = entries.get(selectedValue)
       if (entry?.path) {
@@ -1504,6 +1518,15 @@ export function CommandPalette() {
               </Kbd>{' '}
               new tab
             </span>
+            {peek && (
+              <span className='flex items-center gap-1' data-palette-peek-hint>
+                <Kbd>{ALT_KEY}</Kbd>
+                <Kbd>
+                  <CornerDownLeft className='h-2.5 w-2.5' />
+                </Kbd>{' '}
+                peek
+              </span>
+            )}
             {showTabs && (
               <span className='flex items-center gap-1'>
                 <Kbd>{ALT_KEY}</Kbd>

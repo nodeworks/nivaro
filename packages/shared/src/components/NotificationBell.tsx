@@ -31,6 +31,7 @@ import {
   resolveNotificationTargetFor,
   runNotificationTarget
 } from '../lib/notification-target'
+import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../lib/record-peek'
 import { cn, formatRelative } from '../lib/utils'
 import { LiveCount } from './LiveCount'
 import { AsItWasSheet } from './notifications/AsItWasSheet'
@@ -217,6 +218,7 @@ export function NotificationBell({
   panelPlacement = 'below'
 }: NotificationBellProps) {
   const client = useNivaroClient()
+  const peek = useRecordPeek()
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<BellLaneTab>('attention')
   const rootRef = useRef<HTMLDivElement>(null)
@@ -372,7 +374,15 @@ export function NotificationBell({
     return [...map.values()]
   }, [shown])
 
-  const openTarget = (n: BellNotification) => {
+  const openTarget = (n: BellNotification, e?: React.MouseEvent) => {
+    // Realtime #17: a plain record notification opens in the app's record sheet; the person
+    // stays where they were. The row's "Open record" button still goes to the full page.
+    const peekAt = peek ? notificationPeekTarget(n) : null
+    if (peekAt && peek && !isNewTabClick(e)) {
+      setOpen(false)
+      peek.open(peekAt)
+      return
+    }
     const target = resolveNotificationTargetFor(n, routes)
     if (target) {
       setOpen(false)
@@ -466,9 +476,9 @@ export function NotificationBell({
         {opens ? (
           <button
             type='button'
-            onClick={() => {
+            onClick={(e) => {
               if (!n.read) markRead.mutate(n.id)
-              openTarget(n)
+              openTarget(n, e)
             }}
             className={`flex w-full items-start gap-2.5 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted ${pad}`}
             data-notification-row={n.id}
