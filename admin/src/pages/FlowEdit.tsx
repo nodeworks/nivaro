@@ -401,6 +401,8 @@ interface EventTriggerOptions {
   types: string[]
   collections: string[]
   return_payload: boolean
+  /** Realtime round 3 #6 — also run on updates announced by procedures, imports, scripts. */
+  outside_changes?: boolean
 }
 
 function EventTriggerEditor({
@@ -414,9 +416,19 @@ function EventTriggerEditor({
   const types = options.types ?? []
   const collections = options.collections ?? []
   const returnPayload = options.return_payload ?? false
+  const outsideChanges = options.outside_changes === true
+  const hearsUpdate = types.length === 0 || types.includes('update')
 
   function set(patch: Partial<EventTriggerOptions>) {
-    onChange({ timing, types, collections, return_payload: returnPayload, ...patch })
+    // Keep keys this editor does not show (concurrency, …) — a rebuilt object would drop them.
+    onChange({
+      ...(options as EventTriggerOptions),
+      timing,
+      types,
+      collections,
+      return_payload: returnPayload,
+      ...patch
+    })
   }
 
   const { data: colsData } = useQuery({
@@ -489,6 +501,18 @@ function EventTriggerEditor({
             </p>
           </div>
           <Switch checked={returnPayload} onCheckedChange={(v) => set({ return_payload: v })} />
+        </div>
+      )}
+      {timing === 'after' && hearsUpdate && (
+        <div className='flex items-center justify-between gap-3 rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5'>
+          <div>
+            <Label className='cursor-pointer'>Also run on changes made outside the app</Label>
+            <p className='text-[11px] text-slate-400 dark:text-slate-500'>
+              Updates that procedures, imports or scripts announce. The run gets the record id and
+              the changed field names, with no previous values and no person.
+            </p>
+          </div>
+          <Switch checked={outsideChanges} onCheckedChange={(v) => set({ outside_changes: v })} />
         </div>
       )}
     </div>

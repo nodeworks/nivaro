@@ -341,6 +341,10 @@ export async function fireWebhooks(
     /** Deliver only to webhooks that name this collection — platform tables
      *  (task events, #1008) never reach a webhook left on "all collections". */
     explicitOnly?: boolean
+    /** Realtime round 3 #6 — a change made outside the app (an announced raw write): only
+     *  webhooks with `outside` in their events hear it, and never the webhook whose own write
+     *  it was (`skipOrigin` = `webhook:<id>`). */
+    outside?: { skipOrigin?: string | null }
   } = {}
 ): Promise<void> {
   try {
@@ -365,6 +369,10 @@ export async function fireWebhooks(
     for (const wh of webhooks) {
       const events = parseJson<string[]>(wh.events ?? null) ?? []
       if (!events.includes(event)) continue
+      if (meta.outside) {
+        if (!events.includes('outside')) continue
+        if (meta.outside.skipOrigin === `webhook:${wh.id}`) continue
+      }
 
       const collections = parseJson<string[]>(wh.collections ?? null) ?? []
       if (collections.length > 0 && !collections.includes(collection)) continue

@@ -420,6 +420,42 @@ export async function recordViewRoutes(app: FastifyInstance) {
     }
   )
 
+  /** Realtime round 3 #2 — "Since this email": what happened to this record after `at` (the
+   *  send time an email link carries), judged as the caller: the record must be readable, and
+   *  only changes to fields the caller may read count. Read-only; never moves a watermark.
+   *  `data: null` = nothing changed (or an unusable `at`). */
+  app.get<{ Params: { collection: string; id: string }; Querystring: { at?: string } }>(
+    '/record-views/:collection/:id/since',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, id } = req.params
+      if (!IDENT.test(collection) || /^nivaro_/i.test(collection)) {
+        return reply.code(400).send({ error: 'Not a valid collection' })
+      }
+      const { parseSinceParam, recordChangesSince } = await import('../services/record-since.js')
+      const since = parseSinceParam(req.query.at)
+      if (!since) return reply.send({ data: null })
+      const { recordRefusal } = await import('../services/erp-record-gate.js')
+      const refusal = await recordRefusal(req, collection, String(id), 'read')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
+      try {
+        const data = await recordChangesSince(
+          req.user!,
+          !!req.isAdmin,
+          collection,
+          String(id),
+          since
+        )
+        return reply.send({ data })
+      } catch (err) {
+        req.log.warn({ err }, 'record since-email summary failed')
+        return reply
+          .code(503)
+          .send({ error: 'Could not load this right now', code: 'RECORD_SINCE_UNAVAILABLE' })
+      }
+    }
+  )
+
   /** Who has opened this record, newest first — the audit companion to the
    *  recap ("did the approver actually look?"). Admin-only: viewing habits
    *  are behavioral data, not record data. */
