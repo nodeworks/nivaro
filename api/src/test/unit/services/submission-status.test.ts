@@ -328,6 +328,27 @@ describe('receipt mailbox normalization + domain / instance caps (review follow-
     ).toBe(true)
   })
 
+  it('many forms together cannot push one domain past 100 an hour', async () => {
+    const { mayMailReceipt, RECEIPT_MAILS_PER_DOMAIN_ALL_FORMS_HOUR } = await import(
+      '../../../services/submission-status.js'
+    )
+    const { resetWindowedMemory } = await import('../../../services/windowed-limit.js')
+    resetWindowedMemory()
+    const own = new Set<string>()
+    let sent = 0
+    // 10 forms × 20 sends each: every form stays under its own 30, together they would be 200.
+    for (let f = 0; f < 10; f++)
+      for (let i = 0; i < 20; i++)
+        if (
+          await mayMailReceipt(null, `form-${f}`, `u${f}-${i}@target.example`, { ownDomains: own })
+        )
+          sent++
+    expect(sent).toBe(RECEIPT_MAILS_PER_DOMAIN_ALL_FORMS_HOUR)
+    // Another domain and free-mail are untouched by it.
+    expect(await mayMailReceipt(null, 'form-0', 'a@else.example', { ownDomains: own })).toBe(true)
+    expect(await mayMailReceipt(null, 'form-0', 'a@gmail.com', { ownDomains: own })).toBe(true)
+  })
+
   it('a send refused by an earlier cap spends no domain unit', async () => {
     const { mayMailReceipt, RECEIPT_MAILS_PER_ADDRESS_DAY, RECEIPT_MAILS_PER_DOMAIN_HOUR } =
       await import('../../../services/submission-status.js')
