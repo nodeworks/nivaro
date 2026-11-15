@@ -6,17 +6,16 @@ import { api } from '@/lib/api'
 
 /**
  * "Allow merging" for one collection (merge records, 2026-11-14) —
- * `browser_config.merge_records.mode`. Unset = follows the duplicate warning: merging is
- * offered wherever duplicate warnings are on. The server (services/record-merge/rules.ts
- * mergeSettingOf) reads the same rule; this card only stores an explicit on/off, or clears
- * it back to the default.
+ * `browser_config.merge_records.mode`. On by default for every collection, on its own
+ * (independent of the duplicate warning); turning it off stores `mode: 'off'`, turning it
+ * back on removes the key. The server reads the same rule (services/record-merge/rules.ts
+ * mergeSettingOf).
  */
 
 interface CollectionMeta {
   browser_config:
     | (Record<string, unknown> & {
         merge_records?: { mode?: 'on' | 'off' }
-        duplicate_check?: { mode?: 'on' | 'off' }
       })
     | null
 }
@@ -31,12 +30,10 @@ export function MergeRecordsSetting({ tableName }: { tableName: string }) {
     staleTime: 10 * 60 * 1000
   })
   const bc = col?.browser_config ?? {}
-  const own = bc.merge_records?.mode
-  const duplicatesOn = bc.duplicate_check?.mode !== 'off'
-  const on = own ? own === 'on' : duplicatesOn
+  const on = bc.merge_records?.mode !== 'off'
 
   const save = useMutation({
-    mutationFn: async (mode: 'on' | 'off' | null) => {
+    mutationFn: async (mode: 'off' | null) => {
       const next = { ...(col?.browser_config ?? {}) } as Record<string, unknown>
       if (mode) next.merge_records = { mode }
       else delete next.merge_records
@@ -68,28 +65,12 @@ export function MergeRecordsSetting({ tableName }: { tableName: string }) {
             24 hours). Offered from a list selection, a record’s ⋯ menu and the duplicate warning.
           </p>
           <p className='mt-1.5 text-[11.5px] text-slate-500 dark:text-slate-400'>
-            {own ? (
-              <>
-                Set here.{' '}
-                <button
-                  type='button'
-                  onClick={() => save.mutate(null)}
-                  disabled={save.isPending}
-                  className='font-medium text-nvr-cyan-dark underline decoration-nvr-cyan/40 underline-offset-2 hover:decoration-nvr-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-nvr-cyan'
-                  data-merge-records-default
-                >
-                  Follow duplicate warnings instead
-                </button>{' '}
-                ({duplicatesOn ? 'on' : 'off'} here)
-              </>
-            ) : (
-              `Follows duplicate warnings, which are ${duplicatesOn ? 'on' : 'off'} here.`
-            )}
+            On by default. Turn it off where these records must never be merged.
           </p>
         </div>
         <Switch
           checked={on}
-          onCheckedChange={(v) => save.mutate(v ? 'on' : 'off')}
+          onCheckedChange={(v) => save.mutate(v ? null : 'off')}
           disabled={save.isPending || col === undefined}
           aria-label='Allow merging'
           data-merge-records-toggle

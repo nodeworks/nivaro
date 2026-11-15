@@ -9,6 +9,12 @@ import { autoMerge, type FieldMergeKind, fieldMergeKind } from '../../lib/field-
 export interface MergePlanRecord {
   id: string
   label: string
+  /** The record as read (a hash); the merge sends it back so a changed record is refused. */
+  stamp?: string
+  /** The record's number (#69, or its business id) — shown first. */
+  ref?: string
+  /** When it was created (ISO), when known. */
+  created_at?: string | null
   values: Record<string, unknown>
   state: { key: string; label: string; color: string | null } | null
   can_survive: boolean
@@ -58,6 +64,8 @@ export interface MergePlan {
   labels: Record<string, Record<string, string>>
   undo_hours: number
   max_records: number
+  /** When the plan was read; sent back as `opened_at`. */
+  read_at?: string
 }
 
 export type RecordRole = 'keep' | 'discard' | 'leave'

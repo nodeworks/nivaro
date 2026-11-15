@@ -6,6 +6,7 @@
  * record whether it may survive (they may change it) and whether it may be discarded
  * (they may delete it; edit locks, post-approval locks and partner ids judged).
  */
+import { createHash } from 'node:crypto'
 import type { FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
@@ -44,6 +45,13 @@ export class MergeRefusal extends Error {
 export interface MergePlanRecord {
   id: string
   label: string
+  /** The record as the person read it, hashed: a merge sent with an older stamp is
+   *  refused (409 MERGE_STALE) — someone changed the record since. */
+  stamp: string
+  /** How people tell the records apart: the friendly id (when set and readable), else #id. */
+  ref: string
+  /** When the record was created (the collection's created stamp), when known. */
+  created_at: string | null
   values: Record<string, unknown>
   state: { key: string; label: string; color: string | null } | null
   can_survive: boolean
@@ -96,6 +104,8 @@ export interface MergePlan {
   labels: Record<string, Record<string, string>>
   undo_hours: number
   max_records: number
+  /** When this plan was read (the merge sends it back as `opened_at`). */
+  read_at: string
 }
 
 export function parseIds(raw: unknown): string[] {
@@ -112,6 +122,29 @@ export function parseIds(raw: unknown): string[] {
 const sameId = (a: unknown, b: unknown) =>
   String(a ?? '').toLowerCase() === String(b ?? '').toLowerCase()
 
+/** A short hash of a record as read (keys sorted; the pipeline step included). */
+export function recordStamp(row: Record<string, unknown>): string {
+  const norm = (v: unknown): unknown => {
+    if (v instanceof Date) return v.toISOString()
+    if (Array.isArray(v)) return v.map(norm)
+    if (v && typeof v === 'object') {
+      const o = v as Record<string, unknown>
+      return Object.fromEntries(
+        Object.keys(o)
+          .sort()
+          .map((k) => [k, norm(o[k])])
+      )
+    }
+    return v ?? null
+  }
+  const state = row.$state as { key?: unknown } | null | undefined
+  const { $state: _s, ...rest } = row
+  return createHash('sha1')
+    .update(JSON.stringify([norm(rest), state?.key ?? null]))
+    .digest('base64url')
+    .slice(0, 16)
+}
+
 const readable = (allowed: string[] | null, f: string) =>
   allowed == null || allowed.includes('*') || allowed.includes(f)
 
@@ -120,6 +153,7 @@ export async function mergeCollection(collection: string): Promise<{
   noun: string
   plural: string
   allowed: boolean
+  friendlyField: string | null
 }> {
   if (!IDENT.test(collection) || SYSTEM_COLLECTION.test(collection))
     throw new MergeRefusal(400, 'MERGE_NOT_HERE', 'These records cannot be merged.')
@@ -138,7 +172,13 @@ export async function mergeCollection(collection: string): Promise<{
     String(col.display_name ?? '').trim() ||
     words
   ).toLowerCase()
-  return { noun, plural, allowed: mergeSettingOf(collection, col.browser_config).allowed }
+  const friendly = String(col.friendly_id_field ?? '').trim()
+  return {
+    noun,
+    plural,
+    allowed: mergeSettingOf(collection, col.browser_config).allowed,
+    friendlyField: IDENT.test(friendly) ? friendly : null
+  }
 }
 
 async function readRecords(
@@ -241,6 +281,17 @@ function relationLabel(r: InboundRelation, titles: Map<string, string>): string 
   return `${coll} (${fieldTitle(r.field).toLowerCase()})`
 }
 
+const HIDDEN_SOME: Record<MergeAttachedKind, string> = {
+  comments: 'are on fields you cannot see',
+  tasks: 'are other people’s tasks you cannot manage',
+  record_links: 'link to records you cannot see'
+}
+const HIDDEN_ALL: Record<MergeAttachedKind, string> = {
+  comments: 'They are on fields you cannot see, so they stay with the discarded record.',
+  tasks: 'They are other people’s tasks you cannot manage, so they stay with the discarded record.',
+  record_links: 'They link to records you cannot see, so they stay with the discarded record.'
+}
+
 const MOVE_WORDS: Record<string, [string, string]> = {
   lines: ['Move to the kept record', 'Leave on the discarded record'],
   links: ['Point them at the kept record', 'Leave pointing at the discarded record'],
@@ -275,55 +326,22 @@ async function partnerSends(collection: string, ids: string[]) {
   return out
 }
 
+/** Open tasks and pending approvals per record (shown on the record headers). */
 async function attachedCounts(collection: string, ids: string[]) {
-  const counts: Record<MergeAttachedKind, Record<string, number>> = {
-    comments: {},
-    tasks: {},
-    record_links: {}
-  }
   const openTasks: Record<string, number> = {}
   const openApprovals: Record<string, number> = {}
-  const bump = (m: Record<string, number>, raw: unknown, n = 1) => {
+  const bump = (m: Record<string, number>, raw: unknown) => {
     const id = ids.find((x) => sameId(x, raw))
-    if (id) m[id] = (m[id] ?? 0) + n
+    if (id) m[id] = (m[id] ?? 0) + 1
   }
   await Promise.all([
-    db('nivaro_comments')
-      .where({ collection })
-      .whereIn('item', ids)
-      .whereNull('deleted_at')
-      .select('item')
-      .count({ n: '*' })
-      .groupBy('item')
-      .then((rows) => {
-        for (const r of rows as Array<{ item: string; n: number }>)
-          bump(counts.comments, r.item, Number(r.n))
-      })
-      .catch(() => undefined),
     db('nivaro_tasks')
       .where({ collection })
       .whereIn('item', ids)
-      .select('item', 'status')
+      .whereIn('status', ['open', 'in_progress'])
+      .select('item')
       .then((rows) => {
-        for (const r of rows as Array<{ item: string; status: string }>) {
-          bump(counts.tasks, r.item)
-          if (!['done', 'cancelled', 'completed'].includes(String(r.status)))
-            bump(openTasks, r.item)
-        }
-      })
-      .catch(() => undefined),
-    db('nivaro_record_links')
-      .where((q) =>
-        q
-          .where((a) => a.where('from_collection', collection).whereIn('from_item', ids))
-          .orWhere((b) => b.where('to_collection', collection).whereIn('to_item', ids))
-      )
-      .select('from_collection', 'from_item', 'to_collection', 'to_item')
-      .then((rows) => {
-        for (const r of rows as Array<Record<string, string>>) {
-          if (r.from_collection === collection) bump(counts.record_links, r.from_item)
-          if (r.to_collection === collection) bump(counts.record_links, r.to_item)
-        }
+        for (const r of rows as Array<{ item: string }>) bump(openTasks, r.item)
       })
       .catch(() => undefined),
     db('nivaro_approval_instances')
@@ -335,7 +353,7 @@ async function attachedCounts(collection: string, ids: string[]) {
       })
       .catch(() => undefined)
   ])
-  return { counts, openTasks, openApprovals }
+  return { openTasks, openApprovals }
 }
 
 /** Why the caller may not keep (survive) / discard this record; null = they may. */
@@ -380,7 +398,7 @@ export async function buildMergePlan(
   opts: { draft?: boolean } = {}
 ): Promise<MergePlan> {
   const user = req.user as User
-  const { noun, plural, allowed } = await mergeCollection(collection)
+  const { noun, plural, allowed, friendlyField } = await mergeCollection(collection)
   if (!allowed)
     throw new MergeRefusal(
       403,
@@ -395,6 +413,7 @@ export async function buildMergePlan(
     throw new MergeRefusal(400, 'MERGE_IDS', `Merge at most ${MAX_MERGE_RECORDS} records at once.`)
   const isAdmin = req.isAdmin === true || (await isAdminRole(user).catch(() => false))
 
+  const readAt = new Date().toISOString()
   const rows = await readRecords(user, collection, ids, req)
   const byId = new Map<string, Record<string, unknown>>()
   for (const id of ids) {
@@ -425,6 +444,21 @@ export async function buildMergePlan(
       m2oTarget.set(String(r.many_field), String(r.one_collection))
   }
   const first = byId.get(ids[0]) ?? {}
+  // Records that look alike are told apart by number and created date.
+  const createdField =
+    fields.find((f) => (f.special ?? []).includes('date-created') && f.field in first)?.field ??
+    ['date_created', 'created_at', 'created'].find((f) => f in first) ??
+    null
+  const refOf = (id: string, row: Record<string, unknown>) => {
+    const v = friendlyField ? row[friendlyField] : null
+    return v != null && v !== '' && typeof v !== 'object' ? String(v) : `#${id}`
+  }
+  const createdOf = (row: Record<string, unknown>) => {
+    const v = createdField ? row[createdField] : null
+    if (v == null || v === '') return null
+    const d = v instanceof Date ? v : new Date(String(v))
+    return Number.isNaN(d.getTime()) ? null : d.toISOString()
+  }
   const planFields: MergePlanField[] = []
   for (const f of fields) {
     if (f.hidden) continue
@@ -503,6 +537,9 @@ export async function buildMergePlan(
     records.push({
       id,
       label: labelMap[`${collection}:${id}`] ?? id,
+      stamp: recordStamp(row),
+      ref: refOf(id, row),
+      created_at: createdOf(row),
       values,
       state: st?.key
         ? { key: st.key, label: String(st.label ?? st.key), color: st.color ?? null }
@@ -606,9 +643,20 @@ export async function buildMergePlan(
     tasks: 'Tasks',
     record_links: 'Related records'
   }
+  // Comments, tasks, related-record links: only rows this person may see and manage move;
+  // the rest stay with the discarded record (attached.ts — the merge judges them again).
+  const { attachedRows } = await import('./attached.js')
   for (const kind of ATTACHED_KINDS) {
-    const counts = attached.counts[kind]
-    if (Object.values(counts).reduce((a, b) => a + b, 0) === 0) continue
+    const rows = await attachedRows(req, kind, collection, ids).catch(() => [])
+    if (rows.length === 0) continue
+    const counts: Record<string, number> = {}
+    const hidden: Record<string, number> = {}
+    for (const r of rows) {
+      const m = r.movable ? counts : hidden
+      m[r.item] = (m[r.item] ?? 0) + 1
+    }
+    const nHidden = Object.values(hidden).reduce((a, b) => a + b, 0)
+    const nMovable = rows.length - nHidden
     const [move_word, leave_word] = MOVE_WORDS[kind]
     planRelations.push({
       key: kind,
@@ -622,10 +670,15 @@ export async function buildMergePlan(
             : 'nivaro_record_links',
       field: 'item',
       counts,
-      hidden: {},
-      movable: true,
-      reason: null,
-      default: 'move',
+      hidden,
+      movable: nMovable > 0,
+      reason:
+        nHidden === 0
+          ? null
+          : nMovable === 0
+            ? HIDDEN_ALL[kind]
+            : `${nHidden} of them ${HIDDEN_SOME[kind]} — ${nHidden === 1 ? 'it stays' : 'they stay'} with the discarded record.`,
+      default: nMovable > 0 ? 'move' : 'leave',
       move_word,
       leave_word
     })
@@ -641,6 +694,7 @@ export async function buildMergePlan(
     relations: planRelations,
     labels,
     undo_hours: UNDO_WINDOW_MS / 3_600_000,
-    max_records: MAX_MERGE_RECORDS
+    max_records: MAX_MERGE_RECORDS,
+    read_at: readAt
   }
 }

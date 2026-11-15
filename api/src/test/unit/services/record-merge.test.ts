@@ -1,6 +1,11 @@
 import type { FastifyRequest } from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { applyMerge, type MergeDeps, undoMerge } from '../../../services/record-merge/apply.js'
+import {
+  type AttachedGates,
+  type AttachedRow,
+  judgeAttached
+} from '../../../services/record-merge/attached.js'
 import type { MergePlan, MergePlanRecord } from '../../../services/record-merge/plan.js'
 import {
   emptyUndoLog,
@@ -47,9 +52,12 @@ vi.mock('../../../services/delete-in-flight.js', () => ({
 // ─── Rules ───────────────────────────────────────────────────────────────────
 
 describe('merge switch', () => {
-  it('follows the duplicate warning unless set', () => {
-    expect(mergeSettingOf('vendors', null)).toEqual({ allowed: true, source: 'duplicates' })
-    expect(mergeSettingOf('vendors', { duplicate_check: { mode: 'off' } }).allowed).toBe(false)
+  it('is on by default, on its own (not tied to the duplicate warning)', () => {
+    expect(mergeSettingOf('vendors', null)).toEqual({ allowed: true, source: 'default' })
+    expect(mergeSettingOf('vendors', { duplicate_check: { mode: 'off' } })).toEqual({
+      allowed: true,
+      source: 'default'
+    })
     expect(
       mergeSettingOf(
         'vendors',
@@ -229,6 +237,45 @@ function world() {
   }
   const trash: Array<{ collection: string; row: Row }> = []
   const comments = new Map([['c1', 'B']])
+  // Attached rows the person may / may not manage (attached.ts judges them for real).
+  const attachedStore: Record<string, Array<AttachedRow & { at: string }>> = {
+    comments: [
+      { id: 'c1', item: 'B', at: 'B', movable: true },
+      { id: 'c2', item: 'B', at: 'B', movable: false }
+    ],
+    tasks: [
+      { id: '11', item: 'B', at: 'B', movable: true },
+      { id: '12', item: 'B', at: 'B', movable: false }
+    ],
+    record_links: [
+      {
+        id: '21',
+        item: 'B',
+        at: 'B',
+        side: 'from',
+        other: { collection: 'sites', item: 'S1' },
+        movable: true
+      },
+      {
+        id: '22',
+        item: 'B',
+        at: 'B',
+        side: 'from',
+        other: { collection: 'secret', item: 'X' },
+        movable: false
+      },
+      {
+        id: '23',
+        item: 'B',
+        at: 'B',
+        side: 'to',
+        other: { collection: 'pos', item: 'A' },
+        movable: true
+      }
+    ]
+  }
+  const where = (kind: string, id: string) => attachedStore[kind].find((r) => r.id === id)
+  const attachedRequests: string[] = []
   const writes: string[] = []
   const saved: { log: MergeUndoLog | null } = { log: null }
   let failRemove: string | null = null
@@ -257,6 +304,9 @@ function world() {
   const record = (id: string, extra: Partial<MergePlanRecord> = {}): MergePlanRecord => ({
     id,
     label: `PO ${id}`,
+    stamp: JSON.stringify(tables.pos.get(id) ?? {}),
+    ref: `#${id}`,
+    created_at: null,
     values: { ...(tables.pos.get(id) ?? {}) },
     state: null,
     can_survive: true,
@@ -341,24 +391,25 @@ function world() {
             move_word: '',
             leave_word: ''
           },
-          {
-            key: 'comments',
-            kind: 'comments',
-            label: 'Comments',
-            collection: 'nivaro_comments',
+          ...(['comments', 'tasks', 'record_links'] as const).map((kind) => ({
+            key: kind,
+            kind,
+            label: kind,
+            collection: 'x',
             field: 'item',
-            counts: { B: 1 },
-            hidden: {},
+            counts: { B: attachedStore[kind].filter((r) => r.movable).length },
+            hidden: { B: attachedStore[kind].filter((r) => !r.movable).length },
             movable: true,
-            reason: null,
-            default: 'move',
+            reason: 'some stay',
+            default: 'move' as const,
             move_word: '',
             leave_word: ''
-          }
+          }))
         ],
         labels: {},
         undo_hours: 24,
-        max_records: 5
+        max_records: 5,
+        read_at: new Date().toISOString()
       }
     },
     inbound: async () => inbound,
@@ -394,22 +445,50 @@ function world() {
       trash.splice(i, 1)
       writes.push(`restore ${c}/${id}`)
     },
-    async moveComments(_c, from, to) {
-      const out: Array<{ id: string; from: string }> = []
-      for (const [id, item] of comments)
-        if (from.includes(item)) {
-          out.push({ id, from: item })
-          comments.set(id, to)
-        }
-      return out
+    async attached(_req, kind, _c, ids) {
+      attachedRequests.push(kind)
+      return attachedStore[kind]
+        .filter((r) => ids.includes(r.at))
+        .map(({ at, ...r }) => ({ ...r, item: at }))
     },
-    setCommentItem: async (id, item) => void comments.set(id, item),
-    moveTasks: async () => [],
-    setTaskItem: async () => undefined,
+    changedBy: async () => 'Beth Ortiz',
+    async moveComments(rows, to) {
+      for (const r of rows) {
+        comments.set(r.id, to)
+        const row = where('comments', r.id)
+        if (row) row.at = to
+      }
+      return rows.map((r) => ({ id: r.id, from: r.item }))
+    },
+    setCommentItem: async (id, item) => {
+      comments.set(id, item)
+      const row = where('comments', id)
+      if (row) row.at = item
+    },
+    async moveTasks(rows, to) {
+      for (const r of rows) {
+        const row = where('tasks', r.id)
+        if (row) row.at = to
+      }
+      return rows.map((r) => ({ id: Number(r.id), from: r.item }))
+    },
+    setTaskItem: async (id, item) => {
+      const row = where('tasks', String(id))
+      if (row) row.at = item
+    },
     closeTasks: async () => [],
     reopenTasks: async () => undefined,
-    moveRecordLinks: async () => [],
-    setRecordLink: async () => undefined,
+    async moveRecordLinks(rows, to) {
+      for (const r of rows) {
+        const row = where('record_links', r.id)
+        if (row) row.at = to
+      }
+      return rows.map((r) => ({ id: Number(r.id), side: r.side ?? 'from', from: r.item }))
+    },
+    setRecordLink: async (id, _side, item) => {
+      const row = where('record_links', String(id))
+      if (row) row.at = item
+    },
     cancelApprovals: async () => [],
     setApprovalStatus: async () => undefined,
     note: async (_r, _c, id, action) => {
@@ -429,6 +508,8 @@ function world() {
     tables,
     trash,
     comments,
+    attachedStore,
+    attachedRequests,
     writes,
     saved,
     deps,
@@ -565,6 +646,119 @@ describe('applyMerge', () => {
   })
 })
 
+describe('attached rows (comments, tasks, related-record links)', () => {
+  it('moves only what the person may see and manage; the rest stays put, judged at merge time', async () => {
+    const w = world()
+    await applyMerge(req, 'pos', { survivor: 'A', discard: ['B'] }, w.deps)
+    const at = (kind: string, id: string) => w.attachedStore[kind].find((r) => r.id === id)?.at
+    expect(at('comments', 'c1')).toBe('A')
+    expect(at('comments', 'c2')).toBe('B') // a field comment on a field they cannot read
+    expect(at('tasks', '11')).toBe('A')
+    expect(at('tasks', '12')).toBe('B') // someone else's task
+    expect(at('record_links', '21')).toBe('A')
+    expect(at('record_links', '22')).toBe('B') // the other end is not readable to them
+    expect(at('record_links', '23')).toBe('B') // a link to the kept record itself is never made
+    // Judged again by the merge, not taken from the plan.
+    expect(w.attachedRequests.sort()).toEqual(['comments', 'record_links', 'tasks'])
+  })
+
+  it('a row that became hidden after the plan is not moved', async () => {
+    const w = world()
+    w.attachedStore.tasks[0].movable = false
+    await applyMerge(req, 'pos', { survivor: 'A', discard: ['B'] }, w.deps)
+    expect(w.attachedStore.tasks.map((t) => t.at)).toEqual(['B', 'B'])
+  })
+
+  it('the gates: field comments by field access, tasks by who may work them, links by the other end', async () => {
+    const gates: AttachedGates = {
+      commentField: (f) => f !== 'salary',
+      task: (t) => t.assignee === 'me' || t.created_by === 'me',
+      readable: async (c) => c !== 'secret'
+    }
+    const ids = ['B']
+    expect(
+      (
+        await judgeAttached(
+          'comments',
+          [
+            { id: 1, item: 'b', field: null },
+            { id: 2, item: 'B', field: 'salary' },
+            { id: 3, item: 'B', field: 'name' }
+          ],
+          ids,
+          gates
+        )
+      ).map((r) => [r.id, r.item, r.movable])
+    ).toEqual([
+      ['1', 'B', true],
+      ['2', 'B', false],
+      ['3', 'B', true]
+    ])
+    expect(
+      (
+        await judgeAttached(
+          'tasks',
+          [
+            { id: 5, item: 'B', assignee: 'me', created_by: 'x' },
+            { id: 6, item: 'B', assignee: 'x', created_by: 'y' }
+          ],
+          ids,
+          gates
+        )
+      ).map((r) => r.movable)
+    ).toEqual([true, false])
+    expect(
+      (
+        await judgeAttached(
+          'record_links',
+          [
+            { id: 7, item: 'B', side: 'from', other_collection: 'sites', other_item: '1' },
+            { id: 8, item: 'B', side: 'to', other_collection: 'secret', other_item: '2' }
+          ],
+          ids,
+          gates
+        )
+      ).map((r) => [r.side, r.movable])
+    ).toEqual([
+      ['from', true],
+      ['to', false]
+    ])
+  })
+})
+
+describe('stale guard', () => {
+  it('refuses with who changed which record when a record changed since the screen opened', async () => {
+    const w = world()
+    const stamps = {
+      A: JSON.stringify(w.tables.pos.get('A')),
+      B: JSON.stringify(w.tables.pos.get('B'))
+    }
+    w.tables.pos.get('B')!.city = 'Lyon'
+    await expect(
+      applyMerge(
+        req,
+        'pos',
+        { survivor: 'A', discard: ['B'], stamps, opened_at: new Date().toISOString() },
+        w.deps
+      )
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'MERGE_STALE',
+      record: 'B',
+      message: 'Beth Ortiz changed #B (PO B) while you were merging — review it again.'
+    })
+    expect(w.writes).toEqual([])
+    // Fresh stamps go through.
+    const fresh = {
+      A: JSON.stringify(w.tables.pos.get('A')),
+      B: JSON.stringify(w.tables.pos.get('B'))
+    }
+    await expect(
+      applyMerge(req, 'pos', { survivor: 'A', discard: ['B'], stamps: fresh }, w.deps)
+    ).resolves.toMatchObject({ survivor: 'A' })
+  })
+})
+
 describe('undoMerge', () => {
   it('restores the discarded record, moves rows back and keeps a field changed since', async () => {
     const w = world()
@@ -586,6 +780,8 @@ describe('undoMerge', () => {
     expect(w.tables.pos_tags.get('j2')?.pos_id).toBe('B')
     expect(w.tables.pos_tags.get('j3')?.pos_id).toBe('B')
     expect(w.comments.get('c1')).toBe('B')
+    expect(w.attachedStore.tasks.map((t) => t.at)).toEqual(['B', 'B'])
+    expect(w.attachedStore.record_links.map((t) => t.at)).toEqual(['B', 'B', 'B'])
     expect(w.saved.log?.undone_at).toBeTruthy()
     // A second undo is refused.
     await expect(undoMerge(req, out.merge_id, w.deps)).rejects.toMatchObject({

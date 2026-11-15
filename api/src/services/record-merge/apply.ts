@@ -20,12 +20,14 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
+import { type AttachedRow, attachedRows } from './attached.js'
 import { buildMergePlan, liveInbound, type MergePlan, MergeRefusal, parseIds } from './plan.js'
 import {
   emptyUndoLog,
   type InboundRelation,
   listWords,
   MAX_MERGE_RECORDS,
+  type MergeAttachedKind,
   type MergeUndoLog,
   MOVE_ROW_CAP,
   type MoveChoice,
@@ -42,6 +44,11 @@ export interface MergeBody {
   keep?: unknown
   values?: Record<string, unknown> | null
   relations?: Record<string, MoveChoice> | null
+  /** Each record's `stamp` from the plan the person merged from: a record changed since
+   *  then refuses the merge (409 MERGE_STALE) so they review it again. */
+  stamps?: Record<string, string> | null
+  /** When that plan was read (ISO): who changed a record since is named in the refusal. */
+  opened_at?: string | null
 }
 
 export interface MergeResult {
@@ -78,15 +85,20 @@ export interface MergeDeps {
   read(req: FastifyRequest, collection: string, id: string): Promise<Row | null>
   /** Put a record deleted since `since` back from the trash. */
   restore(req: FastifyRequest, collection: string, id: string, since: string): Promise<void>
-  moveComments(
+  /** Comments / tasks / related-record links on these records, each judged for this person
+   *  (attached.ts). Only `movable` rows are moved; the rest stay where they are. */
+  attached(
+    req: FastifyRequest,
+    kind: MergeAttachedKind,
     collection: string,
-    from: string[],
-    to: string
-  ): Promise<Array<{ id: string; from: string }>>
+    ids: string[]
+  ): Promise<AttachedRow[]>
+  /** Who last changed this record after `since` (a name), for the stale refusal. */
+  changedBy(collection: string, id: string, since: string | null): Promise<string | null>
+  moveComments(rows: AttachedRow[], to: string): Promise<Array<{ id: string; from: string }>>
   setCommentItem(id: string, item: string): Promise<void>
   moveTasks(
-    collection: string,
-    from: string[],
+    rows: AttachedRow[],
     to: string,
     actor: string,
     note: string
@@ -95,8 +107,7 @@ export interface MergeDeps {
   closeTasks(collection: string, from: string[], actor: string, note: string): Promise<number[]>
   reopenTasks(ids: number[], actor: string): Promise<void>
   moveRecordLinks(
-    collection: string,
-    from: string[],
+    rows: AttachedRow[],
     to: string
   ): Promise<Array<{ id: number; side: 'from' | 'to'; from: string }>>
   setRecordLink(id: number, side: 'from' | 'to', item: string): Promise<void>
@@ -220,6 +231,21 @@ export async function applyMerge(
   // ── Judge everything first ──
   const plan = await deps.plan(req, collection, all)
   const rec = (id: string) => plan.records.find((r) => sameId(r.id, id))
+  // A record that changed since the person opened the merge: they review it again first.
+  if (body.stamps && typeof body.stamps === 'object') {
+    for (const r of plan.records) {
+      const sent = Object.entries(body.stamps).find(([id]) => sameId(id, r.id))?.[1]
+      if (sent == null || sent === r.stamp) continue
+      const opened = typeof body.opened_at === 'string' ? body.opened_at : null
+      const who = await deps.changedBy(collection, r.id, opened).catch(() => null)
+      throw new MergeRefusal(
+        409,
+        'MERGE_STALE',
+        `${who ?? 'Someone'} changed ${r.ref ?? r.label}${r.ref && r.ref !== r.label ? ` (${r.label})` : ''} while you were merging — review it again.`,
+        r.id
+      )
+    }
+  }
   const s = rec(survivor)
   if (!s) refuse(404, 'The record to keep is gone, or you cannot see it.')
   if (!s.can_survive) refuse(403, `You cannot keep ${s.label}: ${s.survive_reason}`, s.id)
@@ -321,12 +347,24 @@ export async function applyMerge(
         }
       }
       const actor = String(user.id)
+      // Attached rows are judged again here (never trusted from the plan): only rows this
+      // person may see and manage move; the rest stay with the discarded record.
+      const movable = async (kind: MergeAttachedKind) =>
+        (await deps.attached(req, kind, collection, discard)).filter(
+          (r) =>
+            r.movable &&
+            // A link between two of the merged records would point the survivor at itself.
+            !(
+              r.other &&
+              r.other.collection === collection &&
+              all.some((x) => sameId(x, r.other?.item))
+            )
+        )
       if (choices.get('comments') === 'move')
-        log.comments = await deps.moveComments(collection, discard, survivor)
+        log.comments = await deps.moveComments(await movable('comments'), survivor)
       if (choices.get('tasks') === 'move')
         log.tasks_moved = await deps.moveTasks(
-          collection,
-          discard,
+          await movable('tasks'),
           survivor,
           actor,
           `Moved here — the record was merged into ${survivorLabel}`
@@ -338,7 +376,7 @@ export async function applyMerge(
         `Closed — the record was merged into ${survivorLabel}`
       )
       if (choices.get('record_links') === 'move')
-        log.record_links = await deps.moveRecordLinks(collection, discard, survivor)
+        log.record_links = await deps.moveRecordLinks(await movable('record_links'), survivor)
       log.approvals = await deps.cancelApprovals(collection, discard)
       // Discarded records: the items-service delete (trash, restorable).
       for (const id of discard) {
@@ -498,40 +536,45 @@ export const defaultMergeDeps: MergeDeps = {
     const { restoreTrashRow } = await import('../trash.js')
     await restoreTrashRow(req.user as User, row.id, req)
   },
-  async moveComments(collection, from, to) {
-    const rows = (await db('nivaro_comments')
-      .where({ collection })
-      .whereIn('item', from)
-      .whereNull('deleted_at')
-      .select('id', 'item')) as Array<{ id: string; item: string }>
+  attached: (req, kind, collection, ids) => attachedRows(req, kind, collection, ids),
+  async changedBy(collection, id, since) {
+    const q = db('nivaro_activity as a')
+      .leftJoin('nivaro_users as u', 'u.id', 'a.user')
+      .where({ 'a.collection': collection, 'a.item': String(id) })
+      .whereIn('a.action', ['update', 'create', 'delete', 'restore', 'record-merge'])
+      .orderBy('a.id', 'desc')
+      .first('u.first_name', 'u.last_name')
+    if (since && !Number.isNaN(Date.parse(since))) q.where('a.timestamp', '>=', new Date(since))
+    const row = (await q) as { first_name?: string | null; last_name?: string | null } | undefined
+    const name = [row?.first_name, row?.last_name].filter(Boolean).join(' ').trim()
+    return name || null
+  },
+  async moveComments(rows, to) {
     if (rows.length)
       await db('nivaro_comments')
         .whereIn(
           'id',
           rows.map((r) => r.id)
         )
+        .whereNull('deleted_at')
         .update({ item: to })
-    return rows.map((r) => ({ id: String(r.id), from: String(r.item) }))
+    return rows.map((r) => ({ id: r.id, from: r.item }))
   },
   async setCommentItem(id, item) {
     await db('nivaro_comments').where({ id }).update({ item })
   },
-  async moveTasks(collection, from, to, actor, note) {
-    const rows = (await db('nivaro_tasks')
-      .where({ collection })
-      .whereIn('item', from)
-      .select('id', 'item')) as Array<{ id: number; item: string }>
+  async moveTasks(rows, to, actor, note) {
     if (rows.length) {
       await db('nivaro_tasks')
         .whereIn(
           'id',
-          rows.map((r) => r.id)
+          rows.map((r) => Number(r.id))
         )
         .update({ item: to, updated_at: new Date() })
       const { logTaskEvent } = await import('../tasks.js')
-      for (const r of rows) await logTaskEvent(r.id, actor, note)
+      for (const r of rows) await logTaskEvent(Number(r.id), actor, note)
     }
-    return rows.map((r) => ({ id: Number(r.id), from: String(r.item) }))
+    return rows.map((r) => ({ id: Number(r.id), from: r.item }))
   },
   async setTaskItem(id, item) {
     await db('nivaro_tasks').where({ id }).update({ item, updated_at: new Date() })
@@ -567,22 +610,17 @@ export const defaultMergeDeps: MergeDeps = {
     const { logTaskEvent } = await import('../tasks.js')
     for (const r of open) await logTaskEvent(r.id, actor, 'Reopened — the merge was undone')
   },
-  async moveRecordLinks(collection, from, to) {
+  async moveRecordLinks(rows, to) {
     const out: Array<{ id: number; side: 'from' | 'to'; from: string }> = []
-    for (const side of ['from', 'to'] as const) {
-      const rows = (await db('nivaro_record_links')
-        .where(`${side}_collection`, collection)
-        .whereIn(`${side}_item`, from)
-        .select('id', `${side}_item as item`)) as Array<{ id: number; item: string }>
-      for (const r of rows) {
-        try {
-          await db('nivaro_record_links')
-            .where({ id: r.id })
-            .update({ [`${side}_item`]: to })
-          out.push({ id: Number(r.id), side, from: String(r.item) })
-        } catch {
-          /* the kept record already has this link: the duplicate stays with the discarded one */
-        }
+    for (const r of rows) {
+      const side = r.side ?? 'from'
+      try {
+        await db('nivaro_record_links')
+          .where({ id: Number(r.id) })
+          .update({ [`${side}_item`]: to })
+        out.push({ id: Number(r.id), side, from: r.item })
+      } catch {
+        /* the kept record already has this link: the duplicate stays with the discarded one */
       }
     }
     return out

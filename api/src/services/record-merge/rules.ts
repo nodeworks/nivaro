@@ -12,8 +12,10 @@
  *
  * `nivaro_collections.browser_config.merge_records`:
  *
- *   { mode?: 'on' | 'off' }    missing = follows the duplicate warning (on unless the
- *                              collection turned duplicate warnings off)
+ *   { mode?: 'on' | 'off' }    missing = ON for every registered non-system collection.
+ *
+ * Independent of the duplicate warning: a collection may turn duplicate warnings off
+ * because near-duplicates are normal there and still want merging.
  */
 
 export const SYSTEM_COLLECTION = /^(nivaro_|directus_)/i
@@ -28,8 +30,8 @@ export const UNDO_WINDOW_MS = 24 * 60 * 60 * 1000
 
 export interface MergeSetting {
   allowed: boolean
-  /** 'configured' = the merge switch itself; 'duplicates' = follows the duplicate warning. */
-  source: 'configured' | 'duplicates'
+  /** 'configured' = set on the collection; 'default' = not set (on). */
+  source: 'configured' | 'default'
 }
 
 function parseObj(raw: unknown): Record<string, unknown> | null {
@@ -44,15 +46,14 @@ function parseObj(raw: unknown): Record<string, unknown> | null {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
 }
 
-/** The "Allow merging" switch: its own value when set, else the duplicate warning's mode. */
+/** The "Allow merging" switch: its own value when set, else on. */
 export function mergeSettingOf(collection: string, browserConfig: unknown): MergeSetting {
   if (SYSTEM_COLLECTION.test(collection)) return { allowed: false, source: 'configured' }
   const bc = parseObj(browserConfig)
   const own = parseObj(bc?.merge_records)
   if (own && (own.mode === 'on' || own.mode === 'off'))
     return { allowed: own.mode === 'on', source: 'configured' }
-  const dup = parseObj(bc?.duplicate_check)
-  return { allowed: dup?.mode !== 'off', source: 'duplicates' }
+  return { allowed: true, source: 'default' }
 }
 
 // ─── Fields ─────────────────────────────────────────────────────────────────

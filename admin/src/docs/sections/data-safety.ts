@@ -68,7 +68,7 @@ export const mergeDocs: DocSection = {
       type: 'ul',
       items: [
         'One column per record and a Result column. Click a value in any column to use it; Combine joins long text line by line, rich text by paragraph, and tags or multi-selects as a union; Edit lets you type a new value.',
-        'Per record: Keep (one record — it keeps its id, number, history and pipeline step), Discard (it goes to the trash with a “Merged into …” note and can be restored) or Leave alone (it only lends values).',
+        'Per record: Keep (one record — it keeps its id, number, history and pipeline step), Discard (it goes to the trash with a “Merged into …” note and can be restored) or Not in this merge (it only lends values).',
         'Lines, links from other lists, many-to-many links and files, comments, tasks and related-record links on the discarded records are counted. Each one moves to the kept record by default; choose Leave to keep it with the discarded record.',
         'Review lists every field that changes (now → after, and where the value came from) and every move before anything is saved.'
       ]
@@ -78,17 +78,17 @@ export const mergeDocs: DocSection = {
       type: 'ul',
       items: [
         'Everything is judged as you: you must be able to change the kept record and delete the discarded ones. Someone else editing a record, a post-approval lock or a record already sent along its process refuses with the plain reason.',
-        'Rows you cannot see or change are never moved by you — the move is offered only when you can move all of them.',
+        'Rows you cannot see or change are never moved by you — a list’s rows move only when you can move all of them; comments on fields you cannot see, other people’s tasks and links to records you cannot see stay with the discarded record.',
         'A discarded record that was sent to a partner (it holds an id there) shows a warning; only an administrator can discard it.',
         'Open approvals on the discarded records are closed and their open tasks closed with a merge note (moved tasks stay open on the kept record).',
-        'If any step fails, what was already done is put back and nothing stays half-merged.',
+        'If someone changes one of the records while you are merging, the merge is refused with their name and the screen reads the records again, keeping your choices wherever that field did not change. If any step fails, what was already done is put back and nothing stays half-merged.',
         'Undo is offered for 24 hours (on the done screen and in the kept record’s ⋯ menu): the discarded records come back from the trash, moved rows go back, and the kept record’s fields go back — a field someone changed after the merge keeps the newer value.'
       ]
     },
     { type: 'h2', id: 'record-merge-setting', text: 'Allow merging' },
     {
       type: 'p',
-      text: 'Data Model → a collection → Settings → Allow merging. Without a setting it follows the duplicate warning: merging is offered wherever duplicate warnings are on. Turn it off where people must never merge records; scripts/merge-records-mode.mjs does it for several collections at once (dry run first, then --execute).'
+      text: 'Data Model → a collection → Settings → Allow merging. It is on by default for every collection, separately from the duplicate warning (a list can turn duplicate warnings off and still allow merging). Turn it off where people must never merge records; scripts/merge-records-mode.mjs does it for several collections at once (dry run first, then --execute).'
     },
     { type: 'h2', id: 'record-merge-api', text: 'API' },
     {

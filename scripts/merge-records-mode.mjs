@@ -5,7 +5,7 @@
  *
  *   node scripts/merge-records-mode.mjs --off a,b,c [--like text]   dry run (default)
  *   node scripts/merge-records-mode.mjs --off a,b,c --execute       apply
- *   node scripts/merge-records-mode.mjs --default a,b --execute     follow duplicate warnings
+ *   node scripts/merge-records-mode.mjs --default a,b --execute     back to the default (on)
  */
 import { spawnSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'

@@ -260,7 +260,10 @@ export function MergePicker({
           >
             {on && <Check className='h-3 w-3' strokeWidth={3} />}
           </span>
-          <span className='min-w-0 flex-1 truncate text-[13px] text-slate-800 dark:text-foreground'>
+          <span className='shrink-0 text-[12.5px] font-semibold tabular-nums text-slate-900 dark:text-foreground'>
+            #{c.id}
+          </span>
+          <span className='min-w-0 flex-1 truncate text-[13px] text-slate-700 dark:text-foreground/85'>
             {c.label}
           </span>
           {MATCH_WORDS[c.match] && (
@@ -359,7 +362,7 @@ export function MergePicker({
           <span className='min-w-0 flex-1 truncate text-[12.5px] text-slate-600 dark:text-muted-foreground'>
             {chosen.length === 0
               ? 'None picked yet'
-              : `${chosen.length} picked: ${chosen.map((c) => c.label).join(', ')}`}
+              : `${chosen.length} picked: ${chosen.map((c) => `#${c.id}`).join(', ')}`}
           </span>
           <Button type='button' variant='ghost' size='sm' onClick={() => onOpenChange(false)}>
             Cancel

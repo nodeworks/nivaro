@@ -1,18 +1,18 @@
 /**
  * Turn "Allow merging" off (or back to the default) for named collections in one go.
- * Merging follows the duplicate warning by default (on wherever duplicate warnings are on,
- * services/record-merge/rules.ts); a deployment turns it off where records must never be
+ * Merging is on by default for every collection (services/record-merge/rules.ts), separately
+ * from the duplicate warning; a deployment turns it off where records must never be
  * merged by people (a deployment's core workflow records, say) — an admin can still turn
  * it back on per collection in the Data Model. Run through
  * `node scripts/merge-records-mode.mjs`.
  *
  *   node scripts/merge-records-mode.mjs --off a,b,c [--like text]...      DRY RUN (default)
  *   node scripts/merge-records-mode.mjs --off a,b,c [--like text]... --execute
- *   node scripts/merge-records-mode.mjs --default a,b --execute    follow duplicates again
+ *   node scripts/merge-records-mode.mjs --default a,b --execute    back to the default (on)
  *
  *   --off      collections to set `merge_records.mode = 'off'` on
  *   --like     also every registered collection whose name contains this text (repeatable)
- *   --default  collections to put back to the default (follows the duplicate warning)
+ *   --default  collections to put back to the default (on)
  *
  * Only `browser_config.merge_records` changes; every other browser_config key is kept.
  * System tables are skipped (never merged). Idempotent. A collection name that is not registered is

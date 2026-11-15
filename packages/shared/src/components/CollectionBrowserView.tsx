@@ -4028,7 +4028,7 @@ function BulkBar({
   return (
     <div
       data-cbv-bulkbar
-      className='nvr-slide-up flex shrink-0 flex-wrap items-center gap-3 border-t border-[#16233c] bg-[#0f1e2d] px-4 py-2.5 text-white dark:text-foreground shadow-[0_-2px_12px_rgba(0,0,0,0.25)] dark:border-border dark:bg-card dark:text-foreground dark:shadow-none'
+      className='nvr-slide-up flex shrink-0 flex-wrap items-center gap-3 border-t border-[#16233c] bg-[#0f1e2d] py-2.5 pl-4 pr-16 text-white dark:text-foreground shadow-[0_-2px_12px_rgba(0,0,0,0.25)] dark:border-border dark:bg-card dark:text-foreground dark:shadow-none'
     >
       <button
         type='button'
@@ -4046,7 +4046,9 @@ function BulkBar({
       )}
       <span className='flex-1' />
       {mode === 'actions' && (
-        <span className='flex flex-wrap items-center gap-1.5'>
+        // Wraps inside the bar instead of pushing the last actions (Delete) off the edge
+        // or under the floating corner button (the bar keeps room for it on the right).
+        <span className='flex min-w-0 shrink flex-wrap items-center justify-end gap-1.5'>
           {builtin('recipes') &&
             recipes.map((r) => (
               <span key={r.id} className='group/recipe relative inline-flex'>
