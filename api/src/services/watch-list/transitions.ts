@@ -128,6 +128,11 @@ export async function onWatchTransition(payload: Record<string, unknown>): Promi
       stateLabel: to?.label ?? null,
       actorId
     }).catch(() => 0)
+    // Completed (a final step) — or reopened — on every list that removes completed records.
+    if (to) {
+      const { applyCompletion } = await import('./completed.js')
+      await applyCompletion(collection, item, !!to.is_terminal).catch(() => 0)
+    }
     await applyAutoPins({
       collection,
       item,

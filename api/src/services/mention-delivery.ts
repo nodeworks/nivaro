@@ -243,11 +243,100 @@ async function wouldBeSilenced(
       new Date()
     )
     if (d.dropped || !d.inapp) {
-      const why = d.reasons.find((r) => r.channel === 'all' || r.channel === 'inapp')
-      return { muted: true, reason: why?.text ?? null }
+      // The reason that silenced it — not the bypass notes (always_inbox / critical) before it.
+      const why = [...d.reasons]
+        .reverse()
+        .find(
+          (r) =>
+            (r.channel === 'all' || r.channel === 'inapp') &&
+            r.code !== 'always_inbox' &&
+            r.code !== 'critical'
+        )
+      return { muted: true, reason: plainSilenceReason(why?.code, why?.text) }
     }
-    return { muted: false, reason: 'No notification was sent: they cannot open this.' }
+    return { muted: false, reason: 'not sent: they cannot open this record or field' }
   } catch {
     return { muted: false, reason: null }
   }
+}
+
+/** A silencing decision in plain words for the "Muted — …" line (administrators only). */
+export function plainSilenceReason(code: string | undefined, text: string | undefined): string {
+  switch (code) {
+    case 'matrix_inapp_off':
+      return 'turned off in-app alerts for Mentions'
+    case 'suspended':
+      return 'the account is suspended'
+    case 'redacted':
+      return 'the account was redacted'
+    case 'muted':
+      return 'muted this record'
+    default:
+      return text ? text.replace(/\.$/, '') : 'their notification rules keep it out'
+  }
+}
+
+export interface MentionStatus {
+  status: 'seen' | 'in_inbox' | 'not_told' | 'muted'
+  /** Administrators only: why someone will not be told. */
+  reason?: string | null
+}
+
+/**
+ * The status of mentions on a record's comments, for the receipt line under each comment, so it
+ * says the same as the Delivery panel. The caller passes only comments the reader may see
+ * delivery of (the author, or an administrator). One notifications read for the whole record;
+ * the "would they be told" decision only for administrators, once per person. To a non-admin
+ * author a muted person simply was not told. Keys are receiptKey(comment, user).
+ */
+export async function mentionStatuses(
+  collection: string,
+  item: string,
+  mentions: Array<{ comment: string; user: string; at: Date | string; author: string }>,
+  receipts: Map<string, string>,
+  isAdmin: boolean
+): Promise<Map<string, MentionStatus>> {
+  const out = new Map<string, MentionStatus>()
+  const wanted = mentions.filter((m) => m.user.toUpperCase() !== m.author.toUpperCase())
+  if (wanted.length === 0) return out
+  try {
+    const users = [...new Set(wanted.map((m) => m.user))]
+    const rows = (await selectInChunks(users, 500, (chunk) =>
+      db('nivaro_notifications')
+        .where({ collection, item: String(item), category: 'mentions' })
+        .whereIn('recipient', chunk)
+        .select('recipient', 'timestamp')
+    )) as Array<{ recipient: string; timestamp: Date }>
+    const byPerson = new Map<string, Array<{ timestamp: Date }>>()
+    for (const r of rows) {
+      const k = String(r.recipient).toUpperCase()
+      byPerson.set(k, [...(byPerson.get(k) ?? []), r])
+    }
+    const silencedOf = new Map<string, Promise<{ muted: boolean; reason: string | null }>>()
+    for (const m of wanted) {
+      const key = receiptKey(m.comment, m.user)
+      if (receipts.get(key)) {
+        out.set(key, { status: 'seen' })
+        continue
+      }
+      if (pickMentionRow(byPerson.get(m.user.toUpperCase()) ?? [], new Date(m.at))) {
+        out.set(key, { status: 'in_inbox' })
+        continue
+      }
+      if (!isAdmin) {
+        out.set(key, { status: 'not_told' })
+        continue
+      }
+      const u = m.user.toUpperCase()
+      if (!silencedOf.has(u)) silencedOf.set(u, wouldBeSilenced(m.user, collection, item))
+      const s = (await silencedOf.get(u)) ?? { muted: false, reason: null }
+      out.set(
+        key,
+        s.muted ? { status: 'muted', reason: s.reason } : { status: 'not_told', reason: s.reason }
+      )
+    }
+  } catch {
+    /* a status is decoration — the thread still loads without it */
+  }
+  return out
 }

@@ -5,6 +5,7 @@ vi.mock('../../../db/index.js', () => ({ db: () => ({}) }))
 import {
   bannerPhrase,
   dismissedIds,
+  firstTemplateField,
   parseBannerIds,
   stillHolds,
   withDismissal,
@@ -148,6 +149,12 @@ describe('threshold banners (rt9 #20)', () => {
     expect(dismissedIds({ alert_banner_dismissed: withDismissal({}, 7) }).has(7)).toBe(true)
     const many = { alert_banner_dismissed: Array.from({ length: 400 }, (_v, i) => i) }
     expect(withDismissal(many, 999)).toHaveLength(300)
+  })
+
+  it('names the record by the first plain field of its display template', () => {
+    expect(firstTemplateField('{{project_id}} - {{name}}')).toBe('project_id')
+    expect(firstTemplateField('{{ type.name }} {{code}}')).toBe('code')
+    expect(firstTemplateField(null)).toBeNull()
   })
 
   it('reads the banner list as ids only', () => {

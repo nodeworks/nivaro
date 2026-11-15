@@ -77,7 +77,7 @@ export function RecentRecordsRail({
                 >
                   <span className='min-w-0 flex-1'>
                     <span className='block truncate text-[12.5px] font-medium text-slate-800 dark:text-slate-100'>
-                      {r.label}
+                      {r.label?.trim() || `#${r.item_id}`}
                     </span>
                     <span className='block truncate text-[10.5px] text-slate-400'>
                       {titleCase(r.collection)}

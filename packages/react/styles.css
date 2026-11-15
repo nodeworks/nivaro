@@ -319,6 +319,20 @@ html[data-live-mode] .nvr-derived-fresh { animation: none; }
   .nvr-saved-glow, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in, .nvr-section-enter, .nvr-tab-enter, .nvr-expand-in, .nvr-shake, .nvr-fade-in, .nvr-autofill-glow, .nvr-pop-in, .nvr-value-pulse, .nvr-value-pulse-bg, .nvr-idle-breathe, .nvr-row-enter, .nvr-slide-up, .nvr-slide-up-centered, .nvr-track-travel, .nvr-track-arrive { animation: none; }
 }
 
+/* Someone else's cursor in a grid cell (grid cursors, round-8 budget grid presence): a ring in
+   that person's colour (--nvr-cursor, set by markRemoteCell). On an input itself it is an inset
+   shadow (never clipped by the cell); on a wrapper it is a ring just outside it (the input
+   inside would cover an inset one). Shadows, not outlines: hosts may switch outlines off
+   (efp-new does, !important). Their name rides data-tip and the initials chip. */
+[data-grid-cell].nvr-remote-editing:is(input, textarea) {
+  box-shadow: inset 0 0 0 2px var(--nvr-cursor, rgb(14 165 233 / 0.6));
+  border-radius: 4px;
+}
+[data-grid-cell].nvr-remote-editing:not(input):not(textarea) {
+  box-shadow: 0 0 0 2px var(--nvr-cursor, rgb(14 165 233 / 0.6));
+  border-radius: 6px;
+}
+
 /* Live updates Calm / Off (Profile → Display, packages/shared lib/live-preference.ts sets
    html[data-live-mode]): changes land without fades, flashes or marks, and no one else's
    editing outline. Twin: admin/src/globals.css + packages/react/styles.css. */

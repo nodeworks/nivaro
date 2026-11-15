@@ -125,7 +125,6 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { copyIdText } from '../../lib/record-ref'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { userErrorMessage } from '../../lib/safe-error'
-import { listViewInput } from '../../lib/send-view'
 import {
   selectionSums,
   splitSelKey,
@@ -134,6 +133,7 @@ import {
   useSelectionLiveMarks,
   useSelectionPicks
 } from '../../lib/selection-watch'
+import { listViewInput } from '../../lib/send-view'
 import { useTableDensity } from '../../lib/table-density'
 import { matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
@@ -173,7 +173,6 @@ import {
 import { type Column, DataTable, type FilterDef } from '../DataTable'
 import { EmptyState } from '../EmptyState'
 import { FocusModeToggle } from '../FocusModeToggle'
-import { OverflowRail } from '../OverflowRail'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill } from '../FulfilmentPill'
 import { InStepCell } from '../InStep'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
@@ -187,6 +186,7 @@ import { LiveRowMark } from '../LiveRowMark'
 import { CopyListLinkButton } from '../list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from '../list/InlineEdit'
 import { ListViewers } from '../list/ListViewers'
+import { OverflowRail } from '../OverflowRail'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
   PICKER_EXCLUDED_TITLE,
@@ -4877,6 +4877,13 @@ export function QueueWorklist({
           <OverflowRail
             leadMinWidth='siblings'
             moreLabel='More queue actions'
+            // The board view has no owners row: there the viewers lead the buttons (pinned,
+            // never folded into ⋯). Elsewhere they sit on the Owners row (QueueTeamStrip).
+            lead={
+              !viewersInHeader && view === 'workload' ? (
+                <ListViewers kind='queue' id={queueId} />
+              ) : undefined
+            }
             items={[
               ...(view === 'table'
                 ? [
@@ -5068,15 +5075,6 @@ export function QueueWorklist({
                   />
                 )
               },
-              ...(!viewersInHeader
-                ? [
-                    {
-                      key: 'viewers',
-                      priority: 50,
-                      node: <ListViewers kind='queue' id={queueId} />
-                    }
-                  ]
-                : []),
               ...(view === 'table'
                 ? [
                     {
@@ -5513,7 +5511,16 @@ export function QueueWorklist({
             )}
           </div>
         )}
-        {view !== 'workload' && <QueueTeamStrip queueId={queueId} />}
+        {view !== 'workload' && (
+          <QueueTeamStrip
+            queueId={queueId}
+            right={
+              viewersInHeader ? undefined : (
+                <ListViewers kind='queue' id={queueId} variant='header' />
+              )
+            }
+          />
+        )}
         {view !== 'workload' && (
           <QueueQuickFilters
             defs={quickFilterDefs}

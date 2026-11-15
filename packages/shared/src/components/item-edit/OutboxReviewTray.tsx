@@ -1,9 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ExternalLink, GitMerge } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../context'
 import { type FieldMergeKind, fieldMergeKind } from '../../lib/field-merge'
+import { liveMotionAllowed } from '../../lib/live-preference'
 import { fetchCollectionMeta, queryKeys } from '../../lib/query-keys'
 import {
   isRecordOutboxHeld,
@@ -57,7 +58,7 @@ export function OutboxReviewTray({
     <section
       data-outbox-review
       aria-label='Offline changes to review'
-      className='fixed bottom-4 right-4 z-[60] w-[400px] max-w-[calc(100vw-2rem)]'
+      className='fixed bottom-20 right-4 z-[60] w-[400px] max-w-[calc(100vw-2rem)]'
     >
       {!open ? (
         <button
@@ -70,7 +71,7 @@ export function OutboxReviewTray({
           {summary}
         </button>
       ) : (
-        <div className='nvr-expand-in flex max-h-[min(70vh,560px)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_12px_32px_-12px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card'>
+        <div className='nvr-expand-in flex max-h-[min(calc(100vh-7rem),640px)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_12px_32px_-12px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card'>
           <header className='flex shrink-0 items-start gap-2 border-b border-slate-100 px-4 py-3 dark:border-border'>
             <span className='mt-1.5 h-2 w-2 shrink-0 rounded-full bg-amber-500 dark:bg-amber-400' />
             <div className='min-w-0 flex-1'>
@@ -91,15 +92,56 @@ export function OutboxReviewTray({
               <ChevronDown className='h-4 w-4' />
             </button>
           </header>
-          <div className='min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto overscroll-contain dark:divide-border'>
+          <ScrollBody>
             {waiting.map((e) => (
               <OutboxClashEntry key={e.id} entry={e} onOpenRecord={onOpenRecord} />
             ))}
-          </div>
+          </ScrollBody>
         </div>
       )}
     </section>,
     document.body
+  )
+}
+
+/** The card's scrolling list, with a soft fade at the bottom while more is below. */
+function ScrollBody({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [more, setMore] = useState(false)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const check = () => setMore(el.scrollTop + el.clientHeight < el.scrollHeight - 4)
+    check()
+    el.addEventListener('scroll', check, { passive: true })
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(check) : null
+    ro?.observe(el)
+    for (const c of Array.from(el.children)) ro?.observe(c)
+    const mo = new MutationObserver(check)
+    mo.observe(el, { childList: true, subtree: true })
+    return () => {
+      el.removeEventListener('scroll', check)
+      ro?.disconnect()
+      mo.disconnect()
+    }
+  }, [])
+  return (
+    <div className='relative min-h-0 flex-1'>
+      <div
+        ref={ref}
+        data-outbox-scroll
+        className='h-full max-h-full divide-y divide-slate-100 overflow-y-auto overscroll-contain dark:divide-border'
+      >
+        {children}
+      </div>
+      {more && (
+        <div
+          aria-hidden
+          data-outbox-more-below
+          className='pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-white to-transparent dark:from-card'
+        />
+      )}
+    </div>
   )
 }
 
@@ -116,7 +158,10 @@ function OutboxClashEntry({
     queryFn: () => fetchCollectionMeta(client, entry.collection),
     staleTime: 10 * 60_000
   })
+  const qc = useQueryClient()
   const labels = useRecordLabels(entry.collection, [entry.item])
+  const labelState = qc.getQueryState(['record-label', entry.collection, entry.item])
+  const labelPending = !labels.has(entry.item) && (!labelState || labelState.status === 'pending')
   const byField = useMemo(
     () => new Map((meta?.fields ?? []).map((f) => [f.field, f as unknown as CMSField])),
     [meta]
@@ -126,8 +171,15 @@ function OutboxClashEntry({
       (r) => r.many_collection === entry.collection && r.many_field === field && !r.junction_field
     )?.one_collection ?? null
   const singular = typeof meta?.singular === 'string' ? meta.singular.trim() : ''
-  const noun = singular || titleCase(entry.collection.replace(/_/g, ' '))
+  const noun = singular || singularOf(titleCase(entry.collection.replace(/_/g, ' ')))
   const label = labels.get(entry.item) ?? `#${entry.item}`
+  if (!meta || labelPending)
+    return (
+      <article data-outbox-entry={entry.id} aria-busy='true' className='space-y-2 px-4 py-3'>
+        <div className='h-3.5 w-40 rounded bg-slate-100 dark:bg-muted' />
+        <div className='h-20 rounded-lg bg-slate-50 dark:bg-muted/50' />
+      </article>
+    )
   const sent = entry.sent_fields?.length ?? 0
   return (
     <article data-outbox-entry={entry.id} className='px-4 py-3'>
@@ -169,6 +221,13 @@ function OutboxClashEntry({
   )
 }
 
+/** "Workflows" → "Workflow" (only when the collection names no singular of its own). */
+function singularOf(words: string): string {
+  if (/ies$/i.test(words)) return words.replace(/ies$/i, 'y')
+  if (/[^s]s$/i.test(words)) return words.slice(0, -1)
+  return words
+}
+
 const btn =
   'shrink-0 rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60 disabled:opacity-50'
 
@@ -197,6 +256,17 @@ export function OutboxClashRow({
     typeof v === 'number' && Number.isFinite(v) ? v.toLocaleString() : shownRaw(v, max)
   const [merging, setMerging] = useState(false)
   const [busy, setBusy] = useState(false)
+  const rowRef = useRef<HTMLLIElement>(null)
+  // The opened merge brings its result and its confirm into view inside the card.
+  useEffect(() => {
+    if (!merging) return
+    const t = setTimeout(() => {
+      rowRef.current
+        ?.querySelector<HTMLElement>('[data-merge-apply]')
+        ?.scrollIntoView({ block: 'nearest', behavior: liveMotionAllowed() ? 'smooth' : 'auto' })
+    }, 60)
+    return () => clearTimeout(t)
+  }, [merging])
   const kind: FieldMergeKind = clash.hidden ? 'none' : fieldMergeKind(field, mine, theirs)
   const who = clash.by || 'Someone'
   const decide = (choice: OutboxPick) => {
@@ -211,14 +281,15 @@ export function OutboxClashRow({
   return (
     <li
       data-outbox-clash={clash.field}
-      className='rounded-lg border border-amber-200/80 bg-amber-50/50 px-3 py-2 dark:border-amber-400/25 dark:bg-amber-400/[0.06]'
+      ref={rowRef}
+      className='rounded-lg border border-amber-200/80 bg-amber-50/50 px-3 py-2 dark:border-amber-400/30 dark:bg-white/[0.02]'
     >
       <p className='text-[12px] leading-snug text-slate-700 dark:text-slate-200'>
         <span className='font-semibold text-slate-900 dark:text-slate-50'>{who}</span> changed{' '}
         <span className='font-semibold text-slate-900 dark:text-slate-50'>{label}</span> while you
         were offline
         {clash.at && (
-          <span className='text-slate-500 dark:text-slate-400'>
+          <span className='whitespace-nowrap text-slate-500 dark:text-slate-400'>
             {' '}
             · <RelativeTime value={clash.at} />
           </span>
@@ -266,7 +337,7 @@ export function OutboxClashRow({
           data-outbox-take-theirs
           className={cn(
             btn,
-            'text-slate-600 hover:bg-amber-100/80 dark:text-slate-300 dark:hover:bg-amber-400/10'
+            'text-slate-700 hover:bg-amber-100/80 dark:text-slate-200 dark:hover:bg-amber-400/10'
           )}
         >
           Take theirs
@@ -280,7 +351,10 @@ export function OutboxClashRow({
             data-outbox-merge
             className={cn(
               btn,
-              'inline-flex items-center gap-1 text-slate-600 hover:bg-amber-100/80 dark:text-slate-300 dark:hover:bg-amber-400/10'
+              'inline-flex items-center gap-1',
+              merging
+                ? 'bg-amber-100 text-amber-900 ring-1 ring-amber-300 dark:bg-amber-400/15 dark:text-amber-100 dark:ring-amber-400/40'
+                : 'text-slate-700 hover:bg-amber-100/80 dark:text-slate-200 dark:hover:bg-amber-400/10'
             )}
           >
             <GitMerge className='h-3 w-3' /> Merge

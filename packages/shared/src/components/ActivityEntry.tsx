@@ -17,6 +17,7 @@ import {
   type ActivityGroup,
   type ActivityLabels,
   activityLabelRefs,
+  activityPredicate,
   activityWhy,
   actorName,
   actorOf,
@@ -49,6 +50,26 @@ export interface ActivityEntryProps {
   /** Show the time at the row's end (default true). */
   showTime?: boolean
   className?: string
+  /**
+   * Record phrases the sentence leaves out ("Project 12 – Alpha"): on a record's own stream the
+   * subject is the page itself, so "updated Project 12 – Alpha 3 times" reads "updated 3 times".
+   */
+  omitPhrases?: string[]
+  /** Keep the chevron's room on rows that do not fold, so every sentence starts at one edge. */
+  reserveChevron?: boolean
+}
+
+/** Cut record phrases out of a sentence ("changed X on <phrase>" / "updated <phrase> 2 times"). */
+export function omitRecordPhrases(
+  sentence: string,
+  phrases: readonly string[] | undefined
+): string {
+  let out = sentence
+  for (const p of phrases ?? []) {
+    if (!p) continue
+    out = out.split(` on ${p}`).join('').split(` ${p}`).join('')
+  }
+  return out
 }
 
 function timeText(ts: ActivityEntryInput['timestamp']): { short: string; full: string } | null {
@@ -140,6 +161,73 @@ function WhyLines({ entry }: { entry: ActivityEntryInput }) {
   )
 }
 
+/** Children of an expanded burst shown at first; "Show N more" reveals the rest. */
+const BURST_CHILDREN_SHOWN = 5
+
+function singleActor(group: ActivityEntryInput[], labels?: ActivityLabels | null): boolean {
+  const first = actorName(group[0], labels)
+  return group.every((e) => actorName(e, labels) === first)
+}
+
+const minuteOf = (e: ActivityEntryInput) => {
+  const d = e.timestamp ? new Date(e.timestamp) : null
+  return d && !Number.isNaN(d.getTime()) ? Math.floor(d.getTime() / 60_000) : null
+}
+function sameMinute(group: ActivityEntryInput[]): boolean {
+  const m = minuteOf(group[0])
+  return m != null && group.every((e) => minuteOf(e) === m)
+}
+
+/** What one write changed, without the actor: "set X to Y" reads "X → Y". */
+export function childChangeText(
+  entry: ActivityEntryInput,
+  labels?: ActivityLabels | null,
+  omitPhrases?: readonly string[]
+): string {
+  const t = omitRecordPhrases(activityPredicate(entry, labels), omitPhrases)
+  const set = /^set (.+?) to (.+)$/s.exec(t)
+  return set ? `${set[1]} \u2192 ${set[2]}` : t
+}
+
+function BurstChild({
+  entry,
+  labels,
+  omitPhrases,
+  seconds,
+  showTime
+}: {
+  entry: ActivityEntryInput
+  labels?: ActivityLabels | null
+  omitPhrases?: readonly string[]
+  seconds: boolean
+  showTime: boolean
+}) {
+  const d = entry.timestamp ? new Date(entry.timestamp) : null
+  const valid = d && !Number.isNaN(d.getTime())
+  const time = valid
+    ? d.toLocaleTimeString([], {
+        hour: 'numeric',
+        minute: '2-digit',
+        ...(seconds ? { second: '2-digit' } : {})
+      })
+    : null
+  return (
+    <div className='flex items-start gap-2.5 px-2 py-1.5' data-activity-child={entry.id ?? ''}>
+      <span className='min-w-0 flex-1 text-[12.5px] leading-5 text-slate-600 dark:text-slate-300'>
+        {childChangeText(entry, labels, omitPhrases)}
+      </span>
+      {showTime && time && (
+        <span
+          className='shrink-0 pt-px text-[11px] tabular-nums text-slate-400'
+          data-tip={valid ? formatDateTime(d) : undefined}
+        >
+          {time}
+        </span>
+      )}
+    </div>
+  )
+}
+
 export function ActivityEntry({
   entry,
   labels,
@@ -147,13 +235,17 @@ export function ActivityEntry({
   onOpen,
   actions,
   showTime = true,
-  className
+  className,
+  omitPhrases,
+  reserveChevron
 }: ActivityEntryProps) {
   const [open, setOpen] = useState(false)
+  const [shown, setShown] = useState(BURST_CHILDREN_SHOWN)
   const burst = group && group.length > 1 ? group : null
-  const sentence = burst
-    ? renderActivityGroupSentence(burst, labels)
-    : renderActivitySentence(entry, labels)
+  const sentence = omitRecordPhrases(
+    burst ? renderActivityGroupSentence(burst, labels) : renderActivitySentence(entry, labels),
+    omitPhrases
+  )
   const name = actorName(entry, labels)
   const time = timeText(entry.timestamp)
   const clickable = !!onOpen || !!burst
@@ -163,26 +255,39 @@ export function ActivityEntry({
   }
   return (
     <div className={cn('min-w-0', className)} data-activity-entry={entry.id ?? ''}>
-      <div className='flex w-full items-start gap-2.5 rounded-md px-2 py-2'>
+      <div
+        className={cn(
+          'flex w-full items-start gap-2.5 rounded-md px-2 py-2',
+          // Row-background hover, only where a pointer can hover (never stuck after a tap).
+          clickable &&
+            '[@media(hover:hover)]:hover:bg-slate-50 dark:[@media(hover:hover)]:hover:bg-white/[0.04]'
+        )}
+      >
         <ActorIcon entry={entry} name={name} />
-        <span className='min-w-0 flex-1 text-[12.5px] leading-5 text-slate-700 dark:text-slate-200'>
+        <span className='min-w-0 flex-1 pt-0.5 text-[12.5px] leading-5 text-slate-700 dark:text-slate-200'>
           {clickable ? (
             <button
               type='button'
               onClick={activate}
               aria-expanded={burst ? open : undefined}
-              className='inline-flex max-w-full items-start gap-1 text-left hover:underline'
+              className='inline-flex max-w-full items-start gap-1 text-left'
             >
-              {burst &&
-                (open ? (
+              {burst ? (
+                open ? (
                   <ChevronDown className='mt-[3px] h-3.5 w-3.5 shrink-0 text-slate-400' />
                 ) : (
                   <ChevronRight className='mt-[3px] h-3.5 w-3.5 shrink-0 text-slate-400' />
-                ))}
+                )
+              ) : (
+                reserveChevron && <span className='mt-[3px] h-3.5 w-3.5 shrink-0' aria-hidden />
+              )}
               <span data-activity-sentence>{sentence}</span>
             </button>
           ) : (
-            <span data-activity-sentence>{sentence}</span>
+            <span className='inline-flex max-w-full items-start gap-1' data-activity-sentence-wrap>
+              {reserveChevron && <span className='mt-[3px] h-3.5 w-3.5 shrink-0' aria-hidden />}
+              <span data-activity-sentence>{sentence}</span>
+            </span>
           )}
           {!burst && <WhyLines entry={entry} />}
         </span>
@@ -199,15 +304,44 @@ export function ActivityEntry({
       </div>
       {burst && open && (
         <div className='ml-[18px] border-l border-slate-200 pl-3 dark:border-border'>
-          {burst.map((e, i) => (
-            <ActivityEntry
-              key={String(e.id ?? i)}
-              entry={e}
-              labels={labels}
-              onOpen={onOpen}
-              showTime={showTime}
-            />
-          ))}
+          {singleActor(burst, labels) ? (
+            // One person's burst: the summary row already names them, so each child says only
+            // what that write changed (and the time, to the second when they share a minute).
+            <>
+              {burst.slice(0, shown).map((e, i) => (
+                <BurstChild
+                  key={String(e.id ?? i)}
+                  entry={e}
+                  labels={labels}
+                  omitPhrases={omitPhrases}
+                  seconds={sameMinute(burst)}
+                  showTime={showTime}
+                />
+              ))}
+              {burst.length > shown && (
+                <button
+                  type='button'
+                  data-activity-show-more
+                  onClick={() => setShown((n) => n + BURST_CHILDREN_SHOWN * 4)}
+                  className='ml-2 py-1.5 text-[12px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+                >
+                  Show {burst.length - shown} more
+                </button>
+              )}
+            </>
+          ) : (
+            burst.map((e, i) => (
+              <ActivityEntry
+                key={String(e.id ?? i)}
+                entry={e}
+                labels={labels}
+                onOpen={onOpen}
+                showTime={showTime}
+                omitPhrases={omitPhrases}
+                reserveChevron={reserveChevron}
+              />
+            ))
+          )}
         </div>
       )}
     </div>

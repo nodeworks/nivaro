@@ -86,6 +86,15 @@ describe('CloneDialog', () => {
     const { calls, navigate } = render()
     act(() => buttonByText('Clone')?.click())
     await settle()
+    // Says what a copy is, and how many fields never follow it (list on demand).
+    const intro = document.querySelector('[data-clone-intro]')?.textContent ?? ''
+    expect(intro).toContain('The copy starts at the first step with its own history.')
+    expect(intro).toContain('2 fields are never copied.')
+    act(() => (document.querySelector('[data-clone-never-toggle]') as HTMLButtonElement).click())
+    const never = document.querySelector('[data-clone-never-list]')?.textContent ?? ''
+    expect(never).toContain('Workflow step')
+    expect(never).toContain('Request State')
+    expect(never).toContain('Order Number')
     const labels = [...document.querySelectorAll('label')].map((l) => l.textContent?.trim())
     expect(labels).toContain('Name')
     expect(labels).not.toContain('Request State')

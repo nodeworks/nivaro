@@ -121,46 +121,42 @@ const sig = (body: string) => createHmac('sha256', statusKey()).update(body).dig
 export const hashStatusToken = (token: string) =>
   createHash('sha256').update(token, 'utf8').digest('hex')
 
-/** A fresh token for one submission + what to store on it. */
+/**
+ * A fresh token for one submission + what to store on it. Compact — 79 characters, because it
+ * rides a URL path segment and Fastify answers 414 past 100: the submission id as 32 hex, the
+ * expiry as 8 hex seconds, 12 random bytes, then a 128-bit HMAC of all of that.
+ */
 export function mintStatusToken(
   submissionId: string,
   item: string,
   ttlDays: number,
   now = Date.now()
 ): { token: string; meta: StatusMeta } {
+  const sid = submissionId.replace(/-/g, '').toLowerCase()
+  if (!/^[0-9a-f]{32}$/.test(sid)) throw new Error('submission id must be a uuid')
   const exp = Math.floor(now / 1000) + ttlDays * 86_400
-  const body = Buffer.from(
-    JSON.stringify({ s: submissionId, e: exp, n: randomBytes(12).toString('base64url') }),
-    'utf8'
-  ).toString('base64url')
-  const token = `${body}.${sig(body).toString('base64url')}`
+  const body = `${sid}${exp.toString(16).padStart(8, '0')}${randomBytes(12).toString('base64url')}`
+  const token = `${body}.${sig(body).subarray(0, 16).toString('base64url')}`
   return { token, meta: { item: String(item), hash: hashStatusToken(token), exp } }
 }
 
+const TOKEN_RE = /^([0-9a-f]{32})([0-9a-f]{8})[A-Za-z0-9_-]{16}\.([A-Za-z0-9_-]{22})$/
+
 /** Signature + expiry only (no database): the submission id the token names, or null. */
 export function readStatusToken(token: string, now = Date.now()): { s: string; e: number } | null {
-  if (typeof token !== 'string' || token.length > 400) return null
-  const dot = token.lastIndexOf('.')
-  if (dot <= 0) return null
-  const body = token.slice(0, dot)
-  let given: Buffer
-  try {
-    given = Buffer.from(token.slice(dot + 1), 'base64url')
-  } catch {
-    return null
-  }
-  const expected = sig(body)
+  if (typeof token !== 'string') return null
+  const m = TOKEN_RE.exec(token)
+  if (!m) return null
+  const body = token.slice(0, token.indexOf('.'))
+  const given = Buffer.from(m[3], 'base64url')
+  const expected = sig(body).subarray(0, 16)
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null
-  try {
-    const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as {
-      s?: unknown
-      e?: unknown
-    }
-    if (typeof p.s !== 'string' || typeof p.e !== 'number') return null
-    if (p.e < Math.floor(now / 1000)) return null
-    return { s: p.s, e: p.e }
-  } catch {
-    return null
+  const e = Number.parseInt(m[2], 16)
+  if (!Number.isFinite(e) || e < Math.floor(now / 1000)) return null
+  const h = m[1]
+  return {
+    s: `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`,
+    e
   }
 }
 

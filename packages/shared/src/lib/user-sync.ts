@@ -165,7 +165,18 @@ export function useUserSync(opts: UserSyncOptions = {}): void {
     void qc.invalidateQueries({ queryKey: ['nvr-nav-favorites'] })
     onPrefs.current?.()
   }
-  useLiveEvent('prefs:changed', () => applyPrefs.current(), { includeOwn: true, debounceMs: 250 })
+  useLiveEvent(
+    'prefs:changed',
+    (p) => {
+      // A save that only touched the watch list (pins, seen marks, dock state) is the dock's
+      // business (WatchDock re-reads ['watch-list','prefs']). Re-reading the profile, the
+      // person and the presence list for it made every pin cost four identity reads.
+      const keys = Array.isArray(p?.keys) ? (p.keys as string[]) : null
+      if (keys && keys.length > 0 && keys.every((k) => k === 'watch_list')) return
+      applyPrefs.current()
+    },
+    { includeOwn: true, debounceMs: 250 }
+  )
 
   // rt4 #20 — the person's own lists (saved views, saved searches, Overview pins) and the
   // shared collection pins: refetch what is on screen, quietly (queries keep their data until

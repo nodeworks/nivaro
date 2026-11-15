@@ -248,9 +248,9 @@ useQuery({
       type: 'ul',
       items: [
         'Replies while you type. If someone posts a comment on the record while you have an unsent comment in the box, a small note above the box says "2 new replies since you started typing" and lists them — name, first words, when. Nothing scrolls; click a name to go to that reply. The note goes when you post, empty the box or close it with ✕. A field’s comment thread does the same for replies on that field.',
-        '"Seen by Beth, Mark" under a comment names the people who opened the record after it was written. Hover or click it for the full list with times. It only ever names people who may open this record — and, for a comment on one field, read that field — never the person who wrote it, and never you. People a comment mentions keep their own line ("Beth saw this 2 h ago"), so the seen line then reads "Also seen by". With live updates set to Calm or Off it shows a count ("Seen by 3") and the names on hover.',
+        '"Seen by Beth, Mark" under a comment names the people who opened the record after it was written. Hover or click it for the full list with times. It only ever names people who may open this record — and, for a comment on one field, read that field — never the person who wrote it, and never you. People a comment mentions keep their own line ("Beth saw this 2 h ago"), so the seen line then reads "Also seen by". With live updates set to Calm or Off it shows a count ("Seen by 3") and the names on hover, and the mention line becomes one summary ("3 mentioned · 2 seen").',
         'An administrator using View as never counts as the person seeing anything: opening a record or marking a notification read in a View-as tab leaves the person’s marks alone.',
-        'Who a mention reached. On a comment you wrote that mentions people, Delivery opens one line per person: Seen in app (with the time), In their notifications but not seen yet, Phone or browser alert sent, Emailed 10:42 AM, Email bounced, Teams message sent, or Muted — won’t be told (their own notification rules keep mentions out). Only the comment’s author and administrators see it; administrators also see why someone was not told.'
+        'Who a mention reached. On a comment you wrote that mentions people, Delivery opens one line per person: Seen in app (with the time), In their notifications but not seen yet, Phone or browser alert sent, Emailed 10:42 AM, Email bounced, Teams message sent, or Won’t be told (shown in amber, because it needs you to reach them another way). The mention line under your comment says the same thing ("Kim Lowe won’t be told"). Only the comment’s author and administrators see this; only administrators learn that someone muted mentions and why ("Muted — turned off in-app alerts for Mentions"). Everyone else just sees who has seen the comment.'
       ]
     },
     {
@@ -486,6 +486,11 @@ socket  ops:join {topic: "usage"}   → ops:changed {topic: "usage", at}   (≤ 
     {
       type: 'note',
       text: 'Extension UI bundles get `useLiveOps(topic, onEvent, {debounceMs, match})` on `window.__NIVARO__`, and the Account page has an `account-usage` slot: a bundle that fills it replaces the built-in Usage details card.'
+    },
+    { type: 'h2', id: 'live-admin-allowance', text: 'AI allowance (for hosting layers)' },
+    {
+      type: 'p',
+      text: 'Nivaro sets no AI allowance of its own: a self-hosted instance is never limited by it. A hosting layer can register one from an extension with `ctx.ai.registerAllowance(check)`. Before every AI provider call the check runs in the caller’s context and answers `null` (go ahead) or `{message, action_url?, resets_at?}`; a refusal stops the call with 429 `AI_ALLOWANCE_USED` and that message. A check that throws or takes over 1.5 seconds lets the call through. Extensions can read the same figures as the route with `ctx.usage.read({maxAgeMs})` — `maxAgeMs` reuses an older answer for checks that run on every write (a record limit).'
     }
   ]
 }

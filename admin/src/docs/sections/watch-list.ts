@@ -95,6 +95,23 @@ export const collabWatchList: DocSection = {
         'Unpin them when they leave my step: a record pinned that way goes again when it moves on. A record you pinned yourself always stays.'
       ]
     },
+    { type: 'h3', id: 'watch-list-completed', text: 'Remove records when they’re completed' },
+    {
+      type: 'p',
+      text: 'A list can tidy itself: when a record on it is completed, the row says “Completed” with a green check, so you see it finished, and then it leaves the list on its own.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Completed means the record reached a final step of its pipeline. For a kind of record with no pipeline, it means the same “Inactive” or “Archived” rule the pickers’ badges use.',
+        'Your own list: turn it on in Settings → Remove records when they’re completed. It starts off.',
+        'A shared list: the person who made it sets it in “Rename or change people”. New shared lists start with it on; lists made before it existed stay off until someone turns it on.',
+        'A completed record leaves 24 hours after it was completed, or as soon as you have seen it: opened it, marked it seen, or closed the list after it showed you “Completed”. On a shared list it waits the 24 hours.',
+        'If the record is reopened before it leaves, the mark goes away and it stays.',
+        'Recently removed, at the bottom of the list, keeps removed records for 7 days. Undo puts one back, and it then stays until you unpin it.',
+        'Nobody is notified when a record leaves a list.'
+      ]
+    },
     { type: 'h3', id: 'watch-list-shared', text: 'Shared lists for a team' },
     {
       type: 'ul',

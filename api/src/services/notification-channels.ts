@@ -29,8 +29,8 @@ import {
   normalizeTarget,
   resolveTargetUrl
 } from './notification-target.js'
-import { currentTraceRequestObject } from './request-trace.js'
 import { notificationIsUrgent } from './notification-urgent.js'
+import { currentTraceRequestObject } from './request-trace.js'
 import { currentTenantKey } from './tenant-rooms.js'
 import { announceNotificationsRead } from './user-sync.js'
 import { sendDevicePush } from './web-push.js'
@@ -561,7 +561,7 @@ export async function decideDelivery(
     reasons.push({
       code: 'matrix_inapp_off',
       channel: 'inapp',
-      text: `Notification rules: in-app is OFF for "${NOTIFY_CATEGORY_LABELS[category]}".`
+      text: `In-app alerts for ${NOTIFY_CATEGORY_LABELS[category]} are turned off in the notification rules.`
     })
   }
   let push = inapp
@@ -571,7 +571,7 @@ export async function decideDelivery(
       reasons.push({
         code: 'matrix_push_off',
         channel: 'push',
-        text: `Notification rules: push is OFF for "${NOTIFY_CATEGORY_LABELS[category]}".`
+        text: `Push alerts for ${NOTIFY_CATEGORY_LABELS[category]} are turned off in the notification rules.`
       })
     } else if (inQuietHours(prefs, now)) {
       if (quietOverridden(prefs, category)) {
@@ -658,14 +658,14 @@ export async function decideDelivery(
         reasons.push({
           code: 'email_off',
           channel: 'email',
-          text: `Notification rules: email is OFF for "${NOTIFY_CATEGORY_LABELS[category]}" — not sent, not summarised.`
+          text: `Email for ${NOTIFY_CATEGORY_LABELS[category]} is turned off in the notification rules — not sent, not summarised.`
         })
       } else if (mode === 'daily' && opts.cadence !== 'sender') {
         email = 'deferred'
         reasons.push({
           code: 'email_daily',
           channel: 'email',
-          text: `Notification rules: "${NOTIFY_CATEGORY_LABELS[category]}" email goes in the daily summary.`
+          text: `Email for ${NOTIFY_CATEGORY_LABELS[category]} goes in the daily summary (notification rules).`
         })
       } else if (inQuietHours(prefs, now) && !quietOverridden(prefs, category)) {
         email = 'deferred'

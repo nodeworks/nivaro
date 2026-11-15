@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
 import { useActorNames, writerOf } from './live-list'
 
 /**
@@ -7,7 +15,7 @@ import { useActorNames, writerOf } from './live-list'
  * this file decides WHEN and HOW MUCH reaches the screen:
  *
  * - Bursts (#10): an import or bulk change is one quiet pill ("Import added 500 records ·
- *   Show", "Beth updated 40 rows · Show") instead of hundreds of row flashes; Show = one
+ *   Show", "Beth updated 40 records · Show") instead of hundreds of row flashes; Show = one
  *   refetch. `createBurstTracker` / `useLiveBurst`.
  * - Pause (#11): "Pause live updates" on a list holds its feed (the button counts what is
  *   waiting) and Resume applies it in one go; remembered per list for the session.
@@ -169,20 +177,20 @@ export function createBurstTracker(
   }
 }
 
-/** "Import added 500 records" / "Beth updated 40 rows" — the pill's words (before "· Show"). */
+/** "Import added 500 records" / "Beth updated 40 records" — the pill's words (before "· Show"). */
 export function burstLabel(info: BurstInfo, who: string | null = null): string {
   const actor = who ?? (info.source === 'import' ? 'Import' : null)
   if (info.count === 0) return actor ? `${actor} changed many records` : 'Many records changed'
   const n = `${info.count.toLocaleString('en-US')}${info.approx ? '+' : ''}`
   const records = info.count === 1 && !info.approx ? 'record' : 'records'
-  const rows = info.count === 1 && !info.approx ? 'row' : 'rows'
   const kinds = [info.creates, info.updates, info.deletes].filter((c) => c > 0).length
   const only = (c: number) =>
     kinds === 1 && c > 0 && info.creates + info.updates + info.deletes === info.count
   if (only(info.creates)) return actor ? `${actor} added ${n} ${records}` : `${n} ${records} added`
   if (only(info.deletes))
     return actor ? `${actor} removed ${n} ${records}` : `${n} ${records} removed`
-  if (only(info.updates)) return actor ? `${actor} updated ${n} ${rows}` : `${n} ${rows} updated`
+  if (only(info.updates))
+    return actor ? `${actor} updated ${n} ${records}` : `${n} ${records} updated`
   return actor ? `${actor} changed ${n} ${records}` : `${n} ${records} changed`
 }
 
@@ -612,6 +620,24 @@ export function useSteadyRows<T>(
     }
     gone = new Set(plan.gone)
   }
+  // A row left the screen while the person was on the list (a held row released, or a live
+  // removal under the pointer): re-lay the table once, before paint. Chrome otherwise kept
+  // painting the pinned (sticky) cells of the rows that moved up at their old offsets —
+  // dividers and text 2–3 px out of step with the row, while their layout boxes were already
+  // right (design review 2026-11-15, measured in the browser). A removal with the pointer
+  // elsewhere paints correctly and is left alone.
+  const shownKeysRef = useRef<string[]>([])
+  const wasHoldingRef = useRef(false)
+  useLayoutEffect(() => {
+    const before = shownKeysRef.current
+    const released = wasHoldingRef.current && !holding
+    shownKeysRef.current = order
+    wasHoldingRef.current = holding
+    if (!enabled || before.length === 0) return
+    const now = new Set(order)
+    if (!before.some((k) => !now.has(k))) return
+    if (released || anchors.current()[0] != null) relayoutRows(rootRef.current)
+  })
   // What is on screen now: the next render plans against it.
   useEffect(() => {
     const byKey = new Map<string, T>()
@@ -647,6 +673,30 @@ export function useKeptEntries<V>(
     if (!prev) return current
     return { ...prev, ...current }
   }, [current, prev])
+}
+
+/** Lists longer than this skip the re-lay (its cost grows with the rows). */
+export const RELAYOUT_MAX_ROWS = 200
+
+/**
+ * Re-lay a list's table in place with no visible change: flipping `border-collapse` and back
+ * inside one task makes the browser recompute the rows and their pinned cells together.
+ * Nothing is hidden, so focus, caret, scroll position, selection and open menus stay as they
+ * are; it is skipped while anything in the table body has focus and for lists longer than
+ * RELAYOUT_MAX_ROWS. Returns whether it ran. Exported for tests.
+ */
+export function relayoutRows(root: HTMLElement | null | undefined): boolean {
+  const body = root?.querySelector('tbody')
+  const table = body?.closest('table') as HTMLElement | null | undefined
+  if (!body || !table) return false
+  if (typeof document !== 'undefined' && body.contains(document.activeElement)) return false
+  if (body.rows.length > RELAYOUT_MAX_ROWS) return false
+  const prev = table.style.borderCollapse
+  const flipped = getComputedStyle(table).borderCollapse === 'collapse' ? 'separate' : 'collapse'
+  table.style.borderCollapse = flipped
+  void table.offsetHeight
+  table.style.borderCollapse = prev
+  return true
 }
 
 // ── Totals rows follow the rows (#13) ────────────────────────────────────

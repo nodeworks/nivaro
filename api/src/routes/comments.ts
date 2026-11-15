@@ -17,7 +17,7 @@ import {
   plainFieldLabel
 } from '../services/field-comments.js'
 import { agentBadgesForComments } from '../services/mcp-attribution.js'
-import { mentionDeliveryFor } from '../services/mention-delivery.js'
+import { mentionDeliveryFor, mentionStatuses } from '../services/mention-delivery.js'
 import { mentionReceipts, receiptKey } from '../services/mention-receipts.js'
 import { sendTeamsNotification } from '../services/microsoft.js'
 import { notifyUser } from '../services/notification-channels.js'
@@ -374,6 +374,26 @@ export async function commentsRoutes(app: FastifyInstance) {
       }))
     ).catch(() => new Map())
     const me = String(req.user!.id).toUpperCase()
+    // Each mention's status (seen / in their inbox / won't be told; muted + why for admins) on
+    // the comments whose delivery this reader may see — the author's own, or every one for an
+    // administrator — so the receipt line says what the Delivery panel says.
+    const deliveryVisible = (c: { user?: string | null; deleted_at?: Date | null }) =>
+      !c.deleted_at && (!!req.isAdmin || String(c.user ?? '').toUpperCase() === me)
+    const statuses = await mentionStatuses(
+      collection,
+      String(item),
+      mentions
+        .map((m) => ({ m, c: comments.find((x) => x.id === m.comment) }))
+        .filter(({ c }) => c && deliveryVisible(c))
+        .map(({ m, c }) => ({
+          comment: m.comment,
+          user: String(m.user),
+          at: c!.created_at,
+          author: String(c!.user ?? '')
+        })),
+      receipts,
+      !!req.isAdmin
+    ).catch(() => new Map())
 
     // #3213: comments an agent posted through MCP carry its badge ("via Claude").
     const agentBadges = await agentBadgesForComments(ids).catch(() => new Map<string, string>())
@@ -411,16 +431,14 @@ export async function commentsRoutes(app: FastifyInstance) {
         first_name: m.first_name,
         last_name: m.last_name,
         email: m.email,
-        seen_at: receipts.get(receiptKey(c.id, m.user)) ?? null
+        seen_at: receipts.get(receiptKey(c.id, m.user)) ?? null,
+        ...(statuses.get(receiptKey(c.id, m.user)) ?? {})
       })),
       reactions: reactionsByComment.get(c.id) ?? [],
       seen_by: c.deleted_at ? [] : (seenBy.get(c.id) ?? []),
       // Mention delivery (realtime round 7): the author and administrators may open
       // GET /comments/:id/delivery for a comment that mentions someone.
-      delivery_visible:
-        !c.deleted_at &&
-        (mentionsByComment.get(c.id) ?? []).length > 0 &&
-        (!!req.isAdmin || String(c.user ?? '').toUpperCase() === me),
+      delivery_visible: (mentionsByComment.get(c.id) ?? []).length > 0 && deliveryVisible(c),
       // #3232: a comment left on one field ("on Amount") and whether it was resolved.
       field: c.field ?? null,
       resolved_at: c.resolved_at ?? null

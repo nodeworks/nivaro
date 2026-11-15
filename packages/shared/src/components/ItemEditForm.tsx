@@ -236,6 +236,7 @@ import {
   CoeditFormContext,
   type CoeditFormInfo,
   isCoeditInterface,
+  saveValidationScope,
   sharedTextUnderLock
 } from './item-edit/coedit/context'
 import { columnLengthError } from './item-edit/column-length'
@@ -7381,6 +7382,23 @@ function ItemEditFormView({
     [allFields]
   )
 
+  // The Clone dialog lists fields in the order the form shows them: section by
+  // section (groups in layout order), then the ungrouped ones, then the rest.
+  const cloneFields = useMemo<CMSField[]>(() => {
+    const out: CMSField[] = []
+    const seen = new Set<string>()
+    const add = (f: CMSField) => {
+      if (seen.has(f.field)) return
+      seen.add(f.field)
+      out.push(f)
+    }
+    for (const g of groups) for (const f of groupedMap[g.key] ?? []) add(f)
+    for (const f of ungroupedFields) add(f)
+    for (const f of allFields) add(f)
+    for (const f of fieldConfig ?? []) add(f)
+    return out
+  }, [groups, groupedMap, ungroupedFields, allFields, fieldConfig])
+
   const containerGroups = useMemo(() => groups.filter((g) => g.type === 'container'), [groups])
   // Legacy orphan tabs (no container) — used for layout-level tabs/steps mode
   // Conditional wizard steps (#139): a group's visible_when rules
@@ -9297,7 +9315,10 @@ function ItemEditFormView({
     }
     const errs: Record<string, string> = {}
     const changedThisSession = (k: string) => !valuesEqual(draft[k], initialDataRef.current[k])
+    // Shared text saved under someone else's lock: only the fields it sends are checked.
+    const scope = saveValidationScope(sharedTextSaveOk, unsavedSummary.fields)
     for (const f of allFields) {
+      if (scope && !scope.has(f.field)) continue
       if (f.hidden || f.readonly || SYSTEM_FIELDS.has(f.field) || isSentinelKey(f.field)) continue
       // A field the RESOLVED layout doesn't render can never be filled from
       // this form — a CAR's layout has no vendor or lines, so their required
@@ -14773,7 +14794,9 @@ function ItemEditFormView({
                                                   tab: currentRecordTab()
                                                 })}
                                                 describe={() =>
-                                                  `This ${singularTitle.toLowerCase()}`
+                                                  itemTitle && itemTitle !== title
+                                                    ? `${title} — ${itemTitle}`
+                                                    : `This ${singularTitle.toLowerCase()}`
                                                 }
                                               />
                                               <RecordInsightsButton
@@ -15347,7 +15370,7 @@ function ItemEditFormView({
                                                     <CloneDialog
                                                       collection={collection}
                                                       itemId={itemId}
-                                                      fields={fieldConfig ?? []}
+                                                      fields={cloneFields}
                                                       relations={relations}
                                                       currentValues={itemData ?? {}}
                                                       onSuccess={(newId) =>

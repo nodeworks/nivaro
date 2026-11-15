@@ -18,6 +18,13 @@ import { canSeeRecord } from '../services/sla-visibility.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
 
+/** A beacon string trimmed to what is stored (never refuse the beacon for a long value). */
+function clip(v: string | null | undefined, max: number): string | null {
+  if (v == null) return null
+  const s = String(v)
+  return s.length > max ? s.slice(0, max) : s
+}
+
 const KEY_PREFIX = 'presence:session:'
 
 /**
@@ -209,9 +216,9 @@ function embeddableScript(pingInterval: number): string {
       userId: userId || null,
       userEmail: userEmail || null,
       userName: userName || null,
-      pageUrl: location.href,
-      pageTitle: document.title,
-      referrer: document.referrer || null,
+      pageUrl: String(location.href).slice(0, 2048),
+      pageTitle: String(document.title).slice(0, 256),
+      referrer: document.referrer ? String(document.referrer).slice(0, 2048) : null,
       deviceType: deviceType(),
       screenWidth: screen.width,
       screenHeight: screen.height,
@@ -243,8 +250,8 @@ function embeddableScript(pingInterval: number): string {
   function trackView(prevDur) {
     var body = JSON.stringify({
       sessionId: sessionId, userId: userId||null, userEmail: userEmail||null,
-      userName: userName||null, pageUrl: location.href, pageTitle: document.title,
-      referrer: document.referrer||null, deviceType: deviceType(),
+      userName: userName||null, pageUrl: String(location.href).slice(0, 2048), pageTitle: String(document.title).slice(0, 256),
+      referrer: document.referrer ? String(document.referrer).slice(0, 2048) : null, deviceType: deviceType(),
       previousViewId: (prevDur!=null&&_vid)?_vid:null,
       previousDuration: (prevDur!=null)?Math.max(0,prevDur):null,
     });
@@ -394,9 +401,11 @@ export async function presencePublicRoutes(app: FastifyInstance) {
             userId: { type: ['string', 'null'], maxLength: 128 },
             userEmail: { type: ['string', 'null'], maxLength: 254 },
             userName: { type: ['string', 'null'], maxLength: 128 },
-            pageUrl: { type: 'string', maxLength: 2048 },
-            pageTitle: { type: ['string', 'null'], maxLength: 256 },
-            referrer: { type: ['string', 'null'], maxLength: 2048 },
+            // Accepted long and clipped below: a beacon is never refused for a long URL (list
+            // filters live in the query string).
+            pageUrl: { type: 'string', maxLength: 32768 },
+            pageTitle: { type: ['string', 'null'], maxLength: 4096 },
+            referrer: { type: ['string', 'null'], maxLength: 32768 },
             deviceType: { type: ['string', 'null'], maxLength: 16 },
             screenWidth: { type: ['number', 'null'] },
             screenHeight: { type: ['number', 'null'] },
@@ -442,9 +451,9 @@ export async function presencePublicRoutes(app: FastifyInstance) {
         userId: me?.id ?? null,
         userEmail: me ? me.email : null,
         userName: me ? meName || me.email : unverifiedLabel(body.userName, body.userEmail),
-        pageUrl: body.pageUrl,
-        pageTitle: body.pageTitle ?? null,
-        referrer: body.referrer ?? null,
+        pageUrl: clip(body.pageUrl, 2048) ?? '',
+        pageTitle: clip(body.pageTitle, 256),
+        referrer: clip(body.referrer, 2048),
         deviceType: body.deviceType ?? 'desktop',
         screenWidth: body.screenWidth ?? null,
         screenHeight: body.screenHeight ?? null,

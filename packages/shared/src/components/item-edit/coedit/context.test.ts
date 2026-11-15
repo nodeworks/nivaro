@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sharedTextUnderLock } from './context'
+import { saveValidationScope, sharedTextUnderLock } from './context'
 
 const base = {
   sharedFields: new Set(['considerations', 'scope']),
@@ -30,5 +30,20 @@ describe('shared text on a record someone else holds the lock on', () => {
     expect(sharedTextUnderLock({ ...base, heldByOther: false }).open).toBe(false)
     expect(sharedTextUnderLock({ ...base, sharedFields: new Set() }).open).toBe(false)
     expect(sharedTextUnderLock({ ...base, recordGone: true }).open).toBe(false)
+  })
+})
+
+describe('what Save checks', () => {
+  it('a shared-text save under a held lock checks only the fields it sends', () => {
+    const view = sharedTextUnderLock(base)
+    const scope = saveValidationScope(view.saveOk, base.unsavedFields)
+    expect(scope && [...scope]).toEqual(['considerations'])
+    // A required field elsewhere on the record (read-only to this person) is not judged.
+    expect(scope?.has('vendor')).toBe(false)
+  })
+  it('every other save checks every field', () => {
+    expect(saveValidationScope(false, ['considerations'])).toBeNull()
+    const view = sharedTextUnderLock({ ...base, heldByOther: false })
+    expect(saveValidationScope(view.saveOk, base.unsavedFields)).toBeNull()
   })
 })

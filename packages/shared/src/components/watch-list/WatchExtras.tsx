@@ -194,6 +194,15 @@ export function WatchSettingsMenu({
               onChange={(v) => void actions.setSettings({ auto_remove: v }).catch(() => {})}
             />
           </div>
+          <MenuHeading>Tidy up</MenuHeading>
+          <div className='px-3'>
+            <Toggle
+              label='Remove records when they’re completed'
+              hint='They show “Completed”, then leave 24 hours later or once you’ve seen them. Recently removed keeps them 7 days, with Undo.'
+              checked={settings.remove_completed}
+              onChange={(v) => void actions.setSettings({ remove_completed: v }).catch(() => {})}
+            />
+          </div>
         </div>
         <div className='mt-1 border-t border-border px-3 pb-2'>
           <MenuHeading>Shared lists</MenuHeading>
@@ -721,6 +730,8 @@ export function TeamEditor({
         : []
   )
   const [withReports, setWithReports] = useState(false)
+  // New lists tidy themselves; a list from before keeps what its owner chose (off until set).
+  const [removeDone, setRemoveDone] = useState<boolean>(team ? !!team.remove_completed : true)
   const [busy, setBusy] = useState(false)
   const reports = actions.prefs.direct_reports ?? 0
   const save = async () => {
@@ -729,13 +740,18 @@ export function TeamEditor({
     setBusy(true)
     try {
       if (team) {
-        await actions.editTeam(team.id, { name: n, members: people.map((p) => p.id) })
+        await actions.editTeam(team.id, {
+          name: n,
+          members: people.map((p) => p.id),
+          remove_completed: removeDone
+        })
         onClose()
       } else {
         const id = await actions.createTeam({
           name: n,
           members: people.map((p) => p.id),
-          reports: withReports
+          reports: withReports,
+          remove_completed: removeDone
         })
         if (id) onCreated(id)
         else onClose()
@@ -795,6 +811,21 @@ export function TeamEditor({
           </label>
         )}
       </div>
+      <label className='flex items-start gap-2 text-[12px] text-slate-700 dark:text-slate-200'>
+        <input
+          type='checkbox'
+          checked={removeDone}
+          onChange={(e) => setRemoveDone(e.target.checked)}
+          className='mt-0.5 h-3.5 w-3.5 rounded border-slate-300 accent-[var(--nvr-cyan,#00ceff)]'
+        />
+        <span>
+          Remove records when they’re completed
+          <span className='mt-0.5 block text-[11.5px] leading-snug text-slate-500 dark:text-slate-400'>
+            They show “Completed”, then leave the list 24 hours later. Recently removed keeps them 7
+            days, with Undo.
+          </span>
+        </span>
+      </label>
       <div className='flex items-center justify-end gap-2 pt-1'>
         <button
           type='button'

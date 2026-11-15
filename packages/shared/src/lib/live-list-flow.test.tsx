@@ -11,6 +11,8 @@ import {
   isListPaused,
   type LivePause,
   planRowOrder,
+  RELAYOUT_MAX_ROWS,
+  relayoutRows,
   resumeAsRefetch,
   setListPaused,
   totalsMayMove,
@@ -103,8 +105,8 @@ describe('burstLabel', () => {
     expect(burstLabel(info({ count: 500, creates: 500, source: 'import' }))).toBe(
       'Import added 500 records'
     )
-    expect(burstLabel(info({ count: 40, updates: 40 }), 'Beth')).toBe('Beth updated 40 rows')
-    expect(burstLabel(info({ count: 1200, updates: 1200 }))).toBe('1,200 rows updated')
+    expect(burstLabel(info({ count: 40, updates: 40 }), 'Beth')).toBe('Beth updated 40 records')
+    expect(burstLabel(info({ count: 1200, updates: 1200 }))).toBe('1,200 records updated')
     expect(burstLabel(info({ count: 30, deletes: 30 }))).toBe('30 records removed')
     expect(burstLabel(info({ count: 30, creates: 10, updates: 20 }), 'Beth')).toBe(
       'Beth changed 30 records'
@@ -391,5 +393,47 @@ describe('useKeptEntries (labels of a held row)', () => {
     act(() => root.render(<Probe m={{ a: 'Zone 3' }} />))
     expect(out).toEqual({ a: 'Zone 3', b: 'Zone 2' })
     act(() => root.unmount())
+  })
+})
+
+describe('relayoutRows', () => {
+  const build = (rows: number) => {
+    const root = document.createElement('div')
+    const table = document.createElement('table')
+    table.style.borderCollapse = 'separate'
+    const body = document.createElement('tbody')
+    for (let i = 0; i < rows; i++) {
+      const tr = document.createElement('tr')
+      const td = document.createElement('td')
+      const input = document.createElement('input')
+      td.appendChild(input)
+      tr.appendChild(td)
+      body.appendChild(tr)
+    }
+    table.appendChild(body)
+    root.appendChild(table)
+    document.body.appendChild(root)
+    return { root, table, body }
+  }
+
+  it('re-lays in place and leaves the table as it was', () => {
+    const { root, table, body } = build(3)
+    expect(relayoutRows(root)).toBe(true)
+    expect(table.style.borderCollapse).toBe('separate')
+    expect(body.style.display).toBe('')
+    expect(relayoutRows(null)).toBe(false)
+    root.remove()
+  })
+
+  it('never runs while something in the body has focus, or for very long lists', () => {
+    const focused = build(3)
+    const input = focused.body.querySelector('input') as HTMLInputElement
+    input.focus()
+    expect(relayoutRows(focused.root)).toBe(false)
+    expect(document.activeElement).toBe(input)
+    focused.root.remove()
+    const long = build(RELAYOUT_MAX_ROWS + 1)
+    expect(relayoutRows(long.root)).toBe(false)
+    long.root.remove()
   })
 })

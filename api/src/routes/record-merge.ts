@@ -38,9 +38,12 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 function sendRefusal(reply: FastifyReply, err: unknown) {
   if (err instanceof MergeRefusal)
-    return reply
-      .code(err.statusCode)
-      .send({ error: err.message, code: err.code, ...(err.record ? { record: err.record } : {}) })
+    return reply.code(err.statusCode).send({
+      error: err.message,
+      code: err.code,
+      ...(err.record ? { record: err.record } : {}),
+      ...(err.changedBy ? { changed_by: err.changedBy } : {})
+    })
   throw err
 }
 

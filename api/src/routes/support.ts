@@ -4,13 +4,14 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { singular as singularTitle } from '../services/access-words.js'
-import { logActivity } from '../services/activity.js'
+import { logActivity, logActivityThrottled } from '../services/activity.js'
 import { getCollection } from '../services/collections.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { readOne } from '../services/items.js'
 import { cleanAppLabel } from '../services/page-at.js'
 import { announceRecordHelp, loadRecordHelp } from '../services/record-help.js'
 import { collectionTitle } from '../services/record-label-fallback.js'
+import { readShare, type ShareRedis } from '../services/screen-share.js'
 import { DEFAULT_TARGETS, loadSupportAnalytics } from '../services/support-analytics.js'
 import {
   canSeeTicket,
@@ -652,6 +653,7 @@ export async function supportRoutes(app: FastifyInstance) {
       .limit(200)
       .select(
         'a.id',
+        'a.action',
         'a.comment',
         'a.user',
         'a.timestamp',
@@ -681,6 +683,8 @@ export async function supportRoutes(app: FastifyInstance) {
         })),
         history: history.map((h) => ({
           id: h.id,
+          // Lets the sheet fold one screen share's start / watch / stop rows into one line.
+          action: h.action,
           text: h.comment,
           user: h.user,
           user_name: userName(h as never),
@@ -937,13 +941,24 @@ export async function supportRoutes(app: FastifyInstance) {
     if (!t.created_at || !t.created_by) return reply.send({ data: null })
     const { ticketTraffic } = await import('../services/support-ticket-traffic.js')
     const data = await ticketTraffic(String(t.created_by), t.created_at)
-    void logActivity({
-      action: 'support-traffic-view',
-      user: viewer.id,
-      collection: 'nivaro_tasks',
-      item: String(t.id),
-      comment: 'Viewed the requester’s traffic around the ticket'
-    })
+    // An access audit row, once per ticket per viewer per screen share (or outside one, once a
+    // day) — opening the sheet again is the same look, not a new one.
+    const tenant = currentTenantKey()
+    const share = await readShare(app.redis as unknown as ShareRedis, tenant, t.id).catch(
+      () => null
+    )
+    void logActivityThrottled(
+      app.redis as unknown as Parameters<typeof logActivityThrottled>[0],
+      `support-traffic:${tenant}:${t.id}:${viewer.id}:${share?.id ?? 'none'}`,
+      share ? Math.max(60, Math.ceil((share.expires_at - Date.now()) / 1000) + 3600) : 86_400,
+      {
+        action: 'support-traffic-view',
+        user: viewer.id,
+        collection: 'nivaro_tasks',
+        item: String(t.id),
+        comment: 'Viewed the requester’s traffic around the ticket'
+      }
+    )
     return reply.send({
       data: {
         ...data,

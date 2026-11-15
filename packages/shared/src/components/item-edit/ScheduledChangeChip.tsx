@@ -1,17 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarClock } from 'lucide-react'
+import { CalendarCheck, CalendarClock, CalendarX, Loader2 } from 'lucide-react'
 import { useId, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
-import { del, get, patch } from '../../lib/commands'
+import { del, get, patch, post } from '../../lib/commands'
 import { useDeadlineNow } from '../../lib/deadline-ticker'
 import { toastError } from '../../lib/error-toast'
 import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
 import {
+  type ChipKind,
   changeSentence,
+  chipOf,
   countdownPart,
   fullSentence,
   isDue,
-  readablePending,
+  readableRecent,
   type ScheduledChangeRow,
   whenText
 } from '../../lib/scheduled-countdown'
@@ -23,20 +25,22 @@ import { formatDisplayValue } from './GroupSection'
 import type { CMSField, CMSRelation } from './types'
 
 /**
- * Countdown for scheduled changes (realtime round 7, item 12). A record with a pending
- * scheduled change (Deadlines → Scheduled changes, or the record's "Schedule a change…")
- * shows the soonest one in its header — "Status changes to Closed · in 2 h 14 m" — counted on
- * the page's shared clock; the popover says it in full ("… at 5:00 PM (scheduled by Mark)")
- * and lists every pending change, with Move / Cancel for its scheduler and administrators.
+ * Scheduled changes on a record (realtime round 7, item 12; applied on time since 2026-11-15).
+ * The header shows the soonest waiting change — "Status changes to Closed · Applies at 5:00 PM
+ * (in 2 h 14 m)" — counted on the page's shared clock. When its time comes the server applies
+ * it as the person who scheduled it (api services/scheduled-apply.ts) and the chip flips, live,
+ * to "Applying…", then "Applied: Status changes to Closed" or "Failed — <reason>" for a day.
+ * The popover lists every change with Move / Cancel (waiting) and Undo (applied, 24 h) for its
+ * scheduler and administrators.
  *
  * Read as the viewer: the list route cuts values to the fields this person may read, and a
  * change left with none is not shown. Any change to a schedule (made, moved, cancelled,
- * applied) reaches open pages as the `$scheduled` notice and the list is read again.
- * Nothing applies a change on its own at its time yet, so a passed one says it is waiting.
+ * applied, failed, undone) reaches open pages as the `$scheduled` notice and the list is read
+ * again. Where a collection does not apply them by itself, a passed one waits for an admin.
  */
 
 export function scheduledChangesKey(collection: string, itemId: string) {
-  return ['scheduled-changes', collection, itemId, 'pending'] as const
+  return ['scheduled-changes', collection, itemId, 'recent'] as const
 }
 
 function toLocalInput(iso: string): string {
@@ -44,6 +48,19 @@ function toLocalInput(iso: string): string {
   if (Number.isNaN(d.getTime())) return ''
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+const CHIP_TONE: Record<ChipKind, string> = {
+  pending:
+    'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 dark:border-border dark:bg-muted dark:text-slate-300 dark:hover:bg-muted/70',
+  applying:
+    'border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300 dark:hover:bg-sky-500/15',
+  'waiting-admin':
+    'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/15',
+  applied:
+    'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/15',
+  failed:
+    'border-red-200 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/15'
 }
 
 export function ScheduledChangeChip({
@@ -66,7 +83,7 @@ export function ScheduledChangeChip({
       client
         .request<{ data: ScheduledChangeRow[] }>(
           get(`/scheduled-changes/${collection}/${encodeURIComponent(itemId)}`, {
-            status: 'pending'
+            status: 'recent'
           })
         )
         .then((r) => r.data ?? [])
@@ -82,8 +99,8 @@ export function ScheduledChangeChip({
     },
     { includeOwn: true, debounceMs: 300 }
   )
-  const pending = useMemo(() => readablePending(data, fields), [data, fields])
-  const now = useDeadlineNow(pending.length > 0)
+  const rows = useMemo(() => readableRecent(data, fields), [data, fields])
+  const now = useDeadlineNow(rows.length > 0)
   const [open, setOpen] = useState(false)
 
   const byField = useMemo(() => new Map((fields ?? []).map((f) => [f.field, f])), [fields])
@@ -98,10 +115,29 @@ export function ScheduledChangeChip({
   const sentenceOf = (r: ScheduledChangeRow) =>
     changeSentence(r.changes ?? {}, labelOf, formatValue)
 
-  if (pending.length === 0) return null
-  const next = pending[0]
-  const due = isDue(next.scheduled_at, now)
-  const more = pending.length - 1
+  const chip = chipOf(rows, now)
+  if (!chip) return null
+  const { kind, row } = chip
+  const waiting = rows.filter((r) => r.status === 'pending' || r.status === 'applying').length
+  const more = kind === 'pending' || kind === 'applying' ? waiting - 1 : 0
+  const Icon =
+    kind === 'applied'
+      ? CalendarCheck
+      : kind === 'failed'
+        ? CalendarX
+        : kind === 'applying'
+          ? Loader2
+          : CalendarClock
+  const text =
+    kind === 'pending'
+      ? `${sentenceOf(row)} · Applies at ${whenText(row.scheduled_at, now)} (${countdownPart(row.scheduled_at, now)})`
+      : kind === 'applying'
+        ? `${sentenceOf(row)} · Applying now…`
+        : kind === 'waiting-admin'
+          ? `${sentenceOf(row)} · ${countdownPart(row.scheduled_at, now)}, waiting for an administrator`
+          : kind === 'applied'
+            ? `Applied: ${sentenceOf(row)}`
+            : `Failed — ${row.error_message || 'not applied'}`
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -109,38 +145,40 @@ export function ScheduledChangeChip({
         <button
           type='button'
           data-scheduled-chip
-          data-due={due ? '' : undefined}
-          data-tip={fullSentence(
-            sentenceOf(next),
-            whenText(next.scheduled_at, now),
-            next.created_by_name
-          )}
+          data-kind={kind}
+          aria-live='polite'
+          data-tip={
+            kind === 'pending'
+              ? fullSentence(sentenceOf(row), whenText(row.scheduled_at, now), row.created_by_name)
+              : kind === 'failed'
+                ? `${sentenceOf(row)} — not applied: ${row.error_message ?? ''}`
+                : undefined
+          }
           className={cn(
-            'inline-flex max-w-[320px] items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-medium transition-colors',
-            due
-              ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/15'
-              : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 dark:border-border dark:bg-muted dark:text-slate-300 dark:hover:bg-muted/70'
+            'inline-flex max-w-[360px] items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-medium transition-colors duration-300',
+            CHIP_TONE[kind]
           )}
         >
-          <CalendarClock
+          <Icon
             aria-hidden
-            className={cn('h-2.5 w-2.5 shrink-0', due ? 'text-amber-600' : 'text-nvr-cyan')}
+            className={cn(
+              'h-2.5 w-2.5 shrink-0',
+              kind === 'pending' && 'text-nvr-cyan',
+              kind === 'applying' && 'motion-safe:animate-spin'
+            )}
           />
-          <span className='truncate'>{sentenceOf(next)}</span>
-          <span className='shrink-0 tabular-nums opacity-80'>
-            · {countdownPart(next.scheduled_at, now)}
-          </span>
+          <span className='truncate tabular-nums'>{text}</span>
           {more > 0 && <span className='shrink-0 opacity-70'>+{more}</span>}
         </button>
       </PopoverTrigger>
       <PopoverContent align='start' className='w-[340px] p-0' data-scheduled-panel>
         <div className='border-b border-slate-100 px-3 py-2 dark:border-border'>
           <p className='text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
-            {pending.length === 1 ? 'Scheduled change' : `${pending.length} scheduled changes`}
+            {rows.length === 1 ? 'Scheduled change' : `${rows.length} scheduled changes`}
           </p>
         </div>
         <ul className='max-h-[320px] divide-y divide-slate-100 overflow-y-auto dark:divide-border'>
-          {pending.map((r) => (
+          {rows.map((r) => (
             <ScheduledRow
               key={r.id}
               row={r}
@@ -154,6 +192,54 @@ export function ScheduledChangeChip({
     </Popover>
   )
 }
+
+function StatusLine({ row, now }: { row: ScheduledChangeRow; now: number }) {
+  const status = row.status ?? 'pending'
+  const at = row.executed_at ? whenText(row.executed_at, now) : null
+  if (status === 'pending' || status === 'applying') {
+    const due = isDue(row.scheduled_at, now)
+    const words =
+      status === 'applying' || (due && row.auto_apply !== false)
+        ? `${whenText(row.scheduled_at, now)} · applying now…`
+        : due
+          ? `${whenText(row.scheduled_at, now)} · ${countdownPart(row.scheduled_at, now)} — waiting for an administrator`
+          : `Applies at ${whenText(row.scheduled_at, now)} · ${countdownPart(row.scheduled_at, now)}`
+    return (
+      <p
+        className={cn(
+          'mt-0.5 text-[11.5px] tabular-nums',
+          due && row.auto_apply === false
+            ? 'text-amber-700 dark:text-amber-300'
+            : 'text-slate-500 dark:text-slate-400'
+        )}
+      >
+        {words}
+      </p>
+    )
+  }
+  if (status === 'executed')
+    return (
+      <p className='mt-0.5 text-[11.5px] tabular-nums text-emerald-700 dark:text-emerald-400'>
+        Applied{at ? ` at ${at}` : ''}
+        {row.applied_on_time === false ? ' by an administrator' : ''}
+      </p>
+    )
+  if (status === 'failed')
+    return (
+      <p className='mt-0.5 text-[11.5px] text-red-700 dark:text-red-400'>
+        Not applied{at ? ` (${at})` : ''}: {row.error_message || 'it was refused'}. Nothing on the
+        record was changed.
+      </p>
+    )
+  return (
+    <p className='mt-0.5 text-[11.5px] tabular-nums text-slate-500 dark:text-slate-400'>
+      Undone{at ? ` at ${at}` : ''}
+    </p>
+  )
+}
+
+const ROW_BUTTON =
+  'rounded px-1.5 py-0.5 text-[11.5px] font-medium text-slate-600 hover:bg-muted dark:text-slate-300'
 
 function ScheduledRow({
   row,
@@ -170,7 +256,7 @@ function ScheduledRow({
   const id = useId()
   const [moving, setMoving] = useState(false)
   const [at, setAt] = useState(() => toLocalInput(row.scheduled_at))
-  const due = isDue(row.scheduled_at, now)
+  const status = row.status ?? 'pending'
   const cancel = useMutation({
     mutationFn: () => client.request(del(`/scheduled-changes/${encodeURIComponent(row.id)}`)),
     onSuccess: onChanged,
@@ -190,27 +276,31 @@ function ScheduledRow({
     },
     onError: (e) => toastError(e, 'Could not move the change')
   })
+  const undo = useMutation({
+    mutationFn: () =>
+      client.request(post(`/scheduled-changes/${encodeURIComponent(row.id)}/undo`, {})),
+    onSuccess: onChanged,
+    onError: (e) => toastError(e, 'Could not undo the change')
+  })
   const atValid = at !== '' && !Number.isNaN(new Date(at).getTime())
+  const undoOpen =
+    status === 'executed' &&
+    row.can_undo === true &&
+    !!row.undo_until &&
+    new Date(row.undo_until).getTime() > now
   return (
-    <li className='px-3 py-2.5' data-scheduled-row={row.id}>
+    <li className='px-3 py-2.5' data-scheduled-row={row.id} data-status={status}>
       <p className='text-[12.5px] font-medium leading-snug text-slate-800 dark:text-slate-100'>
         {sentence}
       </p>
-      <p
-        className={cn(
-          'mt-0.5 text-[11.5px] tabular-nums',
-          due ? 'text-amber-700 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'
-        )}
-      >
-        {whenText(row.scheduled_at, now)} · {countdownPart(row.scheduled_at, now)}
-        {due && ' — waiting to be applied'}
-      </p>
+      <StatusLine row={row} now={now} />
       {row.created_by_name && (
         <p className='mt-0.5 text-[11px] text-slate-500 dark:text-slate-400'>
           Scheduled by {row.created_by_name}
         </p>
       )}
       {row.can_manage &&
+        status === 'pending' &&
         (moving ? (
           <div className='mt-2 flex items-center gap-1.5'>
             <label htmlFor={id} className='sr-only'>
@@ -241,11 +331,7 @@ function ScheduledRow({
           </div>
         ) : (
           <div className='mt-1.5 flex items-center gap-1'>
-            <button
-              type='button'
-              onClick={() => setMoving(true)}
-              className='rounded px-1.5 py-0.5 text-[11.5px] font-medium text-slate-600 hover:bg-muted dark:text-slate-300'
-            >
+            <button type='button' onClick={() => setMoving(true)} className={ROW_BUTTON}>
               Move…
             </button>
             <ConfirmButton
@@ -253,13 +339,30 @@ function ScheduledRow({
               disabled={cancel.isPending}
               title='Cancel this change'
               confirmLabel='Cancel it?'
-              className='rounded px-1.5 py-0.5 text-[11.5px] font-medium text-slate-600 hover:bg-muted dark:text-slate-300'
+              className={ROW_BUTTON}
               armedClassName='rounded px-1.5 py-0.5 text-[11.5px] font-medium text-red-600 bg-red-50 dark:bg-red-500/10 dark:text-red-400'
             >
               Cancel change
             </ConfirmButton>
           </div>
         ))}
+      {undoOpen && (
+        <div className='mt-1.5 flex items-center gap-2'>
+          <ConfirmButton
+            onConfirm={() => undo.mutate()}
+            disabled={undo.isPending}
+            title='Put back the values this change replaced'
+            confirmLabel='Undo it?'
+            className={ROW_BUTTON}
+            armedClassName='rounded px-1.5 py-0.5 text-[11.5px] font-medium text-amber-800 bg-amber-50 dark:bg-amber-500/10 dark:text-amber-300'
+          >
+            Undo
+          </ConfirmButton>
+          <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+            until {whenText(row.undo_until as string, now)}
+          </span>
+        </div>
+      )}
     </li>
   )
 }

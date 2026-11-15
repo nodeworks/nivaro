@@ -6,6 +6,8 @@ import {
   __resetScreenShare,
   createFrameAssembler,
   FLUSH_MS,
+  foldShareHistory,
+  historyLine,
   packBatch,
   type ScreenShareInfo,
   type ScreenShareTransport,
@@ -224,10 +226,18 @@ describe('stopping', () => {
     const tr = fakeTransport()
     const rec = fakeRecord()
     const rt = { loadRecord: async () => rec.record as never, loadReplayer: async () => null }
-    await startScreenShare({ share: SHARE, transport: tr.t, runtime: rt, win: null, now: () => 0 })
-    await vi.advanceTimersByTimeAsync(30 * 60_000)
+    // The deadline is the share's expires_at (30 minutes in real life; 3 s here, same code path).
+    await startScreenShare({
+      share: { ...SHARE, expires_at: 3_000 },
+      transport: tr.t,
+      runtime: rt,
+      win: null,
+      now: () => 0
+    })
+    await vi.advanceTimersByTimeAsync(3_000)
     expect(screenShareRunning()).toBe(false)
     expect(tr.stops).toHaveLength(1)
+    expect(tr.stops[0][2]).toBe('expired')
     await vi.advanceTimersByTimeAsync(5_000)
 
     await startScreenShare({ share: SHARE, transport: tr.t, runtime: rt, win: window })
@@ -262,5 +272,92 @@ describe('frames on the wire', () => {
     expect(
       screenEvents([{ type: 0 }, { type: 1 }, { type: 2 }, { type: 3 }, { type: 4 }, { type: 5 }])
     ).toEqual([{ type: 2 }, { type: 3 }, { type: 4 }])
+  })
+})
+
+describe('ticket history', () => {
+  const row = (
+    id: number,
+    action: string | null,
+    text: string,
+    user_name: string | null = 'Rita'
+  ) => ({
+    id,
+    action,
+    text,
+    user_name,
+    at: `2026-11-15T06:0${id}:00Z`
+  })
+
+  it('folds one share into one line and keeps every other row', () => {
+    const out = foldShareHistory([
+      row(1, 'update', 'Picked up by Beth · In progress', 'Beth'),
+      row(2, 'screen-share-start', 'Started sharing their screen with Beth'),
+      row(3, 'support-traffic-view', 'Viewed the requester traffic', 'Beth'),
+      row(4, 'screen-share-watch', "Watched Rita's shared screen", 'Beth'),
+      row(
+        5,
+        'screen-share-stop',
+        'Screen share ended: sharing stopped when the page closed (4 min)',
+        null
+      ),
+      row(6, 'screen-share-start', 'Started sharing their screen with Beth'),
+      row(7, 'screen-share-stop', 'Stopped sharing their screen (1 min)')
+    ])
+    expect(out.map((r) => r.text)).toEqual([
+      'Picked up by Beth · In progress',
+      'Shared their screen with Beth · 4 min · watched · ended when the page closed',
+      'Viewed the requester traffic',
+      'Shared their screen with Beth · 1 min · not watched'
+    ])
+    expect(out[1].user_name).toBe('Rita')
+  })
+
+  it('names a watcher who is not the shared-with person; a live unwatched share = not opened yet', () => {
+    const out = foldShareHistory([
+      row(1, 'screen-share-start', 'Started sharing their screen with the Desk team'),
+      row(2, 'screen-share-watch', "Watched Rita's shared screen", 'Tom'),
+      row(3, 'screen-share-stop', 'Stopped sharing their screen (2 min)'),
+      row(4, 'screen-share-start', 'Started sharing their screen with Beth')
+    ])
+    expect(out.map((r) => r.text)).toEqual([
+      'Shared their screen with the Desk team · 2 min · watched by Tom',
+      'Sharing their screen with Beth now · not opened yet'
+    ])
+  })
+
+  it('a share still running reads as now', () => {
+    const out = foldShareHistory([
+      row(1, 'screen-share-start', 'Started sharing their screen with Beth'),
+      row(2, 'screen-share-watch', "Watched Rita's shared screen", 'Beth')
+    ])
+    expect(out.map((r) => r.text)).toEqual(['Sharing their screen with Beth now · watching now'])
+  })
+})
+
+describe('history worded per reader', () => {
+  const look = {
+    action: 'support-traffic-view',
+    text: 'Viewed the requester traffic',
+    user_name: 'Beth'
+  }
+  it('the requester reads what support looked at as their own activity', () => {
+    expect(historyLine(look, { isRequester: true, requesterName: 'Rita' })).toEqual({
+      text: 'Beth looked at your recent activity around this ticket',
+      showAuthor: false
+    })
+  })
+  it('support reads whose activity it was', () => {
+    expect(historyLine(look, { isRequester: false, requesterName: 'Rita' })).toEqual({
+      text: "Beth viewed Rita's activity around the ticket",
+      showAuthor: false
+    })
+  })
+  it('other rows are unchanged', () => {
+    const r = { action: 'update', text: 'Picked up by Beth', user_name: 'Beth' }
+    expect(historyLine(r, { isRequester: true, requesterName: 'Rita' })).toEqual({
+      text: 'Picked up by Beth',
+      showAuthor: true
+    })
   })
 })

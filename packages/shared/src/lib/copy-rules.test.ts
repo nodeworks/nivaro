@@ -1,6 +1,13 @@
 import { QueryClient } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
-import { childCopySkip, copyRulesQuery, fetchCopySkip, headerCopySkip } from './copy-rules'
+import {
+  childCopySkip,
+  copyRulesQuery,
+  fetchCopySkip,
+  fieldTitle,
+  groupNeverCopied,
+  headerCopySkip
+} from './copy-rules'
 
 const skip = {
   request_state: 'pipeline-state',
@@ -32,6 +39,41 @@ describe('copy rule sets', () => {
   it('no rule (unreadable) leaves nothing out', () => {
     expect(headerCopySkip(null).size).toBe(0)
     expect(childCopySkip(undefined).size).toBe(0)
+  })
+})
+
+describe('groupNeverCopied / fieldTitle', () => {
+  it('splits camelCase and snake_case into a label', () => {
+    expect(fieldTitle('markComplete')).toBe('Mark Complete')
+    expect(fieldTitle('workflow_state')).toBe('Workflow State')
+    expect(fieldTitle('isStateChange')).toBe('Is State Change')
+  })
+
+  it('groups the never-copied fields by reason, real fields only, lists left out', () => {
+    const groups = groupNeverCopied(
+      {
+        request_state: 'pipeline-state',
+        order_number: 'do-not-duplicate',
+        triggerMdsi: 'hidden',
+        lines: 'list',
+        created_at: 'audit',
+        mdsi_units_shipped: 'rollup'
+      },
+      [
+        { field: 'request_state', label: 'State' },
+        { field: 'order_number' },
+        { field: 'triggerMdsi' },
+        { field: 'lines' },
+        { field: 'created_at' },
+        { field: 'mdsi_units_shipped' }
+      ]
+    )
+    expect(groups.map((g) => [g.label, g.fields.map((f) => f.label)])).toEqual([
+      ['Workflow step', ['State']],
+      ['Marked “do not duplicate”', ['Order Number']],
+      ['Totals from lines', ['Mdsi Units Shipped']],
+      ['Hidden', ['Trigger Mdsi']]
+    ])
   })
 })
 

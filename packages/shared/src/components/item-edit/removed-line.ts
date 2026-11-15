@@ -72,6 +72,13 @@ export function removedLineText(
   return `${who.charAt(0).toUpperCase()}${who.slice(1)} removed this line`
 }
 
+/** A line's label without the separators an empty display template leaves ("· Line" → "Line"). */
+export function cleanLineLabel(label: string | null | undefined): string {
+  return String(label ?? '')
+    .replace(/^[\s·•|,;:–—-]+|[\s·•|,;:–—-]+$/g, '')
+    .replace(/\s*·\s*·\s*/g, ' · ')
+}
+
 /** The values a "Restore as new line" starts from: the line as it was, with the person's
  *  input over it; a linked record becomes its id, nested lists are left out. Pure. */
 export function restorableLine(

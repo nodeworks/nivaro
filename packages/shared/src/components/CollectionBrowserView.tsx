@@ -140,8 +140,8 @@ import {
 } from '../lib/list-return'
 import { expandCoalesced, LIVE_ASPECTS, useLiveEvent } from '../lib/live'
 import { createCoalescer } from '../lib/live-counts'
-import { useLiveLinkLabels } from '../lib/live-link-labels'
 import { movingRowTitle, useRowGlide, useSteadyGroups } from '../lib/live-groups'
+import { useLiveLinkLabels } from '../lib/live-link-labels'
 import {
   conditionFields,
   flashRows,
@@ -300,7 +300,6 @@ import { mergeFilterOptions, relationFilterRequests } from './cbv-relation-filte
 import { canOpenChatRoom, discussRecord, useRecordRoomTypes } from './chat/chat-core'
 import { FilterControl } from './DataTable'
 import { FocusModeToggle } from './FocusModeToggle'
-import { OverflowRail } from './OverflowRail'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill, fulfilmentFigures } from './FulfilmentPill'
 import { HScrollProxy } from './HScrollProxy'
 import { InStepCell } from './InStep'
@@ -321,6 +320,7 @@ import { ListViewers } from './list/ListViewers'
 import { MapView } from './MapView'
 import { MergeRecordsDialog } from './merge/MergeRecordsDialog'
 import { useMergeAllowed } from './merge/MergeWithFlow'
+import { OverflowRail } from './OverflowRail'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
   PICKER_EXCLUDED_TITLE,
@@ -8900,6 +8900,9 @@ export function CollectionBrowserView({
             priority ones move into ⋯ as the toolbar narrows (measured, OverflowRail). */}
         <OverflowRail
           moreLabel='More list actions'
+          // Who else is on this list: pinned before the buttons, never folded into ⋯ (its
+          // kept-empty slot reads as free space there, not a gap between buttons).
+          lead={viewersInHeader ? undefined : <ListViewers kind='list' id={collection} />}
           items={[
             {
               key: 'changed',
@@ -9097,15 +9100,6 @@ export function CollectionBrowserView({
                 />
               )
             },
-            ...(!viewersInHeader
-              ? [
-                  {
-                    key: 'viewers',
-                    priority: 50,
-                    node: <ListViewers kind='list' id={collection} />
-                  }
-                ]
-              : []),
             ...(isAdmin && bc.copy_as !== false
               ? [
                   {

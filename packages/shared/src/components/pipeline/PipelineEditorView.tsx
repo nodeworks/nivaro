@@ -2365,9 +2365,11 @@ function StateCensusChips({
         const name = c.collection === 'nivaro_addendums' ? 'Addendums' : titleCase(c.collection)
         const body = (
           <>
-            <b className='font-semibold text-slate-800'>{c.count.toLocaleString('en-US')}</b>
-            {many.length > 1 || system ? ` ${name}` : c.count === 1 ? ' record' : ' records'}
-            {hint ? <span className='text-slate-400'> · {hint}</span> : null}
+            <b className='font-semibold text-slate-800 dark:text-slate-100'>
+              {c.count.toLocaleString('en-US')}
+            </b>
+            {` ${name}`}
+            {hint ? <span className='text-slate-400 dark:text-slate-500'> · {hint}</span> : null}
           </>
         )
         return system ? (
@@ -2380,7 +2382,8 @@ function StateCensusChips({
             type='button'
             onClick={() => onOpen(stateListPath(c.collection, s.key))}
             data-tip={`Open the ${name} sitting in ${s.label}`}
-            className={`${chip} transition-colors hover:border-nvr-cyan/50 hover:bg-nvr-cyan/5 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan`}
+            data-tip-side='right'
+            className={`${chip} transition-colors hover:border-nvr-cyan/50 hover:bg-nvr-cyan/5 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:hover:border-nvr-cyan/50 dark:hover:bg-nvr-cyan/10 dark:hover:text-slate-100`}
           >
             {body}
           </button>

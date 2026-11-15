@@ -71,18 +71,26 @@ const fullName = (r: { ref?: string; id: string; label: string; draft?: boolean 
 }
 
 /** A server refusal's code and sentence, from either client error shape. */
-function refusalOf(err: unknown): { code: string | null; message: string } | null {
-  const r = (
-    err as {
-      response?: { code?: unknown; error?: unknown; data?: { code?: unknown; error?: unknown } }
-    } | null
-  )?.response
+interface Refusal {
+  code: string | null
+  message: string
+  record: string | null
+  changedBy: string | null
+}
+
+function refusalOf(err: unknown): Refusal | null {
+  type Body = { code?: unknown; error?: unknown; record?: unknown; changed_by?: unknown }
+  const r = (err as { response?: Body & { data?: Body } } | null)?.response
   if (!r) return null
-  const code = r.code ?? r.data?.code
-  const message = r.error ?? r.data?.error
+  const pick = (k: keyof Body) => {
+    const v = r[k] ?? r.data?.[k]
+    return typeof v === 'string' ? v : null
+  }
   return {
-    code: typeof code === 'string' ? code : null,
-    message: typeof message === 'string' ? message : ''
+    code: pick('code'),
+    message: pick('error') ?? '',
+    record: pick('record'),
+    changedBy: pick('changed_by')
   }
 }
 
@@ -252,6 +260,7 @@ function MergeBody({
           onClose={onClose}
           onMerged={onMerged}
           onStale={() => planQuery.refetch()}
+          refreshing={planQuery.isFetching}
           onStep={setStep}
         />
       )}
@@ -289,7 +298,8 @@ function MergeEditor({
   onClose,
   onMerged,
   onStale,
-  onStep
+  onStep,
+  refreshing = false
 }: {
   collection: string
   plan: MergePlan
@@ -302,6 +312,8 @@ function MergeEditor({
   onStale: () => Promise<unknown>
   /** The step shown (the dialog header follows it). */
   onStep?: (step: Step) => void
+  /** The records are being read again (after a stale refusal). */
+  refreshing?: boolean
 }) {
   const client = useNivaroClient()
   const nav = useItemNavigation()
@@ -328,17 +340,27 @@ function MergeEditor({
 
   // Someone else changed a record while the person was merging (409 MERGE_STALE): the
   // columns are read again and the picks kept wherever that field did not change.
-  const [staleNote, setStaleNote] = useState<string | null>(null)
+  const [stale, setStale] = useState<{
+    who: string | null
+    record: string | null
+    message: string
+  } | null>(null)
+  /** `<record id>\u0001<field>` of every value someone else changed (marked in the grid). */
+  const [changedCells, setChangedCells] = useState<Set<string>>(() => new Set())
   const prevRecords = useRef(records)
   useEffect(() => {
     const prev = prevRecords.current
     if (prev === records) return
     prevRecords.current = records
     const before = new Map(prev.map((r) => [r.id, r]))
+    const cells = new Set<string>()
+    for (const f of plan.fields)
+      for (const r of records)
+        if (!r.draft && !sameValue(before.get(r.id)?.values[f.field], r.values[f.field]))
+          cells.add(`${r.id}\u0001${f.field}`)
+    setChangedCells(cells)
     const changedFields = plan.fields
-      .filter((f) =>
-        records.some((r) => !sameValue(before.get(r.id)?.values[f.field], r.values[f.field]))
-      )
+      .filter((f) => records.some((r) => cells.has(`${r.id}\u0001${f.field}`)))
       .map((f) => f.field)
     if (changedFields.length === 0) return
     const fresh = defaultPicks(plan, survivor ?? '', records)
@@ -384,6 +406,17 @@ function MergeEditor({
   const setRole = (id: string, role: RecordRole) => {
     if (role === 'keep') return chooseSurvivor(id)
     setRoles((prev) => ({ ...prev, [id]: role }))
+    // A record left out of the merge lends no values: its picks go back to the kept record.
+    if (role === 'leave' && survivor) {
+      const s0 = records.find((r) => r.id === survivor)
+      setPicks((prev) => {
+        const next = { ...prev }
+        for (const f of plan.fields)
+          if (next[f.field]?.source === id)
+            next[f.field] = { source: survivor, value: s0?.values[f.field] ?? null }
+        return next
+      })
+    }
   }
   const pick = (field: string, p: FieldPick) => {
     setPicks((prev) => ({ ...prev, [field]: p }))
@@ -465,11 +498,12 @@ function MergeEditor({
         onMerged?.({ survivor, merge_id: r.data.merge_id, discarded: r.data.discarded })
       }
       setStep('done')
-      setStaleNote(null)
+      setStale(null)
+      setChangedCells(new Set())
     } catch (err) {
       const refusal = refusalOf(err)
       if (refusal?.code === 'MERGE_STALE') {
-        setStaleNote(refusal.message)
+        setStale({ who: refusal.changedBy, record: refusal.record, message: refusal.message })
         setStep('choose')
         await onStale()
       } else setError(err)
@@ -520,6 +554,16 @@ function MergeEditor({
       <div className='min-h-0 flex-1 overflow-auto overscroll-contain' data-merge-step={step}>
         {step === 'choose' ? (
           <div className='px-6 pb-8 max-sm:px-4' data-merge-grid>
+            {stale && (
+              <StaleCallout
+                stale={stale}
+                record={records.find((r) => r.id === stale.record) ?? null}
+                fields={plan.fields
+                  .filter((f) => changedCells.has(`${stale.record}\u0001${f.field}`))
+                  .map((f) => f.label)}
+                refreshing={refreshing}
+              />
+            )}
             <RecordHeaders
               records={records}
               roles={roles}
@@ -542,6 +586,7 @@ function MergeEditor({
                   pickValue={picks[f.field]}
                   labels={plan.labels[f.field]}
                   onPick={(p) => pick(f.field, p)}
+                  changed={changedCells}
                 />
               ))}
             </div>
@@ -549,7 +594,7 @@ function MergeEditor({
               <button
                 type='button'
                 onClick={() => setShowSame((v) => !v)}
-                className='mt-3 rounded-md px-1 text-[12px] font-medium text-slate-500 underline decoration-slate-300 underline-offset-4 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:decoration-border dark:hover:text-foreground'
+                className='mt-3 rounded-sm text-[12px] font-medium text-slate-500 underline decoration-slate-300 underline-offset-4 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:decoration-border dark:hover:text-foreground'
                 data-merge-show-same
               >
                 {showSame
@@ -593,19 +638,6 @@ function MergeEditor({
         )}
       </div>
       <footer className='shrink-0 border-t border-slate-200 bg-slate-50/80 px-6 py-3 dark:border-border dark:bg-muted/30 max-sm:px-4'>
-        {staleNote && (
-          <p
-            className='mb-3 flex gap-1.5 text-[12.5px] text-amber-800 dark:text-amber-300'
-            role='status'
-            data-merge-stale
-          >
-            <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
-            <span>
-              {staleNote} The columns now show the record as it is; your choices are kept wherever
-              that field did not change.
-            </span>
-          </p>
-        )}
         {error != null && <ErrorNotice error={error} fallback='Could not merge' className='mb-3' />}
         <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
           <p
@@ -684,7 +716,7 @@ function MergeEditor({
               <Button
                 type='button'
                 size='sm'
-                className='gap-1.5 bg-nvr-cyan text-white hover:bg-nvr-cyan-dark'
+                className='gap-1.5 bg-nvr-cyan text-white hover:bg-nvr-cyan-dark disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:bg-transparent dark:disabled:text-slate-500 dark:disabled:ring-1 dark:disabled:ring-inset dark:disabled:ring-slate-700 dark:disabled:opacity-50'
                 disabled={!canReview}
                 onClick={() => {
                   setError(null)
@@ -699,7 +731,7 @@ function MergeEditor({
               <Button
                 type='button'
                 size='sm'
-                className='gap-1.5 bg-nvr-cyan text-white hover:bg-nvr-cyan-dark'
+                className='gap-1.5 bg-nvr-cyan text-white hover:bg-nvr-cyan-dark disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:bg-transparent dark:disabled:text-slate-500 dark:disabled:ring-1 dark:disabled:ring-inset dark:disabled:ring-slate-700 dark:disabled:opacity-50'
                 disabled={busy || !canReview}
                 onClick={() => void apply()}
                 data-merge-apply
@@ -720,6 +752,53 @@ function MergeEditor({
         </div>
       </footer>
     </>
+  )
+}
+
+/** Someone changed a record while the person was merging: who, which record, which fields. */
+function StaleCallout({
+  stale,
+  record,
+  fields,
+  refreshing
+}: {
+  stale: { who: string | null; record: string | null; message: string }
+  record: MergePlanRecord | null
+  fields: string[]
+  refreshing: boolean
+}) {
+  return (
+    <div
+      className='mt-4 flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3 text-[12.5px] leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100'
+      role='status'
+      data-merge-stale
+    >
+      <AlertTriangle
+        className='mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400'
+        aria-hidden
+      />
+      <div className='min-w-0'>
+        {record ? (
+          <p>
+            <strong className='font-semibold'>{stale.who ?? 'Someone'}</strong> changed{' '}
+            <strong className='font-semibold'>{fullName(record)}</strong>
+            {fields.length > 0 && ` (${fields.join(', ')})`} while you were merging.
+          </p>
+        ) : (
+          <p>{stale.message}</p>
+        )}
+        <p className='mt-0.5 text-amber-800/90 dark:text-amber-200/80'>
+          {refreshing ? (
+            <span className='inline-flex items-center gap-1.5'>
+              <Loader2 className='h-3 w-3 animate-spin' aria-hidden />
+              Reading the records again…
+            </span>
+          ) : (
+            'The columns now show it as it is — changed values are marked. Your choices are kept wherever that field did not change; review them and merge again.'
+          )}
+        </p>
+      </div>
+    </div>
   )
 }
 
@@ -802,7 +881,7 @@ function RecordHeader({
           ? 'border-nvr-cyan/50 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06)] dark:bg-card'
           : role === 'discard'
             ? 'border-dashed border-slate-300 bg-slate-50 dark:border-border dark:bg-muted/40'
-            : 'border-slate-200 bg-white dark:border-border dark:bg-card'
+            : 'border-dashed border-slate-200 bg-slate-50/60 dark:border-border dark:bg-muted/20'
       )}
       data-merge-record={record.id}
       data-merge-role={role}
@@ -811,7 +890,7 @@ function RecordHeader({
         <span
           className={cn(
             'shrink-0 text-[13px] font-semibold tabular-nums',
-            role === 'discard'
+            role === 'discard' && !record.draft
               ? 'text-slate-500 line-through decoration-slate-300 dark:text-muted-foreground dark:decoration-border'
               : 'text-slate-900 dark:text-foreground'
           )}
@@ -824,14 +903,14 @@ function RecordHeader({
         >
           {record.label}
         </span>
-        {record.draft && (
-          <span className='shrink-0 rounded bg-amber-100 px-1.5 py-px text-[10.5px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'>
-            Not saved
-          </span>
-        )}
       </div>
-      {(record.created_at || record.state) && (
+      {(record.created_at || record.state || record.draft) && (
         <div className='mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-slate-500 dark:text-muted-foreground'>
+          {record.draft && (
+            <span className='shrink-0 rounded bg-amber-100 px-1.5 text-[10.5px] font-medium leading-4 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'>
+              Not saved
+            </span>
+          )}
           {record.created_at && (
             <span className='tabular-nums'>Created {formatDate(record.created_at)}</span>
           )}
@@ -929,7 +1008,8 @@ function FieldRow({
   survivor,
   pickValue,
   labels,
-  onPick
+  onPick,
+  changed
 }: {
   field: MergePlanField
   records: MergePlanRecord[]
@@ -938,9 +1018,12 @@ function FieldRow({
   pickValue: FieldPick | undefined
   labels: Record<string, string> | undefined
   onPick: (p: FieldPick) => void
+  /** Values someone else changed while the screen was open (`<id>\u0001<field>`). */
+  changed?: ReadonlySet<string>
 }) {
   const [editing, setEditing] = useState(false)
-  const values = records.map((r) => r.values[field.field])
+  // A record left out of the merge lends nothing: its values do not combine either.
+  const values = records.filter((r) => roles[r.id] !== 'leave').map((r) => r.values[field.field])
   const combined = useMemo(() => combineValues(field, values), [field, values])
   const canCombine =
     field.writable && combined != null && !values.some((v) => sameValue(v, combined))
@@ -982,7 +1065,9 @@ function FieldRow({
         const v = r.values[field.field]
         const text = displayValue(field, v, labels)
         const chosen = pickValue?.source === r.id
-        const disabled = !field.writable && r.id !== survivor
+        const left = roles[r.id] === 'leave'
+        const disabled = left || (!field.writable && r.id !== survivor)
+        const isChanged = !!changed?.has(`${r.id}\u0001${field.field}`)
         return (
           // biome-ignore lint/a11y/useSemanticElements: a segmented choice drawn as buttons, not a form input
           <button
@@ -990,7 +1075,7 @@ function FieldRow({
             type='button'
             role='radio'
             aria-checked={chosen}
-            aria-label={`${field.label} from ${r.label}: ${text ?? 'empty'}`}
+            aria-label={`${field.label} from ${refOf(r)}: ${text ?? 'empty'}${isChanged ? ' (changed)' : ''}`}
             disabled={disabled}
             onClick={() => onPick({ source: r.id, value: v ?? null })}
             className={cn(
@@ -1000,7 +1085,9 @@ function FieldRow({
                 : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground/85 dark:hover:border-slate-500 dark:hover:bg-muted/50',
               roles[r.id] === 'discard' && !chosen && 'opacity-80',
               disabled &&
-                'opacity-60 hover:border-slate-200 hover:bg-white dark:hover:border-border dark:hover:bg-card'
+                'opacity-60 hover:border-slate-200 hover:bg-white dark:hover:border-border dark:hover:bg-card',
+              left && 'border-dashed opacity-40',
+              isChanged && 'ring-2 ring-amber-400/70 dark:ring-amber-400/60'
             )}
             data-merge-cell={r.id}
           >
@@ -1009,7 +1096,7 @@ function FieldRow({
                 'mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border',
                 chosen
                   ? 'border-nvr-cyan bg-nvr-cyan text-white'
-                  : 'border-slate-300 bg-white dark:border-border dark:bg-card'
+                  : 'border-slate-400 bg-white dark:border-slate-400 dark:bg-card'
               )}
               aria-hidden
             >
@@ -1017,7 +1104,7 @@ function FieldRow({
             </span>
             <span className='min-w-0 flex-1'>
               <span className='mb-0.5 block text-[10.5px] font-medium text-slate-400 md:hidden'>
-                {r.label}
+                {refOf(r)}
               </span>
               {text == null ? (
                 <span className='text-slate-400 dark:text-muted-foreground/70'>Empty</span>
@@ -1025,6 +1112,11 @@ function FieldRow({
                 <span className='line-clamp-3 whitespace-pre-line break-words'>{text}</span>
               )}
             </span>
+            {isChanged && (
+              <span className='shrink-0 rounded bg-amber-100 px-1.5 py-px text-[10.5px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'>
+                Changed
+              </span>
+            )}
           </button>
         )
       })}
@@ -1202,7 +1294,7 @@ function RelationsSection({
                   {r.label}
                 </div>
                 <div className='text-[11.5px] tabular-nums text-slate-500 dark:text-muted-foreground'>
-                  {counts.map((x) => `${x.n.toLocaleString()} on ${x.d.label}`).join(' · ')}
+                  {counts.map((x) => `${x.n.toLocaleString()} on ${refOf(x.d)}`).join(' · ')}
                 </div>
                 {r.reason && (
                   <div
@@ -1221,7 +1313,7 @@ function RelationsSection({
               <div
                 role='radiogroup'
                 aria-label={r.label}
-                className='inline-flex rounded-md border border-slate-200 bg-slate-100/70 p-0.5 dark:border-border dark:bg-muted/60'
+                className='grid w-full grid-cols-2 rounded-md border border-slate-200 bg-slate-100/70 p-0.5 dark:border-border dark:bg-muted/60 sm:w-[28rem]'
               >
                 {(['move', 'leave'] as const).map((v) => {
                   const on = choice === v
@@ -1236,7 +1328,7 @@ function RelationsSection({
                       disabled={disabled}
                       onClick={() => onMove(r.key, v)}
                       className={cn(
-                        'h-7 whitespace-nowrap rounded px-2.5 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-40',
+                        'min-h-7 truncate rounded px-2.5 py-1 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-40',
                         on
                           ? 'bg-white font-semibold text-slate-900 shadow-sm ring-1 ring-slate-300 dark:bg-slate-700 dark:text-white dark:ring-slate-500'
                           : 'text-slate-600 hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
@@ -1289,7 +1381,7 @@ function ReviewView({
   const realDiscarded = discarded.filter((d) => !d.draft)
   const names = (rs: MergePlanRecord[]) => rs.map((r) => fullName(r)).join(', ')
   return (
-    <div className='max-w-[64rem] space-y-6 px-6 py-6 max-sm:px-4' data-merge-review-view>
+    <div className='space-y-6 px-6 py-6 max-sm:px-4' data-merge-review-view>
       <ul className='space-y-2.5 text-[13px] leading-relaxed text-slate-700 dark:text-foreground/90'>
         <li className='flex gap-2.5'>
           <span className='mt-1.5 h-2 w-2 shrink-0 rounded-full bg-nvr-cyan' aria-hidden />
@@ -1333,8 +1425,8 @@ function ReviewView({
               <strong className='font-semibold text-slate-900 dark:text-foreground'>
                 {names(leftAlone.filter((r) => !r.draft))}: not in this merge
               </strong>{' '}
-              — {leftAlone.length === 1 ? 'it stays as it is' : 'they stay as they are'}, and only
-              lent values.
+              — {leftAlone.length === 1 ? 'it stays as it is' : 'they stay as they are'} and
+              {leftAlone.length === 1 ? ' lends' : ' lend'} no values.
             </span>
           </li>
         )}
@@ -1348,7 +1440,7 @@ function ReviewView({
         >
           <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
           <span>
-            <strong className='font-semibold'>{r.label}:</strong> {r.partner?.warning}
+            <strong className='font-semibold'>{fullName(r)}:</strong> {r.partner?.warning}
           </span>
         </div>
       ))}
@@ -1374,12 +1466,12 @@ function ReviewView({
                   const p = picks[f.field]
                   const from =
                     p?.source === 'combined'
-                      ? 'combined'
+                      ? 'Combined'
                       : p?.source === 'custom'
-                        ? 'typed'
+                        ? 'Typed'
                         : (() => {
                             const r = byId.get(p?.source ?? '')
-                            return r ? `from ${refOf(r)}` : ''
+                            return r ? `From ${refOf(r)}` : ''
                           })()
                   return (
                     <tr
@@ -1425,7 +1517,7 @@ function ReviewView({
               const move = (moves[r.key] ?? r.default) === 'move'
               return (
                 <li key={r.key} className='flex items-baseline gap-2'>
-                  <span className='tabular-nums text-slate-500 dark:text-muted-foreground'>
+                  <span className='w-8 shrink-0 text-right tabular-nums text-slate-500 dark:text-muted-foreground'>
                     {n.toLocaleString()}
                   </span>
                   <span>
@@ -1552,9 +1644,9 @@ function DoneView({
         )}
         <Button
           type='button'
-          variant={undone ? 'outline' : 'ghost'}
+          variant='outline'
           size='sm'
-          className={cn(undone && 'dark:bg-transparent')}
+          className='dark:bg-transparent'
           onClick={onClose}
         >
           Close
@@ -1583,7 +1675,7 @@ function DoneView({
         )}
       </div>
       {answer && !undone && (
-        <p className='mt-3 text-[11.5px] text-slate-400 dark:text-muted-foreground/80'>
+        <p className='mt-3 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
           Undo is offered for 24 hours, also from {refOf(keep)}’s ⋯ menu.
         </p>
       )}

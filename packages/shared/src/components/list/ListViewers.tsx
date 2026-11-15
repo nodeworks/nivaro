@@ -48,7 +48,7 @@ export function ListViewers({
       <span aria-hidden className={cn('h-8 shrink-0', INLINE_SLOT, className)} />
     ) : null
   const sentence = viewersSentence(viewers)
-  const tip = `${sentence}: ${viewers.map((v) => v.name).join(', ')}`
+  const tip = `Viewing now: ${viewers.map((v) => v.name).join(', ')}`
   return (
     <span
       data-list-viewers={viewers.length}
@@ -76,7 +76,7 @@ function Stack({ viewers, ring }: { viewers: ListViewer[]; ring: 'toolbar' | 'he
     ring === 'header' ? 'ring-2 ring-white dark:ring-card' : 'ring-2 ring-white dark:ring-slate-900'
   const disc = cn('inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full', ringCls)
   return (
-    <span className='flex -space-x-1'>
+    <span className='flex -space-x-0.5'>
       {shown.map((v) => (
         <UserAvatar
           key={v.id}

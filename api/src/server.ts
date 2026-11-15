@@ -1179,6 +1179,20 @@ export async function buildServer() {
         }
       )
       app.cron.schedule(
+        'watch-list-completed',
+        '*/10 * * * *',
+        async () => {
+          const { runCompletedSweep } = await import('./services/watch-list/completed.js')
+          await runCompletedSweep()
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Takes completed records off watch lists that remove them (24 hours after completion, or once the person has seen them) and forgets “recently removed” records after 7 days. Notifies nobody.'
+        }
+      )
+      app.cron.schedule(
         'watch-list-digest',
         '0 * * * *',
         async () => {
@@ -1189,6 +1203,23 @@ export async function buildServer() {
           idempotent: 'safe',
           description:
             'Emails each person who turned it on what changed on their pinned records in the last day, read as them, at their own digest hour (else 7 AM Eastern). Days with no change send nothing; one email per person per day.'
+        }
+      )
+
+      // Scheduled changes apply themselves at their time, as the person who scheduled them
+      // (services/scheduled-apply.ts; claimed per row, so a double run never applies twice).
+      app.cron.schedule(
+        'scheduled-changes-apply',
+        '* * * * *',
+        async () => {
+          const { runScheduledChanges } = await import('./services/scheduled-apply.js')
+          await runScheduledChanges(app)
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Applies scheduled field changes when their time comes, as the person who scheduled them; refused or conflicting changes are marked failed and that person is told.'
         }
       )
 

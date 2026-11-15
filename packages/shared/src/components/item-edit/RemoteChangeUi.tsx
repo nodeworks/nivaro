@@ -373,7 +373,7 @@ export function FieldMergePanel({
                 <li
                   // biome-ignore lint/suspicious/noArrayIndexKey: hunks are positional
                   key={idx}
-                  className='truncate px-1 text-[11px] text-slate-400 dark:text-slate-500'
+                  className='truncate px-1 text-[11px] text-slate-500 dark:text-slate-400'
                 >
                   {h.mine.length === 1
                     ? blockText(h.mine[0])
@@ -412,13 +412,17 @@ export function FieldMergePanel({
               >
                 <div className='grid gap-1 text-[11.5px] sm:grid-cols-2'>
                   <div className='min-w-0'>
-                    <p className='text-[10px] uppercase tracking-wide text-slate-400'>Yours</p>
+                    <p className='text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+                      Yours
+                    </p>
                     <p className='whitespace-pre-wrap break-words text-slate-700 dark:text-slate-200'>
                       {h.mine.length ? h.mine.map(blockText).join('\n') : '(nothing)'}
                     </p>
                   </div>
                   <div className='min-w-0'>
-                    <p className='text-[10px] uppercase tracking-wide text-slate-400'>{by}</p>
+                    <p className='text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+                      {by}
+                    </p>
                     <p className='whitespace-pre-wrap break-words text-slate-700 dark:text-slate-200'>
                       {h.theirs.length ? h.theirs.map(blockText).join('\n') : '(nothing)'}
                     </p>

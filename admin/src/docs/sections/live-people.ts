@@ -9,17 +9,17 @@ export const livePeopleDocs: DocSection = {
       type: 'p',
       text: 'Two small signals that tell you who is around and who is talking, without opening anything.'
     },
-    { type: 'h2', id: 'queue-team-strip', text: 'Team on a queue' },
+    { type: 'h2', id: 'queue-team-strip', text: 'Owners on a queue' },
     {
       type: 'p',
-      text: 'A queue page shows a thin “Team” strip: the people who sit in the owner groups of the workflows the queue draws from, each with a dot. Green is online, amber is away or idle, a hollow dot is out of office, grey is not online. Click the strip for the full list; for someone who is out it says until when and who covers for them.'
+      text: 'A queue page shows a thin “Owners” strip: the people who own records in the queue (they sit in the owner groups of the workflows it draws from), each with a dot. Green is online, amber is away or idle, a hollow dot is out of office, and no dot means not online. Click the strip for the full list; for someone who is out it says until when and who covers for them.'
     },
     {
       type: 'ul',
       items: [
         'Everyone who can read the queue sees it. It shows only people you could see as online anywhere else (the same visibility rules as the Online list), and never service or bot accounts, suspended or former people.',
         'The dots move on their own while Live updates is Normal. In Calm or Off the strip stays as it was when the page loaded.',
-        'Large teams show the first 40 and say how many more.'
+        'A queue with more than 200 owners lists the first 200 and says how many more.'
       ]
     },
     { type: 'h2', id: 'record-chat-mentions', text: 'Being discussed in chat' },

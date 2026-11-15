@@ -15,14 +15,15 @@ export interface WaitingCounts {
 }
 
 /**
- * What "waiting on you" adds up to: the same four figures the My Work page leads with
- * (records you own, approval steps on you, your open tasks, questions put to you).
+ * What "waiting on you" adds up to in the tab title: records you own, approval steps on you
+ * and questions put to you. Open tasks are left out (Rob, 2026-11-15) — a standing to-do list
+ * is not something that just arrived, and it kept the count from ever reaching zero.
  * Pure — exported for tests. Anything missing or negative counts as none.
  */
 export function waitingCount(counts: WaitingCounts | null | undefined): number {
   if (!counts) return 0
   let n = 0
-  for (const v of [counts.owned, counts.approvals, counts.tasks, counts.questions]) {
+  for (const v of [counts.owned, counts.approvals, counts.questions]) {
     if (typeof v === 'number' && Number.isFinite(v) && v > 0) n += Math.floor(v)
   }
   return n

@@ -108,6 +108,9 @@ export interface RoomRecordData {
     /** Hours until the step is due; negative once overdue (older APIs omit it). */
     remaining_hours?: number | null
     business_hours?: boolean
+    /** The instants the SLA banner counts down to (older APIs omit them). */
+    warning_at?: string | null
+    due_at?: string | null
   } | null
   owners: Array<{ id: string; name: string }>
 }

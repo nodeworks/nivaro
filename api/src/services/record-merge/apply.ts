@@ -245,7 +245,8 @@ export async function applyMerge(
         409,
         'MERGE_STALE',
         `${who ?? 'Someone'} changed ${r.ref ?? r.label}${r.ref && r.ref !== r.label ? ` (${r.label})` : ''} while you were merging — review it again.`,
-        r.id
+        r.id,
+        who
       )
     }
   }

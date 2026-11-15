@@ -175,6 +175,12 @@ export function bannerPhrase(
   }
 }
 
+/** `{{project_id}} - {{name}}` → `project_id` (plain top-level fields only). Pure. */
+export function firstTemplateField(template: string | null | undefined): string | null {
+  const m = /\{\{\s*([A-Za-z_][A-Za-z0-9_]{0,63})\s*\}\}/.exec(template ?? '')
+  return m ? m[1] : null
+}
+
 export function dismissedIds(prefs: Record<string, unknown> | null | undefined): Set<number> {
   const v = prefs?.[DISMISS_PREF]
   return new Set(Array.isArray(v) ? v.map(Number).filter(Number.isFinite) : [])
@@ -279,7 +285,16 @@ export async function alertBannersFor(
 
   // Read the records as the viewer: only rows they can see, only fields they may read.
   const ids = [...new Set(logs.map((l) => String(l.item)))]
-  const fields = [...new Set(['id', ...defs.map((d) => d.field)])]
+  // The record's name: its friendly id, else the first plain field of its display template —
+  // read in the same viewer read as the values (a field they cannot read is just absent).
+  const meta = (await db('nivaro_collections')
+    .where({ collection })
+    .first('display_template')
+    .catch(() => null)) as { display_template: string | null } | null | undefined
+  const nameField = firstTemplateField(meta?.display_template)
+  const fields = [
+    ...new Set(['id', ...defs.map((d) => d.field), ...(nameField ? [nameField] : [])])
+  ]
   const { readItems } = await import('./items.js')
   let rows: Array<Record<string, unknown>> = []
   try {
@@ -296,7 +311,8 @@ export async function alertBannersFor(
   const { recordDisplayRefs } = await import('./record-display-ref.js')
   const refs = await recordDisplayRefs(collection, ids, { recipient: user.id })
   const { collectionNoun } = await import('./access-request-text.js')
-  const noun = await collectionNoun(collection)
+  const { singular } = await import('./access-words.js')
+  const noun = singular(await collectionNoun(collection))
   const Noun = noun.charAt(0).toUpperCase() + noun.slice(1)
 
   const out: AlertBanner[] = []
@@ -313,7 +329,14 @@ export async function alertBannersFor(
         continue
     }
     const at = new Date(l.triggered_at)
-    const ref = refs.get(String(l.item)) ?? `#${l.item}`
+    const friendly = refs.get(String(l.item))
+    const named = nameField ? row[nameField] : null
+    const ref =
+      friendly && !friendly.startsWith('#')
+        ? friendly
+        : named != null && String(named).trim() !== '' && typeof named !== 'object'
+          ? String(named).trim()
+          : `#${l.item}`
     out.push({
       log_id: Number(l.id),
       definition_id: def.id,

@@ -25,6 +25,7 @@ import {
   type MoveChoice,
   mergeSettingOf,
   SYSTEM_COLLECTION,
+  singularOf,
   UNDO_WINDOW_MS
 } from './rules.js'
 
@@ -34,11 +35,20 @@ export class MergeRefusal extends Error {
   statusCode: number
   code: string
   record?: string
-  constructor(status: number, code: string, message: string, record?: string) {
+  /** MERGE_STALE: who changed the record (a name), for the screen to set off. */
+  changedBy?: string | null
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    record?: string,
+    changedBy?: string | null
+  ) {
     super(message)
     this.statusCode = status
     this.code = code
     this.record = record
+    this.changedBy = changedBy
   }
 }
 
@@ -162,10 +172,9 @@ export async function mergeCollection(collection: string): Promise<{
     | undefined
   if (!col) throw new MergeRefusal(404, 'NOT_FOUND', 'This list does not exist.')
   const words = collection.replace(/_/g, ' ')
+  // One record of the list: the configured singular, else the list's name made singular.
   const noun = (
-    String(col.singular ?? '').trim() ||
-    String(col.display_name ?? '').trim() ||
-    words
+    String(col.singular ?? '').trim() || singularOf(String(col.display_name ?? '').trim() || words)
   ).toLowerCase()
   const plural = (
     String(col.plural ?? '').trim() ||

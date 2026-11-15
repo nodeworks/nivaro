@@ -51,25 +51,32 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
       do {
         const [next, keys] = await app.redis.scan(cursor, 'MATCH', 'sess:*', 'COUNT', 200)
         cursor = next
-        for (const key of keys) {
-          const [raw, ttl] = await Promise.all([app.redis.get(key), app.redis.ttl(key)])
-          let userId: string | null = null
+        // One MGET per page (not two round trips per key): the person page re-reads this list
+        // live, and a shared Redis holds thousands of sessions. Revocation markers hold no blob.
+        const live = keys.filter((k) => !k.startsWith('sess:revoked:'))
+        const raws = live.length > 0 ? await app.redis.mget(...live) : []
+        const matched: Array<{ key: string; userId: string; blob: Record<string, unknown> }> = []
+        live.forEach((key, i) => {
+          const raw = raws[i]
           let blob: Record<string, unknown> | null = null
           try {
             blob = raw ? (JSON.parse(raw) as Record<string, unknown>) : null
-            userId = typeof blob?.userId === 'string' ? blob.userId : null
           } catch {
-            // unparseable session blob — still listed, unattributed
+            // unparseable session blob — not attributable to anyone
           }
-          if (userId && (!filterUser || String(userId).toUpperCase() === filterUser)) {
-            sessions.push({
-              sid: key.slice(5),
-              user_id: userId,
-              ttl_seconds: ttl,
-              detail: sessionDetail(blob)
-            })
-          }
-        }
+          const userId = typeof blob?.userId === 'string' ? blob.userId : null
+          if (blob && userId && (!filterUser || userId.toUpperCase() === filterUser))
+            matched.push({ key, userId, blob })
+        })
+        const ttls = await Promise.all(matched.map((m) => app.redis.ttl(m.key)))
+        matched.forEach((m, i) => {
+          sessions.push({
+            sid: m.key.slice(5),
+            user_id: m.userId,
+            ttl_seconds: ttls[i],
+            detail: sessionDetail(m.blob)
+          })
+        })
         guard++
       } while (cursor !== '0' && guard < 100)
     } catch {

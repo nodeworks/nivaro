@@ -70,6 +70,18 @@ describe('readLiveUsage', () => {
     expect(measure).toHaveBeenCalledTimes(2)
   })
 
+  it('maxAgeMs reuses an answer younger than it even after writes (a per-create limit check)', async () => {
+    let n = 0
+    const measure = vi.fn(async () => usage(++n))
+    await readLiveUsage(measure)
+    noteUsageChanged()
+    noteUsageChanged()
+    expect((await readLiveUsage(measure, { maxAgeMs: 300_000 })).records.count).toBe(1)
+    expect(measure).toHaveBeenCalledTimes(1)
+    // …and the plain read still re-measures after those writes
+    expect((await readLiveUsage(measure)).records.count).toBe(2)
+  })
+
   it('reads single-flight', async () => {
     let release: (v: LiveUsage) => void = () => {}
     const measure = vi.fn(() => new Promise<LiveUsage>((r) => (release = r)))

@@ -152,6 +152,7 @@ export function ReportProblemButton({
     <button
       type='button'
       data-report-problem
+      data-floating-help
       data-nvr-recording-hide
       onClick={() => void openReporter()}
       title='Report a problem'

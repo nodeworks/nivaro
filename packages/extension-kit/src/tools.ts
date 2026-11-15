@@ -119,7 +119,24 @@ export interface ExtensionAiMembers {
     handler: ExtensionToolHandler,
     opts?: ExtensionAiToolOptions
   ): boolean
+  /** An allowance check run before every AI provider call, in the caller's (tenant) context.
+   *  Answer null to let it through, or a refusal: the call stops with 429 `AI_ALLOWANCE_USED`
+   *  and the refusal's message. Throwing or taking over 1.5 s lets the call through. Optional —
+   *  an older API does not provide it. Nothing is limited while no check is registered. */
+  registerAllowance?(check: ExtensionAiAllowanceCheck): void
 }
+
+export interface ExtensionAiAllowanceRefusal {
+  message: string
+  action_url?: string
+  resets_at?: string
+}
+
+export type ExtensionAiAllowanceCheck = () =>
+  | ExtensionAiAllowanceRefusal
+  | null
+  | undefined
+  | Promise<ExtensionAiAllowanceRefusal | null | undefined>
 
 // ─── Chat message actions (#2763) ───────────────────────────────────────────
 

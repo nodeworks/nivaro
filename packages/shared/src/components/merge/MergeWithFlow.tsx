@@ -218,7 +218,6 @@ export function MergePicker({
         .then((r) => r.data)
   })
   const max = 4
-  const noun = allowed.data?.noun ?? 'record'
   const plural = allowed.data?.plural ?? 'records'
   const toggle = (c: Candidate) =>
     setChosen((prev) =>
@@ -254,7 +253,7 @@ export function MergePicker({
               'flex h-4 w-4 shrink-0 items-center justify-center rounded border',
               on
                 ? 'border-nvr-cyan bg-nvr-cyan text-white'
-                : 'border-slate-300 bg-white dark:border-border dark:bg-card'
+                : 'border-slate-400 bg-white dark:border-slate-500 dark:bg-card'
             )}
             aria-hidden
           >
@@ -298,18 +297,18 @@ export function MergePicker({
         className='flex max-h-[min(80vh,640px)] w-[min(34rem,96vw)] max-w-none flex-col overflow-hidden p-0 dark:bg-card max-sm:h-[100dvh] max-sm:max-h-none max-sm:w-screen max-sm:rounded-none'
         data-merge-picker
       >
-        <div className='shrink-0 px-5 pb-3 pt-5 pr-12'>
-          <DialogTitle className='flex min-w-0 items-center gap-2 text-[15px] font-semibold text-slate-900 dark:text-foreground'>
-            <GitMerge className='h-4 w-4 shrink-0 text-nvr-cyan' aria-hidden />
-            <span className='truncate'>
-              Merge {cand.data?.self ?? itemLabel ?? `this ${noun}`} with…
+        <div className='shrink-0 px-5 pb-3 pt-5'>
+          <DialogTitle className='flex min-w-0 items-start gap-2 pr-8 text-[15px] font-semibold leading-snug text-slate-900 dark:text-foreground'>
+            <GitMerge className='mt-0.5 h-4 w-4 shrink-0 text-nvr-cyan' aria-hidden />
+            <span className='line-clamp-2 break-words'>
+              Merge #{itemId} {cand.data?.self ?? itemLabel ?? ''} with…
             </span>
           </DialogTitle>
           <DialogDescription className='mt-1 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
             Pick up to {max} {plural} that are the same thing. Next you choose each value and which
             record to keep.
           </DialogDescription>
-          <div className='relative mt-3'>
+          <div className='relative mt-3 w-full'>
             <Search
               className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400'
               aria-hidden
@@ -371,7 +370,7 @@ export function MergePicker({
             type='button'
             size='sm'
             disabled={chosen.length === 0}
-            className='bg-nvr-cyan text-white hover:bg-nvr-cyan-dark'
+            className='bg-nvr-cyan text-white hover:bg-nvr-cyan-dark disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:bg-transparent dark:disabled:text-slate-500 dark:disabled:ring-1 dark:disabled:ring-inset dark:disabled:ring-slate-700 dark:disabled:opacity-50'
             onClick={() => {
               onContinue(chosen.map((c) => c.id))
               setChosen([])

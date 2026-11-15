@@ -56,15 +56,20 @@ export function railOverflow(
  * into a ⋯ menu as the toolbar narrows. Widths are measured (ResizeObserver), never guessed
  * from breakpoints. When even the lead and the trail cannot share a line (phones), the rail
  * takes its own full line and still collapses into ⋯ instead of stacking.
+ * `lead` sits at the rail's left and never folds (e.g. who else is viewing the list): it is
+ * part of the line like the trail, so its width is taken out before items are placed.
  */
 export function OverflowRail({
   items,
+  lead,
   trail,
   leadMinWidth = 304,
   moreLabel = 'More actions',
   className
 }: {
   items: RailItem[]
+  /** Pinned at the rail's left, never moved into ⋯. */
+  lead?: ReactNode
   trail?: ReactNode
   /** Room the toolbar's lead needs beside the rail: a number (a flexible lead such as a
    *  filter bar, at least this wide) or 'siblings' (the natural width of everything before
@@ -75,6 +80,7 @@ export function OverflowRail({
 }) {
   const railRef = useRef<HTMLDivElement | null>(null)
   const trailRef = useRef<HTMLDivElement | null>(null)
+  const pinRef = useRef<HTMLDivElement | null>(null)
   const widths = useRef(new Map<string, number>())
   const nodes = useRef(new Map<string, HTMLElement>())
   const [overflow, setOverflow] = useState<Set<string>>(() => new Set())
@@ -94,7 +100,10 @@ export function OverflowRail({
       (Number.parseFloat(cs.paddingRight) || 0)
     const barGap = Number.parseFloat(cs.columnGap) || 8
     const gap = Number.parseFloat(getComputedStyle(rail).columnGap) || 8
-    const trailW = trailRef.current?.offsetWidth ?? 0
+    const pinW = pinRef.current?.offsetWidth ?? 0
+    // The pinned lead costs its width plus one gap, exactly like the trail.
+    const ownTrailW = trailRef.current?.offsetWidth ?? 0
+    const trailW = ownTrailW + (pinW > 0 ? pinW + gap : 0)
     let lead = 0
     if (leadMinWidth === 'siblings') {
       for (let el = rail.previousElementSibling; el; el = el.previousElementSibling) {
@@ -111,7 +120,7 @@ export function OverflowRail({
       itemsRef.current.map(({ key, priority }) => ({ key, priority })),
       widths.current,
       // The trail's own leading gap is part of the items' gaps (one per real item / the ⋯).
-      trailW > 0 ? avail : avail + gap,
+      ownTrailW > 0 ? avail : avail + gap,
       gap
     )
     setOverflow((prev) =>
@@ -148,6 +157,15 @@ export function OverflowRail({
       data-overflow-rail=''
       className={cn('ml-auto flex shrink-0 flex-nowrap items-center gap-2', className)}
     >
+      {lead != null && (
+        <div
+          ref={pinRef}
+          data-rail-lead=''
+          className='flex shrink-0 items-center gap-2 empty:hidden'
+        >
+          {lead}
+        </div>
+      )}
       {inline.map((i) => (
         <div
           key={i.key}
@@ -179,7 +197,11 @@ export function OverflowRail({
             {/* The same controls as on the line (their own menus open from here). */}
             <div className='flex flex-wrap items-center justify-end gap-2'>
               {hidden.map((i) => (
-                <div key={i.key} data-rail-item={i.key} className='flex shrink-0 items-center gap-2 empty:hidden'>
+                <div
+                  key={i.key}
+                  data-rail-item={i.key}
+                  className='flex shrink-0 items-center gap-2 empty:hidden'
+                >
                   {i.node}
                 </div>
               ))}

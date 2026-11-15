@@ -121,3 +121,40 @@ describe('TipLayer in a menu', () => {
     expect(Number.parseFloat(shownTip()?.style.left ?? '')).toBeGreaterThanOrEqual(244)
   })
 })
+
+describe('TipLayer data-tip-side="right"', () => {
+  it('draws the tip level with the element and to its right, not under it', async () => {
+    const rect = (o: Partial<DOMRect>) => () =>
+      ({ ...o, x: o.left, y: o.top, toJSON() {} }) as DOMRect
+    await act(async () =>
+      root.render(
+        <>
+          <TipLayer />
+          <button type='button' data-tip='Open the Workflows' data-tip-side='right'>
+            chip
+          </button>
+        </>
+      )
+    )
+    const btn = host.querySelector('[data-tip]') as HTMLElement
+    btn.getBoundingClientRect = rect({
+      left: 100,
+      right: 200,
+      top: 300,
+      bottom: 320,
+      width: 100,
+      height: 20
+    })
+    await act(async () => {
+      btn.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    })
+    const tip = [...document.body.querySelectorAll('div')].find(
+      (d) => d.textContent === 'Open the Workflows'
+    ) as HTMLElement
+    expect(tip).toBeTruthy()
+    // jsdom measures nothing: right edge + gap, vertically centred on the chip
+    expect(tip.style.left).toBe('206px')
+    expect(Number.parseInt(tip.style.top, 10)).toBeGreaterThanOrEqual(300)
+    expect(Number.parseInt(tip.style.top, 10)).toBeLessThanOrEqual(320)
+  })
+})

@@ -23,7 +23,14 @@ afterEach(() => {
   host.remove()
 })
 
-const client = { request: vi.fn(async () => ({ data: [] })) }
+const client = {
+  request: vi.fn(async (cmd: { _path: string }) => {
+    if (cmd._path === '/collections/projects')
+      return { data: { collection: 'projects', singular: 'Project', fields: [] } }
+    if (cmd._path === '/items/projects/7') return { data: { id: 7, name: 'North yard' } }
+    return { data: [] }
+  })
+}
 function render(node: React.ReactNode) {
   act(() =>
     root.render(
@@ -98,7 +105,7 @@ describe('offline clash review', () => {
     expect(host.textContent).not.toContain('Theirs')
   })
 
-  it('stays a one-line pill until clicked, then lists what waits', () => {
+  it('stays a one-line pill until clicked, then lists what waits', async () => {
     render(<OutboxReviewTray entries={[entry(), entry({ id: 'x', status: 'queued' })]} />)
     expect(document.querySelector('[data-outbox-review-open]')?.textContent).toContain(
       '1 offline change needs a look'
@@ -106,6 +113,9 @@ describe('offline clash review', () => {
     expect(document.querySelector('[data-outbox-entry]')).toBeNull()
     act(() => (document.querySelector('[data-outbox-review-open]') as HTMLElement).click())
     const tray = document.querySelector('[data-outbox-review]')
+    // One label from the start: a quiet placeholder until the record's own label is read.
+    expect(tray?.textContent).not.toContain('#7')
+    await vi.waitFor(() => expect(tray?.textContent).toContain('Project North yard'))
     expect(tray?.textContent).toContain('Changed while you were offline')
     expect(tray?.textContent).toContain('1 other change was saved.')
     expect(document.querySelectorAll('[data-outbox-entry]')).toHaveLength(1)

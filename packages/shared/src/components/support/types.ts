@@ -65,6 +65,8 @@ export interface SupportTicketDetail extends SupportTicket {
   }>
   history: Array<{
     id: number
+    /** The activity action (screen-share-start / -watch / -stop fold into one line). */
+    action?: string | null
     text: string
     user: string | null
     user_name: string | null

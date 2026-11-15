@@ -200,6 +200,19 @@ export type PayloadTemplateDef = {
   senders?: string[]
 }
 
+/** GET /api/usage/live's figures (api services/usage-live.ts LiveUsage — keep the two in step). */
+export interface ExtensionLiveUsage {
+  /** Rows in every non-`nivaro_` table from the database's row-count statistics; null = this
+   *  database's statistics are not readable. */
+  records: { count: number | null; approx: boolean }
+  storage: { bytes: number; files: number }
+  /** AI input + output tokens since the start of this calendar month (UTC). */
+  ai: { tokens: number; calls: number; since: string }
+  /** Accounts that are not suspended. */
+  users: { count: number }
+  at: string
+}
+
 export interface ExtensionContext {
   app: ExtensionApp
   database: Knex
@@ -669,6 +682,10 @@ export interface ExtensionContext {
    *  asker. An answer that used one stays the asker's unless the tool is
    *  read-only AND declared replayable. Optional — an older API does not provide it. */
   ai?: ExtensionAiMembers
+  /** Live usage figures of the caller's instance/tenant (GET /api/usage/live's answer).
+   *  `maxAgeMs` accepts a cached answer up to that old even after writes (default: the
+   *  route's own few-second freshness). Optional — an older API does not provide it. */
+  usage?: { read(opts?: { maxAgeMs?: number }): Promise<ExtensionLiveUsage> }
   /** Auth middleware — use as Fastify `onRequest` / `preHandler` handlers. */
   auth: {
     authenticate: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
