@@ -12,11 +12,78 @@ import { countdownText } from './deadline-ticker'
 export interface ScheduledChangeRow {
   id: string
   scheduled_at: string
+  /** pending · applying · executed · failed · undone (· cancelled, never listed) */
   status?: string
   change_type?: string
   changes?: Record<string, unknown> | null
   created_by_name?: string | null
   can_manage?: boolean
+  /** When it was applied / failed / undone. */
+  executed_at?: string | null
+  /** Why it was not applied (plain words). */
+  error_message?: string | null
+  /** The collection applies scheduled changes by themselves (default); false = an admin does. */
+  auto_apply?: boolean
+  /** Applied at its time (true) or early by an administrator (false). */
+  applied_on_time?: boolean | null
+  undo_until?: string | null
+  can_undo?: boolean
+}
+
+const LISTED = new Set(['pending', 'applying', 'executed', 'failed', 'undone'])
+
+/**
+ * Every change the record page lists, cut to fields the viewer can read: waiting ones soonest
+ * first, then what happened in the last day, newest first.
+ */
+export function readableRecent(
+  rows: readonly ScheduledChangeRow[] | null | undefined,
+  fields: readonly FieldLabelLike[] | null | undefined
+): ScheduledChangeRow[] {
+  const known = fields ? new Set(fields.map((f) => f.field)) : null
+  const t = (v: string | null | undefined) => (v ? new Date(v).getTime() : 0)
+  const waiting = (r: ScheduledChangeRow) => r.status === 'pending' || r.status === 'applying'
+  return (rows ?? [])
+    .filter((r) => LISTED.has(r.status ?? 'pending'))
+    .map((r) => ({
+      ...r,
+      changes: Object.fromEntries(
+        Object.entries(r.changes ?? {}).filter(([k]) => !known || known.has(k))
+      )
+    }))
+    .filter((r) => Object.keys(r.changes ?? {}).length > 0)
+    .filter((r) => Number.isFinite(new Date(r.scheduled_at).getTime()))
+    .sort((a, b) => {
+      if (waiting(a) !== waiting(b)) return waiting(a) ? -1 : 1
+      return waiting(a)
+        ? t(a.scheduled_at) - t(b.scheduled_at)
+        : t(b.executed_at) - t(a.executed_at)
+    })
+}
+
+export type ChipKind = 'pending' | 'applying' | 'waiting-admin' | 'applied' | 'failed'
+
+/**
+ * What the header chip says: the soonest waiting change (counting down, "Applying…" once its
+ * time has come, or waiting for an administrator where the collection does not apply them by
+ * itself), else the latest outcome of the last day. Undone changes stay in the list only.
+ */
+export function chipOf(
+  rows: readonly ScheduledChangeRow[],
+  now: number
+): { kind: ChipKind; row: ScheduledChangeRow } | null {
+  for (const r of rows) {
+    if (r.status === 'applying') return { kind: 'applying', row: r }
+    if ((r.status ?? 'pending') === 'pending') {
+      if (!isDue(r.scheduled_at, now)) return { kind: 'pending', row: r }
+      return { kind: r.auto_apply === false ? 'waiting-admin' : 'applying', row: r }
+    }
+  }
+  for (const r of rows) {
+    if (r.status === 'executed') return { kind: 'applied', row: r }
+    if (r.status === 'failed') return { kind: 'failed', row: r }
+  }
+  return null
 }
 
 export interface FieldLabelLike {

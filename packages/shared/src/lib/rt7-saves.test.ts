@@ -4,12 +4,57 @@ import { childWriteOf, recalcFeeds } from './rollup-recalc'
 import { nestedRowCount, newSaveId, saveProgressText, withSaveId } from './save-progress'
 import {
   changeSentence,
+  chipOf,
   countdownPart,
   fullSentence,
   isDue,
   readablePending,
+  readableRecent,
+  type ScheduledChangeRow,
   whenText
 } from './scheduled-countdown'
+
+describe('scheduled changes that apply themselves', () => {
+  const now = new Date(2026, 10, 15, 14, 0).getTime()
+  const iso = (ms: number) => new Date(now + ms).toISOString()
+  const fields = [{ field: 'status' }]
+  const row = (over: Partial<ScheduledChangeRow>): ScheduledChangeRow => ({
+    id: 'x',
+    scheduled_at: iso(3600_000),
+    status: 'pending',
+    changes: { status: 'closed' },
+    auto_apply: true,
+    ...over
+  })
+  it('counts down to a waiting change first', () => {
+    const rows = readableRecent(
+      [row({ id: 'done', status: 'executed', executed_at: iso(-60_000) }), row({ id: 'next' })],
+      fields
+    )
+    expect(rows.map((r) => r.id)).toEqual(['next', 'done'])
+    expect(chipOf(rows, now)).toMatchObject({ kind: 'pending', row: { id: 'next' } })
+  })
+  it('says it is applying once the time has come, or waits for an administrator', () => {
+    expect(chipOf([row({ scheduled_at: iso(-30_000) })], now)?.kind).toBe('applying')
+    expect(chipOf([row({ scheduled_at: iso(-30_000), auto_apply: false })], now)?.kind).toBe(
+      'waiting-admin'
+    )
+  })
+  it('shows the latest outcome of the day when nothing waits', () => {
+    const rows = readableRecent(
+      [
+        row({ id: 'old', status: 'executed', executed_at: iso(-7200_000) }),
+        row({ id: 'new', status: 'failed', executed_at: iso(-60_000), error_message: 'x' }),
+        row({ id: 'u', status: 'undone', executed_at: iso(-10_000) })
+      ],
+      fields
+    )
+    expect(chipOf(rows, now)).toMatchObject({ kind: 'failed', row: { id: 'new' } })
+    const undone = readableRecent([row({ status: 'undone', executed_at: iso(-1) })], fields)
+    expect(chipOf(undone, now)).toBeNull()
+    expect(readableRecent([row({ status: 'cancelled' })], fields)).toEqual([])
+  })
+})
 
 describe('save progress (rt7 #8)', () => {
   it('makes ids the server accepts', () => {
