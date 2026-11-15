@@ -329,7 +329,12 @@ import {
 } from './sections/live-ops.js'
 import { liveOutsideDocs } from './sections/live-outside.js'
 import { collabLiveProgress } from './sections/live-progress.js'
-import { collabLiveOps, collabLiveRecords, collabPresence } from './sections/live-records.js'
+import {
+  collabLiveAdmin,
+  collabLiveOps,
+  collabLiveRecords,
+  collabPresence
+} from './sections/live-records.js'
 import { liveScreensDocs } from './sections/live-screens.js'
 import { collabLiveSetting } from './sections/live-setting.js'
 import { loadingFeelDocs } from './sections/loading-feel'
@@ -945,6 +950,7 @@ export const navSections: NavGroup[] = [
       collabLiveConfig,
       collabBackAndPeek,
       collabLiveOps,
+      collabLiveAdmin,
       collabPresence,
       collabTabCount,
       collabLiveSetting,

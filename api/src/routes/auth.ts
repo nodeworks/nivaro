@@ -51,6 +51,7 @@ import {
 } from '../services/masquerade-tokens.js'
 import { bumpUserAccessVersion } from '../services/permission-cache.js'
 import { recordLogin } from '../services/security.js'
+import { noteSessionsChanged } from '../services/sessions-live.js'
 import {
   classifyCallbackFailure,
   classifyMissingState,
@@ -274,7 +275,13 @@ export async function authRoutes(app: FastifyInstance) {
     await regenerateForSignIn(req, app.redis)
     req.session.userId = userId
     req.session.authAt = Date.now()
+    // The admin sessions list names a session by its browser and address (never its id).
+    if (req.ip) req.session.signInIp = String(req.ip).slice(0, 64)
+    const agent = req.headers['user-agent']
+    if (typeof agent === 'string' && agent) req.session.signInAgent = agent.slice(0, 300)
     void recordLogin(app, userId, method, req)
+    // Realtime round 9 — administrators with this person's page open see the new session.
+    noteSessionsChanged([userId])
     // Which app the sign-in was for (the person page's sign-in troubleshooter).
     if (method !== 'static_token') void noteSignInApp(app.redis, userId, req)
   }

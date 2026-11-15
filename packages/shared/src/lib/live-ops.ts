@@ -22,6 +22,8 @@ export interface LiveOpsOptions {
   /** Coalesce a burst on the client too (default 300ms; the LAST payload wins). */
   debounceMs?: number
   enabled?: boolean
+  /** Only events this accepts reach `onEvent` (and the debounce) — e.g. one person's id. */
+  match?: (detail: Record<string, any>) => boolean
 }
 
 export function useLiveOps(
@@ -31,6 +33,8 @@ export function useLiveOps(
 ): void {
   const realtime = useOptionalRealtime()
   const enabled = opts.enabled !== false && !!topic
+  const matchRef = useRef(opts.match)
+  matchRef.current = opts.match
   useEffect(() => {
     if (!realtime || !enabled || !topic) return
     realtime.emit('ops:join', { topic })
@@ -45,7 +49,7 @@ export function useLiveOps(
       enabled,
       debounceMs: opts.debounceMs ?? 300,
       includeOwn: true,
-      match: (p) => p?.topic === topic
+      match: (p) => p?.topic === topic && (!matchRef.current || matchRef.current(p ?? {}))
     }
   )
 }

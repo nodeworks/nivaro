@@ -67,6 +67,28 @@ describe('useLiveOps', () => {
     root = createRoot(host)
   })
 
+  it('match filters before the debounce, so another person cannot hide this one', () => {
+    const { rt, fire } = adapter()
+    const seen: Array<Record<string, unknown>> = []
+    function Probe() {
+      useLiveOps('sessions', (d) => seen.push(d), {
+        debounceMs: 800,
+        match: (d) => d.user_id === 'U1'
+      })
+      return null
+    }
+    act(() =>
+      root.render(createElement(RealtimeContext.Provider, { value: rt }, createElement(Probe)))
+    )
+    act(() => {
+      fire('ops:changed', { topic: 'sessions', user_id: 'U1', at: 1 })
+      fire('ops:changed', { topic: 'sessions', user_id: 'U2', at: 2 })
+      vi.advanceTimersByTime(900)
+    })
+    expect(seen).toHaveLength(1)
+    expect(seen[0].user_id).toBe('U1')
+  })
+
   it('is inert without a realtime adapter', () => {
     const seen: unknown[] = []
     function Probe() {

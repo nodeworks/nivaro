@@ -3,6 +3,7 @@ import { revokeSessions, revokeUserSessions } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { describeUserAgent } from '../services/mail-builders.js'
 import {
   clearSignOutNote,
   leaveSignOutNote,
@@ -10,6 +11,24 @@ import {
   type SignOutNote,
   takeSignOutNote
 } from '../services/sign-out-note.js'
+
+interface SessionDetail {
+  device: string | null
+  ip: string | null
+  signed_in_at: string | null
+}
+
+/** The admin-visible facts of one session blob: browser + OS, address, sign-in time. */
+export function sessionDetail(blob: Record<string, unknown> | null): SessionDetail {
+  const agent = typeof blob?.signInAgent === 'string' ? blob.signInAgent : null
+  const ip = typeof blob?.signInIp === 'string' && blob.signInIp ? blob.signInIp : null
+  const at = typeof blob?.authAt === 'number' && Number.isFinite(blob.authAt) ? blob.authAt : null
+  return {
+    device: agent ? describeUserAgent(agent) : null,
+    ip,
+    signed_in_at: at != null ? new Date(at).toISOString() : null
+  }
+}
 
 /**
  * Security center reads: active sessions (Redis sess:* scan, mapped to users)
@@ -20,7 +39,12 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Querystring: { user_id?: string } }>('/sessions', async (req) => {
     const filterUser = String(req.query?.user_id ?? '').toUpperCase()
-    const sessions: Array<{ sid: string; user_id: string | null; ttl_seconds: number }> = []
+    const sessions: Array<{
+      sid: string
+      user_id: string | null
+      ttl_seconds: number
+      detail: SessionDetail
+    }> = []
     try {
       let cursor = '0'
       let guard = 0
@@ -30,13 +54,20 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
         for (const key of keys) {
           const [raw, ttl] = await Promise.all([app.redis.get(key), app.redis.ttl(key)])
           let userId: string | null = null
+          let blob: Record<string, unknown> | null = null
           try {
-            userId = raw ? ((JSON.parse(raw) as { userId?: string }).userId ?? null) : null
+            blob = raw ? (JSON.parse(raw) as Record<string, unknown>) : null
+            userId = typeof blob?.userId === 'string' ? blob.userId : null
           } catch {
             // unparseable session blob — still listed, unattributed
           }
           if (userId && (!filterUser || String(userId).toUpperCase() === filterUser)) {
-            sessions.push({ sid: key.slice(5), user_id: userId, ttl_seconds: ttl })
+            sessions.push({
+              sid: key.slice(5),
+              user_id: userId,
+              ttl_seconds: ttl,
+              detail: sessionDetail(blob)
+            })
           }
         }
         guard++
@@ -65,7 +96,10 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
         sid_prefix: s.sid.slice(0, 12),
         user_id: s.user_id,
         user_name: nameById.get(String(s.user_id).toUpperCase()) ?? s.user_id,
-        ttl_seconds: s.ttl_seconds
+        ttl_seconds: s.ttl_seconds,
+        // Realtime round 9: what the admin sees of a session — browser, address, sign-in time
+        // (stamped at sign-in; older sessions have none). Never more of the id than the prefix.
+        ...s.detail
       }))
     }
   })
