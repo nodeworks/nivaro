@@ -153,7 +153,7 @@ const STRONG = 'font-medium text-slate-700 dark:text-slate-200'
 
 function Who({ by, at }: { by: string | null; at: string }) {
   return (
-    <span className={cn('whitespace-nowrap', MUTED)}>
+    <span className={cn('block whitespace-nowrap text-[11px] sm:shrink-0 sm:text-[12px]', MUTED)}>
       {by ? `${by} · ` : ''}
       <RelativeTime value={at} />
     </span>
@@ -183,25 +183,27 @@ function rowsOf(d: ResubmissionDiffData): Row[] {
       node: (
         <div className='flex items-start gap-2' data-resub-field={f.field}>
           <KindIcon kind='changed' />
-          <p className='min-w-0 flex-1 break-words'>
-            <span className={STRONG}>{f.label}</span>
-            {f.auto ? <span className={MUTED}> (updated automatically)</span> : null}
-            <span className={MUTED}>: </span>
-            {f.old !== '' && (
-              <>
-                <span className='text-red-600 line-through decoration-red-300 dark:text-red-400 dark:decoration-red-500/50'>
-                  {f.old}
-                </span>
-                <span aria-hidden='true' className={MUTED}>
-                  {' '}
-                  →{' '}
-                </span>
-                <span className='sr-only'> changed to </span>
-              </>
-            )}
-            <span className='text-emerald-700 dark:text-emerald-400'>{f.new}</span>
-          </p>
-          <Who by={f.by} at={f.at} />
+          <div className='min-w-0 flex-1 sm:flex sm:items-start sm:gap-4'>
+            <p className='min-w-0 break-words sm:flex-1'>
+              <span className={STRONG}>{f.label}</span>
+              {f.auto ? <span className={MUTED}> (updated automatically)</span> : null}
+              <span className={MUTED}>: </span>
+              {f.old !== '' && (
+                <>
+                  <span className='text-red-600 line-through decoration-red-300 dark:text-red-400 dark:decoration-red-500/50'>
+                    {f.old}
+                  </span>
+                  <span aria-hidden='true' className={MUTED}>
+                    {' '}
+                    →{' '}
+                  </span>
+                  <span className='sr-only'> changed to </span>
+                </>
+              )}
+              <span className='text-emerald-700 dark:text-emerald-400'>{f.new}</span>
+            </p>
+            <Who by={f.by} at={f.at} />
+          </div>
         </div>
       )
     })
@@ -213,20 +215,22 @@ function rowsOf(d: ResubmissionDiffData): Row[] {
         node: (
           <div className='flex items-start gap-2' data-resub-line={it.kind}>
             <KindIcon kind={it.kind} />
-            <p className='min-w-0 flex-1 break-words'>
-              <span className={MUTED}>{g.label}: </span>
-              <span className={STRONG}>{it.label}</span>
-              <span className={MUTED}>
-                {it.kind === 'added'
-                  ? ' added'
-                  : it.kind === 'removed'
-                    ? ' removed'
-                    : it.fields.length > 0
-                      ? ` — ${it.fields.join(', ')} changed`
-                      : ' changed'}
-              </span>
-            </p>
-            <Who by={it.by} at={it.at} />
+            <div className='min-w-0 flex-1 sm:flex sm:items-start sm:gap-4'>
+              <p className='min-w-0 break-words sm:flex-1'>
+                <span className={MUTED}>{g.label}: </span>
+                <span className={STRONG}>{it.label}</span>
+                <span className={MUTED}>
+                  {it.kind === 'added'
+                    ? ' added'
+                    : it.kind === 'removed'
+                      ? ' removed'
+                      : it.fields.length > 0
+                        ? ` — ${it.fields.join(', ')} changed`
+                        : ' changed'}
+                </span>
+              </p>
+              <Who by={it.by} at={it.at} />
+            </div>
           </div>
         )
       })
@@ -253,24 +257,26 @@ function rowsOf(d: ResubmissionDiffData): Row[] {
           ) : (
             <KindIcon kind={f.kind} />
           )}
-          <p className='min-w-0 flex-1 break-words'>
-            <span className={MUTED}>{f.field_label}: </span>
-            {f.kind === 'replaced' ? (
-              <>
-                <span className={STRONG}>{f.name}</span>
-                <span className={MUTED}> replaced </span>
-                <span className='text-slate-500 line-through dark:text-slate-400'>
-                  {f.old_name ?? 'a file'}
-                </span>
-              </>
-            ) : (
-              <>
-                <span className={STRONG}>{f.name}</span>
-                <span className={MUTED}>{f.kind === 'added' ? ' added' : ' removed'}</span>
-              </>
-            )}
-          </p>
-          <Who by={f.by} at={f.at} />
+          <div className='min-w-0 flex-1 sm:flex sm:items-start sm:gap-4'>
+            <p className='min-w-0 break-words sm:flex-1'>
+              <span className={MUTED}>{f.field_label}: </span>
+              {f.kind === 'replaced' ? (
+                <>
+                  <span className={STRONG}>{f.name}</span>
+                  <span className={MUTED}> replaced </span>
+                  <span className='text-slate-500 line-through dark:text-slate-400'>
+                    {f.old_name ?? 'a file'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className={STRONG}>{f.name}</span>
+                  <span className={MUTED}>{f.kind === 'added' ? ' added' : ' removed'}</span>
+                </>
+              )}
+            </p>
+            <Who by={f.by} at={f.at} />
+          </div>
         </div>
       )
     })
@@ -296,7 +302,7 @@ export function ResubmissionChanges({
     )
   const shown = all ? rows : rows.slice(0, limit)
   return (
-    <div className='space-y-1 text-[12px] leading-snug'>
+    <div className='max-w-[880px] space-y-1.5 text-[12px] leading-snug'>
       {shown.map((r) => (
         <div key={r.key}>{r.node}</div>
       ))}

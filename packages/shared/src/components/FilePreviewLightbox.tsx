@@ -168,7 +168,7 @@ export function FilePreviewLightbox({
       data-file-lightbox
     >
       <div
-        className='flex items-center gap-3 px-4 py-2.5'
+        className='flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5'
         onClick={(e) => e.stopPropagation()}
         onKeyDown={() => {}}
       >
@@ -180,9 +180,9 @@ export function FilePreviewLightbox({
           <p
             role='status'
             data-file-newer
-            className='nvr-fade-in flex shrink-0 items-center gap-2 rounded-md bg-white/10 py-1 pr-1 pl-2.5 text-[12px] text-white/90'
+            className='nvr-fade-in flex shrink-0 items-center gap-2 rounded-md bg-white/10 py-1 pr-1 pl-2.5 text-[12px] text-white/90 max-sm:order-last max-sm:w-full max-sm:justify-between'
           >
-            <span className='max-w-[42vw] truncate'>
+            <span className='min-w-0 truncate sm:max-w-[42vw]'>
               {newer.renamed && !newer.replaced
                 ? `Renamed to ${newer.renamed}`
                 : 'A newer version of this file exists'}
@@ -190,7 +190,7 @@ export function FilePreviewLightbox({
             <button
               type='button'
               onClick={showNewer}
-              className='inline-flex items-center gap-1 rounded bg-white px-2 py-0.5 text-[11.5px] font-medium text-slate-900 hover:bg-white/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white'
+              className='inline-flex shrink-0 items-center gap-1 rounded bg-[#ffffff] px-2 py-0.5 text-[11.5px] font-medium text-[#0f172a] hover:bg-[#e2e8f0] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffffff]'
             >
               <RefreshCw aria-hidden className='h-3 w-3' /> Show newer
             </button>
@@ -200,7 +200,7 @@ export function FilePreviewLightbox({
           <p
             role='status'
             data-file-gone
-            className='nvr-fade-in shrink-0 rounded-md bg-white/10 px-2.5 py-1 text-[12px] text-white/80'
+            className='nvr-fade-in shrink-0 rounded-md bg-white/10 px-2.5 py-1 text-[12px] text-white/80 max-sm:order-last max-sm:w-full'
           >
             This file was removed from the record
           </p>
