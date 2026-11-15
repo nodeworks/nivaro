@@ -8,7 +8,12 @@ import { createRoot } from 'react-dom/client'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import './globals.css'
-import { disableRecordOutbox, guardErrorToasts, installStaleChunkRecovery } from '@nivaro/shared'
+import {
+  disableRecordOutbox,
+  guardErrorToasts,
+  installStaleChunkRecovery,
+  useLiveOps
+} from '@nivaro/shared'
 import App from './App'
 import { STALE_BUILD_TOAST } from './components/stale-build-notice'
 import { registerCloudPlugin, registerExtensionPlugin } from './extensions/store'
@@ -68,6 +73,9 @@ window.__NIVARO__ = {
   useQuery,
   useMutation,
   useNavigate,
+  // Realtime round 9: an ops topic's pokes (`usage`, `sessions`…) for UI bundles — the
+  // server gates every topic at join, so a bundle hears only what its viewer may.
+  useLiveOps,
   toast
 }
 

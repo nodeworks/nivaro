@@ -33,6 +33,8 @@ export type OpsTopic =
   | 'access-requests'
   | 'webhooks'
   | 'dead-letters'
+  | 'sessions'
+  | 'usage'
 
 /**
  * 'ticket' — the person must be able to see that support ticket (canSeeTicket).
@@ -58,7 +60,11 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   'access-requests': 'admin',
   // Webhook deliveries and the dead-letter queue (2026-11-14): pokes only, admin pages.
   webhooks: 'admin',
-  'dead-letters': 'admin'
+  'dead-letters': 'admin',
+  // Realtime round 9: a person's sessions / phones changed ({user_id} only, sessions-live.ts)
+  // and the instance's usage moved (a coalesced poke, usage-live.ts). Administrators only.
+  sessions: 'admin',
+  usage: 'admin'
 }
 
 /**

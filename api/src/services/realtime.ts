@@ -19,6 +19,7 @@ import { publishSseEvent } from './sse-hub.js'
 import { noteCollectionChanged, tempCacheActive } from './traffic-actions/temp-cache.js'
 import { noteWrite } from './traffic-map.js'
 import { currentTrafficSource } from './traffic-source.js'
+import { noteUsageChanged, writeMovesUsage } from './usage-live.js'
 
 /**
  * Best-effort broadcast that a record in `collection` changed. Consumers join
@@ -72,6 +73,8 @@ export function broadcastCollectionUpdate(
   // The Collections directory's counts / last change follow data writes (never system tables
   // or `$` aspect notices): one coalesced poke to admins who have the directory open.
   if (extra?.action && !collection.startsWith('nivaro_')) pokeOps('collections')
+  // Realtime round 9 — records, files and people counted by the live usage figures (coalesced).
+  if (writeMovesUsage(collection, item, extra?.action, extra?.changed_fields)) noteUsageChanged()
   // #1826 — a staged import run writing through the items service says so, so a form open on
   // the record can warn "an import is updating this record" instead of looking like a person.
   const source = extra?.source ?? (currentTrafficSource()?.kind === 'import' ? 'import' : undefined)

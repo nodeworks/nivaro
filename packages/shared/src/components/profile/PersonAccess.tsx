@@ -7,11 +7,14 @@ import {
   EyeOff,
   KeyRound,
   Loader2,
+  LogOut,
+  Monitor,
   MonitorSmartphone,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
+  Smartphone,
   Trash2,
   Undo2
 } from 'lucide-react'
@@ -20,8 +23,13 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
-import { cn, formatNumber, formatRelative } from '../../lib/utils'
+import { useFreshIds, useLiveOps } from '../../lib/live-ops'
+import { useLivePreference } from '../../lib/live-preference'
+import { cn, formatDateTime, formatNumber, formatRelative } from '../../lib/utils'
+import { ErrorNotice } from '../ErrorNotice'
+import { useOverflowTip } from '../TipLayer'
 import { SimpleSelect } from '../ui/SimpleSelect'
+import { Skeleton } from '../ui/skeleton'
 import { ConfirmButton, EmptyLine, SectionCard } from './primitives'
 import { errorText, type PersonProfile, useInvalidatePerson } from './types'
 
@@ -1397,61 +1405,166 @@ export function ApiTokenCard({ profile: p }: { profile: PersonProfile }) {
 
 // ─── Live sessions ───────────────────────────────────────────────────────────
 
+/** One browser session as the admin route lists it (routes/security.ts). `sid_prefix` is only
+ *  the handle Sign out sends back — never shown. device / ip / signed_in_at are stamped at
+ *  sign-in; sessions from before that carry none. */
+export interface PersonSession {
+  sid_prefix: string
+  user_id: string
+  ttl_seconds: number
+  device?: string | null
+  ip?: string | null
+  signed_in_at?: string | null
+}
+
+/** "Ends in 7h" / "Ends in 25 min" from the session's remaining life. */
+export function sessionEndsIn(ttlSeconds: number): string {
+  if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) return 'Ending now'
+  if (ttlSeconds < 3600) return `Ends in ${Math.max(1, Math.round(ttlSeconds / 60))} min`
+  const h = Math.round(ttlSeconds / 3600)
+  return h >= 48 ? `Ends in ${Math.round(h / 24)} days` : `Ends in ${h}h`
+}
+
+/** The person page's browser sessions. Realtime round 9: follows sign-ins, sign-outs and
+ *  revocations live (ops topic `sessions`, admin-only; the event names the person only). */
 export function SessionsCard({ userId }: { userId: string }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
-  const { data: sessions = [] } = useQuery<
-    Array<{ sid_prefix: string; user_id: string; ttl_seconds: number }>
-  >({
-    queryKey: ['nvr-user-sessions', userId],
+  const key = ['nvr-user-sessions', userId]
+  const list = useQuery<PersonSession[]>({
+    queryKey: key,
     queryFn: () =>
       client
-        .request<{ data: Array<{ sid_prefix: string; user_id: string; ttl_seconds: number }> }>(
-          get('/security/sessions', { user_id: userId })
-        )
-        .then((r) => r.data)
-        .catch(() => []),
+        .request<{ data: PersonSession[] }>(get('/security/sessions', { user_id: userId }))
+        .then((r) => r.data ?? []),
     staleTime: 30_000
   })
+  // A sign-in, sign-out or revoke for THIS person (or "many people") → one quiet re-read of
+  // both lists on the page (browsers here, phones in SignedInDevices).
+  const want = userId.toUpperCase()
+  useLiveOps(
+    'sessions',
+    () => {
+      void qc.invalidateQueries({ queryKey: ['nvr-user-sessions', userId] })
+      void qc.invalidateQueries({ queryKey: ['nvr-signed-in-devices', userId] })
+    },
+    {
+      debounceMs: 800,
+      match: (d) => d.all === true || String(d.user_id ?? '').toUpperCase() === want
+    }
+  )
   const revoke = useMutation({
     mutationFn: (prefix: string) => client.request(del(`/security/sessions/${prefix}`)),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['nvr-user-sessions', userId] })
-      toast.success('Session revoked')
+    onSuccess: (_r, prefix) => {
+      qc.setQueryData<PersonSession[]>(key, (rows) => rows?.filter((r) => r.sid_prefix !== prefix))
+      toast.success('That browser is signed out')
     },
-    onError: (e) => toast.error(errorText(e, 'Could not revoke'))
+    onError: (e) => toastError(e, 'Could not sign that browser out')
   })
+  const sessions = list.data ?? []
+  const fresh = useFreshIds(sessions.map((s) => s.sid_prefix))
+  const { quiet } = useLivePreference()
   return (
     <SectionCard
       icon={<MonitorSmartphone className='h-4 w-4' />}
-      title={`Live sessions · ${sessions.length}`}
-      hint='Revoking one signs that browser out on its next request'
+      title={list.isSuccess ? `Signed-in browsers · ${sessions.length}` : 'Signed-in browsers'}
+      hint='Signing a browser out ends it on its next request'
       testId='sessions'
     >
-      {sessions.length === 0 ? (
-        <EmptyLine>No live sessions.</EmptyLine>
+      {list.isLoading ? (
+        <div className='space-y-3' aria-hidden>
+          <Skeleton className='h-9 w-full' />
+          <Skeleton className='h-9 w-2/3' />
+        </div>
+      ) : list.isError ? (
+        <ErrorNotice error={list.error} what='signed-in browsers' onRetry={() => list.refetch()} />
+      ) : sessions.length === 0 ? (
+        <EmptyLine>Not signed in on any browser.</EmptyLine>
       ) : (
-        <ul className='space-y-1.5'>
+        <ul data-sessions-list className='-my-2 divide-y divide-slate-100 dark:divide-border/60'>
           {sessions.map((sn) => (
-            <li
+            <SessionRow
               key={sn.sid_prefix}
-              className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'
-            >
-              <span className='font-mono text-slate-400'>{sn.sid_prefix}…</span>
-              <span className='text-[11px] text-slate-400'>
-                expires in {Math.max(1, Math.round(sn.ttl_seconds / 3600))}h
-              </span>
-              <ConfirmButton
-                onConfirm={() => revoke.mutate(sn.sid_prefix)}
-                confirmLabel='Sign them out?'
-                className='ml-auto text-[11px] text-red-500 underline decoration-dotted hover:text-red-600'
-              >
-                Revoke
-              </ConfirmButton>
-            </li>
+              session={sn}
+              fresh={!quiet && fresh.has(sn.sid_prefix)}
+              pending={revoke.isPending && revoke.variables === sn.sid_prefix}
+              onRevoke={() => revoke.mutate(sn.sid_prefix)}
+            />
           ))}
         </ul>
       )}
     </SectionCard>
+  )
+}
+
+function SessionRow({
+  session: sn,
+  fresh,
+  pending,
+  onRevoke
+}: {
+  session: PersonSession
+  fresh: boolean
+  pending: boolean
+  onRevoke: () => void
+}) {
+  const name = sn.device || 'Browser'
+  const meta = [
+    sn.ip,
+    sn.signed_in_at
+      ? `Signed in ${formatDateTime(sn.signed_in_at)}`
+      : 'Signed in before this was recorded',
+    sessionEndsIn(sn.ttl_seconds)
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  const nameRef = useOverflowTip<HTMLSpanElement>(name)
+  const metaRef = useOverflowTip<HTMLParagraphElement>(meta)
+  return (
+    <li
+      data-session-row
+      data-fresh={fresh || undefined}
+      className={cn(
+        '-mx-2 flex items-center gap-3 rounded-md px-2 py-2.5 transition-colors duration-700 motion-reduce:transition-none',
+        fresh && 'bg-nvr-cyan/10'
+      )}
+    >
+      <span className='flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-300'>
+        {/ on (iOS|Android)$/.test(name) ? (
+          <Smartphone className='h-4 w-4' aria-hidden />
+        ) : (
+          <Monitor className='h-4 w-4' aria-hidden />
+        )}
+      </span>
+      <div className='min-w-0 flex-1'>
+        <span
+          ref={nameRef}
+          data-session-device
+          className='block truncate text-[12.5px] font-medium text-slate-800 dark:text-slate-100'
+        >
+          {name}
+        </span>
+        <p
+          ref={metaRef}
+          data-session-meta
+          className='mt-0.5 truncate text-[11.5px] tabular-nums text-slate-500 dark:text-slate-400'
+        >
+          {meta}
+        </p>
+      </div>
+      <span data-session-sign-out className='contents'>
+        <ConfirmButton
+          title={`Sign out ${name}`}
+          onConfirm={onRevoke}
+          confirmLabel='Sign it out?'
+          disabled={pending}
+          className='inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 transition-colors hover:border-red-300 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:opacity-40 dark:border-border dark:text-slate-300 dark:hover:border-red-500/40 dark:hover:text-red-400'
+          armedClassName='border-red-300 font-semibold text-red-600 dark:border-red-500/40 dark:text-red-400'
+        >
+          <LogOut className='h-3 w-3' aria-hidden />
+          {pending ? 'Signing out…' : 'Sign out'}
+        </ConfirmButton>
+      </span>
+    </li>
   )
 }

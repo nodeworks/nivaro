@@ -27,6 +27,14 @@ export async function revokeSessions(
   ttlSeconds = config.SESSION_TTL
 ): Promise<void> {
   if (sids.length === 0) return
+  // Realtime round 9: whose sessions these are, read before they go (the live sessions list on
+  // the person page). Best-effort — a read that fails never stops the revoke.
+  let owners: string[] = []
+  try {
+    owners = sessionOwners(await redis.mget(...sids.map((sid) => `sess:${sid}`)))
+  } catch {
+    owners = []
+  }
   const pipe = redis.multi()
   for (const sid of sids) {
     pipe.del(`sess:${sid}`)
@@ -38,6 +46,26 @@ export async function revokeSessions(
   void import('../services/socket-access.js')
     .then((m) => m.endSessionSockets(sids, 'signed_out'))
     .catch(() => {})
+  // Administrators with these people's page open see the session go (the person's id only).
+  if (owners.length > 0)
+    void import('../services/sessions-live.js')
+      .then((m) => m.noteSessionsChanged(owners))
+      .catch(() => {})
+}
+
+/** The signed-in people a list of session blobs (raw JSON, null = gone) belongs to. */
+export function sessionOwners(raws: Array<string | null | undefined> | null | undefined): string[] {
+  const out: string[] = []
+  for (const raw of raws ?? []) {
+    if (typeof raw !== 'string' || !raw) continue
+    try {
+      const uid = (JSON.parse(raw) as { userId?: unknown }).userId
+      if (typeof uid === 'string' && uid) out.push(uid)
+    } catch {
+      /* unparseable blob — nobody to tell */
+    }
+  }
+  return out
 }
 
 /** SCAN pages (200 keys each) before sessionIdsForUser gives up: 10M keys. */

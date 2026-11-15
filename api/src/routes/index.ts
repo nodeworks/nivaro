@@ -341,6 +341,7 @@ import { trashRoutes } from './trash.js'
 import { treeRoutes } from './tree.js'
 import { treePermissionsRoutes } from './tree-permissions.js'
 import { twoFactorRoutes } from './two-factor.js'
+import { usageLiveRoutes } from './usage-live.js'
 import { userActivityRoutes } from './user-activity.js'
 import { userGroupsRoutes } from './user-groups.js'
 import { userScopesRoutes } from './user-scopes.js'
@@ -870,6 +871,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(oauthConnectionRoutes)
   // Signed-in phones (device grants): list + sign out, own and admin.
   await app.register(deviceRoutes)
+  // Realtime round 9 — live usage figures (admin) for a hosting layer's plan meter.
+  await app.register(usageLiveRoutes)
   await app.register(signInTroubleshooterRoutes)
   await app.register(mcpConnectionRoutes, { prefix: '/mcp-connections' })
   // #3205 / #3214 connection limits + tool kits, #3206 composite tool suggestions,

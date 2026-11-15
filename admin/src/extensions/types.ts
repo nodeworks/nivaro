@@ -47,6 +47,12 @@ export interface ResponseInterceptorSlot {
   handler: (status: number, data: unknown, headers: Record<string, string>) => boolean | void
 }
 
+/** The Account page's usage panel. A plugin that fills it REPLACES the built-in "Usage details"
+ *  card (the hosting layer owns plan figures; e.g. a live meter over GET /api/usage/live). */
+export interface AccountUsageSlot {
+  component: React.ComponentType
+}
+
 export interface PluginSlots {
   'external-api-detail': ExternalApiDetailSlot
   'item-detail-sidebar': ItemDetailSidebarSlot
@@ -56,6 +62,7 @@ export interface PluginSlots {
   'list-row-action': ListRowActionSlot
   'app-component': AppComponentSlot
   'response-interceptor': ResponseInterceptorSlot
+  'account-usage': AccountUsageSlot
 }
 
 export interface ExtensionPlugin {
@@ -105,6 +112,7 @@ declare global {
       useMutation: typeof import('@tanstack/react-query').useMutation
       useNavigate: typeof import('react-router').useNavigate
       toast: typeof import('sonner').toast
+      useLiveOps: typeof import('@nivaro/shared').useLiveOps
     }
   }
 }

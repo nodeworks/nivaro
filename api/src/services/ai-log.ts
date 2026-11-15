@@ -14,6 +14,7 @@ import {
 import { tenantState } from './ai-tenant-state.js'
 import { currentTraceMeta } from './request-trace.js'
 import { noteAiCall } from './traffic-taps/ai.js'
+import { noteUsageChanged } from './usage-live.js'
 
 /**
  * Per-call AI log (nivaro_ai_calls) — every `messages.create` that leaves
@@ -135,6 +136,8 @@ function insertCallRow(
     if (meta && (await aiCallMetaSupported())) out.meta = meta
     if (promptParts && (await promptPartsSupported())) out.prompt_parts = promptParts
     await db('nivaro_ai_calls').insert(out)
+    // Realtime round 9 — the live usage figures count this month's AI tokens (coalesced poke).
+    noteUsageChanged()
   })().catch(() => undefined)
 }
 
