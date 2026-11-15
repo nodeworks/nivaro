@@ -236,6 +236,7 @@ import {
   CoeditFormContext,
   type CoeditFormInfo,
   isCoeditInterface,
+  saveValidationScope,
   sharedTextUnderLock
 } from './item-edit/coedit/context'
 import { columnLengthError } from './item-edit/column-length'
@@ -9297,7 +9298,10 @@ function ItemEditFormView({
     }
     const errs: Record<string, string> = {}
     const changedThisSession = (k: string) => !valuesEqual(draft[k], initialDataRef.current[k])
+    // Shared text saved under someone else's lock: only the fields it sends are checked.
+    const scope = saveValidationScope(sharedTextSaveOk, unsavedSummary.fields)
     for (const f of allFields) {
+      if (scope && !scope.has(f.field)) continue
       if (f.hidden || f.readonly || SYSTEM_FIELDS.has(f.field) || isSentinelKey(f.field)) continue
       // A field the RESOLVED layout doesn't render can never be filled from
       // this form — a CAR's layout has no vendor or lines, so their required
