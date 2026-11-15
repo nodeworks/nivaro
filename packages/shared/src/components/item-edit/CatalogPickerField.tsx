@@ -43,6 +43,13 @@ import {
   facetsComplete,
   setFacetPick
 } from './catalog-facets'
+import {
+  catalogPriceText,
+  linePriceChange,
+  stockShortText,
+  useCatalogLineLive,
+  usePlaceName
+} from './catalog-line-watch'
 import { orderCatalogMatches, rowMatchesFields } from './catalog-search'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
@@ -1371,6 +1378,53 @@ export function CatalogPickerField({
     return null
   }
 
+  // rt4 #7 — the catalog rows behind the SAVED lines, read on their own (small, by id) so a
+  // catalog price change re-reads only these, live, instead of the whole browse list.
+  const lineSourceFields = useMemo(
+    () => [...new Set(['id', ...Object.values(config.copy_fields ?? {})])].join(','),
+    [config.copy_fields]
+  )
+  const savedPickedIds = useMemo(
+    () =>
+      isNew
+        ? []
+        : effectiveChildRows
+            .map((r) => r[config.item_field])
+            .filter((v) => v != null && v !== '')
+            .map(String),
+    [isNew, effectiveChildRows, config.item_field]
+  )
+  const { data: lineSourceRows = [] } = useQuery<Record<string, unknown>[]>({
+    queryKey: ['catalog-line-sources', catalogCol, lineSourceFields, savedPickedIds.join(',')],
+    queryFn: async () => {
+      const out: Record<string, unknown>[] = []
+      for (let i = 0; i < savedPickedIds.length; i += 200) {
+        const chunk = savedPickedIds.slice(i, i + 200)
+        const rows = await client
+          .request<{ data: Record<string, unknown>[] }>(
+            get(`/items/${catalogCol}`, {
+              filter: JSON.stringify({ id: { _in: chunk } }),
+              fields: lineSourceFields,
+              limit: chunk.length
+            })
+          )
+          .then((r) => r.data ?? [])
+        out.push(...rows)
+      }
+      return out
+    },
+    enabled:
+      !readOnly &&
+      !!catalogCol &&
+      savedPickedIds.length > 0 &&
+      Object.keys(config.copy_fields ?? {}).length > 0,
+    staleTime: 60_000
+  })
+  const lineSourceById = useMemo(
+    () => new Map(lineSourceRows.map((r) => [String(r.id).toUpperCase(), r])),
+    [lineSourceRows]
+  )
+
   // Related per-item lookups (config.related_columns): one batched query per
   // column against its collection, matched by the item FK plus resolved match
   // tokens ('$parent.<field>'). Chunked _in keeps MSSQL parameter limits safe.
@@ -2038,7 +2092,10 @@ export function CatalogPickerField({
       if (v != null && v !== '') return v
     }
     const src = config.copy_fields?.[field]
-    return src ? catalogRowFor(catalogId)[src] : undefined
+    if (!src) return undefined
+    // rt4 #7 — the saved lines' catalog rows as last re-read (live), else the browse rows.
+    const fresh = lineSourceById.get(catalogId.toUpperCase())
+    return fresh && src in fresh ? fresh[src] : catalogRowFor(catalogId)[src]
   }
   // Lines staged by a file (BOM Upload) arrive with no price: the line showed
   // "$0.00 · No catalog price" and TOTAL $0.00 up to Create, while the save
@@ -2052,6 +2109,50 @@ export function CatalogPickerField({
     for (const rc of config.related_columns ?? []) if (rc.copy_to) out.add(rc.copy_to)
     return [...out]
   }, [config.copy_fields, config.related_columns])
+  // rt4 #7 — line price / stock changed since the line was added: the price columns the
+  // catalog fills (a copy or a related copy_to that is money), never a computed total.
+  const priceFields = copyTargets.filter(
+    (f) =>
+      !(f in (config.compute_fields ?? {})) &&
+      (config.field_formats?.[f] === 'currency' || /(^|_)price$/i.test(f))
+  )
+  const linePriceNotes = (row: Record<string, unknown>, catalogId: string) =>
+    priceFields
+      .map((f) => {
+        const change = linePriceChange(row[f], catalogSourceValue(catalogId, f))
+        return change ? { field: f, change } : null
+      })
+      .filter((x): x is { field: string; change: { was: number; now: number } } => !!x)
+  // The place a shortfall is at (the warning column's '$parent.<field>'), named as the viewer sees it.
+  const warnPlaceField = useMemo(() => {
+    const col = (config.related_columns ?? []).find((rc) => rc.key === config.qty_warning?.column)
+    for (const raw of Object.values(col?.match ?? {})) {
+      // A bare token, or the {_eq: token} form.
+      const v = raw && typeof raw === 'object' ? (raw as { _eq?: unknown })._eq : raw
+      if (typeof v === 'string' && v.startsWith('$parent.')) return v.slice('$parent.'.length)
+    }
+    return null
+  }, [config.related_columns, config.qty_warning?.column])
+  const warnPlaceName = usePlaceName(
+    readOnly ? null : parentCollection,
+    warnPlaceField,
+    warnPlaceField ? parentDraft?.[warnPlaceField] : null
+  )
+  // Live: the catalog items on the lines, and the stock / price rows they read, re-read as
+  // the viewer when they change (coalesced). Only while the record can still be changed.
+  useCatalogLineLive({
+    enabled: !readOnly && pickedEntries.length > 0,
+    catalogCol,
+    pickedIds: savedPickedIds,
+    related: (config.related_columns ?? [])
+      .filter(
+        (rc, i) =>
+          i === stockIdx ||
+          rc.key === config.qty_warning?.column ||
+          (!!rc.copy_to && priceFields.includes(rc.copy_to))
+      )
+      .map((rc) => ({ key: rc.key, collection: rc.collection }))
+  })
   const fillSig = JSON.stringify([
     pendingRows.map((r) => [r[config.item_field], ...copyTargets.map((t) => r[t] ?? null)]),
     relatedResults.map((r) => r.dataUpdatedAt),
@@ -3298,13 +3399,56 @@ export function CatalogPickerField({
                           })}
                         </div>
                       )}
-                      {shortfall && (
-                        <p className='mt-1 flex items-center gap-1 pl-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400'>
-                          <AlertTriangle className='h-3 w-3 shrink-0' />
-                          {qtyWarningLabel} is {fmtVal(shortfall.available, 'number')} —{' '}
-                          {fmtVal(shortfall.qty, 'number')} requested
-                        </p>
-                      )}
+                      {shortfall &&
+                        (readOnly ? (
+                          <p className='mt-1 flex items-center gap-1 pl-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400'>
+                            <AlertTriangle className='h-3 w-3 shrink-0' />
+                            {qtyWarningLabel} is {fmtVal(shortfall.available, 'number')} —{' '}
+                            {fmtVal(shortfall.qty, 'number')} requested
+                          </p>
+                        ) : (
+                          // rt4 #7 — what the line is short of, where.
+                          <p
+                            data-catalog-stock-short
+                            className='mt-1 flex items-center gap-1 pl-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400'
+                          >
+                            <AlertTriangle className='h-3 w-3 shrink-0' />
+                            {stockShortText(
+                              shortfall.available,
+                              shortfall.qty,
+                              warnPlaceName,
+                              (n) => fmtVal(n, 'number')
+                            )}
+                          </p>
+                        ))}
+                      {!readOnly &&
+                        rowDbId != null &&
+                        !isStagedDelete &&
+                        linePriceNotes(e.row, e.key).map(({ field: pf, change }) => (
+                          <p
+                            key={pf}
+                            data-catalog-price-changed={pf}
+                            className='mt-1 flex flex-wrap items-center gap-x-1 pl-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300'
+                          >
+                            <AlertTriangle className='h-3 w-3 shrink-0' />
+                            <span>
+                              {catalogPriceText(change, (n) => fmtVal(n, 'currency'))}
+                              {priceFields.length > 1 ? ` · ${titleCase(pf)}` : ''}
+                            </span>
+                            <span aria-hidden className='text-amber-500/70'>
+                              ·
+                            </span>
+                            {/* The person's own edit, through the price cell's path. */}
+                            <button
+                              type='button'
+                              data-catalog-use-new-price={pf}
+                              className='rounded font-semibold text-nvr-cyan underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60'
+                              onClick={() => void commitField(e.key, pf, String(change.now))}
+                            >
+                              Use new price
+                            </button>
+                          </p>
+                        ))}
                       {!isStagedDelete &&
                         isUnpricedLine(
                           {
