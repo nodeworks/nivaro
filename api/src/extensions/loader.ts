@@ -76,6 +76,7 @@ import {
   type KitDeprecation,
   watchDeprecatedMembers
 } from '@nivaro/extension-kit'
+import { registerAiAllowanceCheck } from '../services/ai-allowance.js'
 import { registerCacheWarmer } from '../services/cache-warmers.js'
 import {
   describeChatMessageActions,
@@ -1232,8 +1233,24 @@ export function registrationMembers(
         if (r.ok) own('ai_tools', r.name)
         else ctx.logger.warn(`[extensions] ${extId}: Ask AI tool skipped — ${r.error}`)
         return r.ok
+      },
+      // Realtime round 9 follow-up: a hosting layer's AI allowance (services/ai-allowance.ts).
+      registerAllowance: (check) => {
+        note('ai-allowance')
+        registerAiAllowanceCheck(check, extId)
       }
     } as NonNullable<ExtensionContext['ai']>,
+    // Live usage figures (services/usage-live.ts) — what GET /api/usage/live answers, in the
+    // caller's tenant. `maxAgeMs` lets a per-write check (a record limit) reuse an older answer.
+    usage: {
+      read: async (o) => {
+        const [{ measureUsage, readLiveUsage }, { db }] = await Promise.all([
+          import('../services/usage-live.js'),
+          import('../db/index.js')
+        ])
+        return readLiveUsage(() => measureUsage(db), { maxAgeMs: o?.maxAgeMs })
+      }
+    },
     chatBot: {
       registerTool: (def) => {
         note('chat-bot')

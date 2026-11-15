@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { checkAiAllowance } from './ai-allowance.js'
 import { loggedCreate, loggedStream } from './ai-log.js'
 import {
   AiUnavailableError,
@@ -1011,6 +1012,8 @@ function guardClient(
       // 429 of our own is never mistaken for a provider failure.
       const who = currentAiUser()
       await checkUserAiLimits(who)
+      // A hosting layer's allowance (ai-allowance.ts; none registered self-hosted = no-op).
+      await checkAiAllowance()
       try {
         const out = await run(client)(...args)
         if (who) noteUserTokens(who, tokensOf(out))
