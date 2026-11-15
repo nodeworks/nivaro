@@ -178,7 +178,6 @@ describe('ready-to-send stored result', () => {
     checked: 10,
     ready: 8,
     errors: 0,
-    partial: null,
     collections: { orders: 'Orders' },
     entries: [entry({ item: 'a' }), entry({ item: 'b' })],
     duration_ms: 5

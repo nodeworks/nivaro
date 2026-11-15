@@ -42,7 +42,6 @@ export interface ReadyResult {
   ready: number
   /** Records the check itself failed on (left out of the board). */
   errors: number
-  partial: { reason: 'cap' | 'time'; checked: number; total: number } | null
   collections: Record<string, string>
   entries: ReadyEntry[]
   duration_ms: number
@@ -265,8 +264,7 @@ export function summarizeResult(r: ReadyResult): string {
     checked: r.checked,
     ready: r.ready,
     errors: r.errors,
-    with_problems: new Set(r.entries.map((e) => `${e.collection}:${e.item}`)).size,
-    partial: r.partial
+    with_problems: new Set(r.entries.map((e) => `${e.collection}:${e.item}`)).size
   })
 }
 
@@ -275,6 +273,29 @@ export function parseResult(raw: unknown): ReadyResult | null {
   try {
     const o = JSON.parse(raw)
     return o && o.kind === 'ready-to-send' && Array.isArray(o.entries) ? (o as ReadyResult) : null
+  } catch {
+    return null
+  }
+}
+
+/** What a COMPLETE board's stored JSON starts with (a running run stores counts only). */
+export const COMPLETE_PREFIX = '{"kind":"ready-to-send",'
+
+/** A running run's counts, written after every chunk. */
+export function progressJson(p: {
+  checked: number
+  total: number
+  entries: number
+  started_at: string
+}): string {
+  return JSON.stringify({ kind: 'ready-to-send-progress', ...p })
+}
+
+export function parseProgress(raw: unknown): { checked: number; total: number } | null {
+  if (typeof raw !== 'string' || !raw.startsWith('{"kind":"ready-to-send-progress"')) return null
+  try {
+    const o = JSON.parse(raw)
+    return { checked: Number(o.checked) || 0, total: Number(o.total) || 0 }
   } catch {
     return null
   }

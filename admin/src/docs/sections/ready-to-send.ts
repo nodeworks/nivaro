@@ -46,7 +46,7 @@ export const readyToSend: DocSection = {
     { type: 'h2', id: 'rts-run', text: 'When it runs' },
     {
       type: 'p',
-      text: 'The job `ready-to-send` runs at 04:20 each night (Jobs → Runs & schedules, where it can be paused or moved). Administrators can press Run now on the board. A run checks up to 1,500 records, newest first, for up to 10 minutes; when it stops short the board says how many it checked. The check only reads: nothing is sent, written back or logged against the partner. The result is kept on the job’s own run, and the daily operations report has a Ready to send section with the counts.'
+      text: 'The job `ready-to-send` runs at 04:20 each night (Jobs → Runs & schedules, where it can be paused or moved). Administrators can press Run now on the board. A run checks every such record, 100 at a time, and lets other work through between batches, so a large instance may take a while. If a run is cut short (a deploy or a restart), the board keeps showing the last complete check and says where the latest one stopped; the next run starts from the beginning. The check only reads: nothing is sent, written back or logged against the partner. The result is kept on the job’s own run, and the daily operations report has a Ready to send section with the counts.'
     },
     {
       type: 'pre',

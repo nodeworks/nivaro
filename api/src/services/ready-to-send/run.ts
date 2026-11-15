@@ -43,7 +43,10 @@ import {
 import { fetchRecordForConditions } from '../workflow-conditions.js'
 import { resolveFriendlyIds } from '../workflow-transitions.js'
 import {
+  COMPLETE_PREFIX,
+  parseProgress,
   parseResult,
+  progressJson,
   READY_JOB_ID,
   type ReadyEntry,
   type ReadyResult,
@@ -53,12 +56,12 @@ import {
 } from './board.js'
 import { forgetChunkReads, memoDb } from './memo-db.js'
 
-/** Records checked per run at most (newest first); the rest wait for the next run. */
-export const READY_MAX_RECORDS = 1500
-/** Records read together per collection. */
+/** Records read together per collection (one chunk = one set of set-reads, then dropped). */
 export const READY_CHUNK = 100
-/** A run stops starting records after this long and reports itself partial. */
-export const READY_TIME_BUDGET_MS = 10 * 60_000
+/** The job's watchdog: a run checks every open record, however long that takes, up to this. */
+export const READY_WATCHDOG_MS = 6 * 3_600_000
+/** A run row still 'running' after this long was cut short (deploy, restart, watchdog). */
+export const READY_STALE_MS = READY_WATCHDOG_MS + 2 * 3_600_000
 /** Line rows kept per issue on a stored entry (the record page lists them all). */
 const ROWS_PER_ISSUE = 10
 
@@ -368,12 +371,15 @@ function forgetRecords(cache: Map<string, Promise<unknown>>): void {
 
 export interface CheckOptions {
   userId: string | null
-  deadline?: number
-  /** Stop after this many records (the run's cap). */
+  /** Probes only: stop after this many records. The nightly run checks every record. */
   maxRecords?: number
   now?: () => number
   /** A person's name for entries from "Check again". */
   checkedBy?: string | null
+  /** Records per chunk (tests). */
+  chunkSize?: number
+  /** Called after every chunk: how far the run is (the job stores it as it goes). */
+  onChunk?: (p: { checked: number; total: number; entries: number }) => Promise<void> | void
 }
 
 export interface CheckOutcome {
@@ -381,38 +387,39 @@ export interface CheckOutcome {
   checked: number
   ready: number
   errors: number
-  stoppedForTime: boolean
 }
 
-/** Check candidates collection by collection, chunk by chunk, with one shared cache. */
+/** Let the event loop serve requests between chunks. */
+const yieldToRequests = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+/**
+ * Check candidates collection by collection, chunk by chunk, with one shared cache. Memory stays
+ * bounded: a chunk's records, context rows and last pushes are dropped once it is done; what is
+ * kept is the compact entries of records with something in the way (issue rows capped at 10).
+ */
 export async function checkCandidates(
   candidates: Candidate[],
   catalog: Catalog,
   opts: CheckOptions
 ): Promise<CheckOutcome> {
-  const now = opts.now ?? Date.now
+  const size = Math.max(1, opts.chunkSize ?? READY_CHUNK)
   const cache = new Map<string, Promise<unknown>>()
   // The requirements evaluator's reads, memoized (metadata for the run, the rest per chunk).
   const reads = memoDb(cache)
-  const out: CheckOutcome = { entries: [], checked: 0, ready: 0, errors: 0, stoppedForTime: false }
+  const out: CheckOutcome = { entries: [], checked: 0, ready: 0, errors: 0 }
+  const todo = candidates.slice(0, opts.maxRecords ?? candidates.length)
   const byCollection = new Map<string, Candidate[]>()
-  for (const c of candidates.slice(0, opts.maxRecords ?? candidates.length)) {
-    byCollection.set(c.collection, [...(byCollection.get(c.collection) ?? []), c])
+  for (const c of todo) {
+    const list = byCollection.get(c.collection)
+    if (list) list.push(c)
+    else byCollection.set(c.collection, [c])
   }
-  outer: for (const [collection, list] of byCollection) {
-    for (let i = 0; i < list.length; i += READY_CHUNK) {
-      if (opts.deadline && now() > opts.deadline) {
-        out.stoppedForTime = true
-        break outer
-      }
-      const chunk = list.slice(i, i + READY_CHUNK)
+  for (const [collection, list] of byCollection) {
+    for (let i = 0; i < list.length; i += size) {
+      const chunk = list.slice(i, i + size)
       await prefetchChunk(collection, chunk, cache, opts.userId)
       const found: Array<{ c: Candidate; t: TransitionRow; r: PreflightResult }> = []
       for (const c of chunk) {
-        if (opts.deadline && now() > opts.deadline) {
-          out.stoppedForTime = true
-          break
-        }
         try {
           const results: Array<{ t: TransitionRow; r: PreflightResult }> = []
           // One condition read per record, over every move's rules (not one per move).
@@ -448,7 +455,18 @@ export async function checkCandidates(
       out.entries.push(...(await describe(collection, found, catalog, opts)))
       forgetRecords(cache)
       forgetChunkReads(cache)
-      if (out.stoppedForTime) break outer
+      if (opts.onChunk) {
+        try {
+          await opts.onChunk({
+            checked: out.checked,
+            total: todo.length,
+            entries: out.entries.length
+          })
+        } catch {
+          /* progress bookkeeping never stops the run */
+        }
+      }
+      await yieldToRequests()
     }
   }
   return out
@@ -514,32 +532,24 @@ async function describe(
 
 const SEVERITY_ORDER = { block: 0, warn: 1, ask: 2 } as const
 
-/** The whole board: candidates → checked (capped, time-boxed) → a stored-shape result. */
+/** The whole board: every candidate checked, chunk by chunk → a stored-shape result. */
 export async function buildReadyResult(opts: {
   trigger: string
   userId?: string | null
+  /** Probes only. */
   maxRecords?: number
-  budgetMs?: number
+  onChunk?: CheckOptions['onChunk']
 }): Promise<ReadyResult> {
   const started = Date.now()
   const catalog = await loadCatalog()
   const candidates = await findCandidates(catalog)
-  const max = opts.maxRecords ?? READY_MAX_RECORDS
   const outcome = await checkCandidates(candidates, catalog, {
     userId: opts.userId ?? null,
-    maxRecords: max,
-    deadline: started + (opts.budgetMs ?? READY_TIME_BUDGET_MS)
+    maxRecords: opts.maxRecords,
+    onChunk: opts.onChunk
   })
   const collections = [...new Set(outcome.entries.map((e) => e.collection))]
   const labels = await collectionLabels(collections).catch(() => new Map<string, string>())
-  const partial =
-    outcome.stoppedForTime || candidates.length > outcome.checked
-      ? {
-          reason: outcome.stoppedForTime ? ('time' as const) : ('cap' as const),
-          checked: outcome.checked,
-          total: candidates.length
-        }
-      : null
   return {
     kind: 'ready-to-send',
     generated_at: new Date().toISOString(),
@@ -548,7 +558,6 @@ export async function buildReadyResult(opts: {
     checked: outcome.checked,
     ready: outcome.ready,
     errors: outcome.errors,
-    partial,
     collections: Object.fromEntries(labels),
     entries: outcome.entries.sort(
       (a, b) => SEVERITY_ORDER[a.worst] - SEVERITY_ORDER[b.worst] || a.label.localeCompare(b.label)
@@ -580,7 +589,7 @@ async function ownRunRow(): Promise<number | null> {
   try {
     const row = (await db('nivaro_job_runs')
       .where({ job_id: READY_JOB_ID, status: 'running' })
-      .where('started_at', '>', new Date(Date.now() - 2 * 3_600_000))
+      .where('started_at', '>', new Date(Date.now() - READY_STALE_MS))
       .orderBy('id', 'desc')
       .first('id')) as { id: number } | undefined
     return row ? Number(row.id) : null
@@ -589,11 +598,26 @@ async function ownRunRow(): Promise<number | null> {
   }
 }
 
-/** The `ready-to-send` cron body (nightly tick and Run now, both through the CronManager, which
- *  owns the job row, the heavy slot and the background pool). */
+/**
+ * The `ready-to-send` cron body (nightly tick and Run now, both through the CronManager, which
+ * owns the job row, the heavy slot and the background pool). Every open record is checked —
+ * no cap, no time box. After each chunk the row's progress says how far it got (counts only);
+ * the finished board replaces it at the end. A run cut short (deploy, restart, watchdog) leaves
+ * its counts behind: the board keeps the last COMPLETE result and says where that run stopped;
+ * the next run starts from the beginning.
+ */
 export async function readyToSendTick(trigger = 'cron'): Promise<ReadyResult> {
   const rowId = await ownRunRow()
-  const result = await buildReadyResult({ trigger })
+  const startedAt = new Date().toISOString()
+  const result = await buildReadyResult({
+    trigger,
+    onChunk: async (p) => {
+      if (rowId == null) return
+      await db('nivaro_job_runs')
+        .where('id', rowId)
+        .update({ progress: progressJson({ ...p, started_at: startedAt }) })
+    }
+  })
   if (rowId != null) {
     await db('nivaro_job_runs')
       .where('id', rowId)
@@ -634,16 +658,72 @@ export interface StoredRun {
   result: ReadyResult
 }
 
-/** The newest stored result, and whether a run is going now. */
-export async function latestReadyResult(): Promise<{ run: StoredRun | null; running: boolean }> {
-  const [runningRow, row] = await Promise.all([
-    db('nivaro_job_runs')
-      .where({ job_id: READY_JOB_ID, status: 'running' })
-      .where('started_at', '>', new Date(Date.now() - 2 * 3_600_000))
-      .first('id') as Promise<{ id: number } | undefined>,
+export interface RunRowHead {
+  id: number
+  status: string
+  started_at: Date | string | null
+  /** The first characters of progress — enough for its kind and a counts blob. */
+  head: string | null
+}
+
+/**
+ * Pure: from the job's newest rows (newest first), whether a run is going and how far it is,
+ * and whether the last run that ended was cut short before writing its board. A row still
+ * 'running' past READY_STALE_MS was killed (deploy / restart) and counts as stopped.
+ */
+export function boardRunState(
+  rows: RunRowHead[],
+  now = Date.now()
+): {
+  running: { checked: number; total: number } | null
+  stopped: { checked: number; total: number | null; at: string | null } | null
+} {
+  const fresh = (r: RunRowHead) =>
+    r.status === 'running' &&
+    r.started_at != null &&
+    now - new Date(r.started_at).getTime() < READY_STALE_MS
+  let running: { checked: number; total: number } | null = null
+  let stopped: { checked: number; total: number | null; at: string | null } | null = null
+  for (const [n, r] of rows.entries()) {
+    if (n === 0 && fresh(r)) {
+      const p = parseProgress(r.head)
+      running = { checked: p?.checked ?? 0, total: p?.total ?? 0 }
+      continue
+    }
+    if (r.head?.startsWith(COMPLETE_PREFIX)) break
+    const p = parseProgress(r.head)
+    stopped = {
+      checked: p?.checked ?? 0,
+      total: p?.total ?? null,
+      at: r.started_at ? new Date(r.started_at).toISOString() : null
+    }
+    break
+  }
+  return { running, stopped }
+}
+
+/** The newest complete board, whether a run is going (and how far), and whether the last run
+ *  stopped short. */
+export async function latestReadyResult(): Promise<{
+  run: StoredRun | null
+  running: boolean
+  progress: { checked: number; total: number } | null
+  stopped: { checked: number; total: number | null; at: string | null } | null
+}> {
+  const [heads, row] = await Promise.all([
     db('nivaro_job_runs')
       .where({ job_id: READY_JOB_ID })
-      .where('progress', 'like', '{"kind":"ready-to-send",%')
+      .orderBy('id', 'desc')
+      .limit(5)
+      .select(
+        'id',
+        'status',
+        'started_at',
+        db.raw('SUBSTRING(progress, 1, 400) AS head')
+      ) as Promise<RunRowHead[]>,
+    db('nivaro_job_runs')
+      .where({ job_id: READY_JOB_ID })
+      .where('progress', 'like', `${COMPLETE_PREFIX}%`)
       .orderBy('id', 'desc')
       .first('id', 'status', 'started_at', 'finished_at', 'progress') as Promise<
       | {
@@ -656,9 +736,12 @@ export async function latestReadyResult(): Promise<{ run: StoredRun | null; runn
       | undefined
     >
   ])
+  const state = boardRunState(heads)
   const result = row ? parseResult(row.progress) : null
   return {
-    running: !!runningRow,
+    running: !!state.running,
+    progress: state.running,
+    stopped: state.stopped,
     run:
       row && result
         ? {

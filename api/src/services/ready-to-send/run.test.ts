@@ -65,7 +65,15 @@ vi.mock('../command-center/flow.js', () => ({
 
 import type { PreflightResult, TransitionRow } from '../integration-preview.js'
 import { buildContextBatch } from '../workflow-actions.js'
-import { boardIssue, type Candidate, checkCandidates, movesFrom, sendMoves } from './run.js'
+import { progressJson } from './board.js'
+import {
+  boardIssue,
+  boardRunState,
+  type Candidate,
+  checkCandidates,
+  movesFrom,
+  sendMoves
+} from './run.js'
 
 const ACTION = {
   type: 'erp_submit',
@@ -164,20 +172,97 @@ describe('ready-to-send batched preflight', () => {
     expect(e.issues[0]).toMatchObject({ severity: 'block', kind: 'push', partner: 'Acme ERP' })
   })
 
-  it('stops starting records once the time box is spent and says so', async () => {
-    let t = 0
-    const out = await checkCandidates(setup(3), catalog, {
+  it('checks every record in chunks, reporting progress after each and reading per chunk', async () => {
+    const progress: Array<{ checked: number; total: number }> = []
+    const out = await checkCandidates(setup(7), catalog, {
       userId: null,
-      deadline: 1,
-      now: () => t++
+      chunkSize: 3,
+      onChunk: (p) => {
+        progress.push({ checked: p.checked, total: p.total })
+      }
     })
-    expect(out.stoppedForTime).toBe(true)
-    expect(out.checked).toBeLessThan(3)
+    // No cap: all seven, in chunks of 3 + 3 + 1.
+    expect(out.checked).toBe(7)
+    expect(progress).toEqual([
+      { checked: 3, total: 7 },
+      { checked: 6, total: 7 },
+      { checked: 7, total: 7 }
+    ])
+    // One set-read of the records per chunk, never one per record.
+    expect(calls.filter((c) => c === 'orders')).toHaveLength(3)
+    expect(calls.filter((c) => c === 'nivaro_erp_submissions')).toHaveLength(3)
   })
 
-  it('caps the records checked', async () => {
+  it('a failing progress write never stops the run', async () => {
+    const out = await checkCandidates(setup(4), catalog, {
+      userId: null,
+      chunkSize: 2,
+      onChunk: () => {
+        throw new Error('db gone')
+      }
+    })
+    expect(out.checked).toBe(4)
+  })
+
+  it('caps the records checked only when a probe asks', async () => {
     const out = await checkCandidates(setup(5), catalog, { userId: null, maxRecords: 2 })
     expect(out.checked).toBe(2)
+  })
+})
+
+describe('ready-to-send run state', () => {
+  const now = Date.parse('2026-11-15T10:00:00Z')
+  const hoursAgo = (h: number) => new Date(now - h * 3_600_000).toISOString()
+  const complete = '{"kind":"ready-to-send","generated_at":"x"'
+  const prog = (checked: number, total: number) =>
+    progressJson({ checked, total, entries: 0, started_at: 'x' }).slice(0, 400)
+
+  it('a fresh running row reports how far it is; the board before it was complete', () => {
+    const s = boardRunState(
+      [
+        { id: 3, status: 'running', started_at: hoursAgo(1), head: prog(400, 2000) },
+        { id: 2, status: 'completed', started_at: hoursAgo(25), head: complete }
+      ],
+      now
+    )
+    expect(s).toEqual({ running: { checked: 400, total: 2000 }, stopped: null })
+  })
+
+  it('a run that died mid-way (failed, or still "running" past the stale line) is stopped', () => {
+    expect(
+      boardRunState(
+        [
+          { id: 3, status: 'failed', started_at: hoursAgo(5), head: prog(900, 2000) },
+          { id: 2, status: 'completed', started_at: hoursAgo(29), head: complete }
+        ],
+        now
+      ).stopped
+    ).toEqual({ checked: 900, total: 2000, at: hoursAgo(5) })
+    const stale = boardRunState(
+      [{ id: 3, status: 'running', started_at: hoursAgo(20), head: prog(50, 2000) }],
+      now
+    )
+    expect(stale.running).toBeNull()
+    expect(stale.stopped).toMatchObject({ checked: 50, total: 2000 })
+  })
+
+  it('while a new run goes, an earlier cut-short run is still named', () => {
+    const s = boardRunState(
+      [
+        { id: 4, status: 'running', started_at: hoursAgo(0.5), head: prog(100, 2000) },
+        { id: 3, status: 'failed', started_at: hoursAgo(24), head: prog(1500, 2000) },
+        { id: 2, status: 'completed', started_at: hoursAgo(48), head: complete }
+      ],
+      now
+    )
+    expect(s.running).toEqual({ checked: 100, total: 2000 })
+    expect(s.stopped).toMatchObject({ checked: 1500 })
+  })
+
+  it('the newest finished run being complete means nothing stopped', () => {
+    expect(
+      boardRunState([{ id: 2, status: 'completed', started_at: hoursAgo(3), head: complete }], now)
+    ).toEqual({ running: null, stopped: null })
   })
 })
 
