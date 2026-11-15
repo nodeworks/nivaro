@@ -917,7 +917,7 @@ export function CommentPanel({
   const comments: Comment[] = useMemo(() => (data ?? []).filter((c) => !c.deleted), [data])
   // Realtime round 7: replies others post while this box holds an unsent draft are named above
   // it, so nobody answers past them. Nothing scrolls; posting or clearing the box ends it.
-  const whileTyping = useRepliesWhileTyping(draft, data, userId ?? myId)
+  const whileTyping = useRepliesWhileTyping(draft, data, userId || myId)
 
   // Everything else anyone wrote about this record — transition comments,
   // change reasons (including ones left on child rows, like a forecast's
