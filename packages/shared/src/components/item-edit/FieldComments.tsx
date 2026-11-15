@@ -4,15 +4,18 @@ import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { type SeenPerson, useRepliesWhileTyping } from '../../lib/comment-awareness'
 import { fieldDeepLinkQuery, fieldThread, openFieldCommentCounts } from '../../lib/field-comments'
 import {
   signalSentence,
   useDraftTypingSignal,
+  useMyUserId,
   useRecordSignalPeers
 } from '../../lib/presence-signals'
 import { cn, formatRelative } from '../../lib/utils'
+import { MentionDeliveryButton, RepliesWhileTyping, SeenByLine } from '../panels/CommentAwareness'
 import { CommentBody, CommentImageStrip, useCommentImages } from '../panels/CommentImages'
-import { MentionTextarea } from '../panels/CommentPanel'
+import { MentionTextarea, notePreviewText } from '../panels/CommentPanel'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { type FieldCommentsApi, useFieldComments } from './field-comments-context'
 
@@ -33,6 +36,10 @@ interface FieldComment {
   field?: string | null
   resolved_at?: string | null
   deleted?: boolean
+  /** Realtime round 7 — who opened the record since (readers of this field only). */
+  seen_by?: SeenPerson[]
+  /** The reader wrote it (or administers) and it mentions someone. */
+  delivery_visible?: boolean
 }
 
 /** The record's comments — the same key and shape as the Comments panel's read. */
@@ -159,6 +166,13 @@ function FieldThread({
   // the field hear it (the server judges each one); stops after 6 s idle and on send.
   useDraftTypingSignal(ctx.collection, ctx.item, draft, field)
   const typing = useRecordSignalPeers(ctx.collection, ctx.item, 'note', { field })
+  // Realtime round 7: replies on THIS field posted while the draft is unsent, named above the box.
+  const me = useMyUserId()
+  const fieldComments = useMemo(
+    () => (data ?? []).filter((c) => c.field === field && !c.resolved_at),
+    [data, field]
+  )
+  const whileTyping = useRepliesWhileTyping(draft, data ? fieldComments : undefined, me)
   const refresh = () => qc.invalidateQueries({ queryKey: commentsKey(ctx.collection, ctx.item) })
   const errorText = (err: unknown, fallback: string) =>
     (err as { response?: { data?: { error?: string } }; data?: { error?: string } })?.response?.data
@@ -239,6 +253,14 @@ function FieldThread({
             : 'text-slate-600 dark:text-slate-300'
         )}
       />
+      {!resolved && ((c.seen_by?.length ?? 0) > 0 || c.delivery_visible) && (
+        <div className='flex flex-wrap items-center gap-x-2'>
+          <SeenByLine people={c.seen_by} />
+          {c.delivery_visible && (
+            <MentionDeliveryButton collection={ctx.collection} item={ctx.item} commentId={c.id} />
+          )}
+        </div>
+      )}
     </li>
   )
 
@@ -295,6 +317,16 @@ function FieldThread({
         </p>
       )}
       <div className='space-y-1.5 border-t border-slate-200 p-2 dark:border-border'>
+        <RepliesWhileTyping
+          compact
+          replies={whileTyping.replies.map((c) => ({
+            id: c.id,
+            name: personName(c.user),
+            text: notePreviewText({ kind: 'comment', comment: c }),
+            created_at: c.created_at
+          }))}
+          onDismiss={whileTyping.dismiss}
+        />
         <MentionTextarea
           value={draft}
           onChange={setDraft}

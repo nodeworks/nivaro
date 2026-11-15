@@ -44,6 +44,7 @@ import {
   parseDelivery,
   parseDetail
 } from '../services/notification-channels.js'
+import { readMark } from '../services/notification-read-mark.js'
 import { changedFields, pickSnapshotRevision } from '../services/notification-snapshot.js'
 import {
   clearUntilChange,
@@ -1065,7 +1066,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const updated = await db('nivaro_notifications')
       .where({ id: Number(id), recipient: userId })
-      .update({ status: 'read', read_at: new Date() })
+      .update(readMark(req))
     if (!updated) return reply.code(404).send({ error: 'Not found' })
     await logActivity({
       action: 'notification-read',
@@ -1077,14 +1078,14 @@ export async function notificationsRoutes(app: FastifyInstance) {
     return reply.send({ data: { id: Number(id), read: true } })
   })
 
-  async function markAllRead(userId: string) {
+  async function markAllRead(userId: string, req?: unknown) {
     return db('nivaro_notifications')
       .where({ recipient: userId, status: 'inbox' })
-      .update({ status: 'read', read_at: new Date() })
+      .update(readMark(req))
   }
 
   app.post('/read-all', async (req, reply) => {
-    const updated = await markAllRead(req.user!.id)
+    const updated = await markAllRead(req.user!.id, req)
     await logActivity({
       action: 'update',
       user: req.user!.id,
@@ -1103,7 +1104,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
     const updated = await db('nivaro_notifications')
       .whereIn('id', ids)
       .where({ recipient: req.user!.id, status: 'inbox' })
-      .update({ status: 'read', read_at: new Date() })
+      .update(readMark(req))
     // Consistency with the sibling read endpoints, which all log.
     if (updated > 0) {
       void logActivity({
@@ -1119,7 +1120,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
 
   // Alias for the notifications center UI
   app.post('/mark-all-read', async (req, reply) => {
-    const updated = await markAllRead(req.user!.id)
+    const updated = await markAllRead(req.user!.id, req)
     await logActivity({
       action: 'update',
       user: req.user!.id,
@@ -1418,10 +1419,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
     for (let i = 0; i < target.length; i += 500) {
       const chunk = target.slice(i, i + 500)
       const q = db('nivaro_notifications').where({ recipient: userId }).whereIn('id', chunk)
-      if (b.action === 'read')
-        updated += await q
-          .where({ status: 'inbox' })
-          .update({ status: 'read', read_at: new Date() })
+      if (b.action === 'read') updated += await q.where({ status: 'inbox' }).update(readMark(req))
       else if (b.action === 'archive')
         updated += await q.whereNot('status', 'archived').update({ status: 'archived' })
       else

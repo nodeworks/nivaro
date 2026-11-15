@@ -90,9 +90,10 @@ export function receiptKey(comment: string, user: string): string {
 }
 
 /**
- * `userId` just opened the record. When that makes a mention of them newly seen, poke the
- * record's room with the same `record:comment` notice a new note sends, so open threads
- * refetch and show the mark. Payload: ids only.
+ * `userId` just opened the record. When that makes a comment someone else wrote newly seen by
+ * them — a mention of them (#2117) or any comment for the thread's "Seen by" line (realtime
+ * round 7) — poke the record's room with the same `record:comment` notice a new note sends, so
+ * open threads refetch and show the mark. Payload: ids only. The caller skips View-as opens.
  */
 export async function announceMentionSeen(
   collection: string,
@@ -101,11 +102,12 @@ export async function announceMentionSeen(
   previouslyViewedAt: Date | string | null
 ): Promise<void> {
   try {
-    const q = db('nivaro_comment_mentions as m')
-      .join('nivaro_comments as c', 'm.comment', 'c.id')
-      .where({ 'c.collection': collection, 'c.item': String(item), 'm.user': userId })
+    const q = db('nivaro_comments as c')
+      .where({ 'c.collection': collection, 'c.item': String(item) })
+      .whereNull('c.deleted_at')
+      .where((w) => w.whereNot('c.user', userId).orWhereNull('c.user'))
     if (previouslyViewedAt) q.where('c.created_at', '>', new Date(previouslyViewedAt))
-    const hit = await q.first('m.id')
+    const hit = await q.first('c.id')
     if (!hit) return
     getIo()
       ?.to(tenantScopedRoom(`record:${collection}:${item}`))

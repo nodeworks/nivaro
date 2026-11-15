@@ -16,9 +16,15 @@ import { toast } from 'sonner'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post } from '../../lib/commands'
+import { useRepliesWhileTyping } from '../../lib/comment-awareness'
 import { stripCommentImages } from '../../lib/comment-images'
 import { usePresenceOnlinePoll } from '../../lib/presence-live'
-import { signalSentence, useDraftTypingSignal, useNoteTypists } from '../../lib/presence-signals'
+import {
+  signalSentence,
+  useDraftTypingSignal,
+  useMyUserId,
+  useNoteTypists
+} from '../../lib/presence-signals'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { type SeenEntry, useNewSince } from '../../lib/seen-since'
 import { useStartsOpen } from '../../lib/use-starts-open'
@@ -33,6 +39,13 @@ import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Button } from '../ui/button'
 import { Separator } from '../ui/separator'
 import { Textarea } from '../ui/textarea'
+import {
+  jumpToComment,
+  MentionDeliveryButton,
+  RepliesWhileTyping,
+  SeenByLine,
+  useHoldInPlace
+} from './CommentAwareness'
 import { CommentBody, CommentImageStrip, imageDropProps, useCommentImages } from './CommentImages'
 import { RecordEventPathSheet } from './IntegrationActivitySection'
 import { NewSinceChip } from './NewSinceChip'
@@ -64,6 +77,11 @@ interface Comment {
   /** #3232 — left on one field of the record ("on Amount"); resolved from that field. */
   field?: string | null
   resolved_at?: string | null
+  /** Realtime round 7: people (who may open the record, and read a field comment's field) who
+   *  opened it since this was written — never the author or the reader. */
+  seen_by?: Array<{ id: string; name: string; seen_at: string }>
+  /** The reader wrote it (or is an administrator) and it mentions someone: "Delivery" shows. */
+  delivery_visible?: boolean
 }
 
 const REACTION_EMOJI = ['👍', '✅', '👀', '🎉', '❤️', '😂'] as const
@@ -73,11 +91,25 @@ function initials(u: Comment['user']): string {
   return i || u.email?.[0]?.toUpperCase() || '?'
 }
 
-/** Read receipts under a note: who it mentioned and whether they have seen it yet (#2117). */
-function MentionReceipts({ comment }: { comment: Comment }) {
-  const people = (comment.mentions ?? []).filter(
+/** The mentioned people a receipt line names (never the author). */
+function mentionedOthers(comment: Comment) {
+  return (comment.mentions ?? []).filter(
     (m) => m.id && String(m.id).toUpperCase() !== String(comment.user?.id ?? '').toUpperCase()
   )
+}
+
+/** Read receipts under a note: who it mentioned and whether they have seen it yet (#2117). The
+ *  author (and administrators) also get "Delivery" — how the mention reached each person. */
+function MentionReceipts({
+  comment,
+  collection,
+  item
+}: {
+  comment: Comment
+  collection: string
+  item: string
+}) {
+  const people = mentionedOthers(comment)
   if (people.length === 0) return null
   return (
     <p
@@ -99,6 +131,9 @@ function MentionReceipts({ comment }: { comment: Comment }) {
           </span>
         )
       })}
+      {comment.delivery_visible && (
+        <MentionDeliveryButton collection={collection} item={item} commentId={comment.id} />
+      )}
     </p>
   )
 }
@@ -824,6 +859,7 @@ export function CommentPanel({
 }) {
   const client = useNivaroClient()
   const { userId } = useItemEditAuth()
+  const myId = useMyUserId()
   const queryClient = useQueryClient()
   // #3232: the record form's field-comment context — labels for "on <Field>" and the jump.
   const fieldComments = useFieldComments()
@@ -880,6 +916,12 @@ export function CommentPanel({
   // gone from the thread and its counts — an empty entry with live Edit /
   // Delete / React buttons read as a comment that lost its words.
   const comments: Comment[] = useMemo(() => (data ?? []).filter((c) => !c.deleted), [data])
+  // Realtime round 7: replies others post while this box holds an unsent draft are named above
+  // it, so nobody answers past them. Nothing scrolls; posting or clearing the box ends it.
+  const whileTyping = useRepliesWhileTyping(draft, data, userId || myId)
+  // The note sits ABOVE the box: when it appears or grows, the box stays put on screen.
+  const composerRef = useRef<HTMLFormElement>(null)
+  useHoldInPlace(composerRef, whileTyping.replies.length)
 
   // Everything else anyone wrote about this record — transition comments,
   // change reasons (including ones left on child rows, like a forecast's
@@ -1126,7 +1168,21 @@ export function CommentPanel({
             </div>
           ) : (
             <>
-              <form onSubmit={handleSubmit} className='space-y-2'>
+              {whileTyping.replies.length > 0 && (
+                <div className='mb-2'>
+                  <RepliesWhileTyping
+                    replies={whileTyping.replies.map((c) => ({
+                      id: c.id,
+                      name: authorName(c),
+                      text: notePreviewText({ kind: 'comment', comment: c }),
+                      created_at: c.created_at
+                    }))}
+                    onDismiss={whileTyping.dismiss}
+                    onJump={jumpToComment}
+                  />
+                </div>
+              )}
+              <form ref={composerRef} onSubmit={handleSubmit} className='space-y-2'>
                 <MentionTextarea
                   value={draft}
                   onChange={setDraft}
@@ -1267,7 +1323,11 @@ export function CommentPanel({
                     const isOwn = userId === c.user.id
                     const isEditing = editingId === c.id
                     return (
-                      <div key={c.id} className='nvr-section-enter group flex gap-3'>
+                      <div
+                        key={c.id}
+                        data-comment-id={c.id}
+                        className='nvr-section-enter group flex gap-3 rounded-lg'
+                      >
                         <UserAvatar
                           userId={c.user.id}
                           className='h-8 w-8'
@@ -1412,7 +1472,22 @@ export function CommentPanel({
                               className='mt-0.5 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-600'
                             />
                           )}
-                          {!isEditing && <MentionReceipts comment={c} />}
+                          {!isEditing && (
+                            <MentionReceipts
+                              comment={c}
+                              collection={collection}
+                              item={String(item)}
+                            />
+                          )}
+                          {!isEditing && (
+                            <SeenByLine
+                              people={c.seen_by}
+                              hasMentions={mentionedOthers(c).length > 0}
+                              exclude={
+                                new Set(mentionedOthers(c).map((m) => String(m.id).toUpperCase()))
+                              }
+                            />
+                          )}
                           {/* Reactions: aggregated chips + hover palette */}
                           {!isEditing && (
                             <div className='mt-1 flex flex-wrap items-center gap-1'>
