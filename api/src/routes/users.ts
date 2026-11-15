@@ -1275,6 +1275,20 @@ export async function usersRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'number_format must be an object or null' })
       }
     }
+    if ('tab_count' in body) {
+      // Waiting-on-you count in the browser tab title and icon (realtime round 2, #20).
+      if (!['on', 'off'].includes(String(body.tab_count))) {
+        return reply.code(400).send({ error: "tab_count must be 'on' or 'off'" })
+      }
+      patch.tab_count = body.tab_count
+    }
+    if ('live_announce' in body) {
+      // Screen-reader notices of live changes (#22): full / brief / off.
+      if (!['full', 'brief', 'off'].includes(String(body.live_announce))) {
+        return reply.code(400).send({ error: 'live_announce must be full, brief or off' })
+      }
+      patch.live_announce = body.live_announce
+    }
     if ('week_start' in body) {
       if (!['mon', 'sun'].includes(String(body.week_start))) {
         return reply.code(400).send({ error: "week_start must be 'mon' or 'sun'" })

@@ -28,6 +28,8 @@ import {
   MIN_IDLE_SECONDS,
   saveIdleReloadSettings
 } from '../services/idle-reload.js'
+import { resolveWindow, validCollectionName } from '../services/live-trace.js'
+import { loadLiveTrace } from '../services/live-trace-source.js'
 import { boardMergeOn, boardStats } from '../services/realtime-board.js'
 import { visibleRecordIds } from '../services/socket-access.js'
 import { readSocketHealth, socketBufferState } from '../services/socket-health.js'
@@ -161,6 +163,49 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
   // Cloud mode: the caller's tenant only (one process serves many); self-hosted: the one scope.
   const tenantScope = () =>
     process.env.CLOUD_META_DB_URL ? (getTenantId() ?? getTenantSlug() ?? '-') : null
+
+  // "Why didn't my page update?" (realtime round 2, #24) — admin-only and read-only: the live
+  // events emitted for a record (or to a person) in a window, who was subscribed, who
+  // acknowledged, and writes that were never announced. Ids, field names and times only.
+  app.get<{
+    Querystring: {
+      collection?: string
+      item?: string
+      user?: string
+      from?: string
+      to?: string
+    }
+  }>('/trace', async (req, reply) => {
+    const q = req.query ?? {}
+    const win = resolveWindow(q.from, q.to)
+    if ('error' in win) return reply.code(400).send({ error: win.error })
+    const collection = q.collection?.trim() || null
+    const item = q.item?.trim() || null
+    const user = q.user?.trim() || null
+    if (collection && !validCollectionName(collection))
+      return reply.code(400).send({ error: 'collection is not a valid name' })
+    if (item && (!collection || item.length > 255))
+      return reply.code(400).send({ error: 'item needs a collection and at most 255 characters' })
+    if (user && user.length > 64) return reply.code(400).send({ error: 'user is too long' })
+    if (!(collection && item) && !user)
+      return reply.code(400).send({ error: 'name a record (collection + item) or a person (user)' })
+    const trace = await loadLiveTrace(
+      { collection, item, user, from: win.from, to: win.to },
+      {
+        tenant: tenantScope(),
+        sockets: () =>
+          scopeRealtimeStats(getRealtimeStats(), tenantScope()).sockets.map((s) => ({
+            id: s.id,
+            user: (s.user ?? null) as never,
+            app: s.app ?? null,
+            transport: s.transport ?? null,
+            connectedAt: s.connectedAt ?? null,
+            rooms: s.rooms
+          }))
+      }
+    )
+    return { data: trace }
+  })
 
   app.get('/stats', async () => {
     const stats = scopeRealtimeStats(getRealtimeStats(), tenantScope())

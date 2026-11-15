@@ -18,6 +18,7 @@ import { AccessSummaryCard } from './PersonAccessSummary'
 import { ActivityFeedCard, JourneyCard, SignInsCard, StatsCard } from './PersonActivity'
 import {
   ForceReloadCard,
+  LiveTraceCard,
   MergeCard,
   OffboardingCard,
   SignOutEverywhereCard
@@ -241,6 +242,7 @@ export function PersonProfile({
             <div className='mt-4 grid gap-4 lg:grid-cols-2'>
               <div className='space-y-4'>
                 <ForceReloadCard profile={profile} />
+                <LiveTraceCard profile={profile} />
                 <SignOutEverywhereCard profile={profile} />
                 <MergeCard profile={profile} />
               </div>

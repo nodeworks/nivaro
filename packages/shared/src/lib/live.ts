@@ -110,7 +110,7 @@ function actorOf(ev: Record<string, unknown>): string | null {
   return null
 }
 
-function isOwnEvent(ev: Record<string, unknown>, selfId: string): boolean {
+export function isOwnEvent(ev: Record<string, unknown>, selfId: string): boolean {
   const actor = actorOf(ev)
   if (actor && selfId && actor.toUpperCase() === selfId.toUpperCase()) return true
   const collection = typeof ev.collection === 'string' ? ev.collection : ''

@@ -324,6 +324,7 @@ import {
 import { QueueReturnChip } from './item-edit/QueueReturnChip'
 import { endQuickCreateFollows } from './item-edit/QuickCreateButton'
 import { QuickPicker } from './item-edit/QuickPicker'
+import { LiveTraceSheet } from './item-edit/LiveTraceSheet'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
 import { PickerExclusionToggle, ScheduleChangeButton } from './item-edit/RecordGrantTools'
@@ -2476,6 +2477,8 @@ function ItemEditFormView({
   // until the user supplies a justification, then retries with _change_reason
   const [crChallenge, setCrChallenge] = useState<ChangeReasonChallenge | null>(null)
   const [rawEditOpen, setRawEditOpen] = useState(false)
+  // Why didn't this page update? (realtime round 2, #24) — admin-only trace sheet.
+  const [liveTraceOpen, setLiveTraceOpen] = useState(false)
   // ⋯ → Move to state… when the form has no pipeline panel to open it in.
   const [moveStateOpen, setMoveStateOpen] = useState(false)
   const [graphOpen, setGraphOpen] = useState(false)
@@ -14604,6 +14607,21 @@ function ItemEditFormView({
                                                     <Wrench className='h-3.5 w-3.5' />
                                                     Raw edit
                                                   </Button>
+                                                  {!isNew && itemId && (
+                                                    <Button
+                                                      type='button'
+                                                      variant='outline'
+                                                      size='sm'
+                                                      data-nvr-menu-close
+                                                      onClick={() => setLiveTraceOpen(true)}
+                                                      title='See what the server sent live for this record, the writes it saw and who was listening (admin, read-only)'
+                                                      className='gap-1.5'
+                                                      data-live-trace-open
+                                                    >
+                                                      <Waypoints className='h-3.5 w-3.5' />
+                                                      Why didn't this update?
+                                                    </Button>
+                                                  )}
                                                   {!isNew && (
                                                     <Button
                                                       type='button'
@@ -15344,6 +15362,14 @@ function ItemEditFormView({
                                           queryKey: ['item', collection, String(itemId)]
                                         })
                                       }}
+                                    />
+                                  )}
+                                  {isAdmin && !isNew && itemId && (
+                                    <LiveTraceSheet
+                                      collection={collection}
+                                      itemId={String(itemId)}
+                                      open={liveTraceOpen}
+                                      onClose={() => setLiveTraceOpen(false)}
                                     />
                                   )}
                                   {isAdmin && !isNew && itemId && moveStateOpen && (
