@@ -822,7 +822,12 @@ function EntityRoomCard({ room }: { room: string }) {
         : 'bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300'
   return (
     <div
-      className={cn('flex shrink-0 items-center gap-2 border-b px-3 py-1.5', th.divider)}
+      // Wraps rather than cutting the step short: in a narrow chat dock the clock, owners and
+      // Open move to a second line and the step keeps its whole name.
+      className={cn(
+        'flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-1.5',
+        th.divider
+      )}
       data-chat-room-card
     >
       <span className='shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
@@ -842,8 +847,7 @@ function EntityRoomCard({ room }: { room: string }) {
           data-chat-room-state={stepLabel}
           data-tip={stepLabel}
           className={cn(
-            'nvr-fade-in truncate rounded-full px-2 py-0.5 text-[10px] font-semibold',
-            recordName ? 'max-w-[55%] shrink-0' : 'min-w-0'
+            'nvr-fade-in max-w-full truncate rounded-full px-2 py-0.5 text-[10px] font-semibold'
           )}
           style={{
             backgroundColor: stepColor ? `${stepColor}26` : 'rgba(100,116,139,.15)',
