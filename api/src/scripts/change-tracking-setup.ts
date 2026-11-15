@@ -10,7 +10,12 @@
  *      when it is not on yet;
  *   2. ALTER TABLE [dbo].[<t>] ENABLE CHANGE_TRACKING WITH (TRACK_COLUMNS_UPDATED = OFF) for every
  *      registered, non-system, non-virtual collection that is a base table with a primary key and
- *      is not tracked yet — one at a time, each with its own timeout, each logged.
+ *      is not tracked yet — one at a time, each with its own timeout, each logged;
+ *   3. the same for an explicit SYSTEM ALLOWLIST (services/outside-write-system.ts SYSTEM_TABLES:
+ *      pipeline instances / history, tasks, comments, files, people, addendums + approvals) and
+ *      the file-link junction tables (from nivaro_relations: a junction leg to the files table).
+ *      nivaro_users is tracked WITH its changed columns, so only directory changes count.
+ *      No other system table is ever touched. The pipeline tables' triggers are left as they are.
  * Stops at the first unexpected failure. Refuses any database but the one named by --database
  * (and the connected one must be it), and refuses `EFP` (production) outright: production waits
  * for the DBA (it is a replication publisher).
@@ -20,6 +25,7 @@
  */
 import { appendFileSync } from 'node:fs'
 import { db } from '../db/index.js'
+import { fileJunctions, planSystemTables, planTables } from '../services/change-tracking-plan.js'
 import { runLongSql } from '../services/run-long.js'
 
 const args = process.argv.slice(2)
@@ -38,33 +44,6 @@ const log = (line: string) => {
   if (logFile) appendFileSync(logFile, `${line}\n`)
 }
 const q = (s: string) => `[${s.replace(/]/g, ']]')}]`
-const SYSTEM = /^(nivaro_|directus_|sysdiagrams$)/i
-
-export interface TablePlan {
-  collection: string
-  action: 'enable' | 'skip'
-  reason?: 'not-table' | 'no-pk' | 'tracked'
-}
-
-/** What to do with each registered collection (pure). */
-export function planTables(
-  collections: string[],
-  tables: Map<string, { pk: boolean; tracked: boolean }>
-): TablePlan[] {
-  const seen = new Set<string>()
-  const out: TablePlan[] = []
-  for (const c of collections) {
-    const k = c.toLowerCase()
-    if (!c || SYSTEM.test(c) || seen.has(k)) continue
-    seen.add(k)
-    const t = tables.get(k)
-    if (!t) out.push({ collection: c, action: 'skip', reason: 'not-table' })
-    else if (t.tracked) out.push({ collection: c, action: 'skip', reason: 'tracked' })
-    else if (!t.pk) out.push({ collection: c, action: 'skip', reason: 'no-pk' })
-    else out.push({ collection: c, action: 'enable' })
-  }
-  return out
-}
 
 async function main(): Promise<number> {
   const want = arg('--database')
@@ -108,7 +87,21 @@ async function main(): Promise<number> {
       { pk: Number(r.pk) === 1, tracked: Number(r.tracked) === 1 }
     ])
   )
-  const plan = planTables(collections, tables)
+  const rels = (await db('nivaro_relations').select(
+    'many_collection',
+    'one_collection',
+    'junction_field'
+  )) as Parameters<typeof fileJunctions>[0]
+  const plan = [
+    ...planTables(collections, tables),
+    // junctions that are also registered collections are planned (and tracked) once
+    ...planSystemTables(
+      fileJunctions(rels).filter(
+        (j) => !collections.some((c) => c.toLowerCase() === j.toLowerCase())
+      ),
+      tables
+    )
+  ]
 
   log(`# change tracking ${execute ? 'SETUP' : 'PLAN'} on ${dbName} — ${new Date().toISOString()}`)
   const dbSql = `ALTER DATABASE ${q(dbName)} SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON)`
@@ -128,11 +121,11 @@ async function main(): Promise<number> {
     if (p.action === 'skip') {
       counts[p.reason as 'tracked' | 'no-pk' | 'not-table']++
       log(
-        `SKIP    ${p.collection} — ${p.reason === 'tracked' ? 'already tracked' : p.reason === 'no-pk' ? 'no primary key' : 'not a base table here'}`
+        `SKIP    ${p.collection}${p.system ? ' (system)' : ''} — ${p.reason === 'tracked' ? 'already tracked' : p.reason === 'no-pk' ? 'no primary key' : 'not a base table here'}`
       )
       continue
     }
-    const sql = `ALTER TABLE [dbo].${q(p.collection)} ENABLE CHANGE_TRACKING WITH (TRACK_COLUMNS_UPDATED = OFF)`
+    const sql = `ALTER TABLE [dbo].${q(p.collection)} ENABLE CHANGE_TRACKING WITH (TRACK_COLUMNS_UPDATED = ${p.columns ? 'ON' : 'OFF'})`
     if (!execute) {
       counts.planned++
       log(`PLAN    ${sql}`)
@@ -148,7 +141,9 @@ async function main(): Promise<number> {
     }
     counts.enabled++
     enabled.push(p.collection)
-    log(`ENABLED ${p.collection} (${Date.now() - t0} ms)`)
+    log(
+      `ENABLED ${p.collection}${p.system ? ` (system${p.columns ? ', with changed columns' : ''})` : ''} (${Date.now() - t0} ms)`
+    )
   }
   log(
     `# done on ${dbName}: enabled ${counts.enabled}${execute ? '' : ` (planned ${counts.planned})`}, already tracked ${counts.tracked}, skipped no primary key ${counts['no-pk']}, skipped not a table ${counts['not-table']}, failed ${counts.failed}`

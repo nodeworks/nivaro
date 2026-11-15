@@ -5,6 +5,17 @@ import { liveModeOf } from './collection-live-mode.js'
 import { type JournalEntry, journalTail } from './event-journal.js'
 import { instanceKey } from './instance-key.js'
 import { getApp } from './io-holder.js'
+import {
+  childDetailQuery,
+  dependentTables,
+  mapChildRows,
+  mapSystemRows,
+  planEmits,
+  probeQuery,
+  SYSTEM_TABLES,
+  type SystemTable,
+  systemDetailQuery
+} from './outside-write-system.js'
 import { announceRawWrites, BULK_CAP } from './raw-write-announcer.js'
 import { runLongSql } from './run-long.js'
 
@@ -602,6 +613,7 @@ export function resetOutsideWriteWatch(): void {
   lastMine = new Map()
   settingsCache = null
   catalogCache = null
+  trackedCache = null
   lastReport = null
 }
 
@@ -684,6 +696,127 @@ async function readClock(): Promise<{ u: string; l: string } | null> {
 }
 
 /** CHANGE_TRACKING_CURRENT_VERSION() as text (null when change tracking is off). */
+/** The watcher's state key for the dependents group (system + child tables). */
+const DEP_KEY = '__dependents__'
+let trackedCache: { at: number; set: Set<string> } | null = null
+
+/** dbo tables with change tracking on, lower-cased (cached 10 minutes). */
+async function trackedTables(): Promise<Set<string>> {
+  if (trackedCache && Date.now() - trackedCache.at < CATALOG_TTL_MS) return trackedCache.set
+  const rows = (await db
+    .raw(`SELECT t.name AS tbl FROM sys.change_tracking_tables ct
+           JOIN sys.tables t ON t.object_id = ct.object_id
+           JOIN sys.schemas s ON s.schema_id = t.schema_id WHERE s.name = 'dbo'`)
+    .catch(() => [])) as Array<{ tbl: string }>
+  const set = new Set(rows.map((r) => r.tbl.toLowerCase()))
+  trackedCache = { at: Date.now(), set }
+  return set
+}
+
+/**
+ * The dependents group: tracked system tables and the registered child / junction tables of the
+ * collections being watched. One version pair for the group, one probe for which tables moved,
+ * then one read per moved table; rows become aspects on the records they belong to
+ * (outside-write-system.ts). Returns rows caught / deduped per owning collection.
+ */
+async function lookDependents(o: {
+  now: number
+  clock: { u: string; l: string }
+  current: string
+  watched: string[]
+  catalog: Map<string, Watchable>
+  recentMs: number
+  mine: Map<string, { ids: Set<string>; whole: boolean }>
+  wm: Record<string, string>
+}): Promise<Map<string, { caught: number; deduped: number }>> {
+  const counts = new Map<string, { caught: number; deduped: number }>()
+  const tracked = await trackedTables()
+  const { getRelations } = await import('./collections.js')
+  const rels = (await getRelations()) as unknown as Parameters<typeof mapChildRows>[1]
+  const system = SYSTEM_TABLES.filter((t) => tracked.has(t))
+  const children = dependentTables(o.watched, rels, tracked).filter(
+    (t) => !!o.catalog.get(t.toLowerCase())?.pk
+  )
+  const tables = [...system, ...children]
+  if (!tables.length) return counts
+  const st = states.get(DEP_KEY) ?? (await resumeState(DEP_KEY))
+  const step = changeTrackingStep(st, o.current, null)
+  const next = { ...(st ?? {}), u: o.clock.u, l: o.clock.l, ...step.next }
+  states.set(DEP_KEY, next)
+  o.wm[DEP_KEY] = JSON.stringify({ ...next, at: o.now })
+  if (step.kind !== 'read') return counts
+  const moved = (
+    await runLongSql<{ t: string }>(probeQuery(tables, step.from, step.to), { timeoutMs: 5000 })
+  ).map((r) => r.t)
+  const bump = (c: string, k: 'caught' | 'deduped', n: number) => {
+    const key = c.toLowerCase()
+    const cur = counts.get(key) ?? { caught: 0, deduped: 0 }
+    cur[k] += n
+    counts.set(key, cur)
+  }
+  for (const t of moved) {
+    try {
+      let notices: ReturnType<typeof mapChildRows>
+      if ((SYSTEM_TABLES as readonly string[]).includes(t)) {
+        const rows = await runLongSql<Record<string, unknown>>(
+          systemDetailQuery(t as SystemTable, step.from, step.to),
+          { timeoutMs: 5000 }
+        )
+        const plan = mapSystemRows(t as SystemTable, rows)
+        notices = plan.notices
+        if (plan.people) {
+          const { notePeopleChanged } = await import('./people-live.js')
+          notePeopleChanged(plan.people.ids.length ? plan.people.ids : null, {
+            created: plan.people.created
+          })
+          bump('nivaro_users', 'caught', plan.people.ids.length || 1)
+        }
+        if (plan.ops.length) {
+          const { pokeOps } = await import('./ops-live.js')
+          for (const topic of plan.ops) pokeOps(topic)
+        }
+        if (plan.files.length) {
+          const { announceFileCarriers, recordsCarryingFile } = await import(
+            './related-announce.js'
+          )
+          for (const f of plan.files.slice(0, 50))
+            announceFileCarriers(await recordsCarryingFile(f))
+          bump('nivaro_files', 'caught', plan.files.length)
+        }
+      } else {
+        const pk = o.catalog.get(t.toLowerCase())?.pk as string
+        const rows = await runLongSql<Record<string, unknown>>(
+          childDetailQuery(t, pk, step.from, step.to),
+          { timeoutMs: 5000 }
+        )
+        notices = mapChildRows(t, rels, rows)
+      }
+      const e = planEmits(notices, recent, o.now, o.recentMs)
+      const { queueForeignAspect } = await import('./related-announce.js')
+      const { announceRecordAspect } = await import('./record-events.js')
+      for (const f of e.foreign) queueForeignAspect(f.collection, f.item, f.aspect)
+      for (const r of e.record)
+        announceRecordAspect(
+          r.collection,
+          r.item,
+          r.aspects as Parameters<typeof announceRecordAspect>[2]
+        )
+      for (const n of [...e.record, ...e.foreign]) {
+        const key = n.collection.toLowerCase()
+        const m = o.mine.get(key) ?? { ids: new Set<string>(), whole: false }
+        if (n.item === '*') m.whole = true
+        else m.ids.add(n.item)
+        o.mine.set(key, m)
+        bump(n.collection, 'caught', 1)
+      }
+      if (e.deduped) bump(t, 'deduped', e.deduped)
+    } catch {
+      /* one table's read failing never stops the others */
+    }
+  }
+  return counts
+}
+
 async function readChangeTrackingVersion(): Promise<string | null> {
   const [r] = (await db.raw(
     'SELECT CAST(CHANGE_TRACKING_CURRENT_VERSION() AS VARCHAR(20)) AS v'
@@ -893,6 +1026,31 @@ export async function outsideWriteTick(now = Date.now()): Promise<TickReport | n
         ? 'The look took longer than 5 seconds and was stopped.'
         : 'The look failed; it is tried again next time.'
     }
+  }
+
+  // tables whose rows belong to the open records (system + child tables), via change tracking
+  try {
+    ctCurrent ??= await readChangeTrackingVersion()
+    if (ctCurrent) {
+      const dep = await lookDependents({
+        now,
+        clock,
+        current: ctCurrent,
+        watched: list,
+        catalog,
+        recentMs,
+        mine,
+        wm
+      })
+      for (const [k, n] of dep) {
+        const cur = caughtBy.get(k) ?? { caught: 0, deduped: 0 }
+        caughtBy.set(k, { caught: cur.caught + n.caught, deduped: cur.deduped + n.deduped })
+        report.caught += n.caught
+        report.deduped += n.deduped
+      }
+    }
+  } catch {
+    /* change tracking unreadable here: the dependents wait for the next look */
   }
 
   for (const s of statuses) statusLocal.set(s.collection.toLowerCase(), s)
