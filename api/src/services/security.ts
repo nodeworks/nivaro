@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { getApp } from './io-holder.js'
+import { observeMaintenance, recheckMaintenanceSoon } from './maintenance-live.js'
 import { notifyUser } from './notification-channels.js'
 
 /**
@@ -116,6 +117,16 @@ export function bustMaintenanceCache(): void {
   maintCache = null
 }
 
+/**
+ * rt4 #13: maintenance was written in this process (settings, a window starting or ending,
+ * End maintenance): forget the cached state and read it again shortly, so open tabs hear the
+ * change at once (services/maintenance-live.ts) — the full page returns to the app by itself.
+ */
+export function maintenanceWritten(): void {
+  bustMaintenanceCache()
+  recheckMaintenanceSoon()
+}
+
 // The ioredis client off the app holder, best-effort — null before boot.
 function redisClient(): any {
   try {
@@ -159,7 +170,7 @@ export async function clearMaintenanceOverride(): Promise<void> {
   } catch {
     /* best-effort */
   }
-  bustMaintenanceCache()
+  maintenanceWritten()
 }
 
 export function normalizeMaintenanceDisplay(v: unknown): MaintenanceDisplay {
@@ -172,6 +183,7 @@ export async function maintenanceState(): Promise<MaintenanceState> {
     if (override) {
       maintCache = { at: Date.now(), ...override, source: 'override' }
       const { at: _o, ...state } = maintCache
+      observeMaintenance(state)
       return state
     }
     try {
@@ -205,6 +217,8 @@ export async function maintenanceState(): Promise<MaintenanceState> {
         until: until && !Number.isNaN(until.getTime()) ? until.toISOString() : null,
         source: 'settings'
       }
+      // A read that worked (never the failure below: an offline database is not "over").
+      observeMaintenance(maintCache)
     } catch {
       maintCache = {
         at: Date.now(),

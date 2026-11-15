@@ -98,6 +98,7 @@ export const obsApiAnalytics: DocSection = {
         ['metadata_l2.ttl_s', '`METADATA_L2_TTL_S`', '600'],
         ['warm.mode', '`CACHE_WARM` (on, off, auto)', 'auto'],
         ['warm.budget_ms', '`CACHE_WARM_BUDGET_MS`', '240000'],
+        ['warm.on_change', '`CACHE_WARM_ON_CHANGE` (on, off, auto = follows warm.mode)', 'auto'],
         ['list_total.ttl_ms', '`LIST_TOTAL_CACHE_MS` (0 = off)', '30000'],
         ['label.ttl_ms', '`LABEL_CACHE_MS` (0 = off)', '30000'],
         ['identity.enabled', '`IDENTITY_CACHE`', 'on'],
@@ -113,6 +114,23 @@ export const obsApiAnalytics: DocSection = {
         'Identity rows: the active user row a request signs in with is shared by the requests of the next few seconds (at most 5). A write to `nivaro_users` through the app forgets them in that process at once; a suspension or role change made on another replica shows within the lifetime. Inactive accounts are always read fresh.',
         'Record form layouts: the sections and field assignments behind `/collection-layouts/active`, `/summary` and `/detail` are kept per layout and configuration number. Which form a person gets is still decided on every request. A layout edit clears them at once in the process that made it and on every other process when the number moves.',
         'Cache warm, list totals and label rows read the switch each time they run, so a change applies to the next run.'
+      ]
+    },
+    { type: 'h2', id: 'cache-warm-on-change', text: 'Warms after data changes' },
+    {
+      type: 'p',
+      text: 'A cached query or widget used to show what it worked out until its cache ran out, however much the records under it changed. With Warm after data changes on, a change to a collection (a save, a pipeline move, an import, or a write a procedure announces) marks every cached query that reads that collection as out of date, and the most-viewed answers of those queries are worked out again in the background, so the next person who opens the dashboard gets the new figure at once.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Which queries read a collection: the freshness sources a query declares, else the tables its SQL and the procedures it runs name.',
+        'What is worked out again: the answers people actually opened in the last 7 days, for each widget and each query up to four of them (one person per set of User Scopes, as that person). A Warm daily query nobody opened is left to the 06:00 run.',
+        'How often: a burst of changes (an import of 500 rows) is gathered for a few seconds and handled once. Each widget, and each query’s own answers, is worked out at most once every 2 minutes across all servers; a change inside that gap is handled when the gap ends, so the last change always lands. An answer already worked out after the change is left alone.',
+        'Load: it runs on the background database connections, takes a slot of the heavy-read gate like any expensive read, and a person who opens the same answer while it runs shares the run instead of starting another.',
+        'An answer that was not worked out again says so: its stamp names the collection that changed after it ("regions changed 2m ago, newer than this figure"), and a click refreshes it.',
+        'Database, Caches shows the last 24 hours across every server: changes heard, queries marked, warms, answers worked out again (and how many a viewer shared), answers left alone, failures and the queries worked out most.',
+        'Default `auto` follows the cache warm Mode, so it runs where scheduled jobs run (deployed servers) and not on a development machine. It never runs in cloud mode and needs Redis.'
       ]
     },
     { type: 'h2', id: 'permission-cache', text: 'Permission cache' },

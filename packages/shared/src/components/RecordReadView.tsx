@@ -47,6 +47,7 @@ import {
 import { choiceLabelsFrom } from './layout-editor/overview/describe-conditions'
 import { integrityByField, useRecordIntegrity } from './panels/RecordIntegrityBanner'
 import { RecordHoverCard } from './RecordHoverCard'
+import { RelativeTime } from './RelativeTime'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 import { type InputBinding, WidgetSlot } from './WidgetSlot'
 
@@ -1179,7 +1180,7 @@ function RecordReadViewBody({
             className='ml-1 inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 align-middle text-[9.5px] font-medium leading-4 text-amber-800 hover:bg-amber-100 dark:bg-amber-400/10 dark:text-amber-300 dark:hover:bg-amber-400/20'
           >
             <span className='h-1.5 w-1.5 rounded-full bg-amber-400' aria-hidden />
-            {t.caller.name} · {formatRelative(t.at)}
+            {t.caller.name} · <RelativeTime value={t.at} />
           </button>
         </InboundRequestPopover>
       )

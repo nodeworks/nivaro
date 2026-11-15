@@ -62,6 +62,34 @@ export function planGrant(collection: string, reasons: AccessReason[] | null): G
   return out
 }
 
+/** GET /access-requests/mine's answer for one row: the status and who decided. Exported
+ *  for tests. */
+export function mineAnswer(row: {
+  status?: string
+  resolved_at?: Date | string | null
+  by_first?: string | null
+  by_last?: string | null
+}): {
+  status: string
+  resolved_at: string | null
+  resolved_by_name: string | null
+  resolved_by_first: string | null
+} {
+  const first = row.by_first?.trim() || null
+  const full =
+    [row.by_first, row.by_last]
+      .map((v) => v?.trim())
+      .filter(Boolean)
+      .join(' ') || null
+  const at = row.resolved_at ? new Date(row.resolved_at) : null
+  return {
+    status: String(row.status ?? 'pending'),
+    resolved_at: at && !Number.isNaN(at.getTime()) ? at.toISOString() : null,
+    resolved_by_name: full,
+    resolved_by_first: first ?? full
+  }
+}
+
 const parseReasons = (v: unknown): AccessReason[] | null => {
   if (v == null) return null
   if (Array.isArray(v)) return v as AccessReason[]
@@ -201,6 +229,36 @@ export async function accessRequestRoutes(app: FastifyInstance) {
       return reply.send({ data: { requested: true, notified: admins.length } })
     }
   )
+
+  /**
+   * rt4 #11 — the caller's own latest request for one record (or, with no item, the
+   * collection): a page that unlocked by itself after a grant says who granted it ("Access
+   * granted by Beth"). Own rows only; the answer names the administrator who decided, which
+   * the requester's notification already shows.
+   */
+  app.get('/access-requests/mine', { preHandler: requireAuth }, async (req, reply) => {
+    const q = req.query as { collection?: string; item?: string }
+    const collection = String(q.collection ?? '').trim()
+    const item = String(q.item ?? '').trim()
+    if (!collection || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection) || item.length > 200)
+      return reply.code(400).send({ error: 'collection is required' })
+    const row = (await db('nivaro_access_requests as r')
+      .leftJoin('nivaro_users as u', 'u.id', 'r.resolved_by')
+      .where('r.user', req.user!.id)
+      .where('r.collection', collection)
+      .where((qb) => void (item ? qb.where('r.item', item) : qb.whereNull('r.item')))
+      .orderBy('r.id', 'desc')
+      .first('r.status', 'r.resolved_at', 'u.first_name as by_first', 'u.last_name as by_last')
+      .catch(() => undefined)) as
+      | {
+          status?: string
+          resolved_at?: Date | string | null
+          by_first?: string | null
+          by_last?: string | null
+        }
+      | undefined
+    return reply.send({ data: row ? mineAnswer(row) : null })
+  })
 
   /** Pending grant queue (#55) — admin list + one-click grant/deny. */
   app.get('/access-requests', { preHandler: requireAdmin }, async (req) => {

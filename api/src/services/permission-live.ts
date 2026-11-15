@@ -153,6 +153,22 @@ export async function permissionAudience(
   }
 }
 
+/**
+ * rt4 #12: a person's socket joins `user:<id>` with the id as the database gives it (upper
+ * case on SQL Server), while an id taken from a request path is spelled as the caller wrote
+ * it. Both spellings are told (only one room exists), so a person waiting on the Request
+ * access screen hears an approval made through a lower-case link. Exported for tests.
+ */
+export function userRoomSpellings(ids: readonly string[]): string[] {
+  const out = new Set<string>()
+  for (const id of ids) {
+    out.add(id)
+    out.add(id.toUpperCase())
+    out.add(id.toLowerCase())
+  }
+  return [...out]
+}
+
 /** The onResponse step: tell the affected people (best-effort, never throws). */
 export async function announcePermissionChange(
   target: PermissionTarget,
@@ -162,7 +178,7 @@ export async function announcePermissionChange(
   try {
     const audience = await permissionAudience(target, lookups)
     if (audience === 'tenant') announce({})
-    else for (const userId of audience) announce({ userId })
+    else for (const userId of userRoomSpellings(audience)) announce({ userId })
   } catch {
     // Could not tell who: tell everyone (a refetch beats a stale menu).
     announce({})

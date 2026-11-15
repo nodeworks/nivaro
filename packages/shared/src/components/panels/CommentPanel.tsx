@@ -27,6 +27,7 @@ import { AgentBadge } from '../AgentBadge'
 import { AutolinkedText } from '../AutolinkedText'
 import { InboundRequestPopover } from '../integrations/InboundRequest'
 import { useFieldComments } from '../item-edit/field-comments-context'
+import { RelativeTime } from '../RelativeTime'
 import { UserAvatar } from '../UserAvatar'
 import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Button } from '../ui/button'
@@ -207,7 +208,7 @@ export function MentionTextarea({
     enabled: !!mention && debouncedQuery.length >= 2,
     staleTime: 30_000
   })
-  // Online people first (#2405). Same query key + shape as the chat panel's
+  // The online dot (#2405, rt4 #22). Same query key + shape as the chat panel's
   // presence read, so the two share one cache entry.
   const presencePoll = usePresenceOnlinePoll(15_000, !!mention)
   const { data: presence } = useQuery({
@@ -224,7 +225,9 @@ export function MentionTextarea({
     const p = presence?.data?.find((r) => String(r.user_id).toUpperCase() === id.toUpperCase())
     return !p ? 2 : p.is_idle || p.away ? 1 : 0
   }
-  const users = [...fetchedUsers].sort((a, b) => onlineState(a.id) - onlineState(b.id))
+  // A dot only (rt4 #22): the list keeps the server's order — people never jump about as
+  // others come and go.
+  const users = fetchedUsers
   // Role mentions (#441): "@finance-approvers" fans server-side to every
   // member of the role. /chat/roles is the non-admin-readable role list.
   const { data: allRoles = [] } = useQuery<Array<{ id: string; name: string }>>({
@@ -680,7 +683,7 @@ function RecordedNote({
               <span className='truncate text-[11px] text-slate-400'>{note.context}</span>
             ))}
           <span className='text-[11px] text-slate-400' data-tip={formatDateTime(note.created_at)}>
-            {formatRelative(note.created_at)}
+            <RelativeTime value={note.created_at} />
           </span>
           {note.source === 'inbound' && note.inbound && (
             <InboundRequestPopover
@@ -1289,7 +1292,7 @@ export function CommentPanel({
                               className='text-[11px] text-slate-400'
                               data-tip={formatDateTime(c.created_at)}
                             >
-                              {formatRelative(c.created_at)}
+                              <RelativeTime value={c.created_at} />
                             </span>
                             {c.updated_at && c.updated_at !== c.created_at && (
                               <span className='text-[10px] text-slate-300'>(edited)</span>

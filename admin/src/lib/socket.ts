@@ -505,7 +505,11 @@ export function getSocket(): Socket {
     'announcements:changed',
     'flags:changed',
     // rt2 #19 — the people directory moved (pickers, mentions, avatars; ids only).
-    'people:changed'
+    'people:changed',
+    // rt4 #20 — the person's own lists (saved views, searches, Overview pins) and the shared
+    // collection pins moved.
+    'mine:changed',
+    'pins:changed'
   ]) {
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   }
@@ -587,6 +591,10 @@ const RELAYED_EVENTS = new Set([
   'presence:changed',
   'read:changed',
   'prefs:changed',
+  // rt4 #20 — a person's own lists and the shared pins, to follower tabs too (the same notice
+  // reaching a tab twice inside 150 ms is delivered once by useLiveEvent).
+  'mine:changed',
+  'pins:changed',
   // #1675 — pushed widgets: the figure computed as this sign-in, for this tab's own watch key.
   'widget:watching',
   'widget:data',

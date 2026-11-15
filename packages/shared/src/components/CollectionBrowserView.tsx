@@ -178,6 +178,7 @@ import { type CellShape, type SkeletonColumn, shapeForField } from '../lib/skele
 import { knownTotalFrom } from '../lib/slow-reason'
 import { nextSortValue } from '../lib/sort-cycle'
 import { isFileCollection } from '../lib/system-collections'
+import { useTableDensity } from '../lib/table-density'
 import { templateRelationPaths } from '../lib/template-paths'
 import {
   effectiveScopeSeedIds,
@@ -273,10 +274,12 @@ import {
   usePickerExcludedRows
 } from './PickerExcludedRows'
 import {
+  AccessGrantedNote,
   ItemActionChoiceList,
   type ItemActionChoiceOption,
   itemActionChoiceStep,
-  RevisionsPanel
+  RevisionsPanel,
+  useAccessRegained
 } from './panels'
 import { ConfirmButton } from './profile/primitives'
 import { pruneQuickSelection, type QuickFilterDef } from './quick-filters/config'
@@ -285,6 +288,7 @@ import { useQuickFilterEditing } from './quick-filters/useQuickFilterEditing'
 import { RealtimeStaleMark } from './RealtimeStatusBanner'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RecordHoverCard } from './RecordHoverCard'
+import { RelativeTime } from './RelativeTime'
 import { RowHighlightLegend } from './RowHighlightLegend'
 import { RowPresence } from './RowPresence'
 import { TableSkeletonRows } from './Skeletons'
@@ -1870,7 +1874,11 @@ function CellValue({
     }
     // Rendered as human text ("2 days ago", "08/05/2026"), so it reads as prose;
     // tabular figures keep the column's digits aligned.
-    return <span className='text-[12px] tabular-nums text-slate-400'>{formatRelative(value)}</span>
+    return (
+      <span className='text-[12px] tabular-nums text-slate-400'>
+        <RelativeTime value={String(value)} format={formatRelative} />
+      </span>
+    )
   }
   if (typeof value === 'string') {
     // Long text (names, descriptions) ellipses at a sane width — the full
@@ -4659,23 +4667,10 @@ export function CollectionBrowserView({
   const drillStack = recordDrill.value
   const [auditId, setAuditId] = useState<string | null>(null)
   const [colsOpen, setColsOpen] = useState(false)
-  // Row density — a per-browser preference shared by every table surface.
-  const [density, setDensity] = useState<'compact' | 'comfortable'>(() => {
-    try {
-      return localStorage.getItem('nvr_table_density') === 'comfortable' ? 'comfortable' : 'compact'
-    } catch {
-      return 'compact'
-    }
-  })
-  const toggleDensity = () => {
-    const next = density === 'compact' ? 'comfortable' : 'compact'
-    setDensity(next)
-    try {
-      localStorage.setItem('nvr_table_density', next)
-    } catch {
-      /* private mode */
-    }
-  }
+  // Row density — shared by every table surface; follows the person between tabs and
+  // devices (lib/table-density.ts, rt4 #19).
+  const [density, setDensity] = useTableDensity()
+  const toggleDensity = () => setDensity(density === 'compact' ? 'comfortable' : 'compact')
   // Group rows under collapsible section headers by one column's value.
   // Per-collection preference; grouping fetches up to 500 rows in one page so
   // sections cover the (filtered) set rather than one page of it.
@@ -5551,6 +5546,13 @@ export function CollectionBrowserView({
     refetchInterval: bc.live_events === 'off' ? 30_000 : false,
     retry: false
   })
+  // rt4 #11: the list answered 403 and now reads (an access request granted while it stayed
+  // open — access:changed refetched it): the rows appear with one quiet line saying so.
+  const listAccessRegained = useAccessRegained(
+    (error as { status?: number } | null)?.status === 403 && !isFilterRefusal(error),
+    !!itemsRes && !error,
+    collection
+  )
   // Live collections keep a slow, quiet safety read for writes nothing announces (a procedure
   // or a script that wrote set-based). It never runs while the person has rows selected, a field
   // focused in the table, or the pointer over it, so rows never move under them; a hidden tab
@@ -9668,6 +9670,9 @@ export function CollectionBrowserView({
         )}
       </div>
 
+      {listAccessRegained && !error && (
+        <AccessGrantedNote collection={collection} className='mx-4 mt-3' />
+      )}
       {/* Error — a permission wall offers the access-request path (#55). */}
       {error != null && (
         <div className='mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700 dark:border-red-900/40 dark:bg-red-900/10 dark:text-red-400'>

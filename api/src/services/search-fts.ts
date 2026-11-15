@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { accessSignature } from './ai-answer-cache.js'
+import { epochsOf, registerReadCacheActivity } from './read-caches.js'
 import { createShortCache } from './short-cache.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -190,10 +191,49 @@ export function isPartialAnswer(value: unknown): boolean {
 const answerCache = createShortCache<unknown>('global-search-answer', SEARCH_ANSWER_TTL_MS, {
   max: 2000
 })
+// Remote writes keep reaching this process while answers are held (realtime.ts publishes a
+// "touched" for collections whose live events are off only while some read cache is active).
+registerReadCacheActivity(() => answerCache.size() > 0)
+
+/**
+ * rt4 #9 — new records searchable at once. An answer remembers the collections it searched
+ * and their write epochs (services/read-caches.ts) taken BEFORE its reads ran; a create, edit
+ * or delete in any of them since — this process's own write, or another replica's relayed by
+ * its record event — makes the answer stale, and the next identical search runs again. Without
+ * a stamp (people-only, too short) an answer keeps the plain 20 s.
+ */
+const SEARCH_STAMP = Symbol('nvr.search-stamp')
+interface SearchStamp {
+  collections: string[]
+  epoch: string
+  tenant: string
+}
+
+/** The stamp for a search over `collections`, taken before its reads. */
+export function searchStamp(collections: readonly string[]): SearchStamp {
+  const tenant = currentTenantKey()
+  const list = [...new Set(collections)]
+  return { collections: list, epoch: epochsOf(list, tenant), tenant }
+}
+
+/** Attach a stamp to an answer (a symbol: never serialised, never sent). */
+export function stampSearchAnswer<T extends object>(answer: T, stamp: SearchStamp): T {
+  Object.defineProperty(answer, SEARCH_STAMP, { value: stamp, enumerable: false })
+  return answer
+}
+
+/** Whether a cached answer was overtaken by a write to a collection it searched. */
+export function searchAnswerOutdated(value: unknown): boolean {
+  if (value == null || typeof value !== 'object') return false
+  const stamp = (value as { [SEARCH_STAMP]?: SearchStamp })[SEARCH_STAMP]
+  if (!stamp) return false
+  return epochsOf(stamp.collections, stamp.tenant) !== stamp.epoch
+}
 
 /**
  * A 20-second answer cache for the global search (typing, retyping and the
- * palette's tab counts repeat one search many times), with single-flight:
+ * palette's tab counts repeat one search many times) — dropped early when a collection it
+ * searched was written since (rt4 #9, `stampSearchAnswer`) — with single-flight:
  * concurrent identical searches share one run. Authorisation stays inside
  * `load` — only the computed answer is reused, and only by the same person
  * with the same access. A failed load is never remembered.
@@ -204,6 +244,7 @@ const answerCache = createShortCache<unknown>('global-search-answer', SEARCH_ANS
 export const searchAnswerCache = {
   get<T>(input: SearchAnswerKeyInput, load: () => Promise<T>): Promise<T> {
     const key = searchAnswerKey(input)
+    if (searchAnswerOutdated(answerCache.peek(key))) answerCache.forget(key)
     // A CUT answer (`partial`: parts that ran out of time) is never reused (army 6 H13): the
     // same search 2 s later must run again, never get a cached "nothing matches" in 97 ms.
     // Callers sharing the one flight still get it once, with `partial` saying what was cut.

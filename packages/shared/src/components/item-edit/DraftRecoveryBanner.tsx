@@ -1,8 +1,9 @@
 import { ExternalLink, History, RotateCcw, Trash2 } from 'lucide-react'
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { useItemNavigation } from '../../context'
-import { draftFilledBack, type StoredDraft } from '../../lib/draft-store'
-import { formatRelative, titleCase } from '../../lib/utils'
+import { draftFilledBack, draftIsFromOtherDevice, type StoredDraft } from '../../lib/draft-store'
+import { titleCase } from '../../lib/utils'
+import { RelativeTime } from '../RelativeTime'
 
 /**
  * "Restore your unsaved changes from N min ago" — shown once at the top of
@@ -51,13 +52,11 @@ export function DraftRecoveryBanner({
   renderValue
 }: DraftRecoveryBannerProps) {
   const [open, setOpen] = useState(false)
-  // "from 2 minutes ago" must move while the offer sits open — it said "from
-  // just now" two minutes later (army5 b09-N3b).
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    const t = setInterval(() => setTick((n) => n + 1), 30_000)
-    return () => clearInterval(t)
-  }, [])
+  // "from 2m ago" moves while the offer sits open (army5 b09-N3b): <RelativeTime> rides the
+  // tab's one shared ticker.
+  // A draft another device of this person's stored (rt4 #21): "Continue your draft from your
+  // laptop" — they are carrying on, not recovering from a crash.
+  const otherDevice = draftIsFromOtherDevice(draft) ? draft.device : null
   const itemNav = useItemNavigation()
   const fields = Object.entries(draft.fields ?? {})
   // The person's own edits, counted as the Leave dialog counts them (army6 L2); what a rule
@@ -95,15 +94,28 @@ export function DraftRecoveryBanner({
           {created ? (
             <span className='font-semibold' data-nvr-draft-created>
               {/* No row id (Rob's no-internal-ids rule): "Open the record" links to it. */}
-              These changes from {formatRelative(draft.saved_at)} were already saved as a new record
-              — restoring them makes a second one.
+              These changes from <RelativeTime value={draft.saved_at} /> were already saved as a new
+              record — restoring them makes a second one.
             </span>
           ) : (
-            <span className='font-semibold'>
-              Restore your unsaved changes from {formatRelative(draft.saved_at)}?
+            <span className='font-semibold' data-nvr-draft-other-device={otherDevice?.label}>
+              {otherDevice ? (
+                <>Continue your draft from your {otherDevice.label}</>
+              ) : (
+                <>Restore your unsaved changes from</>
+              )}{' '}
+              {otherDevice ? '(' : ''}
+              <RelativeTime value={draft.saved_at} />
+              {otherDevice ? ')' : ''}?
             </span>
           )}{' '}
           <span className='text-amber-800/80 dark:text-amber-200/80'>{parts.join(' · ')}</span>
+          {!!draft.dropped_fields && (
+            <span className='ml-1 text-[11.5px]' data-nvr-draft-dropped>
+              ({draft.dropped_fields} field{draft.dropped_fields === 1 ? '' : 's'} you can no longer
+              edit {draft.dropped_fields === 1 ? 'was' : 'were'} left out)
+            </span>
+          )}
           {recordChanged && (
             <span className='ml-1 rounded bg-amber-200/70 px-1 py-px text-[10.5px] font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-500/30 dark:text-amber-100'>
               record changed since — review before restoring
@@ -140,7 +152,8 @@ export function DraftRecoveryBanner({
           }
           data-nvr-draft-restore
         >
-          <RotateCcw className='h-3 w-3' /> {created ? 'Restore anyway' : 'Restore'}
+          <RotateCcw className='h-3 w-3' />{' '}
+          {created ? 'Restore anyway' : otherDevice ? 'Continue' : 'Restore'}
         </button>
         <button
           type='button'

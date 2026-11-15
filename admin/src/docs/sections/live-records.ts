@@ -219,6 +219,16 @@ useQuery({
       type: 'note',
       text: 'New notices on `collection:update`: `$sla` (an SLA clock passed its warning or breach line) and `$related` (a child row of the record changed; one per parent per 0.8 s). List pages ignore both for their rows. SLA answers (`GET /sla/status/:collection/:item`, `POST /sla/status/batch`, queue rows, My Work) now carry `warning_at` and `due_at` (queue rows: `sla_warning_at`, `sla_due_at`). A `record:signal` of kind `note` may carry `field`.'
     },
+    { type: 'h3', id: 'live-records-access', text: 'Access, maintenance and search' },
+    {
+      type: 'ul',
+      items: [
+        'A record or list that said "You can\'t view this" opens by itself when an administrator grants the access request while it is still on screen. The content appears with one quiet line, "Access granted by Beth" (who decided comes from `GET /api/access-requests/mine`, the person\'s own request only). Nothing pops up.',
+        'The Request access page a new person waits on (efp-new) opens the portal by itself the moment an administrator approves them. The approval reaches their own socket as `access:changed`; the page still checks every minute while the connection is down.',
+        'The full maintenance page returns to the app by itself when maintenance ends — switched off by an administrator, a scheduled window closing, or a rebuild job deleting its Redis flag. The server notices the change (within a few seconds for the Redis flag) and sends `announcements:changed`; each tab re-reads `/announcements/active` as itself. The 30-second check stays as the fallback. The maintenance strip administrators see goes away the same way.',
+        'A record saved a moment ago is found by search on the next look. The server keeps a search answer for 20 seconds only until any collection it searched is written, here or on another server; where SQL Server full-text indexes are in use, the newest 200 rows of a collection are also matched by plain text until the index catches up.'
+      ]
+    },
     { type: 'h3', id: 'live-ops-pages', text: 'Live operations pages' },
     {
       type: 'p',
@@ -469,7 +479,11 @@ export const collabPresence: DocSection = {
       type: 'ul',
       items: [
         'Reading a notification, or a chat room, clears its unread state on every other tab and device at once (`read:changed` on your `user:<id>` room), instead of on their next poll.',
-        'Saving a display preference (font size, time format, sound, density, do not disturb…) applies in your other tabs and windows immediately: over a BroadcastChannel in the same browser, over `prefs:changed` on your user room across devices. The theme follows across tabs of one browser.',
+        'Saving a display preference (font size, time format, sound, density, do not disturb…) applies in your other tabs and windows immediately: over a BroadcastChannel in the same browser, over `prefs:changed` on your user room across devices.',
+        'The theme (light, dark or system) and the row density of lists and queue worklists (Compact or Comfortable) are saved on your account as `theme` and `table_density`, so a choice made on your laptop shows on your phone and in your other tabs without a reload. A tab opened with "View as" neither saves nor adopts them.',
+        'Your saved views, saved searches and Overview pins refetch quietly in your other tabs and devices when you change them (`mine:changed {kind}` on your user room); favorites ride `prefs:changed`, and the shared collection pins reach everyone signed in (`pins:changed`). Nothing blanks or jumps: lists keep what they show until the fresh answer lands.',
+        'Relative times ("2m ago", "Last changed 5m ago") move forward by themselves in lists, records, notes, tasks and the inbox. Every one of them rides one shared ticker per tab (30 seconds, paused while the tab is hidden, caught up when you return), so a list of a hundred rows costs one timer; times older than a week read as a date and never tick. Hosts use `<RelativeTime value={...} />` or `useRelativeText(value)` instead of calling `formatRelative` in JSX.',
+        'A dot beside a name in people pickers (record people and task assignee), the @ mention list in notes and the chat @ list shows who is online (green) or idle (hollow amber). It is only a dot: nobody moves up the list for being online. It comes from the same presence read as the Online tab, so you only see a dot for people you may see as present.',
         'With several tabs open, a notification or chat sound plays once, from the tab you used last. Tabs that stop answering are ignored, so a frozen tab never takes the sound with it. A "View as" tab keeps its own channels.'
       ]
     },

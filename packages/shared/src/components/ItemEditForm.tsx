@@ -73,7 +73,8 @@ import {
   markDraftCreated,
   prefillSignature,
   type StoredDraft,
-  saveDraft
+  saveDraft,
+  thisDraftDevice
 } from '../lib/draft-store'
 import { editLockLockedFields } from '../lib/edit-lock-fields'
 import { entryConfigOf } from '../lib/entry-config'
@@ -271,6 +272,7 @@ import {
 import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
 import { ListNeighborNav } from './item-edit/ListNeighborNav'
+import { LiveTraceSheet } from './item-edit/LiveTraceSheet'
 import { deferredSections } from './item-edit/lazy-sections'
 import { type LineRevision, mergeEditOf, restoredLineConflicts } from './item-edit/line-merge'
 import {
@@ -328,7 +330,6 @@ import {
 import { QueueReturnChip } from './item-edit/QueueReturnChip'
 import { endQuickCreateFollows } from './item-edit/QuickCreateButton'
 import { QuickPicker } from './item-edit/QuickPicker'
-import { LiveTraceSheet } from './item-edit/LiveTraceSheet'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
 import { PickerExclusionToggle, ScheduleChangeButton } from './item-edit/RecordGrantTools'
@@ -419,6 +420,7 @@ import {
 } from './layout-editor/summary-pref'
 import {
   AccessDeniedPanel,
+  AccessGrantedNote,
   AddendumPanel,
   CommentPanel,
   CustomActionButtons,
@@ -435,6 +437,7 @@ import {
   RelatedRecordsPanel,
   RevisionsPanel,
   TaskPanel,
+  useAccessRegained,
   useExternalRequestsShown,
   useItemLock,
   WhyDeniedButton,
@@ -2449,6 +2452,13 @@ function ItemEditFormView({
       (itemLoadError as { response?: { status?: number } })?.response?.status
     return status === 403 || status === 404
   })()
+  // rt4 #11: refused, then readable on this same page (an access request granted while it
+  // stayed open — access:changed refetched the record): the form appears with one quiet line.
+  const accessRegained = useAccessRegained(
+    itemLoadDenied && !fetchedItemData,
+    !!fetchedItemData && !itemLoadError,
+    `${collection}:${String(itemId ?? '')}`
+  )
   // The record read said 403/404 and nothing is showing: every read about the
   // record itself (lines, links, lock, addendums, paths, checks, previews)
   // would answer the same refusal — they stay off (army 9 b14: a missing
@@ -4116,11 +4126,22 @@ function ItemEditFormView({
     const serverKey = isNew ? 'new' : String(itemId)
     const serverDraft = authUserId
       ? client
-          .request<{ data: { payload: StoredDraft; saved_at: string } }>(
-            get(`/drafts/${collection}/${serverKey}`)
-          )
-          .then((r) =>
-            r?.data?.payload && typeof r.data.payload === 'object' ? r.data.payload : null
+          .request<{
+            data: {
+              payload: StoredDraft
+              saved_at: string
+              device?: StoredDraft['device']
+              dropped_fields?: number
+            }
+          }>(get(`/drafts/${collection}/${serverKey}`))
+          .then((r): StoredDraft | null =>
+            r?.data?.payload && typeof r.data.payload === 'object'
+              ? {
+                  ...r.data.payload,
+                  device: r.data.device ?? r.data.payload.device ?? null,
+                  ...(r.data.dropped_fields ? { dropped_fields: r.data.dropped_fields } : {})
+                }
+              : null
           )
           .catch(() => null)
       : Promise.resolve(null)
@@ -4278,7 +4299,8 @@ function ItemEditFormView({
           pending_deletes: obj(pendingO2MDeletes, (d) => [...d]) as StoredDraft['pending_deletes'],
           m2m_links: obj(m2mLinks, (l) => [...l]) as StoredDraft['m2m_links'],
           m2m_unlinks: obj(m2mUnlinks, (u) => [...u]) as StoredDraft['m2m_unlinks'],
-          ...(isNew ? { prefill_sig: prefillSig } : {})
+          ...(isNew ? { prefill_sig: prefillSig } : {}),
+          device: thisDraftDevice()
         },
         lastPersistedDraftRef.current
       )
@@ -4302,7 +4324,8 @@ function ItemEditFormView({
             .request(
               put(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`, {
                 payload: stored,
-                saved_at: stored.saved_at
+                saved_at: stored.saved_at,
+                device: stored.device ?? null
               })
             )
             .then(
@@ -16403,6 +16426,12 @@ function ItemEditFormView({
                                           dirty={isDirty}
                                           loadDenied={itemLoadDenied}
                                           onGoneChange={setRecordGone}
+                                        />
+                                      )}
+                                      {accessRegained && !isNew && itemId != null && (
+                                        <AccessGrantedNote
+                                          collection={collection}
+                                          itemId={String(itemId)}
                                         />
                                       )}
                                       {staleBy && staleMode !== 'auto-refresh' && (

@@ -13,6 +13,9 @@ import { forgetSettledReads } from './request-gate'
  *   access:changed  {perms: true} — this person's role, policies, scopes or field access moved
  *                   (rt2 #18): the signed-in user (menus, buttons) and every query on screen
  *                   are fetched again as them, so things appear or go without signing out
+ *   mine:changed    {kind} — one of this person's own lists moved (rt4 #20): saved views, saved
+ *                   searches, Overview pins. Their other tabs and devices refetch it.
+ *   pins:changed    the shared collection pins moved — every Collections page refetches
  *   people:changed  {user_ids?, created?} — someone was added or their name, title, photo or
  *                   status moved (rt2 #19): pickers, mentions, cards and avatars refetch
  *
@@ -48,6 +51,13 @@ export function configureUserSync(scope: string): void {
     /* already closed */
   }
   channel = null
+}
+
+/** True in a "View as" tab (the host's scope ends in ':as', see admin's UserSyncHost): such a
+ *  tab is someone else on this browser's shared storage, so it must neither adopt that
+ *  person's preferences into localStorage nor save any. */
+export function userSyncScoped(): boolean {
+  return currentScope.endsWith(':as')
 }
 
 /** Tell this browser's other tabs that preferences were just saved. */
@@ -120,6 +130,16 @@ function jitter(fn: () => void, maxMs = 1200): void {
 const NOTIFICATION_KEYS = [['notification-count'], ['notifications'], ['my-work']]
 const CHAT_KEYS = [['nvr-chat-rooms']]
 
+/** Query keys behind each `mine:changed` kind (a prefix refetches every collection's copy). */
+export const MINE_KEYS: Record<string, readonly (readonly string[])[]> = {
+  'saved-views': [['cbv-views'], ['cbv-view-count']],
+  'saved-searches': [['global-search-saved']],
+  overview: [
+    ['overview', 'prefs'],
+    ['overview', 'pinned-widgets']
+  ]
+}
+
 export function useUserSync(opts: UserSyncOptions = {}): void {
   const qc = useQueryClient()
   const onPrefs = useRef(opts.onPrefsChanged)
@@ -139,9 +159,29 @@ export function useUserSync(opts: UserSyncOptions = {}): void {
   applyPrefs.current = () => {
     void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
     void qc.invalidateQueries({ queryKey: ['presence-online'] })
+    // Favorites (the sidebar star) live in the preferences: the shared collections page keeps
+    // its own copy (rt4 #20).
+    void qc.invalidateQueries({ queryKey: ['nvr-nav-favorites'] })
     onPrefs.current?.()
   }
   useLiveEvent('prefs:changed', () => applyPrefs.current(), { includeOwn: true, debounceMs: 250 })
+
+  // rt4 #20 — the person's own lists (saved views, saved searches, Overview pins) and the
+  // shared collection pins: refetch what is on screen, quietly (queries keep their data until
+  // the new answer lands, so nothing blanks or jumps).
+  useLiveEvent(
+    'mine:changed',
+    (p) => {
+      for (const queryKey of MINE_KEYS[String(p?.kind)] ?? [])
+        void qc.invalidateQueries({ queryKey, refetchType: 'active' })
+    },
+    { includeOwn: true, debounceMs: 300 }
+  )
+  useLiveEvent(
+    'pins:changed',
+    () => jitter(() => void qc.invalidateQueries({ queryKey: ['collection-pins'] })),
+    { includeOwn: true, debounceMs: 500 }
+  )
 
   // rt2 #18 — permissions moved: re-read who this person is and what is on screen, as them.
   // Queries keep their data until the new answer arrives (nothing blanks or jumps); an open
