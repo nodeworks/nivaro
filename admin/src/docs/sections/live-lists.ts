@@ -48,11 +48,11 @@ export const collabLiveLists: DocSection = {
         ],
         [
           'An import or bulk change (a dozen or more records within two seconds)',
-          'No row flashes. One quiet pill says what happened — "Import added 500 records · Show", "Beth updated 40 rows · Show" — and Show re-reads the list once. The name comes from your own read of a few of the rows, so it only appears when you can see who changed them.'
+          'No row flashes. One quiet pill floats over the bottom of the list (the toolbar never moves) and says what happened — "Import added 500 records  Show", "Beth updated 40 rows  Show" — and Show re-reads the list once. The name comes from your own read of a few of the rows, so it only appears when you can see who changed them.'
         ],
         [
           'Your pointer or keyboard is on a row',
-          'Rows at and above it never move. A record that would slide in above it waits, a record that left the list stays in place faded with "No longer in this list" on hover, and values still update. The new order is drawn when the pointer leaves the list or focus moves elsewhere (at most about 10 seconds).'
+          'Rows at and above it never move. A record that would slide in above it waits, a record that left the list stays in place, faded, with a crossed-out eye mark ("No longer matches this view" on hover) and its labels still shown, and values still update. The new order is drawn when the pointer leaves the list or focus moves elsewhere (at most about 10 seconds).'
         ],
         [
           'A totals row is on',
@@ -63,7 +63,7 @@ export const collabLiveLists: DocSection = {
     { type: 'h3', id: 'live-lists-pause', text: 'Pause live updates' },
     {
       type: 'p',
-      text: 'The pause button in a list or queue toolbar stops that one list from changing while you work through it. While paused it turns amber and counts the changes waiting; click it again to resume and they are applied in one go (a few records are updated in place, a lot are re-read at once). Each list remembers being paused until you close the browser tab. Focus mode still works on top of it and applies to every list.'
+      text: 'The "Pause live" button in a list or queue toolbar stops that one list from changing while you work through it. While paused it turns amber, reads "Paused" and counts the changes waiting (it keeps the same width, so nothing in the toolbar moves); click it again to resume and they are applied in one go (a few records are updated in place, a lot are re-read at once). Each list remembers being paused until you close the browser tab. Focus mode still works on top of it and applies to every list.'
     },
     { type: 'h3', id: 'live-lists-focus', text: 'Focus mode' },
     {

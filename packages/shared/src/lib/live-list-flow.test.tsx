@@ -14,6 +14,7 @@ import {
   resumeAsRefetch,
   setListPaused,
   totalsMayMove,
+  useKeptEntries,
   useLivePause,
   useSteadyRows
 } from './live-list-flow'
@@ -372,6 +373,23 @@ describe('useSteadyRows', () => {
     over(host, 'c')
     act(() => root.render(<List rows={[{ id: 'z', v: 1 }]} resetKey='p2' />))
     expect(text(host)).toEqual(['z:1'])
+    act(() => root.unmount())
+  })
+})
+
+describe('useKeptEntries (labels of a held row)', () => {
+  it('keeps the previous read for keys the new read lacks; the new read wins', () => {
+    let out: Record<string, string> | undefined
+    function Probe({ m }: { m?: Record<string, string> }) {
+      out = useKeptEntries(m)
+      return null
+    }
+    const root = createRoot(document.createElement('div'))
+    const first = { a: 'Zone 1', b: 'Zone 2' }
+    act(() => root.render(<Probe m={first} />))
+    expect(out).toBe(first)
+    act(() => root.render(<Probe m={{ a: 'Zone 3' }} />))
+    expect(out).toEqual({ a: 'Zone 3', b: 'Zone 2' })
     act(() => root.unmount())
   })
 })

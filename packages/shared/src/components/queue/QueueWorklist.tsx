@@ -3083,10 +3083,13 @@ export function QueueWorklist({
           {/* #643 — someone else changed this since you last opened it. The
             mark hangs in the column's widened left padding, so item names
             stay aligned with each other and with the header. */}
-          {rowLocks.get(rowId(row)) || rowChanges.isNew(rowId(row)) ? (
+          {rowLocks.get(rowId(row)) ||
+          rowChanges.isNew(rowId(row)) ||
+          steadyItems.isGone(rowId(row)) ? (
             <LiveRowMark
               lock={rowLocks.get(rowId(row))}
               isNew={rowChanges.isNew(rowId(row))}
+              gone={steadyItems.isGone(rowId(row))}
               dataAttr='data-queue-live-mark'
               hang
             />
@@ -4697,7 +4700,6 @@ export function QueueWorklist({
               onToggle={livePause.toggle}
             />
           )}
-          {liveBurst.label && <LiveBurstPill label={liveBurst.label} onShow={showLiveChanges} />}
           {pendingUpdates > 0 && !liveBurst.label && (
             <button
               type='button'
@@ -5541,6 +5543,14 @@ export function QueueWorklist({
                 )}
                 aria-busy={isRefetching || undefined}
               >
+                {/* #10 — an import or bulk change: one pill over the table, never in the toolbar. */}
+                {liveBurst.label && (
+                  <LiveBurstPill
+                    label={liveBurst.label}
+                    onShow={showLiveChanges}
+                    className='bottom-28'
+                  />
+                )}
                 {loadElapsed != null && (
                   <span className='nvr-slide-up-centered absolute left-1/2 top-6 z-[6] -translate-x-1/2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 shadow-lg dark:border-border dark:bg-card dark:text-slate-300'>
                     {queueSlow.text ?? 'Still working'} — {loadElapsed}s

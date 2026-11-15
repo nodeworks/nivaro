@@ -1,12 +1,13 @@
-import { Pause, Play, RefreshCw } from 'lucide-react'
+import { ChevronRight, CirclePause, CirclePlay, RefreshCw } from 'lucide-react'
 
 /**
- * Small list-toolbar controls for live lists (realtime round 2): the Pause button (#11) and
- * the burst pill (#10). Same 32 px height and pill look as the "N updates · Refresh" pill and
- * the focus-mode switch they sit beside; light + dark.
+ * Small controls for live lists (realtime round 2): the Pause button (#11) and the burst
+ * pill (#10). Neither may move the toolbar when live state changes: the pause button keeps
+ * ONE width paused or not, and the burst pill floats over the list (the host gives it a
+ * positioned container) instead of entering the toolbar. Light + dark.
  */
 
-/** "Pause live updates" — paused, it shows how many changes wait and resumes on click. */
+/** "Pause live" / "Paused 7" — one fixed width, so pausing never reflows the toolbar. */
 export function LivePauseButton({
   paused,
   held,
@@ -18,6 +19,8 @@ export function LivePauseButton({
   onToggle: () => void
   className?: string
 }) {
+  const base =
+    'inline-flex h-8 w-[7.5rem] shrink-0 items-center justify-center gap-1.5 rounded-md border px-2 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60'
   if (!paused)
     return (
       <button
@@ -25,24 +28,29 @@ export function LivePauseButton({
         onClick={onToggle}
         aria-pressed={false}
         data-live-pause
-        data-tip='Pause live updates — changes wait here until you resume'
-        className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200 ${className ?? ''}`}
+        data-tip='Live updates are on. Pause them to work through this list without it changing; changes wait until you resume.'
+        className={`${base} border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100 ${className ?? ''}`}
       >
-        <Pause className='h-3.5 w-3.5' aria-hidden />
-        <span className='sr-only'>Pause live updates</span>
+        <CirclePause className='h-3.5 w-3.5 shrink-0' aria-hidden />
+        <span>Pause live</span>
       </button>
     )
+  const n = held.toLocaleString('en-US')
+  const tip =
+    held > 0
+      ? `Live updates are paused. ${n} ${held === 1 ? 'change is' : 'changes are'} waiting — click to apply ${held === 1 ? 'it' : 'them'} and resume.`
+      : 'Live updates are paused. Nothing is waiting yet — click to resume.'
   return (
     <button
       type='button'
       onClick={onToggle}
       aria-pressed
+      aria-label={held > 0 ? `Resume live updates, ${n} waiting` : 'Resume live updates'}
       data-live-pause='paused'
-      // The tip is read when the pointer arrives; the badge carries the live count.
-      data-tip='Live updates paused — changes wait here (the number on the button). Click to resume and apply them.'
-      className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 text-[12px] font-medium text-amber-800 transition-colors hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20 ${className ?? ''}`}
+      data-tip={tip}
+      className={`${base} border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20 ${className ?? ''}`}
     >
-      <Play className='h-3.5 w-3.5' aria-hidden />
+      <CirclePlay className='h-3.5 w-3.5 shrink-0' aria-hidden />
       <span>Paused</span>
       {held > 0 && (
         <span
@@ -52,23 +60,41 @@ export function LivePauseButton({
           {held > 999 ? '999+' : held}
         </span>
       )}
-      <span className='sr-only'>— resume live updates</span>
     </button>
   )
 }
 
-/** One quiet pill for an import or bulk change: "Import added 500 records · Show". */
-export function LiveBurstPill({ label, onShow }: { label: string; onShow: () => void }) {
+/**
+ * One quiet pill for an import or bulk change: "Import added 500 records  Show ›". It floats
+ * centred over the list (the host's list container is `relative`), so it never pushes the
+ * toolbar; `className` positions it vertically for the host.
+ */
+export function LiveBurstPill({
+  label,
+  onShow,
+  className
+}: {
+  label: string
+  onShow: () => void
+  className?: string
+}) {
   return (
-    <button
-      type='button'
-      onClick={onShow}
-      data-live-burst
-      className='nvr-pop-in inline-flex h-8 min-w-0 max-w-full items-center sm:max-w-[22rem] gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2.5 text-[12px] font-medium text-nvr-navy transition-colors hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
+    <div
+      className={`pointer-events-none absolute inset-x-0 z-[8] flex justify-center px-4 ${className ?? 'bottom-16'}`}
     >
-      <RefreshCw className='h-3 w-3 shrink-0' aria-hidden />
-      <span className='truncate'>{label}</span>
-      <span className='shrink-0'>· Show</span>
-    </button>
+      <button
+        type='button'
+        onClick={onShow}
+        data-live-burst
+        className='nvr-pop-in group pointer-events-auto inline-flex h-8 min-w-0 max-w-full items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-white px-3 text-[12px] text-slate-700 shadow-[0_4px_14px_-4px_rgba(15,23,42,0.25)] transition-colors hover:border-nvr-cyan/70 hover:bg-[#f2fcff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-nvr-cyan/40 dark:bg-[#0f2530] dark:text-slate-200 dark:shadow-[0_4px_14px_-4px_rgba(0,0,0,0.6)] dark:hover:bg-[#123140]'
+      >
+        <RefreshCw className='h-3 w-3 shrink-0 text-[#007a99] dark:text-nvr-cyan' aria-hidden />
+        <span className='min-w-[5rem] truncate'>{label}</span>
+        <span className='ml-1 inline-flex shrink-0 items-center font-semibold text-[#007a99] underline-offset-2 group-hover:underline dark:text-nvr-cyan'>
+          Show
+          <ChevronRight className='h-3.5 w-3.5' aria-hidden />
+        </span>
+      </button>
+    </div>
   )
 }

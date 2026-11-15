@@ -434,7 +434,8 @@ export function planRowOrder(
 /** Longest a reorder waits for the pointer to leave or focus to move. */
 export const ROW_HOLD_MAX_MS = 10_000
 
-export const GONE_ROW_TITLE = 'No longer in this list'
+export const GONE_ROW_TITLE =
+  'No longer matches this view — it leaves when you move the pointer away'
 /** Faded look of a row kept only until the hold ends (light + dark). On the cells, not the row:
  *  the row's enter animation fills `both`, so its last frame (opacity 1) wins over a row class.
  *  A pinned (sticky) cell fades its content only: its opaque background must keep covering what
@@ -582,6 +583,29 @@ export function useSteadyRows<T>(
   // biome-ignore lint/correctness/useExhaustiveDependencies: the joined keys are the dependency
   const isGone = useCallback((key: string) => gone.has(key), [goneKey])
   return { rows: out, isGone, holding }
+}
+
+/**
+ * A per-row lookup (labels, owners, pipeline state…) read for the rows on the page, with the
+ * previous read's entries kept for keys the new read lacks. A row held on screen after it left
+ * the list (useSteadyRows) keeps its labels while it fades, instead of blanking to "—". The
+ * newest read always wins for a key it has; only one read back is kept.
+ */
+export function useKeptEntries<V>(
+  current: Record<string, V> | null | undefined
+): Record<string, V> | undefined {
+  const lastRef = useRef<Record<string, V> | null | undefined>(current)
+  const prevRef = useRef<Record<string, V> | null | undefined>(undefined)
+  if (lastRef.current !== current) {
+    prevRef.current = lastRef.current ?? prevRef.current
+    lastRef.current = current
+  }
+  const prev = prevRef.current
+  return useMemo(() => {
+    if (!current) return prev ?? undefined
+    if (!prev) return current
+    return { ...prev, ...current }
+  }, [current, prev])
 }
 
 // ── Totals rows follow the rows (#13) ────────────────────────────────────

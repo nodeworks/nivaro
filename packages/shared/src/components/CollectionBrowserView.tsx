@@ -155,6 +155,7 @@ import {
   GONE_ROW_TITLE,
   resumeAsRefetch,
   totalsMayMove,
+  useKeptEntries,
   useLiveBurst,
   useLivePause,
   useSteadyRows
@@ -6454,7 +6455,7 @@ export function CollectionBrowserView({
     staleTime: 30_000,
     retry: false
   })
-  const { data: pipelineData } = useQuery({
+  const { data: pipelineRead } = useQuery({
     queryKey: ['cbv-pipeline-instances', collection, pageIdsKey],
     queryFn: () =>
       client
@@ -6467,6 +6468,12 @@ export function CollectionBrowserView({
     staleTime: 30_000,
     retry: false
   })
+  // A row held in place after it left the list keeps its state badge (lib/live-list-flow.ts).
+  const keptInstances = useKeptEntries(pipelineRead?.instances)
+  const pipelineData = useMemo(
+    () => (pipelineRead ? { ...pipelineRead, instances: keptInstances ?? null } : pipelineRead),
+    [pipelineRead, keptInstances]
+  )
   const templateId = pipelineData?.binding?.template
   // Admins read the whole template; everyone else its outline (states + the
   // transitions their role may run) — GET /pipelines/:id answers them 403.
@@ -6492,7 +6499,7 @@ export function CollectionBrowserView({
 
   // ── Owners column (pipeline-bound collections): one batched engine pass ───
   const hasPipelineBinding = !!pipelineData?.binding
-  const { data: ownersByItem } = useQuery({
+  const { data: ownersRead } = useQuery({
     queryKey: ['cbv-owners', collection, pageIdsKey],
     queryFn: () =>
       client
@@ -6503,9 +6510,12 @@ export function CollectionBrowserView({
         )
         .then((r) => r.data ?? {}),
     enabled: hasPipelineBinding && pageIdsKey.length > 0,
+    // A live insert/remove changes the id set: keep the names on screen until the new read lands.
+    placeholderData: (prev) => prev,
     staleTime: 60_000,
     retry: false
   })
+  const ownersByItem = useKeptEntries(ownersRead)
 
   // ── Bulk resolve of dotted + alias column values for the current page ─────
   const dottedCols = useMemo(
@@ -6544,13 +6554,20 @@ export function CollectionBrowserView({
         })
       )
       .then((r) => r.data ?? { rows: {}, targets: {} })
-  const { data: resolvedData } = useQuery({
+  const { data: resolvedRead } = useQuery({
     queryKey: ['cbv-resolved', collection, rowIdsKey, resolveList.join(',')],
     queryFn: () => fetchResolved(rowIdsKey),
     enabled: rows.length > 0 && resolveList.length > 0,
+    // Same: related labels stay while a live change re-reads them for the new id set.
+    placeholderData: (prev) => prev,
     staleTime: 30_000,
     retry: false
   })
+  const keptResolvedRows = useKeptEntries(resolvedRead?.rows)
+  const resolvedData = useMemo(
+    () => (resolvedRead ? { ...resolvedRead, rows: keptResolvedRows ?? {} } : resolvedRead),
+    [resolvedRead, keptResolvedRows]
+  )
   const resolvedFor = (rowId: unknown, key: string): string | null => {
     const path = key.includes('.') ? key : aliasPathByField[key]
     if (!path) return null
@@ -8535,7 +8552,6 @@ export function CollectionBrowserView({
             onToggle={livePause.toggle}
           />
         )}
-        {liveBurst.label && <LiveBurstPill label={liveBurst.label} onShow={showLiveChanges} />}
         {pendingLive > 0 && !liveBurst.label && (
           <button
             type='button'
@@ -9864,6 +9880,10 @@ export function CollectionBrowserView({
           ref={rowChanges.rootRef}
           className='nvr-fade-in relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900'
         >
+          {/* #10 — an import or bulk change: one pill over the list, never in the toolbar. */}
+          {liveBurst.label && (
+            <LiveBurstPill label={liveBurst.label} onShow={showLiveChanges} className='bottom-28' />
+          )}
           {/* Refetch overlay — rows stay visible (placeholderData) but dim so
               paginate/sort/filter visibly does something. Only while the rows on screen are
               the PREVIOUS key's: a page already painted from cache (the idle-prefetched next
@@ -10483,10 +10503,13 @@ export function CollectionBrowserView({
                               onClick={(e) => e.stopPropagation()}
                             >
                               <span className='flex items-center gap-1'>
-                                {rowLock || rowChanges.isNew(String(id)) ? (
+                                {rowLock ||
+                                rowChanges.isNew(String(id)) ||
+                                steadyRows.isGone(String(id)) ? (
                                   <LiveRowMark
                                     lock={rowLock}
                                     isNew={rowChanges.isNew(String(id))}
+                                    gone={steadyRows.isGone(String(id))}
                                     dataAttr='data-cbv-live-mark'
                                   />
                                 ) : rowViewers[rowPresenceKey(collection, String(id))] ? (
