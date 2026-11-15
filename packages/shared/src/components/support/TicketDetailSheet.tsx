@@ -3,6 +3,8 @@ import { Loader2, Paperclip, PlayCircle } from 'lucide-react'
 import { useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get, patch, post } from '../../lib/commands'
+import { useLiveFade } from '../../lib/live-screen'
+import { useBackgroundArm } from '../../lib/live-views'
 import { signalSentence, useTopicPresence } from '../../lib/presence-signals'
 import { replayHref } from '../../lib/replay-capture'
 import { TaskDoButton } from '../ai/TaskDo'
@@ -78,7 +80,8 @@ export function TicketDetailSheet({
   const {
     data: t,
     isLoading,
-    isError
+    isError,
+    dataUpdatedAt
   } = useQuery({
     queryKey: ['support-ticket', ticketId],
     queryFn: () =>
@@ -91,6 +94,9 @@ export function TicketDetailSheet({
       return status !== 404 && status !== 403 && status !== 400 && count < 2
     }
   })
+  // A reply, claim or status change from someone else lands in place and fades in; the reply
+  // box, the open pickers and the scroll position are untouched.
+  const fadeRef = useLiveFade(useBackgroundArm(dataUpdatedAt, String(ticketId)))
   const { data: categories = [] } = useQuery({
     queryKey: ['support-categories', 'all-for', t?.collection ?? null],
     queryFn: () =>
@@ -136,6 +142,7 @@ export function TicketDetailSheet({
     <Sheet open={ticketId != null} onOpenChange={onOpenChange}>
       <SheetContent
         side='right'
+        ref={fadeRef}
         className='flex w-[560px] max-w-[96vw] flex-col gap-0 p-0 sm:max-w-[560px] dark:bg-card'
         data-support-ticket={ticketId ?? ''}
       >

@@ -1,4 +1,4 @@
-import { useLiveQueryRefresh } from '@nivaro/shared'
+import { useLiveCalendar } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -48,7 +48,11 @@ export function CollectionCalendar({
   const from = `${cursor.getFullYear()}-${pad(cursor.getMonth() + 1)}-01`
   const to = `${monthEnd.getFullYear()}-${pad(monthEnd.getMonth() + 1)}-${pad(monthEnd.getDate())} 23:59:59`
 
-  const { data: items = [], isLoading } = useQuery({
+  const {
+    data: fetched,
+    isLoading,
+    dataUpdatedAt
+  } = useQuery({
     queryKey: ['calendar', collection, field, monthKey(cursor)],
     queryFn: () =>
       api
@@ -62,19 +66,34 @@ export function CollectionCalendar({
         .then((r) => r.data.data ?? []),
     enabled: !!field
   })
-  // Records others add, move or reschedule appear in place (#2124).
-  useLiveQueryRefresh(collection, [['calendar', collection]])
+  // Records others add, move or reschedule appear in place (#2124): one quiet re-read per
+  // burst, the changed entries fade in, and an entry that left (moved to another day) stays
+  // where it was, dimmed, until the person moves on — nothing shifts under the pointer.
+  const live = useLiveCalendar({
+    collection,
+    keys: [['calendar', collection]],
+    items: fetched,
+    keyOf: (r) => String(r.id),
+    updatedAt: dataUpdatedAt,
+    resetKey: `${collection}|${field}|${monthKey(cursor)}`,
+    enabled: !!field
+  })
+  const items = useMemo(
+    () => live.entries.map((e) => ({ row: e.row, departed: e.state === 'departed' })),
+    [live.entries]
+  )
 
   const byDay = useMemo(() => {
-    const map = new Map<number, Array<Record<string, unknown>>>()
-    for (const it of items) {
+    const map = new Map<number, Array<{ row: Record<string, unknown>; departed: boolean }>>()
+    for (const entry of items) {
+      const it = entry.row
       const raw = it[field]
       if (!raw) continue
       const d = new Date(String(raw))
       if (Number.isNaN(d.getTime()) || d.getMonth() !== cursor.getMonth()) continue
       const day = d.getDate()
       const list = map.get(day) ?? []
-      list.push(it)
+      list.push(entry)
       map.set(day, list)
     }
     return map
@@ -108,7 +127,7 @@ export function CollectionCalendar({
   }
 
   return (
-    <div className='flex-1 overflow-auto p-4'>
+    <div className='flex-1 overflow-auto p-4' ref={live.ref}>
       <div className='mb-3 flex items-center gap-2'>
         <Button
           variant='outline'
@@ -185,12 +204,16 @@ export function CollectionCalendar({
                   {day}
                 </p>
                 <div className='space-y-0.5'>
-                  {(byDay.get(day) ?? []).slice(0, 4).map((it) => (
+                  {(byDay.get(day) ?? []).slice(0, 4).map(({ row: it, departed }) => (
                     <button
                       key={String(it.id)}
+                      data-departed={departed || undefined}
                       type='button'
                       onClick={() => navigate(`/collections/${collection}/${String(it.id)}`)}
-                      className='block w-full truncate rounded bg-[#00ceff1a] px-1.5 py-0.5 text-left text-[10px] font-medium text-nvr-navy hover:bg-[#00ceff33] dark:text-[#00ceff]'
+                      className={cn(
+                        'block w-full truncate rounded bg-[#00ceff1a] px-1.5 py-0.5 text-left text-[10px] font-medium text-nvr-navy hover:bg-[#00ceff33] dark:text-[#00ceff]',
+                        departed && 'opacity-50'
+                      )}
                       title={label(it)}
                     >
                       {label(it)}

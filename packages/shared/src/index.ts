@@ -938,6 +938,7 @@ export * from './lib/live-list'
 export * from './lib/live-ops'
 export * from './lib/live-queries'
 export * from './lib/live-screen'
+export * from './lib/live-views'
 export * from './lib/live-widgets'
 export {
   isListTimeout,

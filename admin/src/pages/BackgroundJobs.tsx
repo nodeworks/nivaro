@@ -1,8 +1,16 @@
 import { createNivaro } from '@nivaro/sdk'
-import { EventPathSheet, NivaroProvider, useLiveEvent, useLiveWatchRoom } from '@nivaro/shared'
+import {
+  EventPathSheet,
+  NivaroProvider,
+  useBackgroundArm,
+  useLiveFade,
+  useLiveJobs,
+  useNowTick,
+  useSettledRows
+} from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, GitBranch, Pencil, Play, RotateCw } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { ExplainButton } from '@/components/explain-button'
@@ -137,7 +145,6 @@ export default function BackgroundJobs() {
   const navigate = useNavigate()
 
   // #2025 / #1974 — the jobs watch room is live: the polls below are the safety net.
-  const live = useLiveWatchRoom('jobs')
   /** Run ids whose log is open. */
   const [openLogs, setOpenLogs] = useState<Set<number>>(new Set())
   const toggleLog = (id: number) =>
@@ -148,11 +155,18 @@ export default function BackgroundJobs() {
       return next
     })
   // Countdowns ("in 5m", "started 2m ago") move without a refetch.
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    const t = setInterval(() => setTick((n) => n + 1), 30_000)
-    return () => clearInterval(t)
-  }, [])
+  useNowTick(30_000)
+
+  // Live job progress (#271): while this page is open, join the jobs watch room. A start or
+  // finish refreshes the lists once per quiet window (a busy job reports many times a second);
+  // a progress report only moves the "Running now" line.
+  const [liveProgress, setLiveProgress] = useState<Record<number, Record<string, unknown>>>({})
+  const live = useLiveJobs({
+    keys: [['job-runs'], ['job-registry']],
+    onProgress: ({ id, progress }) => {
+      if (id != null) setLiveProgress((prev) => ({ ...prev, [id]: progress }))
+    }
+  })
 
   const registry = useQuery({
     queryKey: ['job-registry'],
@@ -174,36 +188,6 @@ export default function BackgroundJobs() {
         .then((r) => r.data),
     refetchInterval: live ? 60_000 : 15_000
   })
-
-  // Live job progress (#271): while this page is open, join the jobs watch
-  // room. A start or finish refreshes the lists (coalesced: a busy job reports
-  // many times a second); a progress report only moves the "Running now" line.
-  const [liveProgress, setLiveProgress] = useState<Record<number, Record<string, unknown>>>({})
-  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(
-    () => () => {
-      if (refreshTimer.current) clearTimeout(refreshTimer.current)
-    },
-    []
-  )
-  useLiveEvent(
-    'job:update',
-    (p: { id?: number; status?: string; progress?: Record<string, unknown> }) => {
-      if (p.progress && p.id != null) {
-        const progress = p.progress
-        const id = p.id
-        setLiveProgress((prev) => ({ ...prev, [id]: progress }))
-        return
-      }
-      if (refreshTimer.current) return
-      refreshTimer.current = setTimeout(() => {
-        refreshTimer.current = null
-        void qc.invalidateQueries({ queryKey: ['job-runs'] })
-        void qc.invalidateQueries({ queryKey: ['job-registry'] })
-      }, 400)
-    },
-    { includeOwn: true }
-  )
 
   const crons: CronEntry[] = registry.data?.crons ?? []
   const activeRuns: JobRun[] = (registry.data?.running ?? []).filter(
@@ -358,7 +342,22 @@ export default function BackgroundJobs() {
     }
   }
 
-  const rows: JobRun[] = runs.data?.data ?? []
+  // The history never reorders under the pointer: while it is hovered or focused, runs that
+  // arrive wait at the end and take their place once the person moves on; a run that finishes
+  // changes its status in place. The changed cells fade in after a background refresh.
+  const settledRuns = useSettledRows<JobRun>(runs.data?.data, (r) => String(r.id), {
+    resetKey: `${kind}|${status}|${search}|${page}`
+  })
+  const rows: JobRun[] = settledRuns.rows.map((r) => r.row)
+  const departedRuns = new Set(
+    settledRuns.rows.filter((r) => r.state === 'departed').map((r) => r.key)
+  )
+  const fadeRef = useLiveFade(
+    useBackgroundArm(
+      Math.max(runs.dataUpdatedAt ?? 0, registry.dataUpdatedAt ?? 0),
+      `${kind}|${status}|${search}|${page}`
+    )
+  )
   const total = runs.data?.total ?? 0
 
   const cronTable = (list: CronEntry[]) => (
@@ -706,7 +705,7 @@ export default function BackgroundJobs() {
     <div className='flex flex-1 min-h-0 flex-col'>
       <HubToolbar description='Everything running behind the scenes — cron jobs, remediations, backfills, recalcs — with outcomes, durations, and history in one place.' />
 
-      <div className='flex-1 space-y-4 overflow-y-auto p-6'>
+      <div className='flex-1 space-y-4 overflow-y-auto p-6' ref={fadeRef}>
         {registry.data?.ticks_enabled === false &&
           (registry.data?.scheduler && registry.data.scheduler.development === false ? (
             <p
@@ -898,7 +897,7 @@ export default function BackgroundJobs() {
             </button>
           </div>
 
-          <div className='mt-3 overflow-x-auto'>
+          <div className='mt-3 overflow-x-auto' ref={settledRuns.containerRef}>
             <table className='w-full text-[12px]'>
               <thead>
                 <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
@@ -919,7 +918,11 @@ export default function BackgroundJobs() {
                   return (
                     <tr
                       key={r.id}
-                      className='border-t border-slate-100 align-top dark:border-border'
+                      data-departed={departedRuns.has(String(r.id)) || undefined}
+                      className={cn(
+                        'border-t border-slate-100 align-top dark:border-border',
+                        departedRuns.has(String(r.id)) && 'opacity-50'
+                      )}
                     >
                       <td className='py-1.5 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
                         <button

@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { LifeBuoy, Plus, Search } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { type SupportDraft, takeSupportDraft } from '../../lib/error-actions'
-import { useLiveOps } from '../../lib/live-ops'
+import { useLiveRefresh } from '../../lib/live-counts'
+import { useLiveFade, useSettledRows } from '../../lib/live-screen'
+import { useBackgroundArm } from '../../lib/live-views'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { LiveCount } from '../LiveCount'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -44,7 +46,6 @@ export function SupportView({
   className?: string
 }) {
   const client = useNivaroClient()
-  const qc = useQueryClient()
   const auth = useItemEditAuth()
   const isAdmin = !!auth?.isAdmin
   const [tab, setTabState] = useState<Tab>('mine')
@@ -78,17 +79,12 @@ export function SupportView({
   })
   const desk = !!summary?.desk
   // Live: new tickets, claims, replies and status moves land for everyone with the desk open.
-  // The refetch goes through the permission-checked routes (a poke names nothing).
-  // The summary counts (tab and filter badges) wait out a 2 s quiet window like every count.
-  useLiveOps(
-    'support',
-    () => {
-      void qc.invalidateQueries({ queryKey: ['support-tickets'] })
-      void qc.invalidateQueries({ queryKey: ['support-summary'] })
-      void qc.invalidateQueries({ queryKey: ['support-ticket'] })
-    },
-    { debounceMs: 2000 }
-  )
+  // The re-read goes through the permission-checked routes (a poke names nothing), once per
+  // quiet window per tab, and a hidden tab reads once when it is shown again.
+  useLiveRefresh({
+    topic: 'support',
+    keys: [['support-tickets'], ['support-summary'], ['support-ticket']]
+  })
   // A desk worker lands on the desk, everyone else on their own requests.
   const [defaulted, setDefaulted] = useState(false)
   useEffect(() => {
@@ -108,12 +104,32 @@ export function SupportView({
         }
       : { scope: 'mine', status: mineStatus }
   if (search.trim()) params.q = search.trim()
-  const { data: list, isLoading } = useQuery({
+  const {
+    data: list,
+    isLoading,
+    dataUpdatedAt
+  } = useQuery({
     queryKey: ['support-tickets', params],
     queryFn: () =>
       client.request<{ data: SupportTicket[]; total: number }>(get('/support/tickets', params)),
     enabled: tab !== 'types' && tab !== 'analytics'
   })
+  // Rows never move under the pointer: a request someone else picked up or closed stays where it
+  // was, dimmed, until the person moves on; new ones wait at the end while they are reading the
+  // list. Their own filter, tab or search shows the new answer as it is.
+  const viewKey = `${tab}|${deskFilter}|${mineStatus}|${search.trim()}`
+  const settled = useSettledRows<SupportTicket>(list?.data, (t) => String(t.id), {
+    resetKey: viewKey,
+    enabled: tab !== 'types' && tab !== 'analytics'
+  })
+  const fadeRef = useLiveFade(useBackgroundArm(dataUpdatedAt, viewKey))
+  const listRef = useCallback(
+    (el: HTMLElement | null) => {
+      settled.containerRef(el)
+      fadeRef(el)
+    },
+    [settled.containerRef, fadeRef]
+  )
 
   const openTicket = (id: number | null) => {
     setOpenId(id)
@@ -217,7 +233,10 @@ export function SupportView({
             </label>
           </div>
 
-          <div className='mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+          <div
+            ref={listRef}
+            className='mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+          >
             {isLoading ? (
               <div className='space-y-2 p-4'>
                 {[0, 1, 2].map((i) => (
@@ -227,7 +246,7 @@ export function SupportView({
                   />
                 ))}
               </div>
-            ) : !list?.data.length ? (
+            ) : !settled.rows.length ? (
               <div className='flex flex-col items-center gap-2 px-6 py-12 text-center'>
                 <LifeBuoy className='h-6 w-6 text-slate-300' />
                 <p className='text-[13px] font-medium text-slate-700 dark:text-slate-200'>
@@ -248,8 +267,12 @@ export function SupportView({
               </div>
             ) : (
               <ul className='divide-y divide-slate-100 dark:divide-border/60' data-support-list>
-                {list.data.map((t) => (
-                  <li key={t.id}>
+                {settled.rows.map(({ row: t, state }) => (
+                  <li
+                    key={t.id}
+                    data-departed={state === 'departed' || undefined}
+                    className={state === 'departed' ? 'opacity-50' : undefined}
+                  >
                     <button
                       type='button'
                       data-support-row={t.id}
