@@ -509,6 +509,7 @@
           <a class="docs-nav-item" data-section="approval-chains" href="#approval-chains">Approval Chains</a>
           <a class="docs-nav-item" data-section="collab-chat" href="#collab-chat">Chat &amp; Channels</a>
           <a class="docs-nav-item" data-section="item-locking" href="#item-locking">Item Locking &amp; Presence</a>
+          <a class="docs-nav-item" data-section="live-conflicts" href="#live-conflicts">Working on the same record</a>
           <a class="docs-nav-item" data-section="notifications-center" href="#notifications-center">Notifications Center</a>
           <a class="docs-nav-item" data-section="user-activity-feed" href="#user-activity-feed">User Activity Feed</a>
           <a class="docs-nav-item" data-section="keyboard-shortcuts" href="#keyboard-shortcuts">Keyboard Shortcuts</a>
@@ -17419,6 +17420,44 @@ PATCH /api/item-locks/config/:collection
 }</code></pre>
           <div class="doc-note">Presence uses Socket.io — updates are real-time. Presence data is NOT persisted; it reflects active connections only.</div>
           <!-- /SYNC:item-locking -->
+        </div>
+
+        <!-- WORKING ON THE SAME RECORD -->
+        <div class="doc-section" id="s-live-conflicts" data-toc='[{"id":"live-conflicts","label":"Working on the same record"},{"id":"live-conflicts-quiet","label":"Fields you have not touched"},{"id":"live-conflicts-yours","label":"Fields you are changing"},{"id":"live-conflicts-see-changes","label":"See changes"},{"id":"live-conflicts-lines","label":"Lines: one person per line"},{"id":"live-conflicts-cursors","label":"Cursors in grids"}]'>
+          <!-- SYNC:live-conflicts -->
+          <h1 class="doc-h1" id="live-conflicts">Working on the same record</h1>
+          <p class="doc-p">When someone else saves a record you have open, their changes land in your form without a reload. What you see depends on whether you were changing the same field.</p>
+          <h3 class="doc-h3" id="live-conflicts-quiet">Fields you have not touched</h3>
+          <p class="doc-p">The field takes their saved value quietly: a short fade on the field and a small dot beside its label. Point at the dot (or tab to it) to read who changed it, when, and what it was before — for example “Beth changed this 2m ago: Draft → Approved”. Click the dot to clear it.</p>
+          <h3 class="doc-h3" id="live-conflicts-yours">Fields you are changing</h3>
+          <p class="doc-p">Your value stays. One line under the field says what the other person saved, with three choices:</p>
+          <ul class="doc-ul">
+            <li>**Keep mine** — your value wins when you save. You are not asked about this field again.</li>
+            <li>**Take theirs** — your change to this field is dropped and their value stays.</li>
+            <li>**Merge** — only for fields that can be combined (below). Opens under the field; nothing changes until you press **Use merged**.</li>
+          </ul>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Field</th><th>How Merge works</th></tr></thead>
+            <tbody><tr><tr><td>Long text (text area, markdown, code)</td><td>Line by line. Lines only one of you changed are taken from that person; lines you both changed show both versions and you pick Yours, Theirs or Both. The result stays editable before you use it.</td></tr>
+              <tr><td>Rich text</td><td>Paragraph by paragraph, the same way.</td></tr>
+              <tr><td>Tags and multi-select</td><td>Everything either of you added is kept. Anything one of you removed is shown crossed out — click it to keep it after all.</td></tr>
+              <tr><td>Numbers, dates, single choices, links, yes/no</td><td>No merge — one value has to win: Keep mine or Take theirs.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Many-to-many pickers (zones, linked records) never conflict: your form saves only the links you added or removed, so the other person’s changes stay.</div>
+          <h3 class="doc-h3" id="live-conflicts-see-changes">See changes</h3>
+          <p class="doc-p">Once anyone else has changed the record since you opened it, a **See changes** button appears beside Save. It lists every field others changed — who, when, old → new — and offers Keep mine / Take theirs on any field you are also changing. If you save while a choice is still open, Save asks once, plainly, which value wins.</p>
+          <p class="doc-p">Values shown here come from your own read of the record, so a field you are not allowed to see never appears. A locked field only offers Take theirs.</p>
+          <h3 class="doc-h3" id="live-conflicts-lines">Lines: one person per line</h3>
+          <p class="doc-p">An administrator can turn on **Lock lines one at a time** for a collection (Data Model → the collection → Settings, beside Item locking). Then:</p>
+          <ul class="doc-ul">
+            <li>Editing a record’s own fields locks the record as before; editing a line locks only that line.</li>
+            <li>Two people can edit different lines of the same record at the same time — even while someone holds the record’s lock.</li>
+            <li>A line someone else is editing is shaded and read-only for you; point at it to see who. It opens for you as soon as they leave it (or within half a minute if their browser closes).</li>
+            <li>If someone saved a line after you loaded it, your save stops on that line and offers Theirs / Mine / Merge per field, using the same rules as above.</li>
+          </ul>
+          <h3 class="doc-h3" id="live-conflicts-cursors">Cursors in grids</h3>
+          <p class="doc-p">In line grids and plan grids, the cell another person is in has a thin outline in their colour; point at it to see their name. Moving quickly across cells only shows the cell they stop on.</p>
+          <!-- /SYNC:live-conflicts -->
         </div>
 
         <!-- NOTIFICATIONS CENTER -->

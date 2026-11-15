@@ -40,6 +40,9 @@ export interface SummaryModeRules {
   edit_lock?: EditLockConfig
   /** Propose a change on a record locked after approval (change-proposals.ts). */
   change_proposals?: true
+  /** Lines (a record's own child rows) lock one at a time instead of with the
+   *  record (realtime item 7, item-lock-guard.ts / edit-lock.ts). Off by default. */
+  line_locks?: boolean
 }
 
 export const NO_STATE = '__none__'
@@ -81,6 +84,7 @@ export function parseSummaryModeRules(raw: unknown): SummaryModeRules {
     rules?: unknown
     edit_lock?: unknown
     change_proposals?: unknown
+    line_locks?: unknown
   }
   const rules: SummaryModeRule[] = []
   if (Array.isArray(o.rules)) {
@@ -108,7 +112,8 @@ export function parseSummaryModeRules(raw: unknown): SummaryModeRules {
     default: o.default === 'summary' ? 'summary' : 'edit',
     rules,
     ...(lock ? { edit_lock: lock } : {}),
-    ...(o.change_proposals === true ? { change_proposals: true as const } : {})
+    ...(o.change_proposals === true ? { change_proposals: true as const } : {}),
+    ...(o.line_locks === true ? { line_locks: true } : {})
   }
 }
 
@@ -129,8 +134,10 @@ export function validateSummaryModeRules(
     rules?: unknown
     edit_lock?: unknown
     change_proposals?: unknown
+    line_locks?: unknown
   }
   const lock = validateEditLock(o.edit_lock)
+  const lineLocks = o.line_locks === true
   if (lock.error) return { error: lock.error }
   if (o.change_proposals != null && typeof o.change_proposals !== 'boolean')
     return { error: 'summary_mode_rules.change_proposals must be true or false' }
@@ -239,13 +246,15 @@ export function validateSummaryModeRules(
       mode: rr.mode
     })
   }
-  if (def === 'edit' && rules.length === 0 && !lock.value && !proposals) return { value: null }
+  if (def === 'edit' && rules.length === 0 && !lock.value && !proposals && !lineLocks)
+    return { value: null }
   return {
     value: {
       default: def,
       rules,
       ...(lock.value ? { edit_lock: lock.value } : {}),
-      ...(proposals ? { change_proposals: true as const } : {})
+      ...(proposals ? { change_proposals: true as const } : {}),
+      ...(lineLocks ? { line_locks: true } : {})
     }
   }
 }

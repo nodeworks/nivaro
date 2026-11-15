@@ -116,3 +116,21 @@ describe('change_proposals switch (idea 6)', () => {
     expect(validateSummaryModeRules({ change_proposals: 'yes' }).error).toMatch(/true or false/)
   })
 })
+
+describe('line_locks (realtime item 7)', () => {
+  it('survives the lenient read and the strict write, off by default', () => {
+    expect(
+      parseSummaryModeRules(JSON.stringify({ default: 'edit', rules: [], line_locks: true }))
+    ).toMatchObject({ line_locks: true })
+    expect(parseSummaryModeRules(JSON.stringify({ default: 'edit', rules: [] })).line_locks).toBe(
+      undefined
+    )
+    expect(
+      validateSummaryModeRules({ default: 'edit', rules: [], line_locks: true }).value
+    ).toEqual({ default: 'edit', rules: [], line_locks: true })
+    // Only a real true turns it on; the empty default still stores nothing.
+    expect(validateSummaryModeRules({ default: 'edit', rules: [], line_locks: 'yes' }).value).toBe(
+      null
+    )
+  })
+})

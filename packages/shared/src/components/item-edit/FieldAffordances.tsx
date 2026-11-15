@@ -25,14 +25,13 @@ import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import type { TextContext } from '../../lib/placement-behaviour'
 import { htmlToText } from '../../lib/sanitize-html'
-import { cn, formatRelative } from '../../lib/utils'
+import { cn } from '../../lib/utils'
 import { useOverflowTip } from '../TipLayer'
 import type { DuplicateHint } from './DuplicateNotice'
 import { clearPersonalDefault, refusalText, usePersonalDefaultCss } from './PersonalDefaultControl'
 import { PERSONAL_DEFAULT_GHOST_BUTTON } from './PersonalDefaultPill'
 import type { CMSField, CMSRelation } from './types'
 import { usePersonalDefaultsApi } from './usePersonalDefaults'
-import { useRecordLabels } from './useRecordLabels'
 
 /**
  * Per-field affordances the record form hands down to every FieldRow without
@@ -64,6 +63,8 @@ export interface FieldAffordances {
   dismissRemoteChange: (field: string) => void
   /** Conflict ghosts (#6): replace the user's draft value with the remote one. */
   takeRemoteChange?: (field: string) => void
+  /** Conflict merge (realtime item 1): the merged value becomes the person's edit. */
+  mergeRemoteChange?: (field: string, value: unknown) => void
   /** field → human reason the input is read-only (shown on the lock glyph + hover). */
   lockReasons: Record<string, string>
   /** #2596: pointing at a locked field asks the server for the exact rule (once). */
@@ -103,89 +104,6 @@ export const ghostText = (v: unknown): string => {
   const raw = String(v)
   const s = /[<&]/.test(raw) ? htmlToText(raw).trim() : raw
   return s.length > 80 ? `${s.slice(0, 80)}…` : s
-}
-
-/** "was X · Jane, just now" under a field another person changed while this
- *  form was open. Dismisses per field; the form drops it on the next save. */
-export function RemoteChangeGhost({
-  change,
-  onDismiss,
-  onTakeTheirs,
-  relatedCollection
-}: {
-  change: RemoteFieldChange
-  onDismiss: () => void
-  onTakeTheirs?: () => void
-  /** A relation field's target: the ids it shows ("was 33") read as labels. */
-  relatedCollection?: string | null
-}) {
-  const looked = useRecordLabels(
-    relatedCollection,
-    [change.was, change.theirs],
-    !!relatedCollection
-  )
-  const shown = (v: unknown) =>
-    v != null && typeof v !== 'object' && looked.has(String(v))
-      ? (looked.get(String(v)) as string)
-      : ghostText(v)
-  if (change.conflict && onTakeTheirs)
-    return (
-      <div
-        data-remote-change-ghost
-        data-remote-conflict
-        className='nvr-expand-in flex flex-wrap items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11.5px] text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100'
-      >
-        <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500' />
-        <span className='min-w-0 flex-1'>
-          {change.by ?? 'Someone'} changed this to{' '}
-          <span className='font-medium'>{shown(change.theirs)}</span> while you were editing
-          <span className='text-amber-700/80 dark:text-amber-200/70'>
-            {' '}
-            · {formatRelative(change.at)}
-          </span>
-        </span>
-        <button
-          type='button'
-          onClick={onTakeTheirs}
-          data-remote-take-theirs
-          className='shrink-0 rounded border border-amber-400 bg-white px-1.5 py-0.5 text-[10.5px] font-medium text-amber-900 hover:bg-amber-100 dark:bg-transparent dark:text-amber-100 dark:hover:bg-amber-500/20'
-        >
-          Take theirs
-        </button>
-        <button
-          type='button'
-          onClick={onDismiss}
-          data-remote-keep-mine
-          className='shrink-0 rounded px-1.5 py-0.5 text-[10.5px] font-medium text-amber-800 hover:bg-amber-100 dark:text-amber-200 dark:hover:bg-amber-500/20'
-        >
-          Keep mine
-        </button>
-      </div>
-    )
-  return (
-    <div
-      data-remote-change-ghost
-      className='nvr-expand-in flex items-start gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-[11.5px] text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200'
-    >
-      <span className='mt-0.5 h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-sky-500' />
-      <span className='min-w-0 flex-1'>
-        was{' '}
-        <span className='font-medium line-through decoration-sky-400/70'>{shown(change.was)}</span>
-        <span className='text-sky-700/80 dark:text-sky-300/80'>
-          {' '}
-          · {change.by ?? 'someone'}, {formatRelative(change.at)}
-        </span>
-      </span>
-      <button
-        type='button'
-        onClick={onDismiss}
-        aria-label='Dismiss'
-        className='shrink-0 rounded p-0.5 text-sky-500 hover:bg-sky-100 hover:text-sky-800 dark:hover:bg-sky-500/20'
-      >
-        <X className='h-3 w-3' />
-      </button>
-    </div>
-  )
 }
 
 /** Lock glyph beside a read-only field's label carrying the reason. */

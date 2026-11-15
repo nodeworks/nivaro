@@ -4702,6 +4702,8 @@ type SummaryModeRulesDraft = {
   edit_lock?: unknown
   /** Propose a change on a record locked after approval (api change-proposals.ts). */
   change_proposals?: boolean
+  /** Lines lock one at a time (Item locking section) — carried through, not edited here. */
+  line_locks?: boolean
 }
 const NO_STATE_KEY = '__none__'
 
@@ -4776,7 +4778,8 @@ function FormUxSection({
           }))
         : [],
       ...(raw?.edit_lock ? { edit_lock: raw.edit_lock } : {}),
-      ...(raw?.change_proposals === true ? { change_proposals: true } : {})
+      ...(raw?.change_proposals === true ? { change_proposals: true } : {}),
+      ...(raw?.line_locks === true ? { line_locks: true } : {})
     }
   }, [meta])
   const save = (next: SummaryModeRulesDraft) => saveMut.mutate({ summary_mode_rules: next })
@@ -6724,8 +6727,58 @@ function ItemLockingSection({ tableName }: { tableName: string }) {
     onError: () => toast.error('Failed to update setting')
   })
 
+  // Lines lock one at a time (realtime item 7): stored in summary_mode_rules with the
+  // record's other lock settings; PATCH /collections keeps the rest of that config.
+  const { data: lockMeta } = useQuery({
+    queryKey: ['collection-meta-read-mode', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { summary_mode_rules?: Record<string, unknown> | null } }>(
+          `/collections/${tableName}`
+        )
+        .then((r) => r.data.data),
+    enabled: !!tableName
+  })
+  const lineLocks = lockMeta?.summary_mode_rules?.line_locks === true
+  const lineLocksMut = useMutation({
+    mutationFn: (on: boolean) => {
+      const cur = (lockMeta?.summary_mode_rules ?? { default: 'edit', rules: [] }) as Record<
+        string,
+        unknown
+      >
+      const next: Record<string, unknown> = { default: 'edit', rules: [], ...cur }
+      if (on) next.line_locks = true
+      else delete next.line_locks
+      return api.patch(`/collections/${tableName}`, { summary_mode_rules: next })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['collection-meta-read-mode', tableName] })
+      toast.success('Line locking setting saved')
+    },
+    onError: () => toast.error('Failed to update setting')
+  })
+
   return (
-    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <div className='flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3 dark:border-border'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+            Lock lines one at a time
+          </p>
+          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400'>
+            Off: someone editing a record holds all of its lines too. On: the record's lock covers
+            its own fields only, and each line locks while one person edits it — two people can work
+            on different lines at once.
+          </p>
+        </div>
+        <Switch
+          checked={lineLocks}
+          onCheckedChange={(v) => lineLocksMut.mutate(v)}
+          disabled={lineLocksMut.isPending || lockMeta === undefined}
+          aria-label='Lock lines one at a time'
+          data-line-locks-toggle
+        />
+      </div>
       <div className='flex items-center justify-between px-4 py-3'>
         <div>
           <p className='text-[13px] font-medium text-slate-800'>Item locking</p>

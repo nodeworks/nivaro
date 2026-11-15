@@ -242,10 +242,13 @@
 /* …and a colleague's cursor sits in this grid cell (#69 shared cursors) */
 [data-grid-cell].nvr-remote-editing {
   position: relative;
-  outline: 2px solid rgb(14 165 233 / 0.6);
+  outline: 2px solid var(--nvr-cursor, rgb(14 165 233 / 0.6));
   outline-offset: 2px;
   border-radius: 6px;
 }
+/* The name rides the cell's hover tip (data-tip, realtime item 25); a cell marked by an
+   older client (no colour) keeps the pill. */
+[data-grid-cell].nvr-remote-editing[data-tip]::after { display: none; }
 [data-grid-cell].nvr-remote-editing::after {
   content: attr(data-remote-editor);
   position: absolute;
@@ -257,7 +260,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   border-radius: 4px;
-  background: rgb(14 165 233);
+  background: var(--nvr-cursor, rgb(14 165 233));
   color: white;
   font-size: 9px;
   line-height: 14px;

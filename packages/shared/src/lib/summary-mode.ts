@@ -57,6 +57,9 @@ export interface SummaryModeRules {
   /** Propose a change on a record locked after approval (api change-proposals.ts);
    *  carried through so a Form UX save never drops it. Default off. */
   change_proposals?: true
+  /** Lines lock one at a time (realtime item 7): the record lock covers its own
+   *  fields only; each line takes its own lock while someone edits it. */
+  line_locks?: boolean
 }
 
 export const NO_STATE = '__none__'
@@ -70,6 +73,7 @@ export function normalizeSummaryModeRules(raw: unknown): SummaryModeRules {
     rules?: unknown
     edit_lock?: SummaryModeRules['edit_lock']
     change_proposals?: unknown
+    line_locks?: unknown
   }
   const def: SummaryMode = o.default === 'summary' ? 'summary' : 'edit'
   const rules: SummaryModeRule[] = []
@@ -90,7 +94,8 @@ export function normalizeSummaryModeRules(raw: unknown): SummaryModeRules {
     default: def,
     rules,
     ...(o.edit_lock ? { edit_lock: o.edit_lock } : {}),
-    ...(o.change_proposals === true ? { change_proposals: true as const } : {})
+    ...(o.change_proposals === true ? { change_proposals: true as const } : {}),
+    ...(o.line_locks === true ? { line_locks: true } : {})
   }
 }
 

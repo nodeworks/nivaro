@@ -33,7 +33,6 @@ import { FOCUSABLE } from './entry/entry-keys'
 import {
   LockReasonBadge,
   PresenceSoftLockStrip,
-  RemoteChangeGhost,
   useFieldAffordances,
   useFieldContextMenu,
   usePresenceSoftLock
@@ -66,6 +65,7 @@ import {
   RepeatLastButton,
   usePlacementTextContext
 } from './placement-behaviour'
+import { RemoteChangeMark, RemoteConflictNotice } from './RemoteChangeUi'
 import { jsonEqual, keepIfEqual } from './render-stability'
 import { softRuleWarning } from './soft-rules'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
@@ -1272,6 +1272,15 @@ export const FieldRow = memo(function FieldRow({
             name={field.field}
             label={label}
           />
+          {remoteChange && !remoteChange.conflict && (
+            <RemoteChangeMark
+              change={remoteChange}
+              now={draft[field.field]}
+              field={field}
+              relatedCollection={cascadeRelatedCollection ?? null}
+              onDismiss={() => affordances?.dismissRemoteChange(field.field)}
+            />
+          )}
           {(locked || field.readonly) && lockReason ? (
             <LockReasonBadge reason={lockReason} onHover={affordances?.onLockHover} />
           ) : locked ? (
@@ -1461,14 +1470,22 @@ export const FieldRow = memo(function FieldRow({
         <PersonalDefaultHint field={field.field} text={personalDefaultHint} />
       )}
       {duplicateHint && <DuplicateNotice field={field.field} hint={duplicateHint} />}
-      {remoteChange && (
-        <RemoteChangeGhost
+      {remoteChange?.conflict && (
+        <RemoteConflictNotice
           change={remoteChange}
+          mine={draft[field.field]}
+          field={field}
           relatedCollection={cascadeRelatedCollection ?? null}
-          onDismiss={() => affordances?.dismissRemoteChange(field.field)}
+          locked={locked || !!field.readonly}
+          onKeepMine={() => affordances?.dismissRemoteChange(field.field)}
           onTakeTheirs={
             affordances?.takeRemoteChange
               ? () => affordances.takeRemoteChange?.(field.field)
+              : undefined
+          }
+          onMerge={
+            affordances?.mergeRemoteChange
+              ? (v) => affordances.mergeRemoteChange?.(field.field, v)
               : undefined
           }
         />

@@ -174,6 +174,11 @@ interface LockPlan {
   childLinks: Map<string, ChildLink[]>
   /** own-row collection → the FK columns that point at any parent (person-held locks) */
   heldLinks: Map<string, ChildLink[]>
+  /** Parents whose lines lock one at a time (summary_mode_rules.line_locks): their
+   *  person-held record lock no longer covers their own rows (realtime item 7). */
+  lineLockParents?: Set<string>
+  /** Own-row collections of such parents: a row there is judged by its OWN lock. */
+  lineLockChildren?: Set<string>
 }
 
 const PLAN_TTL_MS = 30_000
@@ -227,10 +232,15 @@ export function ownRowLinks(
 
 async function readPlan(): Promise<LockPlan> {
   const rows = (await db('nivaro_collections')
-    .where('summary_mode_rules', 'like', '%edit_lock%')
+    .where((q) =>
+      q
+        .where('summary_mode_rules', 'like', '%edit_lock%')
+        .orWhere('summary_mode_rules', 'like', '%line_locks%')
+    )
     .select('collection', 'summary_mode_rules')
     .catch(() => [])) as Array<{ collection: string; summary_mode_rules: string | null }>
   const locks = new Map<string, EditLockConfig>()
+  const lineLockParents = new Set<string>()
   for (const r of rows) {
     let obj: unknown = null
     try {
@@ -240,6 +250,8 @@ async function readPlan(): Promise<LockPlan> {
     }
     const lock = parseEditLock((obj as { edit_lock?: unknown } | null)?.edit_lock)
     if (lock) locks.set(r.collection, lock)
+    if ((obj as { line_locks?: unknown } | null)?.line_locks === true)
+      lineLockParents.add(r.collection)
   }
   const rels = (await db('nivaro_relations')
     .whereNotNull('one_collection')
@@ -250,7 +262,35 @@ async function readPlan(): Promise<LockPlan> {
     .select('collection', 'field')
     .catch(() => [])) as Array<{ collection: string; field: string }>
   const inlineGrids = new Set(grids.map((g) => `${g.collection}.${g.field}`))
-  return { locks, ...ownRowLinks(locks, rels, inlineGrids) }
+  const links = ownRowLinks(locks, rels, inlineGrids)
+  return {
+    locks,
+    ...links,
+    lineLockParents,
+    lineLockChildren: lineLockChildrenOf(links.heldLinks, lineLockParents)
+  }
+}
+
+/** The own-row collections of parents whose lines lock one at a time. Exported for tests. */
+export function lineLockChildrenOf(
+  heldLinks: Map<string, ChildLink[]>,
+  lineLockParents: Set<string>
+): Set<string> {
+  const out = new Set<string>()
+  if (lineLockParents.size === 0) return out
+  for (const [child, ls] of heldLinks)
+    if (ls.some((l) => lineLockParents.has(l.parent))) out.add(child)
+  return out
+}
+
+/** Whether a parent's lines lock one at a time (its record lock covers only its own fields). */
+export async function lineLocksOn(parent: string): Promise<boolean> {
+  return !!(await lockPlan().catch(() => null))?.lineLockParents?.has(parent)
+}
+
+/** Whether rows of this collection are lines of a parent whose lines lock one at a time. */
+export async function isLineLockChild(collection: string): Promise<boolean> {
+  return !!(await lockPlan().catch(() => null))?.lineLockChildren?.has(collection)
 }
 
 function lockPlan(): Promise<LockPlan> {
@@ -610,6 +650,9 @@ export async function assertNotEditLocked(
   if (held) {
     const { editLockRefusal, RecordLockedError } = await import('./item-lock-guard.js')
     for (const t of parentsOf(held)) {
+      // Line locks: the parent's record lock covers its own fields only; the row
+      // is judged by its own lock (the single-row write path asks for it).
+      if (plan.lineLockParents?.has(t.parent)) continue
       const refused = await editLockRefusal(req, t.parent, t.id)
       if (refused) throw new RecordLockedError(refused.body)
     }
