@@ -10,6 +10,7 @@ import { resolveRoleFromAdGroups } from './microsoft.js'
 import { notificationRowMeta, notifyUser } from './notification-channels.js'
 import { rawWriterReason, reasonColumn } from './notification-reason.js'
 import { queueOfficeGeocode } from './office-geocode.js'
+import { notePeopleChanged, signInChangedDirectory } from './people-live.js'
 import { orderByPeopleRelevance } from './people-search-rank.js'
 import { DIRECTORY_USER_COLS } from './user-directory-cols.js'
 
@@ -242,6 +243,9 @@ export async function findOrCreateFromOIDC(profile: {
     }
     if (adRole) updates.role = adRole
     await db('nivaro_users').where({ id: existing.id }).update(updates)
+    // Every sign-in rewrites the row; pickers and avatars hear only a real change (rt2 #19).
+    if (signInChangedDirectory(existing as unknown as Record<string, unknown>, updates))
+      notePeopleChanged([String(existing.id)])
     if (adRole && String(adRole).toUpperCase() !== String(existing.role ?? '').toUpperCase())
       void joinDefaultChannelsSoon([existing.id], 'role from directory groups')
     if (profile.office_location) queueOfficeGeocode(existing.id)
@@ -297,6 +301,8 @@ export async function findOrCreateFromOIDC(profile: {
   // Welcome auto-broadcast (#389): a configured message greets brand-new
   // users on first login — in-app row, fire-and-forget.
   const newId = typeof id === 'object' ? (id as { id?: string }).id : id
+  // A new person shows in pickers and mentions without a reload (rt2 #19).
+  if (newId) notePeopleChanged([String(newId)], { created: true })
   if (newId) await captureEntraIdentity(newId, profile)
   if (newId && profile.office_location) queueOfficeGeocode(newId)
   if (newId && assignedRole) void joinDefaultChannelsSoon([newId], 'new account')

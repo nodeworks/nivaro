@@ -339,6 +339,16 @@ export function RecordLiveSync({
       ])
       if (batch.changedFields?.includes(LIVE_ASPECTS.state)) void announceMove()
     }
+    // rt2 #17 — who owns this record moved (owner matrix, delegation, out of office) while
+    // nobody wrote it: the owners chip and approval chain refetch quietly.
+    if (touched(LIVE_ASPECTS.owners) && !touched(LIVE_ASPECTS.state))
+      invalidate([
+        ['pipeline-all-owners', collection, itemId],
+        ['pipeline-instance-owners', collection, itemId],
+        ['pipeline-owners-resolved', collection, itemId],
+        ['approval-brief', collection, itemId]
+      ])
+    if (batch.aspectsOnly && batch.changedFields?.every((f) => f === LIVE_ASPECTS.owners)) return
     if (touched(LIVE_ASPECTS.addendums)) invalidate([['addendums', collection, itemId]])
     if (touched(LIVE_ASPECTS.comments))
       invalidate([
@@ -443,11 +453,14 @@ export function RecordLiveSync({
     []
   )
 
-  // #1870: who owns records changed somewhere (matrix, delegation, OOO, teams).
+  // #1870: who owns records changed somewhere (matrix, delegation, OOO, teams). rt2 #17: when
+  // the server checked the open records one by one (`checked`), this record already heard
+  // `$owners` if its owners moved; `queues` is the worklist re-sync, not about this page.
   useLiveEvent(
     'owners:changed',
-    () => {
-      if (goneRef.current) return
+    (p) => {
+      if (goneRef.current || p?.checked || p?.queues) return
+      if (Array.isArray(p?.collections) && !p.collections.includes(collection)) return
       invalidate([
         ['pipeline-instance-owners', collection, itemId],
         ['pipeline-owners-resolved', collection, itemId],

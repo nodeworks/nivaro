@@ -56,6 +56,18 @@ export const collabLiveRecords: DocSection = {
           'A banner names the flow ("Automation is updating this record") until the run ends.'
         ],
         [
+          'Who owns the record changes without anyone editing it (owner matrix, a delegation or out-of-office starting or ending, a hand-over)',
+          'The owners chip and approval chain update quietly. Lists, queues and My Work pick up records that became (or stopped being) yours.'
+        ],
+        [
+          'An administrator changes your role, policies, field access or User Scopes',
+          'Menus, buttons, fields and list rows appear or go without signing out. A record you can no longer read says so calmly instead of erroring.'
+        ],
+        [
+          'Someone joins, or changes their name, title, photo or out-of-office status',
+          'Pickers, @mentions, people cards and avatars show the change.'
+        ],
+        [
           'The same record is open with unsaved changes in another tab of your browser',
           'A banner warns you before you edit here too, with a button that asks the other tab to come forward (browsers may only flag its title).'
         ]
@@ -82,20 +94,34 @@ export const collabLiveRecords: DocSection = {
           '`{collection, item, flow_id, flow_name, state: start|end}`'
         ],
         [
+          '`collection:update` with `$owners`',
+          '`collection:<name>` + `record:<name>:<id>`',
+          "`{collection, item, changed_fields: ['$owners']}` — sent only for OPEN records (live viewers, at most 300) whose resolved owners moved; owners are never computed for every record"
+        ],
+        [
           '`owners:changed`',
-          'the tenant (cloud: `t:<tenant>:all`; self-hosted: every socket) — coalesced 5 s, at most one per 15 s',
-          '`{at}`'
+          'the tenant (cloud: `t:<tenant>:all`; self-hosted: every socket) — one per burst of owner changes',
+          '`{at, collections?, checked?, queues?}` — `checked`: open records were told one by one; `queues`: materialized worklists finished re-syncing their owners'
         ],
         [
           '`access:changed`',
-          'the tenant for an administrator’s access write; only the person’s own sockets for their own scope pick — coalesced',
-          '`{at}`'
+          'only the people a change can touch: the person named, a role’s holders (a policy’s role, an access request’s role), or the tenant when it cannot say — coalesced',
+          '`{at, perms: true}` — the client refetches the signed-in user and what is on screen as them'
+        ],
+        [
+          '`people:changed`',
+          'every fully signed-in socket of the tenant — coalesced 1 s, at most one per 3 s',
+          '`{at, user_ids?, created?}` — ids only (never a name, value or credential); no `user_ids` = anyone'
         ]
       ]
     },
     {
       type: 'p',
       text: '`GET /api/trash/record?collection=&item=` answers the latest deletion of one record (`deleted_at`, `deleted_by_name`, `can_restore`, and `trash_id` only when you may restore it) — to an unrestricted administrator or to the person who deleted it. Everyone else gets `{ "data": null }`, the same answer as "not deleted": the trash snapshot cannot be checked against your row filter or User Scopes.'
+    },
+    {
+      type: 'p',
+      text: 'Owner changes are heard where they are written (the owner tables, delegate and out-of-office columns) and by the 15-minute out-of-office sweep, which also catches a delegation that simply ran out. A bulk owner change (an owner-matrix spreadsheet apply) may call `ownerChangeBaseline()` before it writes and `announceOwnerChange({collections})` after (services/owner-change-live.ts) so each open record is told exactly whether its owners moved.'
     },
     { type: 'h3', id: 'live-records-hooks', text: 'Building a live panel (shared hooks)' },
     {
