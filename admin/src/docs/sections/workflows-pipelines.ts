@@ -931,6 +931,7 @@ export const pipelineOwnerOpened: DocSection = {
       items: [
         'An owner of the step as the record stands now opened the record at or after the moment it entered the step. An open before that (on an earlier step, or before a send back) does not count.',
         'The person who moved the record onto the step was on the record when they moved it. If they also own the step, only a later visit counts.',
+        'A delegate covering an owner who is out of office counts too: "Mark Lee (covering for Jane Smith) opened this 2h ago". Their visit counts only if the delegation was in force when they opened the record: the owner was out then (inside their scheduled out-of-office dates, or out right now when no dates were set) and the delegation had not expired. This follows the same delegation rule that hands steps with owner groups to a delegate.',
         'An administrator using View as someone does not open the record as that person: those visits are never counted, and the person\'s own "since you last looked" strip is left as it was.',
         'Names follow the people directory: an owner whose account is suspended, removed or not a person is shown as "An owner of this step", never by name.'
       ]
