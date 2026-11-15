@@ -1409,6 +1409,7 @@ export function CommentPanel({
                           ) : (
                             <CommentBody
                               text={c.text}
+                              record={{ collection, itemId: item }}
                               className='mt-0.5 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-600'
                             />
                           )}

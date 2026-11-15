@@ -136,6 +136,9 @@ export interface ActiveLayoutData {
   /** The `?layout=` this page was opened with names no form the person may
    *  open: the answer is the usual form, and the page says so (army11 f3). */
   requested_form_unavailable?: boolean
+  /** Fields any candidate form's record rules read (rt8 #18): a change to one — or a move —
+   *  re-asks which form applies to the open record. Absent when a form was pinned by name. */
+  rule_fields?: string[]
 }
 
 export interface StepDef {
