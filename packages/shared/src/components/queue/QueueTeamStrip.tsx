@@ -1,6 +1,6 @@
 import { readOnlinePresence } from '@nivaro/sdk'
 import { useQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useLiveEvent } from '../../lib/live'
@@ -257,7 +257,14 @@ function Roster({ rows, more, note }: { rows: TeamRow[]; more: number; note: str
   )
 }
 
-export function QueueTeamStrip({ queueId }: { queueId: string }) {
+export function QueueTeamStrip({
+  queueId,
+  right
+}: {
+  queueId: string
+  /** Shown at the right end of the row (the queue's "who is viewing now"). */
+  right?: ReactNode
+}) {
   const client = useNivaroClient()
   const pref = useLivePreference()
 
@@ -304,7 +311,14 @@ export function QueueTeamStrip({ queueId }: { queueId: string }) {
   const members = data?.data?.members
   const more = data?.data?.more ?? 0
   const rows = useMemo(() => teamRows(members ?? [], states), [members, states])
-  if (rows.length === 0) return null
+  // No owners to show: the row still carries `right` (who is viewing), and disappears when that
+  // is empty too.
+  if (rows.length === 0)
+    return right ? (
+      <div className='hidden shrink-0 items-center justify-end border-slate-100 border-b bg-white px-4 py-1.5 text-[12px] has-[[data-list-viewers]]:flex dark:border-slate-800 dark:bg-slate-900'>
+        {right}
+      </div>
+    ) : null
 
   const shown = rows.slice(0, INLINE_FACES)
   const rest = rows.length - shown.length + more
@@ -365,6 +379,7 @@ export function QueueTeamStrip({ queueId }: { queueId: string }) {
           <Roster rows={rows} more={more} note={note} />
         </PopoverContent>
       </Popover>
+      {right && <div className='ml-auto flex min-w-0 shrink-0 items-center'>{right}</div>}
     </div>
   )
 }
