@@ -43,7 +43,8 @@ import {
   jumpToComment,
   MentionDeliveryButton,
   RepliesWhileTyping,
-  SeenByLine
+  SeenByLine,
+  useHoldInPlace
 } from './CommentAwareness'
 import { CommentBody, CommentImageStrip, imageDropProps, useCommentImages } from './CommentImages'
 import { RecordEventPathSheet } from './IntegrationActivitySection'
@@ -918,6 +919,9 @@ export function CommentPanel({
   // Realtime round 7: replies others post while this box holds an unsent draft are named above
   // it, so nobody answers past them. Nothing scrolls; posting or clearing the box ends it.
   const whileTyping = useRepliesWhileTyping(draft, data, userId || myId)
+  // The note sits ABOVE the box: when it appears or grows, the box stays put on screen.
+  const composerRef = useRef<HTMLFormElement>(null)
+  useHoldInPlace(composerRef, whileTyping.replies.length)
 
   // Everything else anyone wrote about this record — transition comments,
   // change reasons (including ones left on child rows, like a forecast's
@@ -1178,7 +1182,7 @@ export function CommentPanel({
                   />
                 </div>
               )}
-              <form onSubmit={handleSubmit} className='space-y-2'>
+              <form ref={composerRef} onSubmit={handleSubmit} className='space-y-2'>
                 <MentionTextarea
                   value={draft}
                   onChange={setDraft}

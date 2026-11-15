@@ -44,6 +44,7 @@ import {
   parseDelivery,
   parseDetail
 } from '../services/notification-channels.js'
+import { readMark } from '../services/notification-read-mark.js'
 import { changedFields, pickSnapshotRevision } from '../services/notification-snapshot.js'
 import {
   clearUntilChange,
@@ -68,16 +69,6 @@ import { canSeeRecord, visibleRecordIds } from '../services/sla-visibility.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { seesAllRecords } from '../services/user-scopes.js'
 import { announceNotificationsRead, movesNotificationState } from '../services/user-sync.js'
-import { viewAsAdminOf } from '../services/view-as-attribution.js'
-
-/**
- * Marking read: a View-as tab moves the person's inbox like they would, but stamps no read_at —
- * an administrator looking as someone is never that person reading it (mention read receipts,
- * "Seen by" and mention delivery read read_at; realtime round 7).
- */
-function readMark(req: unknown): { status: 'read'; read_at?: Date } {
-  return viewAsAdminOf(req) ? { status: 'read' } : { status: 'read', read_at: new Date() }
-}
 
 // Actual schema (migration 003 + renamed in 012):
 // id INT, timestamp datetime, status varchar ('inbox'|'read'),

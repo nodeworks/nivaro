@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Bell, Eye, Mail, MailWarning, MessageSquareReply, Send, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import {
@@ -117,6 +117,65 @@ export function RepliesWhileTyping({
       )}
     </section>
   )
+}
+
+/** The nearest ancestor that scrolls vertically, else the page's scrolling element. */
+export function scrollParentOf(el: HTMLElement): HTMLElement | null {
+  let node = el.parentElement
+  while (node) {
+    const oy = getComputedStyle(node).overflowY
+    if ((oy === 'auto' || oy === 'scroll') && node.scrollHeight > node.clientHeight) return node
+    node = node.parentElement
+  }
+  return (document.scrollingElement as HTMLElement | null) ?? null
+}
+
+/**
+ * Keep `target` (the comment box) where it is on screen when something above it changes size —
+ * the replies note appearing or growing. Measures the box's top before and after the change and
+ * scrolls its scroll container by the difference, so the person's caret never moves under them.
+ * Skipped when the box was not on screen (nothing to hold still). The browser's own scroll
+ * anchoring may already have held it; then the difference is 0 and nothing is scrolled.
+ */
+export function useHoldInPlace(target: RefObject<HTMLElement | null>, trigger: unknown): void {
+  const lastTop = useRef<number | null>(null)
+  const lastTrigger = useRef<unknown>(trigger)
+  // Track the box's position as the person scrolls, so "before" is always current.
+  useEffect(() => {
+    const note = () => {
+      const el = target.current
+      lastTop.current = el ? el.getBoundingClientRect().top : null
+    }
+    note()
+    window.addEventListener('scroll', note, { capture: true, passive: true })
+    window.addEventListener('resize', note, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', note, { capture: true })
+      window.removeEventListener('resize', note)
+    }
+  }, [target])
+  // Runs after every commit: compare against the position before this one.
+  useLayoutEffect(() => {
+    const el = target.current
+    if (!el) {
+      lastTop.current = null
+      return
+    }
+    const before = lastTop.current
+    const changed = !Object.is(lastTrigger.current, trigger)
+    lastTrigger.current = trigger
+    const now = el.getBoundingClientRect().top
+    if (changed && before != null && now !== before) {
+      const scroller = scrollParentOf(el)
+      const view =
+        scroller && scroller !== document.scrollingElement
+          ? scroller.getBoundingClientRect()
+          : { top: 0, bottom: window.innerHeight }
+      const wasOnScreen = before + el.offsetHeight > view.top && before < view.bottom
+      if (scroller && wasOnScreen) scroller.scrollTop += now - before
+    }
+    lastTop.current = el.getBoundingClientRect().top
+  })
 }
 
 /** Briefly mark a thread entry the person jumped to from the strip (their click, not ours). */

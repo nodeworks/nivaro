@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { detailColumn, parseDetail } from './notification-channels.js'
+import { readMark } from './notification-read-mark.js'
 
 /** #2365 — acknowledge a notification that asked for it. Own rows only;
  *  stamps who/when in the row's detail and marks it read. The body of
@@ -31,8 +32,8 @@ export async function acknowledgeNotification(
       .where({ id })
       .update({
         detail: detailColumn({ ...detail, ack_at: at, ack_by: String(userId) }),
-        status: 'read',
-        read_at: new Date()
+        // Under View-as: read, but no read_at (it never counts as the person seeing it).
+        ...readMark(req)
       })
     await logActivity({
       action: 'notification-acknowledge',
