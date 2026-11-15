@@ -165,7 +165,7 @@ function PointerChip({
           type='button'
           onClick={onGo}
           data-field-pointer-go=''
-          className='inline-flex shrink-0 items-center gap-1 rounded-full bg-nvr-cyan px-2.5 py-1 text-[11.5px] font-semibold text-white hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-card'
+          className='inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[12px] font-semibold text-[#0e7490] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-nvr-cyan'
         >
           <Crosshair className='h-3 w-3' aria-hidden />
           Go
