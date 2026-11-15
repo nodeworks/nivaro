@@ -151,6 +151,7 @@ export const NOTIFY_CATEGORY_LABELS: Record<NotifyCategory, string> = {
   proposals: 'Change proposals',
   sla: 'SLA',
   watch: 'Record watches',
+  watch_list: 'Watch list alerts',
   alerts: 'Alerts',
   audit: 'Audit log patterns',
   anomaly: 'Anomaly detection',

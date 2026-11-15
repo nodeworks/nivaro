@@ -63,6 +63,11 @@ export const NOTIFY_RULE_CATS: Array<{ key: string; label: string; help: string 
     help: 'Something you explicitly watch fired: field watches, per-record subscriptions, and watched stock parts (Stock Planning).'
   },
   {
+    key: 'watch_list',
+    label: 'Watch list alerts',
+    help: 'Alerts you set on records in your watch list: when one reaches a step, when a field changes, or when it is overdue. Also the daily email of what changed on your pinned records, when you turn it on.'
+  },
+  {
     key: 'alerts',
     label: 'Alerts',
     help: 'Threshold alerts you subscribe to: metric alert rules, per-record alert definitions, report alerts, and the alert digest.'

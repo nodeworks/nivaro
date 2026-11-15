@@ -81,6 +81,7 @@
           <a class="docs-nav-item" data-section="activity" href="#activity">Activity</a>
           <a class="docs-nav-item" data-section="notifications" href="#notifications">Notifications</a>
           <a class="docs-nav-item" data-section="comments" href="#comments">Comments</a>
+          <a class="docs-nav-item" data-section="watch-list" href="#watch-list">Watch List</a>
           <a class="docs-nav-item" data-section="computed-fields" href="#computed-fields">Computed Fields</a>
           <a class="docs-nav-item" data-section="dashboards-guide" href="#dashboards-guide">Dashboards</a>
           <a class="docs-nav-item" data-section="reports-guide" href="#reports-guide">Reports</a>
@@ -1203,6 +1204,76 @@ emitNotification(app.io, targetUserId, {
           <h3 class="doc-h3">Machine markers</h3>
           <p class="doc-p">Comment strings written by machinery — a sync script's provenance tag, a stored procedure's marker — are never notes. Extensions declare theirs with <code class="doc-code">ctx.notes.registerMachineMarkers({ exact, prefixes })</code>; the thread drops matching comments and row history renders them as provenance. Core declares none itself.</p>
           <!-- /SYNC:comments -->
+        </div>
+
+        <div class="doc-section" id="s-watch-list" data-toc='[{"id":"watch-list","label":"Watch List"},{"id":"watch-list-pin","label":"Pin a record"},{"id":"watch-list-rows","label":"What a row shows"},{"id":"watch-list-dock","label":"Open, minimized or closed"},{"id":"watch-list-sort","label":"Order"},{"id":"watch-list-waiting","label":"Waiting on others"},{"id":"watch-list-mentions","label":"Mentions &amp; replies"},{"id":"watch-list-alerts","label":"Alerts on a pinned record"},{"id":"watch-list-settings","label":"Settings"},{"id":"watch-list-shared","label":"Shared lists for a team"}]'>
+          <!-- SYNC:watch-list -->
+          <h1 class="doc-h1" id="watch-list">Watch List</h1>
+          <p class="doc-p">The watch list keeps the records you care about in view on every page, a little like a stock watch list. Each row stays current on its own: you never reload a page to see where a record stands.</p>
+          <h3 class="doc-h3" id="watch-list-pin">Pin a record</h3>
+          <ul class="doc-ul">
+            <li>Click the pin beside a record’s title (on the record page or in the record sheet).</li>
+            <li>Or choose “Add to watch list” from a list row’s ⋯ menu or its right-click menu.</li>
+            <li>Or press W while a record is open. Press W again to unpin it.</li>
+            <li>You can pin up to 50 records. Unpin from the row’s × (hover the row), from the pin again, or from the row menu.</li>
+          </ul>
+          <h3 class="doc-h3" id="watch-list-rows">What a row shows</h3>
+          <ul class="doc-ul">
+            <li>The record’s name and its main figure (an amount, when the record has one).</li>
+            <li>Its current step and how long it has been there next to the usual time records spend on that step, for example “20 d / usually 17 m” (amber once it has been there longer than usual).</li>
+            <li>Who owns the current step.</li>
+            <li>What changed last, who did it and when, for example “Moved to Approved · Beth Lee · 2 m”.</li>
+            <li>A countdown when the step has a deadline, turning amber and red at the deadline’s own lines.</li>
+            <li>Hover a row for its card (step, owners, key amounts). Click it to look at the record in the side sheet; Cmd / Ctrl-click opens it in a new tab.</li>
+          </ul>
+          <p class="doc-p">When someone else changes a pinned record, its row gets a soft tint and a small dot until you look at it: open it, or use “Mark all as seen” (the double tick). Your own changes never light a row. A record you can no longer open shows as “No longer available” with a Remove button, and nothing else about it.</p>
+          <h3 class="doc-h3" id="watch-list-dock">Open, minimized or closed</h3>
+          <ul class="doc-ul">
+            <li>Open: a column at the right edge of the page. It takes its own space and never covers the page. Drag its left edge to make it wider or narrower (or focus the edge and use the arrow keys).</li>
+            <li>Minimized (the – button): a slim strip showing how many records you pin and how many changed. Click it to open the list again.</li>
+            <li>Closed (the × button): only the binoculars icon stays, in the sidebar (admin) or the top bar. A small dot on it means a pinned record changed, or a mention is waiting, while the list was closed.</li>
+            <li>Shift W opens or closes the list from anywhere.</li>
+            <li>On narrow windows and phones the list never takes a column: the binoculars icon opens it as a panel over the page.</li>
+            <li>Whether it is open, its width, the tab and the sort are remembered for you on every device.</li>
+          </ul>
+          <h3 class="doc-h3" id="watch-list-sort">Order</h3>
+          <p class="doc-p">“My order” keeps the order you choose: drag a row by the grip on its left edge. “Last change” puts the most recently changed records first; “Due soonest” puts the nearest deadlines first.</p>
+          <h3 class="doc-h3" id="watch-list-waiting">Waiting on others</h3>
+          <p class="doc-p">The Waiting tab lists records you raised that are sitting on a step someone else owns: who it is with and how long it has waited, longest first. “Raised” means you created the record (in the last 180 days), or the record’s “created by” field names you. It updates on its own as records move.</p>
+          <h3 class="doc-h3" id="watch-list-mentions">Mentions &amp; replies</h3>
+          <ul class="doc-ul">
+            <li>Mentions: every time someone @mentioned you in the last 30 days. These are your mention notifications, so reading one here also marks it read in the bell, and the other way round.</li>
+            <li>Replies: comments other people left after your own last comment on the same record (or the same field’s thread).</li>
+            <li>Click one to look at the record and mark it read. “Mark all read” clears the tab.</li>
+          </ul>
+          <h3 class="doc-h3" id="watch-list-alerts">Alerts on a pinned record</h3>
+          <p class="doc-p">Hover a pinned row and click the bell to be told when something happens to that record. The bell stays lit while the record has an alert.</p>
+          <ul class="doc-ul">
+            <li>It reaches a step: pick the step. You are told when the record arrives there (not when you moved it yourself).</li>
+            <li>A field changes: pick one of the fields you can see. You are told when someone else changes it.</li>
+            <li>It’s overdue: you are told when its current step passes its due time, once per step it runs late on.</li>
+            <li>Choose Once (the alert switches itself off after it fires) or Every time.</li>
+            <li>Alerts arrive as notifications under “Watch list alerts”, so Profile → Notification rules decides whether they also push or email. Unpinning a record removes its alerts.</li>
+          </ul>
+          <h3 class="doc-h3" id="watch-list-settings">Settings</h3>
+          <p class="doc-p">The settings button (the sliders, at the top of the list) holds switches that are yours alone. All of them start off.</p>
+          <ul class="doc-ul">
+            <li>Desktop alerts: a notice from your computer when someone else changes a pinned record while the page is in the background. Your browser asks for permission the first time you turn it on (never before). One notice per burst of changes, never for your own changes, and only one even with several tabs open.</li>
+            <li>Daily email: one email a day listing what changed on your pinned records in the last day, by someone other than you. It comes at your own daily-summary hour (Profile → Notifications) in your time zone, or at 7 AM Eastern when you have not set one. Nothing is sent on a quiet day.</li>
+            <li>Records that land on my step: when a record moves to a step you own, it is pinned for you.</li>
+            <li>Unpin them when they leave my step: a record pinned that way goes again when it moves on. A record you pinned yourself always stays.</li>
+          </ul>
+          <h3 class="doc-h3" id="watch-list-shared">Shared lists for a team</h3>
+          <ul class="doc-ul">
+            <li>Settings → New shared list: give it a name and add people. You are on it; a manager or an administrator can also make one for a team they are not on (“Add my direct reports” adds yours in one go).</li>
+            <li>Everyone on the list sees it as its own tab in the watch list, and can add records to it from a record page: the people icon beside the pin.</li>
+            <li>Each person only sees the records on it they are allowed to open. A record someone else cannot open is simply not in their tab.</li>
+            <li>Changes by others light rows the same way as your own list; your “seen” marks are yours alone.</li>
+            <li>The person who made it (or an administrator) can rename it, change its people or delete it from the list’s ⋯ menu. Anyone else can leave it there.</li>
+            <li>If the person who made it can no longer sign in (suspended, removed, or an integration account), the list stays visible but read-only. An administrator can choose Take ownership from its ⋯ menu to keep it going, or delete it.</li>
+          </ul>
+          <div class="doc-note">Everything in the list is read as you: only records, fields and comments you may see. Nothing in it polls; it follows the records over the live connection and refreshes at most once a second, however many changes arrive.</div>
+          <!-- /SYNC:watch-list -->
         </div>
 
         <div class="doc-section" id="s-computed-fields" data-toc='[{"id":"computed-fields","label":"Computed Fields"},{"id":"computed-rollup","label":"Rollup fields"},{"id":"computed-rollup-stored","label":"Stored rollups"},{"id":"computed-fields-where-from","label":"Where does this value come from?"}]'>

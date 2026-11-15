@@ -705,6 +705,9 @@ export { UserAvatar } from './components/UserAvatar'
 export { WidgetImageMenu } from './components/WidgetImageMenu'
 export type { InputBinding } from './components/WidgetSlot'
 export { WidgetSlot } from './components/WidgetSlot'
+export { WatchDock } from './components/watch-list/WatchDock'
+export { WatchListButton } from './components/watch-list/WatchListButton'
+export { WatchPinButton } from './components/watch-list/WatchPinButton'
 export type {
   ReviewListConfig,
   ReviewListResult,
@@ -1528,6 +1531,13 @@ export {
 } from './lib/view-as'
 export * from './lib/waiting-count'
 export * from './lib/waiting-count'
+export {
+  useWatchActions,
+  useWatchPrefs,
+  useWatchUi,
+  watchKeys,
+  watchUi
+} from './lib/watch-list'
 export {
   buildWidgetImageLabel,
   describeDateRangeFilter,

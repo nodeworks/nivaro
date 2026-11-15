@@ -202,6 +202,7 @@ import {
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
 import { loadUserCard, userCardQuery } from '../lib/user-cards'
 import { cn, formatDateTime, humanHours } from '../lib/utils'
+import { useWatchActions } from '../lib/watch-list'
 import { useAskRecordDrag, usePublishAskContext } from './ai/ask-context'
 import {
   type AvailableBulkAction,
@@ -1052,6 +1053,7 @@ export function RowActionsMenu({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const { isAdmin } = useItemEditAuth()
+  const watch = useWatchActions()
   const ref = rowMenuRef({
     label,
     meta: qc.getQueryData<CollectionMeta>(['cbv-collection-meta', collection]),
@@ -1635,6 +1637,17 @@ export function RowActionsMenu({
                     setOpen(false)
                     onPeek()
                   })}
+                {/* rt5: follow the record from the watch list dock. */}
+                {watch.isPinned(collection, id)
+                  ? item('Remove from watch list', () => {
+                      setOpen(false)
+                      void watch.unpin(collection, id).catch(() => {})
+                    })
+                  : !watch.full &&
+                    item('Add to watch list', () => {
+                      setOpen(false)
+                      void watch.pin(collection, id).catch(() => {})
+                    })}
                 {discussable &&
                   item('Discuss in chat', () => {
                     setOpen(false)
@@ -4619,6 +4632,7 @@ export function CollectionBrowserView({
   className
 }: CollectionBrowserViewProps) {
   const client = useNivaroClient()
+  const watchList = useWatchActions()
   const qc = useQueryClient()
   const { open: openTarget, urlFor } = useItemNavigation()
 
@@ -8634,6 +8648,28 @@ export function CollectionBrowserView({
                     label: 'Peek',
                     run: () => recordDrill.push([{ collection, itemId: String(cellMenu.row.id) }])
                   },
+                  // rt5: follow the record from the watch list dock.
+                  ...(watchList.isPinned(collection, cellMenu.row.id as string | number)
+                    ? [
+                        {
+                          label: 'Remove from watch list',
+                          run: () =>
+                            void watchList
+                              .unpin(collection, cellMenu.row.id as string | number)
+                              .catch(() => {})
+                        }
+                      ]
+                    : watchList.full
+                      ? []
+                      : [
+                          {
+                            label: 'Add to watch list',
+                            run: () =>
+                              void watchList
+                                .pin(collection, cellMenu.row.id as string | number)
+                                .catch(() => {})
+                          }
+                        ]),
                   // The friendly id, never the row id (army 7 N7); none = nothing to copy.
                   ...(rowMenuRef({
                     meta,

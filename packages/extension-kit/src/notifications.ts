@@ -5,6 +5,8 @@ export type NotifyCategory =
   | 'proposals'
   | 'sla'
   | 'watch'
+  /** Alerts a person set on records in their watch list (reaches a step, field changes, overdue). */
+  | 'watch_list'
   | 'alerts'
   /** Activity-pattern alerts on the audit log (#23). */
   | 'audit'

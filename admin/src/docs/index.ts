@@ -100,6 +100,7 @@ export * from './sections/team-board.js'
 export * from './sections/team-throughput.js'
 export * from './sections/tree-advanced.js'
 export * from './sections/trees.js'
+export * from './sections/watch-list.js'
 export * from './sections/workflows-pipelines.js'
 
 import { accessInsightsDocs } from './sections/access-insights.js'
@@ -554,6 +555,7 @@ import {
   treeOverview,
   treeSetup
 } from './sections/trees.js'
+import { collabWatchList } from './sections/watch-list.js'
 import {
   pipelineApi,
   pipelineBranching,
@@ -949,6 +951,7 @@ export const navSections: NavGroup[] = [
       collabLiveCounts,
       collabLiveConfig,
       collabBackAndPeek,
+      collabWatchList,
       collabLiveOps,
       collabPresence,
       collabSendMyView,
