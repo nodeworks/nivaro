@@ -31,6 +31,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post, put } from '../lib/commands'
+import { LIVE_MODE_LABELS, parseLiveMode } from '../lib/live-preference'
 import { playNotificationSound } from '../lib/notification-sound'
 import {
   cascadeFilter,
@@ -2313,6 +2314,48 @@ function MyPermissionsCard() {
 
 // ─── Display preferences (#229/#230/#231/#232/#411) ──────────────────────────
 
+/** Live updates: Normal / Calm / Off, or the role's default (lib/live-preference.ts). */
+function LiveUpdatesPref({
+  value,
+  onChange
+}: {
+  value: unknown
+  onChange: (v: 'auto' | 'normal' | 'calm' | 'off') => void
+}) {
+  const client = useNivaroClient()
+  const { data: roleMode } = useQuery({
+    queryKey: ['live-preference-default'],
+    queryFn: () =>
+      client
+        .request<{ data: { mode?: string | null } }>(get('/live-preference/default'))
+        .then((r) => parseLiveMode(r.data?.mode))
+        .catch(() => null),
+    staleTime: 5 * 60_000
+  })
+  const own = parseLiveMode(value)
+  const roleLabel = LIVE_MODE_LABELS[roleMode ?? 'normal']
+  const hint = {
+    normal: 'Changes appear as they happen, with a short fade.',
+    calm: 'Changes appear without fades or marks; lists keep their order until you pause.',
+    off: 'Nothing updates by itself — press ↻ to see the latest.'
+  }[own ?? roleMode ?? 'normal']
+  return (
+    <div className='flex items-center gap-1.5' data-pref='live-mode' data-tip={hint}>
+      Live updates
+      <SimpleSelectXs
+        value={own ?? 'auto'}
+        onChange={(v) => onChange(v as 'auto' | 'normal' | 'calm' | 'off')}
+        options={[
+          { value: 'auto', label: `Role default (${roleLabel})` },
+          { value: 'normal', label: 'Normal' },
+          { value: 'calm', label: 'Calm' },
+          { value: 'off', label: 'Off' }
+        ]}
+      />
+    </div>
+  )
+}
+
 export function DisplayPrefsCard() {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -2448,6 +2491,11 @@ export function DisplayPrefsCard() {
           />
           Count in the browser tab
         </label>
+        {/* Realtime round 3 #24 — how others' changes reach this person's screens. */}
+        <LiveUpdatesPref
+          value={prefs?.live_mode}
+          onChange={(v) => save.mutate({ live_mode: v === 'auto' ? null : v })}
+        />
         {/* #22 — screen-reader notices of live changes. */}
         <label className='flex items-center gap-1.5'>
           Live changes (screen readers)

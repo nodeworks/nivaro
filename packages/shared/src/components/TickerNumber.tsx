@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { liveMotionAllowed } from '../lib/live-preference'
 
 /**
  * Number ticker (#320): rolls to a new value with an eased count instead of
@@ -26,10 +27,8 @@ export function TickerNumber({
       setDisplay(value)
       return
     }
-    if (
-      typeof matchMedia !== 'undefined' &&
-      matchMedia('(prefers-reduced-motion: reduce)').matches
-    ) {
+    // Reduced motion, or live updates set to Calm/Off: snap.
+    if (!liveMotionAllowed()) {
       setDisplay(value)
       return
     }

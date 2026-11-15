@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { liveMotionAllowed } from '../lib/live-preference'
 
 /**
  * A count that follows live data: when the number changes the old one fades out while the new
@@ -8,15 +9,9 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 're
 
 const FADE_MS = 220
 
+/** No fade: reduced motion, or live updates set to Calm/Off (lib/live-preference.ts). */
 export function reducedMotion(): boolean {
-  try {
-    return (
-      typeof window !== 'undefined' &&
-      !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    )
-  } catch {
-    return false
-  }
+  return !liveMotionAllowed()
 }
 
 /** What to show for a value: numbers as-is, null / undefined as nothing. */

@@ -52,6 +52,7 @@ import { navCategories } from '@/layouts/AppLayout'
 import { api } from '@/lib/api'
 import { hubAtBase, tabPermissionKey } from '@/lib/hubs'
 import { cn } from '@/lib/utils'
+import { RoleLiveDefault } from '@/pages/roles/RoleLiveDefault'
 import { RoleSidebarStarter } from '@/pages/roles/RoleSidebarStarter'
 
 type User = {
@@ -1219,14 +1220,17 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
         ) : activeTab === 'compare' ? (
           <CompareTab roleId={role.id} policies={policies} />
         ) : activeTab === 'ui' ? (
-          <UiPermissionsTab
-            roleId={role.id}
-            isAdmin={role.admin_access}
-            disabled={
-              (roleDetail as (typeof roleDetail & { ui_permissions?: string[] }) | undefined)
-                ?.ui_permissions ?? []
-            }
-          />
+          <>
+            <RoleLiveDefault roleId={role.id} />
+            <UiPermissionsTab
+              roleId={role.id}
+              isAdmin={role.admin_access}
+              disabled={
+                (roleDetail as (typeof roleDetail & { ui_permissions?: string[] }) | undefined)
+                  ?.ui_permissions ?? []
+              }
+            />
+          </>
         ) : activeTab === 'sidebar' ? (
           <RoleSidebarStarter
             roleId={role.id}

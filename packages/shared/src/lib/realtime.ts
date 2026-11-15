@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
+import { liveCollectionEventPasses, liveEventQuiet } from './live-preference'
 import { noteLiveSeen } from './live-seen'
 
 /**
@@ -103,11 +104,22 @@ export function withLiveSeenTap(adapter: RealtimeAdapter): RealtimeAdapter {
   const subscribeCollections: RealtimeAdapter['subscribeCollections'] = (collections, cb) =>
     adapter.subscribeCollections(collections, (ev) => {
       noteLiveSeen('collection:update', ev)
+      // The person's live-updates setting (lib/live-preference.ts): Off drops others' writes
+      // here, once, for every surface that reads through the adapter.
+      if (!liveCollectionEventPasses(ev as never)) return
       cb(ev)
+    })
+  // Named events the setting quiets (presence in Calm/Off, data notices in Off).
+  const on: RealtimeAdapter['on'] = (event, cb) =>
+    adapter.on(event, (payload) => {
+      if (event === 'collection:update' && !liveCollectionEventPasses(payload)) return
+      if (event !== 'collection:update' && liveEventQuiet(event)) return
+      cb(payload)
     })
   const wrapped = new Proxy(adapter, {
     get(target, prop) {
       if (prop === 'subscribeCollections') return subscribeCollections
+      if (prop === 'on') return on
       const v = Reflect.get(target, prop, target)
       if (typeof v !== 'function') return v
       let fn = bound.get(prop)

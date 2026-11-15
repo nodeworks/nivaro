@@ -186,6 +186,7 @@ import { layoutUsageRoutes } from './layout-usage.js'
 import { layoutWhyRoutes } from './layout-why.js'
 import { legalHoldRoutes } from './legal-holds.js'
 import { lineageRoutes } from './lineage.js'
+import { livePreferenceRoutes } from './live-preference.js'
 import { mailRoutes } from './mail.js'
 import { mailLogReadRoutes, mailLogRoutes } from './mail-log.js'
 import { mailSuppressionRoutes } from './mail-suppressions.js'
@@ -498,6 +499,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(recordViewRoutes)
   // #3227 — role starter sidebar layouts (a person's own rides preferences.nav_layout)
   await app.register(navLayoutRoutes, { prefix: '/nav-layout' })
+  // Realtime round 3 #24 — Live updates role defaults (a person's own rides preferences.live_mode)
+  await app.register(livePreferenceRoutes, { prefix: '/live-preference' })
   // Collections page: collections an admin pins to the top for everyone
   await app.register(collectionPinRoutes, { prefix: '/collection-pins' })
   await app.register(meNotificationRoutes)

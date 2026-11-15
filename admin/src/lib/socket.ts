@@ -10,6 +10,8 @@ import {
   deliveryAckFor,
   forgetSettledReads,
   guardIdentityCall,
+  liveCollectionEventPasses,
+  liveEventQuiet,
   measureClockOffset,
   parseSignOutNote,
   type RealtimeAdapter,
@@ -690,7 +692,12 @@ function viaWorker(): SocketRealtime | null {
 
 /** RealtimeAdapter for shared components (CBV patches, RecordLiveSync, MyWork). */
 export const adminRealtime: RealtimeAdapter = {
-  subscribeCollections(collections, cb) {
+  subscribeCollections(collections, deliver) {
+    // Live updates Off (Profile → Display): others' writes stop here for the admin's direct
+    // subscribers too (the shared tap filters what reads through the context).
+    const cb: typeof deliver = (ev) => {
+      if (liveCollectionEventPasses(ev as never)) deliver(ev)
+    }
     const w = viaWorker()
     if (w) return w.subscribeCollections(collections, cb)
     const handle = ensureLeaderSocket()
@@ -707,7 +714,14 @@ export const adminRealtime: RealtimeAdapter = {
     })
     return off
   },
-  on(event, cb) {
+  on(event, deliver) {
+    const cb = (payload: any) => {
+      if (
+        event === 'collection:update' ? !liveCollectionEventPasses(payload) : liveEventQuiet(event)
+      )
+        return
+      deliver(payload)
+    }
     const w = viaWorker()
     if (w) return w.on(event, cb)
     const handle = ensureLeaderSocket()

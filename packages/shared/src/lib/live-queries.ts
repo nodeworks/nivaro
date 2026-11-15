@@ -1,6 +1,7 @@
 import { type Query, type QueryClient, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { expandCoalesced } from './live'
+import { getLiveMode } from './live-preference'
 import { LIVE_WIDGET_SAFETY_MS } from './live-widgets'
 import { isOwnWrite } from './own-writes'
 import {
@@ -423,7 +424,8 @@ export function createLiveQueryBridge(
   const heads = new Set(LIVE_RECONCILE_HEADS)
   const reconcile = (reason: string) => {
     void reason
-    if (disposed) return
+    // Live updates Off (lib/live-preference.ts): no catch-up refetch either — the person's ↻.
+    if (disposed || getLiveMode() === 'off') return
     counters.reconciles++
     const tagged: AnyQuery[] = []
     const staleOnly = new Set<AnyQuery>()

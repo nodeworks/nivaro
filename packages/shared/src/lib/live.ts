@@ -1,6 +1,7 @@
 import { useContext, useEffect, useRef } from 'react'
 import { ItemEditAuthContext } from '../context'
 import { deliverLive, releaseLiveOwner } from './focus-mode'
+import { liveEventQuiet } from './live-preference'
 import { isOwnWrite } from './own-writes'
 import { type CollectionUpdateEvent, useOptionalRealtime } from './realtime'
 
@@ -99,6 +100,15 @@ export const LIVE_ASPECTS = {
   related: '$related'
 } as const
 
+// The person's live-updates setting (Normal / Calm / Off): the transport tap and the hooks
+// below read it, so every live surface follows it (realtime round 3, item 24).
+export {
+  getLiveMode,
+  type LiveMode,
+  liveMotionAllowed,
+  useLiveBusy,
+  useLivePreference
+} from './live-preference'
 export { isOwnWrite, noteOwnWrite, noteOwnWriteFromCommand } from './own-writes'
 
 /** The actor id an event names, when a server includes one (`by` / `user` / `user_id`). */
@@ -333,6 +343,8 @@ export function useLiveEvent(
     let latest: { payload: any; event: string } | null = null
     const deliver = (event: string, payload: any) => {
       if (!list.includes(event)) return
+      // Calm/Off quiet presence; Off quiets data notices (also those relayed via the window).
+      if (liveEventQuiet(event)) return
       const o = optsRef.current
       const p = payload ?? {}
       if (!o.includeOwn && typeof p === 'object') {

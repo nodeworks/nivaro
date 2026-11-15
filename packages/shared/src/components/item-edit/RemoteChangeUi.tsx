@@ -12,6 +12,7 @@ import {
   setItemKey,
   setValueLike
 } from '../../lib/field-merge'
+import { liveMotionAllowed } from '../../lib/live-preference'
 import { htmlToText } from '../../lib/sanitize-html'
 import { choiceLabel, cn, formatRelative } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -71,13 +72,8 @@ function useShown(field: CMSField | null, relatedCollection: string | null, valu
   }
 }
 
-const reducedMotion = () => {
-  try {
-    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-  } catch {
-    return false
-  }
-}
+/** No fade: reduced motion, or live updates set to Calm/Off (lib/live-preference.ts). */
+const reducedMotion = () => !liveMotionAllowed()
 
 /** The quiet fade on a field whose value just changed under the person (never with reduced motion). */
 export function fadeChangedField(el: HTMLElement | null | undefined): void {
