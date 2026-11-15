@@ -2,6 +2,8 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { publicLinkBase } from './instance-links.js'
+import { overWindowLimit } from './windowed-limit.js'
 
 /**
  * Public submission status pages (realtime round 9, item 22).
@@ -316,6 +318,53 @@ export function submitterEmail(
     : null
 }
 
+/** The status page's address — on the tenant's own origin in cloud mode (services/instance-links). */
 export function statusPageUrl(token: string): string {
-  return `${config.PUBLIC_URL.replace(/\/$/, '')}/form-status/${token}`
+  return `${publicLinkBase()}/form-status/${token}`
+}
+
+// ── "We received your …" email caps (security review M2) ─────────────────────────
+// The address is whatever an anonymous submitter typed, and the per-IP submission cap can be
+// walked around (many addresses, a forwarded-for header): the receipt mail has caps of its own
+// that no IP enters. Hitting either simply means no email; the answer never says which.
+
+/** Receipt emails one address gets per day, across every form. */
+export const RECEIPT_MAILS_PER_ADDRESS_DAY = 3
+/** Receipt emails one form sends per hour, whoever submits. */
+export const RECEIPT_MAILS_PER_FORM_HOUR = 60
+
+/** A mailbox's counter key: lower case, `+tag` dropped, hashed (no address is ever stored). */
+export function receiptAddressKey(address: string): string {
+  const a = address.trim().toLowerCase()
+  const at = a.lastIndexOf('@')
+  const local = at > 0 ? a.slice(0, at) : a
+  const domain = at > 0 ? a.slice(at + 1) : ''
+  const plus = local.indexOf('+')
+  const normal = `${plus > 0 ? local.slice(0, plus) : local}@${domain}`
+  return createHash('sha256').update(normal).digest('hex').slice(0, 40)
+}
+
+type LimitRedis = Parameters<typeof overWindowLimit>[0]
+
+/** May the receipt go to this address now? Takes one unit from both caps when it may. */
+export async function mayMailReceipt(
+  redis: LimitRedis,
+  formId: string | number,
+  address: string
+): Promise<boolean> {
+  if (
+    await overWindowLimit(
+      redis,
+      `subform-rcpt:${receiptAddressKey(address)}`,
+      RECEIPT_MAILS_PER_ADDRESS_DAY,
+      86_400
+    )
+  )
+    return false
+  return !(await overWindowLimit(
+    redis,
+    `subform-rcpt-form:${formId}`,
+    RECEIPT_MAILS_PER_FORM_HOUR,
+    3600
+  ))
 }

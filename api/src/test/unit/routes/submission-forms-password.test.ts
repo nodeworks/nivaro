@@ -348,6 +348,33 @@ describe('submission status link (rt9 #22)', () => {
     await app.close()
   })
 
+  it('caps receipts per mailbox (case and +tags folded) and never says which cap hit', async () => {
+    mail.sent.length = 0
+    const app = await buildApp()
+    state.form = { ...statusForm({ email_field: 'title' }), fields: '["title"]' }
+    const addresses = [
+      'pat@example.com',
+      'PAT@example.com',
+      'pat+x@example.com',
+      'pat+y@Example.com'
+    ]
+    const emailed: boolean[] = []
+    for (const a of addresses) {
+      const res = await submit(app, '', { title: a })
+      expect(res.statusCode).toBe(201)
+      expect(res.json().data.status_url).toBeTruthy()
+      emailed.push(res.json().data.status_emailed)
+      expect(JSON.stringify(res.json())).not.toMatch(/cap|limit/i)
+    }
+    expect(emailed).toEqual([true, true, true, false])
+    await new Promise((r) => setTimeout(r, 20))
+    expect(mail.sent).toHaveLength(3)
+    // Another mailbox still gets its receipt.
+    const other = await submit(app, '', { title: 'sam@example.com' })
+    expect(other.json().data.status_emailed).toBe(true)
+    await app.close()
+  })
+
   it('gives no link when the status page is off', async () => {
     const app = await buildApp()
     state.form = { password_hash: null }

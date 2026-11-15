@@ -177,20 +177,39 @@ export async function loadTeam(teamId: string): Promise<TeamList | null> {
   return list?.teams.find((t) => t.id === teamId) ?? null
 }
 
-/** Write a list back to its owner's row (null = delete it). */
-async function storeTeam(teamId: string, team: TeamList | null): Promise<void> {
-  await updateWatchList(
+/**
+ * Change a list on its owner's row, applied to the copy the row holds at write time (security
+ * review L6: two members pinning at once both land — the owner's row is written by
+ * compare-and-swap, services/watch-list/user-store.ts). `fn` gets the current list (null = gone)
+ * and returns the next one, null to delete it, or undefined for "no change". Answers the list
+ * before and after the write that landed.
+ */
+async function storeTeam(
+  teamId: string,
+  fn: (current: TeamList | null) => TeamList | null | undefined
+): Promise<{ before: TeamList | null; after: TeamList | null; changed: boolean }> {
+  let before: TeamList | null = null
+  let after: TeamList | null = null
+  const saved = await updateWatchList(
     teamOwnerOf(teamId),
-    (l) => ({
-      ...l,
-      teams: team
-        ? l.teams.some((t) => t.id === teamId)
-          ? l.teams.map((t) => (t.id === teamId ? team : t))
-          : [...l.teams, team]
-        : l.teams.filter((t) => t.id !== teamId)
-    }),
+    (l) => {
+      const cur = l.teams.find((t) => t.id === teamId) ?? null
+      before = cur
+      const next = fn(cur)
+      if (next === undefined || (next === null && !cur)) return null
+      after = next
+      return {
+        ...l,
+        teams: next
+          ? cur
+            ? l.teams.map((t) => (t.id === teamId ? next : t))
+            : [...l.teams, next]
+          : l.teams.filter((t) => t.id !== teamId)
+      }
+    },
     { announce: false }
   )
+  return saved ? { before, after, changed: true } : { before, after: before, changed: false }
 }
 
 /** Tell everyone on (or just taken off) a list that it changed. */
@@ -208,11 +227,34 @@ function announceTeam(ids: Iterable<string>): void {
   }
 }
 
-/** Save a list and keep every member's reference in step with it. */
+/** Save a list (whole) and keep every member's reference in step with it. */
 export async function saveTeam(before: TeamList | null, after: TeamList | null): Promise<void> {
   const id = (after ?? before)?.id
   if (!id) return
-  await storeTeam(id, after)
+  const res = await storeTeam(id, () => after)
+  if (res.changed) await syncMembers(id, res.before, res.after)
+}
+
+/**
+ * Change a list against what its owner's row holds NOW (not a copy read earlier): `fn` gets the
+ * current list and returns the next one, or undefined for "no change". Member references
+ * follow. Answers the list as stored (null = gone).
+ */
+export async function updateTeam(
+  teamId: string,
+  fn: (current: TeamList) => TeamList | undefined
+): Promise<TeamList | null> {
+  const res = await storeTeam(teamId, (cur) => (cur ? fn(cur) : undefined))
+  if (res.changed) await syncMembers(teamId, res.before, res.after)
+  return res.after
+}
+
+/** Keep every member's reference in step with a list change, and tell everyone on it. */
+async function syncMembers(
+  id: string,
+  before: TeamList | null,
+  after: TeamList | null
+): Promise<void> {
   const was = new Set((before?.members ?? []).map((m) => m.u.toLowerCase()))
   const now = new Set((after?.members ?? []).map((m) => m.u.toLowerCase()))
   const added = (after?.members ?? []).filter((m) => !was.has(m.u.toLowerCase())).map((m) => m.u)
@@ -385,8 +427,8 @@ export function followMove(l: WatchListPrefs, fromId: string, toId: string): Wat
  * point every member's reference (and their seen marks and open tab) at the new id.
  */
 export async function moveTeam(before: TeamList, after: TeamList): Promise<void> {
-  await storeTeam(after.id, after)
-  await storeTeam(before.id, null)
+  await storeTeam(after.id, () => after)
+  await storeTeam(before.id, () => null)
   for (const m of after.members) {
     if (sameId(m.u, after.owner)) continue
     await updateWatchList(m.u, (l) => followMove(l, before.id, after.id), {

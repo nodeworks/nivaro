@@ -207,3 +207,50 @@ describe('what the submitter may read', () => {
     expect(submitterEmail(cfg, { other: 'pat@example.com' })).toBeNull()
   })
 })
+
+describe('receipt email caps (security review M2)', () => {
+  it('folds case, spaces and +tags into one mailbox key; never the address itself', async () => {
+    const { receiptAddressKey } = await import('../../../services/submission-status.js')
+    const k = receiptAddressKey('pat@example.com')
+    expect(receiptAddressKey(' PAT+news@Example.COM ')).toBe(k)
+    expect(receiptAddressKey('sam@example.com')).not.toBe(k)
+    expect(k).not.toContain('pat')
+  })
+
+  it('3 a day per mailbox, 60 an hour per form, independent of who submits', async () => {
+    const { mayMailReceipt, RECEIPT_MAILS_PER_ADDRESS_DAY, RECEIPT_MAILS_PER_FORM_HOUR } =
+      await import('../../../services/submission-status.js')
+    const { resetWindowedMemory } = await import('../../../services/windowed-limit.js')
+    resetWindowedMemory()
+    const got: boolean[] = []
+    for (let i = 0; i <= RECEIPT_MAILS_PER_ADDRESS_DAY; i++)
+      got.push(await mayMailReceipt(null, 'f-1', 'pat@example.com'))
+    expect(got).toEqual([true, true, true, false])
+    // The same mailbox through another form: still capped (the cap is per mailbox).
+    expect(await mayMailReceipt(null, 'f-2', 'pat@example.com')).toBe(false)
+
+    resetWindowedMemory()
+    let sent = 0
+    for (let i = 0; i < RECEIPT_MAILS_PER_FORM_HOUR + 5; i++)
+      if (await mayMailReceipt(null, 'f-3', `p${i}@example.com`)) sent++
+    expect(sent).toBe(RECEIPT_MAILS_PER_FORM_HOUR)
+    // Another form is not held back by this one.
+    expect(await mayMailReceipt(null, 'f-4', 'fresh@example.com')).toBe(true)
+  })
+
+  it('the status link names the tenant origin in cloud mode (security review L4)', async () => {
+    const { statusPageUrl } = await import('../../../services/submission-status.js')
+    const { runWithTenantDb } = await import('../../../db/tenant-context.js')
+    expect(statusPageUrl('abc')).toBe('https://nivaro.test/form-status/abc')
+    const url = await new Promise<string>((resolve) =>
+      runWithTenantDb(
+        {} as never,
+        'acme',
+        () => resolve(statusPageUrl('abc')),
+        'tid',
+        'https://acme.nivaro.dev'
+      )
+    )
+    expect(url).toBe('https://acme.nivaro.dev/form-status/abc')
+  })
+})

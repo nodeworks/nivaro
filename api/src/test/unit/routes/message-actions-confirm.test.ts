@@ -53,13 +53,23 @@ vi.mock('../../../middleware/authenticate.js', () => ({
   })
 }))
 
+// The pushed-widget recompute budget (security review L3): off = every recompute is over budget.
+const budget = { open: true }
+vi.mock('../../../services/widget-live.js', () => ({ takeBudget: () => budget.open }))
+
+import { runWithTenantDb } from '../../../db/tenant-context.js'
 import { applyApprovalDecision } from '../../../routes/approvals.js'
 import {
+  decisionPostFromOwnPage,
+  emailDecisionLinks,
+  linkPage,
   messageActionsRoutes,
   signActionToken,
   TOKEN_TTL_SECONDS,
   verifyActionToken
 } from '../../../routes/message-actions.js'
+import { loadApprovalLinkState } from '../../../services/approval-link-state.js'
+import { BUSY, SignalStreamRoute } from '../../../services/public-signal-stream.js'
 
 const mint = () =>
   signActionToken({
@@ -104,6 +114,8 @@ const post = (token: string, session?: string) => ({
   url: '/callback',
   headers: {
     'content-type': 'application/x-www-form-urlencoded',
+    // The landing page's own button (security review L5).
+    'sec-fetch-site': 'same-origin',
     ...(session ? { 'x-test-session': session } : {})
   },
   payload: `token=${encodeURIComponent(token)}`
@@ -361,5 +373,163 @@ describe('POST /callback (the confirm button)', () => {
     const res = await (await app()).inject(post(legacy, 'u-1'))
     expect(res.statusCode).toBe(410)
     expect(applyApprovalDecision).not.toHaveBeenCalled()
+  })
+})
+
+/** Run `fn` inside a cloud tenant's context (as the tenant middleware does). */
+const inTenant = <T>(tenantId: string, origin: string | undefined, fn: () => T | Promise<T>) =>
+  new Promise<T>((resolve, reject) =>
+    runWithTenantDb(
+      {} as never,
+      tenantId,
+      () => void Promise.resolve().then(fn).then(resolve, reject),
+      tenantId,
+      origin
+    )
+  )
+
+describe('tenant binding (security review M1)', () => {
+  it('a token minted for one cloud tenant is refused on another and self-hosted', async () => {
+    const token = await inTenant('tenant-a', 'https://a.nivaro.dev', () => mint())
+    expect(await inTenant('tenant-a', undefined, () => verifyActionToken(token))).not.toBeNull()
+    expect(await inTenant('tenant-b', undefined, () => verifyActionToken(token))).toBeNull()
+    expect(verifyActionToken(token)).toBeNull()
+  })
+
+  it('a self-hosted token is refused inside any tenant', async () => {
+    const token = mint()
+    expect(verifyActionToken(token)).not.toBeNull()
+    expect(await inTenant('tenant-a', undefined, () => verifyActionToken(token))).toBeNull()
+  })
+
+  it('a cross-tenant decision POST decides nothing', async () => {
+    const token = await inTenant('tenant-a', undefined, () => mint())
+    const a = await app()
+    const res = await inTenant('tenant-b', undefined, () => a.inject(post(token, 'u-1')))
+    expect(res.statusCode).toBe(401)
+    expect(applyApprovalDecision).not.toHaveBeenCalled()
+  })
+})
+
+describe('links name the tenant origin (security review L4)', () => {
+  it('email decision links and the record link use the tenant origin, not PUBLIC_URL', async () => {
+    const links = await inTenant('tenant-a', 'https://acme.nivaro.dev', () =>
+      emailDecisionLinks({ instance: { id: 9, collection: 'orders', item: '5' }, userId: 'u-1' })
+    )
+    expect(links.approve_url.startsWith('https://acme.nivaro.dev/api/message-actions/')).toBe(true)
+    const html = await inTenant('tenant-a', 'https://acme.nivaro.dev', () => {
+      const token = mint()
+      return linkPage({
+        token,
+        payload: verifyActionToken(token)!,
+        state: { ...PENDING } as never,
+        holderHere: true,
+        spent: false,
+        liveMode: 'normal',
+        nonce: 'n'
+      })
+    })
+    expect(html).toContain('https://acme.nivaro.dev/collections/workflows/372789')
+    expect(html).not.toContain('nivaro.test')
+  })
+
+  it('self-hosted links keep the configured address', () => {
+    const links = emailDecisionLinks({
+      instance: { id: 9, collection: 'orders', item: '5' },
+      userId: 'u-1'
+    })
+    expect(links.approve_url.startsWith('https://nivaro.test/api/message-actions/')).toBe(true)
+  })
+})
+
+describe('decision POST origin check (security review L5)', () => {
+  const own = ['https://nivaro.test']
+  it('fetch metadata decides when present: only same-origin passes', () => {
+    expect(decisionPostFromOwnPage({ 'sec-fetch-site': 'same-origin', origin: 'null' }, own)).toBe(
+      true
+    )
+    for (const site of ['same-site', 'cross-site', 'none'])
+      expect(
+        decisionPostFromOwnPage({ 'sec-fetch-site': site, origin: 'https://nivaro.test' }, own)
+      ).toBe(false)
+  })
+
+  it('without fetch metadata, Origin must be ours; null or absent is refused', () => {
+    expect(decisionPostFromOwnPage({ origin: 'https://nivaro.test' }, own)).toBe(true)
+    expect(decisionPostFromOwnPage({ origin: 'https://evil.example' }, own)).toBe(false)
+    expect(decisionPostFromOwnPage({ origin: 'https://sub.nivaro.test' }, own)).toBe(false)
+    expect(decisionPostFromOwnPage({ origin: 'null' }, own)).toBe(false)
+    expect(decisionPostFromOwnPage({}, own)).toBe(false)
+  })
+
+  it('a form posted from another site decides nothing', async () => {
+    const a = await app()
+    const req = post(mint(), 'u-1')
+    const res = await a.inject({
+      ...req,
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'x-test-session': 'u-1',
+        'sec-fetch-site': 'same-site',
+        origin: 'https://other.nivaro.test'
+      }
+    })
+    expect(res.statusCode).toBe(403)
+    expect(applyApprovalDecision).not.toHaveBeenCalled()
+    const noHeaders = await a.inject({
+      ...req,
+      headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-session': 'u-1' }
+    })
+    expect(noHeaders.statusCode).toBe(403)
+    // Our own page's button (Origin: null under no-referrer, fetch metadata same-origin) decides.
+    const own = await a.inject({
+      ...req,
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'x-test-session': 'u-1',
+        'sec-fetch-site': 'same-origin',
+        origin: 'null'
+      }
+    })
+    expect(own.statusCode).toBe(200)
+    expect(applyApprovalDecision).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('stream recomputes are budgeted (security review L3)', () => {
+  it('an over-budget recompute answers BUSY and reads nothing', async () => {
+    let subject: { signature(): Promise<string | null> } | null = null
+    const spy = vi
+      .spyOn(SignalStreamRoute.prototype, 'serve')
+      .mockImplementation(async (_req, reply, opts) => {
+        const r = await opts.open()
+        if (r.ok) subject = r.subject
+        void reply.send({ ok: true })
+      })
+    try {
+      const token = signActionToken({
+        action_id: 'approve',
+        kind: 'approval',
+        ref_id: '77',
+        user: 'u-budget',
+        collection: 'workflows',
+        item: '1'
+      })
+      await (await app()).inject({
+        method: 'GET',
+        url: `/stream?token=${encodeURIComponent(token)}`
+      })
+      expect(subject).not.toBeNull()
+      vi.mocked(loadApprovalLinkState).mockClear()
+      budget.open = false
+      expect(await subject!.signature()).toBe(BUSY)
+      expect(loadApprovalLinkState).not.toHaveBeenCalled()
+      budget.open = true
+      expect(await subject!.signature()).not.toBe(BUSY)
+      expect(loadApprovalLinkState).toHaveBeenCalledTimes(1)
+    } finally {
+      budget.open = true
+      spy.mockRestore()
+    }
   })
 })

@@ -161,8 +161,18 @@ const KIOSK_PATH_RE = /(\/command\/kiosk\/)[^/?#]+/gi
 /** A public form submitter's status-page link (realtime round 9, #22): `/form-status/<token>`. */
 const FORM_STATUS_PATH_RE = /(\/form-status\/)[^/?#]+/gi
 
+/** A record share link (`/share/<token>`, its `/share/<token>/stream`) — the token IS the
+ *  access, so it never reaches a log. */
+const SHARE_PATH_RE = /(\/share\/)[^/?#]+/gi
+/** A shared session-replay link (`/api/session-replay-shares/view/<token>`). */
+const REPLAY_SHARE_PATH_RE = /(\/session-replay-shares\/view\/)[^/?#]+/gi
+
 export function maskUrlPath(path: string): string {
-  return path.replace(KIOSK_PATH_RE, `$1${MASK}`).replace(FORM_STATUS_PATH_RE, `$1${MASK}`)
+  return path
+    .replace(KIOSK_PATH_RE, `$1${MASK}`)
+    .replace(FORM_STATUS_PATH_RE, `$1${MASK}`)
+    .replace(SHARE_PATH_RE, `$1${MASK}`)
+    .replace(REPLAY_SHARE_PATH_RE, `$1${MASK}`)
 }
 
 /** A URL (path + query) with its path credential and query string masked — for logs and traces. */

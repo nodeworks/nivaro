@@ -8,6 +8,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
+  mayMailReceipt,
   mintStatusToken,
   parseStatusPageConfig,
   STATUS_META_KEY,
@@ -576,7 +577,10 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       created_at: new Date()
     })
     const statusUrl = status ? statusPageUrl(status.token) : null
-    const emailTo = statusUrl ? submitterEmail(statusCfg, filteredData) : null
+    const typed = statusUrl ? submitterEmail(statusCfg, filteredData) : null
+    // The receipt goes to an address an anonymous person typed: capped per address and per form
+    // (services/submission-status.ts), never only per IP. A cap hit = no email, nothing more said.
+    const emailTo = typed && (await mayMailReceipt(app.redis, form.id, typed)) ? typed : null
     if (statusUrl && emailTo) {
       void sendSubmissionReceivedMail(
         emailTo,
