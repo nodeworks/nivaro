@@ -45,8 +45,25 @@ export const collabLiveLists: DocSection = {
         [
           'Calendar, Gantt and map views',
           'Records others add, move or reschedule appear in place without a flash.'
+        ],
+        [
+          'An import or bulk change (a dozen or more records within two seconds)',
+          'No row flashes. One quiet pill floats over the bottom of the list (the toolbar never moves) and says what happened — "Import added 500 records  Show", "Beth updated 40 rows  Show" — and Show re-reads the list once. The name comes from your own read of a few of the rows, so it only appears when you can see who changed them.'
+        ],
+        [
+          'Your pointer or keyboard is on a row',
+          'Rows at and above it never move. A record that would slide in above it waits, a record that left the list stays in place, faded, with a crossed-out eye mark ("No longer matches this view" on hover) and its labels still shown, and values still update. The new order is drawn when the pointer leaves the list or focus moves elsewhere (at most about 10 seconds).'
+        ],
+        [
+          'A totals row is on',
+          'The Sum / Average / Min / Max / Count figures re-count as you, at most every couple of seconds while changes keep coming, and only when a change could move them (a new or removed record, or a totalled or filtered field). On a queue they tick with the stat tiles.'
         ]
       ]
+    },
+    { type: 'h3', id: 'live-lists-pause', text: 'Pause live updates' },
+    {
+      type: 'p',
+      text: 'The "Pause live" button in a list or queue toolbar stops that one list from changing while you work through it. While paused it turns amber, reads "Paused" and counts the changes waiting (it keeps the same width, so nothing in the toolbar moves); click it again to resume and they are applied in one go (a few records are updated in place, a lot are re-read at once). Each list remembers being paused until you close the browser tab. Focus mode still works on top of it and applies to every list.'
     },
     { type: 'h3', id: 'live-lists-focus', text: 'Focus mode' },
     {
@@ -89,7 +106,9 @@ export const collabLiveLists: DocSection = {
         'A lock taken or released sends a payload-free `$lock` notice on the collection feed (`LIVE_ASPECTS.lock`).',
         '`GET /api/global-search?fresh=1` skips the 20-second per-person answer cache; the live results page uses it for its quiet re-ask (still run as the caller, at most one every few seconds, none while the tab is hidden).',
         'Live results: `useLiveSearchResults` + `LiveNewMatchesPill` (a re-ask only decides for the records an event named, never by working out matching on the client). Fixed findings: `useResolvedFindings` + `FindingFixedMark` — a board passes its findings as `{key, collection, itemId}` and a `recheck(refs)` that returns the keys that no longer have a finding. Query figures: `LiveCacheStamp` / `useLiveStamp` watch the tables in the response `freshness_sources`; no tables, no chip.',
-        'In `@nivaro/shared`: `useRowChanges`, `useRowLocks` / `useRowLocksByCollection`, `viewerMatches`, `useLiveQueryRefresh` (query-backed views) and `FocusModeToggle` / `deliverLive` for focus mode. `useLiveCollection(…, { focusable: true })` holds its batches while focus mode is on.'
+        'In `@nivaro/shared`: `useRowChanges`, `useRowLocks` / `useRowLocksByCollection`, `viewerMatches`, `useLiveQueryRefresh` (query-backed views) and `FocusModeToggle` / `deliverLive` for focus mode. `useLiveCollection(…, { focusable: true })` holds its batches while focus mode is on.',
+        'lib/live-list-flow.ts: `createBurstTracker` / `useLiveBurst` + `LiveBurstPill` (bursts), `useLivePause` + `LivePauseButton` (pause, kept in sessionStorage `nvr:live-paused` per list key such as `cbv:<collection>` or `queue:<id>`; `useLiveQueryRefresh(…, { paused })` for query-backed views), `useSteadyRows` / `planRowOrder` (rows carry `data-row-key`), `totalsMayMove` (when a totals row re-reads; coalesced with `createCoalescer`).',
+        "A merged (coalesced or batched) `collection:update` keeps `source: 'import' | 'raw'` when every write in it had the same one."
       ]
     }
   ]
