@@ -2,10 +2,25 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../db/index.js', () => ({ db: vi.fn() }))
 vi.mock('../lib/column-probe.js', () => ({ hasColumn: vi.fn(async () => true) }))
+const tenant = vi.hoisted(() => ({
+  db: undefined as unknown,
+  ran: [] as Array<{ slug: string; id: string }>
+}))
+vi.mock('../db/tenant-context.js', () => ({
+  getTenantDb: () => tenant.db,
+  getTenantSlug: () => (tenant.db ? 'acme' : undefined),
+  getTenantId: () => (tenant.db ? 'T1' : undefined),
+  getTenantOrigin: () => undefined,
+  runWithTenantDb: (_db: unknown, slug: string, done: () => void, id: string) => {
+    tenant.ran.push({ slug, id })
+    done()
+  }
+}))
 
 import {
   bulkNoticeMin,
   bulkNoticeText,
+  deferWatcherDelivery,
   type FlushDeps,
   fieldPhrase,
   flushBulkNotices,
@@ -19,6 +34,8 @@ import {
 } from './bulk-change-notice.js'
 
 afterEach(() => {
+  tenant.db = undefined
+  tenant.ran.length = 0
   resetBulkNotices()
   delete process.env.BULK_NOTICE_MIN
 })
@@ -45,7 +62,6 @@ function fakeDeps(over: Partial<FlushDeps> = {}): { deps: FlushDeps; sent: any[]
   const deps: FlushDeps = {
     creators: async (_c, ids) => new Map(ids.map((id) => [id, ANN])),
     owners: async () => new Map(),
-    subscribed: async () => false,
     view: async (_u, _c, ids) => ({ ids, fields: null }),
     fieldLabels: async (_c, f) => f.map((x) => x.charAt(0).toUpperCase() + x.slice(1)),
     actorName: async () => 'Beth Jones',
@@ -88,7 +104,7 @@ describe('pure helpers', () => {
     })
     expect(t.subject).toBe('Beth updated 12 of your records (Amount, Status)')
     expect(t.message).toContain('12 of your workflow records')
-    expect(t.message).toContain('See what changed')
+    expect(t.message).not.toContain('See what changed')
     expect(bulkNoticeText({ actor: null, count: 1, word: '', fieldLabels: [] }).subject).toBe(
       'Someone updated 1 of your record'
     )
@@ -178,13 +194,6 @@ describe('one notice per person per burst', () => {
     touch(10, ['amount'], 'bulk:req-2')
     const b = fakeDeps({ view: async () => ({ ids: ['1', '2'], fields: null }) })
     expect(await flushBulkNotices('bulk:req-2', b.deps)).toBe(0)
-  })
-
-  it('someone with a collection-wide subscription is left to it', async () => {
-    touch(8)
-    const { deps, sent } = fakeDeps({ subscribed: async () => true })
-    await flushBulkNotices(GROUP, deps)
-    expect(sent).toHaveLength(0)
   })
 
   it('the person who did it is never told about their own bulk change', async () => {
@@ -285,5 +294,132 @@ describe('one notice per person per burst', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('watchers fold into the one notice (rt5 decision)', () => {
+  function park(user: string, n: number, delivered: string[], group = GROUP) {
+    for (let i = 1; i <= n; i++)
+      expect(
+        deferWatcherDelivery({
+          burst: group,
+          user,
+          actor: BETH,
+          collection: 'workflows',
+          item: String(i),
+          fields: ['amount', 'status'],
+          deliver: async () => {
+            delivered.push(`${user}:${i}`)
+          }
+        })
+      ).toBe(true)
+  }
+
+  it('12 watched records → ONE "records you watch" notice and no per-record rows', async () => {
+    const delivered: string[] = []
+    park(ROB, 12, delivered)
+    const { deps, sent } = fakeDeps({ creators: async () => new Map() })
+    await flushBulkNotices(GROUP, deps)
+    expect(delivered).toEqual([])
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ userId: ROB, why: 'You watch these records.' })
+    expect(sent[0].subject).toBe('Beth Jones updated 12 records you watch (Amount, Status)')
+  })
+
+  it('below the threshold the parked per-record deliveries run as they always did', async () => {
+    const delivered: string[] = []
+    park(ROB, 3, delivered)
+    const { deps, sent } = fakeDeps({ creators: async () => new Map() })
+    await flushBulkNotices(GROUP, deps)
+    expect(sent).toHaveLength(0)
+    expect(delivered).toEqual([`${ROB}:1`, `${ROB}:2`, `${ROB}:3`])
+  })
+
+  it('as the recipient: too few readable watched records fall back to the rows', async () => {
+    const delivered: string[] = []
+    park(ROB, 8, delivered)
+    const { deps, sent } = fakeDeps({
+      creators: async () => new Map(),
+      view: async (_u, _c, ids) => ({ ids: ids.slice(0, 2), fields: null })
+    })
+    await flushBulkNotices(GROUP, deps)
+    expect(sent).toHaveLength(0)
+    expect(delivered).toHaveLength(8)
+  })
+
+  it('a failed send never loses the rows', async () => {
+    const delivered: string[] = []
+    park(ROB, 6, delivered)
+    const { deps } = fakeDeps({
+      creators: async () => new Map(),
+      send: async () => {
+        throw new Error('no app')
+      }
+    })
+    await flushBulkNotices(GROUP, deps)
+    expect(delivered).toHaveLength(6)
+  })
+
+  it('a watcher is not also sent the creator/owner notice for the same collection', async () => {
+    const delivered: string[] = []
+    park(ANN, 7, delivered)
+    touch(7)
+    const { deps, sent } = fakeDeps()
+    await flushBulkNotices(GROUP, deps)
+    expect(sent).toHaveLength(1)
+    expect(sent[0].why).toBe('You watch these records.')
+  })
+
+  it('writes outside a bulk action are not parked', () => {
+    expect(
+      deferWatcherDelivery({
+        burst: 'flow_run:1',
+        user: ROB,
+        actor: BETH,
+        collection: 'workflows',
+        item: '1',
+        deliver: async () => {}
+      })
+    ).toBe(false)
+    expect(
+      deferWatcherDelivery({
+        burst: null,
+        user: ROB,
+        actor: BETH,
+        collection: 'workflows',
+        item: '1',
+        deliver: async () => {}
+      })
+    ).toBe(false)
+  })
+})
+
+describe('cloud: bursts are per tenant and settled inside it', () => {
+  it('a burst written in a tenant flushes in that tenant’s context', async () => {
+    tenant.db = {}
+    touch(6)
+    const { deps, sent } = fakeDeps()
+    expect(await flushBulkNotices(GROUP, deps)).toBe(1)
+    expect(tenant.ran).toEqual([{ slug: 'acme', id: 'T1' }])
+    expect(sent).toHaveLength(1)
+  })
+
+  it('two tenants with the same burst key never merge', async () => {
+    tenant.db = {}
+    touch(3)
+    tenant.db = undefined
+    touch(3)
+    const { deps, sent } = fakeDeps()
+    // 3 + 3 would pass the threshold of 5 only if they merged.
+    await flushBulkNotices(GROUP, deps)
+    tenant.db = {}
+    await flushBulkNotices(GROUP, deps)
+    expect(sent).toHaveLength(0)
+  })
+
+  it('the text for watched records reads plainly', () => {
+    expect(
+      bulkNoticeText({ actor: 'Beth', count: 1, word: '', fieldLabels: [], kind: 'watch' }).subject
+    ).toBe('Beth updated 1 record you watch')
   })
 })

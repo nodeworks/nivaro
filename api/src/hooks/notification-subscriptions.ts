@@ -2,7 +2,9 @@ import type { FastifyInstance } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { resolveActivityStamp } from '../services/activity-scope.js'
 import { recordLink } from '../services/app-links.js'
+import { isNoticeBurst } from '../services/bulk-change-notice.js'
 import { chainFields } from '../services/chain-columns.js'
 import { getRelations } from '../services/collections.js'
 import { sendMail } from '../services/mail.js'
@@ -147,25 +149,6 @@ function isRecordScoped(sub: { filter_field?: string | null; filters?: unknown }
       list[0]?.field === 'id' &&
       (list[0].op === 'eq' || list[0].op === undefined)
     )
-  } catch {
-    return false
-  }
-}
-
-/**
- * A subscription on a whole collection with nothing narrowing it (no field filter, no
- * `filters`) — it already tells its owner about every update, so the one-notice-for-a-bulk-
- * change (services/bulk-change-notice.ts) leaves that person alone.
- */
-export function isCollectionWideSubscription(sub: {
-  filter_field?: string | null
-  filters?: unknown
-}): boolean {
-  if (sub.filter_field) return false
-  if (!sub.filters) return true
-  try {
-    const list = typeof sub.filters === 'string' ? JSON.parse(sub.filters) : sub.filters
-    return !Array.isArray(list) || list.length === 0
   } catch {
     return false
   }
@@ -349,6 +332,8 @@ type Pending = {
   bundle: RecordChangeBundle
   timer: NodeJS.Timeout | null
   startedAt: number
+  /** Bulk action / import burst key the first write belonged to. */
+  burst: string | null
 }
 const pendingRecordChanges = new Map<string, Pending>()
 
@@ -366,7 +351,7 @@ async function flushRecordChanges(key: string) {
     p.actorUserId,
     undefined,
     null,
-    { scope: 'record', bundle: p.bundle }
+    { scope: 'record', bundle: p.bundle, burst: p.burst }
   ).catch(() => undefined)
 }
 
@@ -380,7 +365,8 @@ function enqueueRecordChange(
   item: string,
   actorUserId: string | undefined,
   changes: RecordChangeBundle['changes'],
-  child?: string
+  child?: string,
+  burst?: string | null
 ) {
   if (changes.length === 0) return
   const key = `${collection}:${item}:${actorUserId ?? ''}`
@@ -392,7 +378,8 @@ function enqueueRecordChange(
       actorUserId,
       bundle: { changes: [], children: [], writes: 0 },
       timer: null,
-      startedAt: Date.now()
+      startedAt: Date.now(),
+      burst: burst ?? null
     }
     pendingRecordChanges.set(key, p)
   }
@@ -440,6 +427,8 @@ async function fireSubscriptionNotifications(
     /** A coalesced bundle of everything one person changed on this record in
      *  one sitting — header fields and child rows — sent as ONE message. */
     bundle?: RecordChangeBundle
+    /** The bulk action / import this write belongs to (activity burst key), if any. */
+    burst?: string | null
   }
 ) {
   const scope = opts?.scope ?? 'all'
@@ -680,203 +669,235 @@ async function fireSubscriptionNotifications(
         message = templated.message || message
       }
 
-      // Per-subscription channels (#649): notify_inapp / notify_email are
-      // migration-278 columns; NULL means "on" so every historic row keeps its
-      // exact prior behavior.
-      const wantInapp = channelOn(sub.notify_inapp)
-      const wantEmail = channelOn(sub.notify_email)
+      const deliver = async () => {
+        // Per-subscription channels (#649): notify_inapp / notify_email are
+        // migration-278 columns; NULL means "on" so every historic row keeps its
+        // exact prior behavior.
+        const wantInapp = channelOn(sub.notify_inapp)
+        const wantEmail = channelOn(sub.notify_email)
 
-      // Several updates on one watched record inside the fold window become
-      // one row (services/notification-fold.ts) — collection-wide feeds too.
-      const rowMeta = notificationRowMeta({
-        subject,
-        category: 'watch',
-        kind: 'record',
-        action: 'open'
-      })
-      const foldedId =
-        wantInapp && openItem != null
-          ? await foldIntoRecent({
-              recipient: sub.user,
-              collection: openCollection,
-              item: openItem,
-              category: rowMeta.category,
-              lane: rowMeta.lane,
-              subject,
-              message,
-              sender: actorUserId ?? null,
-              now,
-              label: async () => friendly ?? recordName ?? String(openItem)
-            })
-          : null
-      if (foldedId != null) announceNotificationsRead(sub.user)
-      if (wantInapp && foldedId == null) {
-        // Stored detail (#27 / #77): every change line the message summarised
-        // ("+3 more" expands in the bell) and which watch produced the row.
-        const detail = detailColumn({
-          changes: seenBundle ?? (viaChild ? (seenChild ?? []) : seenRow),
-          via_child: viaChild
-            ? {
-                collection: viaChild.collection,
-                item: viaChild.item,
-                event: viaChild.event,
-                label: viaChild.label ?? null
-              }
-            : null,
-          bundle: bundle ? { writes: bundle.writes, children: bundle.children } : null,
-          why: {
-            kind: recordScoped ? 'watch' : 'subscription',
-            text: recordScoped
-              ? `You watch ${friendly ?? 'this record'}.`
-              : `You subscribed to "${sub.label || `${collectionLabel} ${eventType}`}".`,
-            label: sub.label ?? null,
-            id: sub.id
-          }
+        // Several updates on one watched record inside the fold window become
+        // one row (services/notification-fold.ts) — collection-wide feeds too.
+        const rowMeta = notificationRowMeta({
+          subject,
+          category: 'watch',
+          kind: 'record',
+          action: 'open'
         })
-        const [notif] = await db('nivaro_notifications')
-          .insert({
-            ...(await chainFields('nivaro_notifications')),
-            recipient: sub.user,
-            subject: subject.slice(0, 255),
-            status: 'inbox',
-            timestamp: now,
-            sender: actorUserId ?? null,
-            message: message.slice(0, 500),
-            collection: openCollection,
-            item: openItem,
-            detail,
-            ...(rowParent
-              ? {
-                  target: JSON.stringify({
-                    kind: 'record',
-                    collection: openCollection,
-                    id: openItem,
-                    query: rowQuery,
-                    action: 'open'
-                  }),
-                  kind: 'record',
-                  action: 'open'
-                }
-              : {}),
-            ...notificationRowMeta({ subject, category: 'watch', kind: 'record', action: 'open' }),
-            // #3078 — the watch / subscription is the path and its own channels are the rule.
-            ...(await reasonColumn(
-              rawWriterReason({
-                path: {
-                  kind: recordScoped ? 'watch' : 'subscription',
-                  text: recordScoped
-                    ? `You watch ${friendly ?? 'this record'}.`
-                    : `You subscribed to "${sub.label || `${collectionLabel} ${eventType}`}".`,
-                  label: sub.label ?? null,
-                  id: sub.id
-                },
-                category: 'watch',
-                ruleText: `Your ${recordScoped ? 'watch' : 'subscription'} sends in-app notices${wantEmail ? ' and email' : ''}.`,
-                email: wantEmail
+        const foldedId =
+          wantInapp && openItem != null
+            ? await foldIntoRecent({
+                recipient: sub.user,
+                collection: openCollection,
+                item: openItem,
+                category: rowMeta.category,
+                lane: rowMeta.lane,
+                subject,
+                message,
+                sender: actorUserId ?? null,
+                now,
+                label: async () => friendly ?? recordName ?? String(openItem)
               })
-            ))
-          })
-          .returning('*')
-
-        if (_app?.io) {
-          emitNotification(_app.io, sub.user, {
-            id: notif?.id ?? null,
-            subject: subject.slice(0, 255),
-            message: message.slice(0, 200),
-            collection: openCollection,
-            item: openItem,
-            sender: actorUserId ?? null,
-            timestamp: now
-          })
-        }
-      }
-
-      // Immediate email only for instant subscriptions — daily/weekly ride
-      // the daily action summary (services/daily-digest.ts). In-app
-      // notification above is always inserted regardless of cadence. The
-      // subscription's own cadence beats the category's daily default.
-      const frequency = (sub.digest_frequency as string | null) ?? 'instant'
-      if (frequency === 'instant' && wantEmail && sub.email) {
-        // Detailed body: the record's header-strip card + a labelled old →
-        // new table (mail-types.ts builders, shared with the admin harness).
-        let emailCtx: Record<string, unknown> = {}
-        try {
-          const { buildRecordCard } = await import('../services/mail-record-card.js')
-          const { labelledChanges } = await import('../services/mail-types.js')
-          const card = openItem
-            ? await buildRecordCard(openCollection, openItem, { recipientUserId: sub.user }).catch(
-                () => null
-              )
             : null
-          if (card?.url && rowQuery)
-            card.url = `${card.url}${card.url.includes('?') ? '&' : '?'}${rowQuery}`
-          let delta: Record<string, unknown> | null = null
-          if (eventType === 'update' && data && previous) {
-            delta = {}
-            for (const [k, v] of Object.entries(data)) {
-              if (JSON.stringify(previous[k] ?? null) !== JSON.stringify(v ?? null)) delta[k] = v
-            }
-          }
-          emailCtx = {
-            collection,
-            item,
-            event: viaChild ? viaChild.event : eventType,
-            actor_name: actorName,
-            record_card: card,
-            record_url:
-              card?.url ??
-              (await recordUrlFor(openCollection, openItem, sub.user, rowQuery ?? undefined)),
-            friendly_id: friendly ?? card?.title ?? String(item),
-            changes: seenBundle
-              ? seenBundle
-              : viaChild
-                ? (seenChild ?? [])
-                : delta
-                  ? await view.changes(await labelledChanges(collection, delta, previous))
-                  : [],
+        if (foldedId != null) announceNotificationsRead(sub.user)
+        if (wantInapp && foldedId == null) {
+          // Stored detail (#27 / #77): every change line the message summarised
+          // ("+3 more" expands in the bell) and which watch produced the row.
+          const detail = detailColumn({
+            changes: seenBundle ?? (viaChild ? (seenChild ?? []) : seenRow),
             via_child: viaChild
               ? {
                   collection: viaChild.collection,
                   item: viaChild.item,
                   event: viaChild.event,
-                  label: viaChild.label ?? null,
-                  collection_label: viaChild.collection.replace(/_/g, ' ')
+                  label: viaChild.label ?? null
                 }
               : null,
-            subscription_label: sub.label || `${collectionLabel} subscription`
+            bundle: bundle ? { writes: bundle.writes, children: bundle.children } : null,
+            why: {
+              kind: recordScoped ? 'watch' : 'subscription',
+              text: recordScoped
+                ? `You watch ${friendly ?? 'this record'}.`
+                : `You subscribed to "${sub.label || `${collectionLabel} ${eventType}`}".`,
+              label: sub.label ?? null,
+              id: sub.id
+            }
+          })
+          const [notif] = await db('nivaro_notifications')
+            .insert({
+              ...(await chainFields('nivaro_notifications')),
+              recipient: sub.user,
+              subject: subject.slice(0, 255),
+              status: 'inbox',
+              timestamp: now,
+              sender: actorUserId ?? null,
+              message: message.slice(0, 500),
+              collection: openCollection,
+              item: openItem,
+              detail,
+              ...(rowParent
+                ? {
+                    target: JSON.stringify({
+                      kind: 'record',
+                      collection: openCollection,
+                      id: openItem,
+                      query: rowQuery,
+                      action: 'open'
+                    }),
+                    kind: 'record',
+                    action: 'open'
+                  }
+                : {}),
+              ...notificationRowMeta({
+                subject,
+                category: 'watch',
+                kind: 'record',
+                action: 'open'
+              }),
+              // #3078 — the watch / subscription is the path and its own channels are the rule.
+              ...(await reasonColumn(
+                rawWriterReason({
+                  path: {
+                    kind: recordScoped ? 'watch' : 'subscription',
+                    text: recordScoped
+                      ? `You watch ${friendly ?? 'this record'}.`
+                      : `You subscribed to "${sub.label || `${collectionLabel} ${eventType}`}".`,
+                    label: sub.label ?? null,
+                    id: sub.id
+                  },
+                  category: 'watch',
+                  ruleText: `Your ${recordScoped ? 'watch' : 'subscription'} sends in-app notices${wantEmail ? ' and email' : ''}.`,
+                  email: wantEmail
+                })
+              ))
+            })
+            .returning('*')
+
+          if (_app?.io) {
+            emitNotification(_app.io, sub.user, {
+              id: notif?.id ?? null,
+              subject: subject.slice(0, 255),
+              message: message.slice(0, 200),
+              collection: openCollection,
+              item: openItem,
+              sender: actorUserId ?? null,
+              timestamp: now
+            })
           }
-        } catch {
-          emailCtx = {}
         }
-        await sendMail({
-          collection,
-          item,
-          to: sub.email,
-          rolePicked: true,
-          subject,
-          category: 'watch',
-          cadence: 'sender',
-          template: recordScoped ? 'record_watch' : 'subscription',
-          why: recordScoped
-            ? 'you watch this record'
-            : `you subscribed to "${sub.label || `${collectionLabel} subscription`}"`,
-          data: {
-            first_name: sub.first_name,
-            message,
-            ...emailCtx,
-            ...(item
-              ? {
-                  action_url:
-                    (emailCtx.record_url as string | undefined) ??
-                    (await recordUrlFor(collection, item, sub.user)),
-                  action_label: 'View item'
-                }
-              : {})
+
+        // Immediate email only for instant subscriptions — daily/weekly ride
+        // the daily action summary (services/daily-digest.ts). In-app
+        // notification above is always inserted regardless of cadence. The
+        // subscription's own cadence beats the category's daily default.
+        const frequency = (sub.digest_frequency as string | null) ?? 'instant'
+        if (frequency === 'instant' && wantEmail && sub.email) {
+          // Detailed body: the record's header-strip card + a labelled old →
+          // new table (mail-types.ts builders, shared with the admin harness).
+          let emailCtx: Record<string, unknown> = {}
+          try {
+            const { buildRecordCard } = await import('../services/mail-record-card.js')
+            const { labelledChanges } = await import('../services/mail-types.js')
+            const card = openItem
+              ? await buildRecordCard(openCollection, openItem, {
+                  recipientUserId: sub.user
+                }).catch(() => null)
+              : null
+            if (card?.url && rowQuery)
+              card.url = `${card.url}${card.url.includes('?') ? '&' : '?'}${rowQuery}`
+            let delta: Record<string, unknown> | null = null
+            if (eventType === 'update' && data && previous) {
+              delta = {}
+              for (const [k, v] of Object.entries(data)) {
+                if (JSON.stringify(previous[k] ?? null) !== JSON.stringify(v ?? null)) delta[k] = v
+              }
+            }
+            emailCtx = {
+              collection,
+              item,
+              event: viaChild ? viaChild.event : eventType,
+              actor_name: actorName,
+              record_card: card,
+              record_url:
+                card?.url ??
+                (await recordUrlFor(openCollection, openItem, sub.user, rowQuery ?? undefined)),
+              friendly_id: friendly ?? card?.title ?? String(item),
+              changes: seenBundle
+                ? seenBundle
+                : viaChild
+                  ? (seenChild ?? [])
+                  : delta
+                    ? await view.changes(await labelledChanges(collection, delta, previous))
+                    : [],
+              via_child: viaChild
+                ? {
+                    collection: viaChild.collection,
+                    item: viaChild.item,
+                    event: viaChild.event,
+                    label: viaChild.label ?? null,
+                    collection_label: viaChild.collection.replace(/_/g, ' ')
+                  }
+                : null,
+              subscription_label: sub.label || `${collectionLabel} subscription`
+            }
+          } catch {
+            emailCtx = {}
           }
-        }).catch((err) => {
-          console.warn('[notification-subscriptions] email send failed:', err)
-        })
+          await sendMail({
+            collection,
+            item,
+            to: sub.email,
+            rolePicked: true,
+            subject,
+            category: 'watch',
+            cadence: 'sender',
+            template: recordScoped ? 'record_watch' : 'subscription',
+            why: recordScoped
+              ? 'you watch this record'
+              : `you subscribed to "${sub.label || `${collectionLabel} subscription`}"`,
+            data: {
+              first_name: sub.first_name,
+              message,
+              ...emailCtx,
+              ...(item
+                ? {
+                    action_url:
+                      (emailCtx.record_url as string | undefined) ??
+                      (await recordUrlFor(collection, item, sub.user)),
+                    action_label: 'View item'
+                  }
+                : {})
+            }
+          }).catch((err) => {
+            console.warn('[notification-subscriptions] email send failed:', err)
+          })
+        }
       }
+
+      // A bulk action or import: a watcher who gets enough of THEIR watched records in one
+      // burst hears about it once (services/bulk-change-notice.ts); fewer keep these rows.
+      if (
+        opts?.burst &&
+        eventType === 'update' &&
+        !viaChild &&
+        !rowParent &&
+        !(bundle && bundle.children.length > 0)
+      ) {
+        const { deferWatcherDelivery } = await import('../services/bulk-change-notice.js')
+        if (
+          deferWatcherDelivery({
+            burst: opts.burst,
+            user: sub.user,
+            actor: actorUserId ?? null,
+            collection,
+            item,
+            fields: (seenBundle ?? seenRow).map((c) => c.field),
+            deliver
+          })
+        )
+          continue
+      }
+      await deliver()
     }
   } catch (err) {
     // Non-fatal — log and continue
@@ -1363,6 +1384,11 @@ export function registerNotificationSubscriptionHooks() {
       const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
       const row = ctx.result as Record<string, unknown> | null
       const previous = (ctx.previousData as Record<string, unknown> | null) ?? null
+      const stamp = resolveActivityStamp({
+        req: ctx.req as Parameters<typeof resolveActivityStamp>[0]['req'],
+        user: ctx.user?.id ?? null
+      }).group_key
+      const burst = isNoticeBurst(stamp) ? stamp : null
       // Collection-wide feeds fire per write; the record's own watchers get
       // one coalesced message once the sitting's writes go quiet.
       await fireSubscriptionNotifications(
@@ -1374,7 +1400,8 @@ export function registerNotificationSubscriptionHooks() {
         undefined,
         previous,
         {
-          scope: 'wide'
+          scope: 'wide',
+          burst
         }
       )
       if (row && previous) {
@@ -1384,7 +1411,7 @@ export function registerNotificationSubscriptionHooks() {
         if (Object.keys(delta).length > 0) {
           const { labelledChanges } = await import('../services/mail-types.js')
           const changes = await labelledChanges(ctx.collection, delta, previous).catch(() => [])
-          enqueueRecordChange(ctx.collection, item, ctx.user?.id, changes)
+          enqueueRecordChange(ctx.collection, item, ctx.user?.id, changes, undefined, burst)
         }
       }
       await rollUpToParents(

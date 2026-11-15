@@ -1,4 +1,11 @@
 import { db } from '../db/index.js'
+import {
+  getTenantDb,
+  getTenantId,
+  getTenantOrigin,
+  getTenantSlug,
+  runWithTenantDb
+} from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { selectInChunks } from './db-batch.js'
 
@@ -20,8 +27,13 @@ import { selectInChunks } from './db-batch.js'
  *    their records in the burst (default 5) — fewer stay silent, as they always were.
  *  - Everything is re-read AS THE RECIPIENT: records they cannot see are not counted or
  *    linked, field names they cannot read are not named.
- *  - People with a collection-wide subscription on that collection are skipped: their own
- *    rule already tells them (hooks/notification-subscriptions.ts).
+ *  - Explicit watchers and subscribers (hooks/notification-subscriptions.ts) fold in too: while a
+ *    burst runs, their per-record delivery is parked here (`deferWatcherDelivery`). At flush a
+ *    person with `bulkNoticeMin()` or more of their watched records in the burst gets ONE
+ *    "Beth updated 12 records you watch" notice; with fewer, the parked per-record deliveries
+ *    run exactly as they always did. Anyone parked is left out of the owner/creator notice.
+ *  - Cloud: the burst remembers the tenant it was written in (db, slug, id, origin) and is
+ *    flushed inside that tenant's context; keys carry the tenant so two tenants never merge.
  *  - The notice goes through notifyUser, so the recipient's notification rules, mutes,
  *    quiet hours, role defaults and channel choices apply live, at send time. It is an FYI
  *    in the "Watched records" category and never folds (it names no single record).
@@ -30,7 +42,12 @@ import { selectInChunks } from './db-batch.js'
  * too. Losing a pending notice on restart is the accepted cost of a courtesy message.
  */
 
-export const IDLE_MS = 4_000
+/** Quiet time before a burst is settled. Past the record-watch coalescing window, so parked
+ *  watcher deliveries (which land when that window closes) arrive before the flush. */
+export function idleMs(): number {
+  const coalesce = Number(process.env.RECORD_WATCH_COALESCE_MS ?? 15_000)
+  return Math.max(4_000, (Number.isFinite(coalesce) ? coalesce : 15_000) + 5_000)
+}
 export const MAX_HOLD_MS = 15 * 60_000
 const MAX_IDS_PER_COLLECTION = 5_000
 const MAX_BURSTS = 200
@@ -82,17 +99,20 @@ export function bulkNoticeText(opts: {
   /** "workflow" — the collection's singular word, lower-case; blank for a plain "records". */
   word: string
   fieldLabels: string[]
-  /** Records beyond the ones the link carries. */
-  more?: number
+  /** 'own' = records you created / own; 'watch' = records you watch. */
+  kind?: 'own' | 'watch'
 }): { subject: string; message: string } {
   const who = opts.actor?.trim() || 'Someone'
   const what = fieldPhrase(opts.fieldLabels)
   const recs = opts.count === 1 ? 'record' : 'records'
-  const subject = `${who} updated ${opts.count} of your ${recs}${what ? ` (${what})` : ''}`
+  const watch = opts.kind === 'watch'
+  const subject = watch
+    ? `${who} updated ${opts.count} ${recs} you watch${what ? ` (${what})` : ''}`
+    : `${who} updated ${opts.count} of your ${recs}${what ? ` (${what})` : ''}`
   const kind = opts.word ? ` ${opts.word}` : ''
-  const message = `${who} changed ${opts.count} of your${kind} ${recs}${
-    what ? `: ${what}` : ''
-  }. See what changed.`
+  const message = watch
+    ? `${who} changed ${opts.count}${kind} ${recs} you watch${what ? `: ${what}` : ''}.`
+    : `${who} changed ${opts.count} of your${kind} ${recs}${what ? `: ${what}` : ''}.`
   return { subject: subject.slice(0, 255), message: message.slice(0, 500) }
 }
 
@@ -119,15 +139,94 @@ interface Touch {
   fields: Set<string>
 }
 
+interface Watched {
+  ids: Set<string>
+  fields: Set<string>
+  deliveries: Array<() => Promise<void>>
+}
+
+interface TenantCtx {
+  db: ReturnType<typeof getTenantDb>
+  slug: string
+  id: string
+  origin?: string
+}
+
 interface Burst {
   key: string
   actor: string | null
+  tenant: TenantCtx | null
   touches: Map<string, Touch>
+  /** collection → person → their parked watch deliveries */
+  watchers: Map<string, Map<string, Watched>>
   timer: ReturnType<typeof setTimeout> | null
   firstAt: number
 }
 
 const bursts = new Map<string, Burst>()
+
+function tenantNow(): TenantCtx | null {
+  const db = getTenantDb()
+  const slug = getTenantSlug()
+  if (!db || !slug) return null
+  return { db, slug, id: getTenantId() ?? '', origin: getTenantOrigin() }
+}
+
+function burstFor(groupKey: string, user: string | null | undefined): Burst | null {
+  const tenant = tenantNow()
+  const key = `${tenant?.id ?? ''}|${groupKey}`
+  let burst = bursts.get(key)
+  if (!burst) {
+    if (bursts.size >= MAX_BURSTS) return null
+    burst = {
+      key,
+      actor: user ?? null,
+      tenant,
+      touches: new Map(),
+      watchers: new Map(),
+      timer: null,
+      firstAt: Date.now()
+    }
+    bursts.set(key, burst)
+  }
+  return burst
+}
+
+/**
+ * A watcher's per-record delivery during a bulk action or import: parked until the burst
+ * settles. Returns true when parked (the caller skips delivering now); false when it is not a
+ * bulk burst or the collector is full (deliver as usual).
+ */
+export function deferWatcherDelivery(w: {
+  burst: string | null | undefined
+  user: string
+  actor: string | null | undefined
+  collection: string
+  item: string
+  fields?: string[]
+  deliver: () => Promise<void>
+}): boolean {
+  if (!isNoticeBurst(w.burst) || !w.user || !w.item) return false
+  const burst = burstFor(String(w.burst), w.actor)
+  if (!burst) return false
+  let byUser = burst.watchers.get(w.collection)
+  if (!byUser) {
+    byUser = new Map()
+    burst.watchers.set(w.collection, byUser)
+  }
+  let mine = byUser.get(w.user)
+  if (!mine) {
+    mine = { ids: new Set(), fields: new Set(), deliveries: [] }
+    byUser.set(w.user, mine)
+  }
+  // Never hold more than a safety cap of closures: past it, deliver immediately.
+  if (mine.deliveries.length >= MAX_IDS_PER_COLLECTION) return false
+  mine.ids.add(String(w.item))
+  for (const f of noticeFields(w.fields ?? [])) mine.fields.add(f)
+  mine.deliveries.push(w.deliver)
+  schedule(burst)
+  return true
+}
 
 /** A write that belongs to a bulk action or import. Cheap; no I/O. */
 export function noteBulkWrite(w: {
@@ -141,13 +240,8 @@ export function noteBulkWrite(w: {
   if (!isNoticeBurst(w.groupKey) || !w.collection || w.item == null || w.item === '') return
   if (w.action !== 'update' && w.action !== 'pipeline-transition') return
   if (/^(nivaro_|directus_|__)/i.test(w.collection)) return
-  const key = String(w.groupKey)
-  let burst = bursts.get(key)
-  if (!burst) {
-    if (bursts.size >= MAX_BURSTS) return
-    burst = { key, actor: w.user ?? null, touches: new Map(), timer: null, firstAt: Date.now() }
-    bursts.set(key, burst)
-  }
+  const burst = burstFor(String(w.groupKey), w.user)
+  if (!burst) return
   let t = burst.touches.get(w.collection)
   if (!t) {
     t = { ids: new Set(), fields: new Set() }
@@ -163,7 +257,7 @@ export function noteBulkWrite(w: {
 function schedule(burst: Burst): void {
   if (burst.timer) clearTimeout(burst.timer)
   const held = Date.now() - burst.firstAt
-  const wait = held >= MAX_HOLD_MS ? 0 : IDLE_MS
+  const wait = held >= MAX_HOLD_MS ? 0 : idleMs()
   burst.timer = setTimeout(() => {
     void flushBulkNotices(burst.key)
   }, wait)
@@ -172,19 +266,34 @@ function schedule(burst: Burst): void {
 
 /** Settle one burst now: send what it owes. Never throws. Exported for tests + shutdown. */
 export async function flushBulkNotices(key: string, deps: FlushDeps = realDeps): Promise<number> {
-  const burst = bursts.get(key)
+  const burst = bursts.get(key) ?? bursts.get(`${getTenantId() ?? ''}|${key}`)
   if (!burst) return 0
-  bursts.delete(key)
+  bursts.delete(burst.key)
   if (burst.timer) clearTimeout(burst.timer)
-  let sent = 0
-  try {
-    for (const [collection, touch] of burst.touches) {
-      sent += await noticeCollection(burst.actor, collection, touch, deps)
+  const run = async () => {
+    let sent = 0
+    const collections = new Set([...burst.touches.keys(), ...burst.watchers.keys()])
+    for (const collection of collections) {
+      try {
+        sent += await noticeCollection(
+          burst.actor,
+          collection,
+          burst.touches.get(collection) ?? null,
+          burst.watchers.get(collection) ?? new Map(),
+          deps
+        )
+      } catch {
+        /* a courtesy notice never breaks the write that caused it */
+      }
     }
-  } catch {
-    /* a courtesy notice never breaks the write that caused it */
+    return sent
   }
-  return sent
+  // Cloud: the burst is settled inside the tenant it was written in.
+  const t = burst.tenant
+  if (!t || !t.db) return run()
+  return new Promise<number>((resolve) => {
+    runWithTenantDb(t.db!, t.slug, () => void run().then(resolve, () => resolve(0)), t.id, t.origin)
+  })
 }
 
 /** Drop every pending burst (tests). */
@@ -200,8 +309,6 @@ export interface FlushDeps {
   creators(collection: string, ids: string[]): Promise<Map<string, string>>
   /** record id → current owners */
   owners(collection: string, ids: string[]): Promise<Map<string, Set<string>>>
-  /** Has an active collection-wide subscription on this collection. */
-  subscribed(userId: string, collection: string): Promise<boolean>
   /** The recipient's own view: which of these records they may read, which fields, labels. */
   view(
     userId: string,
@@ -266,34 +373,76 @@ export function whyText(created: boolean, owned: boolean): string {
 async function noticeCollection(
   actor: string | null,
   collection: string,
-  touch: Touch,
+  touch: Touch | null,
+  watched: Map<string, Watched>,
   deps: FlushDeps
 ): Promise<number> {
   const min = bulkNoticeMin()
-  if (touch.ids.size < min) return 0
+  const name = await deps.actorName(actor).catch(() => null)
+  const word = (await deps.word(collection).catch(() => '')).toLowerCase()
+  let sent = 0
+
+  /** Labels for the fields a person may read (and "Step" for a move). */
+  const labelsFor = async (
+    fields: Set<string>,
+    allowed: string[] | null,
+    step: boolean
+  ): Promise<string[]> => {
+    const changed = noticeFields(fields).filter((f) => allowed === null || allowed.includes(f))
+    return [
+      ...(step ? ['Step'] : []),
+      ...(await deps.fieldLabels(collection, changed).catch(() => changed))
+    ]
+  }
+
+  // Watchers and subscribers: parked per-record deliveries. Enough of their watched records
+  // in this burst → ONE notice; otherwise the parked deliveries run as they always did.
+  for (const [userId, w] of watched) {
+    let told = false
+    if (w.ids.size >= min) {
+      const view = await deps.view(userId, collection, [...w.ids]).catch(() => null)
+      if (view && view.ids.length >= min) {
+        const labels = await labelsFor(w.fields, view.fields, false)
+        const text = bulkNoticeText({
+          actor: name,
+          count: view.ids.length,
+          word,
+          fieldLabels: labels,
+          kind: 'watch'
+        })
+        const q = idsQuery(view.ids)
+        told = await deps
+          .send(userId, {
+            ...text,
+            collection,
+            query: q.query,
+            why: 'You watch these records.',
+            senderId: actor
+          })
+          .then(() => true)
+          .catch(() => false)
+        if (told) sent++
+      }
+    }
+    if (!told) for (const deliver of w.deliveries) await deliver().catch(() => {})
+  }
+
+  // Creators and owners (people not already handled above).
+  if (!touch || touch.ids.size < min) return sent
   const ids = [...touch.ids]
   const [creators, owners] = await Promise.all([
     deps.creators(collection, ids).catch(() => new Map<string, string>()),
     deps.owners(collection, ids).catch(() => new Map<string, Set<string>>())
   ])
   const recipients = recipientsOf(creators, owners, actor)
-  const name = await deps.actorName(actor).catch(() => null)
-  const word = (await deps.word(collection).catch(() => '')).toLowerCase()
-  let sent = 0
   for (const [userId, mine] of recipients) {
     if (mine.ids.size < min) continue
-    if (await deps.subscribed(userId, collection).catch(() => false)) continue
+    if (watched.has(userId)) continue
     // As the recipient: records they cannot read are not counted, fields they cannot read
     // are not named — the notice tells them nothing they could not open themselves.
     const view = await deps.view(userId, collection, [...mine.ids]).catch(() => null)
     if (!view || view.ids.length < min) continue
-    const changed = noticeFields(touch.fields).filter(
-      (f) => view.fields === null || view.fields.includes(f)
-    )
-    const labels = [
-      ...(touch.fields.has('__step') ? ['Step'] : []),
-      ...(await deps.fieldLabels(collection, changed).catch(() => changed))
-    ]
+    const labels = await labelsFor(touch.fields, view.fields, touch.fields.has('__step'))
     const text = bulkNoticeText({ actor: name, count: view.ids.length, word, fieldLabels: labels })
     const q = idsQuery(view.ids)
     await deps
@@ -343,17 +492,6 @@ const realDeps: FlushDeps = {
     }
     return out
   },
-  async subscribed(userId, collection) {
-    const { isCollectionWideSubscription } = await import('../hooks/notification-subscriptions.js')
-    const rows = (await db('nivaro_notification_subscriptions')
-      .where({ user: userId, collection, is_active: true })
-      .whereIn('event_type', ['update', 'all'])
-      .select('filter_field', 'filters')) as Array<{
-      filter_field?: string | null
-      filters?: unknown
-    }>
-    return rows.some((r) => isCollectionWideSubscription(r))
-  },
   async view(userId, collection, ids) {
     const { getUser } = await import('./users.js')
     const user = await getUser(userId)
@@ -397,7 +535,7 @@ const realDeps: FlushDeps = {
   async send(userId, n) {
     const { pulseApp } = await import('./activity.js')
     const app = pulseApp()
-    if (!app) return
+    if (!app) throw new Error('server not ready')
     const { notifyUser } = await import('./notification-channels.js')
     await notifyUser(app, userId, {
       subject: n.subject,

@@ -613,9 +613,11 @@ export function NotificationCenterView({
                       ? `${n.target_label}${n.item ? ` #${n.item}` : ''}`
                       : n.collection === '__chat__'
                         ? 'Chat'
-                        : n.collection
-                          ? `${n.collection}${n.item ? ` #${n.item}` : ''}`
-                          : 'Open'}
+                        : n.collection && !n.item
+                          ? 'See what changed'
+                          : n.collection
+                            ? `${n.collection} #${n.item}`
+                            : 'Open'}
               </button>
             )}
             {unread && !target && (

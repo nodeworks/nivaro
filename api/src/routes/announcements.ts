@@ -301,7 +301,7 @@ async function buildAudienceSummaries(
     for (const u of us) {
       userNames.set(
         String(u.id),
-        `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || String(u.email ?? u.id)
+        `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || String(u.email ?? 'A person')
       )
     }
   }
@@ -331,7 +331,7 @@ async function buildAudienceSummaries(
     }
     const uids = p.aud.user_ids ?? []
     if (uids.length > 0) {
-      const names = uids.slice(0, 3).map((uid) => userNames.get(String(uid)) ?? String(uid))
+      const names = uids.slice(0, 3).map((uid) => userNames.get(String(uid)) ?? 'A person')
       parts.push(
         uids.length > 3 ? `${names.join(', ')} +${uids.length - 3} more` : names.join(', ')
       )
