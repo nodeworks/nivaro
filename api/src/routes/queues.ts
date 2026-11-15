@@ -19,6 +19,12 @@ import {
   snapshotsFitViewer
 } from '../services/queue-snapshot-access.js'
 import {
+  buildTeam,
+  loadTeamUsers,
+  queueCollections,
+  seatedUserIds
+} from '../services/queue-team.js'
+import {
   publicByState,
   queueDefinitionHash,
   snapshotMatchesDefinition
@@ -1638,6 +1644,27 @@ export async function queuesRoutes(app: FastifyInstance) {
 
     const workload = await fetchQueueWorkload(id, req.user!)
     return reply.send({ data: workload })
+  })
+
+  // GET /:id/team — who is on this queue's team (owner-group seats of the workflows its
+  // collections are bound to), trimmed to the people the viewer may see in presence, with
+  // out-of-office and who covers. Online/away comes from the shared presence read on the client.
+  app.get('/:id/team', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+    const seated = await seatedUserIds(await queueCollections(id))
+    const { visibleToViewer } = await import('./presence.js')
+    const visible = await visibleToViewer(req.user!, !!req.isAdmin, seated)
+    const { users, delegates } = await loadTeamUsers([...visible])
+    const delegateIds = [...delegates.keys()]
+    const visibleDelegates = await visibleToViewer(req.user!, !!req.isAdmin, delegateIds)
+    return reply.send({
+      data: buildTeam(users, delegates, visible, Date.now(), visibleDelegates)
+    })
   })
 
   // POST /:id/claim — self-assign an item within this queue; write-through to the

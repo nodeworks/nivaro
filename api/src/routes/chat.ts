@@ -1129,45 +1129,10 @@ export async function chatRoutes(app: FastifyInstance) {
     '/record-mentions/:collection/:item',
     async (req, reply) => {
       const { collection, item } = req.params
-      const { can } = await import('../services/permissions.js')
-      if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
-        return reply.code(403).send(forbidden)
-      }
-      const rt = (await db('nivaro_chat_room_types')
-        .where({ collection, is_active: true })
-        .first('prefix', 'match_field')) as { prefix: string; match_field: string } | undefined
-      if (!rt) return reply.send({ data: [] })
-      let token = item
-      if (rt.match_field && rt.match_field !== 'id') {
-        try {
-          const row = (await db(collection).where({ id: item }).first(rt.match_field)) as
-            | Record<string, unknown>
-            | undefined
-          token = String(row?.[rt.match_field] ?? item)
-        } catch {
-          /* fall back to the raw id */
-        }
-      }
-      if (!token || token.length < 4) return reply.send({ data: [] })
-      const like = `%${token.replace(/[%_[]/g, (c) => `[${c}]`)}%`
-      const rows = (await db('chat_messages')
-        .where('message', 'like', like)
-        .whereNot('room', `${rt.prefix}:${token}`)
-        .whereNull('deleted_at')
-        .orderBy('id', 'desc')
-        .limit(30)
-        .select('id', 'room', 'message', 'sender_name', 'date_created')) as Array<
-        Record<string, unknown>
-      >
-      const out: typeof rows = []
-      const seen = new Map<string, boolean>()
-      for (const r of rows) {
-        const room = String(r.room)
-        if (!seen.has(room)) seen.set(room, await canSeeRoom(req.user!, room))
-        if (seen.get(room)) out.push(r)
-        if (out.length >= 15) break
-      }
-      return reply.send({ data: out })
+      const { recordMentionMessages } = await import('../services/record-chat-mentions.js')
+      const rows = await recordMentionMessages(req.user!, collection, item)
+      if (rows === null) return reply.code(404).send({ error: 'Not found' })
+      return reply.send({ data: rows })
     }
   )
 
@@ -2042,6 +2007,19 @@ export async function chatRoutes(app: FastifyInstance) {
       )?.n ?? 0
     )
     return { data: { room: target.room, unread: m ? unread : 0, messages: total, joined: !!m } }
+  })
+
+  /**
+   * Where else this record is being talked about (rt7 #18): rooms the caller is in and can see
+   * whose recent messages name the record. Counts and room names only; nothing when the caller
+   * cannot read the record.
+   */
+  app.get('/record-discussion', async (req, reply) => {
+    const q = req.query as { collection?: string; item?: string }
+    if (!q.collection || !q.item)
+      return reply.code(400).send({ error: 'collection and item are required' })
+    const { recordMentionsFor } = await import('../services/record-chat-mentions.js')
+    return { data: await recordMentionsFor(req.user!, q.collection, q.item) }
   })
 
   /** Unread record rooms for records I own or follow (#969 — My Work). */
