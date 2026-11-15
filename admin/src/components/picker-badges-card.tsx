@@ -257,7 +257,7 @@ export function PickerBadgesCard({ tableName }: { tableName: string }) {
               className={cn(
                 'rounded px-2.5 py-1 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60',
                 value.mode === m
-                  ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
+                  ? 'bg-white text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 dark:bg-white/[0.1] dark:text-foreground dark:shadow-none dark:ring-white/15'
                   : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
               )}
             >
@@ -275,7 +275,7 @@ export function PickerBadgesCard({ tableName }: { tableName: string }) {
         ) : value.mode === 'auto' ? (
           <>
             <p className='mb-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-              Worked out from this table: its pipeline and its yes/no flags.
+              Worked out from this collection’s pipeline and its yes/no fields:
             </p>
             <ul className='divide-y divide-slate-100 rounded-md border border-slate-200 dark:divide-border dark:border-border'>
               {shown.map((r) => (
@@ -320,12 +320,27 @@ export function PickerBadgesCard({ tableName }: { tableName: string }) {
                     placeholder='Badge text'
                     className='h-8 w-[140px] text-[12px]'
                   />
+                  <span className='flex w-[150px] shrink-0 items-center'>
+                    <PickerBadgeList
+                      badges={
+                        r.label.trim()
+                          ? [
+                              {
+                                key: r.when.hidden ? 'hidden' : `p${i}`,
+                                label: r.label.trim(),
+                                tone: r.tone
+                              }
+                            ]
+                          : []
+                      }
+                    />
+                  </span>
                   <SimpleSelect
                     value={r.tone}
                     onChange={(v) => setRule(i, { ...r, tone: v as PickerBadgeTone })}
                     options={TONES}
                     ariaLabel='Badge colour'
-                    className='h-8 w-[170px] text-[12px]'
+                    className='h-8 w-[200px] text-[12px] [&>span]:block [&>span]:min-w-0 [&>span]:truncate [&>span]:text-left gap-2'
                   />
                   <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
                     when
@@ -335,7 +350,7 @@ export function PickerBadgesCard({ tableName }: { tableName: string }) {
                     onChange={(v) => setRule(i, { ...r, when: whenFor(v as CondKind, r.when) })}
                     options={condOptions.map((o) => ({ value: o.value, label: o.label }))}
                     ariaLabel='Badge condition'
-                    className='h-8 w-[190px] text-[12px]'
+                    className='h-8 w-[210px] text-[12px] [&>span]:block [&>span]:min-w-0 [&>span]:truncate [&>span]:text-left gap-2'
                   />
                   {kind === 'states' && (
                     <SimpleSelect
@@ -343,7 +358,7 @@ export function PickerBadgesCard({ tableName }: { tableName: string }) {
                       onChange={(v) => setRule(i, { ...r, when: { states: [v] } })}
                       options={states.map((s) => ({ value: s.key, label: s.label }))}
                       ariaLabel='Pipeline step'
-                      className='h-8 w-[170px] text-[12px]'
+                      className='h-8 w-[170px] text-[12px] [&>span]:block [&>span]:min-w-0 [&>span]:truncate [&>span]:text-left gap-2'
                     />
                   )}
                   {kind === 'field' && (
@@ -353,7 +368,8 @@ export function PickerBadgesCard({ tableName }: { tableName: string }) {
                         onChange={(v) => setRule(i, { ...r, when: { ...r.when, field: v } })}
                         options={fieldOptions}
                         ariaLabel='Field'
-                        className='h-8 w-[160px] text-[12px]'
+                        triggerProps={{ 'data-tip': fieldName(r.when.field ?? '') }}
+                        className='h-8 w-[160px] text-[12px] [&>span]:block [&>span]:min-w-0 [&>span]:truncate [&>span]:text-left gap-2'
                       />
                       <SimpleSelect
                         value={(r.when.op as Op) ?? 'is_true'}
@@ -362,7 +378,7 @@ export function PickerBadgesCard({ tableName }: { tableName: string }) {
                         }
                         options={OPS}
                         ariaLabel='Test'
-                        className='h-8 w-[160px] text-[12px]'
+                        className='h-8 w-[160px] text-[12px] [&>span]:block [&>span]:min-w-0 [&>span]:truncate [&>span]:text-left gap-2'
                       />
                       {r.when.op === 'gt_field' ? (
                         <SimpleSelect
@@ -370,7 +386,8 @@ export function PickerBadgesCard({ tableName }: { tableName: string }) {
                           onChange={(v) => setRule(i, { ...r, when: { ...r.when, other: v } })}
                           options={fieldOptions}
                           ariaLabel='Compared with'
-                          className='h-8 w-[160px] text-[12px]'
+                          triggerProps={{ 'data-tip': fieldName(r.when.other ?? '') }}
+                          className='h-8 w-[160px] text-[12px] [&>span]:block [&>span]:min-w-0 [&>span]:truncate [&>span]:text-left gap-2'
                         />
                       ) : r.when.op && r.when.op !== 'is_true' && r.when.op !== 'is_false' ? (
                         <Input
@@ -396,20 +413,7 @@ export function PickerBadgesCard({ tableName }: { tableName: string }) {
                       ) : null}
                     </>
                   )}
-                  <span className='ml-auto flex items-center gap-2'>
-                    <PickerBadgeList
-                      badges={
-                        r.label.trim()
-                          ? [
-                              {
-                                key: r.when.hidden ? 'hidden' : `p${i}`,
-                                label: r.label.trim(),
-                                tone: r.tone
-                              }
-                            ]
-                          : []
-                      }
-                    />
+                  <span className='ml-auto flex items-center'>
                     <button
                       type='button'
                       aria-label='Remove badge'
