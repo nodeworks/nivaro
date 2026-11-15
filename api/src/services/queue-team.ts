@@ -27,8 +27,9 @@ export interface QueueTeamAnswer {
   more: number
 }
 
-/** The most people one strip lists; a large owner group reads as "and N more". */
-export const QUEUE_TEAM_MAX = 40
+/** The most people one strip lists. Presence is layered on by the screen, so the cap must be
+ *  well above a normal team or the people who are online could fall outside it. */
+export const QUEUE_TEAM_MAX = 200
 
 interface UserRow {
   id: string

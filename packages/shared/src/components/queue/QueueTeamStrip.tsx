@@ -225,7 +225,7 @@ export function QueueTeamStrip({ queueId }: { queueId: string }) {
             <span className='truncate text-slate-600 dark:text-slate-300'>{teamSummary(rows)}</span>
           </button>
         </PopoverTrigger>
-        <PopoverContent align='start' className='w-[300px] p-1'>
+        <PopoverContent align='start' className='w-[340px] p-1'>
           <ul className='max-h-[320px] overflow-y-auto'>
             {rows.map((r) => (
               <li key={r.member.id} className='flex items-center gap-2.5 rounded-md px-2 py-1.5'>
@@ -234,7 +234,7 @@ export function QueueTeamStrip({ queueId }: { queueId: string }) {
                   <span className='block truncate font-medium text-[13px] text-slate-800 dark:text-slate-100'>
                     {r.member.name}
                   </span>
-                  <span className='block truncate text-[11px] text-slate-500 dark:text-slate-400'>
+                  <span className='block text-[11px] text-slate-500 dark:text-slate-400'>
                     {r.status === 'out' ? outLine(r.member) : TEAM_STATUS_LABEL[r.status]}
                   </span>
                 </span>
