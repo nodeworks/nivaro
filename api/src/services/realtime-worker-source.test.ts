@@ -339,6 +339,10 @@ describe('realtime shared worker source (#2475)', () => {
     expect(b.events('field:editing').length).toBe(0)
     expect(a.events('presence:rows').length).toBe(0)
     expect(b.events('presence:rows').length).toBe(1)
+    // a calendar / Gantt drag ghost reaches the tab watching the row, not the record room
+    socket.fire('record:drag', { collection: 'orders', item: '7', view: 'calendar:due', phase: 'move' })
+    expect(a.events('record:drag').length).toBe(0)
+    expect(b.events('record:drag').length).toBe(1)
     // an old server names no record on field events: every tab holding any record hears it
     socket.fire('field:editing', { field: 'total', user: null })
     expect(a.events('field:editing').length).toBe(2)
