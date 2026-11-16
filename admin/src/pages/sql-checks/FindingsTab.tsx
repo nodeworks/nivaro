@@ -180,7 +180,8 @@ export function FindingsTab({
               className='h-8 text-[12px]'
             />
           </div>
-          {check === 'write-unannounced' && (
+          {/* Offered only while there is something open to fix (it opened onto "Nothing to fix"). */}
+          {check === 'write-unannounced' && status === 'open' && (bulk || total > 0) && (
             <button
               type='button'
               onClick={() => {
