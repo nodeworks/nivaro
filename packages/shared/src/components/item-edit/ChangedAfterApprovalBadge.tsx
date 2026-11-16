@@ -146,7 +146,9 @@ export function ChangedAfterApprovalBadge({
           // key: the count changing re-runs the short fade in Normal (Calm / reduced motion: none)
           key={live.normal ? count : undefined}
           className={cn(
-            'inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-px text-[10.5px] font-semibold',
+            // max-w-full: on a row narrower than the chip the label truncates; the record id
+            // beside it never gives way.
+            'inline-flex min-w-0 max-w-full shrink-0 items-center gap-1 rounded-full border px-2 py-px text-[10.5px] font-semibold',
             // Violet, the approval hue — never the amber of the required-fields warning beside it.
             'border-violet-300 bg-violet-50 text-violet-800 hover:bg-violet-100',
             'dark:border-violet-400/40 dark:bg-violet-400/10 dark:text-violet-200 dark:hover:bg-violet-400/20',
@@ -154,10 +156,10 @@ export function ChangedAfterApprovalBadge({
             live.normal && 'nvr-fade-in'
           )}
         >
-          <FileDiff className='h-3 w-3' aria-hidden />
-          Changed after approval
+          <FileDiff className='h-3 w-3 shrink-0' aria-hidden />
+          <span className='truncate'>Changed after approval</span>
           {data.total > 1 && (
-            <span className='tabular-nums font-medium text-violet-700/80 dark:text-violet-200/70'>
+            <span className='shrink-0 tabular-nums font-medium text-violet-700/80 dark:text-violet-200/70'>
               · {data.total}
             </span>
           )}

@@ -92,7 +92,7 @@ export function RecordHelpChip({ collection, itemId }: { collection: string; ite
   // Phone width: the lifebuoy alone (its name read out, the tip on press), so the record title
   // keeps the whole line — the title is what the header is for.
   const cls =
-    'nvr-fade-in relative inline-flex max-w-[16rem] shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1 py-1 text-[10.5px] font-medium text-amber-800 sm:px-2 sm:py-px dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+    'nvr-fade-in relative inline-flex min-w-0 max-w-[min(16rem,100%)] shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1 py-1 text-[10.5px] font-medium text-amber-800 sm:px-2 sm:py-px dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
   const body = (
     <>
       <LifeBuoy className='h-3 w-3 shrink-0 text-amber-700 dark:text-amber-300' aria-hidden />

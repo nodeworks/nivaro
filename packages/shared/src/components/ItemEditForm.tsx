@@ -218,6 +218,7 @@ import {
   AddendumViewContext
 } from './item-edit/AddendumFieldContext'
 import { useAutoIdPreview } from './item-edit/AutoIdPreviewField'
+import { addendumViewGone } from './item-edit/addendum-view'
 import { ChangedAfterApprovalBadge } from './item-edit/ChangedAfterApprovalBadge'
 import {
   type ChangeReasonChallenge,
@@ -6755,7 +6756,11 @@ function ItemEditFormView({
     workflow_state?: { key: string; label: string; color: string | null } | null
   }
 
-  const { data: addendumData = [] } = useQuery<AddendumRecord[]>({
+  const {
+    data: addendumData = [],
+    isSuccess: addendumsLoaded,
+    isFetching: addendumsFetching
+  } = useQuery<AddendumRecord[]>({
     queryKey: ['addendums', collection, itemId],
     queryFn: () =>
       client
@@ -6764,6 +6769,14 @@ function ItemEditFormView({
     enabled: addendumEnabled && recordAnswered,
     staleTime: 30_000
   })
+
+  // The addendum on screen was deleted (here or elsewhere) or never existed (a stale
+  // ?addendum= link): back to the original, which also tells the host (onAddendumViewChange)
+  // so its URL and the record tab's state dot stop pointing at it.
+  useEffect(() => {
+    if (addendumViewGone(addendumViewId, addendumData, addendumsLoaded && !addendumsFetching))
+      setAddendumViewId('original')
+  }, [addendumViewId, addendumData, addendumsLoaded, addendumsFetching])
 
   const addendumFieldMap = useMemo<AddendumFieldMap>(() => {
     const map: AddendumFieldMap = {}
@@ -14343,12 +14356,19 @@ function ItemEditFormView({
                                       The layout editor canvas is far narrower than the viewport
                                       the md: floor reads, so design mode keeps a smaller floor
                                       or the folded toolbar's Create/Save clips at the edge. */}
+                                      {/* Once the row wraps (phones, or a narrow pane with the tools
+                                      already folded) the title block grows from its floor instead of
+                                      claiming its one-line width: it stays on the back arrow's line
+                                      and its chips wrap inside it, rather than the arrow sitting
+                                      alone above an orphaned title. */}
                                       <div
-                                        className={
+                                        data-nvr-header-title
+                                        className={cn(
                                           designMode
                                             ? 'flex min-w-[200px] flex-col'
-                                            : 'flex min-w-[180px] flex-col md:min-w-[260px]'
-                                        }
+                                            : 'flex min-w-[180px] flex-col md:min-w-[260px] max-md:flex-1',
+                                          '[[data-nvr-header-wrap]>&]:flex-1'
+                                        )}
                                       >
                                         {/* The chips (Changed after approval, Help requested) wrap to
                                         their own line under the title instead of squeezing it to
@@ -14356,7 +14376,13 @@ function ItemEditFormView({
                                         open): a flex line breaks on the title's full width, so it
                                         truncates only when it alone is too long. */}
                                         <div className='group/title flex flex-wrap items-center gap-x-1.5 gap-y-1'>
-                                          <h1 className='min-w-0 max-w-full truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
+                                          {/* The record's id is what the header is for: it never shrinks
+                                          beside the chips (they wrap or truncate instead) — only a title
+                                          wider than the whole row is cut. */}
+                                          <h1
+                                            data-nvr-record-title
+                                            className='max-w-full shrink-0 truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'
+                                          >
                                             {isNew ? (
                                               `New ${singularTitle}`
                                             ) : (
