@@ -20,6 +20,7 @@ import { useNivaroClient, useParentDraft } from '../../context'
 import { AUTOFILL_CHECK_KEY, readAiFill, showsAiButton } from '../../lib/ai-fill'
 import { useCoViewers } from '../../lib/co-edit'
 import { del, get, post } from '../../lib/commands'
+import { fieldCurrency } from '../../lib/derived-causes'
 import { toastError } from '../../lib/error-toast'
 import { useOptionalRealtime } from '../../lib/realtime'
 import { cn, formatDateTime, titleCase, toLocalDateString } from '../../lib/utils'
@@ -1500,6 +1501,7 @@ export const FieldRow = memo(function FieldRow({
           itemId={itemId}
           field={field.field}
           type={field.type}
+          currency={fieldCurrency(field as never)}
         />
       )}
       {error && (

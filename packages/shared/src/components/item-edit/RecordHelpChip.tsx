@@ -89,15 +89,13 @@ export function RecordHelpChip({ collection, itemId }: { collection: string; ite
     ? (nav.consoleUrl?.(`/support?ticket=${first.id}`) ??
       (nav.consoleUrl ? null : `/support?ticket=${first.id}`))
     : null
+  // Phone width: the lifebuoy alone (its name read out, the tip on press), so the record title
+  // keeps the whole line — the title is what the header is for.
   const cls =
-    'nvr-fade-in relative inline-flex max-w-[16rem] shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-px text-[10.5px] font-medium text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+    'nvr-fade-in relative inline-flex max-w-[16rem] shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1 py-1 text-[10.5px] font-medium text-amber-800 sm:px-2 sm:py-px dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
   const body = (
     <>
-      <LifeBuoy className='h-3 w-3 shrink-0 text-amber-600 dark:text-amber-300' aria-hidden />
-      {/* Phone width: just "Help requested" so the record title keeps its room. */}
-      <span className='truncate sm:hidden' aria-hidden>
-        Help requested
-      </span>
+      <LifeBuoy className='h-3 w-3 shrink-0 text-amber-700 dark:text-amber-300' aria-hidden />
       <span className='hidden truncate sm:inline'>{text}</span>
       <span className='sr-only sm:hidden'>{text}</span>
     </>

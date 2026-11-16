@@ -748,8 +748,15 @@ export function RecordLiveSync({
               data-remote-upload-chip={u.key}
               className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
             >
-              <UploadCloud className='h-3 w-3 animate-pulse text-nvr-cyan motion-reduce:animate-none' />
-              {uploadSentence(u)}
+              <UploadCloud
+                className='h-3 w-3 shrink-0 text-cyan-700 dark:text-nvr-cyan'
+                aria-hidden
+              />
+              {uploadSentence({ ...u, pct: null })}
+              {/* The percent reads the same as in the field's own row: a bare tabular "60%". */}
+              {u.pct != null && u.pct > 0 && u.pct < 100 && (
+                <span className='tabular-nums text-slate-500 dark:text-slate-400'>{u.pct}%</span>
+              )}
             </span>
           ))}
         </div>

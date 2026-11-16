@@ -58,14 +58,48 @@ function asTime(v: unknown): number | null {
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
 
-function fmtNumber(n: number): string {
-  return Math.abs(n).toLocaleString('en-US', { maximumFractionDigits: 2 })
+function fmtNumber(n: number, currency?: string | null): string {
+  const v = Math.abs(n)
+  if (currency)
+    try {
+      return v.toLocaleString('en-US', {
+        style: 'currency',
+        currency,
+        minimumFractionDigits: Number.isInteger(v) ? 0 : 2
+      })
+    } catch {
+      /* an unknown code reads as a plain number */
+    }
+  return v.toLocaleString('en-US', { maximumFractionDigits: 2 })
 }
 
-/** "Moved 2 days later" / "Up 1,200" / "Changed" — what happened to the value (pure). */
+/** The field's currency when it shows money (options / display options `format: 'currency'`
+ *  or a `currency` code), else null. Pure. */
+export function fieldCurrency(
+  field: { options?: unknown; display_options?: unknown } | null | undefined
+): string | null {
+  const obj = (v: unknown): Record<string, unknown> => {
+    if (typeof v === 'string')
+      try {
+        return obj(JSON.parse(v))
+      } catch {
+        return {}
+      }
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+  }
+  const o = obj(field?.options)
+  const d = obj(field?.display_options)
+  const fmt = String(o.format ?? d.format ?? '')
+  if (fmt !== 'currency' && !o.currency && !d.currency) return null
+  const c = String(o.currency ?? d.currency ?? 'USD').toUpperCase()
+  return /^[A-Z]{3}$/.test(c) ? c : 'USD'
+}
+
+/** "Moved 2 days later" / "Up $1,200" / "Changed" — what happened to the value (pure). */
 export function changeWords(
   cause: Pick<DerivedCause, 'from' | 'to'>,
-  type?: string | null
+  type?: string | null,
+  currency?: string | null
 ): string {
   const t = String(type ?? '').toLowerCase()
   const isDate = /date|time/.test(t)
@@ -96,18 +130,40 @@ export function changeWords(
       Number.isFinite(nb))
   if (numeric && Number.isFinite(nb)) {
     if (cause.from == null || cause.from === '') return 'Filled in'
-    if (Number.isFinite(na) && nb !== na) return `${nb > na ? 'Up' : 'Down'} ${fmtNumber(nb - na)}`
+    if (Number.isFinite(na) && nb !== na)
+      return `${nb > na ? 'Up' : 'Down'} ${fmtNumber(nb - na, currency)}`
   }
   if (cause.to == null || cause.to === '') return 'Cleared'
   return 'Changed'
 }
 
-/** One input as words: "PO due date", "Amount on Line 4" or "a Purchase order's Due date". */
+/** A label mid-sentence: "Due Date" → "due date", acronyms and codes kept ("PO due date",
+ *  "Q3 total"). Pure. */
+export function midSentence(label: string): string {
+  return label
+    .split(/(\s+)/)
+    .map((w) => (/^[A-Z][a-z'’]*$/.test(w) ? w.toLowerCase() : w))
+    .join('')
+}
+
+/** A record's label as one name: "Line 4 · Impeller kit" → "Line 4 (Impeller kit)", so the
+ *  sentence never carries an inner "·" that runs into the time after it. Pure. */
+export function recordName(label: string): string {
+  const parts = label
+    .split(/\s+[·•|–—-]\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  if (parts.length < 2) return label.trim()
+  return `${parts[0]} (${parts.slice(1).join(', ')})`
+}
+
+/** One input as words, one grammar for every kind: "PO due date", "Line 4 (Impeller kit)’s
+ *  amount" or "a purchase order’s due date". */
 export function inputWords(i: DerivedInput): string {
-  if (i.own) return i.label
-  if (i.record_label) return `${i.label} on ${i.record_label}`
-  if (i.collection_label) return `a ${i.collection_label}’s ${i.label}`
-  return i.label
+  if (i.own) return midSentence(i.label)
+  if (i.record_label) return `${recordName(i.record_label)}’s ${midSentence(i.label)}`
+  if (i.collection_label) return `a ${midSentence(i.collection_label)}’s ${midSentence(i.label)}`
+  return midSentence(i.label)
 }
 
 /** "because PO due date changed" / "because Start and Duration changed" (pure). */
@@ -120,9 +176,14 @@ export function becauseWords(inputs: DerivedInput[]): string {
 }
 
 /** The whole note: "Moved 2 days later because PO due date changed". */
-export function causeSentence(cause: DerivedCause, type?: string | null): string {
+export function causeSentence(
+  cause: DerivedCause,
+  type?: string | null,
+  currency?: string | null
+): string {
   const because = becauseWords(cause.inputs)
-  return because ? `${changeWords(cause, type)} ${because}` : changeWords(cause, type)
+  const what = changeWords(cause, type, currency)
+  return because ? `${what} ${because}` : what
 }
 
 /** Shown at all: recent enough (pure). */

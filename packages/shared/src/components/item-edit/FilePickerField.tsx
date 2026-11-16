@@ -614,7 +614,7 @@ export function FilePickerField({
               type='button'
               disabled={disabled}
               onClick={() => setOpen(true)}
-              className='flex h-9 flex-1 items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 disabled:opacity-40 transition-colors'
+              className='flex h-9 flex-1 items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 dark:border-border dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-200 disabled:opacity-40 transition-colors'
             >
               Select file…
             </button>
@@ -625,7 +625,7 @@ export function FilePickerField({
                 type='button'
                 onClick={() => uploadRef.current?.click()}
                 disabled={uploading}
-                className='flex h-9 items-center gap-1.5 rounded-md border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 disabled:opacity-40 transition-colors'
+                className='flex h-9 items-center gap-1.5 rounded-md border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 dark:border-border dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-200 disabled:opacity-40 transition-colors'
               >
                 {uploading ? (
                   <Loader2 className='h-3.5 w-3.5 animate-spin' />
@@ -1113,7 +1113,7 @@ export function FileM2MField({
               <button
                 type='button'
                 onClick={() => setOpen((v) => !v)}
-                className='flex h-8 items-center gap-1.5 rounded border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors'
+                className='flex h-8 items-center gap-1.5 rounded border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 dark:border-border dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-200 transition-colors'
               >
                 <Plus className='h-3.5 w-3.5' />
                 Add existing…
@@ -1140,7 +1140,7 @@ export function FileM2MField({
                 type='button'
                 onClick={() => uploadRef.current?.click()}
                 disabled={uploading}
-                className='flex h-8 items-center gap-1.5 rounded border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 disabled:opacity-40 transition-colors'
+                className='flex h-8 items-center gap-1.5 rounded border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 dark:border-border dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-200 disabled:opacity-40 transition-colors'
               >
                 {uploading ? (
                   <Loader2 className='h-3.5 w-3.5 animate-spin' />
