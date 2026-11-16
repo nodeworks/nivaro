@@ -105,7 +105,7 @@ a{color:var(--accent);text-underline-offset:3px;text-decoration-thickness:1px}
 a:hover{text-decoration-thickness:2px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
 .foot{margin-top:22px;padding-top:14px;border-top:1px solid var(--line);color:var(--faint);font-size:11.5px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
-time{font-variant-numeric:tabular-nums}`
+time{font-variant-numeric:tabular-nums;white-space:nowrap}`
 
 /**
  * Live script: listen, refetch the page's own address (`?refresh=1`), swap `#nvr-live`. A

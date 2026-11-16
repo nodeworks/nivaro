@@ -39,6 +39,10 @@ const NOTE: Record<PublicStage, string> = {
   decided: 'This request is closed. Nothing more is needed from you.'
 }
 
+/** A refusal gets its own next step, never the same line as a yes. */
+const REFUSED_NOTE =
+  'This request was not approved. If you still need it, send a new request or contact whoever shared the form with you.'
+
 /** A decided label that reads as a refusal ("Rejected", "Declined", "Not approved"). Pure. */
 const REFUSAL = /\b(reject|declin|denied|deny|refus|not approved|unsuccessful|cancel|withdrawn)/i
 
@@ -69,7 +73,7 @@ export function statusBlockHtml(link: ResolvedStatusLink, st: PublicStatus): str
   return `<div class="state ${tone}"><span class="dot" aria-hidden="true"></span><div>
 <h1>${esc(st.label)}</h1><p class="by">Submitted ${timeTag(link.createdAt)}${when}</p></div></div>
 <ol class="track at${at} ${tone}" aria-label="Progress">${steps}</ol>
-<p class="note">${esc(NOTE[st.stage])}</p>`
+<p class="note">${esc(tone === 'tone-bad' ? REFUSED_NOTE : NOTE[st.stage])}</p>`
 }
 
 function signatureOf(st: PublicStatus): string {

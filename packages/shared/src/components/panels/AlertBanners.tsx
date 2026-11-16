@@ -75,6 +75,13 @@ function details(b: AlertBannerData): Array<{ key: string; node: ReactNode }> {
   return out
 }
 
+/** Wrap units: each detail alone, except the last two travel together (the time never
+ *  wraps onto a line of its own). Pure. */
+export function detailGroups<T>(items: T[]): T[][] {
+  if (items.length < 2) return [items]
+  return [...items.slice(0, -2).map((x) => [x]), items.slice(-2)]
+}
+
 export function AlertBanners({
   collection,
   itemId,
@@ -186,15 +193,22 @@ export function AlertBanners({
               <span className='font-semibold'>{b.record}</span>
             )}{' '}
             {b.phrase}
-            {/* One wrap unit per detail with its "·" glued on, so a separator never sits alone
-                on a line. On a phone the details take their own line under the headline. */}
+            {/* One wrap unit per detail with its "·" glued on, and the time glued to the detail
+                before it, so no line starts or ends with a lone "·" or "· 3h ago". On a phone
+                the details take their own line under the headline. */}
             <span className='block text-amber-800 sm:inline dark:text-amber-200/80'>
-              {details(b).map((x, i) => (
-                <Fragment key={x.key}>
-                  <span className={i === 0 ? 'hidden sm:inline' : ''}> </span>
+              {detailGroups(details(b)).map((group, gi) => (
+                <Fragment key={group.map((x) => x.key).join('+')}>
+                  <span className={gi === 0 ? 'hidden sm:inline' : ''}> </span>
                   <span className='whitespace-nowrap'>
-                    <span className={i === 0 ? 'hidden sm:inline' : ''}>· </span>
-                    {x.node}
+                    {group.map((x, i) => (
+                      <Fragment key={x.key}>
+                        <span className={gi === 0 && i === 0 ? 'hidden sm:inline' : ''}>
+                          {i === 0 ? '· ' : ' · '}
+                        </span>
+                        {x.node}
+                      </Fragment>
+                    ))}
                   </span>
                 </Fragment>
               ))}

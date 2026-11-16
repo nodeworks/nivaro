@@ -216,7 +216,7 @@ export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): 
       return {
         tone: 'ok',
         title: s.last?.mine ? 'You approved this' : 'Already approved',
-        by: s.last?.mine ? { name: '', at: s.last.at } : by(s.last),
+        by: s.last?.mine ? { lead: 'Approved', name: '', at: s.last.at } : by(s.last),
         note: 'Every step is signed off. Nothing more to do.',
         decidable: false
       }
@@ -224,7 +224,7 @@ export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): 
       return {
         tone: 'bad',
         title: s.last?.mine ? 'You rejected this' : 'Already rejected',
-        by: s.last?.mine ? { name: '', at: s.last.at } : by(s.last),
+        by: s.last?.mine ? { lead: 'Rejected', name: '', at: s.last.at } : by(s.last),
         note: s.last?.step_label ? `Stopped at ${s.last.step_label}. Nothing more to do.` : null,
         decidable: false
       }
@@ -241,14 +241,17 @@ export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): 
   if (s.waiting_on_holder) {
     return {
       tone: 'ask',
-      title: `${verb === 'approve' ? 'Approve' : 'Reject'} ${s.step_label ?? 'this step'}?`,
+      // The step names itself once ("Approve Director approval?" doubled the noun); the
+      // button carries the verb the email link was pressed for.
+      title: `${s.step_label ?? 'This step'} is waiting on you`,
       by: null,
-      note:
+      note: `${verb === 'approve' ? 'Press Approve to sign it off.' : 'Press Reject to turn it down.'}${
         s.step_count > 1
-          ? `Step ${s.step_number} of ${s.step_count}${
+          ? ` Step ${s.step_number} of ${s.step_count}${
               s.last && !s.last.mine ? ` · ${s.last.step_label} approved by ${s.last.by}` : ''
             }.`
-          : null,
+          : ''
+      }`,
       decidable: true
     }
   }
@@ -256,7 +259,11 @@ export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): 
     return {
       tone: 'ok',
       title: s.mine.decision === 'approved' ? 'You approved your step' : 'You rejected your step',
-      by: { name: '', at: s.mine.at },
+      by: {
+        lead: s.mine.decision === 'approved' ? 'Approved' : 'Rejected',
+        name: '',
+        at: s.mine.at
+      },
       note: `Now waiting on ${s.step_label ?? 'the next step'}.`,
       decidable: false
     }

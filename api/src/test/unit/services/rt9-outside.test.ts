@@ -58,8 +58,9 @@ describe('decision link headline (rt9 #21)', () => {
 
   it('asks only while the step is the link holder’s and undecided', () => {
     const h = linkHeadline({ ...base, waiting_on_holder: true }, 'reject')
-    expect(h.title).toBe('Reject Finance review?')
+    expect(h.title).toBe('Finance review is waiting on you')
     expect(h.decidable).toBe(true)
+    expect(h.note).toContain('Press Reject')
     expect(h.note).toContain('Manager approved by Beth Lee')
   })
 
