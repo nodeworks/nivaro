@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, FileDiff } from 'lucide-react'
-import { useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useLivePreference, useLiveRecordQueries } from '../../lib/live'
@@ -147,8 +147,9 @@ export function ChangedAfterApprovalBadge({
           key={live.normal ? count : undefined}
           className={cn(
             'inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-px text-[10.5px] font-semibold',
-            'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100',
-            'dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-200 dark:hover:bg-amber-400/20',
+            // Violet, the approval hue — never the amber of the required-fields warning beside it.
+            'border-violet-300 bg-violet-50 text-violet-800 hover:bg-violet-100',
+            'dark:border-violet-400/40 dark:bg-violet-400/10 dark:text-violet-200 dark:hover:bg-violet-400/20',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
             live.normal && 'nvr-fade-in'
           )}
@@ -156,7 +157,7 @@ export function ChangedAfterApprovalBadge({
           <FileDiff className='h-3 w-3' aria-hidden />
           Changed after approval
           {data.total > 1 && (
-            <span className='tabular-nums font-medium text-amber-700/80 dark:text-amber-200/70'>
+            <span className='tabular-nums font-medium text-violet-700/80 dark:text-violet-200/70'>
               · {data.total}
             </span>
           )}
@@ -164,10 +165,13 @@ export function ChangedAfterApprovalBadge({
       </PopoverTrigger>
       <PopoverContent
         align='start'
-        className='w-[min(26rem,calc(100vw-2rem))] p-0'
+        // 16 px from every screen edge (phones: the right edge too), and never taller than the
+        // room there is: the header stays, the list scrolls inside an opaque panel.
+        collisionPadding={16}
+        className='flex max-h-[min(30rem,var(--radix-popover-content-available-height))] w-[min(26rem,calc(100vw-2rem))] flex-col overflow-hidden bg-white p-0 dark:bg-card'
         data-approval-changes-panel
       >
-        <div className='border-b border-slate-200 px-3.5 pb-2.5 pt-3 dark:border-border'>
+        <div className='shrink-0 border-b border-slate-200 px-3.5 pb-2.5 pt-3 dark:border-border'>
           <p className='text-[13px] font-semibold text-slate-900 dark:text-slate-50'>
             Changed after approval
           </p>
@@ -176,7 +180,7 @@ export function ChangedAfterApprovalBadge({
             {approvers.length > 0 && <> · approved by {approvers.slice(0, 3).join(', ')}</>}
           </p>
         </div>
-        <ul className='max-h-[min(22rem,60vh)] divide-y divide-slate-100 overflow-y-auto dark:divide-border'>
+        <ScrollList>
           {data.changes.map((c) => (
             <li key={c.field} className='px-3.5 py-2.5' data-approval-change={c.field}>
               <div className='flex items-baseline justify-between gap-3'>
@@ -230,14 +234,58 @@ export function ChangedAfterApprovalBadge({
               )}
             </li>
           )}
-        </ul>
+        </ScrollList>
         {more > 0 && (
-          <p className='border-t border-slate-200 px-3.5 py-2 text-[11px] text-slate-500 dark:border-border dark:text-slate-400'>
+          <p className='shrink-0 border-t border-slate-200 px-3.5 py-2 text-[11px] text-slate-500 dark:border-border dark:text-slate-400'>
             {more} more field{more === 1 ? '' : 's'} changed — the record's history has every
             change.
           </p>
         )}
       </PopoverContent>
     </Popover>
+  )
+}
+
+/**
+ * The diff list: scrolls inside the panel, and says so — while more rows sit below the fold a
+ * fade and "More below" sit on the bottom edge, so a row cut by the panel never reads as the
+ * end of the list.
+ */
+function ScrollList({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLUListElement>(null)
+  const [below, setBelow] = useState(false)
+  const measure = useCallback(() => {
+    const el = ref.current
+    if (!el) return
+    setBelow(el.scrollHeight - el.scrollTop - el.clientHeight > 4)
+  }, [])
+  useEffect(() => {
+    measure()
+    const el = ref.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [measure])
+  return (
+    <div className='relative flex min-h-0 flex-1 flex-col'>
+      <ul
+        ref={ref}
+        onScroll={measure}
+        className='min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto overscroll-contain dark:divide-border'
+      >
+        {children}
+      </ul>
+      {below && (
+        <div
+          aria-hidden
+          className='pointer-events-none absolute inset-x-0 bottom-0 flex h-10 items-end justify-center bg-gradient-to-t from-white via-white/90 to-transparent pb-1 dark:from-card dark:via-card/90'
+        >
+          <span className='rounded-full bg-slate-100 px-2 py-px text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'>
+            More below
+          </span>
+        </div>
+      )}
+    </div>
   )
 }

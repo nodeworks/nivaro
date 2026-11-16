@@ -34,7 +34,7 @@ import { openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../../lib/record-peek'
 import { cn, formatRelative } from '../../lib/utils'
 import { AgentBadge } from '../AgentBadge'
-import { hasSnapshotView, offersChanges } from '../NotificationBell'
+import { bellGroupLabel, hasSnapshotView, offersChanges } from '../NotificationBell'
 import { RelativeTime } from '../RelativeTime'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { AsItWasSheet } from './AsItWasSheet'
@@ -95,6 +95,9 @@ interface SentGroup {
 
 interface NotificationRow {
   id: number
+  /** The record's friendly id and the collection's singular name (GET /notifications). */
+  record_label?: string | null
+  record_collection_label?: string | null
   title?: string | null
   subject?: string | null
   message: string | null
@@ -625,7 +628,10 @@ export function NotificationCenterView({
                         : n.collection && !n.item
                           ? 'See changes'
                           : n.collection
-                            ? `${n.collection} #${n.item}`
+                            ? // The record's friendly id ("Workflow TP26-80418"), as the title
+                              // names it — never the table name and row id.
+                              ((n.record_label ? bellGroupLabel(n) : null) ??
+                              `${n.collection} #${n.item}`)
                             : 'Open'}
               </button>
             )}
@@ -650,7 +656,7 @@ export function NotificationCenterView({
                 className='inline-flex items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:border-border dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-200'
               >
                 <History className='h-3 w-3' />
-                as it was
+                Record when sent
               </button>
             )}
           </div>

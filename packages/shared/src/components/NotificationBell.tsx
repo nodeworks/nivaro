@@ -466,7 +466,7 @@ export function NotificationBell({
                 className='inline-flex items-center gap-0.5 rounded px-1 text-[10.5px] text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
               >
                 <History className='h-3 w-3' />
-                as it was
+                Record when sent
               </span>
             )}
           </span>
