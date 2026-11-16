@@ -59,16 +59,21 @@ export function ListNeighborNav({
       : `Record ${n.index} of the ${n.total} ${listName} showed`
   // At the edge of what the list showed, the button stays focusable and says why it stops
   // (a disabled button shows no tooltip).
+  // Without the list's total, the end of the rows shown is not known to be the list's end.
   const prevTip = n.prev
     ? `Previous in ${listName}`
     : n.moreBefore
       ? 'First on this page — go back to the list for the page before'
-      : `First in ${listName}`
+      : n.listTotal == null && n.position > 1
+        ? `First of the ${n.total} shown`
+        : `First in ${listName}`
   const nextTip = n.next
     ? `Next in ${listName}`
     : n.moreAfter
       ? 'Last on this page — go back to the list for the next page'
-      : `Last in ${listName}`
+      : n.listTotal == null
+        ? `Last of the ${n.total} shown — go back to the list for more`
+        : `Last in ${listName}`
 
   const btn =
     'flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 aria-disabled:cursor-default aria-disabled:text-slate-300 aria-disabled:hover:bg-transparent aria-disabled:hover:text-slate-300 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100 dark:aria-disabled:text-slate-600 dark:aria-disabled:hover:text-slate-600'
