@@ -1,10 +1,99 @@
 {
-  "generated_at": "2026-11-16T15:33:33.449Z",
+  "generated_at": "2026-11-16T19:05:33.653Z",
   "releases": [
+    {
+      "version": "0.3.163",
+      "tag": "v0.3.163",
+      "date": "2026-11-16T14:05:06-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "create a record in a chosen pipeline step in one call",
+              "hash": "29c089a41"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Refresh an environment on Environments → Runbooks",
+              "hash": "278c0559f"
+            },
+            {
+              "section": "Added",
+              "scope": "env-refresh",
+              "text": "copy one environment over another, keeping the target's own",
+              "hash": "883f83515"
+            },
+            {
+              "section": "Added",
+              "scope": "files",
+              "text": "read-only fallback to another environment's uploads",
+              "hash": "061857e10"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "env-refresh",
+              "text": "close outbound + credential gaps from the security review",
+              "hash": "e54eb4519"
+            },
+            {
+              "section": "Fixed",
+              "scope": "reports",
+              "text": "horizontal bar labels stay on one line",
+              "hash": "59d14ad3b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "reports",
+              "text": "Reset cache no longer fails every query widget",
+              "hash": "11f3c0b20"
+            },
+            {
+              "section": "Fixed",
+              "scope": "overview",
+              "text": "count failing background jobs, not runs; expiring certificates warn",
+              "hash": "4cf9130d0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "one totals read per list, after the list loads; timeouts say so",
+              "hash": "259f9b777"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "erp",
+              "text": "resend timeout is 60 s now",
+              "hash": "10c777ffe"
+            },
+            {
+              "section": "Other",
+              "scope": "sql-checks",
+              "text": "announce-fix-apply takes --skip for procedures to leave alone",
+              "hash": "2d7c9fcd6"
+            }
+          ]
+        }
+      ],
+      "count": 11
+    },
     {
       "version": "0.3.162",
       "tag": "v0.3.162",
-      "date": "2026-11-16T10:30:46-05:00",
+      "date": "2026-11-16T10:33:33-05:00",
       "sections": [
         {
           "label": "Fixed",
