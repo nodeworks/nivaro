@@ -15,6 +15,7 @@ export const payloadTemplates: DocSection = {
       items: [
         '**Draft** — the working copy. Autosaves; it never reaches a partner. The header shows an amber "Draft — not live" chip while it differs from the live version.',
         '**Publish** — needs a note and shows a before/after payload diff for a real record. If recent records would fail, the panel asks you to confirm ("Publish anyway — N records would fail"). Every publish is an immutable version.',
+        '**Discard draft** — next to Publish while the draft differs from a live version: two presses put the live body, mode and lookups back as the draft ("Live vN" again). A template that was never published has nothing to go back to.',
         '**History** — any version can be restored as the draft. **Reset to default** restores the file default an extension registered.',
         "**Conflicts** — drafts use a revision counter; saving over someone else's newer draft, or over a version published since you opened the page, is refused with a conflict banner (HTTP 409) so you can reload.",
         '**Sharing** — one template can be used by many transitions and code pushes. The header lists them under "Used by".'
@@ -59,6 +60,10 @@ export const payloadTemplates: DocSection = {
           'Keys Nivaro reads back from stored payloads (obligation reconciliation, drift checks) show a lock. They cannot be removed, renamed or retyped; their value source can still change. A locked key may be `not_empty` (it need not appear in every body).'
         ]
       ]
+    },
+    {
+      type: 'p',
+      text: '**Paths through relations.** The Record field pickers ("From the record", "From each <item>" inside a list) walk many-to-one links up to three deep, e.g. each material → CIFA → Task → Name, written as `material.cifa.task.name`. Before a field map renders, Nivaro loads what its paths read and the record or lookup rows lack: a column a lookup\'s `expand` did not list, and the related row behind a link id (in batches, for every row at once; never a system table). So `material.cifa_data.task.name` and `material.cifa.task.name` both read the task\'s name, while `material.cifa_data.task` still reads the task id. **Type a path** beside "From each <item>" keeps a raw path for odd cases. Code (Liquid) templates read the scope as loaded; a lookup can nest `expand` (`{ cifa: { collection, fields, expand: { task: { collection, fields } } } }`, three levels) to load related rows for them.'
     },
     {
       type: 'note',
@@ -151,7 +156,10 @@ const stored = await ctx.payloadTemplates.scrubResponse('MWF', res.body)`
           '`GET /?external_api=`',
           'List with status (live / draft changes / unpublished), version, used-by count, newer-default flag'
         ],
-        ['`GET /:key`', 'One template with draft, published version, used-by, default info'],
+        [
+          '`GET /:key`',
+          'One template with draft, published version, used-by, default info, `context_keys` and `context_collections` (each context key → its rows\' collection)'
+        ],
         ['`POST /`', 'Create `{key, label, external_api, endpoint_path, collection, mode, body}`'],
         [
           '`DELETE /:key`',
@@ -162,6 +170,10 @@ const stored = await ctx.payloadTemplates.scrubResponse('MWF', res.body)`
           '`{mode, body, base_rev, base_published_version?}`; 409 `stale` returns the current row'
         ],
         ['`PUT /:key/lookups`', 'Template-level lookups, validated like erp_submit context'],
+        [
+          '`POST /:key/discard-draft`',
+          '`{base_rev, base_published_version?}` the draft becomes the live version again; 409 `stale` returns the current row, 409 `unpublished` when there is no live version'
+        ],
         [
           '`POST /:key/preview`',
           '`{id, which: draft|published, draft?}` render one record with problems'
