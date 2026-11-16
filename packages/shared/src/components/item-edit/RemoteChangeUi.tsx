@@ -401,7 +401,7 @@ export function FieldMergePanel({
                 className={cn(
                   'inline-flex h-6 items-center rounded px-2 text-[11px] font-medium [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:px-3.5',
                   pick === p
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                    ? 'bg-[#0f172a] text-[#ffffff] dark:bg-[#e2e8f0] dark:text-[#0f172a]'
                     : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted'
                 )}
               >

@@ -342,7 +342,7 @@ function Overview({ onOpenRoom }: { onOpenRoom: (room: string, label: string) =>
               className={cn(
                 'rounded px-2.5 py-1 text-[12px] font-medium',
                 days === d
-                  ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                  ? 'bg-[#0f172a] text-[#ffffff] dark:bg-[#e2e8f0] dark:text-[#0f172a]'
                   : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted'
               )}
               data-chat-analytics-days={d}
@@ -762,7 +762,7 @@ function Messages({
               className={cn(
                 'h-7 rounded-full border px-2.5 text-[12px]',
                 on
-                  ? 'border-slate-800 bg-slate-900 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900'
+                  ? 'border-[#1e293b] bg-[#0f172a] text-[#ffffff] dark:border-[#e2e8f0] dark:bg-[#e2e8f0] dark:text-[#0f172a]'
                   : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
               )}
               data-chat-admin-kind={k}

@@ -1022,7 +1022,7 @@ export function NotificationCenterView({
                 disabled={archiveReadMut.isPending}
                 onClick={() => archiveReadMut.mutate(Number(cleanDays))}
                 data-notification-archive-read
-                className='h-7 rounded-md bg-slate-900 px-2.5 text-[11.5px] font-medium text-white hover:bg-slate-700 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900'
+                className='h-7 rounded-md bg-[#0f172a] px-2.5 text-[11.5px] font-medium text-[#ffffff] hover:bg-[#334155] disabled:opacity-50 dark:bg-[#e2e8f0] dark:text-[#0f172a] dark:hover:bg-[#ffffff]'
               >
                 {archiveReadMut.isPending ? 'Archiving…' : 'Archive now'}
               </button>
@@ -1097,7 +1097,7 @@ export function NotificationCenterView({
                 className={cn(
                   'shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                   status === t.key
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                    ? 'bg-[#0f172a] text-[#ffffff] dark:bg-[#e2e8f0] dark:text-[#0f172a]'
                     : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-slate-800/50'
                 )}
               >
