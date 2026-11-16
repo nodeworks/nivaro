@@ -390,6 +390,22 @@ export function CollectionGantt({
     tick.setMonth(tick.getMonth() + 1)
   }
 
+  // Week ticks (Mondays) under the months, so a moved bar's dates read off the chart
+  // (rt9 review: the axis showed only "Nov"). Thinned to every other week on a long window.
+  const dayTicks: Array<{ pct: number; label: string }> = []
+  const wk = new Date(windowStart)
+  wk.setHours(0, 0, 0, 0)
+  wk.setDate(wk.getDate() + ((8 - wk.getDay()) % 7))
+  const weekStep = span > 200 * DAY ? 14 : 7
+  while (wk.getTime() < windowEnd) {
+    dayTicks.push({ pct: pct(wk.getTime()), label: String(wk.getDate()) })
+    wk.setDate(wk.getDate() + weekStep)
+  }
+  const spanText = (a: number, b: number) =>
+    dragSpanLabel(dragDayKey(new Date(a)), dragDayKey(new Date(Math.max(a, b - 1))))
+  // A label beside a bar goes on whichever side has room.
+  const sideLabel = (endPct: number) => (endPct > 72 ? 'right-full mr-1.5' : 'left-full ml-1.5')
+
   if (dateFields.length < 2) {
     return (
       <p className='p-8 text-center text-[13px] text-slate-400'>
@@ -441,11 +457,11 @@ export function CollectionGantt({
       </p>
       <div className='mb-3 flex flex-wrap items-center gap-3'>
         <div className='flex items-center gap-1.5'>
-          <span className='text-[11px] text-slate-400'>Start</span>
+          <span className='text-[11px] text-slate-500 dark:text-slate-400'>Start field</span>
           <FieldToggle value={startField} onChange={setStartField} exclude={endField} />
         </div>
         <div className='flex items-center gap-1.5'>
-          <span className='text-[11px] text-slate-400'>End</span>
+          <span className='text-[11px] text-slate-500 dark:text-slate-400'>End field</span>
           <FieldToggle value={endField} onChange={setEndField} exclude={startField} />
         </div>
         <span className='ml-auto text-[11px] text-slate-400'>
@@ -478,18 +494,29 @@ export function CollectionGantt({
 
       <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
         {/* Month scale */}
-        <div className='relative flex h-7 border-b border-slate-100 dark:border-border'>
-          <div className='w-56 shrink-0 border-r border-slate-100 px-3 py-1.5 text-[10px] font-semibold text-slate-500 dark:border-border'>
+        <div className='relative flex h-10 border-b border-slate-100 dark:border-border'>
+          <div className='flex w-56 shrink-0 items-end border-r border-slate-100 px-3 pb-1.5 text-[10px] font-semibold text-slate-500 dark:border-border'>
             Record
           </div>
           <div className='relative flex-1'>
             {ticks.map((t) => (
               <span
                 key={t.label + t.pct}
-                className='absolute top-1.5 text-[9px] text-slate-400'
+                className='absolute top-1 pl-1 text-[10px] font-semibold text-slate-500 dark:text-slate-400'
                 style={{ left: `${t.pct}%` }}
               >
                 {t.label}
+              </span>
+            ))}
+            {dayTicks.map((t) => (
+              <span
+                key={`d${t.pct}`}
+                className='absolute bottom-0 h-1.5 border-l border-slate-300 dark:border-slate-600'
+                style={{ left: `${t.pct}%` }}
+              >
+                <span className='absolute bottom-1.5 left-0 -translate-x-1/2 text-[9px] tabular-nums text-slate-400 dark:text-slate-500'>
+                  {t.label}
+                </span>
               </span>
             ))}
           </div>
@@ -503,6 +530,15 @@ export function CollectionGantt({
           </p>
         ) : (
           <div className={cn('relative', drag && 'cursor-grabbing select-none')}>
+            {/* week lines: faint, so dates read across the rows */}
+            {dayTicks.map((t) => (
+              <span
+                key={`g${t.pct}`}
+                aria-hidden
+                className='pointer-events-none absolute bottom-0 top-0 w-px bg-slate-100 dark:bg-white/[0.04]'
+                style={{ left: `calc(14rem + (100% - 14rem) * ${t.pct / 100})` }}
+              />
+            ))}
             {/* today line */}
             {todayPct > 0 && todayPct < 100 && (
               <span
@@ -520,6 +556,11 @@ export function CollectionGantt({
               const ghostWho = ghost ? (liveDrag.names.get(ghost.userId) ?? 'Someone') : null
               const gs = ghost?.start ? new Date(`${ghost.start}T00:00:00`).getTime() : null
               const ge = ghost?.end ? new Date(`${ghost.end}T00:00:00`).getTime() + DAY : null
+              const mineDragging = drag?.id === id
+              const clashHere = clash?.id === id ? clash : null
+              const ms = clashHere ? new Date(`${clashHere.start}T00:00:00`).getTime() : null
+              const me = clashHere ? new Date(`${clashHere.end}T00:00:00`).getTime() + DAY : null
+              const theirFirstName = theirName ? theirName.split(' ')[0] : 'Theirs'
               return (
                 <div
                   key={id}
@@ -544,8 +585,35 @@ export function CollectionGantt({
                           width: `${Math.max(0.6, pct(ge) - pct(gs))}%`
                         }}
                       >
-                        <span className='absolute left-full ml-1.5 whitespace-nowrap text-[10px] font-semibold text-violet-700 dark:text-violet-300'>
-                          {ghostWho?.split(' ')[0]} · {dragDayLabel(ghost.start as string)}
+                        <span
+                          className={cn(
+                            'absolute whitespace-nowrap text-[10px] font-semibold text-violet-700 dark:text-violet-300',
+                            sideLabel(pct(ge))
+                          )}
+                        >
+                          {ghostWho?.split(' ')[0]} ·{' '}
+                          {ghost.end
+                            ? dragSpanLabel(ghost.start as string, ghost.end as string)
+                            : dragDayLabel(ghost.start as string)}
+                        </span>
+                      </div>
+                    )}
+                    {clashHere && ms != null && me != null && (
+                      <div
+                        data-gantt-clash-mine={id}
+                        className='pointer-events-none absolute top-1/2 flex h-4 -translate-y-1/2 items-center rounded-full border border-dashed border-nvr-cyan bg-white/70 dark:bg-card/70'
+                        style={{
+                          left: `${pct(ms)}%`,
+                          width: `${Math.max(0.6, pct(me) - pct(ms))}%`
+                        }}
+                      >
+                        <span
+                          className={cn(
+                            'absolute whitespace-nowrap text-[10px] font-semibold text-[#007a99] dark:text-nvr-cyan',
+                            sideLabel(pct(me))
+                          )}
+                        >
+                          Yours · {dragSpanLabel(clashHere.start, clashHere.end)}
                         </span>
                       </div>
                     )}
@@ -568,9 +636,14 @@ export function CollectionGantt({
                         navigate(`/collections/${collection}/${id}`)
                       }}
                       className={cn(
-                        'absolute top-1/2 h-3 -translate-y-1/2 rounded-full bg-[#00ceff66] ring-1 ring-[#00ceff] focus-visible:outline-none focus-visible:ring-2',
+                        'absolute top-1/2 h-3 -translate-y-1/2 rounded-full focus-visible:outline-none focus-visible:ring-2',
+                        clashHere
+                          ? 'nvr-clash-pulse bg-violet-200 ring-2 ring-violet-500 dark:bg-violet-500/40 dark:ring-violet-400'
+                          : 'bg-[#00ceff66] ring-1 ring-[#00ceff]',
                         canDrag && 'cursor-grab select-none active:cursor-grabbing',
-                        drag?.id === id && 'shadow-[0_2px_8px_-1px_rgba(0,140,180,0.45)]',
+                        // Your own drag lifts: taller, a firmer ring and a soft shadow.
+                        mineDragging &&
+                          'z-20 h-4 bg-[#00ceff99] ring-2 ring-[#00a9d4] shadow-[0_4px_12px_-2px_rgba(0,120,160,0.5)] dark:ring-nvr-cyan',
                         ghost && 'opacity-60'
                       )}
                       style={{
@@ -582,7 +655,22 @@ export function CollectionGantt({
                           ? `${ghostWho} is moving this`
                           : `${new Date(s).toLocaleDateString()} → ${new Date(e).toLocaleDateString()}`
                       }
-                    />
+                    >
+                      {(mineDragging || clashHere) && (
+                        <span
+                          data-gantt-readout={mineDragging ? id : undefined}
+                          className={cn(
+                            'pointer-events-none absolute top-1/2 -translate-y-1/2 whitespace-nowrap rounded px-1 text-[10px] font-semibold',
+                            sideLabel(pct(e)),
+                            mineDragging
+                              ? 'bg-white/90 text-[#007a99] shadow-sm dark:bg-card/90 dark:text-nvr-cyan'
+                              : 'text-violet-700 dark:text-violet-300'
+                          )}
+                        >
+                          {mineDragging ? spanText(s, e) : `${theirFirstName} · ${spanText(s, e)}`}
+                        </span>
+                      )}
+                    </button>
                   </div>
                 </div>
               )

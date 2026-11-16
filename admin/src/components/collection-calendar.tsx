@@ -151,6 +151,14 @@ export function CollectionCalendar({
   const [clashBusy, setClashBusy] = useState(false)
   const clashWho = clashWriter(clash?.current ?? null)
   const clashNames = useActorNames(clashWho ? [clashWho] : [])
+  // While the clash question is open both places are marked on the grid; bring theirs into
+  // view once (rt9 review: the banner sat far from the entry and neither date was marked).
+  const clashId = clash?.id ?? null
+  useEffect(() => {
+    if (!clashId) return
+    const el = document.querySelector<HTMLElement>(`[data-cal-entry="${CSS.escape(clashId)}"]`)
+    el?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
+  }, [clashId])
 
   // A pending drop is settled once the calendar's own read shows the record on that day.
   useEffect(() => {
@@ -427,6 +435,7 @@ export function CollectionCalendar({
 
   const theirDay = clash ? dragDayOf(clash.current?.[field]) : null
   const theirName = clashWho ? (clashNames.get(clashWho) ?? null) : null
+  const theirFirst = theirName ? theirName.split(' ')[0] : 'Theirs'
 
   return (
     <div className='relative flex-1 overflow-auto p-4' ref={live.ref}>
@@ -521,6 +530,8 @@ export function CollectionCalendar({
           const list = day ? (byDay.get(key) ?? []) : []
           const isOver =
             !!drag && day != null && drag.overDay === key && drag.overDay !== drag.fromDay
+          const isToday = day != null && isThisMonth && day === today.getDate()
+          const clashMineHere = !!clash && day != null && clash.mineDay === key && theirDay !== key
           const ghostsHere = day
             ? [...liveDrag.ghosts.values()].filter(
                 (g) =>
@@ -535,21 +546,33 @@ export function CollectionCalendar({
               // biome-ignore lint/suspicious/noArrayIndexKey: fixed grid
               key={i}
               data-cal-day={key || undefined}
+              // Today is its numeral; a drop target is a dashed outline with no fill, so the
+              // two never read alike (rt9 review).
               className={cn(
                 'min-h-24 bg-white p-1.5 transition-colors dark:bg-card',
-                day && isThisMonth && day === today.getDate() && 'bg-[#f3fcff] dark:bg-[#0f2630]',
-                isOver && 'bg-[#eafaff] dark:bg-[#0d2a33]'
+                isOver &&
+                  'outline-dashed outline-2 -outline-offset-[3px] outline-nvr-cyan dark:outline-nvr-cyan/80'
               )}
+              aria-current={isToday ? 'date' : undefined}
             >
               {day && (
                 <>
-                  <p
-                    className={cn(
-                      'mb-1 text-[10px] font-semibold',
-                      isThisMonth && day === today.getDate() ? 'text-nvr-cyan' : 'text-slate-400'
+                  <p className='mb-1 flex h-[18px] items-center'>
+                    <span
+                      className={cn(
+                        'inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums',
+                        isToday
+                          ? 'bg-nvr-navy text-white dark:bg-nvr-cyan dark:text-[#04222c]'
+                          : 'text-slate-400'
+                      )}
+                    >
+                      {day}
+                    </span>
+                    {isToday && (
+                      <span className='ml-1 text-[9.5px] font-medium text-slate-500 dark:text-slate-400'>
+                        Today
+                      </span>
                     )}
-                  >
-                    {day}
                   </p>
                   <div className='space-y-0.5'>
                     {isOver && dragged && (
@@ -558,6 +581,18 @@ export function CollectionCalendar({
                         className='truncate rounded border border-dashed border-nvr-cyan bg-white px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy dark:bg-card dark:text-[#7fe6ff]'
                       >
                         {label(dragged)}
+                      </div>
+                    )}
+                    {clashMineHere && (
+                      <div
+                        data-cal-clash-mine
+                        data-tip='Where you dropped it'
+                        className='flex items-center gap-1 truncate rounded border border-dashed border-nvr-cyan bg-white px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy dark:bg-card dark:text-[#7fe6ff]'
+                      >
+                        <span className='truncate'>{clash?.label}</span>
+                        <span className='shrink-0 font-semibold text-[#007a99] dark:text-nvr-cyan'>
+                          · Yours
+                        </span>
                       </div>
                     )}
                     {ghostsHere.map((g) => {
@@ -585,6 +620,7 @@ export function CollectionCalendar({
                         ? (liveDrag.names.get(ghost.userId) ?? 'Someone')
                         : null
                       const beingDragged = drag?.id === id
+                      const clashTheirs = clash?.id === id
                       return (
                         <button
                           key={id}
@@ -607,15 +643,27 @@ export function CollectionCalendar({
                             navigate(`/collections/${collection}/${id}`)
                           }}
                           className={cn(
-                            'block w-full truncate rounded bg-[#00ceff1a] px-1.5 py-0.5 text-left text-[10px] font-medium text-nvr-navy hover:bg-[#00ceff33] dark:text-[#00ceff]',
+                            'flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-[10px] font-medium',
+                            // Someone else's move (a live ghost or the newer move in a clash)
+                            // wears their colour, text included — never cyan inside violet.
+                            ghost || clashTheirs
+                              ? 'bg-violet-50 text-violet-900 hover:bg-violet-100 dark:bg-violet-500/10 dark:text-violet-100 dark:hover:bg-violet-500/20'
+                              : 'bg-[#00ceff1a] text-nvr-navy hover:bg-[#00ceff33] dark:text-[#00ceff]',
                             canDrag && 'cursor-grab select-none active:cursor-grabbing',
                             (departed || beingDragged) && 'opacity-50',
                             ghost &&
-                              'outline-dashed outline-1 outline-violet-400 dark:outline-violet-400/70'
+                              'outline-dashed outline-1 outline-violet-400 dark:outline-violet-400/70',
+                            clashTheirs &&
+                              'nvr-clash-pulse outline outline-2 outline-violet-500 dark:outline-violet-400'
                           )}
                           title={ghostWho ? `${ghostWho} is moving this` : label(it)}
                         >
-                          {label(it)}
+                          <span className='truncate'>{label(it)}</span>
+                          {clashTheirs && (
+                            <span className='shrink-0 font-semibold text-violet-700 dark:text-violet-300'>
+                              · {theirFirst}
+                            </span>
+                          )}
                         </button>
                       )
                     })}
