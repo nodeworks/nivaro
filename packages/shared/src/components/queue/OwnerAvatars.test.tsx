@@ -3,6 +3,9 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { describe, expect, it, vi } from 'vitest'
 
+// The user card needs the app's client; these tests are about the faces and labels.
+vi.mock('../item-edit/UserChip', () => ({ UserChip: ({ children }: { children: unknown }) => children }))
+
 vi.mock('../UserAvatar', () => ({
   UserAvatar: ({ fallback }: { fallback: React.ReactNode }) => fallback
 }))

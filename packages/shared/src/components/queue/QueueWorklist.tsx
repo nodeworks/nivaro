@@ -183,7 +183,7 @@ import { queueReturnApplies, readQueueReturn, writeQueueReturn } from '../item-e
 import { ListLoadError } from '../ListLoadError'
 import { LiveCount } from '../LiveCount'
 import { LiveBurstPill, LivePauseButton } from '../LiveListControls'
-import { LiveRowMark } from '../LiveRowMark'
+import { LiveRowMark, MovingRowChip } from '../LiveRowMark'
 import { CopyListLinkButton } from '../list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from '../list/InlineEdit'
 import { ListViewers } from '../list/ListViewers'
@@ -2466,7 +2466,12 @@ export function QueueWorklist({
   const rememberPlace = (opened?: { collection: string; id: string }) => {
     if (!queue) return
     // The rows in order, for the record's Previous / Next in list (realtime #16).
-    if (opened)
+    if (opened) {
+      // A paged table states the whole queue's count and where this page starts, so the record
+      // says "3 of 49", never the page size (rt-nav review). Addendum rows are not records the
+      // header walks, so a page holding them keeps "N of M shown".
+      const paged = view === 'table' && !serverGrouped
+      const pure = !items.some((r) => r.collection === ADDENDUM_ROW_COLLECTION)
       noteListOpen({
         list: `queue:${queueId}`,
         label: queue.name,
@@ -2474,8 +2479,12 @@ export function QueueWorklist({
           .filter((r) => r.collection !== ADDENDUM_ROW_COLLECTION)
           .map((r) => ({ collection: r.collection, id: String(r.item_id) })),
         opened,
-        entry: ensureHistoryKey()
+        entry: ensureHistoryKey(),
+        ...(paged && pure && typeof data?.total === 'number'
+          ? { total: data.total, offset: (page - 1) * limit }
+          : {})
       })
+    }
     writeQueueReturn({
       queue_id: queueId,
       name: queue.name,
@@ -3266,6 +3275,10 @@ export function QueueWorklist({
           >
             {row.label}
           </span>
+          {/* rt9 review: a held row in a grouped queue says where it goes, in words. */}
+          {rowMovingTo(rowId(row)) != null && (
+            <MovingRowChip to={rowMovingTo(rowId(row)) as string} />
+          )}
           {(row.labels ?? []).slice(0, 3).map((l) => (
             <span
               key={l}
@@ -3340,11 +3353,15 @@ export function QueueWorklist({
       key: QUEUE_IN_STEP_COLUMN,
       header: aliasFor(QUEUE_IN_STEP_COLUMN, 'In step'),
       sortable: true,
+      // A bounded box: the table sizes columns to their content, so without a max width the
+      // step name ran on under the pinned State column instead of ending in "…".
       render: (row) => (
-        <InStepCell
-          stepLabel={row.state ? stateLabel(row.state) : null}
-          enteredAt={row.state_entered_at}
-        />
+        <div className='min-w-0 max-w-[240px]'>
+          <InStepCell
+            stepLabel={row.state ? stateLabel(row.state) : null}
+            enteredAt={row.state_entered_at}
+          />
+        </div>
       )
     },
     {
@@ -5213,7 +5230,15 @@ export function QueueWorklist({
                               Columns
                             </button>
                           </PopoverTrigger>
-                          <PopoverContent className='w-[220px] p-2' align='end'>
+                          {/* Kept inside the screen on a phone: 16 px from every edge, scrolling
+                            inside itself when the list is taller than the room left (it opened
+                            off the left edge with every label cut, rt8 review). */}
+                          <PopoverContent
+                            className='max-h-[var(--radix-popover-content-available-height)] w-[min(240px,calc(100vw-2rem))] overflow-y-auto overscroll-contain p-2'
+                            align='end'
+                            collisionPadding={16}
+                            data-queue-columns-chooser=''
+                          >
                             <DndContext
                               sensors={sensors}
                               collisionDetection={closestCenter}

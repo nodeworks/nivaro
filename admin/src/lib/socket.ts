@@ -665,6 +665,8 @@ const RELAYED_EVENTS = new Set([
   'lock:available',
   'lock:queued',
   'record:uploading',
+  // Round 9 #17 — calendar / Gantt drag ghosts (the record's row watchers get them).
+  'record:drag',
   'ops:changed',
   'ops:incident',
   'notification:new',

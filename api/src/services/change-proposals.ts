@@ -882,6 +882,8 @@ export interface ProposalView {
     to: unknown
     /** the field no longer holds `from` */
     stale?: boolean
+    /** what the field holds now (stale changes only), so the owner sees what moved */
+    now?: unknown
   }>
   /** fields of this proposal the viewer may not read (left out of `changes`) */
   hidden_fields: number
@@ -992,7 +994,7 @@ export async function proposalsForRecord(
           ...(choicesByField.has(c.field) ? { choices: choicesByField.get(c.field) } : {}),
           from: c.from,
           to: c.to,
-          ...(stale ? { stale: true } : {})
+          ...(stale ? { stale: true, now: current?.[c.field] ?? null } : {})
         }
       }),
       hidden_fields: all.length - visible.length,

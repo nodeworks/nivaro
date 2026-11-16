@@ -143,8 +143,9 @@ const fmtNum = (n: number) =>
 export function withUnit(n: number, unit: string | null | undefined): string {
   const u = (unit ?? '').trim()
   if (!u || u === 'count') return fmtNum(n)
-  if (u === '%') return `${fmtNum(n)}%`
-  if (u === '$' || u === 'USD') return `$${fmtNum(n)}`
+  // The alert editor stores 'percent' / 'dollar'; older rules hold the symbol itself.
+  if (u === '%' || u === 'percent') return `${fmtNum(n)}%`
+  if (u === '$' || u === 'USD' || u === 'dollar') return `$${fmtNum(n)}`
   return `${fmtNum(n)} ${u}`
 }
 

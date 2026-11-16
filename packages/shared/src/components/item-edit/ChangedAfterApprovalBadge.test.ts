@@ -32,4 +32,11 @@ describe('approvalValueText', () => {
     expect(approvalValueText(4, 'Acme Supply')).toBe('Acme Supply')
     expect(approvalValueText('x'.repeat(100)).length).toBe(78)
   })
+  it('reads rich text as words, never markup or "Changed"', () => {
+    expect(approvalValueText('<p>C2085.024</p>')).toBe('C2085.024')
+    expect(
+      approvalValueText({ time: 1, blocks: [{ type: 'paragraph', data: { text: 'Scope' } }] })
+    ).toBe('Scope')
+    expect(approvalValueText('<p></p>')).toBe('Empty')
+  })
 })

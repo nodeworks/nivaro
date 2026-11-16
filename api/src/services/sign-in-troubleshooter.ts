@@ -189,7 +189,13 @@ export interface TroubleCheck {
   ok: boolean | null
   label: string
   detail: string
+  /** The answer is too old to count as a pass (shown amber, not green). */
+  stale?: boolean
 }
+
+/** A directory answer older than this no longer counts as "active in Microsoft": the sync
+ *  runs daily, so a week without one means it is off or not reaching them. */
+export const DIRECTORY_STALE_DAYS = 7
 
 export interface SignInTroubleshooter {
   window_days: number
@@ -257,9 +263,10 @@ export function accountChecks(
   })
   const ds = String(u.directory_status ?? '').toLowerCase()
   const checked = iso(u.directory_checked_at)
-  const checkedAgo = checked
-    ? ` (checked ${Math.max(0, Math.round((now - new Date(checked).getTime()) / DAY))} days ago)`
-    : ''
+  const checkedDays = checked
+    ? Math.max(0, Math.round((now - new Date(checked).getTime()) / DAY))
+    : null
+  const checkedAgo = checkedDays != null ? ` (checked ${checkedDays} days ago)` : ''
   if (ds === 'disabled' || ds === 'missing') {
     out.push({
       key: 'directory',
@@ -270,6 +277,14 @@ export function accountChecks(
           ? 'The directory sync found the account disabled in Microsoft'
           : 'The directory sync could not find the account in Microsoft') +
         `${checkedAgo}. Microsoft will refuse their sign-in until their IT team fixes it.`
+    })
+  } else if (ds && checkedDays != null && checkedDays > DIRECTORY_STALE_DAYS) {
+    out.push({
+      key: 'directory',
+      ok: null,
+      stale: true,
+      label: 'Microsoft check out of date',
+      detail: `Last checked ${checkedDays} days ago, when the account was active. The directory sync may be off or not reaching them, so this may have changed.`
     })
   } else if (ds) {
     out.push({

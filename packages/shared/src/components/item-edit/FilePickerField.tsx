@@ -23,6 +23,7 @@ import { FileDownloadCount, useFileDownloadStats } from './FileDownloadCount'
 import { FileUsageChip, useFileUsage, useOnceVisible } from './FileUsage'
 import { useFileDownload } from './file-download'
 import {
+  lastWriterName,
   noteOwnFileChange,
   OWN_FILE_CHANGE_MS,
   REMOVED_FADE_MS,
@@ -83,6 +84,37 @@ function isImage(type: string | null) {
   return !!type && type.startsWith('image/')
 }
 
+/** A file's kind in words people use ("PDF", "Spreadsheet") — never a raw MIME type. */
+export function friendlyFileType(type: string | null | undefined, name?: string | null): string {
+  const t = (type ?? '').toLowerCase()
+  const ext = (name ?? '').split('.').pop()?.toUpperCase() ?? ''
+  if (t === 'application/pdf') return 'PDF'
+  if (t === 'text/csv') return 'CSV'
+  if (t.includes('spreadsheet') || t.includes('excel')) return 'Spreadsheet'
+  if (t.includes('wordprocessing') || t.includes('msword')) return 'Word document'
+  if (t.includes('presentation') || t.includes('powerpoint')) return 'Presentation'
+  if (t.startsWith('image/')) return `Image${ext && name?.includes('.') ? ` (${ext})` : ''}`
+  if (t.startsWith('video/')) return 'Video'
+  if (t.startsWith('audio/')) return 'Audio'
+  if (t.includes('zip') || t.includes('compressed')) return 'ZIP archive'
+  if (t === 'text/plain') return 'Text'
+  if (t.includes('json')) return 'JSON'
+  if (t.includes('xml')) return 'XML'
+  if (ext && ext.length <= 5 && name?.includes('.')) return ext
+  return 'File'
+}
+
+/** The tile behind a file's icon: a quiet tint per kind, with a dark partner. */
+function fileTileTone(type: string | null): string {
+  const t = (type ?? '').toLowerCase()
+  if (t === 'application/pdf') return 'bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-300'
+  if (t.includes('spreadsheet') || t.includes('excel') || t === 'text/csv')
+    return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+  if (t.includes('wordprocessing') || t.includes('msword'))
+    return 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300'
+  return 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-300'
+}
+
 function fileIcon(type: string | null, cls: string) {
   if (!type) return <File className={cls} strokeWidth={1.5} />
   if (type.startsWith('video/')) return <FileVideo className={cls} strokeWidth={1.5} />
@@ -120,27 +152,54 @@ function FileThumb({
   const dim = size === 'sm' ? 'h-10 w-10' : size === 'lg' ? 'h-20 w-20' : 'h-14 w-14'
   // The small rendition the server prepares after upload; the original if that fails.
   const [thumbFailed, setThumbFailed] = useState(false)
+  // Neither rendition loads: the type tile, never an empty gap where the picture was.
+  const [broken, setBroken] = useState(false)
+  // When processing ends the thumbnail now exists: ask again (a fresh URL, so a cached
+  // "not ready" answer is never reused) and forget earlier failures (rt-record r-1116d:
+  // the photo row kept an empty tile after "Processing…" went).
+  const [bust, setBust] = useState(0)
+  const wasProcessing = useRef(processing)
+  useEffect(() => {
+    if (wasProcessing.current && !processing) {
+      setThumbFailed(false)
+      setBroken(false)
+      setBust(Date.now())
+    }
+    wasProcessing.current = processing
+  }, [processing])
   if (isImage(type) && processing) return <FileProcessingTile className={dim} />
-  if (isImage(type)) {
+  if (isImage(type) && !broken) {
+    const fail = () => {
+      if (!thumbFailed && chipThumbUrl(url) !== url) {
+        setThumbFailed(true)
+        return
+      }
+      setBroken(true)
+    }
+    const src = thumbFailed ? url : chipThumbUrl(url)
     return (
       <img
-        src={thumbFailed ? url : chipThumbUrl(url)}
+        src={
+          bust && !/^(blob|data):/i.test(src)
+            ? `${src}${src.includes('?') ? '&' : '?'}v=${bust}`
+            : src
+        }
         alt={filename}
         data-file-thumb
         className={cn(dim, 'object-cover rounded shrink-0')}
         loading='lazy'
-        onError={(e) => {
-          if (!thumbFailed && chipThumbUrl(url) !== url) {
-            setThumbFailed(true)
-            return
-          }
-          ;(e.target as HTMLImageElement).style.display = 'none'
+        onError={fail}
+        // An answer that decodes to nothing is a failure too: the type tile, never a blank.
+        onLoad={(e) => {
+          if (e.currentTarget.naturalWidth === 0) fail()
         }}
       />
     )
   }
   return (
-    <div className={cn(dim, 'flex items-center justify-center rounded bg-slate-100 shrink-0')}>
+    <div
+      className={cn(dim, 'flex items-center justify-center rounded shrink-0', fileTileTone(type))}
+    >
       {fileIcon(type, size === 'sm' ? 'h-4 w-4' : 'h-6 w-6')}
     </div>
   )
@@ -458,7 +517,13 @@ export function FilePickerField({
     <div className='relative'>
       {!hasFile && removed && (
         <div className='mb-1.5'>
-          <RemovedFileRow name={removed.name} leaving={removed.leaving} />
+          <RemovedFileRow
+            name={removed.name}
+            leaving={removed.leaving}
+            by={lastWriterName(
+              qc.getQueryData(['last-touch', parentDraft?.collection, String(recordId)])
+            )}
+          />
         </div>
       )}
       {hasFile ? (
@@ -467,7 +532,7 @@ export function FilePickerField({
           key={fileId ?? 'pending'}
           data-file-fresh={freshFile ? '' : undefined}
           className={cn(
-            'flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50',
+            'flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50 dark:border-border dark:bg-white/[0.03]',
             freshFile && 'nvr-row-enter'
           )}
         >
@@ -499,14 +564,25 @@ export function FilePickerField({
             </a>
           )}
           <div className='flex-1 min-w-0'>
-            <div className='flex items-center gap-1'>
+            {/* "Processing…" sits right after the name, as on the multi-file rows. */}
+            <div className='flex min-w-0 items-center gap-1.5'>
+              {hasPending && <Clock className='h-3 w-3 text-amber-400 shrink-0' />}
+              <p
+                data-file-name
+                className='min-w-0 text-[12px] font-medium text-slate-700 truncate dark:text-slate-100'
+              >
+                {hasPending ? (
+                  pendingFile!.name
+                ) : file ? (
+                  fileDisplayName(file) || 'Untitled file'
+                ) : (
+                  // Never the raw file id while the name loads.
+                  <span className='text-slate-400 dark:text-slate-500'>Loading name…</span>
+                )}
+              </p>
               {!hasPending && !!fileId && processing.isProcessing(fileId) && (
                 <FileProcessingBadge />
               )}
-              {hasPending && <Clock className='h-3 w-3 text-amber-400 shrink-0' />}
-              <p data-file-name className='text-[12px] font-medium text-slate-700 truncate'>
-                {hasPending ? pendingFile!.name : fileDisplayName(file) || fileId}
-              </p>
               {/* Dead link: the row exists but the bytes are gone — stamped by
                   the file-integrity sweep / verify route. */}
               {!hasPending && (health.verdict(fileId) ?? !!file?.missing_at) && (
@@ -522,14 +598,20 @@ export function FilePickerField({
               {hasPending ? (
                 <>
                   {pendingFile!.type && (
-                    <span className='text-[10px] text-slate-400'>{pendingFile!.type}</span>
+                    <span className='text-[10px] text-slate-500 dark:text-slate-400'>
+                      {friendlyFileType(pendingFile!.type, pendingFile!.name)}
+                    </span>
                   )}
                   <span className='text-[10px] text-slate-400'>{fmtSize(pendingFile!.size)}</span>
                   <span className='text-[10px] text-amber-500'>Pending upload</span>
                 </>
               ) : (
                 <>
-                  {file?.type && <span className='text-[10px] text-slate-400'>{file.type}</span>}
+                  {file?.type && (
+                    <span className='text-[10px] text-slate-500 dark:text-slate-400'>
+                      {friendlyFileType(file.type, file.filename_download)}
+                    </span>
+                  )}
                   {file?.filesize != null && (
                     <span className='text-[10px] text-slate-400'>{fmtSize(file.filesize)}</span>
                   )}
@@ -614,7 +696,7 @@ export function FilePickerField({
               type='button'
               disabled={disabled}
               onClick={() => setOpen(true)}
-              className='flex h-9 flex-1 items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 disabled:opacity-40 transition-colors'
+              className='flex h-9 flex-1 items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 dark:border-border dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-200 disabled:opacity-40 transition-colors'
             >
               Select file…
             </button>
@@ -625,7 +707,7 @@ export function FilePickerField({
                 type='button'
                 onClick={() => uploadRef.current?.click()}
                 disabled={uploading}
-                className='flex h-9 items-center gap-1.5 rounded-md border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 disabled:opacity-40 transition-colors'
+                className='flex h-9 items-center gap-1.5 rounded-md border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 dark:border-border dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-200 disabled:opacity-40 transition-colors'
               >
                 {uploading ? (
                   <Loader2 className='h-3.5 w-3.5 animate-spin' />
@@ -857,12 +939,20 @@ export function FileM2MField({
           })
         )
         .then((r) => r.data ?? [])
+      // Keyed lower-case: the link row and the files read may spell a GUID differently,
+      // and a miss showed the row without its name (rt-record r-1116d).
       const map: Record<string, NivaroFile> = {}
-      for (const f of data) map[f.id] = f
+      for (const f of data) map[String(f.id).toLowerCase()] = f
       return map
     },
     enabled: allFileIds.length > 0,
     staleTime: 60_000,
+    // A file linked a moment ago may not read yet: ask again a few times, not for a minute.
+    refetchInterval: (q) => {
+      const m = q.state.data as Record<string, NivaroFile> | undefined
+      if (!m || q.state.dataUpdateCount > 8) return false
+      return allFileIds.some((id) => !m[id.toLowerCase()]) ? 2000 : false
+    },
     // A changed id list keeps the names already known on screen while the new read runs.
     placeholderData: (prev) => prev
   })
@@ -959,7 +1049,7 @@ export function FileM2MField({
       {(allFileIds.length > 0 || pendingFiles.length > 0 || removedRows.length > 0) && (
         <div ref={usageRef} className='flex flex-col gap-1.5'>
           {allFileIds.map((id) => {
-            const f = filesMap[id]
+            const f = filesMap[id.toLowerCase()]
             const fresh = live.fresh.has(id)
             // Someone else's new file waits for its name, then fades in — never a bare id.
             if (fresh && !f) return null
@@ -968,7 +1058,7 @@ export function FileM2MField({
                 key={id}
                 data-file-fresh={fresh ? '' : undefined}
                 className={cn(
-                  'flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50',
+                  'flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50 dark:border-border dark:bg-white/[0.03]',
                   fresh && 'nvr-row-enter'
                 )}
               >
@@ -989,31 +1079,45 @@ export function FileM2MField({
                   />
                 </a>
                 <div className='flex-1 min-w-0'>
-                  {processing.isProcessing(id) && (
-                    <span className='float-right ml-1.5'>
-                      <FileProcessingBadge />
-                    </span>
-                  )}
-                  <a
-                    href={`${getUrl(id)}?download=1`}
-                    download={f?.filename_download || true}
-                    onClick={downloadClick(`${getUrl(id)}?download=1`, f?.filename_download)}
-                    title='Download'
-                    data-file-name
-                    className='block w-full truncate text-left text-[12px] font-medium text-slate-700 hover:underline'
-                  >
-                    {fileDisplayName(f) || id}
-                  </a>
+                  {/* "Processing…" sits right after the name it is about, not at the far edge. */}
+                  <div className='flex min-w-0 items-center gap-1.5'>
+                    <a
+                      href={`${getUrl(id)}?download=1`}
+                      download={f?.filename_download || true}
+                      onClick={downloadClick(`${getUrl(id)}?download=1`, f?.filename_download)}
+                      title='Download'
+                      data-file-name
+                      className='min-w-0 truncate text-left text-[12px] font-medium text-slate-700 hover:underline dark:text-slate-100'
+                    >
+                      {f ? (
+                        fileDisplayName(f) || 'Untitled file'
+                      ) : (
+                        // The name is still loading: never show the raw file id.
+                        <span className='text-slate-400 dark:text-slate-500'>Loading name…</span>
+                      )}
+                    </a>
+                    {processing.isProcessing(id) && <FileProcessingBadge />}
+                  </div>
                   <div className='flex flex-wrap items-center gap-x-2 mt-0.5'>
-                    {f?.type && <span className='text-[10px] text-slate-400'>{f.type}</span>}
+                    {f?.type && (
+                      <span className='text-[10px] text-slate-500 dark:text-slate-400'>
+                        {friendlyFileType(f.type, f.filename_download)}
+                      </span>
+                    )}
                     {f?.filesize != null && (
-                      <span className='text-[10px] text-slate-400'>{fmtSize(f.filesize)}</span>
+                      <span className='text-[10px] text-slate-500 dark:text-slate-400'>
+                        {fmtSize(f.filesize)}
+                      </span>
                     )}
                     {f?.uploaded_on && (
-                      <span className='text-[10px] text-slate-400'>{fmtDate(f.uploaded_on)}</span>
+                      <span className='text-[10px] text-slate-500 dark:text-slate-400'>
+                        {fmtDate(f.uploaded_on)}
+                      </span>
                     )}
                     {f?.uploaded_by_name && (
-                      <span className='text-[10px] text-slate-500'>by {f.uploaded_by_name}</span>
+                      <span className='text-[10px] text-slate-500 dark:text-slate-400'>
+                        by {f.uploaded_by_name}
+                      </span>
                     )}
                   </div>
                 </div>
@@ -1063,6 +1167,9 @@ export function FileM2MField({
               key={`removed-${id}`}
               name={knownNames.current.get(id.toLowerCase()) ?? 'A file'}
               leaving={live.leaving.has(id)}
+              by={lastWriterName(
+                qc.getQueryData(['last-touch', ownerCollection, String(parentId)])
+              )}
             />
           ))}
           {pendingFiles.map((pf) => (
@@ -1079,13 +1186,18 @@ export function FileM2MField({
               <div className='flex-1 min-w-0'>
                 <div className='flex items-center gap-1'>
                   <Clock className='h-3 w-3 text-amber-400 shrink-0' />
-                  <p data-file-name className='text-[12px] font-medium text-slate-700 truncate'>
+                  <p
+                    data-file-name
+                    className='text-[12px] font-medium text-slate-700 truncate dark:text-slate-100'
+                  >
                     {pf.file.name}
                   </p>
                 </div>
                 <div className='flex flex-wrap items-center gap-x-2 mt-0.5'>
                   {pf.file.type && (
-                    <span className='text-[10px] text-slate-400'>{pf.file.type}</span>
+                    <span className='text-[10px] text-slate-500 dark:text-slate-400'>
+                      {friendlyFileType(pf.file.type, pf.file.name)}
+                    </span>
                   )}
                   <span className='text-[10px] text-slate-400'>{fmtSize(pf.file.size)}</span>
                   <span className='text-[10px] text-amber-500'>Pending upload</span>
@@ -1113,7 +1225,7 @@ export function FileM2MField({
               <button
                 type='button'
                 onClick={() => setOpen((v) => !v)}
-                className='flex h-8 items-center gap-1.5 rounded border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors'
+                className='flex h-8 items-center gap-1.5 rounded border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 dark:border-border dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-200 transition-colors'
               >
                 <Plus className='h-3.5 w-3.5' />
                 Add existing…
@@ -1140,7 +1252,7 @@ export function FileM2MField({
                 type='button'
                 onClick={() => uploadRef.current?.click()}
                 disabled={uploading}
-                className='flex h-8 items-center gap-1.5 rounded border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 disabled:opacity-40 transition-colors'
+                className='flex h-8 items-center gap-1.5 rounded border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 dark:border-border dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-200 disabled:opacity-40 transition-colors'
               >
                 {uploading ? (
                   <Loader2 className='h-3.5 w-3.5 animate-spin' />

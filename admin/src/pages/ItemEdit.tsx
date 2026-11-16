@@ -105,6 +105,13 @@ interface AttributeDef {
 
 // ─── AttributeSelect ──────────────────────────────────────────────────────────
 
+/** A 403/404 read: the record is refused or not there (axios error or SDK error). */
+function refusedStatus(err: unknown): boolean {
+  const e = err as { status?: number; response?: { status?: number } } | null
+  const status = e?.response?.status ?? e?.status
+  return status === 403 || status === 404
+}
+
 function AttributeSelect({
   value,
   options,
@@ -267,9 +274,16 @@ function ScheduleChangeDialog({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button size='sm' variant='outline' className={triggerClassName}>
-          <CalendarClock className='mr-1.5 h-3.5 w-3.5' />
-          Schedule
+        <Button
+          size='sm'
+          variant='outline'
+          className={triggerClassName}
+          title='Schedule a field change'
+          aria-label='Schedule a field change'
+        >
+          <CalendarClock className='h-3.5 w-3.5 sm:mr-1.5' />
+          {/* Phone: the icon alone, so the header group fits. */}
+          <span className='hidden sm:inline'>Schedule</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent className='w-80 p-4' align='end'>
@@ -465,11 +479,33 @@ export function ItemEditPage() {
     staleTime: 10 * 60 * 1000
   })
 
-  const { data: itemData } = useQuery({
+  // "Beth editing Description" — the field's label as the form shows it (read from the form's
+  // own field-config cache, never fetched again here), not its key.
+  const editingFieldLabel = (key: string): string => {
+    if (key.startsWith('row:') || key.startsWith('cell:')) return 'a line'
+    for (const [, d] of queryClient.getQueriesData<unknown>({
+      queryKey: ['field-config', collection]
+    })) {
+      if (!Array.isArray(d)) continue
+      const hit = (d as Array<{ field?: string; label?: string | null }>).find(
+        (x) => x?.field === key
+      )
+      if (hit?.label) return hit.label
+    }
+    return titleCase(key.replace(/_/g, ' '))
+  }
+
+  const { data: itemData, error: itemError } = useQuery({
     queryKey: ['item', collection, id],
     queryFn: () => api.get(`/items/${collection}/${id}`).then((r) => r.data.data),
-    enabled: !!collection && !!id && !isNew
+    enabled: !!collection && !!id && !isNew,
+    // A refusal answers the same on every try: say so at once.
+    retry: (n, err) => !refusedStatus(err) && n < 2
   })
+  // rt4 review: the record answered 403/404 — its tools (Hide from pickers, Schedule, History,
+  // Share) cannot work and hint at a record this person may not see; the header keeps only
+  // its title while the access card explains.
+  const recordRefused = !isNew && !itemData && refusedStatus(itemError)
 
   // #1835 — Ask AI on this page means this record (ids only; the server
   // reads it again as the asker). The label is for the chip.
@@ -721,6 +757,8 @@ export function ItemEditPage() {
     values: Record<string, unknown>
     links: Record<string, unknown[]>
     rows: Record<string, Array<Record<string, unknown>>>
+    /** The record it was duplicated from, for the "Copied from" line. */
+    source?: { id: string; label: string }
   } | null>(() => {
     const key = searchParams.get('dupe')
     if (!key) return null
@@ -849,12 +887,13 @@ export function ItemEditPage() {
             )}
             <div className='flex flex-1 min-h-0 flex-col'>
               {/* Admin sticky header */}
-              <div className='sticky top-0 z-20 shrink-0 border-b border-slate-200 bg-white px-8 py-4 dark:border-border dark:bg-background'>
-                <div className='flex items-center gap-4'>
+              <div className='sticky top-0 z-20 shrink-0 border-b border-slate-200 bg-white px-8 py-4 max-sm:px-4 dark:border-border dark:bg-background'>
+                {/* A phone wraps the tool group onto its own row instead of clipping it. */}
+                <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
                   <Button variant='ghost' size='icon' onClick={goBack}>
                     <ArrowLeft className='h-4 w-4' />
                   </Button>
-                  <div className='flex-1'>
+                  <div className='min-w-0 flex-1'>
                     <div className='flex items-center gap-2'>
                       <h1 className='text-[18px] font-semibold text-slate-900 dark:text-slate-100'>
                         {displayName}
@@ -879,8 +918,24 @@ export function ItemEditPage() {
                         })()}
                       <span className='text-[12px] text-slate-400 font-mono'>{collection}</span>
                     </div>
-                    {!(ancestors && ancestors.length > 1) && (
-                      <PageTrail currentLabel={trailLabel} showCurrent={false} className='mt-1' />
+                    {isNew && dupePayload?.source ? (
+                      // A duplicate names where it came from (review r-1116b), not a bare id.
+                      <p
+                        className='mt-1 text-[12px] text-slate-500 dark:text-slate-400'
+                        data-copied-from
+                      >
+                        Copied from{' '}
+                        <Link
+                          to={`/collections/${collection}/${dupePayload.source.id}`}
+                          className='font-medium text-nvr-cyan hover:underline'
+                        >
+                          {dupePayload.source.label}
+                        </Link>
+                      </p>
+                    ) : (
+                      !(ancestors && ancestors.length > 1) && (
+                        <PageTrail currentLabel={trailLabel} showCurrent={false} className='mt-1' />
+                      )
                     )}
                     {ancestors && ancestors.length > 1 && (
                       <nav className='flex items-center gap-1 text-[12px] text-slate-400 mt-1 flex-wrap'>
@@ -1086,22 +1141,33 @@ export function ItemEditPage() {
                   {/* Header widgets render in ItemEditForm's own header strip — not here. */}
 
                   {/* Admin tool buttons */}
-                  <div className='flex overflow-hidden rounded-md'>
+                  <div
+                    className={cn(
+                      'flex overflow-hidden rounded-md max-sm:basis-full max-sm:flex-wrap max-sm:gap-y-2 max-sm:overflow-visible',
+                      recordRefused && 'hidden'
+                    )}
+                  >
                     {id && !isNew && canDisablePickers && (
                       <button
                         type='button'
                         onClick={() => toggleExclusion.mutate()}
                         disabled={toggleExclusion.isPending}
                         title={isExcluded ? 'Show in pickers' : 'Hide from pickers'}
+                        aria-label={
+                          isExcluded ? 'Hidden from pickers — show in pickers' : 'Hide from pickers'
+                        }
                         className={cn(
-                          'inline-flex items-center gap-1.5 rounded-none border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+                          'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-none border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                           isExcluded
                             ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800'
                             : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'
                         )}
                       >
                         <EyeOff className='h-3.5 w-3.5' />
-                        {isExcluded ? 'Hidden from pickers' : 'Hide from pickers'}
+                        {/* Phone: the icon alone (named by aria-label) so the group never clips. */}
+                        <span className='hidden sm:inline'>
+                          {isExcluded ? 'Hidden from pickers' : 'Hide from pickers'}
+                        </span>
                       </button>
                     )}
                     {id && !isNew && canSchedule && (
@@ -1132,13 +1198,17 @@ export function ItemEditPage() {
                     )}
                     {presence.viewers.length > 0 && (
                       <div
-                        className='ml-2 flex items-center'
+                        // mr-2: "viewing now" never runs into the button after it (the AI button).
+                        className='mx-2 flex shrink-0 items-center'
                         title={presence.viewers.map((v) => v.name).join(', ')}
                       >
                         {presence.viewers.slice(0, 4).map((v, i) => (
                           <span
                             key={v.id}
-                            className='-ml-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-nvr-navy text-[9px] font-bold text-nvr-cyan first:ml-0 dark:border-card'
+                            // The shared avatar pair (UserAvatar): a light disc in light, a visible
+                            // mid-slate disc in dark — navy-on-white read as a dark-mode token,
+                            // and in dark the navy disc vanished into the page.
+                            className='-ml-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-[#cbd5e1] text-[9px] font-bold text-[#334155] first:ml-0 dark:border-card dark:bg-[#475569] dark:text-[#f1f5f9]'
                             style={{ zIndex: 10 - i }}
                           >
                             {v.name
@@ -1150,11 +1220,11 @@ export function ItemEditPage() {
                           </span>
                         ))}
                         {presence.viewers.length > 4 && (
-                          <span className='-ml-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-slate-200 text-[9px] font-semibold text-slate-600 dark:border-card'>
+                          <span className='-ml-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-slate-100 text-[9px] font-semibold text-slate-600 dark:border-card dark:bg-muted dark:text-slate-300'>
                             +{presence.viewers.length - 4}
                           </span>
                         )}
-                        <span className='ml-2 hidden text-[11px] text-slate-400 lg:inline'>
+                        <span className='ml-2 hidden text-[11px] text-slate-500 lg:inline dark:text-slate-400'>
                           viewing now
                         </span>
                       </div>
@@ -1182,7 +1252,7 @@ export function ItemEditPage() {
                                 className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
                               >
                                 <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400' />
-                                {v.name} editing {field.replace(/_/g, ' ')}
+                                {v.name} editing {editingFieldLabel(field)}
                               </span>
                             )
                           )}
@@ -1194,7 +1264,14 @@ export function ItemEditPage() {
                         size='sm'
                         onClick={handleSummarize}
                         disabled={summarizing}
-                        className='rounded-none -ml-px first:ml-0'
+                        // After the presence strip it stands apart (its own corners); straight
+                        // after the tool buttons it joins their group as before.
+                        className={
+                          presence.viewers.length > 0 || Object.keys(presence.editing).length > 0
+                            ? 'ml-2'
+                            : 'rounded-none -ml-px first:ml-0'
+                        }
+                        aria-label='Summarize this record with AI'
                       >
                         {summarizing ? (
                           <Loader2 className='h-3.5 w-3.5 animate-spin' />
@@ -1231,7 +1308,7 @@ export function ItemEditPage() {
                       onClick={() => setEditingLayoutId(formView.summaryLayoutId)}
                     >
                       <LayoutTemplate className='h-3.5 w-3.5' />
-                      Edit summary
+                      Edit summary layout
                     </Button>
                   ) : editableLayoutId != null ? (
                     <Button
@@ -1316,7 +1393,17 @@ export function ItemEditPage() {
                     : (payload) => {
                         const key = `nvr-dupe-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
                         try {
-                          sessionStorage.setItem(key, JSON.stringify(payload))
+                          const label =
+                            friendlyIdOf(
+                              colMeta,
+                              itemData as Record<string, unknown> | undefined
+                            ) ??
+                            trailLabel ??
+                            `#${id}`
+                          sessionStorage.setItem(
+                            key,
+                            JSON.stringify({ ...payload, source: { id: String(id), label } })
+                          )
                         } catch {
                           /* storage full — the new page just opens blank */
                         }

@@ -201,8 +201,8 @@ function PlanCard({
       </div>
       <div className='text-[11px] text-muted-foreground space-y-0.5 mb-4'>
         <div>{formatLargeNumber(plan.recordLimit)} records</div>
-        <div>{plan.storageGb} GB storage</div>
-        <div>{plan.maxUsers === 0 ? 'Unlimited' : plan.maxUsers} users</div>
+        <div>{plan.storageGb.toLocaleString('en-US')} GB storage</div>
+        <div>{plan.maxUsers === 0 ? 'Unlimited' : plan.maxUsers.toLocaleString('en-US')} users</div>
       </div>
       {isCurrent ? (
         <Button variant='outline' size='sm' className='w-full h-7 text-[12px]' onClick={onManage} disabled={isLoading}>
@@ -382,6 +382,14 @@ export function AccountPage() {
   const invoices = (invoicesQuery.data ?? []) as CloudInvoice[]
   const plans = (plansQuery.data ?? []) as CloudPlan[]
 
+  // The plan's display name ("Team"), never its key ("team").
+  const planName =
+    plans.find((p) => p.planKey === info.plan)?.name ??
+    (info.plan ? info.plan.charAt(0).toUpperCase() + info.plan.slice(1) : '')
+  // A hosting layer's live meter (account-usage slot) is the one usage figure on the page: the
+  // summary card's nightly snapshot would disagree with it, so it steps aside.
+  const liveUsage = usagePanels.length > 0
+
   const topUsagePct = usage
     ? Math.max(
         usagePct(usage.records.used, usage.records.limit),
@@ -420,7 +428,9 @@ export function AccountPage() {
         <div className='max-w-5xl mx-auto px-6 py-6 space-y-6'>
 
           {/* Top stat row */}
-          <div className='grid grid-cols-1 sm:grid-cols-3 gap-4'>
+          <div
+            className={cn('grid grid-cols-1 gap-4', liveUsage ? 'sm:grid-cols-2' : 'sm:grid-cols-3')}
+          >
             {/* Current plan */}
             <Card className='border-border'>
               <CardHeader className='pb-2 pt-4 px-4'>
@@ -431,7 +441,7 @@ export function AccountPage() {
               <CardContent className='px-4 pb-4 space-y-2'>
                 <div className='flex items-center gap-2'>
                   <span className='text-lg font-semibold text-slate-900 dark:text-foreground'>
-                    {info.plan}
+                    {planName}
                   </span>
                   <PlanStatusBadge status={info.status} />
                 </div>
@@ -450,6 +460,7 @@ export function AccountPage() {
             </Card>
 
             {/* Usage summary */}
+            {!liveUsage && (
             <Card className='border-border'>
               <CardHeader className='pb-2 pt-4 px-4'>
                 <CardTitle className='text-[11px] font-medium tracking-wide text-muted-foreground uppercase'>
@@ -487,6 +498,7 @@ export function AccountPage() {
                 )}
               </CardContent>
             </Card>
+            )}
 
             {/* Next invoice */}
             <Card className='border-border'>
@@ -576,7 +588,8 @@ export function AccountPage() {
 
           {/* Available plans */}
           {(plans.length > 0 || plansQuery.isLoading) && (
-            <div>
+            // `#account-plans`: a hosting layer's usage meter scrolls here from "Upgrade plan".
+            <div id='account-plans' className='scroll-mt-4'>
               <h2 className='text-sm font-semibold text-slate-900 dark:text-foreground mb-3'>
                 Available plans
               </h2>

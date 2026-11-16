@@ -46,6 +46,10 @@ export interface PageModel {
     hidden: number
     links: number
     chip: Partial<Record<ChipKey, number>>
+    /** Which collections are link tables is not known yet (stats loading, failed, or not an
+     *  admin): `hidden` / `links` then are no counts to show — a link table would otherwise be
+     *  counted as hidden (rt-admin review: "Hidden 73" for 7). */
+    pending: boolean
   }
   /** Rows a filter would match but that are folded away — hidden (never a link table) / link
    *  tables (hidden flag or not) — for empty-search help. */
@@ -102,7 +106,9 @@ export function buildPageModel(
   stats: OverviewStats | undefined,
   state: PageState,
   filter: string,
-  usage: { counts: Record<string, number> }
+  usage: { counts: Record<string, number> },
+  /** Link-table facts have arrived (admin stats). Off: hidden / link numbers are held back. */
+  linksKnown = !!stats
 ): PageModel {
   const folderNames = new Set(rows.map((c) => c.group).filter((g): g is string => !!g))
   const folderRows = new Map(
@@ -130,13 +136,21 @@ export function buildPageModel(
   // hidden collections that are not link tables. Each has its own switch.
   const isHidden = (c: Collection) => !!c.hidden && !isLink(c)
 
+  const pending = !linksKnown
   const counts = {
     total: real.length,
     hidden: real.filter(isHidden).length,
     links: real.filter(isLink).length,
     chip: Object.fromEntries(
-      CHIPS.map((k) => [k, real.filter((c) => matchesChip(c, k, stat(c))).length])
-    ) as Partial<Record<ChipKey, number>>
+      CHIPS.map((k) => [
+        k,
+        // Unknown link facts: no Hidden / Link table chip numbers (they would be wrong).
+        pending && (k === 'hidden' || k === 'link')
+          ? 0
+          : real.filter((c) => matchesChip(c, k, stat(c))).length
+      ])
+    ) as Partial<Record<ChipKey, number>>,
+    pending
   }
 
   const passesChips = (c: Collection) => state.chips.every((k) => matchesChip(c, k, stat(c)))
@@ -165,6 +179,8 @@ export function buildPageModel(
     }))
     // A folder whose collections are all hidden still shows (with "N hidden") until you narrow.
     .filter((s) => s.cols.length > 0 || (!narrowing && s.hiddenCount > 0))
+    // …but says no number while link tables cannot be told apart from hidden ones.
+    .map((s) => (pending ? { ...s, hiddenCount: 0 } : s))
   const loose = visible.filter((c) => !c.group || !folderNames.has(c.group)).sort(byLabel)
 
   let flat: Collection[] = []

@@ -117,6 +117,41 @@ describe('value equality', () => {
     expect(sameValue('a', 'b')).toBe(false)
     expect(sameValue(5, 6)).toBe(false)
   })
+  it('a legacy rich-text document and the HTML it was converted to are the same words', () => {
+    const doc = { time: 1, blocks: [{ type: 'paragraph', data: { text: 'C2085.024' } }] }
+    expect(sameValue(doc, '<p>C2085.024</p>')).toBe(true)
+    expect(sameValue(JSON.stringify(doc), '<p>C2085.024</p>')).toBe(true)
+    expect(sameValue('<p>C2085.024</p>', doc)).toBe(true)
+    expect(sameValue({ blocks: [{ data: { text: '' } }] }, '<p></p>')).toBe(true)
+  })
+  it('a text change in rich text is a change', () => {
+    const doc = { time: 1, blocks: [{ type: 'paragraph', data: { text: 'C2085.024' } }] }
+    expect(sameValue(doc, '<p>C2085.025</p>')).toBe(false)
+    expect(sameValue('<p>Ship Monday</p>', '<p>Ship Friday</p>')).toBe(false)
+  })
+  it('two HTML values compare as markup: a changed link or image source is a change', () => {
+    expect(
+      sameValue(
+        '<p><a href="https://a.example/q1">Quote</a></p>',
+        '<p><a href="https://b.example/q1">Quote</a></p>'
+      )
+    ).toBe(false)
+    expect(sameValue('<p><img src="/api/files/1"></p>', '<p><img src="/api/files/2"></p>')).toBe(
+      false
+    )
+    // Whitespace between and inside tags is spelling only.
+    expect(sameValue('<p>A  B</p>\n<p>C</p>', '<p>A B</p><p>C</p>')).toBe(true)
+    // Escaped text is not the markup it spells.
+    expect(sameValue('<p>&lt;b&gt;x&lt;/b&gt;</p>', '<p><b>x</b></p>')).toBe(false)
+    expect(sameValue('<p><a href="x&quot;y">q</a></p>', "<p><a href='x\"y'>q</a></p>")).toBe(false)
+  })
+  it('two documents compare as their blocks (the save stamp is not content)', () => {
+    const one = { time: 1, blocks: [{ type: 'paragraph', data: { text: 'x' } }] }
+    expect(sameValue(one, { ...one, time: 2 })).toBe(true)
+    expect(sameValue(one, { time: 1, blocks: [{ type: 'paragraph', data: { text: 'y' } }] })).toBe(
+      false
+    )
+  })
 })
 
 describe('diff since approval', () => {

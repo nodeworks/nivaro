@@ -1,13 +1,13 @@
-import { LIVE_MODE_LABELS, LIVE_MODES, parseLiveMode, toastError } from '@nivaro/shared'
+import {
+  LIVE_MODE_HINTS,
+  LIVE_MODE_LABELS,
+  LIVE_MODES,
+  parseLiveMode,
+  toastError
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-
-const HINTS = {
-  normal: 'Changes appear as they happen, with a short fade.',
-  calm: 'Changes appear without fades or marks; lists keep their order until people pause.',
-  off: 'Nothing updates by itself — people press ↻ to see the latest.'
-} as const
 
 /**
  * Realtime round 3 #24 — the role's Live updates default: what people with this role get until
@@ -41,12 +41,12 @@ export function RoleLiveDefault({ roleId }: { roleId: string }) {
         <p className='text-[13px] font-medium text-slate-800 dark:text-slate-100'>Live updates</p>
         <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
           The default for this role. People can choose their own in Profile → Display.{' '}
-          {HINTS[shown ?? 'normal']}
+          {LIVE_MODE_HINTS[shown ?? 'normal']}
         </p>
       </div>
       <fieldset
         aria-label='Live updates default'
-        className='m-0 inline-flex shrink-0 rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted/40'
+        className='m-0 inline-flex shrink-0 rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-white/[0.03]'
       >
         {LIVE_MODES.map((m) => {
           const on = shown === m
@@ -63,7 +63,7 @@ export function RoleLiveDefault({ roleId }: { roleId: string }) {
               className={cn(
                 'h-7 rounded px-3 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
                 on
-                  ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
+                  ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200 dark:bg-white/[0.14] dark:text-white dark:ring-white/15'
                   : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
               )}
             >

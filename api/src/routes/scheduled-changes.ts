@@ -8,12 +8,11 @@ import { canUpdateItem, describeWriteRefusal, readOne, updateOne } from '../serv
 import { can, getAllowedFields, isAdminRole } from '../services/permissions.js'
 import { announceRecordAspect } from '../services/record-events.js'
 import { recordToolRefusal } from '../services/record-tool-gate.js'
-import { seesAllRecords } from '../services/user-scopes.js'
 import {
   applyClaimed,
   autoApplyOn,
-  claimChange,
   type ChangeRow,
+  claimChange,
   defaultApplyDeps,
   encodeMeta,
   readMeta,
@@ -21,6 +20,7 @@ import {
   SCHEDULE_META_COLUMN,
   sameValue
 } from '../services/scheduled-apply.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 import type { User } from '../types.js'
 
 /**
@@ -439,7 +439,8 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
     return reply.code(204).send()
   })
 
-  // PATCH /scheduled-changes/:id — move a pending change to another time (rt7 #12). The same
+  // PATCH /scheduled-changes/:id — move a pending change to another time (rt7 #12), or
+  // reschedule one that failed. The same
   // gate as cancelling it: its scheduler while they can still see and update the record, or an
   // administrator. Only `scheduled_at` moves; what the change writes stays as scheduled.
   app.patch('/:id', { preHandler: authenticate }, async (req, reply) => {
@@ -464,18 +465,29 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       String(existing.item_id)
     )
     if (moveRefusal) return reply.code(moveRefusal.status).send({ error: moveRefusal.error })
-    if (existing.status !== 'pending') {
+    // A change that failed may be scheduled again for a new time ("Reschedule" in the record
+    // header): it goes back to waiting with what it writes unchanged — the full stored change,
+    // never a copy cut to the fields the caller can read.
+    const rescheduling = existing.status === 'failed'
+    if (existing.status !== 'pending' && !rescheduling) {
       return reply.code(409).send({ error: `Change is already ${existing.status}` })
     }
+    if (rescheduling && at.getTime() <= Date.now()) {
+      return reply.code(400).send({ error: 'Pick a time in the future' })
+    }
     await db('nivaro_scheduled_changes')
-      .where({ id, status: 'pending' })
-      .update({ scheduled_at: at })
+      .where({ id, status: existing.status })
+      .update(
+        rescheduling
+          ? { scheduled_at: at, status: 'pending', executed_at: null, error_message: null }
+          : { scheduled_at: at }
+      )
     await logActivity({
       action: 'schedule-change-move',
       user: req.user?.id,
       collection: existing.collection,
       item: existing.item_id,
-      comment: `${existing.change_type} moved to ${at.toISOString()}`,
+      comment: `${existing.change_type} ${rescheduling ? 'rescheduled after it failed' : 'moved'} to ${at.toISOString()}`,
       req
     })
     announceScheduled(existing.collection, existing.item_id)

@@ -47,7 +47,15 @@ export function LiveRowMark({
       {gone ? (
         <EyeOff className='h-3 w-3 text-slate-700 dark:text-slate-100' aria-label={tip} />
       ) : moving ? (
-        <ArrowDownUp className='h-3 w-3 text-[#0089ad] dark:text-nvr-cyan' aria-label={tip} />
+        // A filled disc, not a bare 10 px glyph: the row is held on purpose while the group
+        // counts above it already moved (rt9 review: it read as a count bug).
+        <span
+          role='img'
+          aria-label={tip}
+          className='inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#0089ad] text-white dark:bg-nvr-cyan dark:text-[#04222c]'
+        >
+          <ArrowDownUp className='h-2.5 w-2.5' aria-hidden />
+        </span>
       ) : lock ? (
         <Lock
           className={`h-3 w-3 ${lock.is_mine ? 'text-slate-400' : 'text-amber-500'}`}
@@ -56,6 +64,24 @@ export function LiveRowMark({
       ) : (
         <span className='h-1.5 w-1.5 rounded-full bg-nvr-cyan' role='img' aria-label='New' />
       )}
+    </span>
+  )
+}
+
+/**
+ * The words for a held grouped row: "Moving to Finance". Hosts put it beside the row's title
+ * while the list holds still (lib/live-groups.ts), so a group count that disagrees with the
+ * rows drawn under it reads as intended. Light + dark.
+ */
+export function MovingRowChip({ to, className }: { to: string; className?: string }) {
+  return (
+    <span
+      data-moving-chip
+      data-tip={movingRowTitle(to)}
+      className={`nvr-fade-in inline-flex h-[18px] max-w-[11rem] shrink-0 items-center gap-1 rounded-full bg-[#e6f8fd] px-1.5 text-[10.5px] font-medium text-[#006d8a] ring-1 ring-inset ring-[#0089ad]/25 dark:bg-[#0c2a33] dark:text-nvr-cyan dark:ring-nvr-cyan/30 ${className ?? ''}`}
+    >
+      <ArrowDownUp className='h-2.5 w-2.5 shrink-0' aria-hidden />
+      <span className='truncate'>Moving to {to}</span>
     </span>
   )
 }

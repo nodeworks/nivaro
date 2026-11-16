@@ -41,6 +41,14 @@ function when(iso: string | null | undefined): string {
   })
 }
 
+/** The work box's selects: the value in body text (never the label's grey), the card's fill in
+ *  dark, the value left-aligned and truncated with a full-size caret at every width. */
+const CONTROL =
+  'mt-1 h-9 w-full min-w-0 gap-2 rounded-md border-slate-200 bg-white px-3 text-[13px] font-normal text-slate-900 dark:border-border dark:bg-card dark:text-slate-100 [&>span]:min-w-0 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left [&>svg]:h-4 [&>svg]:w-4 [&>svg]:shrink-0'
+/** The Assignee picker sized and filled like CONTROL. */
+const PICKER_CONTROL =
+  'mt-1 font-normal [&>div>button]:h-9 [&>div>button]:border-slate-200 [&>div>button]:bg-white [&>div>button]:text-[13px] [&>div>button]:text-slate-900 dark:[&>div>button]:border-border dark:[&>div>button]:bg-card dark:[&>div>button]:text-slate-100'
+
 export function StatusPill({ status, label }: { status: TicketStatus; label?: string }) {
   return (
     <span
@@ -147,8 +155,14 @@ export function TicketDetailSheet({
       <SheetContent
         side='right'
         ref={fadeRef}
-        className={`flex max-w-[96vw] flex-col gap-0 p-0 transition-[width] duration-300 ease-out dark:bg-card ${wide ? 'w-[min(1280px,96vw)] sm:max-w-[min(1280px,96vw)]' : 'w-[560px] sm:max-w-[560px]'}`}
+        className={`flex max-w-[96vw] flex-col gap-0 p-0 outline-none focus:outline-none transition-[width] duration-300 ease-out dark:bg-card ${wide ? 'w-[min(1280px,96vw)] sm:max-w-[min(1280px,96vw)]' : 'w-[560px] sm:max-w-[560px]'}`}
         data-support-ticket={ticketId ?? ''}
+        // Opening focuses the sheet itself, not its close button: the button's ring is for
+        // keyboard focus only (a Tab reaches it), never a mouse-opened sheet's first paint.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          ;(e.currentTarget as HTMLElement | null)?.focus({ preventScroll: true })
+        }}
       >
         {!validId || isError ? (
           <div className='flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center'>
@@ -172,8 +186,8 @@ export function TicketDetailSheet({
                 <span className='font-mono text-[11.5px] text-slate-400'>#{t.id}</span>
                 <StatusPill status={t.status} label={t.status_label} />
                 {t.priority === 'urgent' && (
-                  <span className='rounded bg-red-500/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'>
-                    urgent
+                  <span className='rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-600 dark:text-red-400'>
+                    Urgent
                   </span>
                 )}
               </div>
@@ -220,7 +234,7 @@ export function TicketDetailSheet({
               {t.can.work && (
                 <div
                   data-ticket-controls
-                  className='grid grid-cols-2 gap-x-3 gap-y-3.5 rounded-lg border border-slate-200/80 bg-slate-50/70 p-4 dark:border-border dark:bg-white/[0.03]'
+                  className='grid grid-cols-2 gap-x-3 gap-y-3.5 rounded-lg border border-slate-200/80 bg-slate-50/70 p-4 dark:border-border dark:bg-white/[0.04]'
                 >
                   <div className='col-span-2 flex items-center gap-2'>
                     <span className='mr-auto text-[12.5px] text-slate-600 dark:text-slate-300'>
@@ -266,7 +280,7 @@ export function TicketDetailSheet({
                       onChange={(v) => update.mutate({ status: v })}
                       options={STATUS_OPTIONS}
                       ariaLabel='Status'
-                      className='mt-1'
+                      className={CONTROL}
                     />
                   </div>
                   <div className='block text-[11.5px] font-medium text-slate-500 dark:text-slate-400'>
@@ -279,12 +293,12 @@ export function TicketDetailSheet({
                         ...categories.map((c) => ({ value: String(c.id), label: c.name }))
                       ]}
                       ariaLabel='Type'
-                      className='mt-1'
+                      className={CONTROL}
                     />
                   </div>
                   <div className='col-span-2 text-[11.5px] font-medium text-slate-500 dark:text-slate-400'>
                     Assignee
-                    <div className='mt-1'>
+                    <div className={PICKER_CONTROL}>
                       <RelationCombobox
                         collection='nivaro_users'
                         value={t.assignee}
@@ -496,23 +510,31 @@ export function TicketDetailSheet({
                   </p>
                 ) : (
                   <ol className='space-y-2 border-l border-slate-200 pl-3.5 dark:border-border'>
-                    {foldShareHistory(t.history).map((h) => {
-                      // Worded for this reader: the requester reads "… looked at your …".
-                      const line = historyLine(h, {
-                        isRequester: !t.can.work,
-                        requesterName: t.requester_name
-                      })
-                      return (
-                        <li key={h.id} className='text-[12px] text-slate-600 dark:text-slate-300'>
-                          <span className='text-slate-800 dark:text-slate-100'>{line.text}</span>
-                          <span className='text-slate-500 dark:text-slate-400'>
-                            {' '}
-                            · {line.showAuthor ? `${h.user_name ?? 'System'} · ` : ''}
-                            {when(h.at)}
-                          </span>
-                        </li>
-                      )
-                    })}
+                    {/* Newest first: a share that is running now is the first line. */}
+                    {foldShareHistory(t.history, { requester: t.created_by })
+                      .reverse()
+                      .map((h) => {
+                        // Worded for this reader: the requester reads "… looked at your …"
+                        // (an administrator who raised the request is still its requester).
+                        const line = historyLine(h, {
+                          isRequester: t.can.requester ?? !t.can.work,
+                          requesterName: t.requester_name
+                        })
+                        return (
+                          <li key={h.id} className='text-[12px] text-slate-600 dark:text-slate-300'>
+                            <span className='text-slate-800 dark:text-slate-100'>{line.text}</span>
+                            <span className='text-slate-500 dark:text-slate-400'>
+                              {' '}
+                              {/* Name and time wrap as one piece: a line breaks before them,
+                                  never inside a name ("Sam / Rivera") or a time ("1:29 / AM"). */}
+                              <span className='whitespace-nowrap'>
+                                · {line.showAuthor ? `${h.user_name ?? 'System'} · ` : ''}
+                                {when(h.at)}
+                              </span>
+                            </span>
+                          </li>
+                        )
+                      })}
                   </ol>
                 )}
               </section>

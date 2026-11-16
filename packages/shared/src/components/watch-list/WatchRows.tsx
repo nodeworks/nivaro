@@ -77,10 +77,12 @@ export function OwnerStack({
         <span
           key={o.id}
           aria-hidden
-          className={`relative inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-200 text-[8.5px] font-semibold text-slate-600 ring-2 ring-card dark:bg-slate-700 dark:text-slate-200 ${
+          className={`relative inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#e2e8f0] text-[8.5px] font-semibold text-[#334155] ring-2 ring-card dark:bg-[#334155] dark:text-[#e2e8f0] ${
             i > 0 ? '-ml-1' : ''
           } ${o.inactive ? 'opacity-50 grayscale' : ''}`}
-          style={{ zIndex: shown.length - i }}
+          // Later avatars sit on top: the ring cuts a clean edge into the one
+          // before, so an initials disc never loses its first letter under a photo.
+          style={{ zIndex: i + 1 }}
         >
           <UserAvatar
             userId={o.id}
@@ -94,6 +96,7 @@ export function OwnerStack({
         <span
           aria-hidden
           className='relative -ml-1 inline-flex h-[18px] min-w-[22px] shrink-0 items-center justify-center rounded-full bg-slate-100 px-1 text-[9px] font-semibold tabular-nums text-slate-600 ring-2 ring-card dark:bg-slate-800 dark:text-slate-300'
+          style={{ zIndex: shown.length + 1 }}
         >
           +{extra}
         </span>
@@ -222,6 +225,7 @@ export function WatchRow({
   onUnpin,
   onSeen,
   rowActions,
+  rowMark,
   unpinLabel = 'Unpin',
   canRemove = true
 }: {
@@ -232,6 +236,8 @@ export function WatchRow({
   onSeen: (key: string) => void
   /** Extra buttons beside the unpin cross (the alert bell). */
   rowActions?: (row: WatchRowData) => ReactNode
+  /** A quiet mark that stays on the title line (the row has alerts). */
+  rowMark?: (row: WatchRowData) => ReactNode
   /** What the cross says: "Unpin", "Remove from this list". */
   unpinLabel?: string
   /** False = read-only (a shared list whose maker is gone): no cross. */
@@ -264,7 +270,7 @@ export function WatchRow({
             <button
               type='button'
               onClick={() => onUnpin(row)}
-              className='shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[11.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-white/[0.12] dark:text-slate-200 dark:hover:bg-white/[0.05]'
+              className='shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[11.5px] font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-border dark:text-slate-200 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
             >
               Remove
             </button>
@@ -280,11 +286,16 @@ export function WatchRow({
     open({ collection: row.collection, itemId: row.id, title }, e, { list })
   }
   const change = row.change
-  const changeWords = change
-    ? [change.text, change.by && !change.by.self ? change.by.name : change.by ? 'You' : '']
-        .filter(Boolean)
-        .join(' · ')
-    : null
+  // What changed truncates; who did it and when stay whole (rt6 review: the actor was cut down
+  // to a bare "…").
+  const changeText = change?.text ?? null
+  const changeBy = change?.by ? (change.by.self ? 'You' : change.by.name) : null
+  const changeWords = changeText || changeBy ? true : null
+  // The hover actions (bell, ×) overlay the title line's right end, so the row's figures run
+  // to the same right edge as its other lines and the header's icons (rt6 review: a 75–130 px
+  // dead strip). The amount fades out while they show; the title makes room for them.
+  const hasActions = !!rowActions || canRemove
+  const mark = rowMark?.(row)
   return (
     <RowShell sortable={sortable} id={row.key}>
       {(handle, style, ref) => (
@@ -302,7 +313,8 @@ export function WatchRow({
           <RecordHoverCard
             collection={row.collection}
             id={row.id}
-            side='bottom'
+            // Beside the dock, never over the next row.
+            side='left'
             block
             delayMs={800}
           >
@@ -320,16 +332,35 @@ export function WatchRow({
                   open({ collection: row.collection, itemId: row.id, title }, null, { list })
                 }
               }}
-              className={`block cursor-pointer py-2.5 pl-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan/60 ${
-                rowActions ? 'pr-14' : 'pr-8'
-              }`}
+              className='block cursor-pointer py-2.5 pl-4 pr-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan/60'
             >
-              <div className='flex items-baseline gap-2'>
+              <div
+                className={`flex items-baseline gap-2 ${
+                  hasActions
+                    ? rowActions
+                      ? 'group-focus-within/row:pr-12 group-hover/row:pr-12 group-has-[[data-state=open]]/row:pr-12'
+                      : 'group-focus-within/row:pr-6 group-hover/row:pr-6'
+                    : ''
+                }`}
+              >
                 <span className='min-w-0 flex-1 truncate text-[12.5px] font-medium text-slate-800 dark:text-slate-100'>
                   {title}
                 </span>
+                {mark && (
+                  // Stays on hover ("For you" must survive it, rt6 round 2); a host part that
+                  // should give way to the hover bell hides itself.
+                  <span data-no-hovercard className='flex shrink-0 self-center'>
+                    {mark}
+                  </span>
+                )}
                 {figure && (
-                  <span className='shrink-0 text-[12px] font-medium tabular-nums text-slate-700 dark:text-slate-200'>
+                  <span
+                    className={`shrink-0 text-[12px] font-medium tabular-nums text-slate-700 dark:text-slate-200 ${
+                      hasActions
+                        ? 'group-focus-within/row:hidden group-hover/row:hidden group-has-[[data-state=open]]/row:hidden'
+                        : ''
+                    }`}
+                  >
                     {cardAmountText(figure)}
                   </span>
                 )}
@@ -359,13 +390,24 @@ export function WatchRow({
                       }`}
                     >
                       {changed && (
+                        // A ring, not a dot: step chips carry filled dots in the step's colour,
+                        // and in a theme whose accent is amber the two read as one (rt6 review).
                         <span
                           aria-hidden
-                          className='h-1.5 w-1.5 shrink-0 rounded-full bg-nvr-cyan'
+                          className='h-[7px] w-[7px] shrink-0 rounded-full border-[1.5px] border-nvr-cyan'
                         />
                       )}
                       <span className='flex min-w-0'>
-                        <span className='truncate'>{changeWords}</span>
+                        {changeText && <span className='min-w-0 truncate'>{changeText}</span>}
+                        {changeBy && changeText && (
+                          // Its own span: a truncating name can never swallow the joiner's space.
+                          <span aria-hidden className='shrink-0 whitespace-pre'>
+                            {' · '}
+                          </span>
+                        )}
+                        {changeBy && (
+                          <span className='min-w-0 max-w-[60%] shrink-0 truncate'>{changeBy}</span>
+                        )}
                         <span className='shrink-0 whitespace-pre tabular-nums text-slate-500 dark:text-slate-400'>
                           {' · '}
                           {agoText(change?.at)}
@@ -410,6 +452,7 @@ export function WatchRowList({
   onUnpin,
   onSeen,
   rowActions,
+  rowMark,
   unpinLabel,
   canRemove,
   label = 'Watched records'
@@ -420,6 +463,7 @@ export function WatchRowList({
   onUnpin: (row: WatchRowData) => void
   onSeen: (key: string) => void
   rowActions?: (row: WatchRowData) => ReactNode
+  rowMark?: (row: WatchRowData) => ReactNode
   unpinLabel?: string
   canRemove?: boolean
   label?: string
@@ -454,6 +498,7 @@ export function WatchRowList({
               onUnpin={onUnpin}
               onSeen={onSeen}
               rowActions={rowActions}
+              rowMark={rowMark}
               unpinLabel={unpinLabel}
               canRemove={canRemove}
             />

@@ -88,17 +88,21 @@ export function SectionPresence({
     >
       <span className='flex items-center pl-1' aria-hidden>
         {shown.map((p, i) => (
-          // The first face sits on top; the next tucks behind it, initials still readable.
+          // Each later face sits ON TOP of the one before, overlapping only 4 px of its 20 —
+          // the 2 px surface-coloured ring cuts it out, so every pair of initials stays whole.
           <span
             key={p.id}
-            className={i > 0 ? '-ml-1.5 flex' : 'flex'}
-            style={{ zIndex: shown.length - i, position: 'relative' }}
+            className={i > 0 ? '-ml-1 flex' : 'flex'}
+            style={{ zIndex: i + 1, position: 'relative' }}
           >
             <CoViewerAvatar person={p} size={20} />
           </span>
         ))}
         {people.length > shown.length && (
-          <span className='relative -ml-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-100 px-1 text-[9px] font-semibold text-slate-600 ring-2 ring-white dark:bg-slate-700 dark:text-slate-200 dark:ring-card'>
+          <span
+            style={{ zIndex: shown.length + 1 }}
+            className='relative -ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-100 px-1 text-[9px] font-semibold text-slate-600 ring-2 ring-white dark:bg-slate-700 dark:text-slate-200 dark:ring-card'
+          >
             +{people.length - shown.length}
           </span>
         )}

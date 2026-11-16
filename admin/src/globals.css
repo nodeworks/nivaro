@@ -246,14 +246,15 @@
   outline-offset: 2px;
   border-radius: 6px;
 }
-/* The name rides the cell's hover tip (data-tip, realtime item 25); a cell marked by an
-   older client (no colour) keeps the pill. */
-[data-grid-cell].nvr-remote-editing[data-tip]::after { display: none; }
+/* Every cursor outlines the whole cell, whatever wraps the control. */
+div[data-grid-cell].nvr-remote-editing { width: 100%; }
+/* The name is a small flag on the outline's top edge — readable without hovering (touch)
+   and never over the next row's value. */
 [data-grid-cell].nvr-remote-editing::after {
   content: attr(data-remote-editor);
   position: absolute;
-  right: 4px;
-  top: -9px;
+  left: 4px;
+  top: -10px;
   z-index: 2;
   max-width: 160px;
   overflow: hidden;
@@ -418,6 +419,10 @@ tr.nvr-row-flash > td {
 .nvr-shake { animation: nvr-shake 260ms ease-out 1; }
 @keyframes nvr-fade-in { from { opacity: 0; } to { opacity: 1; } }
 .nvr-fade-in { animation: nvr-fade-in 160ms ease-out both; }
+/* rt9 review: the entry a drag clash is about pulses once so the eye finds it (calendar / Gantt). */
+@keyframes nvr-clash-pulse { 0% { box-shadow: 0 0 0 0 rgb(139 92 246 / 0.55); } 100% { box-shadow: 0 0 0 9px rgb(139 92 246 / 0); } }
+.nvr-clash-pulse { animation: nvr-clash-pulse 900ms cubic-bezier(0.16, 1, 0.3, 1) 2; }
+@media (prefers-reduced-motion: reduce) { .nvr-clash-pulse { animation: none; } }
 /* rt9 #10: a derived-value note that just happened: one faint cyan wash that settles. */
 @keyframes nvr-derived-fresh { from { background-color: rgb(var(--nvr-cyan-rgb, 0 206 255) / 0.14); } to { background-color: transparent; } }
 .nvr-derived-fresh { animation: nvr-derived-fresh 2400ms cubic-bezier(0.16, 1, 0.3, 1) both; }
@@ -650,6 +655,13 @@ html[data-nvr-recording-clean] body[data-nvr-chat-pinned] {
 html[data-nvr-recording-clean] body[data-nvr-chat-pinned] [data-nvr-dock-aware],
 html[data-nvr-recording-clean] body[data-nvr-chat-pinned] [data-sonner-toaster] {
   margin-right: 0 !important;
+}
+
+/* Sonner's rich warning text (hsl 31 92% 45%) is ~3.1:1 on its cream toast in light mode —
+   below AA for 13 px text. Same amber family, dark enough for >= 4.5:1 (~7:1). The dark
+   theme's own warning colours already pass (~11:1). */
+html [data-sonner-toaster][data-sonner-theme='light'] {
+  --warning-text: hsl(28, 85%, 27%);
 }
 
 /* Radix Select renders a visually hidden native <select aria-hidden

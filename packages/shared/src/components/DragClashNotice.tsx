@@ -47,11 +47,13 @@ export function DragClashNotice({
         className='h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300'
         aria-hidden='true'
       />
-      <p className='min-w-0 flex-1'>
+      {/* The sentence keeps a readable width: on a narrow screen the buttons wrap below it
+          instead of squeezing it to one word a line (rt9 round 2). */}
+      <p className='min-w-[min(15rem,calc(100%-2rem))] flex-1'>
         <span className='font-medium'>{sentence}.</span>{' '}
         <span className='text-amber-800 dark:text-amber-200/80'>{mine}.</span>
       </p>
-      <div className='flex shrink-0 items-center gap-2'>
+      <div className='ml-auto flex shrink-0 items-center gap-2'>
         <button
           type='button'
           disabled={busy}

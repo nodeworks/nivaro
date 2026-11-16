@@ -132,7 +132,12 @@ export async function linkLabelsAsUser(
           : row[fields[0]] == null
             ? ''
             : String(row[fields[0]])
-        if (label?.trim()) labels[key(collection, row.id)] = label.trim()
+        // A dropped `{{link.field}}` leaves its separator behind ("· Line 4"): trim it off.
+        const clean = String(label ?? '')
+          .replace(/\s+/g, ' ')
+          .replace(/^[\s\-–—·|,:/]+|[\s\-–—·|,:/]+$/g, '')
+          .trim()
+        if (clean) labels[key(collection, row.id)] = clean
       }
     } catch {
       /* unreadable target — its links keep their ids */

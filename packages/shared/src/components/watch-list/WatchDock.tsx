@@ -5,6 +5,7 @@ import {
   Binoculars,
   Check,
   CheckCheck,
+  ChevronLeft,
   ChevronRight,
   CircleCheck,
   Hourglass,
@@ -13,6 +14,7 @@ import {
   MoreHorizontal,
   Pencil,
   Pin,
+  Plus,
   Trash2,
   Undo2,
   UserCheck,
@@ -61,7 +63,7 @@ import { ConfirmButton } from '../profile/primitives'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
-import { AlertButton, TeamEditor, WatchSettingsMenu } from './WatchExtras'
+import { AlertButton, AlertMark, AutoPinMark, TeamEditor, WatchSettingsMenu } from './WatchExtras'
 import { agoText, StepChip, WatchRowList } from './WatchRows'
 
 /**
@@ -378,8 +380,18 @@ export function WatchDock() {
       <Sheet open={mode === 'sheet'} onOpenChange={(o) => !o && watchUi.closeSheet()}>
         <SheetContent
           side='right'
-          className='flex w-full flex-col gap-0 p-0 sm:max-w-[400px]'
+          // The sheet's own × sits in the header row, the same 28 px box and centre line as the
+          // header's other icons (rt6 review: it sat higher).
+          className='flex w-full flex-col gap-0 p-0 sm:max-w-[400px] [&>button:last-of-type]:right-2 [&>button:last-of-type]:top-2 [&>button:last-of-type]:flex [&>button:last-of-type]:h-7 [&>button:last-of-type]:w-7 [&>button:last-of-type]:items-center [&>button:last-of-type]:justify-center [&>button:last-of-type]:rounded-md [&>button:last-of-type]:text-slate-500 [&>button:last-of-type]:bg-transparent [&>button:last-of-type]:opacity-100 [&>button:last-of-type]:hover:bg-slate-100 dark:[&>button:last-of-type]:text-slate-400 dark:[&>button:last-of-type]:hover:bg-white/[0.06]'
           data-watch-dock='sheet'
+          // Opening lands on the heading, not the first control with a ring around it.
+          onOpenAutoFocus={(e) => {
+            e.preventDefault()
+            const h = (e.currentTarget as HTMLElement | null)?.querySelector<HTMLElement>(
+              '[data-watch-title]'
+            )
+            h?.focus({ preventScroll: true })
+          }}
         >
           <SheetTitle className='sr-only'>Watch list</SheetTitle>
           <SheetDescription className='sr-only'>
@@ -665,23 +677,33 @@ function DockPanel({
     ...prefs.teams.map((t) => ({
       key: `team:${t.id}` as DockTab,
       label: t.name,
-      count: t.pins.length || null,
+      count: t.pins.length,
       dot: false,
       team: true
     })),
     { key: 'waiting', label: 'Waiting', count: waitingCount ?? null, dot: false },
-    { key: 'mentions', label: 'Mentions', count: unreadMentions || null, dot: unreadMentions > 0 }
+    {
+      key: 'mentions',
+      label: 'Mentions',
+      // Unread mentions; a count once known, 0 included, like every other tab (rt6 review).
+      count: data.mentions.data ? unreadMentions : null,
+      dot: unreadMentions > 0
+    }
   ]
   // More tabs than fit (shared lists): the strip scrolls sideways and fades at its right edge
   // while there is more to see.
   const stripRef = useRef<HTMLDivElement>(null)
   const [stripMore, setStripMore] = useState(false)
+  const [stripBefore, setStripBefore] = useState(false)
   const measureStrip = () => {
     const el = stripRef.current
     if (!el) return
     setStripMore(el.scrollWidth - el.scrollLeft - el.clientWidth > 2)
+    setStripBefore(el.scrollLeft > 2)
   }
-  const tabSig = tabs.map((t) => `${t.key}:${t.count ?? ''}`).join('|')
+  const scrollStrip = (dir: 1 | -1) =>
+    stripRef.current?.scrollBy({ left: dir * 140, behavior: 'smooth' })
+  const tabSig = `${tabs.map((t) => `${t.key}:${t.count ?? ''}`).join('|')}${editing === 'new' ? '|new' : ''}`
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when the tabs change
   useEffect(() => {
     measureStrip()
@@ -691,12 +713,20 @@ function DockPanel({
     ro.observe(el)
     return () => ro.disconnect()
   }, [tabSig])
-  // The chosen tab is always fully in view (a shared list opened from the settings menu).
+  // The chosen tab is always fully in view (a shared list opened from the settings menu, the
+  // New list pseudo-tab while making one).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run on the tab, not the measurer
   useEffect(() => {
-    const el = stripRef.current?.querySelector(`[data-tab="${CSS.escape(tab)}"]`)
+    const el = stripRef.current?.querySelector(
+      editing === 'new' ? '[data-tab-new]' : `[data-tab="${CSS.escape(tab)}"]`
+    )
     if (el && typeof (el as HTMLElement).scrollIntoView === 'function')
       (el as HTMLElement).scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [tab])
+    // The pseudo-tab is always the last one: show the strip's end, clear of the arrow.
+    const strip = stripRef.current
+    if (editing === 'new' && strip) strip.scrollLeft = strip.scrollWidth
+    measureStrip()
+  }, [tab, editing])
   const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
     const i = tabs.findIndex((t) => t.key === tab)
@@ -709,7 +739,11 @@ function DockPanel({
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
       <div className={`flex h-11 shrink-0 items-center gap-1 pl-4 ${inSheet ? 'pr-11' : 'pr-2'}`}>
-        <h2 className='flex-1 truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+        <h2
+          tabIndex={-1}
+          data-watch-title
+          className='flex-1 truncate text-[13px] font-semibold text-slate-800 outline-none dark:text-slate-100'
+        >
           Watch list
         </h2>
         {tab === 'watching' && prefs.pins.length > 1 && (
@@ -748,60 +782,95 @@ function DockPanel({
           </>
         )}
       </div>
-      <div
-        role='tablist'
-        aria-label='Watch list views'
-        onKeyDown={onTabKey}
-        ref={stripRef}
-        onScroll={measureStrip}
-        className={`flex shrink-0 overflow-x-auto border-b border-border px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
-          prefs.teams.length > 0 ? 'gap-3' : 'gap-4'
-        } ${
-          stripMore
-            ? '[mask-image:linear-gradient(to_right,#000_calc(100%_-_28px),transparent)]'
-            : ''
-        }`}
-      >
-        {tabs.map((t) => {
-          const on = t.key === tab
-          return (
-            <button
-              key={t.key}
-              type='button'
-              role='tab'
-              data-tab={t.key}
-              aria-selected={on}
-              tabIndex={on ? 0 : -1}
-              onClick={() => {
-                setEditing(null)
-                actions.setDock({ tab: t.key })
-              }}
-              data-tip={t.team ? `Shared list · ${t.label}` : undefined}
-              className={`relative -mb-px flex shrink-0 items-center gap-1.5 border-b-2 pb-2 pt-0.5 text-[12px] font-medium transition-colors rounded-t-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 ${
-                on
-                  ? 'border-nvr-cyan text-slate-900 dark:text-slate-50'
-                  : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
-              }`}
+      <div className='relative shrink-0 border-b border-border'>
+        <div
+          role='tablist'
+          aria-label='Watch list views'
+          onKeyDown={onTabKey}
+          ref={stripRef}
+          onScroll={measureStrip}
+          className={`-mb-px flex scroll-px-10 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+            prefs.teams.length > 0 || editing === 'new' ? 'gap-3' : 'gap-4'
+          }`}
+        >
+          {tabs.map((t) => {
+            // Making a new list: no existing tab is the one shown (rt6 review).
+            const on = t.key === tab && editing !== 'new'
+            return (
+              <button
+                key={t.key}
+                type='button'
+                role='tab'
+                data-tab={t.key}
+                aria-selected={on}
+                tabIndex={on ? 0 : -1}
+                onClick={() => {
+                  setEditing(null)
+                  actions.setDock({ tab: t.key })
+                }}
+                data-tip={t.team ? `Shared list · ${t.label}` : undefined}
+                className={`relative flex shrink-0 items-center gap-1.5 border-b-2 pb-2 pt-0.5 text-[12px] font-medium transition-colors rounded-t-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 ${
+                  on
+                    ? 'border-nvr-cyan text-slate-900 dark:text-slate-50'
+                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                }`}
+              >
+                {t.team && <Users aria-hidden className='h-3 w-3 shrink-0 opacity-70' />}
+                <span className={t.team ? 'max-w-[96px] truncate' : undefined}>{t.label}</span>
+                {t.count != null && (
+                  <span
+                    className={`rounded-full px-1.5 text-[10.5px] font-semibold tabular-nums ${
+                      t.dot
+                        ? 'bg-sky-100 text-sky-800 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                        : t.count === 0
+                          ? 'bg-slate-100/70 text-slate-400 dark:bg-white/[0.04] dark:text-slate-500'
+                          : 'bg-slate-100 text-slate-500 dark:bg-white/[0.07] dark:text-slate-400'
+                    }`}
+                  >
+                    {t.count}
+                  </span>
+                )}
+                {t.dot && t.key === 'watching' && (
+                  <span className='sr-only'>, {changed.length} changed</span>
+                )}
+              </button>
+            )
+          })}
+          {editing === 'new' && (
+            <span
+              aria-current='page'
+              className='relative flex shrink-0 items-center gap-1.5 border-b-2 border-nvr-cyan pb-2 pt-0.5 text-[12px] font-medium text-slate-900 dark:text-slate-50'
+              data-tab-new
             >
-              {t.team && <Users aria-hidden className='h-3 w-3 shrink-0 opacity-70' />}
-              <span className={t.team ? 'max-w-[96px] truncate' : undefined}>{t.label}</span>
-              {t.count != null && t.count > 0 && (
-                <span
-                  className={`rounded-full px-1.5 text-[10.5px] font-semibold tabular-nums ${
-                    t.dot
-                      ? 'bg-sky-100 text-sky-800 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
-                      : 'bg-slate-100 text-slate-500 dark:bg-white/[0.07] dark:text-slate-400'
-                  }`}
-                >
-                  {t.count}
-                </span>
-              )}
-              {t.dot && t.key === 'watching' && (
-                <span className='sr-only'>, {changed.length} changed</span>
-              )}
-            </button>
-          )
-        })}
+              <Plus aria-hidden className='h-3 w-3 shrink-0 opacity-70' />
+              New list
+            </span>
+          )}
+        </div>
+        {/* More tabs than fit: an arrow at the clipped end says so and scrolls (rt6 review). */}
+        {stripBefore && (
+          <button
+            type='button'
+            tabIndex={-1}
+            aria-hidden
+            onClick={() => scrollStrip(-1)}
+            className='absolute inset-y-0 left-0 flex w-8 items-start justify-start bg-[linear-gradient(to_right,hsl(var(--card))_70%,transparent)] pl-1 pt-0.5 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
+          >
+            <ChevronLeft className='h-4 w-4' />
+          </button>
+        )}
+        {stripMore && (
+          <button
+            type='button'
+            tabIndex={-1}
+            aria-hidden
+            onClick={() => scrollStrip(1)}
+            data-tab-more
+            className='absolute inset-y-0 right-0 flex w-9 items-start justify-end bg-[linear-gradient(to_left,hsl(var(--card))_70%,transparent)] pr-1 pt-0.5 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
+          >
+            <ChevronRight className='h-4 w-4' />
+          </button>
+        )}
       </div>
       <div
         className='min-h-0 flex-1 overflow-y-auto'
@@ -921,6 +990,8 @@ function WatchingTab({
     return sortWatchRows(withCompleted(inOrder, prefs.pins), prefs.dock.sort)
   }, [answer, prefs.pins, prefs.dock.sort, seenLocal])
 
+  // The empty state only once the pins have answered: before that "nothing pinned" is a guess.
+  if (!actions.prefsReady) return <LoadingRows n={3} />
   if (prefs.pins.length === 0)
     return (
       <>
@@ -954,6 +1025,17 @@ function WatchingTab({
           if (r?.change?.changed || r?.completed_at) actions.markSeen([key])
         }}
         rowActions={(r) => <AlertButton row={r} actions={actions} />}
+        rowMark={(r) =>
+          prefs.pins.some((p) => p.key === r.key && p.auto) ||
+          prefs.alerts.some((a) => a.key === r.key) ? (
+            <span className='flex items-center gap-1.5'>
+              <AutoPinMark row={r} actions={actions} />
+              <span className='flex group-focus-within/row:hidden group-hover/row:hidden group-has-[[data-state=open]]/row:hidden'>
+                <AlertMark row={r} actions={actions} />
+              </span>
+            </span>
+          ) : null
+        }
       />
       {missing > 0 && <LoadingRows n={Math.min(3, missing)} />}
       <p className='px-4 py-3 text-[11px] text-slate-500 dark:text-slate-400'>
@@ -1353,7 +1435,7 @@ function MentionsTab({ data }: { data: ReturnType<typeof useDockData> }) {
           <button
             type='button'
             onClick={() => markRead(unread)}
-            className='inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11.5px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-white/[0.12] dark:text-slate-300 dark:hover:bg-white/[0.05] dark:hover:text-slate-100'
+            className='inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-slate-300 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
           >
             <CheckCheck aria-hidden className='h-3 w-3' />
             Mark all read

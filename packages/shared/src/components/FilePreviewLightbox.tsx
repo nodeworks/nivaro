@@ -1,4 +1,4 @@
-import { Download, RefreshCw, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, RefreshCw, X } from 'lucide-react'
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useParentDraft } from '../context'
@@ -66,13 +66,27 @@ function fmtBytes(n: number | null | undefined): string | null {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/** Several files opened together (a comment's images): previous / next and "1 of 2". */
+export interface PreviewNav {
+  index: number
+  count: number
+  onPrev: () => void
+  onNext: () => void
+}
+
 export function FilePreviewLightbox({
   file: opened,
   onClose,
-  record: recordProp
+  record: recordProp,
+  caption,
+  nav
 }: {
   file: PreviewFile
   onClose: () => void
+  /** Says whose file this is ("Review Admin · just now") in place of a generic file name
+   *  such as every pasted "screenshot.png"; the name stays as the image's alt text. */
+  caption?: string | null
+  nav?: PreviewNav | null
   /** The record the file was opened from: its `$files` notices say when the file changed
    *  (rt8 #19). Defaults to the record form the preview sits in. */
   record?: { collection: string; itemId: string | number } | null
@@ -100,11 +114,16 @@ export function FilePreviewLightbox({
       if (e.key === 'Escape') {
         e.stopPropagation()
         onClose()
+      } else if (nav && nav.count > 1 && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.stopPropagation()
+        e.preventDefault()
+        if (e.key === 'ArrowLeft') nav.onPrev()
+        else nav.onNext()
       }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [onClose, nav])
 
   const type = file.type ?? ''
   const size = fmtBytes(file.size)
@@ -173,9 +192,41 @@ export function FilePreviewLightbox({
         onKeyDown={() => {}}
       >
         <p className='min-w-0 flex-1 truncate text-[13px] font-medium text-white'>
-          {file.name}
-          {size && <span className='ml-2 text-[11px] font-normal text-white/60'>{size}</span>}
+          {caption || file.name}
+          {nav && nav.count > 1 && (
+            <span
+              className='ml-2 text-[12px] font-normal tabular-nums text-white/70'
+              data-file-lightbox-count
+            >
+              {nav.index + 1} of {nav.count}
+            </span>
+          )}
+          {!caption && size && (
+            <span className='ml-2 text-[11px] font-normal text-white/60'>{size}</span>
+          )}
         </p>
+        {nav && nav.count > 1 && (
+          <span className='flex shrink-0 items-center gap-0.5'>
+            <button
+              type='button'
+              onClick={nav.onPrev}
+              aria-label='Previous image'
+              data-tip='Previous (←)'
+              className='rounded p-1.5 text-white/80 hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70'
+            >
+              <ChevronLeft className='h-4 w-4' aria-hidden />
+            </button>
+            <button
+              type='button'
+              onClick={nav.onNext}
+              aria-label='Next image'
+              data-tip='Next (→)'
+              className='rounded p-1.5 text-white/80 hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70'
+            >
+              <ChevronRight className='h-4 w-4' aria-hidden />
+            </button>
+          </span>
+        )}
         {newer.kind === 'newer' && (
           <p
             role='status'

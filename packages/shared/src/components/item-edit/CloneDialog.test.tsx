@@ -84,7 +84,7 @@ const buttonByText = (text: string) =>
 describe('CloneDialog', () => {
   it('offers only fields that copy, then opens the copy', async () => {
     const { calls, navigate } = render()
-    act(() => buttonByText('Clone')?.click())
+    act(() => buttonByText('Clone and save…')?.click())
     await settle()
     // Says what a copy is, and how many fields never follow it (list on demand).
     const intro = document.querySelector('[data-clone-intro]')?.textContent ?? ''

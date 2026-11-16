@@ -17215,14 +17215,14 @@ DELETE /api/tasks/:id</code></pre>
           <p class="doc-p">When an administrator has turned it on (Settings → AI Features → Let AI do this), the assignee of an open task sees a sparkle button that asks AI to draft a plan for it — reviewed, approved and undoable like any Ask AI plan, with the outcome posted on the task. See the AI Features → Let AI do this section.</p>
           <!-- /SYNC:tasks -->
         </div>
-        <div class="doc-section" id="s-support-requests" data-toc='[{"id":"support-requests","label":"Support Requests"},{"id":"support-ai-do","label":"Let AI do this"},{"id":"support-report-problem","label":"Report a problem"},{"id":"support-screen-share","label":"Share my screen with support"}]'>
+        <div class="doc-section" id="s-support-requests" data-toc='[{"id":"support-requests","label":"Support Requests"},{"id":"support-desk","label":"Working the desk"},{"id":"support-assigned-email","label":"Assigned to you"},{"id":"support-assign-rules","label":"Assignment rules"},{"id":"support-ai-do","label":"Let AI do this"},{"id":"support-report-problem","label":"Report a problem"},{"id":"support-screen-share","label":"Share my screen with support"}]'>
           <!-- SYNC:support-requests -->
           <h1 class="doc-h1" id="support-requests">Support Requests</h1>
           <p class="doc-p">People ask the administrators for help or for a change to a record, and follow the request until it is done. A support request is a task (<code class="doc-code">nivaro_tasks.kind = support</code>) that points at a record, or at nothing for General Support, and waits unassigned until someone picks it up.</p>
           <ul class="doc-ul">
             <li>**Raise one** with Request help on a record (beside Save — the request types for that kind of record are offered) or from Get help (General Support). Files can be attached.</li>
             <li>**Follow it** on the Support page (<code class="doc-code">/support</code>) under My requests, in the "Tasks I've requested" dashboard widget, and through notifications on every status change and reply.</li>
-            <li>**Work it** on the Desk tab (administrators, and members of a team a request type routes to): Pick it up assigns it to you and moves it to In progress; status, type and assignee can be changed; replies go to the requester.</li>
+            <li>**Work it** on the Desk tab (administrators, and members of a team a request type routes to): Pick it up assigns it to you and moves it to In progress; status, type and assignee can be changed; replies go to the requester. See Working the desk below for filters, sorting, who has what and bulk changes.</li>
             <li>**Analytics** (Analytics tab on the Desk, administrators and team members; a team member sees the tickets routed to their teams): tickets by request type and team, first response and resolution time (median and p75, with the share within the target: 4 hours to first reply and 3 days to resolution by default), the share of closed tickets that were reopened, tickets per kind of record, how many arrived with a replay clip or screenshot, and the busiest requesters, over 7, 30 or 90 days. Counts and timings only, no ticket text. <code class="doc-code">GET /api/support/analytics?days=&amp;first_response_hours=&amp;resolution_hours=</code>.</li>
             <li>**Status**: Open → In progress → Done, or Cancelled. The requester can withdraw an open request or reopen a finished one.</li>
             <li>**Request types** (<code class="doc-code">nivaro_task_categories</code>, administrators, Request types tab): a type tied to a collection is offered on those records only; with no team a request goes to every administrator; a default assignee skips the desk.</li>
@@ -17240,14 +17240,47 @@ POST  /api/support/report-problem       // Report a problem: issue + linked requ
   "screenshot": "data:image/jpeg;base64,…", "context": "…", "attachments": ["&lt;file id&gt;"],
   "replay": { "recording_id": "…", "offset_ms": 52000 } }
 
-GET   /api/support/tickets?scope=mine|desk&amp;status=open|closed&amp;assignee=me|unassigned&amp;q=
+GET   /api/support/tickets?scope=mine|desk&amp;status=open|closed|all|&lt;status&gt;
+        &amp;assignee=me|unassigned|&lt;user id&gt;&amp;category=&amp;priority=&amp;requester=&lt;user id, desk&gt;
+        &amp;q=&amp;sort=attention|newest|oldest|updated|priority&amp;page=&amp;limit=
 GET   /api/support/tickets/:id           // thread + history
 POST  /api/support/tickets/:id/comments  { "text": "…" }
 POST  /api/support/tickets/:id/claim
 PATCH /api/support/tickets/:id           { "status": "done" }
+POST  /api/support/tickets/bulk          { "ids": [12, 13], "status": "done" }
+GET   /api/support/workload              // desk: open requests per person + unassigned
 GET   /api/support/summary               // badge counts
 GET   /api/support/categories?collection=orders
 GET   /api/tasks/requested               // tasks I asked others to do</code></pre>
+          <h3 class="doc-h3" id="support-desk">Working the desk</h3>
+          <p class="doc-p">The Desk and My requests share one list: search (words or a request number), Status, Type and Priority filters, an Assignee filter on the Desk (Anyone, Me, Unassigned or a person), Clear filters, and a sort. Each person’s filters are remembered per tab on their own browser.</p>
+          <ul class="doc-ul">
+            <li>**Needs attention** (the Desk’s default sort): urgent first, then requests nobody has, then whoever has waited longest. Waiting counts from the last reply by anyone but the requester, else from when they asked. Other sorts: Newest, Oldest, Recently updated, Priority; the #, Priority and Waiting / Updated column headers sort too.</li>
+            <li>**Who has what**: a strip above the Desk list with each person’s open requests (and Unassigned); hover for urgent and the longest wait, click to filter to them.</li>
+            <li>**Bulk changes**: tick rows (or the header box for the whole page) and use the bar: Close, Cancel (each asks for a second press), Assign to (a person, Me, or back to the desk), Status, Priority. Each request goes through the same checks as changing it on its own — who may work it, its history line, its notifications. The bar says what happened: “Closed: 12 · 1 not allowed (You do not work this request)”. At most 200 at a time.</li>
+            <li>On a phone rows become cards, the filters fold into one Filters button and the bulk bar stays at the bottom.</li>
+          </ul>
+          <h3 class="doc-h3" id="support-assigned-email">Assigned to you</h3>
+          <p class="doc-p">When a request is newly given to someone else — by hand, in bulk, by its type’s default assignee or by an assignment rule — they get “Assigned to you: &lt;summary&gt;” in the app and, by email, according to their own email setting for workflow notifications (instant, daily summary or off). Taking a request yourself sends nothing. Every other request notice (replies, status changes) stays in the app and on push, as before.</p>
+          <h3 class="doc-h3" id="support-assign-rules">Assignment rules</h3>
+          <p class="doc-p">Administrators decide who new requests go to on the Assignment rules tab. Rules are a list in order: the first rule that fits a new request decides. If none fits, the request type’s default assignee takes it, else it waits on the desk. Each rule reads as a sentence — “When the type is Vendor change and the record’s Zone is East, share it among Beth, Sam and Kim — whoever has the fewest open requests, max 15 each.” Drag to reorder; switch a rule off without deleting it; duplicate; delete with a second press. Changes apply once saved.</p>
+          <ul class="doc-ul">
+            <li>**Conditions** (all or any of them): request type; what it is about (a record of some kinds, or General Support); a field on that record (Zone, Region, Project type… picked with the field’s own picker; is / is one of / contains / is empty / more than…); the record’s pipeline step; who raised it, their role or team; priority; words in the title or description (any / all / none); where it was raised (Get help, a record’s Request help, an error’s Get help, Report a problem); inside or outside business hours (Eastern, days and times set above the list).</li>
+            <li>**Then**: give it to one person (their cover takes it while they are out); share it among people; give it to the record’s step owner (the first, or the one with the fewest open requests); or send it to a team’s desk unassigned.</li>
+            <li>**Sharing among people** picks by fewest open requests, least recently assigned (fair turns), fewest assigned today or this week, fewest urgent open, most experience with this kind (closed the most of this type or record), whoever last helped this requester, the record’s step owner if listed, or at random. Per person: at most N open requests, and any time / business hours only / only while online. Suspended people are always skipped; someone out of office is skipped or hands it to their cover. Ties go to fewest open, then least recently assigned, then list order.</li>
+            <li>**If nobody on it can take it**: leave it on the desk, or give it to a named person.</li>
+            <li>**Also when the type changes**: off by default — a type change then only assigns requests nobody has.</li>
+            <li>**Try a request** at the bottom of the tab: describe a request (type, record, requester, priority, words, where from, when) to see which rule wins, who gets it, the ranking with the number that decided it, who was skipped and why, and why each earlier rule did not fit. It uses unsaved changes and creates nothing.</li>
+          </ul>
+          <div class="doc-note">A record’s fields and step are read by the system only to decide; nothing shows their values. The requester’s history says only “Assigned to Beth”; the line naming the rule is visible only to the people who work the request. Rules are stored without a migration in <code class="doc-code">nivaro_extension_settings</code> (<code class="doc-code">nivaro-core</code> / <code class="doc-code">support_assign_rules</code>).</div>
+          <pre class="doc-pre"><code>GET  /api/support/assign-rules            // { data: { rules, hours }, labels }   (administrators)
+PUT  /api/support/assign-rules            { "rules": [ … ], "hours": { "start": "08:00", "end": "18:00", "days": [1,2,3,4,5] } }
+GET  /api/support/assign-rules/options    // types, teams, roles, collections, steps
+GET  /api/support/assign-rules/fields?collection=workflows
+POST /api/support/assign-rules/test       { "request": { "category_id": 3, "collection": "workflows", "item": "42",
+                                              "priority": "normal", "title": "…" }, "rules": [ … ] }
+// → { trace: [{ name, result, reasons }], outcome: { kind, user | team, via, rule, note },
+//     pick: { ranking: [{ name, measure }], skipped: [{ name, reason }], used } }</code></pre>
           <h3 class="doc-h3" id="support-ai-do">Let AI do this</h3>
           <p class="doc-p">With it turned on for support tickets (Settings → AI Features → Let AI do this, optionally per request type), the person a ticket is assigned to sees “Let AI do this” on the Desk detail: AI drafts a plan from the ticket and its thread, the outcome lands on the thread as a reply, and a drafted reply to the requester can be edited and sent. See AI Features → Let AI do this.</p>
           <h3 class="doc-h3" id="support-report-problem">Report a problem</h3>

@@ -82,7 +82,13 @@ describe('list return stash (Previous / Next in list)', () => {
       index: 2,
       total: 3,
       prev: { collection: 'workflows', id: '1' },
-      next: { collection: 'workflows', id: '3' }
+      next: { collection: 'workflows', id: '3' },
+      position: 2,
+      // The list did not say how many it holds: only the rows shown are counted.
+      listTotal: null,
+      approx: false,
+      moreAfter: false,
+      moreBefore: false
     })
     expect(listNeighbors(s, { collection: 'workflows', id: '1' })?.prev).toBeNull()
     expect(listNeighbors(s, { collection: 'workflows', id: '3' })?.next).toBeNull()
@@ -110,6 +116,46 @@ describe('list return stash (Previous / Next in list)', () => {
     // The same record opened later on another entry.
     window.history.replaceState({ idx: 9, key: 'later' }, '')
     expect(listReturnFor({ collection: 'workflows', id: '2' })).toBeNull()
+  })
+
+  it('counts against the whole list, not the page it showed (rt-nav: "3 of 25" under "about 49")', () => {
+    const page = Array.from({ length: 25 }, (_, i) => ({ collection: 'tasks', id: String(i + 1) }))
+    noteListOpen({
+      list: 'cbv:tasks',
+      rows: page,
+      opened: { collection: 'tasks', id: '3' },
+      total: 49,
+      totalApprox: true
+    })
+    const s = readListReturn()
+    const third = listNeighbors(s, { collection: 'tasks', id: '3' })
+    expect(third?.position).toBe(3)
+    expect(third?.listTotal).toBe(49)
+    expect(third?.approx).toBe(true)
+    expect(third?.index).toBe(3)
+    expect(third?.total).toBe(25)
+    // The last row of page 1: Next stops, and the nav can say the list goes on.
+    const last = listNeighbors(s, { collection: 'tasks', id: '25' })
+    expect(last?.next).toBeNull()
+    expect(last?.moreAfter).toBe(true)
+    expect(last?.moreBefore).toBe(false)
+  })
+
+  it('a later page counts from its offset; a stale smaller total never reads "30 of 25"', () => {
+    noteListOpen({
+      list: 'cbv:tasks',
+      rows: Array.from({ length: 24 }, (_, i) => ({ collection: 'tasks', id: String(i + 26) })),
+      opened: { collection: 'tasks', id: '26' },
+      total: 40,
+      offset: 25
+    })
+    const first = listNeighbors(readListReturn(), { collection: 'tasks', id: '26' })
+    expect(first?.position).toBe(26)
+    expect(first?.prev).toBeNull()
+    expect(first?.moreBefore).toBe(true)
+    // 25 + 24 rows shown > 40: the total is stale, the shown rows win.
+    expect(first?.listTotal).toBe(49)
+    expect(first?.moreAfter).toBe(false)
   })
 
   it('ignores a stale or garbled stash', () => {

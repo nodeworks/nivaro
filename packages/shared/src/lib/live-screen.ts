@@ -321,6 +321,25 @@ export function scrollParentOf(el: Element | null): HTMLElement | null {
 const AT_TOP_SLACK = 24
 
 /**
+ * How far down the screen the host's own sticky or fixed bars reach (a phone's project header),
+ * ignoring anything inside `inside`. 0 when nothing sticks to the top.
+ */
+export function stickyTopOffset(inside: Element | null): number {
+  if (typeof document === 'undefined') return 0
+  let max = 0
+  for (const el of document.body.querySelectorAll<HTMLElement>('*')) {
+    if (inside?.contains(el)) continue
+    const pos = getComputedStyle(el).position
+    if (pos !== 'sticky' && pos !== 'fixed') continue
+    const r = el.getBoundingClientRect()
+    if (r.top > 200 || r.bottom <= 0 || r.width < window.innerWidth * 0.5) continue
+    if (r.height > window.innerHeight * 0.5) continue
+    max = Math.max(max, r.bottom)
+  }
+  return max
+}
+
+/**
  * `holdTopInserts` wired to the feed's scroller. `resetKey` (a filter, a page) starts over:
  * whatever the new view's first answer is shows as it is.
  */
@@ -345,12 +364,27 @@ export function useTopInserts<T>(
     const sc = scrollParentOf(root)
     scrollerRef.current = sc
     if (!sc) return
-    const target: HTMLElement | Window =
-      sc === document.scrollingElement || sc === document.documentElement ? window : sc
-    const read = () => setAtTop(sc.scrollTop <= AT_TOP_SLACK)
+    const page = sc === document.scrollingElement || sc === document.documentElement
+    const target: HTMLElement | Window = page ? window : sc
+    // A feed further down a scrolled page (a phone) is "at the top" while its own first row is
+    // in view below the page's sticky bars — not only when the whole page is at its top.
+    let bars = page ? stickyTopOffset(root) : 0
+    const read = () => {
+      if (sc.scrollTop <= AT_TOP_SLACK) return setAtTop(true)
+      const viewTop = page ? bars : sc.getBoundingClientRect().top
+      setAtTop(root.getBoundingClientRect().top >= viewTop - AT_TOP_SLACK)
+    }
+    const onResize = () => {
+      if (page) bars = stickyTopOffset(root)
+      read()
+    }
     read()
     target.addEventListener('scroll', read, { passive: true })
-    return () => target.removeEventListener('scroll', read)
+    window.addEventListener('resize', onResize)
+    return () => {
+      target.removeEventListener('scroll', read)
+      window.removeEventListener('resize', onResize)
+    }
   }, [root])
 
   const bump = useCallback(() => setRevealTick((n) => n + 1), [])
@@ -434,6 +468,16 @@ function viewerAway(): boolean {
 }
 
 /** A small accent dot in a row's gutter, until the row has been in view. */
+/** The first opaque background behind `el` (the card it sits on); white when none is found. */
+function surfaceColour(el: HTMLElement): string {
+  if (typeof getComputedStyle !== 'function') return '#fff'
+  for (let n: HTMLElement | null = el; n; n = n.parentElement) {
+    const bg = getComputedStyle(n).backgroundColor
+    if (bg && bg !== 'transparent' && !/rgba\([^)]*,\s*0\)$/.test(bg)) return bg
+  }
+  return '#fff'
+}
+
 function markUnseen(row: HTMLElement, dot: string): void {
   if (row.querySelector('[data-live-new-dot]')) return
   if (typeof getComputedStyle === 'function' && getComputedStyle(row).position === 'static')
@@ -441,7 +485,8 @@ function markUnseen(row: HTMLElement, dot: string): void {
   const el = document.createElement('span')
   el.setAttribute('data-live-new-dot', '')
   el.setAttribute('aria-hidden', 'true')
-  el.style.cssText = `position:absolute;left:3px;top:6px;width:6px;height:6px;border-radius:9999px;background:${dot};pointer-events:none;z-index:1`
+  // A 2 px ring in the surface colour: a badge in the gutter, never touching what it sits by.
+  el.style.cssText = `position:absolute;left:3px;top:6px;width:6px;height:6px;border-radius:9999px;background:${dot};box-shadow:0 0 0 2px ${surfaceColour(row)};pointer-events:none;z-index:1`
   row.appendChild(el)
   const clear = () => {
     el.remove()

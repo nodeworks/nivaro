@@ -230,6 +230,7 @@ export function RecordLiveSync({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [flash, setFlash] = useState(false)
+  const [flashBy, setFlashBy] = useState<string | null>(null)
   // Co-viewers' uploads no mounted file field shows itself (rt9 #9, lib/upload-presence.ts).
   const uploads = useRemoteUploads(collection, String(itemId), 'unclaimed')
   const [gone, setGoneState] = useState<RecordGone | null>(null)
@@ -458,7 +459,11 @@ export function RecordLiveSync({
     // late — rollups, hooks, a slow replica) names them, and is not "someone else".
     const touchKey = ['last-touch', collection, String(itemId)]
     await qc.invalidateQueries({ queryKey: touchKey }).catch(() => {})
-    if (!flashIt || writtenBySelf(qc.getQueryData(touchKey), userIdRef.current)) return
+    const touch = qc.getQueryData(touchKey)
+    if (!flashIt || writtenBySelf(touch, userIdRef.current)) return
+    // Name the writer when the activity row knows them ("by Beth Ray").
+    const name = (touch as { user_name?: unknown } | null | undefined)?.user_name
+    setFlashBy(typeof name === 'string' && name.trim() ? name.trim() : null)
     setFlash(true)
     if (flashTimer.current) clearTimeout(flashTimer.current)
     flashTimer.current = setTimeout(() => setFlash(false), 4000)
@@ -737,21 +742,55 @@ export function RecordLiveSync({
       {realtime && (flash || uploads.length > 0) && (
         <div className='flex flex-wrap items-center gap-2'>
           {flash && (
-            <span className='inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-2.5 py-0.5 text-[11px] font-medium text-[#0e7490] dark:text-slate-200'>
-              <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
-              Updated just now by someone else
+            <span
+              data-record-updated-by
+              className='inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-2.5 py-0.5 text-[11px] font-medium text-[#0e7490] dark:text-slate-200'
+            >
+              <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-nvr-cyan' />
+              <span className='min-w-0'>Updated just now by {flashBy ?? 'someone else'}</span>
             </span>
           )}
-          {uploads.map((u) => (
+          {/* One line per chip: the sentence truncates (full text in the tip), the percent never
+              shrinks. More than two uploads fold into one chip that names who is uploading. */}
+          {(uploads.length > 2 ? [] : uploads).map((u) => {
+            const sentence = uploadSentence({ ...u, pct: null })
+            return (
+              <span
+                key={u.key}
+                data-remote-upload-chip={u.key}
+                data-tip={sentence}
+                className='inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
+              >
+                <UploadCloud
+                  className='h-3 w-3 shrink-0 text-cyan-700 dark:text-nvr-cyan'
+                  aria-hidden
+                />
+                <span className='min-w-0 truncate'>{sentence}</span>
+                {/* The percent reads the same as in the field's own row: a bare tabular "60%". */}
+                {u.pct != null && u.pct > 0 && u.pct < 100 && (
+                  <span className='shrink-0 tabular-nums text-slate-500 dark:text-slate-400'>
+                    {u.pct}%
+                  </span>
+                )}
+              </span>
+            )
+          })}
+          {uploads.length > 2 && (
             <span
-              key={u.key}
-              data-remote-upload-chip={u.key}
-              className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
+              data-remote-upload-chip='many'
+              data-tip={uploads.map((u) => uploadSentence(u)).join('\n')}
+              className='inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
             >
-              <UploadCloud className='h-3 w-3 animate-pulse text-nvr-cyan motion-reduce:animate-none' />
-              {uploadSentence(u)}
+              <UploadCloud
+                className='h-3 w-3 shrink-0 text-cyan-700 dark:text-nvr-cyan'
+                aria-hidden
+              />
+              <span className='min-w-0 truncate'>
+                {uploads.length} uploads in progress ·{' '}
+                {[...new Set(uploads.map((u) => u.user))].join(', ')}
+              </span>
             </span>
-          ))}
+          )}
         </div>
       )}
     </div>

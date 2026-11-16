@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NivaroProvider } from '../../context'
 import { type RealtimeAdapter, RealtimeContext } from '../../lib/realtime'
-import { SessionsCard, sessionEndsIn } from './PersonAccess'
+import { orderSessions, SessionsCard, sessionEndsIn } from './PersonAccess'
 
 // Person page → Signed-in browsers (realtime round 9 #23): each row names the browser, the
 // address and when it signed in — never the session id — and the list re-reads when the
@@ -138,6 +138,46 @@ describe('SessionsCard', () => {
     expect(host.querySelector('[data-session-device]')?.textContent).toBe('Browser')
     expect(host.querySelector('[data-session-meta]')?.textContent).toContain(
       'Signed in before this was recorded'
+    )
+  })
+})
+
+describe('orderSessions', () => {
+  it('this browser first, then the newest with details, then ones with none', () => {
+    const rows = [
+      { sid_prefix: 'bare', user_id: USER, ttl_seconds: 50 },
+      {
+        sid_prefix: 'old',
+        user_id: USER,
+        ttl_seconds: 10,
+        device: 'Chrome',
+        signed_in_at: '2026-11-01T00:00:00Z'
+      },
+      {
+        sid_prefix: 'new',
+        user_id: USER,
+        ttl_seconds: 10,
+        device: 'Edge',
+        signed_in_at: '2026-11-10T00:00:00Z'
+      },
+      { sid_prefix: 'me', user_id: USER, ttl_seconds: 5, current: true }
+    ]
+    expect(orderSessions(rows).map((r) => r.sid_prefix)).toEqual(['me', 'new', 'old', 'bare'])
+  })
+
+  it('folds three or more sign-ins with no details into one line', async () => {
+    rows = [
+      { ...rows[0] },
+      ...['a', 'b', 'c'].map((p) => ({
+        sid_prefix: `${p}00000000000`,
+        user_id: USER,
+        ttl_seconds: 120
+      }))
+    ]
+    await mount()
+    expect(host.querySelectorAll('[data-session-row]')).toHaveLength(1)
+    expect(host.querySelector('[data-sessions-show-all]')?.textContent).toContain(
+      '3 older sign-ins with no browser details'
     )
   })
 })

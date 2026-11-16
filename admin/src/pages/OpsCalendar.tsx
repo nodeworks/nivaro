@@ -22,18 +22,48 @@ interface OpsEvent {
   detail?: string | null
 }
 
-const KIND_META: Record<string, { label: string; cls: string }> = {
-  cron: { label: 'Cron', cls: 'bg-slate-500/10 text-slate-600 dark:text-slate-300' },
-  scheduled_change: { label: 'Change', cls: 'bg-nvr-cyan/15 text-nvr-navy dark:text-nvr-cyan' },
-  report: { label: 'Report', cls: 'bg-violet-500/10 text-violet-600 dark:text-violet-400' },
-  retention: { label: 'Retention', cls: 'bg-red-500/10 text-red-600 dark:text-red-400' },
-  blackout: { label: 'Blackout', cls: 'bg-amber-500/10 text-amber-700 dark:text-amber-400' },
-  ooo: { label: 'OOO', cls: 'bg-orange-500/10 text-orange-600 dark:text-orange-400' },
+// `bar`: the 3 px edge each entry carries — the chips above are the legend, so rows never
+// repeat a type badge (it ate half the row and cut names to ~9 characters, rt3 review).
+const KIND_META: Record<string, { label: string; cls: string; bar: string }> = {
+  cron: {
+    label: 'Cron',
+    cls: 'bg-slate-500/10 text-slate-600 dark:text-slate-300',
+    bar: 'bg-slate-400 dark:bg-slate-500'
+  },
+  scheduled_change: {
+    label: 'Change',
+    cls: 'bg-nvr-cyan/15 text-nvr-navy dark:text-nvr-cyan',
+    bar: 'bg-nvr-cyan'
+  },
+  report: {
+    label: 'Report',
+    cls: 'bg-violet-500/10 text-violet-600 dark:text-violet-400',
+    bar: 'bg-violet-500'
+  },
+  retention: {
+    label: 'Retention',
+    cls: 'bg-red-500/10 text-red-600 dark:text-red-400',
+    bar: 'bg-red-500'
+  },
+  blackout: {
+    label: 'Blackout',
+    cls: 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
+    bar: 'bg-amber-500'
+  },
+  ooo: {
+    label: 'OOO',
+    cls: 'bg-orange-500/10 text-orange-600 dark:text-orange-400',
+    bar: 'bg-orange-500'
+  },
   announcement: {
     label: 'Broadcast',
-    cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+    cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+    bar: 'bg-emerald-500'
   }
 }
+
+/** Entries a day shows before "+N more". */
+const DAY_LIMIT = 10
 
 const DAY = 86_400_000
 
@@ -46,6 +76,7 @@ function startOfDay(d: Date): Date {
 export default function OpsCalendar() {
   const [offsetDays, setOffsetDays] = useState(0)
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set())
+  const [openDays, setOpenDays] = useState<Set<string>>(new Set())
   const from = startOfDay(new Date(Date.now() + offsetDays * DAY))
   const to = new Date(from.getTime() + 7 * DAY)
 
@@ -171,6 +202,9 @@ export default function OpsCalendar() {
           <div className='grid grid-cols-1 gap-3 lg:grid-cols-7'>
             {days.map((d) => {
               const isToday = startOfDay(new Date()).getTime() === startOfDay(d.date).getTime()
+              const dayKey = d.date.toISOString()
+              const showAll = openDays.has(dayKey) || d.events.length <= DAY_LIMIT + 1
+              const shown = showAll ? d.events : d.events.slice(0, DAY_LIMIT)
               return (
                 <div
                   key={d.date.toISOString()}
@@ -196,61 +230,73 @@ export default function OpsCalendar() {
                       <span className='ml-1.5 text-[10px] font-medium uppercase'>today</span>
                     )}
                   </div>
-                  <div className='max-h-[440px] space-y-1 overflow-y-auto p-2'>
+                  <div
+                    className={cn(
+                      'space-y-1 p-2',
+                      // Collapsed days end on "+N more" (never cut by a scroll box); an opened day scrolls.
+                      openDays.has(dayKey) && 'max-h-[560px] overflow-y-auto'
+                    )}
+                  >
                     {d.events.length === 0 && (
                       <p className='px-1 py-2 text-[11px] text-slate-300 dark:text-slate-600'>—</p>
                     )}
-                    {d.events.map((e, i) => {
+                    {shown.map((e, i) => {
                       const meta = KIND_META[e.kind] ?? KIND_META.cron
                       const time = new Date(e.at).toLocaleTimeString([], {
                         hour: 'numeric',
                         minute: '2-digit'
                       })
+                      const key = `${e.kind}-${e.label}-${e.at}-${i}`
+                      const gone = departed.has(`${e.kind}|${e.label}|${e.at}`)
+                      const tip = [`${meta.label} · ${e.label}`, e.detail, gone ? 'Moved' : null]
+                        .filter(Boolean)
+                        .join(' — ')
                       const body = (
                         <>
                           <span
-                            className={cn(
-                              'rounded px-1 py-px text-[9.5px] font-semibold uppercase',
-                              meta.cls
-                            )}
-                          >
-                            {meta.label}
-                          </span>
-                          <span className='min-w-0 flex-1 truncate text-[11.5px] text-slate-700 dark:text-slate-200'>
+                            className={cn('w-[3px] shrink-0 self-stretch rounded-full', meta.bar)}
+                            aria-hidden
+                          />
+                          <span className='sr-only'>{meta.label}: </span>
+                          <span className='min-w-0 flex-1 text-[11.5px] leading-snug text-slate-700 [overflow-wrap:anywhere] dark:text-slate-200'>
                             {e.label}
                           </span>
-                          <span className='shrink-0 text-[10.5px] tabular-nums text-slate-400'>
+                          <span className='shrink-0 pt-px text-[10.5px] tabular-nums text-slate-500 dark:text-slate-400'>
                             {time}
                           </span>
                         </>
                       )
-                      const key = `${e.kind}-${e.label}-${e.at}-${i}`
-                      const gone = departed.has(`${e.kind}|${e.label}|${e.at}`)
+                      const row = cn(
+                        'relative flex items-start gap-1.5 rounded-md px-1.5 py-1',
+                        gone && 'opacity-50'
+                      )
                       return e.link ? (
                         <Link
                           key={key}
                           to={e.link}
                           className={cn(
-                            'flex items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-slate-50 dark:hover:bg-muted/50',
-                            gone && 'opacity-50'
+                            row,
+                            'hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-muted/50'
                           )}
-                          data-tip={e.detail ?? undefined}
+                          data-tip={tip}
                         >
                           {body}
                         </Link>
                       ) : (
-                        <div
-                          key={key}
-                          className={cn(
-                            'flex items-center gap-1.5 rounded-md px-1.5 py-1',
-                            gone && 'opacity-50'
-                          )}
-                          data-tip={e.detail ?? undefined}
-                        >
+                        <div key={key} className={row} data-tip={tip}>
                           {body}
                         </div>
                       )
                     })}
+                    {d.events.length > shown.length && (
+                      <button
+                        type='button'
+                        onClick={() => setOpenDays((prev) => new Set(prev).add(dayKey))}
+                        className='w-full rounded-md px-1.5 py-1 text-left text-[11.5px] font-medium text-nvr-navy hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-nvr-cyan dark:hover:bg-muted/50'
+                      >
+                        +{d.events.length - shown.length} more
+                      </button>
+                    )}
                   </div>
                 </div>
               )

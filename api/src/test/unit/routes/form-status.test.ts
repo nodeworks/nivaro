@@ -22,7 +22,11 @@ vi.mock('../../../services/submission-status.js', async (orig) => ({
 const budget = { open: true }
 vi.mock('../../../services/widget-live.js', () => ({ takeBudget: () => budget.open }))
 
-import { formStatusPublicRoutes } from '../../../routes/form-status.js'
+import {
+  decidedTone,
+  formStatusPublicRoutes,
+  statusBlockHtml
+} from '../../../routes/form-status.js'
 import { BUSY, SignalStreamRoute } from '../../../services/public-signal-stream.js'
 
 const LINK = {
@@ -100,6 +104,36 @@ describe('GET /form-status/:token', () => {
     expect(codes.slice(120)).toEqual([429, 429])
     // The counter is per address, never per token (a guesser rotating tokens is still capped).
     expect([...counts.keys()].every((k) => !k.includes('good.token'))).toBe(true)
+  })
+})
+
+describe('status block (design review)', () => {
+  it('names the three stages the same way in every state; the owner label is the headline', () => {
+    const html = statusBlockHtml(LINK as never, {
+      stage: 'received',
+      label: 'We have your request',
+      gone: false
+    })
+    expect(html).toContain('<h1>We have your request</h1>')
+    expect(html).toMatch(/<li class="now" aria-current="step">Received<\/li>/)
+    expect(html).toContain('>In review</li>')
+    expect(html).toContain('>Decided</li>')
+  })
+
+  it('colours a decision by its outcome and says when it was decided', () => {
+    expect(decidedTone('Approved')).toBe('tone-ok')
+    expect(decidedTone('Rejected')).toBe('tone-bad')
+    expect(decidedTone('Not approved')).toBe('tone-bad')
+    expect(decidedTone('Decided')).toBe('tone-done')
+    const html = statusBlockHtml(LINK as never, {
+      stage: 'decided',
+      label: 'Approved',
+      gone: false,
+      since: '2026-11-15T10:00:00.000Z'
+    })
+    expect(html).toContain('state tone-ok')
+    expect(html).toContain('track at2 tone-ok')
+    expect(html).toContain('Decided <time datetime="2026-11-15T10:00:00.000Z"')
   })
 })
 

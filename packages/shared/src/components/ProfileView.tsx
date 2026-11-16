@@ -31,7 +31,12 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post, put } from '../lib/commands'
-import { LIVE_MODE_LABELS, parseLiveMode, useLivePreference } from '../lib/live-preference'
+import {
+  LIVE_MODE_HINTS,
+  LIVE_MODE_LABELS,
+  parseLiveMode,
+  useLivePreference
+} from '../lib/live-preference'
 import { playNotificationSound } from '../lib/notification-sound'
 import {
   cascadeFilter,
@@ -1647,9 +1652,10 @@ function OwnProfile({
               )}
               <a
                 href={`mailto:${view.email}`}
-                className='inline-flex items-center gap-1.5 transition-colors hover:text-nvr-navy dark:hover:text-nvr-cyan'
+                className='inline-flex min-w-0 max-w-full items-center gap-1.5 transition-colors hover:text-nvr-navy dark:hover:text-nvr-cyan'
               >
-                <Mail className='h-3.5 w-3.5' /> {view.email}
+                <Mail className='h-3.5 w-3.5 shrink-0' />{' '}
+                <span className='min-w-0 break-all'>{view.email}</span>
               </a>
               {view.phone && (
                 <a
@@ -1836,7 +1842,8 @@ function OwnProfileTabs({
     <div
       role='tablist'
       aria-label='Profile sections'
-      className='flex gap-1 border-b border-slate-200 dark:border-border'
+      // Scrolls sideways on a phone instead of wrapping a tab onto a second line.
+      className='flex gap-1 overflow-x-auto overflow-y-hidden border-b border-slate-200 [scrollbar-width:none] dark:border-border'
     >
       {items.map(([key, label]) => (
         <button
@@ -1846,7 +1853,7 @@ function OwnProfileTabs({
           aria-selected={tab === key}
           onClick={() => pick(key)}
           className={cn(
-            '-mb-px border-b-2 px-3 py-2 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40',
+            '-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40',
             tab === key
               ? 'border-nvr-cyan text-slate-900 dark:text-white'
               : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
@@ -2342,11 +2349,7 @@ function LiveUpdatesPref({
   })
   const own = parseLiveMode(value)
   const roleLabel = LIVE_MODE_LABELS[roleMode ?? 'normal']
-  const hint = {
-    normal: 'Changes appear as they happen, with a short fade.',
-    calm: 'Changes appear without fades or marks; lists keep their order until you pause.',
-    off: 'Nothing updates by itself — press ↻ to see the latest.'
-  }[own ?? roleMode ?? 'normal']
+  const hint = LIVE_MODE_HINTS[own ?? roleMode ?? 'normal']
   return (
     <div className='flex items-center gap-1.5' data-pref='live-mode' data-tip={hint}>
       Live updates
@@ -2354,10 +2357,15 @@ function LiveUpdatesPref({
         value={own ?? 'auto'}
         onChange={(v) => onChange(v as 'auto' | 'normal' | 'calm' | 'off')}
         options={[
-          { value: 'auto', label: `Role default (${roleLabel})` },
-          { value: 'normal', label: 'Normal' },
-          { value: 'calm', label: 'Calm' },
-          { value: 'off', label: 'Off' }
+          // Each choice says what it does (the Roles card uses the same words).
+          {
+            value: 'auto',
+            label: `Role default (${roleLabel})`,
+            description: LIVE_MODE_HINTS[roleMode ?? 'normal']
+          },
+          { value: 'normal', label: 'Normal', description: LIVE_MODE_HINTS.normal },
+          { value: 'calm', label: 'Calm', description: LIVE_MODE_HINTS.calm },
+          { value: 'off', label: 'Off', description: LIVE_MODE_HINTS.off }
         ]}
       />
     </div>

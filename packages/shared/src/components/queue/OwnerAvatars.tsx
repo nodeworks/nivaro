@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { cn } from '../../lib/utils'
+import { UserChip } from '../item-edit/UserChip'
 import { UserAvatar } from '../UserAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
@@ -108,6 +109,34 @@ export function OwnerAvatars({
     )
   }
 
+  // One owner: the avatar and name open that person's user card straight away.
+  if (owners.length === 1) {
+    const o = owners[0]
+    return (
+      <UserChip userId={o.id}>
+        <button
+          type='button'
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`1 owner: ${ownerText(o)}`}
+          className='group/owners flex min-w-0 items-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+        >
+          <Avatar owner={o} className={cn(o.inactive && 'opacity-50 grayscale')} />
+          <span className='ml-1.5 flex min-w-0 items-center'>
+            <span
+              className={cn(
+                'truncate text-[12px] text-slate-600 group-hover/owners:text-slate-800 group-hover/owners:underline dark:text-slate-300 dark:group-hover/owners:text-slate-100',
+                o.inactive && 'line-through decoration-slate-400'
+              )}
+            >
+              {o.name}
+            </span>
+            <InactiveTag owner={o} />
+          </span>
+        </button>
+      </UserChip>
+    )
+  }
+
   const visible = owners.slice(0, max)
   const overflow = owners.length - visible.length
 
@@ -127,11 +156,12 @@ export function OwnerAvatars({
               <Avatar
                 key={o.id}
                 owner={o}
-                className={cn(i > 0 && '-ml-1.5', o.inactive && 'opacity-50 grayscale')}
+                // A light overlap: a deeper one clipped initials ("BM" read "BN").
+                className={cn(i > 0 && '-ml-0.5', o.inactive && 'opacity-50 grayscale')}
               />
             ))}
             {overflow > 0 && (
-              <span className='-ml-1.5 inline-flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-full bg-slate-100 px-1 text-[9px] font-semibold text-slate-600 ring-2 ring-white dark:bg-muted dark:text-slate-300 dark:ring-card'>
+              <span className='-ml-0.5 inline-flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-full bg-slate-100 px-1 text-[9px] font-semibold text-slate-600 ring-2 ring-white dark:bg-muted dark:text-slate-300 dark:ring-card'>
                 +{overflow}
               </span>
             )}
@@ -168,13 +198,19 @@ export function OwnerAvatars({
         </p>
         <div className='max-h-[260px] space-y-0.5 overflow-y-auto'>
           {owners.map((o) => (
-            <div key={o.id} className='flex items-center gap-2 rounded px-2 py-1'>
-              <Avatar owner={o} />
-              <span className='truncate text-[12px] text-slate-700 dark:text-slate-200'>
-                {o.name}
-              </span>
-              <InactiveTag owner={o} />
-            </div>
+            <UserChip key={o.id} userId={o.id}>
+              <button
+                type='button'
+                data-owner-person={o.id}
+                className='flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-white/5'
+              >
+                <Avatar owner={o} />
+                <span className='truncate text-[12px] text-slate-700 dark:text-slate-200'>
+                  {o.name}
+                </span>
+                <InactiveTag owner={o} />
+              </button>
+            </UserChip>
           ))}
         </div>
       </PopoverContent>

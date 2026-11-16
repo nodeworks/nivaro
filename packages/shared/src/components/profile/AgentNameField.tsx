@@ -5,6 +5,7 @@ import { useNivaroClient } from '../../context'
 import { patch } from '../../lib/commands'
 import { userErrorMessage } from '../../lib/safe-error'
 import { cn } from '../../lib/utils'
+import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 
 /** Longest agent name the server keeps (api services/mcp-calls.ts AGENT_NAME_MAX). */
 export const AGENT_NAME_MAX = 40
@@ -24,8 +25,12 @@ export function AgentNameField({
   forName,
   scope,
   trailing,
+  editIn = 'inline',
   className
 }: {
+  /** Where the editor opens: in place (a profile card has room), or in a popover beside the
+   *  name so a table row never reflows while someone types (MCP connections). */
+  editIn?: 'inline' | 'popover'
   /** Beside the name while it is not being edited: the kind pill. */
   trailing?: ReactNode
   conn: string
@@ -79,34 +84,33 @@ export function AgentNameField({
     save.reset()
   }
 
-  if (!editing)
-    return (
-      <span className={cn('inline-flex min-w-0 items-center gap-1', className)}>
-        <span
-          className='truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'
-          data-tip={
-            customName ? `Named by its owner or an administrator · app: ${appName}` : undefined
-          }
-        >
-          {displayName}
-        </span>
-        <button
-          type='button'
-          onClick={start}
-          aria-label={`Rename ${displayName}`}
-          data-tip='Rename — the name records and notifications show for this agent'
-          className='inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-muted hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-500 dark:hover:text-slate-200'
-        >
-          <Pencil className='h-3.5 w-3.5' aria-hidden />
-        </button>
-        {trailing}
+  const view = (
+    <span className={cn('inline-flex min-w-0 items-center gap-1', className)}>
+      <span
+        className='truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'
+        data-tip={
+          customName ? `Named by its owner or an administrator · app: ${appName}` : undefined
+        }
+      >
+        {displayName}
       </span>
-    )
+      <button
+        type='button'
+        onClick={start}
+        aria-label={`Rename ${displayName}`}
+        data-tip='Rename — the name records and notifications show for this agent'
+        className='inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-muted hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-500 dark:hover:text-slate-200'
+      >
+        <Pencil className='h-3.5 w-3.5' aria-hidden />
+      </button>
+      {trailing}
+    </span>
+  )
 
   const preview = trimmed || appName
-  return (
+  const form = (
     <form
-      className={cn('flex w-full min-w-0 flex-col gap-1', className)}
+      className={cn('flex w-full min-w-0 flex-col gap-1', editIn === 'inline' && className)}
       data-nvr-agent-name-edit
       onSubmit={(e) => {
         e.preventDefault()
@@ -129,7 +133,10 @@ export function AgentNameField({
           }}
           aria-label='Agent name'
           aria-describedby={hintId}
-          className='h-8 w-48 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-[13px] text-slate-800 outline-none transition-colors focus:border-nvr-cyan focus-visible:ring-2 focus-visible:ring-nvr-cyan/25 dark:border-border dark:bg-background dark:text-slate-100'
+          className={cn(
+            'h-8 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-[13px] text-slate-800 outline-none transition-colors focus:border-nvr-cyan focus-visible:ring-2 focus-visible:ring-nvr-cyan/25 dark:border-border dark:bg-background dark:text-slate-100',
+            editIn === 'popover' ? 'w-full basis-full' : 'w-48'
+          )}
         />
         <button
           type='submit'
@@ -155,7 +162,7 @@ export function AgentNameField({
             type='button'
             disabled={save.isPending}
             onClick={() => save.mutate(null)}
-            className='h-8 rounded-md px-2 text-[12px] font-medium text-slate-500 underline-offset-2 transition-colors hover:text-slate-800 hover:underline disabled:opacity-40 dark:text-slate-400 dark:hover:text-slate-100'
+            className='h-8 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 disabled:opacity-40 dark:border-border dark:text-slate-300 dark:hover:text-white'
           >
             Use “{appName}”
           </button>
@@ -173,4 +180,28 @@ export function AgentNameField({
       </p>
     </form>
   )
+
+  if (editIn === 'popover')
+    return (
+      <Popover
+        open={editing}
+        onOpenChange={(o) => {
+          if (!o) cancel()
+        }}
+      >
+        <PopoverAnchor asChild>{view}</PopoverAnchor>
+        <PopoverContent
+          align='start'
+          collisionPadding={16}
+          className='w-[min(360px,calc(100vw-2rem))] p-3'
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <p className='mb-2 text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+            Rename this agent
+          </p>
+          {form}
+        </PopoverContent>
+      </Popover>
+    )
+  return editing ? form : view
 }

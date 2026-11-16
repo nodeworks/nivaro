@@ -90,6 +90,10 @@ export function partnerWords(reason: string): string | null {
     } else if (body.startsWith('"')) {
       words = unescapeJson(body.slice(1).replace(/"$/, ''))
       cut = body.length < 2 || !body.endsWith('"')
+    } else if (/^[A-Za-z][^{}[\]<>]*$/.test(body)) {
+      // A plain-text answer that is a sentence ("BEMO is not supported."): the
+      // other system's words too (rt4-forms r-1116d: it read "refused the request").
+      words = body
     }
   }
   const full = (words ?? '').replace(/\s+/g, ' ').trim()

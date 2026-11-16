@@ -33,6 +33,13 @@ export const LIVE_MODE_LABELS: Record<LiveMode, string> = {
   off: 'Off'
 }
 
+/** What each mode does, in one line — Profile → Display and the Roles card use the same words. */
+export const LIVE_MODE_HINTS: Record<LiveMode, string> = {
+  normal: 'Changes appear as they happen, with a short fade.',
+  calm: 'No fades or marks; lists keep their order until you pause.',
+  off: 'Nothing moves until you press ↻.'
+}
+
 const STORAGE_KEY = 'nvr:live-mode'
 /** How long without pointer, wheel or keys counts as "paused" for a Calm list. */
 export const LIVE_CALM_PAUSE_MS = 3000

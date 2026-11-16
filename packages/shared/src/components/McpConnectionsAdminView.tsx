@@ -174,7 +174,6 @@ function BadgeSetting() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-mcp-connections'] })
   })
   if (!q.data) return null
-  const example = mode === 'fixed' ? label.trim() || 'via assistant' : 'via Claude'
   return (
     <section
       className='rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'
@@ -217,9 +216,19 @@ function BadgeSetting() {
             aria-label='Badge label'
           />
         </label>
-        <span className='inline-flex items-center gap-1.5 text-[12px] text-slate-500 dark:text-slate-400'>
-          Shows as <AgentBadge label={example} />
-        </span>
+        {/* Both cases when apps are named: the input sets only the fallback, so the preview
+          shows that fallback too — one "via Claude" alone read as if the input made it. */}
+        {mode === 'fixed' ? (
+          <span className='inline-flex items-center gap-1.5 text-[12px] text-slate-500 dark:text-slate-400'>
+            Shows as <AgentBadge label={label.trim() || 'via assistant'} />
+          </span>
+        ) : (
+          <span className='inline-flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] text-slate-500 dark:text-slate-400'>
+            Shows as <AgentBadge label='via Claude' />
+            <span>· with no app name</span>
+            <AgentBadge label={label.trim() || 'via assistant'} />
+          </span>
+        )}
         <button
           type='button'
           disabled={!dirty || !label.trim() || save.isPending}
@@ -280,7 +289,8 @@ function LimitCell({ c, onSaved }: { c: McpConnection; onSaved: () => void }) {
         }
         className={cn(
           inputCls,
-          'h-7 w-16',
+          // The default shows as a placeholder in both themes (dark read it as a set value).
+          'h-7 w-16 placeholder:text-slate-400 dark:placeholder:text-slate-500',
           save.isError && 'border-red-400 dark:border-red-500/60'
         )}
       />
@@ -538,8 +548,10 @@ export function McpConnectionsAdminView({
           ) : (
             <table className='w-full min-w-[1040px] text-left text-[12px]'>
               <thead>
-                <tr className='border-b border-slate-200 text-[11px] text-slate-500 dark:border-border dark:text-slate-400'>
-                  <th className='px-4 py-2 font-medium'>App</th>
+                {/* Headers never wrap; the App column has a fixed width (renaming opens a
+                  popover beside the name, so the row never reflows while someone types). */}
+                <tr className='border-b border-slate-200 text-[11px] text-slate-500 dark:border-border dark:text-slate-400 [&>th]:whitespace-nowrap'>
+                  <th className='w-[260px] px-4 py-2 font-medium'>App</th>
                   <th className='py-2 pr-3 font-medium'>Person</th>
                   <th className='py-2 pr-3 font-medium'>Last used</th>
                   <th className='py-2 pr-3 font-medium'>
@@ -548,7 +560,10 @@ export function McpConnectionsAdminView({
                   <th className='py-2 pr-3 font-medium'>Top tools</th>
                   <th className='py-2 pr-3 font-medium'>May use</th>
                   <th className='py-2 pr-3 font-medium'>Calls a minute</th>
-                  <th className='py-2 pr-4' />
+                  {/* Actions stay in view (pinned right, a soft edge over the scrolled
+                    cells) when the table is narrower than its columns — with the Watch list
+                    open "Roll back…" was cut at the table edge. */}
+                  <th className='sticky right-0 bg-white py-2 pr-4 dark:bg-card' />
                 </tr>
               </thead>
               <tbody>
@@ -557,8 +572,8 @@ export function McpConnectionsAdminView({
                   return (
                     <Fragment key={c.conn}>
                       <tr className='border-b border-slate-100 align-middle last:border-0 hover:bg-muted/50 dark:border-border/60'>
-                        <td className='px-4 py-2.5'>
-                          <div className='flex items-center gap-2'>
+                        <td className='max-w-[260px] px-4 py-2.5'>
+                          <div className='flex min-w-0 items-center gap-2'>
                             <AgentNameField
                               conn={c.conn}
                               displayName={c.display_name ?? c.name}
@@ -566,7 +581,8 @@ export function McpConnectionsAdminView({
                               appName={c.name}
                               forName={c.user_name ?? 'this person'}
                               scope='admin'
-                              trailing={<KindPill kind={c.kind} />}
+                              editIn='popover'
+                              trailing={<KindPill kind={c.kind} name={c.display_name ?? c.name} />}
                             />
                           </div>
                         </td>
@@ -591,7 +607,7 @@ export function McpConnectionsAdminView({
                               </span>
                             </span>
                           ) : (
-                            <span className='flex items-center gap-3'>
+                            <span className='flex items-center gap-3 whitespace-nowrap'>
                               {c.stats && <CallsSparkline days={c.stats.days} />}
                               <CallFigures s={c.stats} />
                             </span>
@@ -632,8 +648,8 @@ export function McpConnectionsAdminView({
                         <td className='py-2.5 pr-3'>
                           <LimitCell c={c} onSaved={refresh} />
                         </td>
-                        <td className='py-2.5 pr-4 text-right'>
-                          <span className='inline-flex items-center justify-end gap-1.5'>
+                        <td className='sticky right-0 bg-white py-2.5 pl-3 pr-4 text-right shadow-[-10px_0_12px_-10px_rgba(15,23,42,0.18)] dark:bg-card dark:shadow-[-10px_0_12px_-10px_rgba(0,0,0,0.6)]'>
+                          <span className='inline-flex items-center justify-end gap-1.5 whitespace-nowrap'>
                             <button
                               type='button'
                               onClick={() =>

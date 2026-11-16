@@ -38,7 +38,7 @@ describe('mcpWriteStampOf', () => {
     ).toEqual({ mcp_conn: 'k7', via_app: 'Ops bot' })
     expect(
       mcpWriteStampOf({ mcpInner: true, authMethod: 'token', user: { id: USER } } as never)
-    ).toEqual({ mcp_conn: `u${USER.toLowerCase()}`, via_app: 'Assistant' })
+    ).toEqual({ mcp_conn: `u${USER.toLowerCase()}`, via_app: 'Personal token' })
     expect(mcpWriteStampOf({ mcpInner: true } as never)).toBeNull()
   })
 })

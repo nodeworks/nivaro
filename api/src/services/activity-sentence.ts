@@ -557,6 +557,26 @@ export function choiceText(raw: string | null | undefined): string {
 const ISO_DT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
 const ISO_D = /^\d{4}-\d{2}-\d{2}$/
 
+const HTML_TAG = /<\/?[a-z][a-z0-9]*(\s[^>]*)?\/?>/i
+const ENTITIES: Record<string, string> = {
+  '&nbsp;': ' ',
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': "'"
+}
+
+/** Text of an HTML fragment for a one-line sentence: tags become spaces, common entities decode. */
+function markupToWords(html: string): string {
+  return html
+    .replace(/<(script|style|template)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&(nbsp|amp|lt|gt|quot|#39);/g, (m) => ENTITIES[m] ?? m)
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 /** A changed value as a reader sees it: choice label, date in their zone, short text. */
 export function valueText(
   collection: string | null | undefined,
@@ -568,7 +588,10 @@ export function valueText(
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
   if (typeof value === 'object')
     return Array.isArray(value) ? `${value.length} items` : 'a new value'
-  const s = String(value)
+  const raw = String(value)
+  // A rich-text value reads as its words, never its markup ("<p>Splice the feeders</p>").
+  const s = HTML_TAG.test(raw) ? markupToWords(raw) : raw
+  if (!s) return 'empty'
   const choice = labels?.choices?.[`${collection ?? ''}.${field}`]?.[s]
   if (choice) return choiceText(choice)
   if (ISO_D.test(s)) return s

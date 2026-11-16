@@ -151,7 +151,9 @@ function route(event, args) {
   var targets = null
   if (event === 'collection:update') {
     targets = p && p.collection ? holdersOf('collection:' + p.collection) : []
-  } else if (event === 'presence:rows') {
+  } else if (event === 'presence:rows' || event === 'record:drag') {
+    /* record:drag (calendar / Gantt ghosts) goes to the tabs WATCHING the row, like row
+       presence: a calendar never opens the record room (rt9 retake: ghosts never arrived). */
     targets = p && p.collection && p.item != null ? holdersOf('rows:' + p.collection + ':' + p.item) : []
   } else if (event === 'chat:message') {
     var chatHolders = p && p.room ? holdersOf('chat:' + p.room) : []

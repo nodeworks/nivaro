@@ -27,7 +27,15 @@ vi.mock('../../../db/index.js', () => {
     const q = { table, calls: [] as Array<[string, unknown[]]> }
     h.queries.push(q)
     const builder: Record<string, unknown> = {}
-    for (const m of ['distinct', 'where', 'whereNotNull', 'whereIn', 'whereRaw', 'limit'])
+    for (const m of [
+      'distinct',
+      'where',
+      'whereNull',
+      'whereNotNull',
+      'whereIn',
+      'whereRaw',
+      'limit'
+    ])
       builder[m] = (...args: unknown[]) => {
         q.calls.push([m, args])
         return builder
@@ -283,5 +291,23 @@ describe('recordsCarryingFile — rename / replace / delete reach the records sh
       workflows_id: i
     }))
     expect(await recordsCarryingFile('f-1')).toContainEqual({ collection: 'workflows', id: '*' })
+  })
+
+  it('a record whose comment shows the file (a pasted image) hears it too, once', async () => {
+    const file = '539abe70-b2f5-4c06-8f19-195bb6ca37e3'
+    h.columns.workflows = ['id', 'cover']
+    h.rows.workflows = [{ id: 7 }]
+    h.rows.workflows_files = []
+    h.rows.nivaro_comments = [
+      { collection: 'workflows', item: 7 },
+      { collection: 'workflows', item: 8 },
+      { collection: 'nivaro_users', item: 'x' }
+    ]
+    expect(await recordsCarryingFile(file)).toEqual([
+      { collection: 'workflows', id: '7' },
+      { collection: 'workflows', id: '8' }
+    ])
+    const q = [...h.queries].reverse().find((x) => x.table === 'nivaro_comments')
+    expect(q?.calls).toContainEqual(['where', ['text', 'like', `%${file}%`]])
   })
 })

@@ -19,6 +19,7 @@ import {
   ListChecks,
   Loader2,
   Map as MapIcon,
+  MoreHorizontal,
   Network,
   Pin,
   RotateCw,
@@ -97,6 +98,7 @@ import {
   formatValue
 } from '../lib/format-value'
 import { IN_STEP_COLUMN, IN_STEP_SORT, inStepText } from '../lib/in-step'
+import { dotsForRecord } from '../lib/integration-dots'
 import type { JobProgressPayload } from '../lib/jobs-tray'
 import { useKeepRowCheckboxFocus } from '../lib/keep-row-focus'
 import {
@@ -319,7 +321,7 @@ import { relatedMissing } from './item-edit/related-missing'
 import { UserChip, UserRosterCluster } from './item-edit/UserChip'
 import { LiveCount } from './LiveCount'
 import { LiveBurstPill, LivePauseButton } from './LiveListControls'
-import { LiveRowMark } from './LiveRowMark'
+import { LiveRowMark, MovingRowChip } from './LiveRowMark'
 import { CopyListLinkButton } from './list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from './list/InlineEdit'
 import { ListViewers } from './list/ListViewers'
@@ -338,6 +340,7 @@ import {
   ItemActionChoiceList,
   type ItemActionChoiceOption,
   itemActionChoiceStep,
+  ListAccessDenied,
   RevisionsPanel,
   useAccessRegained
 } from './panels'
@@ -959,7 +962,8 @@ function RecordRelationLabel({
     : renderDisplayTemplate(meta?.display_template ?? null, item)
   // rt3 #16 — hover shows the linked record's current step, owners and amounts.
   return (
-    <RecordHoverCard collection={relatedCollection} id={id} disabled={userCol}>
+    // To the right of the cell: below it, the card covered the same column on the next rows.
+    <RecordHoverCard collection={relatedCollection} id={id} disabled={userCol} side='right'>
       <span className='text-[12px] text-slate-700 dark:text-slate-200'>{label}</span>
     </RecordHoverCard>
   )
@@ -7944,7 +7948,11 @@ export function CollectionBrowserView({
         label: meta?.display_name ?? titleCase(collection),
         rows: rows.map((r) => ({ collection, id: String(r.id) })),
         opened: { collection, id: String(id) },
-        entry: ensureHistoryKey()
+        entry: ensureHistoryKey(),
+        // The whole list's count and where this page starts, so the record says "3 of 49",
+        // never the page size (rt-nav review). A grouped list holds every row it shows.
+        ...(totalUnknown ? {} : { total, totalApprox }),
+        offset: groupBy || aiResult ? 0 : (page - 1) * effPageSize
       })
     if (onOpenItem) onOpenItem(id)
     else openTarget({ collection, itemId: String(id) })
@@ -8638,6 +8646,27 @@ export function CollectionBrowserView({
       approx: totalApprox
     })
   })()
+
+  // rt4 review: a list the person may not read shows the lock card in place of the grid,
+  // filters and totals (an empty table under a red bar read as broken). Rows kept from an
+  // earlier read (placeholderData) still show with the bar below.
+  if (!itemsRes && (error as { status?: number } | null)?.status === 403 && !isFilterRefusal(error))
+    return (
+      <div
+        data-cbv
+        data-cbv-denied
+        className={
+          className ?? 'flex h-full min-h-0 flex-col bg-slate-50 text-[13px] dark:bg-slate-950'
+        }
+      >
+        <div className='flex min-h-0 flex-1 flex-col overflow-y-auto'>
+          <ListAccessDenied
+            collection={collection}
+            label={meta?.display_name || titleCase(collection)}
+          />
+        </div>
+      </div>
+    )
 
   return (
     <div
@@ -10252,7 +10281,9 @@ export function CollectionBrowserView({
                 : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
             }`}
           >
-            {(v.is_default || v.role_default) && (
+            {/* The leading ★ says "default"; for an admin on the active pill the default menu's
+                own ★ says it, so it is not shown twice (rt-screens review). */}
+            {(v.is_default || v.role_default) && !(isAdmin && activeViewId === v.id) && (
               <span
                 title={
                   v.role_default
@@ -10295,7 +10326,7 @@ export function CollectionBrowserView({
               <span
                 data-view-count={v.id}
                 data-tip='Records matching this view right now (as you see them)'
-                className='rounded-full bg-slate-100 px-1.5 text-[10.5px] font-medium tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                className='rounded-full bg-slate-100 px-1.5 text-[11.5px] font-medium tabular-nums text-slate-600 dark:bg-slate-800 dark:text-slate-300'
               >
                 <LiveCount
                   value={viewCounts.get(v.id) as number}
@@ -10314,60 +10345,81 @@ export function CollectionBrowserView({
             )}
             {activeViewId === v.id && (
               <>
-                <button
-                  type='button'
-                  onClick={() => toggleViewSub.mutate(v.id)}
-                  data-tip={
-                    subForView(v.id)
-                      ? 'Daily digest on: once a day you hear about records that entered this view. Click to stop it.'
-                      : 'Daily digest off: click to hear once a day about records that enter this view.'
-                  }
-                  aria-label={`Toggle digest subscription for ${v.name}`}
-                  className={
-                    subForView(v.id) ? 'text-[#00a5cc]' : 'text-slate-400 hover:text-[#00a5cc]'
-                  }
-                >
-                  {subForView(v.id) ? (
-                    <Bell className='h-3 w-3' fill='currentColor' />
-                  ) : (
-                    <BellOff className='h-3 w-3' />
-                  )}
-                </button>
-                {canChangeView(v) && (
-                  <button
-                    type='button'
-                    onClick={() => updateView.mutate(v.id)}
-                    disabled={updateView.isPending && updateView.variables === v.id}
-                    title={
-                      updateView.isPending && updateView.variables === v.id
-                        ? 'Saving…'
-                        : viewJustSaved === v.id
-                          ? 'Saved'
-                          : 'Update with current state'
-                    }
-                    aria-label={`Update ${v.name}`}
-                    data-view-update={v.id}
-                    data-view-update-state={
-                      updateView.isPending && updateView.variables === v.id
-                        ? 'saving'
-                        : viewJustSaved === v.id
-                          ? 'saved'
-                          : 'idle'
-                    }
-                    className='inline-flex h-3.5 w-3.5 items-center justify-center'
-                  >
-                    {updateView.isPending && updateView.variables === v.id ? (
-                      <Loader2 className='h-3 w-3 animate-spin' />
-                    ) : viewJustSaved === v.id ? (
-                      <Check
-                        className='h-3 w-3 text-emerald-600 dark:text-emerald-400'
-                        strokeWidth={3}
-                      />
-                    ) : (
-                      '↺'
+                {/* Digest and "update with the current state" live in one ⋯ menu: four icons
+                    inside the pill were too dense (rt-screens review). */}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type='button'
+                      aria-label={`More for the view ${v.name}`}
+                      data-tip='Digest, update the view'
+                      data-view-more={v.id}
+                      className='inline-flex h-4 w-4 items-center justify-center rounded text-slate-500 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-slate-400 dark:hover:text-white'
+                    >
+                      {updateView.isPending && updateView.variables === v.id ? (
+                        <Loader2 className='h-3 w-3 animate-spin' />
+                      ) : viewJustSaved === v.id ? (
+                        <Check
+                          className='h-3 w-3 text-emerald-600 dark:text-emerald-400'
+                          strokeWidth={3}
+                        />
+                      ) : (
+                        <MoreHorizontal className='h-3.5 w-3.5' />
+                      )}
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align='start' className='w-72 p-1'>
+                    <button
+                      type='button'
+                      onClick={() => toggleViewSub.mutate(v.id)}
+                      aria-label={`Toggle digest subscription for ${v.name}`}
+                      className='flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-[12.5px] hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                    >
+                      {subForView(v.id) ? (
+                        <Bell
+                          className='mt-0.5 h-3.5 w-3.5 shrink-0 text-[#00a5cc]'
+                          fill='currentColor'
+                        />
+                      ) : (
+                        <BellOff className='mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500' />
+                      )}
+                      <span className='min-w-0'>
+                        {subForView(v.id) ? 'Stop the daily digest' : 'Get a daily digest'}
+                        <span className='block text-[11.5px] text-muted-foreground'>
+                          {subForView(v.id)
+                            ? 'You hear once a day about records that entered this view.'
+                            : 'Once a day, hear about records that entered this view.'}
+                        </span>
+                      </span>
+                    </button>
+                    {canChangeView(v) && (
+                      <button
+                        type='button'
+                        onClick={() => updateView.mutate(v.id)}
+                        disabled={updateView.isPending && updateView.variables === v.id}
+                        aria-label={`Update ${v.name}`}
+                        data-view-update={v.id}
+                        data-view-update-state={
+                          updateView.isPending && updateView.variables === v.id
+                            ? 'saving'
+                            : viewJustSaved === v.id
+                              ? 'saved'
+                              : 'idle'
+                        }
+                        className='flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-[12.5px] hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-60'
+                      >
+                        <RotateCw className='mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500' />
+                        <span className='min-w-0'>
+                          {updateView.isPending && updateView.variables === v.id
+                            ? 'Saving…'
+                            : viewJustSaved === v.id
+                              ? 'Saved'
+                              : 'Update with the current filters and columns'}
+                        </span>
+                      </button>
                     )}
-                  </button>
-                )}
+                  </PopoverContent>
+                </Popover>
                 {isAdmin && (
                   <ViewDefaultMenu
                     name={v.name}
@@ -11217,6 +11269,14 @@ export function CollectionBrowserView({
                             ? `${VIEW_CHANGED_ROW_CLASS} ${ROW_SURFACE_HOVER}`
                             : `${ROW_SURFACE} ${ROW_SURFACE_HOVER}`
                       const stickyBg = PINNED_CELL_SURFACE
+                      const movingChip = steadyGroups.movingTo(String(id))
+                      // Where the chip sits: over the tail of the row's longest text (a name,
+                      // already truncated), never over a short identifier it would hide.
+                      const movingChipKey = movingChip
+                        ? (orderedCols
+                            .map((c) => ({ k: c.key, n: String(row[c.key] ?? '').length }))
+                            .sort((a, b) => b.n - a.n)[0]?.k ?? orderedCols[0]?.key)
+                        : null
                       return (
                         <tr
                           key={String(id)}
@@ -11330,9 +11390,10 @@ export function CollectionBrowserView({
                                           </span>
                                         )}
                                       </span>
-                                    ) : (
+                                    ) : integrationsEnabled ||
+                                      !(sendStatus?.[String(id)]?.length ?? 0) ? (
                                       <span className='text-[12px] text-slate-300'>—</span>
-                                    )}
+                                    ) : null}
                                     {/* rt4 #10 — the row's sends, beside its state when the list has
                                       no integrations column to carry them. */}
                                     {!integrationsEnabled && (
@@ -11456,6 +11517,13 @@ export function CollectionBrowserView({
                               )
                             }
                             if (col.kind === 'integrations') {
+                              const sendFacts = sendStatus?.[String(id)]
+                              const dotRows = integrationsSummary?.[String(id)]
+                              // The empty dash only when nothing else is in the cell: never "— ⊗".
+                              const showDots =
+                                dotsForRecord(dotRows ?? []).length > 0 ||
+                                !Array.isArray(sendFacts) ||
+                                sendFacts.length === 0
                               return (
                                 <td
                                   key={key}
@@ -11463,8 +11531,8 @@ export function CollectionBrowserView({
                                   className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
                                 >
                                   <span className='inline-flex items-center gap-2'>
-                                    <IntegrationDots rows={integrationsSummary?.[String(id)]} />
-                                    <SendStatusMarks facts={sendStatus?.[String(id)]} />
+                                    {showDots && <IntegrationDots rows={dotRows} />}
+                                    <SendStatusMarks facts={sendFacts} />
                                   </span>
                                 </td>
                               )
@@ -11564,8 +11632,16 @@ export function CollectionBrowserView({
                                     cellText: (e.currentTarget as HTMLElement).innerText.trim()
                                   })
                                 }}
-                                className={`whitespace-nowrap px-3 py-1.5 ${isNumericCol(key) ? 'text-right' : ''} ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                className={`whitespace-nowrap px-3 py-1.5 ${isNumericCol(key) ? 'text-right' : ''} ${pinCls(key, 'z-[1]', stickyBg)}${movingChip && key === movingChipKey ? ' relative' : ''}`}
                               >
+                                {/* rt9 review: a held row in a grouped list says where it goes, in
+                                    words (the counts above already moved). */}
+                                {movingChip && key === movingChipKey && (
+                                  <MovingRowChip
+                                    to={movingChip}
+                                    className='absolute right-2 top-1/2 z-[2] -translate-y-1/2 shadow-sm'
+                                  />
+                                )}
                                 {wrapInline(
                                   row,
                                   key,

@@ -413,10 +413,13 @@ function MatrixSheet({
   onClose: () => void
 }) {
   const w = typeof width === 'number' ? `${width}px` : (width ?? '85%')
+  // Every drawer here fills a phone (max-sm:!w-full beats the inline width): a part-width sheet
+  // left cut-off fragments of the page beside a cramped grid (rt8 review).
   return (
     <div className='fixed inset-0 z-50 flex justify-end bg-black/30' onClick={onClose}>
       <div
-        className='flex h-full flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-border dark:bg-background'
+        data-page-drawer
+        className='flex h-full flex-col border-l border-slate-200 max-sm:!w-full max-sm:!max-w-full max-sm:border-l-0 bg-white shadow-2xl dark:border-border dark:bg-background'
         style={{ width: w, maxWidth: '96%' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -773,7 +776,8 @@ function QuerySheet({
   return (
     <div className='fixed inset-0 z-50 flex justify-end bg-black/30' onClick={onClose}>
       <div
-        className='flex h-full flex-col border-l border-slate-200 bg-slate-50 shadow-2xl dark:border-border dark:bg-background'
+        data-page-drawer
+        className='flex h-full flex-col border-l border-slate-200 max-sm:!w-full max-sm:!max-w-full max-sm:border-l-0 bg-slate-50 shadow-2xl dark:border-border dark:bg-background'
         style={{ width: w, maxWidth: '96%' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -1165,7 +1169,8 @@ export function RecordGridWidgetBody({ widget }: { widget: PageRendererWidget })
             onClick={() => setOpen(false)}
           >
             <div
-              className='flex h-full flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-border dark:bg-background'
+              data-page-drawer
+              className='flex h-full flex-col border-l border-slate-200 max-sm:!w-full max-sm:!max-w-full max-sm:border-l-0 bg-white shadow-2xl dark:border-border dark:bg-background'
               style={{
                 width:
                   typeof cfg.sheet_width === 'number'
@@ -1225,7 +1230,8 @@ function QueryDrawerButton({
           onClick={() => setOpen(false)}
         >
           <div
-            className='flex h-full flex-col border-l border-slate-200 bg-slate-50 shadow-2xl dark:border-border dark:bg-background'
+            data-page-drawer
+            className='flex h-full flex-col border-l border-slate-200 max-sm:!w-full max-sm:!max-w-full max-sm:border-l-0 bg-slate-50 shadow-2xl dark:border-border dark:bg-background'
             style={{
               width:
                 typeof cfg.sheet_width === 'number'

@@ -111,7 +111,12 @@ export function OwnerOpenedLine({
             : 'mt-px h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400'
         }
       />
-      <span data-tip={opened ? `Opened ${exact}` : `In this step since ${exact}`}>
+      {/* Left-aligned text that wraps as one sentence: the name button never sits centred on
+          a line of its own in a narrow column (idea-21 review). */}
+      <span
+        className='min-w-0 text-left'
+        data-tip={opened ? `Opened ${exact}` : `In this step since ${exact}`}
+      >
         {words.lead}
         {opened && data.by ? (
           <>
@@ -119,7 +124,7 @@ export function OwnerOpenedLine({
               <button
                 type='button'
                 aria-label={`${data.by.name} — profile`}
-                className='rounded font-medium text-slate-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-foreground'
+                className='inline rounded p-0 text-left align-baseline font-medium text-slate-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-foreground'
               >
                 {words.name}
               </button>

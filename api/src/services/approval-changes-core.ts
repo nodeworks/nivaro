@@ -160,6 +160,77 @@ export function approvalMomentOf(
   return { at: steps[i].at, state: steps[i].to_key, approvers: approvers.slice(0, 10) }
 }
 
+/** A legacy EditorJS document (object or JSON text), parsed; null when the value is not one. */
+function editorJsDoc(v: unknown): { blocks: Array<{ data?: Record<string, unknown> }> } | null {
+  let doc: unknown = v
+  if (typeof v === 'string') {
+    const s = v.trim()
+    if (!s.startsWith('{') || !/"blocks"\s*:/.test(s)) return null
+    try {
+      doc = JSON.parse(s)
+    } catch {
+      return null
+    }
+  }
+  if (!doc || typeof doc !== 'object' || !Array.isArray((doc as { blocks?: unknown }).blocks))
+    return null
+  return doc as { blocks: Array<{ data?: Record<string, unknown> }> }
+}
+
+const isHtml = (v: unknown): v is string =>
+  typeof v === 'string' && /^<[a-z][\s\S]*>$/i.test(v.trim())
+
+/**
+ * The words of a legacy EditorJS document or of HTML (exported for tests). Used ONLY to compare a
+ * document with the HTML it was converted to (sameValue); never between two HTML values, where
+ * markup such as a link target is part of the value.
+ */
+export function richPlain(v: unknown): string | null {
+  if (isHtml(v)) return plainWords(v)
+  const doc = editorJsDoc(v)
+  if (!doc) return null
+  const parts: string[] = []
+  for (const b of doc.blocks) {
+    const d = b?.data ?? {}
+    if (typeof d.text === 'string') parts.push(d.text)
+    else if (Array.isArray(d.items))
+      for (const it of d.items as unknown[])
+        parts.push(
+          typeof it === 'string' ? it : String((it as { content?: unknown })?.content ?? '')
+        )
+  }
+  return plainWords(parts.join(' '))
+}
+
+const decodeEntities = (s: string) =>
+  s
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+
+function plainWords(html: string): string {
+  return decodeEntities(html.replace(/<[^>]+>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * HTML compared as markup: only whitespace runs and whitespace between tags are normalised.
+ * Entities stay as written — decoding them would let escaped text (`&lt;a href=x&gt;`) and a real
+ * tag compare equal.
+ */
+function normalHtml(html: string): string {
+  return html.replace(/>\s+</g, '><').replace(/\s+/g, ' ').trim()
+}
+
+/** A legacy EditorJS document compared as its blocks (the save `time` stamp is not content). */
+function normalDoc(doc: { blocks: unknown[] }): string {
+  return JSON.stringify(doc.blocks)
+}
+
 function norm(v: unknown): unknown {
   if (v === undefined || v === null || v === '') return null
   if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString()
@@ -182,6 +253,19 @@ function norm(v: unknown): unknown {
 
 /** Equal as values, not as spellings (numbers vs numeric text, Date vs ISO text, '' vs null). */
 export function sameValue(a: unknown, b: unknown): boolean {
+  // Rich text, pairwise. Only the legacy conversion — an EditorJS document on one side, HTML on
+  // the other — compares as words (the conversion itself is not a change after approval). Two
+  // HTML values compare as markup, so a changed link target or image source still counts; two
+  // documents compare as their blocks.
+  const docA = editorJsDoc(a)
+  const docB = editorJsDoc(b)
+  if (docA && docB) return normalDoc(docA) === normalDoc(docB)
+  if ((docA && isHtml(b)) || (docB && isHtml(a))) {
+    const wa = richPlain(a) ?? ''
+    const wb = richPlain(b) ?? ''
+    return wa === wb
+  }
+  if (isHtml(a) && isHtml(b)) return normalHtml(a) === normalHtml(b)
   const x = norm(a)
   const y = norm(b)
   if (typeof x === 'boolean' && typeof y === 'number') return Number(x) === y

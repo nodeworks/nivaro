@@ -37,15 +37,20 @@ export function WidgetImageMenu({
   getTarget,
   label,
   className,
-  align = 'end'
+  align = 'end',
+  loading
 }: {
   getTarget: () => HTMLElement | null
   label: WidgetImageInput | (() => WidgetImageInput)
   className?: string
   align?: 'start' | 'center' | 'end'
+  /** The host knows its widget is (re)loading: the picture would show a spinner. */
+  loading?: boolean
 }) {
   const [busy, setBusy] = useState(false)
+  const [notReady, setNotReady] = useState(false)
   const lock = useRef(false)
+  const waiting = loading || notReady
 
   const resolveLabel = (): WidgetImageLabel =>
     buildWidgetImageLabel(typeof label === 'function' ? label() : label)
@@ -66,7 +71,7 @@ export function WidgetImageMenu({
       copyPngOrSave(png, fileName)
         .then((r) => {
           if (r === 'copied') toast.success('Copied the picture. Paste it into an email or Teams.')
-          else toast.info('Your browser would not copy a picture, so it was saved as a file.')
+          else toast.info(`Your browser would not copy a picture, so it was saved as ${fileName}.`)
         })
         .catch((err) => toastError(err, 'Could not make the picture.'))
         .finally(done)
@@ -82,7 +87,7 @@ export function WidgetImageMenu({
   }
 
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={(open) => open && setNotReady(widgetIsLoading(getTarget()))}>
       <DropdownMenuTrigger asChild>
         <button
           type='button'
@@ -91,7 +96,9 @@ export function WidgetImageMenu({
           data-tip='Copy or save as a picture'
           disabled={busy}
           className={cn(
-            'inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-60 dark:text-slate-500 dark:hover:bg-white/[0.06] dark:hover:text-slate-200',
+            // The hit area reaches past the 24 px glyph box (finger-sized on a phone) without
+            // changing its look.
+            'relative inline-flex h-6 w-6 items-center before:absolute before:-inset-1 justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-60 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-700 dark:text-slate-500 dark:hover:bg-white/[0.06] dark:hover:text-slate-200 dark:data-[state=open]:bg-white/[0.08] dark:data-[state=open]:text-slate-200',
             className
           )}
         >
@@ -103,15 +110,45 @@ export function WidgetImageMenu({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align={align} className='min-w-[170px]'>
-        <DropdownMenuItem onSelect={() => run('copy')} className='gap-2 text-[12.5px]'>
+        <DropdownMenuItem
+          disabled={waiting}
+          onSelect={() => run('copy')}
+          className='gap-2 text-[12.5px]'
+        >
           <ImageIcon className='h-3.5 w-3.5' aria-hidden />
           Copy as image
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => run('download')} className='gap-2 text-[12.5px]'>
+        <DropdownMenuItem
+          disabled={waiting}
+          onSelect={() => run('download')}
+          className='gap-2 text-[12.5px]'
+        >
           <Download className='h-3.5 w-3.5' aria-hidden />
           Download PNG
         </DropdownMenuItem>
+        {waiting && (
+          <p
+            className='flex items-center gap-1.5 px-2 pb-1 pt-1.5 text-[11.5px] text-muted-foreground'
+            data-widget-image-wait
+          >
+            <Loader2 className='h-3 w-3 animate-spin' aria-hidden />
+            Wait for the widget to load
+          </p>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )
+}
+
+/** A spinner, skeleton or busy region in the widget body (its own chrome left out): a picture
+ *  taken now would show the loading state, not the figure. */
+export function widgetIsLoading(el: HTMLElement | null): boolean {
+  if (!el) return false
+  const nodes = el.querySelectorAll<HTMLElement>(
+    '[aria-busy="true"], .animate-spin, .animate-pulse'
+  )
+  for (const n of Array.from(nodes)) {
+    if (!n.closest(`[${WIDGET_IMAGE_IGNORE_ATTR}]`)) return true
+  }
+  return false
 }

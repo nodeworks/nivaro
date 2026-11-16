@@ -625,8 +625,28 @@ function parseOther(text: string): SheetFilter[] | string {
   return out
 }
 
+/** 'project_type.name' → 'Project Type', 'divisions.short_name' → 'Division': a column path in
+ *  words (drop the trailing display column, name the entity) — never shown raw in the review. */
+export function pathWords(path: string): string {
+  const segs = path.split('.').filter(Boolean)
+  while (
+    segs.length > 1 &&
+    /^((short_)?name|label|key|id|title|code|.*_id)$/i.test(segs[segs.length - 1])
+  )
+    segs.pop()
+  const leaf = (segs[segs.length - 1] ?? path).replace(/s$/i, '')
+  return (
+    leaf
+      .replace(/[_-]+/g, ' ')
+      .trim()
+      .replace(/\b\w/g, (c) => c.toUpperCase()) || path
+  )
+}
+
 function describeFilter(f: SheetFilter, headerOf: Map<string, string>): string {
-  const name = headerOf.get(f.field) ?? f.field
+  // A column whose header is its own path (a filter that is no dimension) reads as words.
+  const header = headerOf.get(f.field)
+  const name = header && header !== f.field ? header : pathWords(f.field)
   const value = Array.isArray(f.value) ? f.value.join(', ') : cellText(f.value)
   const word: Record<string, string> = {
     eq: ':',

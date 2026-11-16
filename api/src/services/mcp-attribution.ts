@@ -50,8 +50,14 @@ export function appNameOf(req: StampSource): string {
   const keyId = req.apiKeyId ?? req.apiKeySimulatedId
   if ((req.authMethod === 'api_key' || req.authMethod === 'key_sim') && keyId != null)
     return cleanBadge(String(req.apiKeyName ?? '')) || 'API key'
-  return 'Assistant'
+  // A person's own token: the name MCP connections lists it under (services/mcp-activity.ts),
+  // so the record's presence pill, the badge and the list never call one connection three
+  // things ("Assistant" / "Personal token" / "Sam Rivera token", rt8 review r2).
+  return PERSONAL_TOKEN_NAME
 }
+
+/** The default name of a connection made with a person's own token (`u<id>`). */
+export const PERSONAL_TOKEN_NAME = 'Personal token'
 
 /**
  * The stamp of a write made through the hosted MCP endpoint, else null. `via_app` is the name

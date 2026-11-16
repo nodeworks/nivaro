@@ -4,6 +4,7 @@ import { useNivaroClient } from '../context'
 import { get } from '../lib/commands'
 import { useLiveRecord } from '../lib/live'
 import { formatRelative } from '../lib/utils'
+import { RECORD_CARD_OPEN_EVENT } from './CellCopyLayer'
 import { useHoverIntent } from './collections-directory/CollectionHoverCard'
 import { Popover, PopoverAnchor, PopoverContent } from './ui/popover'
 import { Skeleton } from './ui/skeleton'
@@ -53,6 +54,13 @@ export function cardAmountText(a: { value: number; money: boolean }): string {
     : a.value.toLocaleString('en-US', { maximumFractionDigits: 2 })
 }
 
+/** A card that would only repeat the link — a lookup record with no step, deadline, owners or
+ *  amounts — never opens: it said "Workflow Types / Purchase Order REQ" over a link reading
+ *  "Purchase Order REQ" (rt3-record r-1116b). */
+export function cardAddsNothing(d: RecordCardData): boolean {
+  return !d.state && !d.sla && d.owners.length === 0 && d.amounts.length === 0
+}
+
 const SLA_TEXT: Record<string, { text: string; cls: string }> = {
   warning: {
     text: 'Due soon',
@@ -93,18 +101,20 @@ function CardBody({
     void qc.invalidateQueries({ queryKey: recordCardKey(collection, id) })
   })
   // 404 (not theirs to read) or a failed read: no card at all — never an empty box.
+  const empty = !!data && cardAddsNothing(data)
   useEffect(() => {
-    if (isError) onGone()
-  }, [isError, onGone])
+    if (isError || empty) onGone()
+  }, [isError, empty, onGone])
   if (isPending)
     return (
-      <div className='space-y-2' aria-busy>
+      // In dark the popover and the skeleton token are the same grey: lift the bars a step.
+      <div className='space-y-2 dark:[&>div]:bg-white/[0.09]' aria-busy>
         <Skeleton className='h-4 w-40' />
         <Skeleton className='h-3 w-24' />
         <Skeleton className='h-3 w-32' />
       </div>
     )
-  if (isError || !data) return null
+  if (isError || !data || empty) return null
   const sla = data.sla ? SLA_TEXT[data.sla] : null
   return (
     <div className='min-w-0' data-record-card>
@@ -189,9 +199,18 @@ export function RecordHoverCard({
   const eligible = !disabled && hoverCardEligible(collection, id)
   const card = useHoverIntent(eligible, delayMs)
   const qc = useQueryClient()
-  // A record already answered 404 for this viewer: no card, not even a skeleton.
+  // One overlay at a time: a list cell's copy button stands down while this card is open
+  // (it sat over the card's corner, rt3-record r-1116e).
+  useEffect(() => {
+    if (!card.open || typeof window === 'undefined') return
+    window.dispatchEvent(new CustomEvent(RECORD_CARD_OPEN_EVENT))
+  }, [card.open])
+  // A record already answered 404 for this viewer, or its card would only repeat the link:
+  // no card, not even a skeleton.
   const show = () => {
-    if (qc.getQueryState(recordCardKey(String(collection), String(id)))?.status === 'error') return
+    const state = qc.getQueryState<RecordCardData>(recordCardKey(String(collection), String(id)))
+    if (state?.status === 'error') return
+    if (state?.data && cardAddsNothing(state.data)) return
     card.show()
   }
   if (!eligible) return <>{children}</>
@@ -208,6 +227,13 @@ export function RecordHoverCard({
           }}
           onPointerLeave={(e) => {
             if (e.pointerType === 'mouse') card.hide()
+          }}
+          // A part that carries its own tip ([data-no-hovercard]) keeps the card shut while
+          // the pointer is on it: one overlay at a time (rt6 review).
+          onPointerOver={(e) => {
+            if (e.pointerType !== 'mouse') return
+            if ((e.target as Element).closest?.('[data-no-hovercard]')) card.close()
+            else if (!card.open) show()
           }}
           onPointerDown={card.close}
           onFocus={show}

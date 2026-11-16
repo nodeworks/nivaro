@@ -59,7 +59,7 @@ export function SignedInDevices({ userId, name }: { userId?: string; name?: stri
   return (
     <SectionCard
       icon={<Smartphone className='h-4 w-4' />}
-      title='Signed-in phones'
+      title={list.isSuccess ? `Signed-in phones · ${phones.length}` : 'Signed-in phones'}
       hint={
         userId
           ? 'Signing a phone out ends its sign-in and stops its alerts'

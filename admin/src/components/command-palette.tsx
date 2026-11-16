@@ -214,6 +214,9 @@ export interface GlobalSearchResponse {
   suggestions?: string[]
   extra?: SearchExtra
   commands?: SearchCommand[]
+  /** Parts the search's time budget cut (collection names, or people / semantic / comments …):
+   *  the answer holds everything else, so an empty part here is "not searched", never "no match". */
+  partial?: string[]
 }
 
 export function personName(p: SearchPerson): string {
@@ -1037,7 +1040,11 @@ export function CommandPalette() {
           <div className='flex'>
             <CommandList ref={listRef} className='max-h-[400px] flex-1'>
               {!collectionTab && !activeExtra && (
-                <LiveNewMatchesPill count={recordsLive.newCount} onShow={recordsLive.show} />
+                <LiveNewMatchesPill
+                  count={recordsLive.newCount}
+                  onShow={recordsLive.show}
+                  className='bg-popover'
+                />
               )}
               {collectionTab ? (
                 <>

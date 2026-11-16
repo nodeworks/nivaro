@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  atWhen,
   msUntilNoAnswer,
   msUntilRetryTick,
   plainDuration,
   retryCountdown,
   type SendStatusFact,
-  sendStatusWords
+  sendStatusWords,
+  withoutContactLine
 } from './send-status'
 
 const NOW = Date.parse('2026-11-14T15:50:00Z')
@@ -45,7 +47,7 @@ describe('sendStatusWords', () => {
     const w = words({ answer_by: '2026-11-14T15:45:00.000Z' })
     expect(w.state).toBe('no_answer')
     expect(w.text).toBe(
-      'No answer from Ledger after 8 minutes — the send is held and will not be repeated automatically'
+      'No answer from Ledger after 8 minutes — the send is held and will not be repeated automatically. An administrator can mark it received or not received.'
     )
   })
 
@@ -104,7 +106,7 @@ describe('sendStatusWords', () => {
       no_retry: 'sending the same thing again cannot fix it'
     })
     expect(w.text).toBe(
-      'Ledger refused it at 10:43 AM: \u201cThe project is closed.\u201d Change that on the record, then send it again.'
+      'Ledger refused it at 10:43 AM: \u201cThe project is closed.\u201d Change that on the record, then send it again from Integrations at the top of the record.'
     )
     // The next step already says repeating it will not do: no second line.
     expect(w.detail).toBeUndefined()
@@ -115,7 +117,31 @@ describe('sendStatusWords', () => {
         finished_at: '2026-11-14T15:43:00.000Z',
         error_class: 'validation'
       }).text
-    ).toBe('Ledger refused it at 10:43 AM. Check the record, then send it again.')
+    ).toBe(
+      'Ledger refused it at 10:43 AM without giving a reason. Check the record, then send it again from Integrations at the top of the record.'
+    )
+    // A plain-text answer is the partner's own words too.
+    expect(
+      words({
+        status: 'failed',
+        finished_at: '2026-11-14T15:43:00.000Z',
+        error_class: 'validation',
+        reason: 'Submission failed — HTTP 400: BEMO is not supported. Contact Support.'
+      }).text
+    ).toBe(
+      'Ledger refused it at 10:43 AM: \u201cBEMO is not supported.\u201d Change that on the record, then send it again from Integrations at the top of the record.'
+    )
+    // A bare HTTP 400 with no words is our reading, not a reason: never "Change that".
+    expect(
+      words({
+        status: 'failed',
+        finished_at: '2026-11-14T15:43:00.000Z',
+        error_class: 'validation',
+        reason: 'Submission failed — HTTP 400'
+      }).text
+    ).toBe(
+      'Ledger refused it at 10:43 AM without giving a reason. Check the record, then send it again from Integrations at the top of the record.'
+    )
   })
 
   it('refused sign-in: an administrator checks the connection', () => {
@@ -233,5 +259,24 @@ describe('helpers', () => {
     expect(msUntilNoAnswer(base, NOW)).toBe(5 * 60_000 + 500)
     expect(msUntilNoAnswer({ ...base, status: 'pending' }, NOW)).toBeNull()
     expect(msUntilNoAnswer({ ...base, answer_by: '2026-11-14T15:00:00.000Z' }, NOW)).toBeNull()
+  })
+})
+
+describe('atWhen', () => {
+  it('says "at" for today and "on <day> at" for another day', () => {
+    expect(atWhen(NOW, NOW)).toMatch(/^at \d{1,2}:\d{2}\s?[AP]M$/)
+    expect(atWhen(NOW - 50 * 86_400_000, NOW)).toMatch(
+      /^on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2}\s?[AP]M$/
+    )
+  })
+})
+
+describe('withoutContactLine', () => {
+  it('drops a closing "Contact Support." footer, never the whole reason', () => {
+    expect(withoutContactLine('BEMO is not supported. Contact Support.')).toBe(
+      'BEMO is not supported.'
+    )
+    expect(withoutContactLine('Contact support')).toBe('Contact support')
+    expect(withoutContactLine('The project is closed.')).toBe('The project is closed.')
   })
 })

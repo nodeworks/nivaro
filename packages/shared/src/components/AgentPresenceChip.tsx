@@ -1,5 +1,5 @@
 import { Bot } from 'lucide-react'
-import { agentSentence, useRecordAgents } from '../lib/agent-presence'
+import { agentOwnerPrefix, agentSentence, useRecordAgents } from '../lib/agent-presence'
 import { useMyUserId } from '../lib/presence-signals'
 import { cn } from '../lib/utils'
 
@@ -24,6 +24,7 @@ export function AgentPresenceChip({
   const first = agents[0]
   const all = agents.map((a) => agentSentence(a, me)).join('\n')
   const writing = first.mode === 'updating'
+  const owner = agentOwnerPrefix(first, me)
   return (
     <span
       data-nvr-agent-presence={first.mode}
@@ -42,16 +43,27 @@ export function AgentPresenceChip({
           />
         )}
       </span>
-      <span className='truncate'>
+      <span className='truncate max-sm:hidden'>
         <span className='font-medium text-slate-800 dark:text-foreground'>{first.name}</span>
-        <span className='hidden sm:inline'>
-          {agentSentence(first, me).slice(first.name.length)}
-        </span>
-        <span className='sm:hidden'>{agentSentence(first, me, true).slice(first.name.length)}</span>
+        {agentSentence(first, me).slice(first.name.length)}
+      </span>
+      {/* Phone: shorter, but still whose agent it is ("Rob’s Desk Claude is updating"). */}
+      <span className='truncate sm:hidden'>
+        {owner ? `${owner} ` : ''}
+        <span className='font-medium text-slate-800 dark:text-foreground'>{first.name}</span>
+        {agentSentence(first, me, true).slice(first.name.length)}
       </span>
       {agents.length > 1 && (
         <span className='shrink-0 font-medium tabular-nums text-slate-500 dark:text-slate-400'>
           +{agents.length - 1}
+          <span className='sr-only'>
+            {' '}
+            more:{' '}
+            {agents
+              .slice(1)
+              .map((a) => agentSentence(a, me))
+              .join('; ')}
+          </span>
         </span>
       )}
     </span>

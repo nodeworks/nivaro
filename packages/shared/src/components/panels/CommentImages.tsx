@@ -210,54 +210,38 @@ export function CommentImageStrip({
   )
 }
 
-function PostedImage({
-  id,
-  name,
-  record
-}: {
-  id: string
-  name: string
-  record?: { collection: string; itemId: string | number } | null
-}) {
+function PostedImage({ id, name, onOpen }: { id: string; name: string; onOpen: () => void }) {
   const client = useNivaroClient()
-  const [open, setOpen] = useState(false)
   const [broken, setBroken] = useState(false)
   const url = client.fileUrl(id)
   if (broken) {
     return (
       <span
         data-comment-image='unavailable'
-        className='inline-flex items-center gap-1 rounded-md border border-dashed border-slate-200 px-2 py-1 text-[11.5px] text-slate-400 dark:border-border dark:text-muted-foreground'
+        className='inline-flex items-center gap-1 rounded-md border border-dashed border-slate-300 px-2 py-1 text-[11.5px] text-slate-500 dark:border-border dark:text-muted-foreground'
       >
         <ImageOff aria-hidden className='h-3 w-3' /> Image not available
       </span>
     )
   }
   return (
-    <>
-      <button
-        type='button'
-        onClick={() => setOpen(true)}
-        data-comment-image='posted'
-        aria-label={`Open ${name}`}
-        className='block max-w-full overflow-hidden rounded-md border border-slate-200 bg-slate-50 transition-colors hover:border-nvr-cyan dark:border-border dark:bg-muted'
-      >
-        <img
-          src={url}
-          alt={name}
-          loading='lazy'
-          onError={() => setBroken(true)}
-          className='block max-h-44 max-w-full object-contain'
-        />
-      </button>
-      {open && (
-        <FilePreviewLightbox
-          file={{ id, url, name, type: 'image/png' }}
-          record={record}
-          onClose={() => setOpen(false)}
-        />
-      )}
-    </>
+    // On a phone the image takes the comment's width (contained, never cropped) instead of
+    // shrinking with the column; on wider screens it keeps its own size up to 176 px tall.
+    <button
+      type='button'
+      onClick={onOpen}
+      data-comment-image='posted'
+      aria-label={`Open ${name}`}
+      className='block max-w-full overflow-hidden rounded-md border border-slate-200 bg-slate-50 transition-colors hover:border-nvr-cyan max-sm:w-full dark:border-border dark:bg-muted'
+    >
+      <img
+        src={url}
+        alt={name}
+        loading='lazy'
+        onError={() => setBroken(true)}
+        className='block max-h-44 max-w-full object-contain max-sm:mx-auto max-sm:min-h-24'
+      />
+    </button>
   )
 }
 
@@ -265,37 +249,70 @@ function PostedImage({
 export function CommentBody({
   text,
   className,
-  record
+  record,
+  caption
 }: {
   text: string
   className?: string
   /** The record the comment is on: an opened image hears when its file changes (rt8 #19). */
   record?: { collection: string; itemId: string | number } | null
+  /** Who posted it and when ("Review Admin · just now") — the opened image's title. */
+  caption?: string | null
 }) {
+  const client = useNivaroClient()
+  const [opened, setOpened] = useState<number | null>(null)
   const parts = splitCommentImages(text)
-  if (!parts.some((p) => p.kind === 'image')) {
+  const images = parts.flatMap((p) => (p.kind === 'image' ? [{ id: p.id, name: p.name }] : []))
+  if (images.length === 0) {
     return (
       <p className={className}>
         <AutolinkedText text={text} />
       </p>
     )
   }
+  const shown = opened != null ? images[opened] : null
+  let imageNo = -1
   return (
     <div className={className}>
-      {parts.map((p, n) =>
-        p.kind === 'text' ? (
-          p.text.trim() ? (
+      {parts.map((p, n) => {
+        if (p.kind === 'text')
+          return p.text.trim() ? (
             // biome-ignore lint/suspicious/noArrayIndexKey: parts are positional and never reorder
             <p key={`t${n}`} className='m-0'>
               <AutolinkedText text={p.text.replace(/^\n+|\n+$/g, '')} />
             </p>
           ) : null
-        ) : (
+        imageNo += 1
+        const at = imageNo
+        return (
           // biome-ignore lint/suspicious/noArrayIndexKey: parts are positional and never reorder
           <div key={`i${n}`} className='my-1.5 whitespace-normal'>
-            <PostedImage id={p.id} name={p.name} record={record} />
+            <PostedImage id={p.id} name={p.name} onOpen={() => setOpened(at)} />
           </div>
         )
+      })}
+      {shown && opened != null && (
+        <FilePreviewLightbox
+          file={{
+            id: shown.id,
+            url: client.fileUrl(shown.id),
+            name: shown.name,
+            type: 'image/png'
+          }}
+          record={record}
+          caption={caption}
+          nav={
+            images.length > 1
+              ? {
+                  index: opened,
+                  count: images.length,
+                  onPrev: () => setOpened((i) => ((i ?? 0) - 1 + images.length) % images.length),
+                  onNext: () => setOpened((i) => ((i ?? 0) + 1) % images.length)
+                }
+              : null
+          }
+          onClose={() => setOpened(null)}
+        />
       )}
     </div>
   )

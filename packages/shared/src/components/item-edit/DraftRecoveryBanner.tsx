@@ -2,6 +2,7 @@ import { ExternalLink, History, RotateCcw, Trash2 } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { useItemNavigation } from '../../context'
 import { draftFilledBack, draftIsFromOtherDevice, type StoredDraft } from '../../lib/draft-store'
+import { diffWindow } from '../../lib/text-diff-window'
 import { titleCase } from '../../lib/utils'
 import { RelativeTime } from '../RelativeTime'
 
@@ -38,6 +39,18 @@ const fmt = (v: unknown): string => {
   if (typeof v === 'boolean') return v ? 'Yes' : 'No'
   const str = typeof v === 'object' ? JSON.stringify(v) : String(v)
   return str.length > 60 ? `${str.slice(0, 60)}…` : str
+}
+
+/** Two plain text values, at least one past the head cut: their differing part (never ids,
+ *  choices or objects — those go through renderValue / fmt). */
+function longTextPair(was: unknown, now: unknown) {
+  const text = (v: unknown) => typeof v === 'string' || v == null
+  if (!text(was) || !text(now)) return null
+  const a = was == null ? '' : String(was)
+  const b = now == null ? '' : String(now)
+  if (a.length <= 60 && b.length <= 60) return null
+  const w = diffWindow(a.replace(/\s+/g, ' '), b.replace(/\s+/g, ' '))
+  return { before: w.before || 'empty', after: w.after || 'empty' }
 }
 
 export function DraftRecoveryBanner({
@@ -88,97 +101,117 @@ export function DraftRecoveryBanner({
       className='mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200'
       data-nvr-draft-recovery
     >
-      <div className='flex flex-wrap items-center gap-2'>
-        <History className='h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400' />
-        <span className='min-w-0 flex-1'>
-          {created ? (
-            <span className='font-semibold' data-nvr-draft-created>
-              {/* No row id (Rob's no-internal-ids rule): "Open the record" links to it. */}
-              These changes from <RelativeTime value={draft.saved_at} /> were already saved as a new
-              record — restoring them makes a second one.
-            </span>
-          ) : (
-            <span className='font-semibold' data-nvr-draft-other-device={otherDevice?.label}>
-              {otherDevice ? (
-                <>Continue your draft from your {otherDevice.label}</>
-              ) : (
-                <>Restore your unsaved changes from</>
-              )}{' '}
-              {otherDevice ? '(' : ''}
-              <RelativeTime value={draft.saved_at} />
-              {otherDevice ? ')' : ''}?
-            </span>
-          )}{' '}
-          <span className='text-amber-800/80 dark:text-amber-200/80'>{parts.join(' · ')}</span>
-          {!!draft.dropped_fields && (
-            <span className='ml-1 text-[11.5px]' data-nvr-draft-dropped>
-              ({draft.dropped_fields} field{draft.dropped_fields === 1 ? '' : 's'} you can no longer
-              edit {draft.dropped_fields === 1 ? 'was' : 'were'} left out)
-            </span>
+      {/* Two blocks that wrap: the message (icon + title, then what it holds) and the actions.
+          The message keeps an 18rem basis, so on a phone or a narrow column the actions take
+          their own row instead of squeezing the title to one word per line; at desktop width
+          the title stays on one line beside them. */}
+      <div className='flex flex-wrap items-start gap-x-3 gap-y-2'>
+        <div className='flex min-w-0 flex-1 basis-[18rem] items-start gap-2'>
+          <History className='mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400' />
+          <div className='min-w-0'>
+            {created ? (
+              <p className='font-semibold' data-nvr-draft-created>
+                {/* No row id (Rob's no-internal-ids rule): "Open the record" links to it. */}
+                These changes from <RelativeTime value={draft.saved_at} /> were already saved as a
+                new record — restoring them makes a second one.
+              </p>
+            ) : (
+              <p className='font-semibold' data-nvr-draft-other-device={otherDevice?.label}>
+                {otherDevice ? (
+                  <>Continue your draft from your {otherDevice.label}</>
+                ) : (
+                  <>Restore your unsaved changes from</>
+                )}{' '}
+                {otherDevice ? '(' : ''}
+                <RelativeTime value={draft.saved_at} />
+                {otherDevice ? ')' : ''}?
+              </p>
+            )}
+            <p className='mt-0.5 text-[11.5px] text-amber-800/90 dark:text-amber-200/85'>
+              {parts.join(' · ')}
+              {parts.length > 0 && ' · '}
+              <button
+                type='button'
+                onClick={() => setOpen((v) => !v)}
+                aria-expanded={open}
+                className='whitespace-nowrap rounded underline decoration-dotted underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60'
+              >
+                {open ? 'Hide changes' : 'Show changes'}
+              </button>
+              {!!draft.dropped_fields && (
+                <span className='ml-1' data-nvr-draft-dropped>
+                  ({draft.dropped_fields} field{draft.dropped_fields === 1 ? '' : 's'} you can no
+                  longer edit {draft.dropped_fields === 1 ? 'was' : 'were'} left out)
+                </span>
+              )}
+            </p>
+            {recordChanged && (
+              <span className='mt-1 inline-block rounded bg-amber-200/70 px-1 py-px text-[10.5px] font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-500/30 dark:text-amber-100'>
+                record changed since — review before restoring
+              </span>
+            )}
+          </div>
+        </div>
+        <div className='flex shrink-0 flex-wrap items-center gap-2 max-sm:pl-6'>
+          {created && createdId && collection && (
+            <a
+              href={itemNav.urlFor({ collection, itemId: createdId })}
+              onClick={(e) => {
+                e.preventDefault()
+                itemNav.open({ collection, itemId: createdId })
+              }}
+              className='inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white hover:brightness-95'
+              data-nvr-draft-open-created
+            >
+              <ExternalLink className='h-3.5 w-3.5' /> Open the record
+            </a>
           )}
-          {recordChanged && (
-            <span className='ml-1 rounded bg-amber-200/70 px-1 py-px text-[10.5px] font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-500/30 dark:text-amber-100'>
-              record changed since — review before restoring
-            </span>
-          )}
-        </span>
-        <button
-          type='button'
-          onClick={() => setOpen((v) => !v)}
-          className='text-[11.5px] underline decoration-dotted underline-offset-2'
-        >
-          {open ? 'Hide changes' : 'Show changes'}
-        </button>
-        {created && createdId && collection && (
-          <a
-            href={itemNav.urlFor({ collection, itemId: createdId })}
-            onClick={(e) => {
-              e.preventDefault()
-              itemNav.open({ collection, itemId: createdId })
-            }}
-            className='inline-flex h-7 items-center gap-1 rounded-md bg-amber-600 px-2.5 text-[11.5px] font-semibold text-white hover:bg-amber-700'
-            data-nvr-draft-open-created
+          {/* The app's one primary (cyan) — never a solid orange that appears nowhere else. */}
+          <button
+            type='button'
+            onClick={onRestore}
+            className={
+              created
+                ? 'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-amber-300 bg-white px-3 text-[12px] font-medium text-amber-900 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-transparent dark:text-amber-100 dark:hover:bg-amber-500/15'
+                : 'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white hover:brightness-95'
+            }
+            data-nvr-draft-restore
           >
-            <ExternalLink className='h-3 w-3' /> Open the record
-          </a>
-        )}
-        <button
-          type='button'
-          onClick={onRestore}
-          className={
-            created
-              ? 'inline-flex h-7 items-center gap-1 rounded-md border border-amber-300 px-2.5 text-[11.5px] font-medium hover:bg-amber-100 dark:border-amber-500/40 dark:hover:bg-amber-500/15'
-              : 'inline-flex h-7 items-center gap-1 rounded-md bg-amber-600 px-2.5 text-[11.5px] font-semibold text-white hover:bg-amber-700'
-          }
-          data-nvr-draft-restore
-        >
-          <RotateCcw className='h-3 w-3' />{' '}
-          {created ? 'Restore anyway' : otherDevice ? 'Continue' : 'Restore'}
-        </button>
-        <button
-          type='button'
-          onClick={onDiscard}
-          className='inline-flex h-7 items-center gap-1 rounded-md border border-amber-300 px-2.5 text-[11.5px] font-medium hover:bg-amber-100 dark:border-amber-500/40 dark:hover:bg-amber-500/15'
-          data-nvr-draft-discard
-        >
-          <Trash2 className='h-3 w-3' /> Discard
-        </button>
+            <RotateCcw className='h-3.5 w-3.5' />{' '}
+            {created ? 'Restore anyway' : otherDevice ? 'Continue' : 'Restore'}
+          </button>
+          <button
+            type='button'
+            onClick={onDiscard}
+            className='inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-amber-300 bg-white px-3 text-[12px] font-medium text-amber-900 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-transparent dark:text-amber-100 dark:hover:bg-amber-500/15'
+            data-nvr-draft-discard
+          >
+            <Trash2 className='h-3.5 w-3.5' /> Discard
+          </button>
+        </div>
       </div>
       {open && (
         <div className='mt-2 max-h-[240px] space-y-1 overflow-y-auto border-t border-amber-200/70 pt-2 dark:border-amber-500/30'>
-          {fields.map(([k, v]) => (
-            <div key={k} className='text-[11.5px]'>
-              <span className='font-medium'>{labelFor(k) || titleCase(k.replace(/_/g, ' '))}</span>
-              <p className='break-words text-amber-800/80 dark:text-amber-200/80'>
-                <span className='line-through opacity-70'>
-                  {renderValue ? renderValue(k, current[k]) : fmt(current[k])}
-                </span>{' '}
-                <span className='font-medium text-amber-900 dark:text-amber-100'>
-                  {renderValue ? renderValue(k, v) : fmt(v)}
+          {fields.map(([k, v]) => {
+            // Long text shows the part that differs: a 60-character head cut made the old and
+            // new text read the same whenever the edit was past it (rt4-sync r-1116b).
+            const win = longTextPair(current[k], v)
+            return (
+              <div key={k} className='text-[11.5px]'>
+                <span className='font-medium'>
+                  {labelFor(k) || titleCase(k.replace(/_/g, ' '))}
                 </span>
-              </p>
-            </div>
-          ))}
+                <p className='break-words text-amber-800/80 dark:text-amber-200/80'>
+                  <span className='line-through opacity-70'>
+                    {win ? win.before : renderValue ? renderValue(k, current[k]) : fmt(current[k])}
+                  </span>{' '}
+                  <span className='font-medium text-amber-900 dark:text-amber-100'>
+                    {win ? win.after : renderValue ? renderValue(k, v) : fmt(v)}
+                  </span>
+                </p>
+              </div>
+            )
+          })}
           {Object.entries(draft.pending_rows ?? {})
             .filter(([, r]) => r.length > 0)
             .map(([k, r]) => (

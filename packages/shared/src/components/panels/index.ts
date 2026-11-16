@@ -1,8 +1,4 @@
-export { AddendumPanel } from './AddendumPanel'
-export { CommentPanel } from './CommentPanel'
-export { OwnersSlot } from './OwnersSlot'
-export type { LockHolder, LockQueueEntry } from './ItemLockBanner'
-export { AccessDeniedPanel } from './AccessDeniedPanel'
+export { AccessDeniedPanel, ListAccessDenied } from './AccessDeniedPanel'
 export { AccessGrantedNote, useAccessRegained } from './AccessGrantedNote'
 export {
   deniedToastAction,
@@ -10,6 +6,10 @@ export {
   WhyDeniedButton,
   WhyOwnersButton
 } from './AccessInsights'
+export { AddendumPanel } from './AddendumPanel'
+export { MoveProblemWordsContext } from './BackgroundMove'
+export { CommentPanel } from './CommentPanel'
+export { CustomActionButtons } from './CustomActionButtons'
 export { ErpFailureBanner } from './ErpFailureBanner'
 export { ExternalRequestsChip, useExternalRequestsShown } from './ExternalRequestsChip'
 export { ItemActionButtons } from './ItemActionButtons'
@@ -19,12 +19,12 @@ export {
   type ItemActionChooseMeta,
   itemActionChoiceStep
 } from './ItemActionChoices'
-export { CustomActionButtons } from './CustomActionButtons'
+export type { LockHolder, LockQueueEntry } from './ItemLockBanner'
 export { ItemLockBanner, LockHolderButton, useItemLock } from './ItemLockBanner'
-export { MoveProblemWordsContext } from './BackgroundMove'
+export { OwnersSlot } from './OwnersSlot'
 export { PipelinePanel, PipelineTransitionButtons } from './PipelinePanel'
-export { RevisionsPanel } from './RevisionsPanel'
+export { ReferencedByPanel } from './ReferencedByPanel'
 export { RelatedRecordsPanel } from './RelatedRecordsPanel'
+export { RevisionsPanel } from './RevisionsPanel'
 export { TaskPanel } from './TaskPanel'
 export { WorkflowPanel } from './WorkflowPanel'
-export { ReferencedByPanel } from './ReferencedByPanel'

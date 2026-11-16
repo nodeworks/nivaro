@@ -83,6 +83,7 @@ export function FieldSourceBadge({
   const t = data?.[field]
   const shown = wanted && !!t
   const text = t ? sourceSentence(t) : ''
+  const kind = t ? sourceKind(t.via) : 'person'
   return (
     <span
       ref={anchorRef}
@@ -91,30 +92,40 @@ export function FieldSourceBadge({
       aria-hidden={!shown}
     >
       {shown && t && (
+        // Text only, right after the label's own icons: the field's one dot is the live-change
+        // mark beside it (its tip says who changed it). What kind of source this is — a person,
+        // a process, outside the app — is in this badge's tooltip. It never leaves its anchor
+        // (the label row's free space): on a narrow row the sentence truncates, whole in the tip.
         <span
           data-field-source={field}
           data-field-source-via={t.via}
+          data-tip={`${text} · ${formatDateTime(t.at)} — ${SOURCE_KIND_WORDS[kind]}`}
           className={cn(
-            'nvr-fade-in absolute right-0 top-1/2 inline-flex -translate-y-1/2 items-center gap-1 whitespace-nowrap rounded-full bg-white py-px pl-2 pr-0.5 text-[10.5px] leading-4 dark:bg-card',
-            showLive ? 'text-sky-700 dark:text-sky-300' : 'text-slate-500 dark:text-slate-400'
+            'nvr-fade-in pointer-events-auto absolute top-1/2 left-0 inline-flex max-w-full -translate-y-1/2 items-center gap-1 whitespace-nowrap rounded-full py-px pr-1 pl-1 text-[10.5px] leading-4 text-slate-500 dark:text-slate-400',
+            showLive && 'text-slate-600 dark:text-slate-300'
           )}
-          title={`${text} · ${formatDateTime(t.at)}`}
         >
-          <span
-            aria-hidden
-            className={cn(
-              'h-1.5 w-1.5 shrink-0 rounded-full',
-              t.via === 'user'
-                ? 'bg-slate-300 dark:bg-slate-500'
-                : t.via === 'outside'
-                  ? 'bg-rose-400'
-                  : 'bg-amber-400'
-            )}
-          />
-          {text}
-          <span className='text-slate-400 dark:text-slate-500'>· {formatRelative(t.at)}</span>
+          <span className='min-w-0 truncate'>{text}</span>
+          <span className='shrink-0 text-slate-400 dark:text-slate-500'>
+            · {formatRelative(t.at)}
+          </span>
         </span>
       )}
     </span>
   )
+}
+
+type SourceKind = 'person' | 'process' | 'outside'
+
+function sourceKind(via: FieldTouch['via'] | undefined): SourceKind {
+  if (via === 'user') return 'person'
+  if (via === 'outside') return 'outside'
+  return 'process'
+}
+
+/** What kind of source it is, in the tooltip. */
+const SOURCE_KIND_WORDS: Record<SourceKind, string> = {
+  person: 'a person set it in the app',
+  process: 'set by a process (sync, import, procedure or the system), not a person',
+  outside: 'changed directly in the database, outside the app'
 }

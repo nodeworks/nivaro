@@ -246,6 +246,7 @@ function FieldThread({
       </div>
       <CommentBody
         text={c.text}
+        caption={`${personName(c.user)} · ${formatRelative(c.created_at)}`}
         className={cn(
           'm-0 mt-0.5 whitespace-pre-wrap text-[12.5px] leading-snug [overflow-wrap:anywhere]',
           resolved

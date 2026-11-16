@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, Copy, RotateCcw } from 'lucide-react'
+import { ChevronDown, CopyPlus, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../../context'
@@ -7,6 +7,7 @@ import { post } from '../../lib/commands'
 import { copyRulesQuery, fieldTitle, groupNeverCopied, headerCopySkip } from '../../lib/copy-rules'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
+import { Checkbox } from '../ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -17,7 +18,6 @@ import {
   DialogTrigger
 } from '../ui/dialog'
 import { Label } from '../ui/label'
-import { Switch } from '../ui/switch'
 import { FieldRenderer } from './FieldRenderer'
 import type { CMSField, CMSRelation } from './types'
 
@@ -46,6 +46,14 @@ function labelOf(f: CMSField): string {
   return f.label?.trim() || fieldTitle(f.field)
 }
 
+/** A value the copy would carry: empty ones are folded away (review r-1116b). */
+function hasValue(v: unknown): boolean {
+  if (v == null) return false
+  if (typeof v === 'string') return v.trim() !== ''
+  if (Array.isArray(v)) return v.length > 0
+  return true
+}
+
 interface FieldState {
   include: boolean
   value: unknown
@@ -58,6 +66,8 @@ interface CloneDialogProps {
   fields: CMSField[]
   relations: CMSRelation[]
   currentValues: Record<string, unknown>
+  /** The record's heading ("TP26-91116"), for the dialog title. */
+  recordLabel?: string
   onSuccess: (newId: string | number) => void
 }
 
@@ -67,6 +77,7 @@ export function CloneDialog({
   fields,
   relations,
   currentValues,
+  recordLabel,
   onSuccess
 }: CloneDialogProps) {
   const client = useNivaroClient()
@@ -74,6 +85,7 @@ export function CloneDialog({
   const [open, setOpen] = useState(false)
   const [cloning, setCloning] = useState(false)
   const [showNever, setShowNever] = useState(false)
+  const [showEmpty, setShowEmpty] = useState(false)
   const [fieldStates, setFieldStates] = useState<Record<string, FieldState>>({})
   const [subRowIncludes, setSubRowIncludes] = useState<Record<string, boolean>>({})
 
@@ -89,6 +101,9 @@ export function CloneDialog({
   const cloneableFields = fields.filter(
     (f) => isCloneable(f, relations, collection) && !neverCopy.has(f.field)
   )
+  // What the copy really carries comes first; empty fields fold behind one line.
+  const filledFields = cloneableFields.filter((f) => hasValue(currentValues[f.field]))
+  const emptyFields = cloneableFields.filter((f) => !hasValue(currentValues[f.field]))
   const subRowFields = fields.filter(isSubRowField)
 
   function openFresh() {
@@ -101,6 +116,7 @@ export function CloneDialog({
     for (const f of subRowFields) srInit[f.field] = true
     setSubRowIncludes(srInit)
     setShowNever(false)
+    setShowEmpty(false)
     setOpen(true)
   }
 
@@ -168,6 +184,63 @@ export function CloneDialog({
   const setValue = (field: string, value: unknown) =>
     setFieldStates((s) => ({ ...s, [field]: { ...s[field], value } }))
 
+  // One field row. The include control is a checkbox, so a yes/no value switch
+  // beside it reads as the value (review r-1116b).
+  function renderRow(f: CMSField) {
+    const state = fieldStates[f.field]
+    if (!state) return null
+    const dirty = isDirty(f.field, state)
+    const id = `clone-inc-${f.field}`
+    return (
+      <div key={f.field} className='flex items-start gap-2.5' data-clone-field={f.field}>
+        <Checkbox
+          id={id}
+          checked={state.include}
+          aria-label={`Copy ${labelOf(f)}`}
+          onCheckedChange={() =>
+            setFieldStates((s) => ({
+              ...s,
+              [f.field]: { ...s[f.field], include: !s[f.field].include }
+            }))
+          }
+          className='mt-2.5'
+        />
+        <Label
+          htmlFor={id}
+          className={cn(
+            'mt-2 w-36 shrink-0 break-words text-[12px] leading-snug',
+            !state.include && 'text-slate-400 line-through dark:text-slate-500'
+          )}
+        >
+          {labelOf(f)}
+        </Label>
+        <div className={cn('min-w-0 flex-1', !state.include && 'pointer-events-none opacity-40')}>
+          {/* The form's own control: pickers show labels, dates the form's date
+              input, choices their text. */}
+          <FieldRenderer
+            field={f}
+            value={state.value}
+            onChange={(v) => setValue(f.field, v)}
+            relations={relations}
+            collection={collection}
+            itemId='new'
+          />
+        </div>
+        {dirty && state.include && (
+          <button
+            type='button'
+            data-tip='Back to the original value'
+            aria-label={`Reset ${labelOf(f)}`}
+            onClick={() => setValue(f.field, currentValues[f.field] ?? null)}
+            className='mt-2.5 shrink-0 text-slate-400 hover:text-slate-600 dark:hover:text-foreground'
+          >
+            <RotateCcw className='h-3.5 w-3.5' />
+          </button>
+        )}
+      </div>
+    )
+  }
+
   return (
     <Dialog
       open={open}
@@ -177,14 +250,22 @@ export function CloneDialog({
       }}
     >
       <DialogTrigger asChild>
-        <Button size='sm' variant='outline' className='gap-1.5'>
-          <Copy className='h-3.5 w-3.5' />
-          Clone
+        <Button
+          size='sm'
+          variant='outline'
+          className='gap-1.5'
+          data-clone-open
+          data-tip='Pick which values to copy; the copy is saved at once and starts at the first step.'
+        >
+          <CopyPlus className='h-3.5 w-3.5' />
+          Clone and save…
         </Button>
       </DialogTrigger>
       <DialogContent className='flex max-h-[85vh] max-w-xl flex-col overflow-hidden'>
         <DialogHeader className='shrink-0 space-y-1.5 px-6 pt-6'>
-          <DialogTitle className='text-[15px]'>Clone item</DialogTitle>
+          <DialogTitle className='truncate text-[15px]'>
+            {recordLabel ? `Clone ${recordLabel}` : 'Clone item'}
+          </DialogTitle>
           <DialogDescription className='text-[12.5px] leading-relaxed' data-clone-intro>
             The copy starts at the first step with its own history.
             {!rulesPending && neverCount > 0 && (
@@ -240,67 +321,42 @@ export function CloneDialog({
                   Values the copy starts with
                 </p>
                 <div className='space-y-2.5'>
-                  {cloneableFields.map((f) => {
-                    const state = fieldStates[f.field]
-                    if (!state) return null
-                    const dirty = isDirty(f.field, state)
-                    return (
-                      <div
-                        key={f.field}
-                        className='flex items-start gap-2'
-                        data-clone-field={f.field}
-                      >
-                        <Switch
-                          checked={state.include}
-                          aria-label={`Copy ${labelOf(f)}`}
-                          onCheckedChange={() =>
-                            setFieldStates((s) => ({
-                              ...s,
-                              [f.field]: { ...s[f.field], include: !s[f.field].include }
-                            }))
-                          }
-                          className='mt-2 shrink-0 scale-75'
-                        />
-                        <Label
-                          className={cn(
-                            'mt-2.5 w-36 shrink-0 truncate text-[12px]',
-                            !state.include && 'text-slate-400 line-through'
-                          )}
-                        >
-                          {labelOf(f)}
-                        </Label>
-                        <div
-                          className={cn(
-                            'min-w-0 flex-1',
-                            !state.include && 'pointer-events-none opacity-40'
-                          )}
-                        >
-                          {/* The form's own control: pickers show labels, dates the
-                              form's date input, choices their text. */}
-                          <FieldRenderer
-                            field={f}
-                            value={state.value}
-                            onChange={(v) => setValue(f.field, v)}
-                            relations={relations}
-                            collection={collection}
-                            itemId='new'
-                          />
-                        </div>
-                        {dirty && state.include && (
-                          <button
-                            type='button'
-                            data-tip='Back to the original value'
-                            aria-label={`Reset ${labelOf(f)}`}
-                            onClick={() => setValue(f.field, currentValues[f.field] ?? null)}
-                            className='mt-2.5 shrink-0 text-slate-400 hover:text-slate-600 dark:hover:text-foreground'
-                          >
-                            <RotateCcw className='h-3.5 w-3.5' />
-                          </button>
-                        )}
-                      </div>
-                    )
-                  })}
+                  {filledFields.map(renderRow)}
+                  {filledFields.length === 0 && (
+                    <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+                      Every field the copy could carry is empty on this record.
+                    </p>
+                  )}
                 </div>
+                {emptyFields.length > 0 && (
+                  <div className='mt-3 border-t border-slate-100 pt-3 dark:border-border'>
+                    <button
+                      type='button'
+                      aria-expanded={showEmpty}
+                      onClick={() => setShowEmpty((v) => !v)}
+                      className='inline-flex items-center gap-1 rounded text-[12px] font-medium text-slate-600 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-muted-foreground dark:hover:text-foreground'
+                      data-clone-empty-toggle
+                    >
+                      <ChevronDown
+                        className={cn(
+                          'h-3.5 w-3.5 transition-transform',
+                          !showEmpty && '-rotate-90'
+                        )}
+                      />
+                      {emptyFields.length === 1
+                        ? '1 empty field'
+                        : `${emptyFields.length} empty fields`}{' '}
+                      <span className='font-normal text-slate-500 dark:text-muted-foreground'>
+                        — copied empty unless you fill them
+                      </span>
+                    </button>
+                    {showEmpty && (
+                      <div className='mt-2.5 space-y-2.5' data-clone-empty-list>
+                        {emptyFields.map(renderRow)}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
             {subRowFields.length > 0 && (
@@ -311,12 +367,16 @@ export function CloneDialog({
                 <div className='space-y-2'>
                   {subRowFields.map((f) => (
                     <div key={f.field} className='flex items-center gap-2'>
-                      <Switch
+                      <Checkbox
+                        id={`clone-sub-${f.field}`}
                         checked={!!subRowIncludes[f.field]}
-                        onCheckedChange={(v) => setSubRowIncludes((s) => ({ ...s, [f.field]: v }))}
-                        className='shrink-0 scale-75'
+                        onCheckedChange={(v) =>
+                          setSubRowIncludes((s) => ({ ...s, [f.field]: v === true }))
+                        }
                       />
-                      <Label className='text-[12px]'>Include {labelOf(f)} rows</Label>
+                      <Label htmlFor={`clone-sub-${f.field}`} className='text-[12px]'>
+                        Include {labelOf(f)} rows
+                      </Label>
                     </div>
                   ))}
                 </div>
@@ -329,7 +389,7 @@ export function CloneDialog({
             Cancel
           </Button>
           <Button size='sm' disabled={cloning || rulesPending} onClick={handleClone}>
-            <Copy className='mr-1.5 h-3.5 w-3.5' />
+            <CopyPlus className='mr-1.5 h-3.5 w-3.5' />
             {cloning ? 'Cloning…' : 'Clone'}
           </Button>
         </DialogFooter>

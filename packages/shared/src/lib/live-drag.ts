@@ -46,7 +46,9 @@ export function dayOf(value: unknown): string | null {
   if (value == null || value === '') return null
   const s = String(value)
   const m = DATE_ONLY.exec(s.slice(0, 10))
-  if (m && (s.length === 10 || /^\d{4}-\d{2}-\d{2}[ T]00:00(:00)?(\.0+)?$/.test(s)))
+  // The API serialises a date column as UTC midnight ("2026-11-10T00:00:00.000Z"): that is the
+  // day itself, never the evening before west of UTC (rt9 retake: every entry sat a day early).
+  if (m && (s.length === 10 || /^\d{4}-\d{2}-\d{2}[ T]00:00(:00)?(\.0+)?(Z|[+-]00:?00)?$/.test(s)))
     return s.slice(0, 10)
   const d = new Date(s)
   return Number.isNaN(d.getTime()) ? null : dayKey(d)

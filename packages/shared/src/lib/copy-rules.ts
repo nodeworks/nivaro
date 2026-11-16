@@ -39,6 +39,12 @@ export function fieldTitle(name: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+/** A label someone typed as a column name ("workflow_state (legacy)") in words:
+ *  snake_case tokens become titled words, the rest is kept. */
+export function readableLabel(label: string): string {
+  return label.replace(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g, (m) => fieldTitle(m))
+}
+
 export interface NeverCopiedGroup {
   reason: string
   label: string
@@ -66,7 +72,10 @@ export function groupNeverCopied(
     if (!f || why === 'list' || why === 'audit') continue
     const label = COPY_REASON_WORDS.find(([r]) => r === why)?.[1]
     if (!label) continue
-    groups.get(label)?.fields.push({ field, label: f.label?.trim() || fieldTitle(field) })
+    groups.get(label)?.fields.push({
+      field,
+      label: f.label?.trim() ? readableLabel(f.label.trim()) : fieldTitle(field)
+    })
   }
   return [...groups.values()].filter((g) => g.fields.length > 0)
 }

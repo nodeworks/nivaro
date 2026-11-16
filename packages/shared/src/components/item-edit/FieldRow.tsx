@@ -20,6 +20,7 @@ import { useNivaroClient, useParentDraft } from '../../context'
 import { AUTOFILL_CHECK_KEY, readAiFill, showsAiButton } from '../../lib/ai-fill'
 import { useCoViewers } from '../../lib/co-edit'
 import { del, get, post } from '../../lib/commands'
+import { fieldCurrency } from '../../lib/derived-causes'
 import { toastError } from '../../lib/error-toast'
 import { useOptionalRealtime } from '../../lib/realtime'
 import { cn, formatDateTime, titleCase, toLocalDateString } from '../../lib/utils'
@@ -1163,8 +1164,15 @@ export const FieldRow = memo(function FieldRow({
               {fieldIsRecommended(field) && <RecommendedMarker />}
             </Label>
           )}
-          {partnerNeedShown && partnerNeed && (
-            <PartnerNeedBadge field={field.field} mark={partnerNeed} />
+          {/* Right beside the label it belongs to — after the AI chip it read as detached. */}
+          {remoteChange && !remoteChange.conflict && (
+            <RemoteChangeMark
+              change={remoteChange}
+              now={draft[field.field]}
+              field={field}
+              relatedCollection={cascadeRelatedCollection ?? null}
+              onDismiss={() => affordances?.dismissRemoteChange(field.field)}
+            />
           )}
           {shownText.note && (
             <TooltipProvider delayDuration={100}>
@@ -1310,15 +1318,6 @@ export const FieldRow = memo(function FieldRow({
             name={field.field}
             label={label}
           />
-          {remoteChange && !remoteChange.conflict && (
-            <RemoteChangeMark
-              change={remoteChange}
-              now={draft[field.field]}
-              field={field}
-              relatedCollection={cascadeRelatedCollection ?? null}
-              onDismiss={() => affordances?.dismissRemoteChange(field.field)}
-            />
-          )}
           {(locked || field.readonly) && lockReason ? (
             <LockReasonBadge reason={lockReason} onHover={affordances?.onLockHover} />
           ) : locked ? (
@@ -1500,6 +1499,8 @@ export const FieldRow = memo(function FieldRow({
           itemId={itemId}
           field={field.field}
           type={field.type}
+          currency={fieldCurrency(field as never)}
+          value={draft[field.field] ?? null}
         />
       )}
       {error && (
@@ -1536,6 +1537,14 @@ export const FieldRow = memo(function FieldRow({
       )}
       {partnerHintShown && (
         <PartnerNeedHint field={field.field} label={label || titleCase(field.field)} />
+      )}
+      {partnerNeedShown && partnerNeed && (
+        // Under the input, where the partner hint sits — never in the label line, where it
+        // wrapped onto a line of its own (or truncated to "Needed by M…") and pushed this
+        // input below its row neighbours (idea-43 review).
+        <div className='flex min-w-0'>
+          <PartnerNeedBadge field={field.field} mark={partnerNeed} />
+        </div>
       )}
       {personalDefaultHint && !personalDefaultApplied && (
         <PersonalDefaultHint field={field.field} text={personalDefaultHint} />

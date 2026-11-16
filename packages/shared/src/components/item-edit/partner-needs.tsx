@@ -110,9 +110,11 @@ export function needLabel(mark: PartnerNeedMark): string {
 
 /** The badge's tip: who needs it and on which move. */
 export function needTip(mark: PartnerNeedMark): string {
-  const who = mark.partners.join(', ') || 'A partner system'
+  // Name the partner as the system the record is SENT to: beside a picked warehouse
+  // ("CTDI") a bare "Acme Warehouse needs this" read as a mismatch (idea-43 review).
+  const who = mark.partners.join(', ') || 'a partner system'
   const when = mark.steps.length ? ` at ${mark.steps.join(' / ')}` : ' at a later step'
-  return `${who} needs this${when}. Fill it in now so the step does not stop on it later.`
+  return `This record is sent to ${who}${when}, which needs this field. Fill it in now so the step does not stop on it later.`
 }
 
 const NO_FIELDS: Record<string, PartnerNeedMark> = {}
@@ -204,7 +206,7 @@ export function usePartnerNeedsForm(args: {
 const BADGE =
   'inline-flex max-w-full items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-px text-[10px] font-medium leading-4 text-indigo-700 dark:border-indigo-400/25 dark:bg-indigo-400/10 dark:text-indigo-200'
 
-/** Beside a field's label while it is empty: "Needed by Acme ERP". */
+/** Under an empty field's input: "Needed by Acme ERP". */
 export function PartnerNeedBadge({ field, mark }: { field: string; mark: PartnerNeedMark }) {
   return (
     <span

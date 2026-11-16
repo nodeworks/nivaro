@@ -326,6 +326,26 @@ describe('ticket history', () => {
     ])
   })
 
+  it("shows a support person's look once, and never the requester's look at their own", () => {
+    const look = (id: number, user: string, name: string) => ({
+      ...row(id, 'support-traffic-view', 'Viewed the requester traffic', name),
+      user
+    })
+    const out = foldShareHistory(
+      [
+        look(1, 'rita-id', 'Rita'),
+        row(2, 'screen-share-start', 'Started sharing their screen with Beth'),
+        look(3, 'beth-id', 'Beth'),
+        row(4, 'screen-share-stop', 'Stopped sharing their screen (1 min)'),
+        row(5, 'screen-share-start', 'Started sharing their screen with Beth'),
+        look(6, 'BETH-ID', 'Beth'),
+        row(7, 'screen-share-stop', 'Stopped sharing their screen (2 min)')
+      ],
+      { requester: 'RITA-ID' }
+    )
+    expect(out.map((r) => r.id)).toEqual([2, 3, 5])
+  })
+
   it('a share still running reads as now', () => {
     const out = foldShareHistory([
       row(1, 'screen-share-start', 'Started sharing their screen with Beth'),

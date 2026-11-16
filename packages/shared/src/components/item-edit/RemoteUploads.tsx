@@ -39,10 +39,13 @@ export function RemoteUploadRow({ upload: u }: { upload: RemoteUpload }) {
     <div
       role='status'
       data-remote-upload={u.key}
-      className='nvr-fade-in rounded-md border border-dashed border-slate-200 bg-slate-50/70 px-2 py-1.5 dark:border-border dark:bg-muted/40'
+      className='nvr-fade-in rounded-md border border-slate-200 bg-slate-50/70 px-2 py-1.5 dark:border-border dark:bg-muted/40'
     >
       <div className='flex items-center gap-1.5 text-[11.5px] leading-4 text-slate-600 dark:text-slate-300'>
-        <UploadCloud className='h-3.5 w-3.5 shrink-0 text-nvr-cyan' aria-hidden />
+        <UploadCloud
+          className='h-3.5 w-3.5 shrink-0 text-cyan-700 dark:text-nvr-cyan'
+          aria-hidden
+        />
         <span className='min-w-0 flex-1 truncate'>{uploadSentence({ ...u, pct: null })}</span>
         {known && (
           <span className='shrink-0 tabular-nums text-slate-500 dark:text-slate-400'>{u.pct}%</span>

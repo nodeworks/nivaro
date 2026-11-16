@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarCheck, CalendarClock, CalendarX, Loader2 } from 'lucide-react'
+import { AlertCircle, CalendarCheck, CalendarClock, CalendarX, Loader2 } from 'lucide-react'
 import { useId, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
@@ -48,6 +48,14 @@ function toLocalInput(iso: string): string {
   if (Number.isNaN(d.getTime())) return ''
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/** The top of the next hour, at least 30 minutes away — a fresh time for a failed change. */
+function nextHourIso(): string {
+  const d = new Date(Date.now() + 30 * 60_000)
+  d.setMinutes(0, 0, 0)
+  d.setHours(d.getHours() + 1)
+  return d.toISOString()
 }
 
 const CHIP_TONE: Record<ChipKind, string> = {
@@ -137,7 +145,8 @@ export function ScheduledChangeChip({
           ? `${sentenceOf(row)} · ${countdownPart(row.scheduled_at, now)}, waiting for an administrator`
           : kind === 'applied'
             ? `Applied: ${sentenceOf(row)}`
-            : `Failed — ${row.error_message || 'not applied'}`
+            : // One word for this state in the chip and the popover: "Not applied".
+              `Not applied: ${sentenceOf(row)}`
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -154,24 +163,31 @@ export function ScheduledChangeChip({
                 ? `${sentenceOf(row)} — not applied: ${row.error_message ?? ''}`
                 : undefined
           }
+          // Narrow headers (phones): the words wrap inside the chip, never clip.
           className={cn(
-            'inline-flex max-w-[360px] items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-medium transition-colors duration-300',
+            'inline-flex max-w-full items-start gap-1 rounded-[9px] border px-1.5 py-px text-left text-[9.5px] font-medium leading-[14px] transition-colors duration-300 sm:max-w-[420px]',
             CHIP_TONE[kind]
           )}
         >
           <Icon
             aria-hidden
             className={cn(
-              'h-2.5 w-2.5 shrink-0',
+              'mt-[2px] h-2.5 w-2.5 shrink-0',
               kind === 'pending' && 'text-nvr-cyan',
               kind === 'applying' && 'motion-safe:animate-spin'
             )}
           />
-          <span className='truncate tabular-nums'>{text}</span>
+          <span className='min-w-0 tabular-nums [overflow-wrap:anywhere]'>{text}</span>
           {more > 0 && <span className='shrink-0 opacity-70'>+{more}</span>}
         </button>
       </PopoverTrigger>
-      <PopoverContent align='start' className='w-[340px] p-0' data-scheduled-panel>
+      <PopoverContent
+        align='start'
+        // 16 px from every screen edge (phones: the right one too).
+        collisionPadding={16}
+        className='w-[min(340px,calc(100vw-2rem))] p-0'
+        data-scheduled-panel
+      >
         <div className='border-b border-slate-100 px-3 py-2 dark:border-border'>
           <p className='text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
             {rows.length === 1 ? 'Scheduled change' : `${rows.length} scheduled changes`}
@@ -225,11 +241,16 @@ function StatusLine({ row, now }: { row: ScheduledChangeRow; now: number }) {
       </p>
     )
   if (status === 'failed')
+    // The red is the icon and the status word; the reason reads as plain body text.
     return (
-      <p className='mt-0.5 text-[11.5px] text-red-700 dark:text-red-400'>
-        Not applied{at ? ` (${at})` : ''}: {row.error_message || 'it was refused'}. Nothing on the
-        record was changed.
-      </p>
+      <div className='mt-1 flex items-start gap-1.5 text-[11.5px] leading-snug'>
+        <AlertCircle aria-hidden className='mt-px h-3.5 w-3.5 shrink-0 text-red-500' />
+        <p className='text-slate-600 dark:text-slate-300'>
+          <span className='font-medium text-red-700 dark:text-red-400'>Not applied</span>
+          {at ? ` (${at})` : ''} — {row.error_message || 'it was refused'}. Nothing on the record
+          was changed.
+        </p>
+      </div>
     )
   return (
     <p className='mt-0.5 text-[11.5px] tabular-nums text-slate-500 dark:text-slate-400'>
@@ -238,8 +259,13 @@ function StatusLine({ row, now }: { row: ScheduledChangeRow; now: number }) {
   )
 }
 
+// Real buttons (bordered), flush with the text column above them.
 const ROW_BUTTON =
-  'rounded px-1.5 py-0.5 text-[11.5px] font-medium text-slate-600 hover:bg-muted dark:text-slate-300'
+  'inline-flex h-7 items-center rounded-md border border-slate-200 bg-white px-2.5 text-[11.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-50 dark:border-border dark:bg-transparent dark:text-slate-200 dark:hover:bg-muted'
+const ROW_BUTTON_DANGER =
+  'inline-flex h-7 items-center rounded-md border border-red-200 bg-white px-2.5 text-[11.5px] font-medium text-red-700 transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:opacity-50 dark:border-red-500/40 dark:bg-transparent dark:text-red-400 dark:hover:bg-red-500/10'
+const ROW_BUTTON_ARMED =
+  'inline-flex h-7 items-center rounded-md border border-red-600 bg-red-600 px-2.5 text-[11.5px] font-medium text-white transition-colors hover:bg-red-700 dark:border-red-500 dark:bg-red-500/90'
 
 function ScheduledRow({
   row,
@@ -260,7 +286,8 @@ function ScheduledRow({
   const cancel = useMutation({
     mutationFn: () => client.request(del(`/scheduled-changes/${encodeURIComponent(row.id)}`)),
     onSuccess: onChanged,
-    onError: (e) => toastError(e, 'Could not cancel the change')
+    onError: (e) =>
+      toastError(e, status === 'failed' ? 'Could not dismiss it' : 'Could not cancel the change')
   })
   const move = useMutation({
     mutationFn: () =>
@@ -274,7 +301,11 @@ function ScheduledRow({
       setMoving(false)
       onChanged()
     },
-    onError: (e) => toastError(e, 'Could not move the change')
+    onError: (e) =>
+      toastError(
+        e,
+        status === 'failed' ? 'Could not schedule it again' : 'Could not move the change'
+      )
   })
   const undo = useMutation({
     mutationFn: () =>
@@ -300,11 +331,11 @@ function ScheduledRow({
         </p>
       )}
       {row.can_manage &&
-        status === 'pending' &&
+        (status === 'pending' || status === 'failed') &&
         (moving ? (
           <div className='mt-2 flex items-center gap-1.5'>
             <label htmlFor={id} className='sr-only'>
-              New time
+              {status === 'failed' ? 'Try again at' : 'New time'}
             </label>
             <Input
               id={id}
@@ -321,45 +352,61 @@ function ScheduledRow({
             >
               Save
             </button>
-            <button
-              type='button'
-              onClick={() => setMoving(false)}
-              className='h-7 rounded-md px-2 text-[11.5px] text-slate-500 hover:bg-muted dark:text-slate-400'
-            >
+            <button type='button' onClick={() => setMoving(false)} className={ROW_BUTTON}>
               Back
             </button>
           </div>
         ) : (
-          <div className='mt-1.5 flex items-center gap-1'>
-            <button type='button' onClick={() => setMoving(true)} className={ROW_BUTTON}>
-              Move…
-            </button>
-            <ConfirmButton
-              onConfirm={() => cancel.mutate()}
-              disabled={cancel.isPending}
-              title='Cancel this change'
-              confirmLabel='Cancel it?'
+          <div className='mt-2 flex flex-wrap items-center gap-1.5'>
+            <button
+              type='button'
+              onClick={() => {
+                // A failed change's own time has passed: offer the next hour instead.
+                if (status === 'failed') setAt(toLocalInput(nextHourIso()))
+                setMoving(true)
+              }}
               className={ROW_BUTTON}
-              armedClassName='rounded px-1.5 py-0.5 text-[11.5px] font-medium text-red-600 bg-red-50 dark:bg-red-500/10 dark:text-red-400'
             >
-              Cancel change
-            </ConfirmButton>
+              {status === 'failed' ? 'Reschedule…' : 'Move…'}
+            </button>
+            {status === 'failed' ? (
+              <button
+                type='button'
+                onClick={() => cancel.mutate()}
+                disabled={cancel.isPending}
+                data-tip='Take this off the record header. Nothing on the record changes.'
+                className={ROW_BUTTON}
+              >
+                Dismiss
+              </button>
+            ) : (
+              <ConfirmButton
+                onConfirm={() => cancel.mutate()}
+                disabled={cancel.isPending}
+                title='Cancel this change'
+                confirmLabel='Cancel it?'
+                className={ROW_BUTTON_DANGER}
+                armedClassName={ROW_BUTTON_ARMED}
+              >
+                Cancel change
+              </ConfirmButton>
+            )}
           </div>
         ))}
       {undoOpen && (
-        <div className='mt-1.5 flex items-center gap-2'>
+        <div className='mt-2 flex flex-wrap items-center gap-2'>
           <ConfirmButton
             onConfirm={() => undo.mutate()}
             disabled={undo.isPending}
             title='Put back the values this change replaced'
             confirmLabel='Undo it?'
             className={ROW_BUTTON}
-            armedClassName='rounded px-1.5 py-0.5 text-[11.5px] font-medium text-amber-800 bg-amber-50 dark:bg-amber-500/10 dark:text-amber-300'
+            armedClassName='inline-flex h-7 items-center rounded-md border border-amber-300 bg-amber-50 px-2.5 text-[11.5px] font-medium text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200'
           >
             Undo
           </ConfirmButton>
           <span className='text-[11px] text-slate-500 dark:text-slate-400'>
-            until {whenText(row.undo_until as string, now)}
+            Possible until {whenText(row.undo_until as string, now)}
           </span>
         </div>
       )}

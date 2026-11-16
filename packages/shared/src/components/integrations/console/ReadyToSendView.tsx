@@ -5,6 +5,7 @@ import { useItemNavigation } from '../../../context'
 import { toastError } from '../../../lib/error-toast'
 import { cn } from '../../../lib/utils'
 import { QueryErrorState } from '../../QueryErrorState'
+import { SimpleSelect } from '../../ui/SimpleSelect'
 import { useCheckReadyRecord, useReadyBoard, useRunReadyCheck } from './api'
 import { Segment } from './EventsView'
 import { agoText, exactTime, TONE_BORDER, TONE_FILL, TONE_SOFT, TONE_TEXT, type Tone } from './tone'
@@ -121,21 +122,22 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
 
   if (!data.run) {
     return (
-      <div
-        data-ic-ready-empty
-        className='flex flex-wrap items-start gap-4 rounded-lg border border-border bg-card px-5 py-6'
-      >
-        <div className='min-w-0 flex-1 space-y-1'>
-          <p className='text-[14px] font-semibold text-foreground'>
+      <div className='space-y-4' data-ic-ready-empty>
+        <SummaryRow runButton={runButton}>
+          <span className='font-medium text-foreground'>
             {data.running ? 'The first check is running' : 'Not checked yet'}
-          </p>
+          </span>
+          {data.running && data.progress?.total
+            ? ` · ${data.progress.checked} of ${data.progress.total} records so far`
+            : ''}
+        </SummaryRow>
+        <div className='rounded-lg border border-border bg-card px-5 py-6'>
           <p className='max-w-[68ch] text-[12.5px] leading-relaxed text-muted-foreground'>
             Every night, each open record whose next step sends to a partner is checked the way its
             Push readiness check does: missing values, conditions, and what the partner needs. What
             would be refused shows up here, so it can be fixed before someone presses the button.
           </p>
         </div>
-        {runButton}
       </div>
     )
   }
@@ -144,38 +146,38 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
   const generated = data.run.generated_at
   const cov = data.coverage
   const filtering = !!(partner || problem || severity)
+  // Records with a send next that are neither ready nor on this board: could not be checked,
+  // or (for a reader with narrower access) not shown to them. Said, so the numbers add up.
+  const notShown = cov ? Math.max(0, cov.checked - cov.ready - cov.errors - totals.records) : 0
 
   return (
     <div className='space-y-4' data-ic-ready>
-      <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
-        <p className='min-w-0 text-[13px] text-muted-foreground' data-ic-ready-summary>
-          {totals.records === 0 ? (
-            <span className='font-medium text-foreground'>
-              Nothing in the way of the next sends
+      <SummaryRow runButton={runButton}>
+        {totals.records === 0 ? (
+          <span className='font-medium text-foreground'>Nothing in the way of the next sends</span>
+        ) : (
+          <>
+            <Count n={totals.refused} tone='negative' /> would be refused
+            {' · '}
+            <Count n={totals.warnings} tone='warning' /> would send incomplete
+            {' · '}
+            <Count n={totals.asks} tone='info' /> ask for something when sent
+          </>
+        )}
+        {' · '}
+        <span data-tip={exactTime(generated)}>checked {agoText(generated)}</span>
+        {cov && (
+          <>
+            {' · '}
+            <span data-ic-ready-coverage>
+              {plural(cov.checked, 'record')} with a send next
+              {cov.ready > 0 ? `, ${cov.ready} ready` : ''}
+              {cov.errors > 0 ? `, ${cov.errors} could not be checked` : ''}
+              {notShown > 0 ? `, ${notShown} not shown to you` : ''}
             </span>
-          ) : (
-            <>
-              <Count n={totals.refused} tone='negative' /> would be refused
-              {' · '}
-              <Count n={totals.warnings} tone='warning' /> would send incomplete
-              {' · '}
-              <Count n={totals.asks} tone='info' /> ask for something when sent
-            </>
-          )}
-          {' · '}
-          <span data-tip={exactTime(generated)}>checked {agoText(generated)}</span>
-          {cov && (
-            <>
-              {' · '}
-              <span data-ic-ready-coverage>
-                {plural(cov.checked, 'record')} with a send next
-                {cov.ready > 0 ? `, ${cov.ready} ready` : ''}
-              </span>
-            </>
-          )}
-        </p>
-        <div className='ml-auto'>{runButton}</div>
-      </div>
+          </>
+        )}
+      </SummaryRow>
 
       {data.running && (
         <Banner
@@ -188,6 +190,23 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
             ? ` (${data.progress.checked} of ${data.progress.total} records so far)`
             : ''}
           . This board is from the last complete check and updates when it finishes.
+          {data.progress?.total ? (
+            <span
+              className='mt-2 block h-1 w-full max-w-[320px] overflow-hidden rounded-full bg-black/10 dark:bg-white/15'
+              role='progressbar'
+              aria-label='Records checked'
+              aria-valuemin={0}
+              aria-valuemax={data.progress.total}
+              aria-valuenow={data.progress.checked}
+            >
+              <span
+                className='block h-full rounded-full bg-current transition-[width] duration-500'
+                style={{
+                  width: `${Math.min(100, Math.round((data.progress.checked / data.progress.total) * 100))}%`
+                }}
+              />
+            </span>
+          ) : null}
         </Banner>
       )}
       {!data.running && data.stopped_short && (
@@ -214,13 +233,15 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
             Every record you can see is ready to send
           </p>
           <p className='text-[12.5px] text-muted-foreground'>
-            Checked {agoText(generated)}. Records whose next step sends to a partner show up here
-            when something would stop or weaken that send.
+            Records whose next step sends to a partner show up here when something would stop or
+            weaken that send.
           </p>
         </div>
       ) : (
         <div className='grid items-start gap-5 lg:grid-cols-[260px_minmax(0,1fr)]'>
-          <aside className='space-y-5' aria-label='Group the board'>
+          {/* On a phone the rails would sit under every record; there a compact Partner /
+              Problem pair above the list does the same grouping. */}
+          <aside className='hidden space-y-5 lg:block' aria-label='Group the board'>
             <RailSection title='Partner'>
               <RailButton
                 on={!partner}
@@ -271,6 +292,36 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
           </aside>
 
           <section className='min-w-0 space-y-3' aria-label='Records'>
+            <div className='grid grid-cols-2 gap-2 lg:hidden' data-ic-ready-phone-groups>
+              <SimpleSelect
+                ariaLabel='Partner'
+                value={partner ?? ''}
+                onChange={(v) => setPartner(v || null)}
+                className='h-9 min-w-0 text-[12.5px]'
+                options={[
+                  { value: '', label: `All partners (${totals.records})` },
+                  ...(data.partners ?? []).map((p) => ({
+                    value: p.partner,
+                    label: `${p.partner} (${p.records})`
+                  }))
+                ]}
+              />
+              <SimpleSelect
+                ariaLabel='Problem'
+                value={problem ?? ''}
+                onChange={(v) => setProblem(v || null)}
+                className='h-9 min-w-0 text-[12.5px]'
+                // Inside the phone screen: long problem names wrap so the "(13)" count shows.
+                contentClassName='max-w-[calc(100vw-2rem)] [&_[role=option]]:whitespace-normal'
+                options={[
+                  { value: '', label: 'All problems' },
+                  ...(data.problems ?? []).map((g) => ({
+                    value: g.key,
+                    label: `${g.label} (${g.records})`
+                  }))
+                ]}
+              />
+            </div>
             <div className='flex flex-wrap items-center gap-2'>
               <Segment<SeverityFilter>
                 label='Show'
@@ -296,7 +347,7 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
                     setProblem(null)
                     setSeverity('')
                   }}
-                  className='text-[12px] font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded'
+                  className='rounded text-[12px] font-medium text-sky-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-nvr-cyan'
                 >
                   Clear filters
                 </button>
@@ -312,7 +363,7 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
                   <ReadyRow
                     key={`${e.collection}:${e.item}:${e.transition.id}`}
                     entry={e}
-                    collectionLabel={data.collections?.[e.collection] ?? e.collection}
+                    collectionLabel={collectionWord(data.collections, e.collection)}
                     onOpenRecord={onOpenRecord}
                   />
                 ))}
@@ -331,6 +382,35 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
           </section>
         </div>
       )}
+    </div>
+  )
+}
+
+/** A line's label from a display template with an empty part ("· Line 1"): the dangling
+ *  separators go, so a list reads "Line 1, Line 2". A label of separators only ("-") is
+ *  empty — the caller drops it. */
+export function tidyRowLabel(label: string): string {
+  return label.replace(/^[\s·•|,–—-]+|[\s·•|,–—-]+$/g, '').trim()
+}
+
+/** The collection's own name for a row; nothing when only its raw key is known. */
+function collectionWord(labels: Record<string, string> | undefined, key: string): string | null {
+  const l = labels?.[key]?.trim()
+  return l && l !== key ? l : null
+}
+
+/** Summary sentence + Run now: side by side on a wide page; on a phone the sentence takes the
+ *  width and the button sits on its own line under it. */
+function SummaryRow({ runButton, children }: { runButton: ReactNode; children: ReactNode }) {
+  return (
+    <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
+      <p
+        className='min-w-0 basis-full text-[13px] leading-relaxed text-muted-foreground sm:flex-1 sm:basis-auto'
+        data-ic-ready-summary
+      >
+        {children}
+      </p>
+      {runButton && <div className='sm:ml-auto'>{runButton}</div>}
     </div>
   )
 }
@@ -438,7 +518,7 @@ function ReadyRow({
   onOpenRecord
 }: {
   entry: ReadyEntry
-  collectionLabel: string
+  collectionLabel: string | null
   onOpenRecord?: (collection: string, id: string) => void
 }) {
   const nav = useItemNavigation()
@@ -481,7 +561,9 @@ function ReadyRow({
             >
               {e.label}
             </a>
-            <span className='text-[12px] text-muted-foreground'>{collectionLabel}</span>
+            {collectionLabel && (
+              <span className='text-[12px] text-muted-foreground'>{collectionLabel}</span>
+            )}
             <span
               className={cn(
                 'rounded px-1.5 py-px text-[11px] font-semibold',
@@ -523,16 +605,19 @@ function ReadyRow({
                 <span className={i.severity === 'ask' ? 'text-foreground' : TONE_TEXT[t]}>
                   {i.message}
                 </span>
-                {rows.length > 0 && (
-                  <span className='text-muted-foreground'>
-                    {' — '}
-                    {rows
-                      .slice(0, 3)
-                      .map((r) => r.label)
-                      .join(', ')}
-                    {rows.length > 3 ? ` and ${rows.length - 3} more` : ''}
-                  </span>
-                )}
+                {(() => {
+                  // Rows whose label is only separators ("-") say nothing; with none left
+                  // the " — " goes too.
+                  const named = rows.map((r) => tidyRowLabel(r.label)).filter(Boolean)
+                  if (named.length === 0) return null
+                  return (
+                    <span className='text-muted-foreground'>
+                      {' — '}
+                      {named.slice(0, 3).join(', ')}
+                      {named.length > 3 ? ` and ${named.length - 3} more` : ''}
+                    </span>
+                  )
+                })()}
               </span>
             </li>
           )

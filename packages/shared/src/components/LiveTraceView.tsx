@@ -1,11 +1,37 @@
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle2, CircleDashed, Loader2, RefreshCw, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, Loader2, RefreshCw, TriangleAlert } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { get } from '../lib/commands'
 import { cn } from '../lib/utils'
 import { ErrorNotice } from './ErrorNotice'
 import { SimpleSelectXs } from './ui/SimpleSelect'
+
+/** Stamps an event carries for bookkeeping, not fields a person changed. */
+const BOOKKEEPING_FIELDS = new Set(['changed', 'updated_at', 'date_updated', 'user_updated'])
+
+/** Parts of a record an event names with a `$` token: said in words, never the token. */
+const ASPECT_WORDS: Record<string, string> = {
+  $state: 'step',
+  $related: 'linked records',
+  $comments: 'comments',
+  $tasks: 'tasks',
+  $files: 'files'
+}
+
+/** An event's fields split into real field names and the record parts it touched. Pure. */
+export function traceFields(fields: readonly string[]): { names: string[]; aspects: string[] } {
+  const names: string[] = []
+  const aspects: string[] = []
+  for (const f of fields) {
+    if (BOOKKEEPING_FIELDS.has(f)) continue
+    if (f.startsWith('$')) {
+      const word = ASPECT_WORDS[f] ?? f.slice(1).replace(/_/g, ' ')
+      if (!aspects.includes(word)) aspects.push(word)
+    } else names.push(f)
+  }
+  return { names, aspects }
+}
 
 /**
  * "Why didn't my page update?" — the admin-only trace (GET /api/realtime/trace). For one
@@ -96,7 +122,7 @@ function clock(iso: string): string {
 
 function Th({ children }: { children: React.ReactNode }) {
   return (
-    <th className='px-2 py-1 text-left text-[10.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+    <th className='whitespace-nowrap px-3 py-1 text-left text-[10.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
       {children}
     </th>
   )
@@ -194,7 +220,7 @@ export function LiveTraceView({
           )}
           Run again
         </button>
-        <span className='text-[11px] text-slate-400'>
+        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
           Read-only. Shows ids, field names and times, never values.
         </span>
       </div>
@@ -258,13 +284,13 @@ export function LiveTraceView({
                           key={`${w.kind}-${w.at}-${w.matched_seq ?? ''}-${w.by ?? ''}`}
                           className='border-t border-slate-100 dark:border-border/60'
                         >
-                          <td className='px-2 py-1 tabular-nums'>{clock(w.at)}</td>
-                          <td className='px-2 py-1'>
+                          <td className='px-3 py-1 tabular-nums'>{clock(w.at)}</td>
+                          <td className='px-3 py-1'>
                             {WRITE_LABEL[w.kind]}
                             {w.kind === 'raw-pending' && w.by ? ` (${w.by})` : ''}
                           </td>
-                          <td className='px-2 py-1'>{w.action ?? '—'}</td>
-                          <td className='px-2 py-1'>
+                          <td className='px-3 py-1'>{w.action ?? '—'}</td>
+                          <td className='px-3 py-1'>
                             {w.kind === 'raw-pending' ? (
                               <span className='text-amber-700 dark:text-amber-400'>
                                 not sent yet
@@ -307,25 +333,26 @@ export function LiveTraceView({
                           key={s.user_id ?? s.name}
                           className='border-t border-slate-100 dark:border-border/60'
                         >
-                          <td className='px-2 py-1'>{s.name}</td>
-                          <td className='px-2 py-1 tabular-nums'>
+                          <td className='px-3 py-1'>{s.name}</td>
+                          <td className='px-3 py-1 tabular-nums'>
                             {s.sockets}
                             {s.apps.length ? ` (${s.apps.join(', ')})` : ''}
                           </td>
-                          <td className='px-2 py-1'>
+                          <td className='px-3 py-1'>
                             {s.via
                               .map((v) => (v === 'record' ? 'this record' : 'the whole list'))
                               .join(' + ')}
                           </td>
-                          <td className='px-2 py-1'>
+                          <td className='px-3 py-1'>
                             {s.acked ? (
                               <span className='inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400'>
                                 <CheckCircle2 className='h-3 w-3' /> {s.acked_events} event
                                 {s.acked_events === 1 ? '' : 's'}
                               </span>
                             ) : (
-                              <span className='inline-flex items-center gap-1 text-slate-500'>
-                                <CircleDashed className='h-3 w-3' /> none
+                              // Plain text, not a dashed-circle glyph (it read as "still checking").
+                              <span className='text-slate-500 dark:text-slate-400'>
+                                Not acknowledged
                               </span>
                             )}
                           </td>
@@ -357,13 +384,13 @@ export function LiveTraceView({
                     <tbody>
                       {d.person.sockets.map((s) => (
                         <tr key={s.id} className='border-t border-slate-100 dark:border-border/60'>
-                          <td className='px-2 py-1 font-mono'>{s.id}</td>
-                          <td className='px-2 py-1'>{s.app ?? '—'}</td>
-                          <td className='px-2 py-1'>{s.transport ?? '—'}</td>
-                          <td className='px-2 py-1 tabular-nums'>
+                          <td className='px-3 py-1 font-mono'>{s.id}</td>
+                          <td className='px-3 py-1'>{s.app ?? '—'}</td>
+                          <td className='px-3 py-1'>{s.transport ?? '—'}</td>
+                          <td className='px-3 py-1 tabular-nums'>
                             {s.connected_at ? clock(s.connected_at) : '—'}
                           </td>
-                          <td className='px-2 py-1'>{s.rooms_total}</td>
+                          <td className='px-3 py-1'>{s.rooms_total}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -389,8 +416,8 @@ export function LiveTraceView({
                           key={r.room}
                           className='border-t border-slate-100 dark:border-border/60'
                         >
-                          <td className='px-2 py-1 font-mono'>{r.room}</td>
-                          <td className='px-2 py-1 tabular-nums'>{r.events}</td>
+                          <td className='px-3 py-1 font-mono'>{r.room}</td>
+                          <td className='px-3 py-1 tabular-nums'>{r.events}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -421,34 +448,59 @@ export function LiveTraceView({
                   </tr>
                 </thead>
                 <tbody>
-                  {events.slice(0, 100).map((e) => (
-                    <tr key={e.seq} className='border-t border-slate-100 dark:border-border/60'>
-                      <td className='px-2 py-1 tabular-nums text-slate-500'>{e.seq}</td>
-                      <td className='px-2 py-1 tabular-nums'>{clock(e.at)}</td>
-                      <td className='px-2 py-1'>
-                        {e.action ?? e.event}
-                        {e.item === '*' ? ` (${e.bulk ?? 'many'} records)` : ''}
-                        {e.source ? ` · ${e.source}` : ''}
-                      </td>
-                      <td className='max-w-[260px] truncate px-2 py-1' title={e.fields.join(', ')}>
-                        {e.fields.length ? e.fields.join(', ') : '—'}
-                      </td>
-                      <td className='px-2 py-1'>
-                        {e.acked_by.length > 0 ? (
-                          `${e.acked_by.length} ${e.acked_by.length === 1 ? 'person' : 'people'}`
-                        ) : (
-                          <span className='text-slate-400'>not sampled / none</span>
+                  {events.slice(0, 100).map((e) => {
+                    const { names, aspects } = traceFields(e.fields)
+                    const fieldsText = [...names, ...aspects].join(', ')
+                    const acked = e.acked_by.length > 0
+                    return (
+                      <tr
+                        key={e.seq}
+                        className={cn(
+                          'border-t border-slate-100 dark:border-border/60',
+                          acked && 'bg-emerald-50/70 dark:bg-emerald-500/[0.07]'
                         )}
-                      </td>
-                    </tr>
-                  ))}
+                      >
+                        <td className='px-3 py-1 tabular-nums text-slate-500'>{e.seq}</td>
+                        <td className='whitespace-nowrap px-3 py-1 tabular-nums'>{clock(e.at)}</td>
+                        <td className='px-3 py-1'>
+                          {e.action ?? e.event}
+                          {e.item === '*' ? ` (${e.bulk ?? 'many'} records)` : ''}
+                          {e.source ? ` · ${e.source}` : ''}
+                        </td>
+                        <td className='max-w-[200px] truncate px-3 py-1' title={fieldsText}>
+                          {names.join(', ')}
+                          {aspects.length > 0 && (
+                            <span className='italic text-slate-500 dark:text-slate-400'>
+                              {names.length ? ', ' : ''}
+                              {aspects.join(', ')}
+                            </span>
+                          )}
+                          {!fieldsText && '—'}
+                        </td>
+                        <td className='whitespace-nowrap px-3 py-1'>
+                          {acked ? (
+                            <span className='font-medium text-emerald-800 dark:text-emerald-300'>
+                              {e.acked_by.length} {e.acked_by.length === 1 ? 'person' : 'people'}
+                            </span>
+                          ) : (
+                            <span className='text-slate-400 dark:text-slate-500'>—</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             )}
           </Block>
-          <p className='text-[11px] leading-relaxed text-slate-400'>
-            {d.subscription_note} Acknowledged events: {d.ack.acked_events}; about 1 in{' '}
-            {d.ack.sampled_about_one_in || '—'} events is sampled.
+          <p className='text-[11.5px] leading-relaxed text-slate-500 dark:text-slate-400'>
+            This shows who is connected right now, not earlier.{' '}
+            {d.ack.sampled_about_one_in
+              ? `The server checks delivery on about 1 in ${d.ack.sampled_about_one_in} events`
+              : 'The server is not checking delivery here'}
+            {d.ack.sampled_about_one_in
+              ? ` (${d.ack.acked_events} confirmed in this window). A dash under Acknowledged by means the event was not checked, or nobody confirmed it.`
+              : '.'}
           </p>
         </>
       )}

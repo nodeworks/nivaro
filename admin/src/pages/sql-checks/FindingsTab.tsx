@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Check, Copy, ExternalLink, Search } from 'lucide-react'
+import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, Search, Wand2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
@@ -24,6 +24,7 @@ import {
   objectLabel,
   SeverityPill,
   StatusText,
+  type Summary,
   TYPE_LABEL
 } from './shared'
 
@@ -95,6 +96,12 @@ export function FindingsTab({
     }
   }, [initialObject])
 
+  // Same key and shape as the page header's summary read: shared, never a second fetch.
+  const summary = useQuery({
+    queryKey: ['sql-checks', 'summary'],
+    queryFn: () => api.get<{ data: Summary }>('/sql-checks/summary').then((r) => r.data.data)
+  })
+  const lastRunAt = summary.data?.last_run?.finished_at ?? summary.data?.last_run?.started_at
   const list = useQuery({
     queryKey: ['sql-checks', 'findings', status, severity, check, q, object, pageNo],
     queryFn: () =>
@@ -180,7 +187,8 @@ export function FindingsTab({
               className='h-8 text-[12px]'
             />
           </div>
-          {check === 'write-unannounced' && (
+          {/* Offered only while there is something open to fix (it opened onto "Nothing to fix"). */}
+          {check === 'write-unannounced' && status === 'open' && (bulk || total > 0) && (
             <button
               type='button'
               onClick={() => {
@@ -189,14 +197,26 @@ export function FindingsTab({
               }}
               aria-pressed={bulk}
               className={cn(
-                'rounded-md border border-slate-200 px-2.5 py-1.5 text-left text-[12px] hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border',
-                bulk && 'bg-accent'
+                'flex items-start gap-2 rounded-md border border-nvr-cyan/40 px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-nvr-cyan/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-nvr-cyan/10',
+                bulk && 'bg-nvr-cyan/10 dark:bg-nvr-cyan/15'
               )}
             >
-              <span className='font-medium text-foreground'>Fix them all at once…</span>
-              <span className='block text-muted-foreground'>
-                Review and apply the announce fix procedure by procedure.
+              <Wand2
+                className='mt-0.5 h-3.5 w-3.5 shrink-0 text-[#0e7490] dark:text-[#67e8f9]'
+                aria-hidden='true'
+              />
+              <span className='min-w-0 flex-1'>
+                <span className='font-medium text-[#0e7490] dark:text-[#67e8f9]'>
+                  Fix them all at once
+                </span>
+                <span className='block text-muted-foreground'>
+                  Review the fix for each procedure, then apply the ones you choose.
+                </span>
               </span>
+              <ChevronRight
+                className='mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground'
+                aria-hidden='true'
+              />
             </button>
           )}
           {object && (
@@ -233,7 +253,10 @@ export function FindingsTab({
             <p className='m-0 p-4 text-[12.5px] text-muted-foreground'>
               {status === 'open' && !severity && !check && !q && !object
                 ? 'No open findings.'
-                : 'Nothing matches these filters.'}
+                : status === 'open' && check && !severity && !q && !object
+                  ? // Only the check is picked: say what that means, not "nothing matches".
+                    `No open “${CHECK_LABEL[check] ?? check}” findings${lastRunAt ? ` (last run ${formatDateTime(lastRunAt)})` : ''}.`
+                  : 'Nothing matches these filters.'}
             </p>
           ) : (
             <ul className='m-0 list-none divide-y divide-slate-100 p-0 dark:divide-border'>

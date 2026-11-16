@@ -5,6 +5,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 import { createPortal } from 'react-dom'
 import { useItemEditAuth, useNivaroClient, useStaleFieldReporter } from '../../context'
 import { get, post } from '../../lib/commands'
+import { flashFieldBox, useLabelFlash } from '../../lib/label-flash'
 import { compareByMatch } from '../../lib/picker-rank'
 import { useRecordReader } from '../../lib/record-loader'
 import { useOnlineUsers } from '../../lib/use-online-users'
@@ -644,6 +645,11 @@ export function RelationCombobox({
   // A value whose row renders no name says so in words — never "#5331".
   const selectedLabel =
     selectedRaw === null ? null : isNamelessLabel(selectedRaw) ? NAMELESS_LABEL : selectedRaw
+  // The linked record was renamed while open: its name flashes once (rt9 #8).
+  const labelFlash = useLabelFlash(value, selectedLabel)
+  useEffect(() => {
+    if (labelFlash > 0) flashFieldBox(triggerRef.current)
+  }, [labelFlash])
   // The answer on screen is for what is typed now — otherwise the previous
   // answer, narrowed by the newer text until the server replies.
   const optionsSettled = !isPlaceholderData && query === debouncedQuery && !waitingOnLabels
@@ -988,7 +994,13 @@ export function RelationCombobox({
                   <span className='sr-only'>Not an available option: </span>
                 </>
               )}
-              <span className='truncate'>{selectedLabel ?? placeholder ?? 'Select…'}</span>
+              <span
+                key={labelFlash}
+                data-label-flash={labelFlash > 0 || undefined}
+                className='truncate'
+              >
+                {selectedLabel ?? placeholder ?? 'Select…'}
+              </span>
               {!!value && !!selected && !isUserCollection && (
                 <RecordPickerBadges collection={collection} id={value} />
               )}

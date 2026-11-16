@@ -28,6 +28,9 @@ interface Tip {
   beside?: { left: number; right: number; rowTop: number; rowHeight: number }
   /** `data-tip-side="right"`: level with the element, to its right (left when there is no room). */
   rightOf?: { left: number; right: number; top: number; height: number }
+  /** `data-tip-side="top"`: above the element (below when there is no room) — for a grid
+   *  cell, whose tip below would cover the next row's value. */
+  above?: { top: number; bottom: number }
 }
 
 export function TipLayer() {
@@ -76,6 +79,10 @@ export function TipLayer() {
           text,
           rightOf: { left: r.left, right: r.right, top: r.top, height: r.height }
         })
+        return
+      }
+      if (el.getAttribute('data-tip-side') === 'top') {
+        setTip({ x: r.left, y: r.top, text, above: { top: r.top, bottom: r.bottom } })
         return
       }
       setTip({ x: r.left, y: r.bottom + 4, text })
@@ -128,6 +135,10 @@ export function TipLayer() {
       x = left >= 8 ? left : Math.min(b.right + GAP, Math.max(8, window.innerWidth - r.width - 8))
       y = Math.round(b.rowTop + (b.rowHeight - r.height) / 2)
       y = Math.max(8, Math.min(y, window.innerHeight - r.height - 8))
+    } else if (tip.above) {
+      const top = tip.above.top - GAP - r.height
+      y = top >= 8 ? top : tip.above.bottom + 4
+      if (x + r.width > window.innerWidth - 8) x = Math.max(8, window.innerWidth - r.width - 8)
     } else {
       if (r.right > window.innerWidth - 8) x = Math.max(8, window.innerWidth - r.width - 8)
       if (r.bottom > window.innerHeight - 8) y = Math.max(8, tip.y - r.height - 30)

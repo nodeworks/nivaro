@@ -1,6 +1,7 @@
 import {
   AlertOctagon,
   AlertTriangle,
+  BellOff,
   ChevronDown,
   ChevronRight,
   ExternalLink,
@@ -53,8 +54,10 @@ export function SignalCard({
   canExplain
 }: SignalCardProps) {
   const critical = signal.severity === 'critical'
-  const tone = critical ? 'negative' : 'warning'
-  const Mark = critical ? AlertOctagon : AlertTriangle
+  // Nothing open (only snoozed rows): a quiet card, never a warning (rt-admin review).
+  const quiet = !signal.error && signal.count === 0
+  const tone = quiet ? 'neutral' : critical ? 'negative' : 'warning'
+  const Mark = quiet ? BellOff : critical ? AlertOctagon : AlertTriangle
   const oldest = oldestSeen(signal)
   // #2847 — a signal whose newest row appeared during a chaos drill reads "Drill".
   const drills = useDrillWindows()
@@ -84,7 +87,13 @@ export function SignalCard({
             'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md',
             TONE_SOFT[tone]
           )}
-          data-tip={critical ? 'Critical — something is failing now' : 'Worth a look'}
+          data-tip={
+            quiet
+              ? 'Nothing open — only snoozed rows'
+              : critical
+                ? 'Critical — something is failing now'
+                : 'Worth a look'
+          }
         >
           <Mark className={cn('h-3.5 w-3.5', TONE_TEXT[tone])} aria-hidden />
         </span>
@@ -98,14 +107,24 @@ export function SignalCard({
               </span>
             ) : (
               <span className='text-[12px] tabular-nums text-muted-foreground'>
-                <span className={cn('font-semibold', TONE_TEXT[tone])}>{signal.count}</span> open
+                {quiet && signal.snoozed.length > 0 ? (
+                  <>
+                    <span className='font-semibold text-foreground'>{signal.snoozed.length}</span>{' '}
+                    snoozed · none open
+                  </>
+                ) : (
+                  <>
+                    <span className={cn('font-semibold', TONE_TEXT[tone])}>{signal.count}</span>{' '}
+                    open
+                  </>
+                )}
                 {oldest && (
                   <span data-tip={`Oldest first seen ${exactTime(oldest)}`}>
                     {' '}
                     · oldest {ageOf(oldest)}
                   </span>
                 )}
-                {signal.snoozed.length > 0 && <> · {signal.snoozed.length} snoozed</>}
+                {!quiet && signal.snoozed.length > 0 && <> · {signal.snoozed.length} snoozed</>}
               </span>
             )}
           </span>

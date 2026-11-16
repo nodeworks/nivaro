@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
+  ChevronDown,
   CircleAlert,
   Download,
   FileSpreadsheet,
@@ -84,11 +85,33 @@ export interface OwnerSheetPreview {
 
 type FetchError = Error & { status?: number; code?: string; data?: OwnerSheetPreview }
 
+/** A readable file that is not the owner matrix workbook (no Step, People… columns). */
+function wrongFileDescription(fileName: string): ErrorDescription {
+  const ext = /\.([a-z0-9]+)$/i.exec(fileName)?.[1]?.toLowerCase()
+  return {
+    title:
+      ext && !['xlsx', 'xlsm', 'xls'].includes(ext)
+        ? `This ${ext.toUpperCase()} file is not the owner matrix`
+        : 'This file is not the owner matrix',
+    hint: 'Upload the .xlsx file you got from Download as Excel, after editing it. Its Owners sheet is what is read.'
+  }
+}
+
 /** The file itself could not be used (wrong file, no Owners sheet, too big): say so
  *  plainly instead of the generic "correct the highlighted values". */
-function readFailure(err: unknown): ErrorDescription | undefined {
+function readFailure(err: unknown, fileName?: string): ErrorDescription | undefined {
   const e = err as FetchError
   if (!e || !['UNREADABLE', 'NO_FILE', 'FILE_TOO_LARGE'].includes(String(e.code))) return undefined
+  // A CSV (or any other non-workbook) has no Owners sheet: name the kind of file and the fix,
+  // rather than the reader's "Sheet1 has no data rows".
+  const ext = /\.([a-z0-9]+)$/i.exec(fileName ?? '')?.[1]?.toLowerCase()
+  if (ext && !['xlsx', 'xlsm', 'xls'].includes(ext))
+    return {
+      title: `This ${ext.toUpperCase()} file has no owner matrix in it`,
+      hint: 'Upload the .xlsx file you got from Download as Excel, after editing it.',
+      code: e.code,
+      status: e.status
+    }
   return {
     title: e.message || 'This file could not be read',
     hint: 'Upload the file you got from Download as Excel — its Owners sheet is what is read.',
@@ -312,6 +335,30 @@ export function OwnerSheetDrawer({
 
   const blocked = !!preview && preview.errors > 0
   const canApply = !!preview && !blocked && !preview.nothing_to_do && !loading
+  // A file with no owner rows and only file-level problems (none of the owner matrix columns,
+  // a CSV export of something else) is the wrong file, not eight things to fix one by one.
+  const wrongFile =
+    !loading &&
+    !!preview &&
+    preview.rows === 0 &&
+    preview.errors > 0 &&
+    preview.problems.every((p) => p.row == null)
+  const readFail =
+    error != null
+      ? readFailure(error, fileName)
+      : wrongFile
+        ? wrongFileDescription(fileName)
+        : undefined
+  // Nothing to apply at all: the file could not be used, or it matches the matrix. The footer
+  // then offers only another file and Close.
+  const failed = !loading && (error != null || wrongFile)
+  const nothing = !loading && !failed && !!preview && preview.nothing_to_do && !blocked
+  // Rows with a problem that stops Apply: their changes are shown as blocked, not as changes.
+  const blockedRows = new Set(
+    (preview?.problems ?? [])
+      .filter((p) => p.severity === 'error' && p.row != null)
+      .map((p) => p.row)
+  )
 
   // Portal to body — the page-enter transform re-anchors position:fixed.
   return createPortal(
@@ -335,7 +382,7 @@ export function OwnerSheetDrawer({
             </h2>
             <p className='truncate text-[11.5px] text-slate-500 dark:text-muted-foreground'>
               {fileName}
-              {preview ? ` · ${plural(preview.rows, 'row')}` : ''}
+              {preview && !wrongFile ? ` · ${plural(preview.rows, 'row')}` : ''}
             </p>
           </div>
           <button
@@ -356,15 +403,45 @@ export function OwnerSheetDrawer({
               Reading {fileName} and comparing it with the owner matrix…
             </div>
           )}
-          {!loading && error != null && (
-            <ErrorNotice
-              error={error}
-              description={readFailure(error)}
-              fallback='Could not read the spreadsheet'
-              onRetry={onRetry}
-            />
+          {!loading &&
+            (error != null || wrongFile) &&
+            (readFail ? (
+              <div
+                role='alert'
+                data-owner-sheet-read-failure
+                className='flex items-start gap-2.5 rounded-md border border-rose-200 bg-rose-50 px-3 py-2.5 dark:border-rose-900/60 dark:bg-rose-950/30'
+              >
+                <CircleAlert className='mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400' />
+                <div className='min-w-0 space-y-0.5'>
+                  <p className='text-[13px] font-semibold text-rose-900 dark:text-rose-100'>
+                    {readFail.title}
+                  </p>
+                  {readFail.hint && (
+                    <p className='text-[12.5px] text-rose-800 dark:text-rose-200/90'>
+                      {readFail.hint}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <ErrorNotice
+                error={error}
+                fallback='Could not read the spreadsheet'
+                onRetry={onRetry}
+              />
+            ))}
+          {!loading && wrongFile && preview && (
+            <details className='group text-[12px]' data-owner-sheet-wrong-file-details>
+              <summary className='inline-flex cursor-pointer list-none items-center gap-1 rounded text-slate-600 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-muted-foreground dark:hover:text-foreground [&::-webkit-details-marker]:hidden'>
+                <ChevronDown className='h-3.5 w-3.5 -rotate-90 transition-transform group-open:rotate-0' />
+                What the file is missing
+              </summary>
+              <div className='mt-2'>
+                <Problems preview={preview} />
+              </div>
+            </details>
           )}
-          {!loading && preview && (
+          {!loading && preview && !wrongFile && (
             <>
               {stale && (
                 <div className='flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 dark:border-amber-800/70 dark:bg-amber-950/40 dark:text-amber-200'>
@@ -375,7 +452,7 @@ export function OwnerSheetDrawer({
                   </span>
                 </div>
               )}
-              {!preview.nothing_to_do && <Summary preview={preview} />}
+              {!preview.nothing_to_do && <Summary preview={preview} blockedRows={blockedRows} />}
               {preview.problems.length > 0 && <Problems preview={preview} />}
               {preview.nothing_to_do && preview.errors === 0 && (
                 <p className='rounded-md border border-dashed border-slate-200 px-3 py-6 text-center text-[13px] text-slate-500 dark:border-border dark:text-muted-foreground'>
@@ -383,7 +460,7 @@ export function OwnerSheetDrawer({
                 </p>
               )}
               {preview.steps.map((s) => (
-                <StepSection key={s.state_id} step={s} />
+                <StepSection key={s.state_id} step={s} blockedRows={blockedRows} />
               ))}
               {canApply && collections.length > 0 && (
                 <div className='rounded-md border border-slate-200 dark:border-border'>
@@ -391,11 +468,17 @@ export function OwnerSheetDrawer({
                     type='button'
                     onClick={() => setTrial((v) => !v)}
                     aria-expanded={trial}
-                    className='flex w-full items-center justify-between px-3 py-2 text-left text-[12.5px] font-medium text-slate-700 hover:bg-muted dark:text-foreground'
+                    data-owner-sheet-trial
+                    className='flex w-full items-center gap-2 rounded-md px-3 py-2 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan'
                   >
-                    Try a record with these changes
-                    <span className='text-[11.5px] font-normal text-slate-400'>
-                      {trial ? 'Hide' : 'Who would own each step'}
+                    <ChevronDown
+                      className={`h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform dark:text-muted-foreground ${trial ? '' : '-rotate-90'}`}
+                    />
+                    <span className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
+                      Try a record with these changes
+                    </span>
+                    <span className='ml-auto text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                      Who would own each step
                     </span>
                   </button>
                   {trial &&
@@ -419,11 +502,20 @@ export function OwnerSheetDrawer({
         </div>
 
         <div className='flex shrink-0 flex-wrap items-center gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 dark:border-border dark:bg-muted/30'>
-          <p className='min-w-0 flex-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
-            {blocked
-              ? `Fix ${plural(preview?.errors ?? 0, 'problem')} in the file, then upload it again.`
-              : 'Nothing changes until you press Apply.'}
-            {!blocked && (
+          <p
+            className='min-w-0 flex-1 text-[12px] text-slate-500 dark:text-muted-foreground'
+            data-owner-sheet-footer
+          >
+            {loading
+              ? 'Reading the file…'
+              : failed
+                ? 'Nothing was changed. Upload the workbook from Download as Excel.'
+                : nothing
+                  ? 'Nothing to apply — the owner matrix already matches this file.'
+                  : blocked
+                    ? `Fix ${plural(preview?.errors ?? 0, 'problem')} in the file, then upload it again.`
+                    : 'Nothing changes until you press Apply.'}
+            {!loading && !failed && !nothing && !blocked && (
               <span className='hidden sm:inline'>
                 {' '}
                 The matrix is saved as a version first, so it can be restored.
@@ -439,16 +531,28 @@ export function OwnerSheetDrawer({
           >
             Upload another file
           </Button>
-          <Button
-            size='sm'
-            className='h-8 gap-1.5 bg-nvr-cyan text-[12.5px] text-white hover:bg-nvr-cyan/90'
-            onClick={onApply}
-            disabled={!canApply || applying}
-            data-owner-sheet-apply
-          >
-            {applying && <Loader2 className='h-3.5 w-3.5 animate-spin' />}
-            Apply changes
-          </Button>
+          {failed || nothing ? (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8 text-[12.5px]'
+              onClick={onClose}
+              data-owner-sheet-close
+            >
+              Close
+            </Button>
+          ) : (
+            <Button
+              size='sm'
+              className='h-8 gap-1.5 bg-nvr-cyan text-[12.5px] text-white hover:bg-nvr-cyan/90 disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:border dark:disabled:border-border dark:disabled:!bg-transparent dark:disabled:!text-slate-500'
+              onClick={onApply}
+              disabled={!canApply || applying}
+              data-owner-sheet-apply
+            >
+              {applying && <Loader2 className='h-3.5 w-3.5 animate-spin' />}
+              Apply changes
+            </Button>
+          )}
         </div>
       </div>
     </div>,
@@ -456,8 +560,33 @@ export function OwnerSheetDrawer({
   )
 }
 
-function Summary({ preview }: { preview: OwnerSheetPreview }) {
-  const c = preview.counts
+/** Whether a change comes from a row whose problem stops Apply. */
+const isBlocked = (c: GroupChange, blockedRows: Set<number | null>) =>
+  c.row != null && blockedRows.has(c.row)
+
+function Summary({
+  preview,
+  blockedRows
+}: {
+  preview: OwnerSheetPreview
+  blockedRows: Set<number | null>
+}) {
+  // The tiles count what an Apply would do: changes from rows waiting on a fix are left out
+  // and named once under the tiles.
+  const c = { ...preview.counts }
+  let waiting = 0
+  for (const step of preview.steps) {
+    for (const ch of step.changes) {
+      if (!isBlocked(ch, blockedRows)) continue
+      waiting++
+      if (ch.kind === 'added') c.groups_added--
+      else if (ch.kind === 'removed') c.groups_removed--
+      else c.groups_changed--
+      c.people_added -= ch.people_added.length
+      c.people_removed -= ch.people_removed.length
+    }
+  }
+  for (const k of Object.keys(c) as Array<keyof typeof c>) c[k] = Math.max(0, c[k])
   const items: Array<{ n: number; label: string; tone: 'add' | 'remove' | 'change' | 'plain' }> = [
     {
       n: c.groups_added,
@@ -492,17 +621,29 @@ function Summary({ preview }: { preview: OwnerSheetPreview }) {
     plain: 'text-slate-700 dark:text-foreground'
   }
   return (
-    <div className='flex flex-wrap gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
-      {items.map((it) => (
-        <div key={it.label} className='min-w-[104px] flex-1 bg-white px-3 py-2 dark:bg-card'>
-          <div
-            className={`text-[17px] font-semibold tabular-nums ${it.n ? tone[it.tone] : 'text-slate-300 dark:text-slate-600'}`}
-          >
-            {it.n}
+    <div className='space-y-1'>
+      <div className='flex flex-wrap gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
+        {items.map((it) => (
+          <div key={it.label} className='min-w-[104px] flex-1 bg-white px-3 py-2 dark:bg-card'>
+            <div
+              className={`text-[17px] font-semibold tabular-nums ${it.n ? tone[it.tone] : 'text-slate-300 dark:text-slate-600'}`}
+            >
+              {it.n}
+            </div>
+            <div className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              {it.label}
+            </div>
           </div>
-          <div className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>{it.label}</div>
-        </div>
-      ))}
+        ))}
+      </div>
+      {waiting > 0 && (
+        <p
+          className='text-[11.5px] text-slate-500 dark:text-muted-foreground'
+          data-owner-sheet-waiting
+        >
+          Not counted: {plural(waiting, 'group change')} waiting on a fix in the file.
+        </p>
+      )}
     </div>
   )
 }
@@ -534,15 +675,17 @@ function Problems({ preview }: { preview: OwnerSheetPreview }) {
             ) : (
               <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400' />
             )}
-            <span className='w-[60px] shrink-0 whitespace-nowrap text-slate-500 tabular-nums dark:text-muted-foreground'>
-              {p.row != null ? `Row ${p.row}` : 'File'}
-            </span>
-            <span className='min-w-0 text-slate-700 dark:text-foreground'>
-              {p.column && !p.message.toLowerCase().includes(p.column.toLowerCase()) && (
-                <span className='mr-1.5 font-medium text-slate-500 dark:text-muted-foreground'>
+            <span className='w-[96px] shrink-0 leading-snug text-slate-500 tabular-nums dark:text-muted-foreground'>
+              <span className='block whitespace-nowrap'>
+                {p.row != null ? `Row ${p.row}` : 'File'}
+              </span>
+              {p.column && (
+                <span className='block truncate text-[11px]' data-tip={p.column}>
                   {p.column}
                 </span>
               )}
+            </span>
+            <span className='min-w-0 leading-snug text-slate-700 dark:text-foreground'>
               {p.message}
             </span>
           </li>
@@ -574,7 +717,23 @@ const KIND = {
 
 const FIELD_WORD = { step: 'Step', name: 'Name', default: 'Default', priority: 'Priority' }
 
-function StepSection({ step }: { step: StepChanges }) {
+function StepSection({
+  step,
+  blockedRows
+}: {
+  step: StepChanges
+  blockedRows: Set<number | null>
+}) {
+  // +N / −N count only what an Apply would do; changes waiting on a fix are named apart.
+  let added = step.people_added
+  let removed = step.people_removed
+  let waiting = 0
+  for (const ch of step.changes) {
+    if (!isBlocked(ch, blockedRows)) continue
+    waiting++
+    added -= ch.people_added.length
+    removed -= ch.people_removed.length
+  }
   return (
     <section aria-label={step.state_label}>
       <div className='mb-1.5 flex items-baseline gap-2'>
@@ -582,30 +741,50 @@ function StepSection({ step }: { step: StepChanges }) {
           {step.state_label}
         </h3>
         <span className='text-[11.5px] text-slate-500 tabular-nums dark:text-muted-foreground'>
-          {plural(step.changes.length, 'group')}
-          {step.people_added > 0 && ` · +${step.people_added}`}
-          {step.people_removed > 0 && ` · −${step.people_removed}`}
+          {[
+            step.changes.length > waiting ? plural(step.changes.length - waiting, 'group') : '',
+            added > 0 ? `+${added}` : '',
+            removed > 0 ? `−${removed}` : '',
+            waiting > 0 ? `${waiting} waiting on a fix` : ''
+          ]
+            .filter(Boolean)
+            .join(' · ')}
         </span>
       </div>
       <ul className='divide-y divide-slate-100 overflow-hidden rounded-md border border-slate-200 dark:divide-border dark:border-border'>
         {step.changes.map((c) => (
-          <ChangeRow key={`${c.group_id ?? ''}:${c.row ?? ''}`} change={c} />
+          <ChangeRow
+            key={`${c.group_id ?? ''}:${c.row ?? ''}`}
+            change={c}
+            blocked={isBlocked(c, blockedRows)}
+          />
         ))}
       </ul>
     </section>
   )
 }
 
-function ChangeRow({ change: c }: { change: GroupChange }) {
+function ChangeRow({ change: c, blocked = false }: { change: GroupChange; blocked?: boolean }) {
   const k = KIND[c.kind]
   return (
-    <li className='space-y-1.5 px-3 py-2' data-change-kind={c.kind}>
+    <li
+      className={`space-y-1.5 px-3 py-2 ${blocked ? 'bg-slate-50 opacity-70 dark:bg-muted/30' : ''}`}
+      data-change-kind={c.kind}
+      data-change-blocked={blocked || undefined}
+    >
       <div className='flex flex-wrap items-center gap-2'>
-        <span
-          className={`rounded px-1.5 py-px text-[10.5px] font-semibold uppercase tracking-wide ring-1 ring-inset ${k.cls}`}
-        >
-          {k.label}
-        </span>
+        {blocked ? (
+          <span className='inline-flex items-center gap-1 rounded px-1.5 py-px text-[10.5px] font-semibold uppercase tracking-wide text-rose-700 ring-1 ring-inset ring-rose-200 dark:text-rose-300 dark:ring-rose-800/60'>
+            <CircleAlert className='h-3 w-3' />
+            Fix row {c.row} first
+          </span>
+        ) : (
+          <span
+            className={`rounded px-1.5 py-px text-[10.5px] font-semibold uppercase tracking-wide ring-1 ring-inset ${k.cls}`}
+          >
+            {k.label}
+          </span>
+        )}
         <span className='min-w-0 text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
           {c.label}
         </span>
@@ -627,13 +806,11 @@ function ChangeRow({ change: c }: { change: GroupChange }) {
       {c.kind === 'changed' && c.filters_after.length + c.filters_before.length > 0 && (
         <ValueDiff before={c.filters_before} after={c.filters_after} />
       )}
-      {c.kind === 'added' &&
-        c.filters_after.length > 0 &&
-        c.filters_after.join(' · ') !== c.label && (
-          <div className='text-[12px] text-slate-600 dark:text-muted-foreground'>
-            {c.filters_after.join(' · ')}
-          </div>
-        )}
+      {c.kind === 'added' && c.filters_after.length > c.label.split(' · ').length && (
+        <div className='text-[12px] text-slate-600 dark:text-muted-foreground'>
+          {c.filters_after.join(' · ')}
+        </div>
+      )}
       {(c.people_added.length > 0 ||
         c.people_removed.length > 0 ||
         c.teams_added.length > 0 ||

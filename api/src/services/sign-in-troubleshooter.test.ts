@@ -90,6 +90,16 @@ describe('accountChecks', () => {
     const c = accountChecks({ ...base, directory_status: null }, true, NOW)
     expect(c.find((x) => x.key === 'directory')?.ok).toBeNull()
   })
+
+  it('a directory answer older than a week is out of date, not a green pass', () => {
+    const c = accountChecks({ ...base, directory_checked_at: '2026-10-06T12:00:00Z' }, true, NOW)
+    expect(c.find((x) => x.key === 'directory')).toMatchObject({
+      ok: null,
+      stale: true,
+      label: 'Microsoft check out of date'
+    })
+    expect(c.find((x) => x.key === 'directory')?.detail).toContain('39 days ago')
+  })
 })
 
 describe('currentProblem', () => {

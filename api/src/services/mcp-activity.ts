@@ -6,6 +6,7 @@ import { logActivity } from './activity.js'
 import { hasChainColumns } from './chain-columns.js'
 import { selectInChunks } from './db-batch.js'
 import { deleteOne, updateOne } from './items.js'
+import { PERSONAL_TOKEN_NAME } from './mcp-attribution.js'
 import {
   agentDisplayName,
   CONN_RE,
@@ -310,7 +311,7 @@ export async function listConnections(
       out.push({
         conn,
         kind: 'token',
-        name: 'Personal token',
+        name: PERSONAL_TOKEN_NAME,
         user_id: conn.slice(1),
         created_at: null,
         last_used_at: st?.last_call_at ?? null,

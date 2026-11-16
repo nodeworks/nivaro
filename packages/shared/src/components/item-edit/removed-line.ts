@@ -58,25 +58,57 @@ export function nextLineAfter(
   return null
 }
 
-/** "Beth removed this line", "A procedure (reforecast) removed this line", … Pure. */
+/** "Beth Ames removed this line", "Removed by procedure reforecast", … — always says who (or
+ *  what) when it is known, and that it was someone else when it is not. Pure. */
 export function removedLineText(
   by: LineRemovedBy | null | undefined,
   selfId?: string | null
 ): string {
-  if (!by) return 'This line was removed'
+  if (!by) return 'Removed by someone else'
   if (by.user_id && selfId && by.user_id.toUpperCase() === selfId.toUpperCase())
     return 'You removed this line in another tab'
-  if (by.via === 'outside') return 'This line was removed outside the app'
+  if (by.via === 'outside') return 'Removed outside the app'
   const who = String(by.who ?? '').trim()
-  if (!who) return 'This line was removed'
+  if (by.via === 'procedure')
+    return who
+      ? `Removed by ${/^procedure\b/i.test(who) ? who : `procedure ${who}`}`
+      : 'Removed by a procedure'
+  if (by.via === 'import') return who ? `Removed by an import (${who})` : 'Removed by an import'
+  if (by.via === 'system' && !who) return 'Removed by the system'
+  if (!who) return 'Removed by someone else'
   return `${who.charAt(0).toUpperCase()}${who.slice(1)} removed this line`
 }
 
-/** A line's label without the separators an empty display template leaves ("· Line" → "Line"). */
+const SEPARATOR = /\s*[·•|]\s*/
+
+/** A line's label without the separators an empty display template leaves ("· · Line" →
+ *  "Line"): split on the separators, drop the empty parts, join what is left. Pure. */
 export function cleanLineLabel(label: string | null | undefined): string {
   return String(label ?? '')
-    .replace(/^[\s·•|,;:–—-]+|[\s·•|,;:–—-]+$/g, '')
-    .replace(/\s*·\s*·\s*/g, ' · ')
+    .split(SEPARATOR)
+    .map((p) => p.replace(/^[\s,;:–—-]+|[\s,;:–—-]+$/g, ''))
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/**
+ * How the note names the removed line: "Line 3 · 27\" monitor". The number comes first (the
+ * row's position when it was removed); a label that is only the word "Line" or the row's id
+ * adds nothing and is dropped. Pure.
+ */
+export function removedLineName(
+  label: string | null | undefined,
+  lineNumber?: number | null
+): string {
+  const clean = cleanLineLabel(label)
+  const n = lineNumber != null && lineNumber > 0 ? lineNumber : null
+  const rest = clean
+    .split(' · ')
+    // "#371234" is the row's id (the label's last resort), not a name people know.
+    .filter((p) => !/^(line|row)$/i.test(p) && !(n != null && /^#\d+$/.test(p)))
+    .join(' · ')
+  if (n == null) return rest || 'A line'
+  return rest && !/^line\s*\d/i.test(rest) ? `Line ${n} · ${rest}` : rest || `Line ${n}`
 }
 
 /** The values a "Restore as new line" starts from: the line as it was, with the person's

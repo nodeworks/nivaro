@@ -204,6 +204,9 @@ const stored = () => JSON.parse(localStorage.getItem('nvr_cbv_totals_wf') ?? 'nu
 const cellText = (key: string) =>
   document.querySelector(`[data-cbv-total-cell="${key}"]`)?.textContent ?? null
 async function updateView() {
+  // "Update the view" sits in the active pill's ⋯ menu.
+  await act(async () => (document.querySelector('[data-view-more="11"]') as HTMLElement).click())
+  await settle()
   await act(async () => (document.querySelector('[data-view-update="11"]') as HTMLElement).click())
   await settle()
 }

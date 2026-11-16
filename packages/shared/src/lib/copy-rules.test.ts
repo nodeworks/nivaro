@@ -6,7 +6,8 @@ import {
   fetchCopySkip,
   fieldTitle,
   groupNeverCopied,
-  headerCopySkip
+  headerCopySkip,
+  readableLabel
 } from './copy-rules'
 
 const skip = {
@@ -92,5 +93,12 @@ describe('fetchCopySkip', () => {
       throw new Error('403')
     }) as never
     expect(await fetchCopySkip({ request }, new QueryClient(), 'x')).toBeNull()
+  })
+})
+
+describe('readableLabel', () => {
+  it('turns a column name typed as a label into words', () => {
+    expect(readableLabel('workflow_state (legacy)')).toBe('Workflow State (legacy)')
+    expect(readableLabel('LinX ID')).toBe('LinX ID')
   })
 })

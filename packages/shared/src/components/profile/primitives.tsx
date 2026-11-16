@@ -46,7 +46,7 @@ export function SectionCard({
         <span
           className={cn(
             'shrink-0',
-            tone === 'danger' ? 'text-amber-500' : 'text-nvr-navy dark:text-nvr-cyan'
+            tone === 'danger' ? 'text-amber-500' : 'text-slate-500 dark:text-slate-400'
           )}
         >
           {icon}

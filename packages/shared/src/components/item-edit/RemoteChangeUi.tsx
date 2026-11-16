@@ -14,7 +14,8 @@ import {
 } from '../../lib/field-merge'
 import { liveMotionAllowed } from '../../lib/live-preference'
 import { htmlToText } from '../../lib/sanitize-html'
-import { choiceLabel, cn, formatRelative } from '../../lib/utils'
+import { diffWindow } from '../../lib/text-diff-window'
+import { choiceLabel, cn, formatDate, formatDateTime, formatRelative } from '../../lib/utils'
 import { RelativeTime } from '../RelativeTime'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import type { RemoteFieldChange } from './FieldAffordances'
@@ -180,39 +181,46 @@ export function RemoteConflictNotice({
   const shown = useShown(field, relatedCollection ?? null, [change.theirs, mine])
   const kind: FieldMergeKind = fieldMergeKind(field, mine, change.theirs)
   const canMerge = !locked && !!onMerge && kind !== 'none'
+  // Outlined small buttons (44 px tall on a touch screen) — bare text read as
+  // a label next to the cyan "Use merged".
   const btn =
-    'shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60'
+    'inline-flex h-7 shrink-0 items-center gap-1 rounded-md border px-2.5 text-[11.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:px-3.5'
+  const quietBtn =
+    'border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:bg-muted'
   return (
     <div
       data-remote-change-ghost
       data-remote-conflict
       className='nvr-expand-in rounded-md border border-amber-200/80 bg-amber-50/60 px-2 py-1.5 text-[11.5px] text-slate-700 dark:border-amber-400/25 dark:bg-amber-400/[0.06] dark:text-slate-200'
     >
-      <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
-        <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-400' />
-        <span className='min-w-0 flex-1'>
-          <span className='font-medium'>{change.by ?? 'Someone'}</span> saved{' '}
-          <span
-            className='font-medium text-slate-900 dark:text-slate-50'
-            data-tip={shown(change.theirs, 400)}
-          >
-            {shown(change.theirs)}
-          </span>
-          <span className='text-slate-500 dark:text-slate-400'>
-            {' '}
-            · <RelativeTime value={change.at} />
+      {/* Always stacked: the sentence takes the full width, the buttons sit on their own row
+          under it (rt2-conflict r-1116b — side by side, a field column squeezed the sentence
+          to ~150 px over five lines). */}
+      <div className='flex flex-col items-start gap-1.5'>
+        {/* The dot travels with its sentence: never alone on a line of its own. */}
+        <span className='flex w-full min-w-0 items-start gap-2'>
+          <span className='mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-400' />
+          <span className='min-w-0'>
+            <span className='font-medium'>{change.by ?? 'Someone'}</span> saved{' '}
+            <span
+              className='font-medium text-slate-900 dark:text-slate-50'
+              data-tip={shown(change.theirs, 400)}
+            >
+              {shown(change.theirs)}
+            </span>
+            <span className='text-slate-500 dark:text-slate-400'>
+              {' '}
+              · <RelativeTime value={change.at} />
+            </span>
           </span>
         </span>
-        <span className='flex shrink-0 items-center gap-0.5'>
+        <span className='flex flex-wrap items-center gap-1.5 pl-3.5'>
           {!locked && (
             <button
               type='button'
               onClick={onKeepMine}
               data-remote-keep-mine
-              className={cn(
-                btn,
-                'text-slate-600 hover:bg-amber-100/80 dark:text-slate-300 dark:hover:bg-amber-400/10'
-              )}
+              className={cn(btn, quietBtn)}
             >
               Keep mine
             </button>
@@ -224,7 +232,7 @@ export function RemoteConflictNotice({
               data-remote-take-theirs
               className={cn(
                 btn,
-                'text-slate-600 hover:bg-amber-100/80 dark:text-slate-300 dark:hover:bg-amber-400/10'
+                'border-amber-300 bg-amber-100 text-amber-950 hover:bg-amber-200/70 dark:border-amber-400/40 dark:bg-amber-400/15 dark:text-amber-100 dark:hover:bg-amber-400/25'
               )}
             >
               Take theirs
@@ -236,10 +244,7 @@ export function RemoteConflictNotice({
               onClick={() => setMerging((v) => !v)}
               data-remote-merge
               aria-expanded={merging}
-              className={cn(
-                btn,
-                'inline-flex items-center gap-1 border border-amber-300 bg-white text-amber-900 hover:bg-amber-50 dark:border-amber-400/30 dark:bg-transparent dark:text-amber-100 dark:hover:bg-amber-400/10'
-              )}
+              className={cn(btn, quietBtn)}
             >
               <GitMerge className='h-3 w-3' />
               Merge
@@ -254,6 +259,7 @@ export function RemoteConflictNotice({
           mine={mine}
           theirs={change.theirs}
           by={change.by ?? 'Someone'}
+          flat
           shown={(v) => shown(v, 120)}
           onCancel={() => setMerging(false)}
           onApply={(v) => {
@@ -279,9 +285,12 @@ export function FieldMergePanel({
   theirs,
   by,
   shown,
+  flat,
   onApply,
   onCancel
 }: {
+  /** Inside the amber conflict notice: no card of its own (one bordered panel, not three). */
+  flat?: boolean
   kind: FieldMergeKind
   base: unknown
   mine: unknown
@@ -322,7 +331,12 @@ export function FieldMergePanel({
     <div
       ref={firstRef}
       data-field-merge
-      className='mt-2 space-y-2 rounded-md border border-slate-200 bg-white p-2 dark:border-border dark:bg-card'
+      className={cn(
+        'mt-2 space-y-2',
+        flat
+          ? 'border-t border-amber-200/80 pt-2 dark:border-amber-400/20'
+          : 'rounded-md border border-slate-200 bg-white p-2 dark:border-border dark:bg-card'
+      )}
     >
       {kind === 'set' && (
         <ul className='flex flex-wrap gap-1.5' aria-label='Merged values'>
@@ -347,17 +361,16 @@ export function FieldMergePanel({
                   data-merge-item={String(it.value)}
                   onClick={() => setFlips((m) => new Map(m).set(k, !on))}
                   className={cn(
-                    'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors',
+                    'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11.5px] transition-colors [@media(pointer:coarse)]:min-h-[44px]',
                     on
                       ? 'border-nvr-cyan/50 bg-nvr-cyan/10 text-slate-800 dark:text-slate-100'
-                      : 'border-slate-200 text-slate-400 line-through dark:border-border dark:text-slate-500'
+                      : 'border-slate-200 bg-white text-slate-500 dark:border-border dark:bg-transparent dark:text-slate-400'
                   )}
                 >
-                  <span>{shown(it.value)}</span>
+                  {/* Only the value is struck when it is left out — never the note. */}
+                  <span className={on ? undefined : 'line-through'}>{shown(it.value)}</span>
                   {note && (
-                    <span className='text-[10px] text-slate-500 no-underline dark:text-slate-400'>
-                      · {note}
-                    </span>
+                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>· {note}</span>
                   )}
                 </button>
               </li>
@@ -388,10 +401,10 @@ export function FieldMergePanel({
                 data-merge-pick={p}
                 onClick={() => setPicks((m) => new Map(m).set(idx, p))}
                 className={cn(
-                  'rounded px-1.5 py-0.5 text-[10.5px] font-medium',
+                  'inline-flex h-6 items-center rounded px-2 text-[11px] font-medium [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:px-3.5',
                   pick === p
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
-                    : 'text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-muted'
+                    ? 'bg-[#0f172a] text-[#ffffff] dark:bg-[#e2e8f0] dark:text-[#0f172a]'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted'
                 )}
               >
                 {label}
@@ -428,15 +441,21 @@ export function FieldMergePanel({
                     </p>
                   </div>
                 </div>
-                <div className='mt-1 flex items-center gap-0.5'>
+                <div className='mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1'>
                   {h.conflict && (
-                    <span className='mr-1 text-[10.5px] text-amber-700 dark:text-amber-300'>
+                    <span className='text-[11px] text-amber-700 dark:text-amber-300'>
                       You both changed this
                     </span>
                   )}
-                  {opt('mine', 'Yours')}
-                  {opt('theirs', 'Theirs')}
-                  {opt('both', 'Both')}
+                  <span
+                    role='group'
+                    aria-label='Which version to keep'
+                    className='inline-flex items-center gap-0.5 rounded-md border border-slate-200 bg-white p-0.5 dark:border-border dark:bg-card'
+                  >
+                    {opt('mine', 'Yours')}
+                    {opt('theirs', 'Theirs')}
+                    {opt('both', 'Both')}
+                  </span>
                 </div>
               </li>
             )
@@ -469,7 +488,7 @@ export function FieldMergePanel({
         <button
           type='button'
           onClick={onCancel}
-          className='rounded px-2 py-1 text-[11.5px] text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-muted'
+          className='inline-flex h-7 items-center rounded-md px-2.5 text-[11.5px] text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted [@media(pointer:coarse)]:h-11'
         >
           Cancel
         </button>
@@ -477,12 +496,99 @@ export function FieldMergePanel({
           type='button'
           data-merge-apply
           onClick={() => onApply(result)}
-          className='rounded bg-nvr-cyan px-2.5 py-1 text-[11.5px] font-medium text-white hover:brightness-95'
+          className='inline-flex h-7 items-center rounded-md bg-nvr-cyan px-3 text-[11.5px] font-medium text-white hover:brightness-95 [@media(pointer:coarse)]:h-11'
         >
           Use merged
         </button>
       </div>
     </div>
+  )
+}
+
+/** Columns the system stamps on every save — never "a change by others" a person needs to see. */
+const SYSTEM_STAMPS = new Set([
+  'date_updated',
+  'updated_at',
+  'user_updated',
+  'updated_by',
+  'date_created',
+  'created_at',
+  'user_created',
+  'created_by',
+  'modified_at',
+  'modified_by',
+  'date_modified',
+  'last_modified',
+  'last_updated',
+  // EFP-style stamps: `changed` / `created` carry the save time on workflows.
+  'changed',
+  'created'
+])
+
+export function isSystemStampField(name: string): boolean {
+  return SYSTEM_STAMPS.has(name)
+}
+
+const DATE_ONLY = new Set(['date'])
+const DATE_TIME = new Set(['datetime', 'dateTime', 'timestamp', 'time-stamp'])
+
+/** One value in "See changes", formatted the way the form shows it. */
+function ChangeValue({
+  value,
+  field,
+  relatedCollection
+}: {
+  value: unknown
+  field: CMSField | null
+  relatedCollection: string | null
+}) {
+  const shown = useShown(field, relatedCollection, [value])
+  if (value != null && value !== '' && field) {
+    if (DATE_ONLY.has(field.type)) return <>{formatDate(String(value)) || 'empty'}</>
+    if (DATE_TIME.has(field.type)) return <>{formatDateTime(String(value)) || 'empty'}</>
+  }
+  return <>{shown(value, 60)}</>
+}
+
+/**
+ * Old → new in "See changes". Long text shows the part that differs (lib/text-diff-window):
+ * a head cut made both sides read the same whenever the edit was past it (rt2-conflict).
+ */
+function ChangeDiff({
+  was,
+  now,
+  field,
+  relatedCollection
+}: {
+  was: unknown
+  now: unknown
+  field: CMSField | null
+  relatedCollection: string | null
+}) {
+  const shown = useShown(field, relatedCollection, [was, now])
+  const plain =
+    (typeof was === 'string' || was == null) &&
+    (typeof now === 'string' || now == null) &&
+    !(field && (DATE_ONLY.has(field.type) || DATE_TIME.has(field.type)))
+  const win = plain ? diffWindow(shown(was, 100000), shown(now, 100000)) : null
+  return (
+    <p className='mt-0.5 break-words text-slate-500 dark:text-slate-400'>
+      <span className='line-through decoration-slate-300 dark:decoration-slate-600'>
+        {win ? (
+          win.before
+        ) : (
+          <ChangeValue value={was} field={field} relatedCollection={relatedCollection} />
+        )}
+      </span>{' '}
+      →{' '}
+      <span className='text-slate-700 dark:text-slate-200'>
+        {win ? (
+          win.after
+        ) : (
+          <ChangeValue value={now} field={field} relatedCollection={relatedCollection} />
+        )}
+      </span>
+    </p>
   )
 }
 
@@ -503,11 +609,17 @@ export function RemoteChangesButton({
   entries,
   conflicts,
   labelOf,
+  fieldOf,
+  relatedOf,
   onKeepMine,
   onTakeTheirs,
   onJump
 }: {
   entries: RemoteChangeLogEntry[]
+  /** The field's config, to format values as the form does. */
+  fieldOf?: (field: string) => CMSField | null
+  /** The collection a link field points at, to show the linked record's name. */
+  relatedOf?: (field: string) => string | null
   /** field → the open conflict on it. */
   conflicts: Record<string, RemoteFieldChange>
   labelOf: (field: string) => string
@@ -516,9 +628,11 @@ export function RemoteChangesButton({
   onJump?: (field: string) => void
 }) {
   const [open, setOpen] = useState(false)
-  if (entries.length === 0) return null
+  // A save stamps date_updated / user_updated: noise, not a change to read.
+  const shownEntries = entries.filter((e) => !isSystemStampField(e.field))
+  if (shownEntries.length === 0) return null
   const open_ = Object.values(conflicts).filter((c) => c.conflict).length
-  const newest = [...entries].reverse()
+  const newest = [...shownEntries].reverse()
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -526,21 +640,22 @@ export function RemoteChangesButton({
           type='button'
           data-remote-changes-button
           className={cn(
-            'inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-[12px] font-medium transition-colors',
+            'inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium shadow-sm transition-colors',
             open_ > 0
               ? 'border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-400/30 dark:text-amber-200 dark:hover:bg-amber-400/10'
-              : 'border-slate-200 text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
+              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-100 dark:hover:bg-muted'
           )}
         >
           <History className='h-3.5 w-3.5' />
           See changes
-          <span className='rounded-full bg-slate-100 px-1.5 text-[10.5px] tabular-nums text-slate-600 dark:bg-muted dark:text-slate-300'>
-            {entries.length}
+          <span className='rounded-full bg-slate-100 px-1.5 text-[10.5px] tabular-nums text-slate-700 dark:bg-slate-700 dark:text-slate-100'>
+            {shownEntries.length}
           </span>
         </button>
       </PopoverTrigger>
       <PopoverContent
         align='end'
+        collisionPadding={16}
         className='w-[360px] max-w-[calc(100vw-32px)] p-0'
         data-remote-changes-panel
       >
@@ -576,32 +691,32 @@ export function RemoteChangesButton({
                   >
                     {labelOf(e.field)}
                   </button>
-                  <span className='shrink-0 text-[10.5px] text-slate-400'>
+                  <span className='shrink-0 text-[10.5px] text-slate-500 dark:text-slate-400'>
                     {e.by ?? 'Someone'} · <RelativeTime value={e.at} />
                   </span>
                 </div>
-                <p className='mt-0.5 break-words text-slate-500 dark:text-slate-400'>
-                  <span className='line-through decoration-slate-300 dark:decoration-slate-600'>
-                    {short(e.was, 60)}
-                  </span>{' '}
-                  → <span className='text-slate-700 dark:text-slate-200'>{short(e.now, 60)}</span>
-                </p>
+                <ChangeDiff
+                  was={e.was}
+                  now={e.now}
+                  field={fieldOf?.(e.field) ?? null}
+                  relatedCollection={relatedOf?.(e.field) ?? null}
+                />
                 {c?.conflict && i === newest.findIndex((x) => x.field === e.field) && (
-                  <div className='mt-1 flex items-center gap-1'>
-                    <span className='mr-auto text-[10.5px] text-amber-700 dark:text-amber-300'>
+                  <div className='mt-1.5 flex flex-wrap items-center gap-1.5'>
+                    <span className='mr-auto text-[11px] text-amber-700 dark:text-amber-300'>
                       You changed this too
                     </span>
                     <button
                       type='button'
                       onClick={() => onKeepMine(e.field)}
-                      className='rounded px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 hover:bg-muted dark:text-slate-300'
+                      className='inline-flex h-7 items-center rounded-md border border-slate-300 bg-white px-2.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:bg-muted [@media(pointer:coarse)]:h-11'
                     >
                       Keep mine
                     </button>
                     <button
                       type='button'
                       onClick={() => onTakeTheirs(e.field)}
-                      className='rounded border border-slate-200 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-700 hover:bg-muted dark:border-border dark:text-slate-200'
+                      className='inline-flex h-7 items-center rounded-md border border-amber-300 bg-amber-100 px-2.5 text-[11px] font-medium text-amber-950 hover:bg-amber-200/70 dark:border-amber-400/40 dark:bg-amber-400/15 dark:text-amber-100 dark:hover:bg-amber-400/25 [@media(pointer:coarse)]:h-11'
                     >
                       Take theirs
                     </button>

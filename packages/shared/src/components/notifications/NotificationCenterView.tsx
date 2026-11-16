@@ -34,7 +34,7 @@ import { openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../../lib/record-peek'
 import { cn, formatRelative } from '../../lib/utils'
 import { AgentBadge } from '../AgentBadge'
-import { hasSnapshotView, offersChanges } from '../NotificationBell'
+import { bellGroupLabel, hasSnapshotView, offersChanges } from '../NotificationBell'
 import { RelativeTime } from '../RelativeTime'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { AsItWasSheet } from './AsItWasSheet'
@@ -95,6 +95,9 @@ interface SentGroup {
 
 interface NotificationRow {
   id: number
+  /** The record's friendly id and the collection's singular name (GET /notifications). */
+  record_label?: string | null
+  record_collection_label?: string | null
   title?: string | null
   subject?: string | null
   message: string | null
@@ -550,11 +553,7 @@ export function NotificationCenterView({
             <RelativeTime value={n.created_at ?? new Date()} />
           </span>
         </div>
-        {n.message && (
-          <p className='mt-0.5 line-clamp-3 whitespace-pre-line text-[12px] text-slate-500'>
-            {n.message.replace(/<[^>]+>/g, '')}
-          </p>
-        )}
+        {n.message && <MessageBody text={n.message.replace(/<[^>]+>/g, '')} />}
         <ResolvedLine resolved={n.detail?.resolved} className='text-[11.5px]' />
       </>
     )
@@ -625,7 +624,10 @@ export function NotificationCenterView({
                         : n.collection && !n.item
                           ? 'See changes'
                           : n.collection
-                            ? `${n.collection} #${n.item}`
+                            ? // The record's friendly id ("Workflow TP26-80418"), as the title
+                              // names it — never the table name and row id.
+                              ((n.record_label ? bellGroupLabel(n) : null) ??
+                              `${n.collection} #${n.item}`)
                             : 'Open'}
               </button>
             )}
@@ -650,7 +652,7 @@ export function NotificationCenterView({
                 className='inline-flex items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:border-border dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-200'
               >
                 <History className='h-3 w-3' />
-                as it was
+                Record when sent
               </button>
             )}
           </div>
@@ -828,7 +830,12 @@ export function NotificationCenterView({
           <span
             className={cn(
               'mt-2 h-2 w-2 shrink-0 rounded-full',
-              b.unread > 0 ? tone.dot : 'bg-transparent'
+              // The same dot an unread row inside the group shows.
+              b.unread > 0
+                ? b.lane === 'critical'
+                  ? 'bg-red-500'
+                  : 'bg-nvr-cyan'
+                : 'bg-transparent'
             )}
           />
           <div className='min-w-0 flex-1'>
@@ -846,13 +853,22 @@ export function NotificationCenterView({
                 )}
                 <span
                   className={cn(
-                    'truncate text-[13px]',
+                    // A phone wraps the headline (two lines) instead of cutting it to a word.
+                    'min-w-0 line-clamp-2 break-words text-[13px] sm:line-clamp-none sm:truncate',
                     b.unread > 0
                       ? cn('font-medium', tone.text)
                       : 'font-normal text-slate-600 dark:text-slate-400'
                   )}
                 >
-                  {bundleHeadline(b)}
+                  {/* The record id never breaks across lines. */}
+                  {b.label ? (
+                    <>
+                      {bundleHeadline(b).slice(0, -b.label.length)}
+                      <span className='whitespace-nowrap'>{b.label}</span>
+                    </>
+                  ) : (
+                    bundleHeadline(b)
+                  )}
                 </span>
                 <span className='shrink-0 text-[10.5px] text-slate-400'>
                   {b.newest ? formatRelative(b.newest) : ''}
@@ -895,8 +911,10 @@ export function NotificationCenterView({
                   Open {b.label}
                 </button>
               )}
-              {b.unread > 0 && b.unread < b.count && (
-                <span className='text-[10.5px] text-slate-400'>{b.unread} unread</span>
+              {b.unread > 0 && (
+                <span className='text-[10.5px] text-slate-500 dark:text-slate-400'>
+                  {b.unread} unread
+                </span>
               )}
             </div>
           </div>
@@ -905,10 +923,13 @@ export function NotificationCenterView({
               type='button'
               data-notification-bundle-read={key}
               onClick={() => markBundleMut.mutate(unreadIds)}
-              className='inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-muted'
+              aria-label='Mark read'
+              data-tip='Mark read'
+              // Icon-only on a phone so the headline keeps the width.
+              className='inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 p-1.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50 sm:px-2 sm:py-1 dark:border-border dark:text-slate-300 dark:hover:bg-muted'
             >
-              <Check className='h-3 w-3' />
-              Mark read
+              <Check className='h-3.5 w-3.5 sm:h-3 sm:w-3' />
+              <span className='max-sm:hidden'>Mark read</span>
             </button>
           )}
         </div>
@@ -954,31 +975,44 @@ export function NotificationCenterView({
                 </button>
               )}
             </div>
-            <p className='mt-0.5 text-[13px] text-slate-400'>
+            <p className='mt-0.5 text-[13px] text-slate-500 dark:text-slate-400'>
+              {/* The lane badges count unread across the inbox; this line counts the view. */}
               {total} notification{total === 1 ? '' : 's'}
+              {lane !== 'all' || status !== 'all' || search || collectionFilter
+                ? ' in this view'
+                : ''}
               {counts?.attention != null && counts.attention > 0
                 ? ` · ${counts.attention} need${counts.attention === 1 ? 's' : ''} you`
                 : ''}
             </p>
           </div>
+          {/* Below sm the two actions are icon buttons (names in the tip and for screen readers)
+              so the title row never wraps them onto two lines each. */}
           <div className='flex shrink-0 items-center gap-2'>
             <button
               type='button'
               onClick={() => setCleanOpen((o) => !o)}
               data-notification-cleanup-toggle
-              className='inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
+              aria-label='Clean up'
+              aria-expanded={cleanOpen}
+              data-tip='Clean up'
+              className='inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 px-2 text-[12px] font-medium text-slate-700 hover:bg-slate-50 sm:px-3 dark:border-border dark:text-foreground dark:hover:bg-muted'
             >
-              <Archive className='h-3.5 w-3.5' />
-              Clean up
+              <Archive className='h-3.5 w-3.5' aria-hidden />
+              <span className='hidden sm:inline'>Clean up</span>
             </button>
             <button
               type='button'
               onClick={() => markAllMut.mutate()}
-              disabled={markAllMut.isPending}
-              className='inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
+              disabled={markAllMut.isPending || (counts != null && counts.unread === 0)}
+              aria-label='Mark all read'
+              data-tip={counts?.unread === 0 ? 'Nothing unread' : 'Mark all read'}
+              className='inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 px-2 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:px-3 dark:border-border dark:text-foreground dark:hover:bg-muted'
             >
-              <CheckCheck className='h-3.5 w-3.5' />
-              {markAllMut.isPending ? 'Marking…' : 'Mark all read'}
+              <CheckCheck className='h-3.5 w-3.5' aria-hidden />
+              <span className='hidden sm:inline'>
+                {markAllMut.isPending ? 'Marking…' : 'Mark all read'}
+              </span>
             </button>
           </div>
         </div>
@@ -1006,7 +1040,7 @@ export function NotificationCenterView({
                 disabled={archiveReadMut.isPending}
                 onClick={() => archiveReadMut.mutate(Number(cleanDays))}
                 data-notification-archive-read
-                className='h-7 rounded-md bg-slate-900 px-2.5 text-[11.5px] font-medium text-white hover:bg-slate-700 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900'
+                className='h-7 rounded-md bg-[#0f172a] px-2.5 text-[11.5px] font-medium text-[#ffffff] hover:bg-[#334155] disabled:opacity-50 dark:bg-[#e2e8f0] dark:text-[#0f172a] dark:hover:bg-[#ffffff]'
               >
                 {archiveReadMut.isPending ? 'Archiving…' : 'Archive now'}
               </button>
@@ -1032,8 +1066,9 @@ export function NotificationCenterView({
           </div>
         )}
         {/* Lane strip — what the badge counts sits first */}
+        {/* Each tab group is one row; on a phone a group scrolls sideways instead of wrapping. */}
         <div className='mt-4 flex flex-wrap items-center gap-2'>
-          <div className='flex max-w-full flex-wrap items-center gap-1'>
+          <div className='-mx-1 flex max-w-full items-center gap-1 overflow-x-auto px-1 [scrollbar-width:none] sm:flex-wrap'>
             {LANE_TABS.map((t) => {
               const c = laneCount(t.key)
               return (
@@ -1056,7 +1091,10 @@ export function NotificationCenterView({
                 >
                   {t.label}
                   {c != null && c > 0 && (
-                    <span className='ml-1.5 rounded-full bg-slate-200 px-1.5 text-[10px] font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-300'>
+                    <span
+                      className='ml-1.5 rounded-full bg-slate-200 px-1.5 text-[10px] font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+                      data-tip={`${c} unread`}
+                    >
                       {c}
                     </span>
                   )}
@@ -1065,7 +1103,7 @@ export function NotificationCenterView({
             })}
           </div>
           <span className='mx-1 hidden h-5 w-px bg-slate-200 dark:bg-border sm:block' />
-          <div className='flex max-w-full flex-wrap items-center gap-1'>
+          <div className='-mx-1 flex max-w-full items-center gap-1 overflow-x-auto px-1 [scrollbar-width:none] sm:flex-wrap'>
             {STATUS_TABS.map((t) => (
               <button
                 key={t.key}
@@ -1077,7 +1115,7 @@ export function NotificationCenterView({
                 className={cn(
                   'shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                   status === t.key
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                    ? 'bg-[#0f172a] text-[#ffffff] dark:bg-[#e2e8f0] dark:text-[#0f172a]'
                     : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-slate-800/50'
                 )}
               >
@@ -1450,4 +1488,34 @@ export function NotificationCenterView({
 function titleWords(collection: string): string {
   const t = collection.replace(/_/g, ' ').trim()
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : collection
+}
+
+/**
+ * A notification's body. A one-paragraph message clamps at three lines; a message of several
+ * lines (one per problem) clamps each line on its own, so a long first line can never hide the
+ * next problem (rt6 review: the stock line vanished under the price sentence on a phone).
+ */
+function MessageBody({ text }: { text: string }) {
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+  if (lines.length <= 1)
+    return (
+      <p className='mt-0.5 line-clamp-3 whitespace-pre-line text-[12px] text-slate-500'>{text}</p>
+    )
+  const shown = lines.slice(0, 4)
+  return (
+    <div className='mt-0.5 space-y-0.5 text-[12px] text-slate-500'>
+      {shown.map((l, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: static lines of one message
+        <p key={i} className='line-clamp-2'>
+          {l}
+        </p>
+      ))}
+      {lines.length > shown.length && (
+        <p className='text-[11.5px] text-slate-400'>+{lines.length - shown.length} more</p>
+      )}
+    </div>
+  )
 }

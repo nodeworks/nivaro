@@ -251,6 +251,8 @@ export interface PublicStatus {
   label: string
   /** The request is no longer there (deleted, or out of the form owner's reach). */
   gone: boolean
+  /** When it reached the stage it is in (pipeline source only; a field has no such time). */
+  since?: string | null
 }
 
 /** A record's raw status value → what the submitter may read. Pure. */
@@ -297,8 +299,15 @@ export async function loadPublicStatus(link: ResolvedStatusLink): Promise<Public
   const { attachRecordState } = await import('./record-state.js')
   const row: Record<string, unknown> = { id: rec.id ?? link.item }
   await attachRecordState(link.collection, [row])
-  const st = row.$state as { key?: string; external_label?: string | null } | null
-  return publicStatusOf(link.cfg, st?.key ?? null, st?.external_label ?? null)
+  const st = row.$state as {
+    key?: string
+    external_label?: string | null
+    entered_at?: string | null
+  } | null
+  return {
+    ...publicStatusOf(link.cfg, st?.key ?? null, st?.external_label ?? null),
+    since: st?.entered_at ?? null
+  }
 }
 
 /** The submitter's email from the submitted values, when the form collects one. Pure. */

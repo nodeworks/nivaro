@@ -30,6 +30,8 @@ export interface ProposalChangeView {
   from: unknown
   to: unknown
   stale?: boolean
+  /** what the field holds now (stale changes only) */
+  now?: unknown
 }
 
 export interface ProposalView {

@@ -2,6 +2,7 @@ import { useItemEditAuth } from '../../context'
 import { type ListViewer, useListViewers, viewersSentence } from '../../lib/list-viewers'
 import { cn } from '../../lib/utils'
 import { UserAvatar } from '../UserAvatar'
+import { UserChip } from '../item-edit/UserChip'
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -78,22 +79,30 @@ function Stack({ viewers, ring }: { viewers: ListViewer[]; ring: 'toolbar' | 'he
   return (
     <span className='flex -space-x-0.5'>
       {shown.map((v) => (
-        <UserAvatar
-          key={v.id}
-          userId={v.id}
-          alt=''
-          className={cn('h-6 w-6 shrink-0 rounded-full object-cover', ringCls)}
-          fallback={
-            <span
-              className={cn(
-                disc,
-                'bg-slate-200 text-[9.5px] font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-100'
-              )}
-            >
-              {initials(v.name)}
-            </span>
-          }
-        />
+        // Each face opens that person's user card, like avatars everywhere else.
+        <UserChip key={v.id} userId={v.id}>
+          <button
+            type='button'
+            aria-label={v.name}
+            className='relative rounded-full hover:z-10 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+          >
+            <UserAvatar
+              userId={v.id}
+              alt=''
+              className={cn('h-6 w-6 shrink-0 rounded-full object-cover', ringCls)}
+              fallback={
+                <span
+                  className={cn(
+                    disc,
+                    'bg-slate-200 text-[9.5px] font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-100'
+                  )}
+                >
+                  {initials(v.name)}
+                </span>
+              }
+            />
+          </button>
+        </UserChip>
       ))}
       {more > 0 && (
         <span

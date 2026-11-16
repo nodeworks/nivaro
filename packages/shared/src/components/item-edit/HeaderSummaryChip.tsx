@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { type CSSProperties, useEffect, useState } from 'react'
+import { type CSSProperties, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { post } from '../../lib/commands'
 import {
@@ -11,6 +11,7 @@ import {
 } from '../../lib/header-strip'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { RecalcValue } from './RecalcValue'
 
 /**
  * A number over a record's child rows, shown in the item header: "Unallocated
@@ -44,6 +45,9 @@ interface Props {
     rowId: string
     field: string
   }) => void
+  /** rt7 #9: whether totals over this child collection are being recalculated right now (the
+   *  form's useRollupRecalc). The figure then shows "Updating…" until its own re-read lands. */
+  recalculating?: (childCollection: string) => boolean
   /** Set by the band (HeaderTiles): its cell key and fold mark land on the tile. */
   'data-header-cell'?: string
   'data-header-folded'?: string
@@ -62,7 +66,15 @@ interface Summary {
   fk_field: string
 }
 
-export function HeaderSummaryChip({ collection, itemId, field, config, onOpen, ...cell }: Props) {
+export function HeaderSummaryChip({
+  collection,
+  itemId,
+  field,
+  config,
+  onOpen,
+  recalculating,
+  ...cell
+}: Props) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   // A grid WRITE on this record refreshes the figure: a rows query of this
@@ -91,7 +103,7 @@ export function HeaderSummaryChip({ collection, itemId, field, config, onOpen, .
     }
   }, [qc, collection, itemId])
 
-  const { data, isLoading } = useQuery<Summary>({
+  const { data, isLoading, dataUpdatedAt } = useQuery<Summary>({
     queryKey: ['child-summary', collection, itemId, field, config.formula, config.positive_only],
     queryFn: () =>
       client
@@ -113,6 +125,30 @@ export function HeaderSummaryChip({ collection, itemId, field, config, onOpen, .
   // show" to "has rows" (a line lands, the summary refetches) would otherwise
   // render one more hook than the previous pass ('Rendered fewer hooks').
   const [open, setOpen] = useState(false)
+  // rt7 #9: the lines this figure sums are being rewritten — hold "Updating…" from the first
+  // write until this chip's OWN re-read after the burst has landed (the summary refetches ~0.4 s
+  // after the rows do), so the old sum is never shown as final. Safety: 15 s.
+  const burstNow = !!data && !!recalculating?.(data.child_collection)
+  const [held, setHeld] = useState<{ endedAt: number | null } | null>(null)
+  const [landed, setLanded] = useState(false)
+  const heldRef = useRef(held)
+  heldRef.current = held
+  useEffect(() => {
+    if (burstNow) setHeld({ endedAt: null })
+    else if (heldRef.current && heldRef.current.endedAt == null) setHeld({ endedAt: Date.now() })
+  }, [burstNow])
+  useEffect(() => {
+    if (!held || held.endedAt == null) return
+    if (dataUpdatedAt > held.endedAt) {
+      setHeld(null)
+      setLanded(true)
+      const t = setTimeout(() => setLanded(false), 1400)
+      return () => clearTimeout(t)
+    }
+    const t = setTimeout(() => setHeld(null), 15_000)
+    return () => clearTimeout(t)
+  }, [held, dataUpdatedAt])
+  const recalcState = held ? 'pending' : landed ? 'landed' : null
   if (!data && !isLoading) return null
   if (data && data.count === 0 && config.hide_when_zero !== false) return null
   const value = data
@@ -154,9 +190,11 @@ export function HeaderSummaryChip({ collection, itemId, field, config, onOpen, .
             {config.label}
           </span>
           <span className={`${HEADER_VALUE_LINE} items-baseline`} data-header-value>
-            <span className={cn(HEADER_VALUE_HERO, isLoading && !data && 'text-slate-300')}>
-              {value}
-            </span>
+            <RecalcValue state={recalcState} inline>
+              <span className={cn(HEADER_VALUE_HERO, isLoading && !data && 'text-slate-300')}>
+                {value}
+              </span>
+            </RecalcValue>
             {data && (
               <span className={HEADER_SUB}>
                 across {data.count} {data.count === 1 ? countLabel.replace(/s$/, '') : countLabel}

@@ -146,7 +146,7 @@ import { del, get, patch, post } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
 import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
-import { createCellAnnouncer } from '../../lib/grid-cursors'
+import { createCellAnnouncer, personInitials } from '../../lib/grid-cursors'
 import { LineLockContext, lineLockMoves, useLineLocks } from '../../lib/line-locks'
 import { isOwnWrite } from '../../lib/own-writes'
 import { fetchCollectionRelations, queryKeys } from '../../lib/query-keys'
@@ -261,8 +261,10 @@ import {
 import { RowWatchButton } from './RowWatchButton'
 import { RuleProvenanceChip } from './RuleProvenancePopover'
 import {
+  cleanLineLabel,
   type LineRemovedBy,
   nextLineAfter,
+  removedLineName,
   restorableLine,
   unsavedLineChanges
 } from './removed-line'
@@ -4720,6 +4722,7 @@ export function InlineTableField({
       setRemovedLine({
         rowId: id,
         label: rowIdentityLabel(stored),
+        lineNumber: prevOrder.indexOf(id) + 1,
         row: restorableLine(stored, changes),
         changes,
         by: null,
@@ -7690,7 +7693,8 @@ export function InlineTableField({
     // otherwise reduce a perfectly good "2026" to "#6423129".
     const tmpl = ownCollectionMeta?.display_template
     if (tmpl) {
-      const rendered = applyDisplayTemplate(tmpl, row).trim()
+      // An empty template part leaves bare separators ("Line 1 · · Line 1", "· Line"): drop them.
+      const rendered = cleanLineLabel(applyDisplayTemplate(tmpl, row))
       if (rendered && rendered !== '-' && rendered !== String(row.id ?? ''))
         return rendered.length > 60 ? `${rendered.slice(0, 60)}…` : rendered
     }
@@ -8964,9 +8968,19 @@ export function InlineTableField({
           if (diff?.added.size) parts.push(`${diff.added.size} added`)
           if (diff?.changed.size) parts.push(`${diff.changed.size} changed`)
           if (diff?.removed.length) parts.push(`${diff.removed.length} removed`)
-          const removedLabels = (diff?.removed ?? [])
+          // Named like the removed-line note does ("Line 3 · 27\" monitor"), never a bare "Line":
+          // the number is the row's place when this person opened the grid.
+          // The line the removed-line note above already names is not repeated here.
+          const baseOrder = [...(baselineRef.current?.keys() ?? [])]
+          const otherRemoved = (diff?.removed ?? []).filter((id) => id !== removedLine?.rowId)
+          const removedLabels = otherRemoved
             .slice(0, 5)
-            .map((id) => rowIdentityLabel(baselineRef.current?.get(id) ?? { id }))
+            .map((id) =>
+              removedLineName(
+                rowIdentityLabel(baselineRef.current?.get(id) ?? { id }),
+                baseOrder.indexOf(id) + 1 || null
+              )
+            )
           return (
             <div
               data-grid-since-opened=''
@@ -8984,8 +8998,8 @@ export function InlineTableField({
                   {removedLabels.length > 0 && (
                     <span className='text-amber-700/80 dark:text-amber-300/80'>
                       removed: {removedLabels.join(', ')}
-                      {diff.removed.length > removedLabels.length
-                        ? ` +${diff.removed.length - removedLabels.length}`
+                      {otherRemoved.length > removedLabels.length
+                        ? ` +${otherRemoved.length - removedLabels.length}`
                         : ''}
                     </span>
                   )}
@@ -9058,7 +9072,8 @@ export function InlineTableField({
         className={
           isPrefilling
             ? 'hidden'
-            : `relative rounded-lg border border-slate-200 text-[12px]${freezeFirstColumn ? ' overflow-x-auto' : ''}`
+            : // A phone scrolls the grid sideways instead of squeezing every column to a sliver.
+              `relative rounded-lg border border-slate-200 text-[12px]${freezeFirstColumn ? ' overflow-x-auto' : ' max-sm:overflow-x-auto'}`
         }
       >
         {reordering && (
@@ -9071,7 +9086,15 @@ export function InlineTableField({
         )}
         {frozenCss && <style>{frozenCss}</style>}
         <table
-          className={freezeFirstColumn ? `w-full min-w-max ${frozenClass}` : 'w-full table-fixed'}
+          className={
+            freezeFirstColumn
+              ? `w-full min-w-max ${frozenClass}`
+              : 'w-full table-fixed max-sm:min-w-[var(--nvr-grid-min)]'
+          }
+          // Phone floor: ~6.5rem per data column plus the fixed ones (select, #, status, actions).
+          style={
+            { '--nvr-grid-min': `${effectiveCols.length * 104 + 200}px` } as React.CSSProperties
+          }
         >
           <thead className='bg-slate-50 border-b border-slate-200 [&>tr>th:first-child]:rounded-tl-lg [&>tr>th:last-child]:rounded-tr-lg'>
             <tr>
@@ -9102,7 +9125,8 @@ export function InlineTableField({
               {effectiveCols.map((c) => (
                 <th
                   key={c.field}
-                  className='px-3 py-2 text-left font-medium text-slate-500 text-[11px]'
+                  data-tip={c.label ?? titleCase(c.field)}
+                  className='truncate px-3 py-2 text-left font-medium text-slate-500 text-[11px]'
                 >
                   {c.label ?? titleCase(c.field)}
                 </th>
@@ -9687,6 +9711,17 @@ export function InlineTableField({
                                 </button>
                               ) : (
                                 <>
+                                  {/* Who holds this line, without hovering (touch has no hover). */}
+                                  {lineLock.readOnly && (
+                                    <span
+                                      data-line-lock-holder
+                                      aria-label={`${lineLock.by ?? 'Someone'} is editing this line`}
+                                      className='mr-0.5 inline-flex h-5 shrink-0 items-center gap-1 rounded-full border border-amber-300 bg-amber-50 pl-1 pr-1.5 text-[10px] font-semibold text-amber-800 dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-200'
+                                    >
+                                      <Lock className='h-2.5 w-2.5' aria-hidden />
+                                      {personInitials(lineLock.by ?? '?')}
+                                    </span>
+                                  )}
                                   {isPendingEdit && (
                                     <button
                                       type='button'

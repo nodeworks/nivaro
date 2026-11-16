@@ -29,6 +29,15 @@ async function loadHtml2Canvas(): Promise<Html2Canvas> {
   return fn
 }
 
+/** A picture narrower than this is drawn at this width (a phone's widget column would give a
+ *  sliver nobody can paste into an email); the copy reflows at the wider size. */
+export const MIN_PICTURE_WIDTH = 640
+
+/** The width the picture is drawn at: the on-screen width, never under MIN_PICTURE_WIDTH. */
+export function pictureWidth(onScreen: number): number {
+  return Math.max(MIN_PICTURE_WIDTH, Math.round(onScreen) || 1)
+}
+
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
 
 /** Build the header block in the clone's own document. */
@@ -61,13 +70,19 @@ export async function renderWidgetImage(
 ): Promise<Blob> {
   const html2canvas = await loadHtml2Canvas()
   const rect = el.getBoundingClientRect()
-  const width = Math.max(1, Math.round(rect.width))
+  const width = pictureWidth(rect.width)
   const height = Math.max(1, Math.round(rect.height))
+  // Narrower on screen than the picture: the copy reflows at the picture width, so its height
+  // is whatever the content needs there (charts keep their drawn height, centred).
+  const widened = width > Math.round(rect.width)
   const canvas = await html2canvas(el, {
     scale: opts.scale ?? 2,
     backgroundColor: '#ffffff',
     useCORS: true,
     logging: false,
+    // The clone's window must be at least as wide as the picture, or it lays out in the
+    // phone's width again.
+    windowWidth: Math.max(window.innerWidth, width + 32),
     onclone: (doc: Document, cloned: HTMLElement) => {
       const root = doc.documentElement
       root.classList.remove('dark')
@@ -95,18 +110,46 @@ export async function renderWidgetImage(
       s.borderColor = '#e2e8f0'
       s.width = `${width}px`
       s.maxWidth = 'none'
-      s.height = `${height}px`
+      s.height = widened ? 'auto' : `${height}px`
       s.minHeight = '0'
       s.maxHeight = 'none'
       s.overflow = 'hidden'
       s.boxSizing = 'border-box'
       if (!s.display) s.display = 'flex'
       if (getComputedStyle(cloned).display === 'flex') s.flexDirection = 'column'
+      if (widened) {
+        // Drawn charts were sized for the narrow column: let them take the picture's width at
+        // their own height, centred, instead of a strip down the left edge.
+        for (const svg of Array.from(cloned.querySelectorAll('svg'))) {
+          const w = Number(svg.getAttribute('width'))
+          const h = Number(svg.getAttribute('height'))
+          if (!(w > 120 && h > 0)) continue
+          if (!svg.getAttribute('viewBox')) svg.setAttribute('viewBox', `0 0 ${w} ${h}`)
+          svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
+          svg.setAttribute('width', '100%')
+          let box = svg.parentElement
+          for (let i = 0; box && box !== cloned && i < 3; i++, box = box.parentElement) {
+            box.style.width = '100%'
+            box.style.maxWidth = 'none'
+          }
+        }
+      }
       const head = buildHeader(doc, label)
       cloned.insertBefore(head, cloned.firstChild)
       // The header takes room the figure had: grow the card by the same.
-      const used = head.getBoundingClientRect().height + 10
-      s.height = `${height + Math.ceil(used)}px`
+      const used = Math.ceil(head.getBoundingClientRect().height + 10)
+      if (!widened) {
+        s.height = `${height + used}px`
+      } else {
+        // Reflowed at the picture width the card would end right under the figure: keep the
+        // room it has on screen (a KPI's number stays centred under the rule) and at least
+        // the card's top padding below the content, so nothing sits on the frame's edge.
+        s.minHeight = `${height + used}px`
+        const view = doc.defaultView ?? window
+        const top = Number.parseFloat(view.getComputedStyle(cloned).paddingTop) || 0
+        const bottom = Number.parseFloat(view.getComputedStyle(cloned).paddingBottom) || 0
+        s.paddingBottom = `${Math.max(24, top, bottom)}px`
+      }
     }
   })
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))

@@ -244,9 +244,15 @@ export function useRowGlide(
       const esc = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(key) : key
       const el = root.querySelector<HTMLElement>(`[data-row-key="${esc}"]`)
       if (!el) continue
-      el.style.transition = 'none'
-      el.style.transform = `translateY(${dy}px)`
-      els.push(el)
+      // A table row glides cell by cell: a transform on the <tr> leaves its pinned (sticky)
+      // cells out of step with the scrolling ones, tearing the grid (rt2 review).
+      const parts =
+        el.tagName === 'TR' ? (Array.from(el.children) as HTMLElement[]) : [el as HTMLElement]
+      for (const p of parts) {
+        p.style.transition = 'none'
+        p.style.transform = `translateY(${dy}px)`
+        els.push(p)
+      }
     }
     // One reflow for all, then play every row to its place together.
     void root.offsetHeight
@@ -255,7 +261,10 @@ export function useRowGlide(
       el.style.transform = ''
     }
     setTimeout(() => {
-      for (const el of els) el.style.transition = ''
+      for (const el of els) {
+        el.style.transition = ''
+        el.style.transform = ''
+      }
     }, GLIDE_MS + 40)
   })
 }

@@ -1,31 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { LifeBuoy, Plus, Search } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { type SupportDraft, takeSupportDraft } from '../../lib/error-actions'
 import { useLiveRefresh } from '../../lib/live-counts'
-import { useLiveFade, useSettledRows } from '../../lib/live-screen'
-import { useBackgroundArm } from '../../lib/live-views'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { LiveCount } from '../LiveCount'
 import { SimpleSelect } from '../ui/SimpleSelect'
+import { AssignRulesView } from './AssignRules'
+import { RequestList } from './RequestList'
 import { SupportAnalytics } from './SupportAnalytics'
 import { SupportRequestDialog } from './SupportRequestDialog'
-import { StatusPill, TicketDetailSheet } from './TicketDetailSheet'
-import type { SupportCategory, SupportSummary, SupportTicket } from './types'
+import { TicketDetailSheet } from './TicketDetailSheet'
+import type { SupportCategory, SupportSummary } from './types'
 
-type Tab = 'mine' | 'desk' | 'analytics' | 'types'
-type DeskFilter = 'unassigned' | 'me' | 'open' | 'closed'
-
-function ago(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
-  if (m < 60) return `${Math.max(m, 1)}m ago`
-  const h = Math.round(m / 60)
-  if (h < 48) return `${h}h ago`
-  return `${Math.round(h / 24)}d ago`
-}
+type Tab = 'mine' | 'desk' | 'analytics' | 'types' | 'rules'
 
 /**
  * The support page (#999). Everyone sees My requests (raise one, follow it).
@@ -64,9 +54,6 @@ export function SupportView({
       : null
   )
   const [raising, setRaising] = useState(!!draft)
-  const [mineStatus, setMineStatus] = useState<'open' | 'closed'>('open')
-  const [deskFilter, setDeskFilter] = useState<DeskFilter>('unassigned')
-  const [search, setSearch] = useState('')
 
   useEffect(() => {
     if (initialTicketId != null) setOpenId(initialTicketId)
@@ -83,7 +70,7 @@ export function SupportView({
   // quiet window per tab, and a hidden tab reads once when it is shown again.
   useLiveRefresh({
     topic: 'support',
-    keys: [['support-tickets'], ['support-summary'], ['support-ticket']]
+    keys: [['support-tickets'], ['support-summary'], ['support-ticket'], ['support-workload']]
   })
   // A desk worker lands on the desk, everyone else on their own requests.
   const [defaulted, setDefaulted] = useState(false)
@@ -94,43 +81,6 @@ export function SupportView({
     }
   }, [summary, defaulted])
 
-  const params: Record<string, string> =
-    tab === 'desk'
-      ? {
-          scope: 'desk',
-          status: deskFilter === 'closed' ? 'closed' : 'open',
-          ...(deskFilter === 'unassigned' ? { assignee: 'unassigned' } : {}),
-          ...(deskFilter === 'me' ? { assignee: 'me' } : {})
-        }
-      : { scope: 'mine', status: mineStatus }
-  if (search.trim()) params.q = search.trim()
-  const {
-    data: list,
-    isLoading,
-    dataUpdatedAt
-  } = useQuery({
-    queryKey: ['support-tickets', params],
-    queryFn: () =>
-      client.request<{ data: SupportTicket[]; total: number }>(get('/support/tickets', params)),
-    enabled: tab !== 'types' && tab !== 'analytics'
-  })
-  // Rows never move under the pointer: a request someone else picked up or closed stays where it
-  // was, dimmed, until the person moves on; new ones wait at the end while they are reading the
-  // list. Their own filter, tab or search shows the new answer as it is.
-  const viewKey = `${tab}|${deskFilter}|${mineStatus}|${search.trim()}`
-  const settled = useSettledRows<SupportTicket>(list?.data, (t) => String(t.id), {
-    resetKey: viewKey,
-    enabled: tab !== 'types' && tab !== 'analytics'
-  })
-  const fadeRef = useLiveFade(useBackgroundArm(dataUpdatedAt, viewKey))
-  const listRef = useCallback(
-    (el: HTMLElement | null) => {
-      settled.containerRef(el)
-      fadeRef(el)
-    },
-    [settled.containerRef, fadeRef]
-  )
-
   const openTicket = (id: number | null) => {
     setOpenId(id)
     onTicketChange?.(id)
@@ -140,13 +90,54 @@ export function SupportView({
     { key: 'mine', label: 'My requests', count: summary?.mine_open },
     ...(desk ? [{ key: 'desk' as Tab, label: 'Desk', count: summary?.unassigned }] : []),
     ...(desk ? [{ key: 'analytics' as Tab, label: 'Analytics' }] : []),
-    ...(isAdmin ? [{ key: 'types' as Tab, label: 'Request types' }] : [])
+    ...(isAdmin ? [{ key: 'types' as Tab, label: 'Request types' }] : []),
+    ...(isAdmin ? [{ key: 'rules' as Tab, label: 'Assignment rules' }] : [])
   ]
+
+  // Tab strip on a phone: fade the side with more tabs past the edge, and bring the chosen
+  // tab to the middle of the strip (the strip scrolls, never the page).
+  const stripRef = useRef<HTMLDivElement | null>(null)
+  const [stripEdges, setStripEdges] = useState({ left: false, right: false })
+  const measureStrip = useCallback(() => {
+    const el = stripRef.current
+    if (!el) return
+    const left = el.scrollLeft > 2
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+    setStripEdges((e) => (e.left === left && e.right === right ? e : { left, right }))
+  }, [])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when tabs appear (desk/admin load late)
+  useEffect(() => {
+    measureStrip()
+    window.addEventListener('resize', measureStrip)
+    return () => window.removeEventListener('resize', measureStrip)
+  }, [measureStrip, tabs.length])
+  useEffect(() => {
+    const el = stripRef.current
+    const btn = el?.querySelector<HTMLElement>(`[data-support-tab="${tab}"]`)
+    if (!el || !btn || el.scrollWidth <= el.clientWidth) return
+    const target = btn.offsetLeft - (el.clientWidth - btn.offsetWidth) / 2
+    el.scrollTo({ left: Math.max(0, target), behavior: 'smooth' })
+  }, [tab])
+  const stripMask =
+    stripEdges.left || stripEdges.right
+      ? (() => {
+          const m = `linear-gradient(to right, ${stripEdges.left ? 'transparent' : 'black'}, black 20px, black calc(100% - 28px), ${stripEdges.right ? 'transparent' : 'black'})`
+          return { maskImage: m, WebkitMaskImage: m }
+        })()
+      : undefined
 
   return (
     <div className={className} data-support-view>
       <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div className='flex items-center gap-1' role='tablist'>
+        {/* One row that scrolls sideways on a phone: tab names never break onto two lines. */}
+        <div
+          ref={stripRef}
+          onScroll={measureStrip}
+          className='relative -mx-1 flex min-w-0 max-w-full items-center gap-1 overflow-x-auto px-1 [scrollbar-width:none]'
+          // A soft fade on a side that has more tabs past the edge (a phone), none at rest.
+          style={stripMask}
+          role='tablist'
+        >
           {tabs.map((t) => (
             <button
               key={t.key}
@@ -157,8 +148,8 @@ export function SupportView({
               onClick={() => setTab(t.key)}
               className={
                 tab === t.key
-                  ? 'inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan/10 px-3 text-[12.5px] font-medium text-nvr-navy dark:text-nvr-cyan'
-                  : 'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12.5px] text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5'
+                  ? 'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-nvr-cyan/10 px-3 text-[12.5px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                  : 'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 text-[12.5px] text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5'
               }
             >
               {t.label}
@@ -182,145 +173,12 @@ export function SupportView({
 
       {tab === 'types' ? (
         <SupportTypesEditor />
+      ) : tab === 'rules' ? (
+        <AssignRulesView />
       ) : tab === 'analytics' ? (
         <SupportAnalytics />
       ) : (
-        <>
-          <div className='mt-4 flex flex-wrap items-center gap-2'>
-            {(tab === 'desk'
-              ? ([
-                  ['unassigned', 'Not picked up'],
-                  ['me', 'Mine'],
-                  ['open', 'All open'],
-                  ['closed', 'Closed']
-                ] as Array<[DeskFilter, string]>)
-              : ([
-                  ['open', 'Open'],
-                  ['closed', 'Closed']
-                ] as Array<['open' | 'closed', string]>)
-            ).map(([k, label]) => {
-              const active = tab === 'desk' ? deskFilter === k : mineStatus === k
-              return (
-                <button
-                  key={k}
-                  type='button'
-                  data-support-filter={k}
-                  aria-pressed={active}
-                  onClick={() =>
-                    tab === 'desk'
-                      ? setDeskFilter(k as DeskFilter)
-                      : setMineStatus(k as 'open' | 'closed')
-                  }
-                  className={
-                    active
-                      ? 'h-7 rounded-full border border-nvr-cyan/60 bg-nvr-cyan/10 px-2.5 text-[12px] font-medium text-nvr-navy dark:text-nvr-cyan'
-                      : 'h-7 rounded-full border border-slate-200 px-2.5 text-[12px] text-slate-600 hover:border-slate-300 dark:border-border dark:text-slate-300'
-                  }
-                >
-                  {label}
-                </button>
-              )
-            })}
-            <label className='ml-auto flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 dark:border-border dark:bg-background'>
-              <Search className='h-3.5 w-3.5 text-slate-400' />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder='Search requests'
-                aria-label='Search requests'
-                className='w-48 bg-transparent text-[12.5px] text-slate-900 outline-none dark:text-slate-100'
-              />
-            </label>
-          </div>
-
-          <div
-            ref={listRef}
-            className='mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
-          >
-            {isLoading ? (
-              <div className='space-y-2 p-4'>
-                {[0, 1, 2].map((i) => (
-                  <div
-                    key={i}
-                    className='h-10 animate-pulse rounded bg-[hsl(var(--nvr-skeleton))]'
-                  />
-                ))}
-              </div>
-            ) : !settled.rows.length ? (
-              <div className='flex flex-col items-center gap-2 px-6 py-12 text-center'>
-                <LifeBuoy className='h-6 w-6 text-slate-300' />
-                <p className='text-[13px] font-medium text-slate-700 dark:text-slate-200'>
-                  {tab === 'desk'
-                    ? deskFilter === 'unassigned'
-                      ? 'Every request has been picked up.'
-                      : 'Nothing here.'
-                    : mineStatus === 'open'
-                      ? 'You have no open requests.'
-                      : 'No closed requests yet.'}
-                </p>
-                {tab === 'mine' && (
-                  <p className='max-w-sm text-[12px] text-slate-500 dark:text-muted-foreground'>
-                    Use Get help for anything general, or Request help on a record (beside Save) to
-                    ask for a change to that record.
-                  </p>
-                )}
-              </div>
-            ) : (
-              <ul className='divide-y divide-slate-100 dark:divide-border/60' data-support-list>
-                {settled.rows.map(({ row: t, state }) => (
-                  <li
-                    key={t.id}
-                    data-departed={state === 'departed' || undefined}
-                    className={state === 'departed' ? 'opacity-50' : undefined}
-                  >
-                    <button
-                      type='button'
-                      data-support-row={t.id}
-                      onClick={() => openTicket(t.id)}
-                      className='grid w-full grid-cols-[1fr_auto] items-start gap-3 px-4 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-white/5'
-                    >
-                      <span className='min-w-0'>
-                        <span className='flex items-center gap-2'>
-                          <span className='font-mono text-[11px] text-slate-400'>#{t.id}</span>
-                          <span className='truncate text-[13px] font-medium text-slate-900 dark:text-slate-100'>
-                            {t.title}
-                          </span>
-                          {t.priority === 'urgent' && (
-                            <span className='rounded bg-red-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'>
-                              urgent
-                            </span>
-                          )}
-                        </span>
-                        <span className='mt-0.5 block truncate text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-                          {[
-                            t.record_label ?? 'General Support',
-                            t.category_name,
-                            tab === 'desk' ? t.requester_name : null,
-                            t.assignee_name ? `with ${t.assignee_name}` : null,
-                            t.replies ? `${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}` : null
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        </span>
-                      </span>
-                      <span className='flex flex-col items-end gap-1'>
-                        <StatusPill status={t.status} label={t.status_label} />
-                        <span className='text-[11px] text-slate-400'>
-                          {ago(t.updated_at ?? t.created_at)}
-                        </span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          {list && list.total > list.data.length && (
-            <p className='mt-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-              Showing {list.data.length} of {list.total}. Search to narrow the list.
-            </p>
-          )}
-        </>
+        <RequestList key={tab} tab={tab} openId={openId} onOpen={(id) => openTicket(id)} />
       )}
 
       <SupportRequestDialog
@@ -331,9 +189,9 @@ export function SupportView({
         }}
         initialTitle={draft?.title}
         initialDescription={draft?.description}
+        source={draft ? 'error' : undefined}
         onCreated={(t) => {
           setTab('mine')
-          setMineStatus('open')
           openTicket(t.id)
         }}
       />

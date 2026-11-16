@@ -398,10 +398,10 @@ let writeSeq = 0
 let writesInFlight = 0
 let stalePrefsAnswer = false
 
-export function useWatchActions(): WatchActions & { prefs: WatchPrefs } {
+export function useWatchActions(): WatchActions & { prefs: WatchPrefs; prefsReady: boolean } {
   const client = useOptionalNivaroClient()
   const qc = useQueryClient()
-  const { prefs } = useWatchPrefs()
+  const { prefs, ready: prefsReady } = useWatchPrefs()
   const pinned = useMemo(() => new Set(prefs.pins.map((p) => p.key)), [prefs.pins])
 
   const apply = useCallback(
@@ -723,6 +723,7 @@ export function useWatchActions(): WatchActions & { prefs: WatchPrefs } {
 
   return {
     prefs,
+    prefsReady,
     setSettings,
     addAlert,
     removeAlert,

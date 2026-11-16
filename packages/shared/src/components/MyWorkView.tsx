@@ -51,6 +51,8 @@ interface OwnedRow {
   item: string
   label: string
   state: string | null
+  /** The step's label as the record shows it; `state` is its key (rt2-record r-1116b). */
+  state_label?: string | null
   state_color: string | null
   url: string
   sla: SlaInfo | null
@@ -151,13 +153,24 @@ const SLA_TONE_CLASS: Record<'ok' | 'warn' | 'alert' | 'neutral', string> = {
   ok: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
 }
 
-// Time-to-breach chip — "breaches in 6h" / "breached 2d ago" — amber for a
-// soon-due warning, red once breached, slate otherwise. #853.
-function SlaChip({ sla: read }: { sla: SlaInfo | null }) {
-  // Realtime round 2: moved on by the page's shared clock between reads.
-  const now = useDeadlineNow(!!read?.due_at)
-  const sla = read?.due_at ? liveSlaReading(read, now) : read
-  const chip = slaChip(sla)
+/** One SLA reading per row, moved on by the page's shared clock (realtime round 2). The
+ *  "Due soon" tab and the row's chip read the SAME reading — a row counted under the tab
+ *  showed a neutral "breaches in 2d" chip (rt2-record r-1116b). */
+function liveRead(read: SlaInfo | null, now: number): SlaInfo | null {
+  return read?.due_at ? liveSlaReading(read, now) : read
+}
+
+/** Due soon: the clock already turned amber, or it breaches within the next day. */
+function dueSoon(read: SlaInfo | null): boolean {
+  if (!read || read.status === 'breached') return false
+  return read.status === 'warning' || withinDay(read)
+}
+
+// Time-to-breach chip — "breaches in 6h" / "breached 2d ago" — amber when due soon (the
+// same test as the tab), red once breached, slate otherwise. #853.
+function SlaChip({ sla }: { sla: SlaInfo | null }) {
+  const base = slaChip(sla)
+  const chip = base && dueSoon(sla) ? { ...base, tone: 'warn' as const } : base
   if (!chip) return null
   return (
     <span
@@ -173,13 +186,14 @@ function StateChip({ state, color }: { state: string | null; color: string | nul
   if (!state) return null
   return (
     <span
-      className='rounded-full px-2 py-0.5 text-[10.5px] font-medium'
+      data-tip={state}
+      className='min-w-0 truncate rounded-full px-2 py-0.5 text-[10.5px] font-medium'
       style={{
         backgroundColor: color ? `${color}22` : 'rgba(100,116,139,.12)',
         color: color ?? undefined
       }}
     >
-      {state.replace(/_/g, ' ')}
+      {state}
     </span>
   )
 }
@@ -238,14 +252,14 @@ function MyWorkSkeleton({ order, hidden }: { order: string[]; hidden: string[] }
     }
     const pair = shown.slice(i, i + 2).filter((k) => k !== 'records')
     blocks.push(
-      <div key={pair.join('+')} className='grid gap-5 lg:grid-cols-2'>
+      <div key={pair.join('+')} className='grid grid-cols-1 gap-5 lg:grid-cols-2'>
         {pair.map((k) => section(k, 4))}
       </div>
     )
     i += pair.length
   }
   return (
-    <div className='space-y-5 p-6' data-my-work-loading aria-busy='true'>
+    <div className='space-y-5 p-4 sm:p-6' data-my-work-loading aria-busy='true'>
       <div className='flex items-start justify-between'>
         <div className='grid flex-1 grid-cols-2 gap-3 lg:grid-cols-4'>
           {['Waiting on you', 'SLA breached', 'Open tasks', 'Unread notifications'].map((label) => (
@@ -274,8 +288,10 @@ function MyWorkSkeleton({ order, hidden }: { order: string[]; hidden: string[] }
 
 function Tile({ label, value, tone }: { label: string; value: number; tone?: string }) {
   return (
-    <div className='rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
-      <p className='text-[10.5px] uppercase tracking-wide text-muted-foreground'>{label}</p>
+    <div className='min-w-0 rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
+      <p className='break-words text-[10.5px] uppercase tracking-wide text-muted-foreground'>
+        {label}
+      </p>
       <p className={`mt-0.5 text-[18px] font-semibold tabular-nums ${tone ?? ''}`}>
         <TickerNumber value={value} />
       </p>
@@ -349,6 +365,7 @@ export function MyWorkView({
   const debounceRef = useRef(0)
   // #853 — which owned rows show, by their SLA reading; client-side only.
   const [slaFilter, setSlaFilter] = useState<'all' | 'soon' | 'breached'>('all')
+  const slaNow = useDeadlineNow(true)
   // rt5 #15 — "Show them" on the covering line: only the covered person's records.
   // The keys follow the live answer: a record handled under the filter leaves it.
   const [coverUser, setCoverUser] = useState<string | null>(null)
@@ -522,10 +539,11 @@ export function MyWorkView({
     return <MyWorkSkeleton order={sectionPrefs.order} hidden={sectionPrefs.hidden} />
 
   return (
-    <div className='space-y-5 p-6' data-my-work>
+    <div className='space-y-5 p-4 sm:p-6' data-my-work>
       <FirstWeekCard onOpenPath={onOpenPath} />
-      <div className='flex items-start justify-between'>
-        <div className='grid flex-1 grid-cols-2 gap-3 lg:grid-cols-4'>
+      {/* Phone: the toolbar sits on its own row above the tiles, never inside their grid. */}
+      <div className='flex flex-col-reverse gap-3 sm:flex-row sm:items-start sm:justify-between'>
+        <div className='grid min-w-0 flex-1 grid-cols-2 gap-3 lg:grid-cols-4'>
           <Tile label='Waiting on you' value={data.counts.owned} />
           <Tile
             label='SLA breached'
@@ -535,94 +553,99 @@ export function MyWorkView({
           <Tile label='Open tasks' value={data.counts.tasks} />
           <Tile label='Unread notifications' value={data.counts.notifications} />
         </div>
-        {updatesPending && (
+        <div className='flex shrink-0 flex-wrap items-center justify-end gap-2'>
+          {updatesPending && (
+            <button
+              type='button'
+              onClick={() => {
+                setUpdatesPending(false)
+                void refetch()
+              }}
+              className='inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-[#0e7490] hover:bg-nvr-cyan/20 dark:text-[#67e8f9]'
+            >
+              <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
+              Updates available — refresh
+            </button>
+          )}
           <button
             type='button'
             onClick={() => {
               setUpdatesPending(false)
               void refetch()
             }}
-            className='ml-3 inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-[#0e7490] hover:bg-nvr-cyan/20 dark:text-[#67e8f9]'
+            disabled={isFetching}
+            className='rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] hover:bg-muted disabled:opacity-50 dark:border-border'
           >
-            <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
-            Updates available — refresh
+            {isFetching ? 'Refreshing…' : 'Refresh'}
           </button>
-        )}
-        <button
-          type='button'
-          onClick={() => {
-            setUpdatesPending(false)
-            void refetch()
-          }}
-          disabled={isFetching}
-          className='ml-3 rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] hover:bg-muted disabled:opacity-50 dark:border-border'
-        >
-          {isFetching ? 'Refreshing…' : 'Refresh'}
-        </button>
-        <div className='relative ml-2'>
-          <button
-            type='button'
-            onClick={() => setCustomizeOpen((o) => !o)}
-            className='rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] hover:bg-muted dark:border-border'
-          >
-            Customize
-          </button>
-          {customizeOpen && (
-            <div className='absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-slate-200 bg-white p-2 shadow-lg dark:border-border dark:bg-card'>
-              <p className='px-1 pb-1.5 text-[11px] font-semibold text-slate-500'>Sections</p>
-              {sectionPrefs.order.map((k, idx) => {
-                const label = SECTION_LABEL[k] ?? k
-                const hidden = sectionPrefs.hidden.includes(k)
-                const move = (dir: -1 | 1) => {
-                  const order = [...sectionPrefs.order]
-                  const j = idx + dir
-                  if (j < 0 || j >= order.length) return
-                  ;[order[idx], order[j]] = [order[j], order[idx]]
-                  updateSectionPrefs({ ...sectionPrefs, order })
-                }
-                return (
-                  <div key={k} className='flex items-center gap-1 rounded px-1 py-1 hover:bg-muted'>
-                    <button
-                      type='button'
-                      onClick={() =>
-                        updateSectionPrefs({
-                          ...sectionPrefs,
-                          hidden: hidden
-                            ? sectionPrefs.hidden.filter((h) => h !== k)
-                            : [...sectionPrefs.hidden, k]
-                        })
-                      }
-                      className='flex h-4 w-4 items-center justify-center rounded border border-slate-300 text-[10px] dark:border-border'
-                      title={hidden ? 'Show section' : 'Hide section'}
+          <div className='relative'>
+            <button
+              type='button'
+              onClick={() => setCustomizeOpen((o) => !o)}
+              className='rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] hover:bg-muted dark:border-border'
+            >
+              Customize
+            </button>
+            {customizeOpen && (
+              <div className='absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-slate-200 bg-white p-2 shadow-lg dark:border-border dark:bg-card'>
+                <p className='px-1 pb-1.5 text-[11px] font-semibold text-slate-500'>Sections</p>
+                {sectionPrefs.order.map((k, idx) => {
+                  const label = SECTION_LABEL[k] ?? k
+                  const hidden = sectionPrefs.hidden.includes(k)
+                  const move = (dir: -1 | 1) => {
+                    const order = [...sectionPrefs.order]
+                    const j = idx + dir
+                    if (j < 0 || j >= order.length) return
+                    ;[order[idx], order[j]] = [order[j], order[idx]]
+                    updateSectionPrefs({ ...sectionPrefs, order })
+                  }
+                  return (
+                    <div
+                      key={k}
+                      className='flex items-center gap-1 rounded px-1 py-1 hover:bg-muted'
                     >
-                      {hidden ? '' : '✓'}
-                    </button>
-                    <span
-                      className={`min-w-0 flex-1 truncate text-[12px] ${hidden ? 'text-slate-400 line-through' : ''}`}
-                    >
-                      {label}
-                    </span>
-                    <button
-                      type='button'
-                      onClick={() => move(-1)}
-                      disabled={idx === 0}
-                      className='px-1 text-[11px] text-slate-400 hover:text-foreground disabled:opacity-30'
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type='button'
-                      onClick={() => move(1)}
-                      disabled={idx === sectionPrefs.order.length - 1}
-                      className='px-1 text-[11px] text-slate-400 hover:text-foreground disabled:opacity-30'
-                    >
-                      ↓
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-          )}
+                      <button
+                        type='button'
+                        onClick={() =>
+                          updateSectionPrefs({
+                            ...sectionPrefs,
+                            hidden: hidden
+                              ? sectionPrefs.hidden.filter((h) => h !== k)
+                              : [...sectionPrefs.hidden, k]
+                          })
+                        }
+                        className='flex h-4 w-4 items-center justify-center rounded border border-slate-300 text-[10px] dark:border-border'
+                        title={hidden ? 'Show section' : 'Hide section'}
+                      >
+                        {hidden ? '' : '✓'}
+                      </button>
+                      <span
+                        className={`min-w-0 flex-1 truncate text-[12px] ${hidden ? 'text-slate-400 line-through' : ''}`}
+                      >
+                        {label}
+                      </span>
+                      <button
+                        type='button'
+                        onClick={() => move(-1)}
+                        disabled={idx === 0}
+                        className='px-1 text-[11px] text-slate-400 hover:text-foreground disabled:opacity-30'
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type='button'
+                        onClick={() => move(1)}
+                        disabled={idx === sectionPrefs.order.length - 1}
+                        className='px-1 text-[11px] text-slate-400 hover:text-foreground disabled:opacity-30'
+                      >
+                        ↓
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -655,20 +678,23 @@ export function MyWorkView({
       {(() => {
         const renderers: Record<string, () => React.ReactNode> = {
           records: () => {
-            const soonCount = data.owned.filter((o) => withinDay(o.sla)).length
-            const breachedCount = data.owned.filter((o) => o.sla?.status === 'breached').length
+            const reads = new Map(data.owned.map((o) => [o, liveRead(o.sla, slaNow)]))
+            const soonOf = (o: OwnedRow) => dueSoon(reads.get(o) ?? null)
+            const breachedOf = (o: OwnedRow) => reads.get(o)?.status === 'breached'
+            const soonCount = data.owned.filter(soonOf).length
+            const breachedCount = data.owned.filter(breachedOf).length
             const bySla =
               slaFilter === 'soon'
-                ? data.owned.filter((o) => withinDay(o.sla))
+                ? data.owned.filter(soonOf)
                 : slaFilter === 'breached'
-                  ? data.owned.filter((o) => o.sla?.status === 'breached')
+                  ? data.owned.filter(breachedOf)
                   : data.owned
             const filteredOwned = coverFilter
               ? bySla.filter((o) => coverFilter.keys.has(`${o.collection}:${o.item}`))
               : bySla
             const slaFilters = [
               { key: 'all' as const, label: `All (${data.owned.length})` },
-              { key: 'soon' as const, label: `Warning within 24h (${soonCount})` },
+              { key: 'soon' as const, label: `Due soon (${soonCount})` },
               { key: 'breached' as const, label: `Breached (${breachedCount})` }
             ]
             return (
@@ -738,7 +764,8 @@ export function MyWorkView({
                           {...intent.record(o.collection, o.item)}
                           className='flex w-full items-center gap-2.5 px-4 py-2 text-left hover:bg-muted'
                         >
-                          <span className='min-w-0 flex-1 truncate text-[12.5px] font-medium'>
+                          {/* The record id keeps its width; the step pill truncates first. */}
+                          <span className='min-w-[6.5rem] flex-1 truncate text-[12.5px] font-medium'>
                             {o.label}
                           </span>
                           <span className='hidden text-[11px] text-muted-foreground sm:inline'>
@@ -753,8 +780,13 @@ export function MyWorkView({
                               On hold
                             </span>
                           )}
-                          <StateChip state={o.state} color={o.state_color} />
-                          <SlaChip sla={o.sla} />
+                          <StateChip
+                            state={o.state_label || o.state?.replace(/_/g, ' ') || null}
+                            color={o.state_color}
+                          />
+                          <span className='shrink-0'>
+                            <SlaChip sla={reads.get(o) ?? null} />
+                          </span>
                         </button>
                       </li>
                     ))}
@@ -1124,15 +1156,21 @@ export function MyWorkView({
         while (i < visible.length) {
           const k = visible[i]
           if (FULL_WIDTH.has(k)) {
-            out.push(<div key={k}>{built.get(k)}</div>)
+            out.push(
+              <div key={k} className='min-w-0'>
+                {built.get(k)}
+              </div>
+            )
             i++
           } else {
             const pair = [k]
             if (i + 1 < visible.length && !FULL_WIDTH.has(visible[i + 1])) pair.push(visible[i + 1])
             out.push(
-              <div key={pair.join('+')} className='grid gap-5 lg:grid-cols-2'>
+              <div key={pair.join('+')} className='grid grid-cols-1 gap-5 lg:grid-cols-2'>
                 {pair.map((pk) => (
-                  <div key={pk}>{built.get(pk)}</div>
+                  <div key={pk} className='min-w-0'>
+                    {built.get(pk)}
+                  </div>
                 ))}
               </div>
             )

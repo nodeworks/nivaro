@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
  * Change chips for figures that update live (realtime program 2026-11-14, idea 20).
  *
  * A count that quietly moves from 14 to 17 tells the person nothing about whether it moved
- * while they looked away. The chip says how far it moved: "+3 since this morning", or, when
- * nothing moved today, "−2 since yesterday". The baseline is the first value this browser saw
+ * while they looked away. The chip says how far it moved: "+3 today", or, when nothing moved
+ * today, "−2 vs yesterday" (its tip has the whole phrase: "+3 since this morning"). The baseline is the first value this browser saw
  * today (and the last value it saw on the day before). It lives in localStorage, per person and
  * per figure, so no new read, route or table is involved — a figure is only ever read once, the
  * way it already was.
@@ -32,8 +32,11 @@ export interface DeltaChip {
   /** `+3` / `−2`, with a real minus sign. */
   sign: string
   since: 'this morning' | 'earlier today' | 'yesterday'
-  /** The whole phrase: "+3 since this morning". */
+  /** What the chip shows, short enough for a narrow tile: "+3 today" / "−2 vs yesterday".
+   *  The time anchor is part of it, so it is never the part a narrow tile cuts (rt6 review). */
   text: string
+  /** The whole phrase for its tip: "+3 since this morning". */
+  phrase: string
 }
 
 /** A whole-number tile value ("1,204", "-3", "7") as a number; anything else is not a count. */
@@ -88,7 +91,13 @@ export function deltaChip(b: DeltaBaseline | null): DeltaChip | null {
     since = 'yesterday'
   }
   const sign = `${delta > 0 ? '+' : '−'}${Math.abs(delta).toLocaleString('en-US')}`
-  return { delta, sign, since, text: `${sign} since ${since}` }
+  return {
+    delta,
+    sign,
+    since,
+    text: `${sign} ${since === 'yesterday' ? 'vs yesterday' : 'today'}`,
+    phrase: `${sign} since ${since}`
+  }
 }
 
 // ── Storage (best effort: private windows and blocked storage just mean no chip) ───────

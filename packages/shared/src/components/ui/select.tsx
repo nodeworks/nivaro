@@ -14,14 +14,14 @@ function SelectTrigger({
   return (
     <SelectPrimitive.Trigger
       className={cn(
-        'flex h-10 w-full items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-nvr-cyan focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1',
+        'flex h-10 w-full items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-0 data-[state=open]:ring-2 data-[state=open]:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1',
         className
       )}
       {...props}
     >
       {children}
       <SelectPrimitive.Icon asChild>
-        <ChevronDown className='h-4 w-4 opacity-50' />
+        <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   )
@@ -74,8 +74,12 @@ function SelectLabel({
 function SelectItem({
   className,
   children,
+  description,
   ...props
-}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>) {
+}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item> & {
+  /** A muted second line in the open list only (the trigger shows the label alone). */
+  description?: string
+}) {
   return (
     <SelectPrimitive.Item
       className={cn(
@@ -89,7 +93,16 @@ function SelectItem({
           <Check className='h-4 w-4 text-nvr-cyan' />
         </SelectPrimitive.ItemIndicator>
       </span>
-      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      {description ? (
+        <span className='min-w-0'>
+          <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+          <span className='block max-w-[34ch] text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+            {description}
+          </span>
+        </span>
+      ) : (
+        <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      )}
     </SelectPrimitive.Item>
   )
 }

@@ -98,6 +98,43 @@ const UNITS = [
   { value: 'days', label: 'Days' }
 ]
 
+/** Radix Select reports '' when a saved value lands before its options mount (the hidden
+ *  native select has no matching option yet): a saved rule then showed a blank operator, unit
+ *  and category. Only a real pick changes the value. */
+const keepPicked = (set: (v: string) => void) => (v: string) => {
+  if (v) set(v)
+}
+
+/** Older rules hold the unit's symbol ('%', '$'); the picker lists names. */
+function normalizeUnit(u: string | null | undefined): string {
+  const v = (u ?? '').trim()
+  if (v === '%') return 'percent'
+  if (v === '$' || v === 'USD') return 'dollar'
+  return UNITS.some((x) => x.value === v) ? v : 'count'
+}
+
+/** The banner's sentence for a threshold, as people will read it (services/alert-banners.ts
+ *  bannerPhrase): "just crossed 90%". */
+function bannerExample(operator: string, threshold: number, unit: string): string {
+  const n = Number.isFinite(threshold) ? threshold.toLocaleString() : '…'
+  const t =
+    unit === 'percent' ? `${n}%` : unit === 'dollar' ? `$${n}` : unit === 'days' ? `${n} days` : n
+  switch (operator) {
+    case 'gt':
+    case 'gte':
+      return `just crossed ${t}`
+    case 'lt':
+    case 'lte':
+      return `just dropped below ${t}`
+    case 'eq':
+      return `just reached ${t}`
+    case 'change_pct':
+      return `just moved by ${t} or more`
+    default:
+      return `just passed its ${t} line`
+  }
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function AlertEditPage() {
@@ -210,7 +247,7 @@ export function AlertEditPage() {
       setField(existing.field)
       setOperator(existing.operator)
       setThreshold(existing.threshold)
-      setUnit(existing.unit)
+      setUnit(normalizeUnit(existing.unit))
       setCooldownMinutes(existing.cooldown_minutes)
       setIsActive(existing.is_active)
       setShowBanner(existing.show_banner === true)
@@ -459,7 +496,7 @@ export function AlertEditPage() {
         {/* Category */}
         <div className='space-y-1.5'>
           <Label htmlFor='alert-category'>Category</Label>
-          <Select value={category} onValueChange={setCategory}>
+          <Select value={category} onValueChange={keepPicked(setCategory)}>
             <SelectTrigger id='alert-category'>
               <SelectValue />
             </SelectTrigger>
@@ -630,7 +667,7 @@ export function AlertEditPage() {
           <div className='grid grid-cols-3 gap-4'>
             <div className='space-y-1.5'>
               <Label htmlFor='alert-operator'>Operator</Label>
-              <Select value={operator} onValueChange={setOperator}>
+              <Select value={operator} onValueChange={keepPicked(setOperator)}>
                 <SelectTrigger id='alert-operator'>
                   <SelectValue />
                 </SelectTrigger>
@@ -655,7 +692,7 @@ export function AlertEditPage() {
             </div>
             <div className='space-y-1.5'>
               <Label htmlFor='alert-unit'>Unit</Label>
-              <Select value={unit} onValueChange={setUnit}>
+              <Select value={unit} onValueChange={keepPicked(setUnit)}>
                 <SelectTrigger id='alert-unit'>
                   <SelectValue />
                 </SelectTrigger>
@@ -731,10 +768,15 @@ export function AlertEditPage() {
               Show as a banner
             </Label>
             <p className='text-xs text-muted-foreground'>
-              People who open the record see “… just crossed {threshold}
-              {unit === '%' ? '%' : ''}” for up to 7 days while the value still holds. Each person
-              can hide it for themselves, and sees it only for records and fields they can read.
+              People who open the record see “… {bannerExample(operator, threshold, unit)}” for up
+              to 7 days while the value still holds. Each person can hide it for themselves, and
+              sees it only for records and fields they can read.
             </p>
+            {showBanner && !OPERATORS.some((o) => o.value === operator) && (
+              <p className='mt-1 text-xs font-medium text-amber-700 dark:text-amber-300'>
+                Pick an operator above. Without one this alert never crosses, so no banner shows.
+              </p>
+            )}
           </div>
         </div>
 

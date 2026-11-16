@@ -178,6 +178,9 @@ export async function notifyTicket(
     message: string
     actorId: string | null
     category: 'system' | 'workflow'
+    /** Also ask for email (their per-category email setting — instant, daily summary or off —
+     *  decides). Used for "Assigned to you"; every other ticket notice stays in-app/push. */
+    email?: boolean
   }
 ): Promise<void> {
   const seen = new Set<string>()
@@ -192,6 +195,7 @@ export async function notifyTicket(
       sender: opts.actorId,
       category: opts.category,
       target: { kind: 'support', id: t.id },
+      ...(opts.email ? { channels: { email: true } } : {}),
       source: { kind: 'support', label: 'Support ticket', id: t.id },
       why: same(id, t.created_by)
         ? 'you raised this support request'

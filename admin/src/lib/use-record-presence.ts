@@ -30,6 +30,25 @@ export interface LiveEdit extends Viewer {
 
 const NO_EDITING: Record<string, LiveEdit> = {}
 
+/**
+ * One entry per person. The server lists the record room per SOCKET (and peers' viewers from
+ * other processes), so someone with two tabs or two devices open — or one on two API
+ * processes — came twice ("BL BL"). Ids compare case-insensitively (SQL Server uuids arrive
+ * in either case); the first name seen wins. Pure — exported for tests.
+ */
+export function distinctViewers(viewers: readonly Viewer[] | null | undefined): Viewer[] {
+  const seen = new Set<string>()
+  const out: Viewer[] = []
+  for (const v of viewers ?? []) {
+    if (!v || v.id == null) continue
+    const key = String(v.id).toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(v)
+  }
+  return out
+}
+
 export function useRecordPresence(collection: string | undefined, item: string | undefined) {
   const { user } = useAuth()
   const [viewers, setViewers] = useState<Viewer[]>([])
@@ -75,7 +94,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
           (payload.collection !== collection || String(payload.item) !== String(item))
         )
           return
-        setViewers(payload.viewers ?? [])
+        setViewers(distinctViewers(payload.viewers))
       }
     )
 

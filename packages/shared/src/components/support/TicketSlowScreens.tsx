@@ -28,7 +28,7 @@ export function TicketSlowScreens({
         type='button'
         onClick={() => setOpen(true)}
         data-ticket-slow-screens-open
-        className='inline-flex items-center gap-1.5 text-[12px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+        className='inline-flex items-center gap-1.5 text-[12px] font-medium text-[#00789a] underline-offset-2 hover:underline dark:text-nvr-cyan'
       >
         <Gauge className='h-3.5 w-3.5' />
         Show {first ? `${first}’s` : 'their'} slowest screens

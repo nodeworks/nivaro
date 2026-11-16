@@ -14,13 +14,15 @@ import { getDisplayTimezone } from './utils'
  *   accepted   "Ledger accepted it at 10:43 AM — PO 12345" (the API's reference label;
  *              "reference" when none is set)
  *   refused    "Ledger refused it at 10:43 AM: “The project is closed.” Change that on
- *              the record, then send it again." (the partner's own words quoted, ours not)
+ *              the record, then send it again from Integrations at the top of the record."
+ *              (the partner's own words quoted, ours not; the same stored request would be
+ *              refused again, so the line names where a fresh send is made, rt6 review)
  *   not_taken  "Couldn't reach Ledger — nothing was sent. Retrying at 10:45 AM (attempt 2
  *              of 5)" when a sweep will try again (rt6 #18); else a Send again button when
  *              the viewer may (`can_resend`), or "… Ask an admin to send it again."
  *              "Ledger was too busy to take it at 10:43 AM — nothing was sent. …"
  *   no_answer  "No answer from Ledger after 25 minutes — the send is held and will not be
- *              repeated automatically"
+ *              repeated automatically. An administrator can mark it received or not received."
  *
  * A failed send nothing will repeat says why on a quieter line (`detail`):
  * "It won't be sent again automatically — retries are not set up for Ledger".
@@ -28,6 +30,9 @@ import { getDisplayTimezone } from './utils'
  * There is no "queued" state: a send runs as part of its move, in parallel across
  * records, never behind other records' sends — so no position is ever shown.
  */
+
+/** Where a fresh send of a refused request is made: the record's Integrations chip (Re-run). */
+const SEND_AGAIN_FROM = 'Integrations at the top of the record'
 
 export interface SendStatusFact {
   id: number
@@ -92,6 +97,17 @@ export function atClock(at: string | number | Date, now: number = Date.now()): s
   return `${date}, ${time}`
 }
 
+/**
+ * A moment inside a sentence: "at 4:41 PM" today, "on Sep 25 at 4:41 PM" another day
+ * ("refused it at Sep 25, 4:41 PM" read badly).
+ */
+export function atWhen(at: string | number | Date, now: number = Date.now()): string {
+  const c = atClock(at, now)
+  if (!c) return ''
+  const m = /^(.+), (\d{1,2}:\d{2}\s?[AP]M)$/.exec(c)
+  return m ? `on ${m[1]} at ${m[2]}` : `at ${c}`
+}
+
 /** "less than a minute", "1 minute", "25 minutes", "3 hours", "2 days". */
 export function plainDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 60_000) return 'less than a minute'
@@ -112,8 +128,20 @@ export function sendReason(reason: string | null | undefined): { text: string; q
   if (!text) return { text: '', quoted: false }
   const mark = /\bHTTP \d{3}: /.exec(text)
   const own = partnerWords(mark ? text.slice(mark.index) : text)
-  if (own) return { text: own.replace(/[\s.,;:]+$/, ''), quoted: true }
+  if (own) return { text: withoutContactLine(own).replace(/[\s.,;:]+$/, ''), quoted: true }
   return { text: plainSendReason(text), quoted: false }
+}
+
+/**
+ * A partner's closing "Contact Support." is its generic footer, not the step to take: our
+ * sentence already says what to do next, and two instructions back to back read as a muddle.
+ */
+export function withoutContactLine(text: string): string {
+  const cut = text.replace(
+    /(^|[.!]\s*)(please\s+)?contact\s+(support|(the\s+)?help\s*desk|your\s+(system\s+)?administrator|an?\s+administrator)[^.!]*[.!]?\s*$/i,
+    '$1'
+  )
+  return cut.trim() ? cut.trim() : text
 }
 
 /** The partner's reason in plain words: its own sentence when it gave one, else what it means. */
@@ -125,7 +153,7 @@ export function plainSendReason(reason: string | null | undefined): string {
   const mark = /\bHTTP \d{3}: /.exec(text)
   const said =
     partnerWords(mark ? text.slice(mark.index) : text) ?? partnerOutcome(text) ?? partnerSaid(text)
-  if (said) return said.replace(/[\s.,;:]+$/, '')
+  if (said) return withoutContactLine(said).replace(/[\s.,;:]+$/, '')
   return describeError({ message: text }, '').title.replace(/[\s.,;:]+$/, '')
 }
 
@@ -144,6 +172,8 @@ const NOT_TAKEN = new Set(['transient', 'rate_limited'])
 export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}): SendStatusWords {
   const now = opts.now ?? Date.now()
   const time = opts.time ?? ((iso: string) => atClock(iso, now))
+  // "at 10:42 AM" / "on Sep 25 at 4:41 PM" (a test's fixed clock reads "at <its text>").
+  const when = (iso: string) => (opts.time ? `at ${opts.time(iso)}` : atWhen(iso, now))
   const readReason = opts.reason ?? plainSendReason
   const p = f.api?.trim() || 'the other system'
   const status = (f.status ?? '').toLowerCase()
@@ -155,7 +185,7 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
       return {
         state: 'no_answer',
         tone: 'held',
-        text: `No answer from ${p} after ${plainDuration(now - new Date(f.started_at).getTime())} — the send is held and will not be repeated automatically`
+        text: `No answer from ${p} after ${plainDuration(now - new Date(f.started_at).getTime())} — the send is held and will not be repeated automatically. An administrator can mark it received or not received.`
       }
     return {
       state: 'sending',
@@ -171,7 +201,7 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
     return {
       state: 'waiting',
       tone: 'waiting',
-      text: `Sent to ${p} at ${time(f.started_at)} — waiting for ${p}'s answer${usual}`
+      text: `Sent to ${p} ${when(f.started_at)} — waiting for ${p}'s answer${usual}`
     }
   }
   if (status === 'accepted') {
@@ -180,7 +210,7 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
     return {
       state: 'accepted',
       tone: 'ok',
-      text: `${p} accepted it at ${time(doneAt)}${ref ? ` — ${label} ${ref}` : ''}`
+      text: `${p} accepted it ${when(doneAt)}${ref ? ` — ${label} ${ref}` : ''}`
     }
   }
   // failed / rejected
@@ -201,7 +231,7 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
   if (NOT_TAKEN.has(cls)) {
     const busy = cls === 'rate_limited'
     const lead = busy
-      ? `${p} was too busy to take it at ${time(doneAt)} — nothing was sent.`
+      ? `${p} was too busy to take it ${when(doneAt)} — nothing was sent.`
       : `Couldn't reach ${p} — nothing was sent.`
     // The same request again can work: the person sends it (Send again) when they may,
     // otherwise an administrator does.
@@ -215,7 +245,7 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
       ...extra(true)
     }
   }
-  const refused = `${p} refused it at ${time(doneAt)}`
+  const refused = `${p} refused it ${when(doneAt)}`
   if (cls === 'auth')
     return {
       state: 'refused',
@@ -226,7 +256,15 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
       ...extra(true)
     }
   // The partner's own words are quoted; our reading of a failure is not.
-  const said = why.text ? (why.quoted ? `: “${why.text}.”` : `: ${why.text}.`) : '.'
+  // "The other system refused the request" is our reading of a bare refusal, not a
+  // reason: say none was given, so "Change that" never points at nothing (rt4-forms).
+  const bare = !why.quoted && /^The other system refused the request\.?$/.test(why.text)
+  const reason = bare ? '' : why.text
+  const said = reason
+    ? why.quoted
+      ? `: “${reason}.”`
+      : `: ${reason}.`
+    : ' without giving a reason.'
   const fixable = status === 'rejected' || ['validation', 'not_found'].includes(cls)
   return {
     state: 'refused',
@@ -234,9 +272,9 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
     text: `${refused}${said} ${
       retry
         ? retryText
-        : why.text
-          ? 'Change that on the record, then send it again.'
-          : 'Check the record, then send it again.'
+        : reason
+          ? `Change that on the record, then send it again from ${SEND_AGAIN_FROM}.`
+          : `Check the record, then send it again from ${SEND_AGAIN_FROM}.`
     }`,
     // "Repeating it cannot fix it" is already what the next step says.
     ...extra(!fixable)

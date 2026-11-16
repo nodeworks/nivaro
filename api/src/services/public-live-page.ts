@@ -33,6 +33,9 @@ export interface PublicLivePageOptions {
   title: string
   /** Small line above the card content (the form or chain name). */
   context?: string | null
+  /** What the page is about, named plainly under the context (an approval's record label —
+   *  only for a reader who may see it). */
+  subject?: string | null
   /** The live block's HTML (already escaped). */
   liveHtml: string
   nonce: string
@@ -68,23 +71,31 @@ body{font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font
 .wrap{max-width:520px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 28px 24px;box-shadow:0 1px 2px rgba(15,23,42,.04),0 8px 24px -12px rgba(15,23,42,.12)}
 @media (max-width:480px){body{padding:20px 12px}.wrap{padding:22px 18px 18px}}
 .ctx{color:var(--muted);font-size:12.5px;margin-bottom:14px;overflow-wrap:anywhere}
+.subj{margin:-6px 0 18px;padding-bottom:16px;border-bottom:1px solid var(--line);font-size:15.5px;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
 .state{display:flex;gap:12px;align-items:flex-start}
 .dot{flex:none;width:10px;height:10px;border-radius:50%;margin-top:9px;background:var(--faint)}
-.tone-done .dot{background:var(--fg)}.tone-ok .dot{background:var(--ok)}.tone-bad .dot{background:var(--bad)}.tone-wait .dot{background:var(--wait)}.tone-ask .dot{background:var(--ask)}
+.tone-done{--tone:var(--accent);--tone-bg:var(--ask-bg)}.tone-ok{--tone:var(--ok);--tone-bg:var(--ok-bg)}.tone-bad{--tone:var(--bad);--tone-bg:var(--bad-bg)}.tone-wait{--tone:var(--wait);--tone-bg:var(--wait-bg)}.tone-ask{--tone:var(--ask);--tone-bg:var(--ask-bg)}
+.tone-done .dot,.tone-ok .dot,.tone-bad .dot,.tone-wait .dot,.tone-ask .dot{background:var(--tone)}
 h1{font-size:21px;line-height:1.3;letter-spacing:-.015em;font-weight:650;text-wrap:balance}
 .by{margin-top:4px;color:var(--muted);font-size:13.5px}
 .by strong{color:var(--fg);font-weight:600}
 .note{margin-top:14px;color:var(--muted);font-size:13px;max-width:60ch}
+.msg{margin-top:6px;color:var(--muted);font-size:14px;max-width:60ch}
+.msg + .msg{margin-top:12px}
 .chg h1{animation:nvrchg 1.4s cubic-bezier(.16,1,.3,1)}
 @keyframes nvrchg{from{background:var(--chg);border-radius:4px}to{background:transparent}}
 @media (prefers-reduced-motion:reduce){.chg h1{animation:none}}
-.track{list-style:none;display:flex;margin:22px 0 4px;gap:0}
-.track li{flex:1;position:relative;padding-top:18px;font-size:12px;color:var(--faint)}
-.track li::before{content:'';position:absolute;top:4px;left:0;width:9px;height:9px;border-radius:50%;background:var(--card);border:2px solid var(--line);z-index:1}
-.track li::after{content:'';position:absolute;top:8px;left:9px;right:0;height:2px;background:var(--line)}
-.track li:last-child::after{display:none}
-.track li.done{color:var(--muted)}.track li.done::before{background:var(--accent);border-color:var(--accent)}.track li.done::after{background:var(--accent)}
-.track li.now{color:var(--fg);font-weight:600}.track li.now::before{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 4px var(--ask-bg)}
+.track{list-style:none;display:flex;justify-content:space-between;position:relative;margin:22px 0 4px}
+.track::before,.track::after{content:'';position:absolute;top:7px;left:5px;height:2px;border-radius:1px}
+.track::before{right:5px;background:var(--line)}
+.track::after{width:0;background:var(--tone,var(--accent))}
+.track.at1::after{width:calc(50% - 5px)}.track.at2::after{width:calc(100% - 10px)}
+.track li{flex:1;position:relative;padding-top:20px;font-size:12px;color:var(--faint);z-index:1}
+.track li:nth-child(2){text-align:center}.track li:last-child{text-align:right}
+.track li::before{content:'';position:absolute;top:2px;left:0;width:12px;height:12px;border-radius:50%;background:var(--card);border:2px solid var(--line);box-sizing:border-box}
+.track li:nth-child(2)::before{left:calc(50% - 6px)}.track li:last-child::before{left:auto;right:0}
+.track li.done{color:var(--muted)}.track li.done::before{background:var(--tone,var(--accent));border-color:var(--tone,var(--accent))}
+.track li.now{color:var(--fg);font-weight:600}.track li.now::before{background:var(--tone,var(--accent));border-color:var(--tone,var(--accent));box-shadow:0 0 0 4px var(--tone-bg,var(--ask-bg))}
 .actions{margin-top:20px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 button{font:inherit;font-size:14px;font-weight:650;padding:10px 22px;border:0;border-radius:8px;background:var(--btn);color:#06303d;cursor:pointer;transition:filter .15s}
 button:hover{filter:brightness(.95)}
@@ -94,7 +105,7 @@ a{color:var(--accent);text-underline-offset:3px;text-decoration-thickness:1px}
 a:hover{text-decoration-thickness:2px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
 .foot{margin-top:22px;padding-top:14px;border-top:1px solid var(--line);color:var(--faint);font-size:11.5px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
-time{font-variant-numeric:tabular-nums}`
+time{font-variant-numeric:tabular-nums;white-space:nowrap}`
 
 /**
  * Live script: listen, refetch the page's own address (`?refresh=1`), swap `#nvr-live`. A
@@ -127,7 +138,7 @@ export function publicLivePageHtml(o: PublicLivePageOptions): string {
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer"><meta name="color-scheme" content="light dark">
 <title>${esc(o.title)}</title><style>${STYLE}</style></head><body><main class="wrap">
-${o.context ? `<p class="ctx">${esc(o.context)}</p>` : ''}<div id="nvr-live" aria-live="polite">${o.liveHtml}</div>
+${o.context ? `<p class="ctx">${esc(o.context)}</p>` : ''}${o.subject ? `<p class="subj">${esc(o.subject)}</p>` : ''}<div id="nvr-live" aria-live="polite">${o.liveHtml}</div>
 ${
   o.foot || o.streamUrl
     ? `<p class="foot"><span>${o.foot ? esc(o.foot) : 'This page updates while it is open.'}</span></p>`
@@ -136,12 +147,19 @@ ${
 </main><script nonce="${esc(o.nonce)}">${liveScript(o.streamUrl, o.refreshUrl, o.liveMode ?? 'normal')}</script></body></html>`
 }
 
-/** A plain answer page (not found, expired, error) in the same look, no script. */
-export function publicMessagePageHtml(title: string, message: string): string {
+/** A plain answer page (not found, expired, error) in the same look, no script. `link` = the
+ *  next step the message promises ("Open in Nivaro"). */
+export function publicMessagePageHtml(
+  title: string,
+  message: string,
+  link?: { href: string; label: string } | null
+): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer"><meta name="color-scheme" content="light dark">
 <title>${esc(title)}</title><style>${STYLE}</style></head><body><main class="wrap">
-<div class="state"><span class="dot" aria-hidden="true"></span><div><h1>${esc(title)}</h1><p class="note">${esc(message)}</p></div></div>
+<div class="state"><span class="dot" aria-hidden="true"></span><div><h1>${esc(title)}</h1><p class="msg">${esc(message)}</p>${
+    link ? `<p class="msg"><a href="${esc(link.href)}">${esc(link.label)}</a></p>` : ''
+  }</div></div>
 </main></body></html>`
 }

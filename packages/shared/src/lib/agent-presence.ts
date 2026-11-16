@@ -71,6 +71,16 @@ export function agentSentence(a: RecordAgent, meId?: string | null, short = fals
   return short ? `${a.name} ${verb}` : `${a.name} (for ${who}) ${verb} this record`
 }
 
+/** Whose agent it is, for the short (phone) line: "Your" / "Rob’s" / null when unknown.
+ *  The short line once dropped the owner entirely — and whose agent it is is the point. */
+export function agentOwnerPrefix(a: RecordAgent, meId?: string | null): string | null {
+  const mine = !!meId && !!a.for.id && a.for.id.toUpperCase() === String(meId).toUpperCase()
+  if (mine) return 'Your'
+  // First name only: the phone line has room for whose agent it is, not a full name.
+  const first = (a.for.name ?? '').trim().split(/\s+/)[0]
+  return first ? `${first}’s` : null
+}
+
 /** The agents on one record right now; [] when there are none or live presence is quiet. */
 export function useRecordAgents(
   collection: string | null | undefined,

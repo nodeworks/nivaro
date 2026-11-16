@@ -1363,7 +1363,7 @@ export function CommentPanel({
                           className='h-8 w-8'
                           fallback={
                             <Avatar className='h-8 w-8 shrink-0'>
-                              <AvatarFallback className='bg-nvr-cyan/15 text-[11px] font-bold text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'>
+                              <AvatarFallback className='bg-[#cbd5e1] text-[11px] font-semibold text-[#334155] dark:bg-[#475569] dark:text-[#f1f5f9]'>
                                 {initials(c.user)}
                               </AvatarFallback>
                             </Avatar>
@@ -1500,6 +1500,7 @@ export function CommentPanel({
                             <CommentBody
                               text={c.text}
                               record={{ collection, itemId: item }}
+                              caption={`${authorName(c)} · ${formatRelative(c.created_at)}`}
                               className='mt-0.5 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-600'
                             />
                           )}

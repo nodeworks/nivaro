@@ -6,8 +6,8 @@ import { esc, timeTag } from './public-live-page.js'
  * What a decision link's landing page says about its approval (realtime round 9, item 21):
  * where the approval stands now, read fresh on every load and every live refresh. A decision
  * link is handed to ONE approver (email or Teams), so the page names the chain, the step and
- * the people who decided — never record values (the record itself opens in Nivaro, as the
- * reader).
+ * the people who decided. The record is named by its label only to a viewer who can read it,
+ * read as them (routes/message-actions.ts) — never other record values.
  */
 
 export type LinkStatus = 'pending' | 'approved' | 'rejected' | 'cancelled' | 'gone'
@@ -176,8 +176,10 @@ export type Tone = 'ok' | 'bad' | 'wait' | 'ask' | 'muted'
 export interface LinkHeadline {
   tone: Tone
   title: string
-  /** "by Beth Lee at <time>" when a person decided. */
-  by?: { name: string; at: string } | null
+  /** "by Beth Lee at <time>" when a person decided. `lead` names what they decided ("Manager
+   *  sign-off approved") when it is not the headline itself — a waiting headline never carries
+   *  a bare "by <person>" (it would read as if that person were holding it up). */
+  by?: { name: string; at: string; lead?: string } | null
   note?: string | null
   /** The decide buttons may show (the page adds them only for the signed-in approver). */
   decidable: boolean
@@ -191,7 +193,7 @@ export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): 
       tone: 'muted',
       title: 'This approval has already been decided',
       by: null,
-      note: 'Sign in to Nivaro to see who decided and when.',
+      note: 'Open it in Nivaro to see who decided and when.',
       decidable: false
     }
   if (s.anonymous && s.status === 'pending' && !s.waiting_on_holder)
@@ -199,7 +201,7 @@ export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): 
       tone: 'wait',
       title: `Waiting on ${s.step_label ?? 'the next step'}`,
       by: null,
-      note: 'Sign in to Nivaro to see more.',
+      note: 'Open it in Nivaro to see more.',
       decidable: false
     }
   switch (s.status) {
@@ -214,7 +216,7 @@ export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): 
       return {
         tone: 'ok',
         title: s.last?.mine ? 'You approved this' : 'Already approved',
-        by: s.last?.mine ? { name: '', at: s.last.at } : by(s.last),
+        by: s.last?.mine ? { lead: 'Approved', name: '', at: s.last.at } : by(s.last),
         note: 'Every step is signed off. Nothing more to do.',
         decidable: false
       }
@@ -222,7 +224,7 @@ export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): 
       return {
         tone: 'bad',
         title: s.last?.mine ? 'You rejected this' : 'Already rejected',
-        by: s.last?.mine ? { name: '', at: s.last.at } : by(s.last),
+        by: s.last?.mine ? { lead: 'Rejected', name: '', at: s.last.at } : by(s.last),
         note: s.last?.step_label ? `Stopped at ${s.last.step_label}. Nothing more to do.` : null,
         decidable: false
       }
@@ -239,14 +241,17 @@ export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): 
   if (s.waiting_on_holder) {
     return {
       tone: 'ask',
-      title: `${verb === 'approve' ? 'Approve' : 'Reject'} ${s.step_label ?? 'this step'}?`,
+      // The step names itself once ("Approve Director approval?" doubled the noun); the
+      // button carries the verb the email link was pressed for.
+      title: `${s.step_label ?? 'This step'} is waiting on you`,
       by: null,
-      note:
+      note: `${verb === 'approve' ? 'Press Approve to sign it off.' : 'Press Reject to turn it down.'}${
         s.step_count > 1
-          ? `Step ${s.step_number} of ${s.step_count}${
+          ? ` Step ${s.step_number} of ${s.step_count}${
               s.last && !s.last.mine ? ` · ${s.last.step_label} approved by ${s.last.by}` : ''
             }.`
-          : null,
+          : ''
+      }`,
       decidable: true
     }
   }
@@ -254,7 +259,11 @@ export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): 
     return {
       tone: 'ok',
       title: s.mine.decision === 'approved' ? 'You approved your step' : 'You rejected your step',
-      by: { name: '', at: s.mine.at },
+      by: {
+        lead: s.mine.decision === 'approved' ? 'Approved' : 'Rejected',
+        name: '',
+        at: s.mine.at
+      },
       note: `Now waiting on ${s.step_label ?? 'the next step'}.`,
       decidable: false
     }
@@ -262,8 +271,14 @@ export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): 
   return {
     tone: 'wait',
     title: `Waiting on ${s.step_label ?? 'the next step'}`,
-    by: s.last ? { name: s.last.by, at: s.last.at } : null,
-    note: s.last ? `${s.last.step_label} was approved.` : 'This step is not yours to decide.',
+    by: s.last
+      ? {
+          lead: `${s.last.step_label} ${s.last.decision === 'rejected' ? 'rejected' : 'approved'}`,
+          name: s.last.by,
+          at: s.last.at
+        }
+      : null,
+    note: 'This step is not yours to decide. Nothing is waiting on you.',
     decidable: false
   }
 }
@@ -271,7 +286,7 @@ export function linkHeadline(s: ApprovalLinkState, verb: 'approve' | 'reject'): 
 /** The live block's HTML. `form` = the decide form (only for the signed-in approver). */
 export function linkStateHtml(h: LinkHeadline, extra: { formHtml?: string; openUrl?: string }) {
   const byLine = h.by
-    ? `<p class="by">${h.by.name ? `by <strong>${esc(h.by.name)}</strong> ` : ''}at ${timeTag(h.by.at)}</p>`
+    ? `<p class="by">${h.by.lead ? `${esc(h.by.lead)} ` : ''}${h.by.name ? `by <strong>${esc(h.by.name)}</strong> ` : ''}at ${timeTag(h.by.at)}</p>`
     : ''
   const toneClass = h.tone === 'muted' ? '' : `tone-${h.tone}`
   return `<div class="state ${toneClass}"><span class="dot" aria-hidden="true"></span><div>

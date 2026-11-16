@@ -72,7 +72,26 @@ export function HeaderTools({ children }: { children: ReactNode }) {
     // land after their query) — watch the actions strip this sits in too.
     const strip = wrapRef.current?.parentElement
     if (strip && strip !== header) ro.observe(strip)
-    return () => ro.disconnect()
+    // Buttons that land later OUTSIDE this strip (the pipeline moves, Approve / Send Back) grow
+    // the row without resizing it or the strip: a 1600 px header ran its last move off the
+    // edge. Re-check when anything in the row is added or removed (one check per frame).
+    let raf = 0
+    const mo =
+      typeof MutationObserver === 'undefined'
+        ? null
+        : new MutationObserver(() => {
+            if (raf) return
+            raf = requestAnimationFrame(() => {
+              raf = 0
+              check()
+            })
+          })
+    mo?.observe(header, { childList: true, subtree: true })
+    return () => {
+      ro.disconnect()
+      mo?.disconnect()
+      if (raf) cancelAnimationFrame(raf)
+    }
   })
 
   useEffect(() => {

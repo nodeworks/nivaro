@@ -34,7 +34,8 @@ function setup(
           total: 10,
           hidden: 3,
           links: 0,
-          chip: { has_records: 4, empty: 0, hidden: 3, link: 2 }
+          chip: { has_records: 4, empty: 0, hidden: 3, link: 2 },
+          pending: false
         }}
         isAdmin={isAdmin}
         selectedCount={2}

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Satellite } from 'lucide-react'
+import { Plug, RefreshCw, Satellite, Unplug } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
@@ -216,12 +216,14 @@ export function ExternalRequestsChip({
                 : 'Integrations for this record — partner status and every request sent'
           }
         >
-          <Satellite
-            className={cn(
-              'h-3.5 w-3.5',
-              needs > 0 ? 'text-red-500' : summary.retrying > 0 ? 'text-amber-500' : 'text-nvr-cyan'
-            )}
-          />
+          {/* The icon follows the state: a broken link only when something failed. */}
+          {needs > 0 ? (
+            <Unplug aria-hidden className='h-3.5 w-3.5 text-red-500' />
+          ) : summary.retrying > 0 ? (
+            <RefreshCw aria-hidden className='h-3.5 w-3.5 text-amber-500' />
+          ) : (
+            <Plug aria-hidden className='h-3.5 w-3.5 text-slate-500 dark:text-slate-400' />
+          )}
           {summary.partners.length <= 3 ? (
             summary.partners.map((p) => (
               <span

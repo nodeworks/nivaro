@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   type LayoutSwitch,
   linkChangeText,
+  placedFields,
   splitStagedLinks,
+  splitUnsaved,
   useSmoothLayout
 } from './layout-switch'
 import type { ActiveLayoutData, CMSField } from './types'
@@ -146,5 +148,29 @@ describe('useSmoothLayout (rt8 #18)', () => {
     render({ f: b, enabled: false, prepare, onSwitch: vi.fn() })
     expect(shown).toBe(b)
     expect(prepare).not.toHaveBeenCalled()
+  })
+})
+
+describe('placedFields', () => {
+  const f = (field: string, extra: Partial<CMSField> = {}) => ({ field, ...extra }) as CMSField
+  it('a field the new form does not place is hidden there, so its unsaved value is held', () => {
+    const to = {
+      assignments: [
+        { field: 'description', sort: 1, is_visible: true },
+        { field: 'notes', sort: 2, is_visible: false }
+      ]
+    } as unknown as ActiveLayoutData
+    const placed = placedFields([f('description'), f('vendor_contact'), f('notes')], to)
+    const { keep, held } = splitUnsaved(
+      { description: 'b', vendor_contact: 'Dana', notes: 'x' },
+      { description: 'a', vendor_contact: null, notes: null },
+      placed
+    )
+    expect(keep).toEqual(['description'])
+    expect(held.map((h) => h.field)).toEqual(['vendor_contact', 'notes'])
+  })
+  it('a form that places nothing keeps the list as it is', () => {
+    const list = [f('a')]
+    expect(placedFields(list, { assignments: [] } as unknown as ActiveLayoutData)).toBe(list)
   })
 })

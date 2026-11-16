@@ -433,6 +433,8 @@ export interface ShareHistoryRow {
   id: number | string
   action?: string | null
   text: string
+  /** Who wrote the row (user id), when known. */
+  user?: string | null
   user_name: string | null
   at: string
 }
@@ -467,10 +469,17 @@ export function historyLine(
 /**
  * Fold each screen share's start / first-look / stop rows (actions screen-share-start,
  * -watch, -stop) into ONE history line: "Shared their screen with Beth · 4 min · watched by
- * Beth · page closed". Every other row passes through untouched, in order.
+ * Beth · page closed". A support person's look at the requester's activity
+ * (`support-traffic-view`, logged once per share) shows once per person, and never when the
+ * requester looked at their own. Every other row passes through untouched, in order.
  */
-export function foldShareHistory<T extends ShareHistoryRow>(rows: T[]): T[] {
+export function foldShareHistory<T extends ShareHistoryRow>(
+  rows: T[],
+  opts: { requester?: string | null } = {}
+): T[] {
   const out: T[] = []
+  const requester = opts.requester ? String(opts.requester).toUpperCase() : null
+  const looked = new Set<string>()
   let open: { at: number; row: T; to: string; watchers: string[] } | null = null
   const finish = (dur: string | null, why: string | null, running: boolean) => {
     if (!open) return
@@ -500,6 +509,12 @@ export function foldShareHistory<T extends ShareHistoryRow>(rows: T[]): T[] {
     } else if (r.action === 'screen-share-stop' && open) {
       const dur = /\(([^)]+)\)\s*$/.exec(r.text)?.[1] ?? null
       finish(dur, endedWord(r.text), false)
+    } else if (r.action === 'support-traffic-view') {
+      const by = String(r.user ?? r.user_name ?? '').toUpperCase()
+      if (requester && by === requester) continue
+      if (by && looked.has(by)) continue
+      if (by) looked.add(by)
+      out.push(r)
     } else out.push(r)
   }
   finish(null, null, true)

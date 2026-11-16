@@ -22,14 +22,47 @@ type RowState =
   | { s: 'failed'; reason: string }
 
 /** Where an entry's fix goes, in the words the list shows. */
-function pathOf(e: AnnouncePlanEntry): { label: string; tone: string; applicable: boolean } {
+function pathOf(e: AnnouncePlanEntry): {
+  label: string
+  tone: string
+  applicable: boolean
+  tip: string
+} {
   const p = e.proposal
-  if (e.error || !p) return { label: 'Can’t read', tone: 'muted', applicable: false }
-  if (!p.proposable) return { label: 'Needs a person', tone: 'muted', applicable: false }
-  if (p.apply_refused) return { label: 'Propose only', tone: 'muted', applicable: false }
+  if (e.error || !p)
+    return {
+      label: 'Can’t read',
+      tone: 'muted',
+      applicable: false,
+      tip: 'The procedure’s text could not be read'
+    }
+  if (!p.proposable)
+    return {
+      label: 'Needs a person',
+      tone: 'muted',
+      applicable: false,
+      tip: 'The fix cannot be written automatically; open it to see why'
+    }
+  if (p.apply_refused)
+    return {
+      label: 'Propose only',
+      tone: 'muted',
+      applicable: false,
+      tip: 'Shown only: nobody here owns this procedure, so it is not changed from this page'
+    }
   if (p.target.kind === 'managed_procedure')
-    return { label: 'App config', tone: 'cyan', applicable: true }
-  return { label: 'Import body', tone: 'cyan', applicable: true }
+    return {
+      label: 'Managed by the app',
+      tone: 'cyan',
+      applicable: true,
+      tip: 'Saved as a new version on the Procedures page, then deployed from there'
+    }
+  return {
+    label: 'Owned by an import',
+    tone: 'cyan',
+    applicable: true,
+    tip: 'Its text lives in an import definition: the fix is saved there and deployed with it'
+  }
 }
 
 /**
@@ -97,7 +130,7 @@ export function AnnounceBulk({ onBack }: { onBack: () => void }) {
       done++
     }
     setRunning(false)
-    const msg = `Announce fix applied to ${ok} of ${list.length} ${list.length === 1 ? 'procedure' : 'procedures'}${stop.current ? ' (stopped)' : ''}`
+    const msg = `Fix applied to ${ok} of ${list.length} ${list.length === 1 ? 'procedure' : 'procedures'}${stop.current ? ' (stopped)' : ''}`
     setStatus(msg)
     if (ok === list.length) toast.success(msg)
     else toast.error(msg)
@@ -108,7 +141,7 @@ export function AnnounceBulk({ onBack }: { onBack: () => void }) {
   const waiting = applicable.filter((e) => chosen.has(e.finding_id) && !states.has(e.finding_id))
 
   return (
-    <div className='grid gap-4 p-4 sm:p-6'>
+    <div className='grid min-w-0 gap-4 p-4 sm:p-6'>
       <div className='grid gap-1'>
         <button
           type='button'
@@ -117,8 +150,8 @@ export function AnnounceBulk({ onBack }: { onBack: () => void }) {
         >
           <ArrowLeft className='h-3.5 w-3.5' aria-hidden='true' /> Findings
         </button>
-        <h2 className='m-0 flex items-center gap-2 text-[15px] font-semibold'>
-          <Radio className='h-4 w-4 text-muted-foreground' aria-hidden='true' />
+        <h2 className='m-0 flex min-w-0 items-start gap-2 text-[15px] font-semibold'>
+          <Radio className='mt-0.5 h-4 w-4 shrink-0 text-muted-foreground' aria-hidden='true' />
           Procedures that change records without announcing it
         </h2>
         <p className='m-0 max-w-[72ch] text-[12.5px] text-muted-foreground'>
@@ -172,7 +205,7 @@ export function AnnounceBulk({ onBack }: { onBack: () => void }) {
                 )}
               </span>
             </label>
-            <span className='ml-auto flex items-center gap-2'>
+            <span className='flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto'>
               {running && (
                 <Button
                   size='sm'
@@ -188,7 +221,7 @@ export function AnnounceBulk({ onBack }: { onBack: () => void }) {
               <Button
                 size='sm'
                 className={cn(
-                  'h-8 text-[12.5px] [&_svg]:size-3.5',
+                  'h-8 w-full text-[12.5px] sm:w-auto [&_svg]:size-3.5',
                   armed
                     ? 'bg-amber-500 text-white hover:bg-amber-500/90'
                     : 'bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
@@ -205,7 +238,7 @@ export function AnnounceBulk({ onBack }: { onBack: () => void }) {
                   ? 'Applying…'
                   : armed
                     ? `Click again to apply to ${formatNumber(waiting.length)}`
-                    : `Apply announce fix to ${formatNumber(waiting.length)} ${waiting.length === 1 ? 'procedure' : 'procedures'}`}
+                    : `Apply the fix to ${formatNumber(waiting.length)} ${waiting.length === 1 ? 'procedure' : 'procedures'}`}
               </Button>
             </span>
           </div>
@@ -221,7 +254,7 @@ export function AnnounceBulk({ onBack }: { onBack: () => void }) {
               const expanded = open === e.finding_id
               const p = e.proposal
               return (
-                <li key={e.finding_id} className='grid gap-2 px-3 py-2.5'>
+                <li key={e.finding_id} className='grid min-w-0 gap-2 px-3 py-2.5'>
                   <div className='flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1'>
                     <Checkbox
                       checked={path.applicable && chosen.has(e.finding_id)}
@@ -251,6 +284,7 @@ export function AnnounceBulk({ onBack }: { onBack: () => void }) {
                           ? 'bg-nvr-cyan/10 text-[#0e7490] dark:text-[#67e8f9]'
                           : 'bg-muted text-muted-foreground'
                       )}
+                      data-tip={path.tip}
                     >
                       {path.label}
                     </span>

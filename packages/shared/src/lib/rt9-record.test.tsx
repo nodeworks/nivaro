@@ -4,7 +4,13 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { helpChipText, helpChipTip } from '../components/item-edit/RecordHelpChip'
-import { becauseWords, causeSentence, causeShown, changeWords } from './derived-causes'
+import {
+  becauseWords,
+  causeSentence,
+  causeShown,
+  changeWords,
+  fieldCurrency
+} from './derived-causes'
 import {
   __stopLiveLinkLabels,
   addChange,
@@ -172,6 +178,10 @@ describe('derived values explain themselves (rt9 #10)', () => {
 
   it('says how a number moved', () => {
     expect(changeWords({ from: 1000, to: 2200 }, 'decimal')).toBe('Up 1,200')
+    expect(changeWords({ from: 1000, to: 2200 }, 'decimal', 'USD')).toBe('Up $1,200')
+    expect(fieldCurrency({ options: { format: 'currency' } })).toBe('USD')
+    expect(fieldCurrency({ display_options: '{"currency":"eur"}' })).toBe('EUR')
+    expect(fieldCurrency({ options: null })).toBeNull()
     expect(changeWords({ from: 50, to: 20.5 }, 'float')).toBe('Down 29.5')
     expect(changeWords({ from: 'a', to: 'b' }, 'string')).toBe('Changed')
   })
@@ -187,11 +197,18 @@ describe('derived values explain themselves (rt9 #10)', () => {
     }
     const hidden = { field: 'amount', label: 'Amount', collection_label: 'Line', own: false }
     expect(becauseWords([own])).toBe('because PO due date changed')
-    expect(becauseWords([other])).toBe('because Amount on Line 4 changed')
-    expect(becauseWords([hidden])).toBe('because a Line’s Amount changed')
+    expect(becauseWords([other])).toBe('because Line 4’s amount changed')
+    expect(becauseWords([hidden])).toBe('because a line’s amount changed')
     expect(becauseWords([own, other, hidden])).toBe(
-      'because PO due date, Amount on Line 4 and 1 other changed'
+      'because PO due date, Line 4’s amount and 1 other changed'
     )
+    // One name for a related record, never an inner "·" before the time.
+    expect(becauseWords([{ ...other, record_label: 'Line 4 · Impeller kit' }])).toBe(
+      'because Line 4 (Impeller kit)’s amount changed'
+    )
+    expect(
+      becauseWords([{ ...hidden, label: 'Due Date', collection_label: 'Purchase Order' }])
+    ).toBe('because a purchase order’s due date changed')
     expect(
       causeSentence(
         {
