@@ -1079,7 +1079,7 @@ export function PayloadTemplateEditorPage() {
                 </span>
               </p>
             </div>
-            <div className='flex shrink-0 flex-wrap items-center gap-2'>
+            <div className='flex max-w-full shrink-0 flex-wrap items-center gap-2'>
               <UsedByPopover template={template} />
               <button
                 type='button'

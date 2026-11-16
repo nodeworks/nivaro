@@ -115,9 +115,12 @@ export function FieldPicker({
       >
         <span
           className={
-            value
-              ? 'font-mono text-[12px] flex-1 text-left truncate'
-              : 'text-slate-400 flex-1 text-left truncate whitespace-nowrap'
+            // A readable label (valueLabel) reads like the rest of the UI; only a raw path is mono.
+            value && valueLabel
+              ? 'text-[12.5px] flex-1 text-left truncate'
+              : value
+                ? 'font-mono text-[12px] flex-1 text-left truncate'
+                : 'text-slate-400 flex-1 text-left truncate whitespace-nowrap'
           }
         >
           {valueLabel || value || placeholder || 'Select field…'}
@@ -378,13 +381,16 @@ function PickerFieldRow({
 
   const relLabel = m2oRel ? 'M2O' : m2mRel ? 'M2M' : o2mRel ? 'O2M' : null
 
+  // A phone has no room beside the list: the next level opens below the row, kept on screen.
+  const narrow = typeof window !== 'undefined' && window.innerWidth < 640
+
   if (relatedCollection) {
     return (
       <Popover open={subOpen} onOpenChange={setSubOpen}>
         <PopoverTrigger asChild>
           <button
             type='button'
-            className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-slate-700 hover:bg-slate-50 data-[state=open]:bg-slate-100'
+            className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-slate-700 hover:bg-slate-50 data-[state=open]:bg-slate-100 dark:data-[state=open]:bg-muted'
             style={{ paddingLeft: `${0.5 + depth * 1}rem` }}
           >
             <span className='flex-1'>{titleCase(field.field)}</span>
@@ -396,7 +402,13 @@ function PickerFieldRow({
             <ChevronRight className='h-3.5 w-3.5 text-slate-400 shrink-0' />
           </button>
         </PopoverTrigger>
-        <PopoverContent side='right' align='start' sideOffset={4} className='w-56 p-1'>
+        <PopoverContent
+          side={narrow ? 'bottom' : 'right'}
+          align={narrow ? 'end' : 'start'}
+          sideOffset={4}
+          collisionPadding={8}
+          className='w-56 p-1'
+        >
           {(m2oRel || m2mRel) && (
             <button
               type='button'
