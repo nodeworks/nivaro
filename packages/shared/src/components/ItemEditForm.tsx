@@ -14980,7 +14980,7 @@ function ItemEditFormView({
                                               {onDuplicate && (
                                                 <button
                                                   type='button'
-                                                  title='Duplicate this record into a new prefilled form — fields, linked values, and line items come along (attachments do not)'
+                                                  data-tip='Opens a new form filled from this record (fields, links, lines; not files). Nothing is saved until you press Save.'
                                                   onClick={async () => {
                                                     // Copy what a person would re-create: plain scalars + M2O
                                                     // FKs, the M2M link sets (Zone, funding years…), and the

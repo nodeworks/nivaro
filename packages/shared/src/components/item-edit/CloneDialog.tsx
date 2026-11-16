@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, Copy, RotateCcw } from 'lucide-react'
+import { ChevronDown, Copy, CopyPlus, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../../context'
@@ -177,9 +177,15 @@ export function CloneDialog({
       }}
     >
       <DialogTrigger asChild>
-        <Button size='sm' variant='outline' className='gap-1.5'>
-          <Copy className='h-3.5 w-3.5' />
-          Clone
+        <Button
+          size='sm'
+          variant='outline'
+          className='gap-1.5'
+          data-clone-open
+          data-tip='Pick which values to copy; the copy is saved at once and starts at the first step.'
+        >
+          <CopyPlus className='h-3.5 w-3.5' />
+          Clone and save…
         </Button>
       </DialogTrigger>
       <DialogContent className='flex max-h-[85vh] max-w-xl flex-col overflow-hidden'>
