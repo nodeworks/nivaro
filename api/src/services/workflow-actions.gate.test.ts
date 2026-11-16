@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../db/index.js', () => ({ db: vi.fn() }))
 
 import { db } from '../db/index.js'
+import { rowSource } from './context-rows.js'
 import {
   buildContext,
   erpActionGate,
@@ -147,6 +148,66 @@ describe('buildContext', () => {
     expect(rows[0].item_data?.email).toBe('pat@corp.com')
     expect(rows[1].item_data?.email).toBe('b@vendor.com')
     expect(rows[1].item_data?.first_name).toBe('B')
+  })
+})
+
+describe('buildContext nested expand', () => {
+  it('expands the related rows again (their fk read even if unlisted) and tags every row', async () => {
+    const selects: Record<string, unknown[]> = {}
+    const builder = (table: string) => {
+      const b: Record<string, unknown> = {}
+      for (const m of ['where', 'whereNull', 'whereNotNull', 'orderBy', 'whereIn'])
+        b[m] = vi.fn(() => b)
+      if (table === 'inventory_request_materials')
+        b.limit = vi.fn(() =>
+          Promise.resolve([
+            { id: 1, inventory_request: 7, cifa: 18598 },
+            { id: 2, inventory_request: 7, cifa: null }
+          ])
+        )
+      if (table === 'nivaro_relations') b.first = vi.fn(() => Promise.resolve(undefined))
+      if (table === 'cifa_items')
+        b.select = vi.fn((cols: string[]) => {
+          selects.cifa_items = cols
+          return Promise.resolve([{ id: 18598, cifa_number: '103233', task: 17 }])
+        })
+      if (table === 'tasks')
+        b.select = vi.fn((cols: string[]) => {
+          selects.tasks = cols
+          return Promise.resolve([
+            { id: 17, name: '210.0 - NETWORK ACCESS HARDWARE', expenditure_type: 'NAH' }
+          ])
+        })
+      return b
+    }
+    vi.mocked(db).mockImplementation(builder as never)
+    const out = await buildContext(
+      {
+        materials: {
+          collection: 'inventory_request_materials',
+          filter: { inventory_request: '$id' },
+          expand: {
+            cifa: {
+              collection: 'cifa_items',
+              fields: ['cifa_number'],
+              expand: { task: { collection: 'tasks', fields: ['name', 'expenditure_type'] } }
+            }
+          }
+        }
+      },
+      '7',
+      {}
+    )
+    const rows = out.materials as Array<Record<string, any>>
+    expect(selects.cifa_items).toEqual(['id', 'cifa_number', 'task'])
+    expect(rows[0].cifa_data.task_data.name).toBe('210.0 - NETWORK ACCESS HARDWARE')
+    expect(rows[1].cifa_data).toBeNull()
+    expect(rowSource(rows[0])).toEqual({
+      collection: 'inventory_request_materials',
+      partial: false
+    })
+    expect(rowSource(rows[0].cifa_data)).toEqual({ collection: 'cifa_items', partial: true })
+    expect(rowSource(rows[0].cifa_data.task_data)).toEqual({ collection: 'tasks', partial: true })
   })
 })
 

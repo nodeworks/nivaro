@@ -144,6 +144,8 @@ export interface TemplateDetail {
   used_by: UsedBy[]
   /** `context.<key>` names a render can read (first referencing action's context + own lookups). */
   context_keys: string[]
+  /** Each context key → the collection its rows come from ('' unknown; older servers send none). */
+  context_collections?: Record<string, string>
   newer_default: boolean
   /** The registrar ships a file default for this key (Reset to file default). */
   has_default?: boolean
@@ -221,6 +223,12 @@ function normalizeDetail(raw: TemplateDetail): TemplateDetail {
     lookups: parseMaybeJson(raw.lookups),
     used_by: Array.isArray(raw.used_by) ? raw.used_by : [],
     context_keys: Array.isArray(raw.context_keys) ? raw.context_keys.map(String) : [],
+    context_collections:
+      raw.context_collections && typeof raw.context_collections === 'object'
+        ? Object.fromEntries(
+            Object.entries(raw.context_collections).map(([k, v]) => [k, String(v ?? '')])
+          )
+        : {},
     newer_default: !!raw.newer_default
   }
 }

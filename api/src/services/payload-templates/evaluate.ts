@@ -12,7 +12,15 @@ import {
 } from '../payload-filters.js'
 import { makeSecretTokens, neutralizeSecretMarkers, SECRET_PLACEHOLDER } from '../secret-markers.js'
 import { type ConditionRule, evalConditionRule } from '../workflow-conditions.js'
-import type { Field, MapSpec, Problem, ProblemCode, Transform, ValueSpec } from './types.js'
+import type {
+  Field,
+  HopTable,
+  MapSpec,
+  Problem,
+  ProblemCode,
+  Transform,
+  ValueSpec
+} from './types.js'
 
 export { validateSpec } from './validate.js'
 
@@ -60,6 +68,8 @@ type Ctx = {
   json: Map<string, unknown>
   /** Per-call secret token factory (secret-markers.ts). */
   tokens: ReturnType<typeof makeSecretTokens>
+  /** Columns and related rows the hop loader read for this render (hops.ts), or null. */
+  hops: HopTable | null
 }
 
 type At = { fieldId: string; path: string }
@@ -159,7 +169,11 @@ function parseJsonText(ctx: Ctx, s: string): unknown {
   return parsed
 }
 
-/** Walk `segs[from..]` down from `start`. */
+/**
+ * Walk `segs[from..]` down from `start`. With a hop table (hops.ts), a column the row lacked
+ * reads its filled value, and an M2O id followed by more path walks into the related row
+ * (`cifa_data.task.name`), while the id alone still reads the id (`cifa_data.task`).
+ */
 function walk(
   ctx: Ctx,
   start: unknown,
@@ -167,11 +181,20 @@ function walk(
   from: number
 ): { value: unknown; parentMissing: boolean } {
   let cur = start
+  const hops = ctx.hops
   for (let i = from; i < segs.length; i++) {
     if (typeof cur === 'string') cur = parseJsonText(ctx, cur)
     if (cur == null || typeof cur !== 'object') return { value: null, parentMissing: true }
     const seg = segs[i]
-    cur = Object.hasOwn(cur, seg) ? (cur as Record<string, unknown>)[seg] : undefined
+    const obj = cur
+    let next: unknown = Object.hasOwn(obj, seg)
+      ? (obj as Record<string, unknown>)[seg]
+      : hops?.fill.get(obj)?.[seg]
+    if (hops && i < segs.length - 1 && (next == null || typeof next !== 'object')) {
+      const row = hops.hop.get(obj)?.[seg]
+      if (row) next = row
+    }
+    cur = next
   }
   return { value: cur === undefined ? null : cur, parentMissing: false }
 }
@@ -803,7 +826,7 @@ function checkKeys(ctx: Ctx, fields: unknown, prefix: string): void {
 export async function evaluateMap(
   spec: MapSpec,
   scope: Record<string, unknown>,
-  opts: { secretNames?: string[] } = {}
+  opts: { secretNames?: string[]; hops?: HopTable | null } = {}
 ): Promise<{
   body: Record<string, unknown>
   problems: Problem[]
@@ -826,7 +849,8 @@ export async function evaluateMap(
     values: {},
     skip: new WeakSet(),
     json: new Map(),
-    tokens: makeSecretTokens()
+    tokens: makeSecretTokens(),
+    hops: opts.hops ?? null
   }
   const fields = isObj(spec) && Array.isArray(spec.fields) ? spec.fields : null
   if (!fields) {

@@ -5,6 +5,7 @@ import { bodySecretNames } from '../body-secrets.js'
 import { parseJson, toJsonStr } from '../pipeline-engine.js'
 import { currentTenantKey } from '../tenant-rooms.js'
 import { validateSpec } from './evaluate.js'
+import { templateHops } from './hops.js'
 import { blockingProblems, renderBody } from './render.js'
 import type { Problem } from './types.js'
 import type { ValidateMode } from './validate.js'
@@ -681,6 +682,64 @@ export async function saveDraftLookups(
   return { ok: false, current: await requireTemplate(key) }
 }
 
+/**
+ * Throw the working copy away: the draft becomes the published version again (body, mode and
+ * lookups), so the template reads "Live vN". Same revision guard as saveDraft — a stale
+ * `base_rev`, or a publish since `base_published_version`, → `{ ok: false, current }` and
+ * nothing written. The draft row is reset (rev + 1), never deleted: a revision only moves up,
+ * so an editor that loaded an older draft can never match a new one by number. A template that
+ * was never published has nothing to go back to (`unpublished`). A draft already equal to the
+ * live version is left alone.
+ */
+export async function discardDraft(
+  key: string,
+  input: { base_rev: number; base_published_version?: number | null },
+  userId: string | null
+): Promise<{ ok: true; rev: number; unchanged: boolean } | { ok: false; current: TemplateRow }> {
+  const row = await requireTemplate(key)
+  const base = Number(input?.base_rev)
+  if (!Number.isInteger(base) || base < 0) {
+    throw new PayloadTemplateError('invalid', 'base_rev must be a whole number', [
+      problem('base_rev must be a whole number')
+    ])
+  }
+  if (row.published_version == null || row.published_body == null || !row.published_mode) {
+    throw new PayloadTemplateError(
+      'unpublished',
+      `Payload template '${key}' was never published: there is no live version to go back to`
+    )
+  }
+  if (row.draft_rev !== base) return { ok: false, current: row }
+  if (
+    input.base_published_version !== undefined &&
+    (input.base_published_version == null ? null : Number(input.base_published_version)) !==
+      row.published_version
+  ) {
+    return { ok: false, current: row }
+  }
+  const same =
+    row.draft_mode === row.published_mode &&
+    row.draft_body === row.published_body &&
+    sameLookups(row.draft_lookups, row.lookups)
+  if (same) return { ok: true, rev: base, unchanged: true }
+  const patch: DraftPatch = {
+    mode: row.published_mode,
+    body: row.published_body,
+    lookups: row.lookups
+  }
+  if (!(await writeDraft(row, base, patch, userId, input.base_published_version))) {
+    return { ok: false, current: await requireTemplate(key) }
+  }
+  await logActivity({
+    action: 'payload-template-discard',
+    user: userId,
+    collection: T,
+    item: key,
+    comment: `Discarded the draft (back to v${row.published_version})`
+  })
+  return { ok: true, rev: base + 1, unchanged: false }
+}
+
 const STALE = Symbol('stale')
 
 /** Publish the saved draft as the next version. Stale `base_rev` → `{ ok: false, current }`. */
@@ -985,6 +1044,8 @@ async function logInstall(key: string, userId: string | null, comment: string): 
 type PublishedTemplate = {
   key: string
   external_api: string | null
+  /** The record collection (the hop loader reads `scope.record` as one of these). */
+  collection: string | null
   locked_keys: string[]
   published_mode: PayloadMode | null
   published_body: string | null
@@ -1011,6 +1072,7 @@ async function publishedTemplate(key: string): Promise<PublishedTemplate | null>
     .first(
       'key',
       'external_api',
+      'collection',
       'locked_keys',
       'published_mode',
       'published_body',
@@ -1021,6 +1083,7 @@ async function publishedTemplate(key: string): Promise<PublishedTemplate | null>
   return {
     key: String(r.key),
     external_api: (r.external_api as string | null) ?? null,
+    collection: r.collection == null ? null : String(r.collection),
     locked_keys: parseLocked(r.locked_keys),
     published_mode: isMode(r.published_mode) ? r.published_mode : null,
     published_body: (r.published_body as string | null) ?? null,
@@ -1139,7 +1202,13 @@ export async function renderPayloadTemplate(
     if (body == null) {
       return { body: null, problems: [problem('The draft is empty')], values: {}, version: null }
     }
-    const r = await renderBody(mode, body, scope, { lockedKeys: row.locked_keys, secretNames })
+    // Previews and sends load relation hops the same way (one render path).
+    const hops = await templateHops(mode, body, scope, row.collection)
+    const r = await renderBody(mode, body, scope, {
+      lockedKeys: row.locked_keys,
+      secretNames,
+      hops
+    })
     return { ...r, version: null }
   }
 
@@ -1152,9 +1221,11 @@ export async function renderPayloadTemplate(
     )
   }
   const secretNames = await secretNamesFor(row.external_api, resolver, canonical)
+  const hops = await templateHops(row.published_mode, row.published_body, scope, row.collection)
   const r = await renderBody(row.published_mode, row.published_body, scope, {
     lockedKeys: row.locked_keys,
-    secretNames
+    secretNames,
+    hops
   })
   const blocking = blockingProblems(r.problems)
   if (blocking.length) {

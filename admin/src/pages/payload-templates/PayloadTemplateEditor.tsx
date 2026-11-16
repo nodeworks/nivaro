@@ -45,6 +45,7 @@ import {
 import { CheckRecentPanel } from './CheckRecentPanel'
 import { ConflictPanel, conflictText } from './ConflictPanel'
 import { DefaultPanel, useTakeDefault } from './DefaultPanel'
+import { DiscardDraftButton } from './DiscardDraftButton'
 import { type EditorTab, EditorTabs } from './EditorTabs'
 import { PayloadEditorContext, type PayloadEditorCtx } from './editor-context'
 import { HistoryPanel } from './HistoryPanel'
@@ -1090,6 +1091,9 @@ export function PayloadTemplateEditorPage() {
                 <ListChecks className='h-3.5 w-3.5 text-slate-400' />
                 Check recent records
               </button>
+              {status === 'draft' && template.published_version != null && (
+                <DiscardDraftButton template={template} />
+              )}
               <span data-tip={nothingToPublish ? 'Nothing to publish' : undefined}>
                 <button
                   type='button'

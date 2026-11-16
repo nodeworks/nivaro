@@ -2,7 +2,7 @@ import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
 import { parseJson, toJsonStr } from '../pipeline-engine.js'
 import { isSystemCollection } from '../system-collections.js'
-import { actingUser, buildContext, erpActionGate } from '../workflow-actions.js'
+import { actingUser, buildContext, erpActionGate, MAX_EXPAND_DEPTH } from '../workflow-actions.js'
 import type { ConditionRule } from '../workflow-conditions.js'
 import {
   bustPayloadTemplateCache,
@@ -147,12 +147,30 @@ export async function usedBy(key: string): Promise<TemplateUse[]> {
  * Sorted, each once.
  */
 export async function contextKeys(row: Pick<TemplateRow, 'key' | 'lookups'>): Promise<string[]> {
-  const keys = new Set<string>()
+  return Object.keys(await contextCollections(row)).sort((a, b) => a.localeCompare(b))
+}
+
+/**
+ * Each `context.<key>` a render can read → the collection its rows come from ('' when the def
+ * names none), from the same sources as contextKeys: the referencing action's `context` under
+ * the template's own lookups (the action wins a clash, as the render merges them). The editor's
+ * "From each <item>" picker walks that collection's fields.
+ */
+export async function contextCollections(
+  row: Pick<TemplateRow, 'key' | 'lookups'>
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {}
+  const add = (defs: unknown) => {
+    if (!isObj(defs)) return
+    for (const [k, d] of Object.entries(defs)) {
+      const c = isObj(d) && typeof d.collection === 'string' ? d.collection : ''
+      out[k] = IDENT_RE.test(c) ? c : ''
+    }
+  }
+  add(typeof row.lookups === 'string' ? parseJson(row.lookups) : row.lookups)
   const [ref] = await referencingTransitions(row.key)
-  if (ref && isObj(ref.action.context)) for (const k of Object.keys(ref.action.context)) keys.add(k)
-  const own = typeof row.lookups === 'string' ? parseJson(row.lookups) : row.lookups
-  if (isObj(own)) for (const k of Object.keys(own)) keys.add(k)
-  return [...keys].sort((a, b) => a.localeCompare(b))
+  if (ref) add(ref.action.context)
+  return out
 }
 
 /** How many transitions name the key (registrar senders not counted). */
@@ -481,9 +499,46 @@ function collectionError(c: unknown, at: string): string | null {
   return null
 }
 
+const EXPAND_KEYS = new Set(['collection', 'fields', 'expand'])
+
+/**
+ * An `expand` (`{ fk: { collection, fields, expand? } }`): every level passes the
+ * system-collection guard, at most MAX_EXPAND_DEPTH levels (workflow-actions reads no deeper).
+ */
+function expandErrors(raw: unknown, at: string, depth: number, errors: string[]): void {
+  if (!isObj(raw)) {
+    errors.push(`${at} must be an object { fk: { collection, fields } }`)
+    return
+  }
+  if (depth > MAX_EXPAND_DEPTH) {
+    errors.push(`${at}: expansions go at most ${MAX_EXPAND_DEPTH} levels deep`)
+    return
+  }
+  for (const [fk, exp] of Object.entries(raw)) {
+    const here = `${at}.${fk}`
+    if (!IDENT_RE.test(fk)) errors.push(`${at}: '${fk}' is not a field name`)
+    if (!isObj(exp)) {
+      errors.push(`${here} must be an object { collection, fields }`)
+      continue
+    }
+    for (const k of Object.keys(exp))
+      if (!EXPAND_KEYS.has(k)) errors.push(`${here}.${k} is not an expand setting`)
+    const ee = collectionError(exp.collection, `${here}.collection`)
+    if (ee) errors.push(ee)
+    if (
+      !Array.isArray(exp.fields) ||
+      !exp.fields.length ||
+      !exp.fields.every((f) => typeof f === 'string' && IDENT_RE.test(f))
+    )
+      errors.push(`${here}.fields must be a list of field names`)
+    if (exp.expand !== undefined) expandErrors(exp.expand, `${here}.expand`, depth + 1, errors)
+  }
+}
+
 /**
  * Check template lookups — the erp_submit `context` shape (workflow-actions.ts ContextQueryDef):
- * `{ <name>: { collection, filter?, junction_filter?, sort?, limit?, expand? } }`. Every
+ * `{ <name>: { collection, filter?, junction_filter?, sort?, limit?, expand? } }` (`expand` may
+ * nest: `{ fk: { collection, fields, expand? } }`, 3 levels at most). Every
  * collection, junction and expansion passes the system-collection guard. Null clears them.
  */
 export function validateLookups(
@@ -538,27 +593,7 @@ export function validateLookups(
         (d.limit as number) > MAX_LOOKUP_LIMIT)
     )
       errors.push(`${name}.limit must be a whole number from 1 to ${MAX_LOOKUP_LIMIT}`)
-    if (d.expand !== undefined) {
-      if (!isObj(d.expand))
-        errors.push(`${name}.expand must be an object { fk: { collection, fields } }`)
-      else
-        for (const [fk, exp] of Object.entries(d.expand)) {
-          const at = `${name}.expand.${fk}`
-          if (!IDENT_RE.test(fk)) errors.push(`${name}.expand: '${fk}' is not a field name`)
-          if (!isObj(exp)) {
-            errors.push(`${at} must be an object { collection, fields }`)
-            continue
-          }
-          const ee = collectionError(exp.collection, `${at}.collection`)
-          if (ee) errors.push(ee)
-          if (
-            !Array.isArray(exp.fields) ||
-            !exp.fields.length ||
-            !exp.fields.every((f) => typeof f === 'string' && IDENT_RE.test(f))
-          )
-            errors.push(`${at}.fields must be a list of field names`)
-        }
-    }
+    if (d.expand !== undefined) expandErrors(d.expand, `${name}.expand`, 1, errors)
   }
   return errors.length ? { ok: false, errors } : { ok: true, value: raw }
 }

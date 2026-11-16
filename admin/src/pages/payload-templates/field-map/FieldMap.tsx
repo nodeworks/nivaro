@@ -87,6 +87,9 @@ export interface FieldMapProps {
   valuesPending?: boolean
   /** `context.<key>` names a render can read (GET /:key `context_keys`) — offered as Related data. */
   contextKeys?: string[]
+  /** Each context key → its rows' collection (GET /:key `context_collections`): a list over it
+   *  picks each item's fields like the record's. */
+  contextCollections?: Record<string, string>
   /** Link to the API's Body secrets card (`/external-apis/<id>#body-secrets`); null = plain text. */
   secretsHref?: string | null
 }
@@ -112,9 +115,15 @@ function isMod(e: KeyboardEvent | ReactKeyboardEvent) {
   return e.metaKey || e.ctrlKey
 }
 
-function lookupsFrom(raw: unknown, contextKeys: string[], spec: MapSpec): LookupInfo[] {
+export function lookupsFrom(
+  raw: unknown,
+  contextKeys: string[],
+  spec: MapSpec,
+  contextCollections: Record<string, string> = {}
+): LookupInfo[] {
   const out = new Map<string, LookupInfo>()
-  for (const key of contextKeys) if (key) out.set(key, { key })
+  for (const key of contextKeys)
+    if (key) out.set(key, { key, collection: contextCollections[key] || undefined })
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     for (const [key, def] of Object.entries(raw as Record<string, unknown>)) {
       const collection =
@@ -123,7 +132,8 @@ function lookupsFrom(raw: unknown, contextKeys: string[], spec: MapSpec): Lookup
         typeof (def as { collection?: unknown }).collection === 'string'
           ? (def as { collection: string }).collection
           : undefined
-      out.set(key, { key, collection: collection ?? out.get(key)?.collection })
+      // The referencing action's context wins a key clash, as the render merges them.
+      out.set(key, { key, collection: contextCollections[key] || collection })
     }
   }
   // Older rows without context_keys: the paths the map already reads name them.
@@ -357,12 +367,12 @@ export function FieldMap(props: FieldMapProps) {
   // its content holds, so rows reading the env do not all re-render on every keystroke.
   const lookupsRef = useRef<{ sig: string; list: LookupInfo[] } | null>(null)
   const lookups = useMemo(() => {
-    const list = lookupsFrom(props.lookups, props.contextKeys ?? [], spec)
+    const list = lookupsFrom(props.lookups, props.contextKeys ?? [], spec, props.contextCollections)
     const sig = list.map((l) => `${l.key}\u0001${l.collection ?? ''}`).join('\u0002')
     if (lookupsRef.current?.sig === sig) return lookupsRef.current.list
     lookupsRef.current = { sig, list }
     return list
-  }, [props.lookups, props.contextKeys, spec])
+  }, [props.lookups, props.contextKeys, props.contextCollections, spec])
   // Same names → same array, whatever the caller passes (an inline [] re-renders every row).
   const secretSig = props.secretNames.join('\u0001')
   const secretNames = useMemo(() => (secretSig ? secretSig.split('\u0001') : []), [secretSig])

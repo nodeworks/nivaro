@@ -1,5 +1,5 @@
-import { CollectionFieldPicker } from '@nivaro/shared'
-import { ChevronDown, Network, Rows3 } from 'lucide-react'
+import { CollectionFieldPicker, type RelationWalk } from '@nivaro/shared'
+import { ChevronDown, ListTree, Network, Rows3, TextCursorInput } from 'lucide-react'
 import { useState } from 'react'
 import { Popover, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
@@ -9,6 +9,7 @@ import {
   FmPopoverContent,
   Hint,
   type ItemScope,
+  quietButton,
   smallAction,
   TextField,
   useFieldMapEnv
@@ -17,6 +18,18 @@ import {
 // Pickers that produce a render-scope path without making anyone type one:
 // a field of this record (the relation-walking FieldPicker), a field of each
 // list item, or a related-data lookup from the template's context.
+
+/**
+ * What a render can read through a relation (api payload-templates/hops.ts): many-to-one links
+ * only, at most three deep. Every picker here walks no further, so it never offers a path that
+ * reads nothing.
+ */
+export const PAYLOAD_WALK: RelationWalk = { m2oOnly: true, maxHops: 3 }
+
+/** The path a pick from each list item writes: `material.cifa.task.name`. */
+export function itemPath(alias: string, picked: string[]): string {
+  return [alias, ...picked].join('.')
+}
 
 const CONTEXT_RE = /^context\.([^.[\]]+)(?:\[(\d+)\])?(?:\.(.+))?$/
 
@@ -77,18 +90,39 @@ export function RecordFieldSection({
   const recordRel = value.startsWith('record.') ? value.slice('record.'.length) : ''
   const prefix = scope ? `${scope.alias}.` : null
   const itemRel = prefix && value.startsWith(prefix) ? value.slice(prefix.length) : ''
+  // A typed path for odd cases (a JSON column's key, a field the picker hides).
+  const [typing, setTyping] = useState(false)
+  const picking = !!scope?.collection && !typing
   return (
     <div className='space-y-3'>
       {scope && (
         <div>
-          <FmLabel>From each {scope.alias}</FmLabel>
-          {scope.collection ? (
+          <div className='flex items-center justify-between gap-2'>
+            <FmLabel>From each {scope.alias}</FmLabel>
+            {scope.collection && (
+              <button
+                type='button'
+                aria-pressed={typing}
+                onClick={() => setTyping((t) => !t)}
+                className={cn(quietButton, '-mr-1.5 -mt-1 mb-0.5')}
+              >
+                {typing ? (
+                  <ListTree className='h-3 w-3' />
+                ) : (
+                  <TextCursorInput className='h-3 w-3' />
+                )}
+                {typing ? 'Pick a field' : 'Type a path'}
+              </button>
+            )}
+          </div>
+          {picking ? (
             <CollectionFieldPicker
-              collection={scope.collection}
+              collection={scope.collection as string}
               value={itemRel}
               valueLabel={itemRel ? humanizePath(value, scope.alias, env.names) : undefined}
-              onChange={(p) => onChange(`${scope.alias}.${p.path.join('.')}`)}
+              onChange={(p) => onChange(itemPath(scope.alias, p.path))}
               placeholder={`Pick a field of the ${scope.alias}…`}
+              walk={PAYLOAD_WALK}
             />
           ) : (
             <>
@@ -101,7 +135,9 @@ export function RecordFieldSection({
               <Hint className='mt-1'>
                 {itemRel
                   ? `Reads ${humanizePath(value, scope.alias, env.names)}`
-                  : `Type the name of a field each ${scope.alias} has.`}
+                  : scope.collection
+                    ? `A field of each ${scope.alias}, dots between links: cifa.task.name`
+                    : `Type the name of a field each ${scope.alias} has.`}
               </Hint>
             </>
           )}
@@ -128,6 +164,7 @@ export function RecordFieldSection({
           valueLabel={recordRel ? humanizePath(value, null, env.names) : undefined}
           onChange={(p) => onChange(`record.${p.path.join('.')}`)}
           placeholder='Pick a field…'
+          walk={PAYLOAD_WALK}
         />
         {!scope && (
           <Hint className='mt-1.5'>
@@ -202,6 +239,7 @@ export function RelatedSection({
               valueLabel={rest ? humanizePath(rest) : undefined}
               onChange={(p) => onChange(`context.${key}[0].${p.path.join('.')}`)}
               placeholder='Pick a field…'
+              walk={PAYLOAD_WALK}
             />
           ) : (
             <PathTextInput

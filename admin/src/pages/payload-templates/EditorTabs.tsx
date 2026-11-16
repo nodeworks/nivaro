@@ -126,6 +126,7 @@ export function EditorTabs({
             partner={template.external_api}
             valuesPending={valuesPending}
             contextKeys={template.context_keys}
+            contextCollections={template.context_collections}
             secretsHref={secretsHref}
           />
         ) : active === 'code' ? (

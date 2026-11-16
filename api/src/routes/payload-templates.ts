@@ -7,6 +7,7 @@ import { markConfigRead } from '../services/config-live.js'
 import { readItems } from '../services/items.js'
 import { validateSpec } from '../services/payload-templates/evaluate.js'
 import {
+  discardDraft,
   getTemplate,
   getVersion,
   hasNewerDefault,
@@ -27,7 +28,7 @@ import {
 import {
   assertRecordCollection,
   CollectionRefusedError,
-  contextKeys,
+  contextCollections,
   createTemplate,
   deleteTemplate,
   RecordNotFoundError,
@@ -241,12 +242,15 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
     const row = await loadOr404(req.params.key, reply)
     if (!row) return reply
     const def = registeredDef(row.key)
+    // key → the collection its rows come from (the editor's "From each <item>" picker)
+    const contextFrom = await contextCollections(row)
     return {
       data: {
         ...(await withPeopleNames(row)),
         status: statusOf(row),
         used_by: await usedBy(row.key),
-        context_keys: await contextKeys(row),
+        context_keys: Object.keys(contextFrom).sort((a, b) => a.localeCompare(b)),
+        context_collections: contextFrom,
         newer_default: hasNewerDefault(row),
         has_default: !!def,
         ...(def
@@ -292,6 +296,34 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
       )
       if (!r.ok) return sendStale(reply, r.current)
       return { rev: r.rev }
+    } catch (e) {
+      return sendError(reply, e)
+    }
+  })
+
+  // ── discard the draft (back to the live version) ──
+  app.post<{
+    Params: { key: string }
+    Body: { base_rev?: number; base_published_version?: number | null }
+  }>('/:key/discard-draft', async (req, reply) => {
+    const b = req.body ?? {}
+    const baseRev = Number(b.base_rev)
+    if (b.base_rev == null || !Number.isInteger(baseRev) || baseRev < 0) {
+      return reply.code(400).send({ error: 'invalid', errors: ['base_rev is required'] })
+    }
+    try {
+      const r = await discardDraft(
+        req.params.key,
+        {
+          base_rev: baseRev,
+          ...(b.base_published_version !== undefined
+            ? { base_published_version: publishedVersionOf(b.base_published_version) }
+            : {})
+        },
+        req.user?.id ?? null
+      )
+      if (!r.ok) return sendStale(reply, r.current)
+      return { rev: r.rev, unchanged: r.unchanged }
     } catch (e) {
       return sendError(reply, e)
     }
