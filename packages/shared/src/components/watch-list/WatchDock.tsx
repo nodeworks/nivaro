@@ -1426,7 +1426,7 @@ function MentionsTab({ data }: { data: ReturnType<typeof useDockData> }) {
           <button
             type='button'
             onClick={() => markRead(unread)}
-            className='inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11.5px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-white/[0.12] dark:text-slate-300 dark:hover:bg-white/[0.05] dark:hover:text-slate-100'
+            className='inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-slate-300 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
           >
             <CheckCheck aria-hidden className='h-3 w-3' />
             Mark all read
