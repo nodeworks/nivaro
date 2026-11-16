@@ -26,12 +26,14 @@ import {
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation } from '../../context'
+import { useFieldEditors } from '../../lib/co-edit'
 import { cn } from '../../lib/utils'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { COEDIT_REMOTE } from './coedit/collab'
 import type { CoeditFieldTarget } from './coedit/context'
 import { COEDIT_CURSOR_CSS, CoeditCursors } from './coedit/cursors'
 import { isSafeLinkHref } from './coedit/safe-link'
+import { coeditColor } from './coedit/session'
 import { useCoedit } from './coedit/useCoedit'
 
 // ─── EditorJS JSON → HTML ──────────────────────────────────────────────────────
@@ -213,6 +215,17 @@ export function RichTextEditor({
 
   const binding = useCoedit(editor, coedit ?? null, value, toEditorHtml)
   coeditRef.current = binding.session
+  // Own edits kept apart: the writers' names come with their next cursor (up to 15 s). Until
+  // then the record's presence already says who is in this field, so the note names them.
+  const fieldEditors = useFieldEditors(coedit?.collection, coedit?.item)
+  const inField = coedit ? fieldEditors[coedit.field] : undefined
+  const notePeers = useMemo(
+    () =>
+      binding.peers.length || !binding.diverged || !inField
+        ? binding.peers
+        : [{ name: inField.name, color: coeditColor(String(inField.id)) }],
+    [binding.peers, binding.diverged, inField]
+  )
   // The field wrapper says when it is written together: its "someone is editing" lock ring and
   // badge give way to the cursors (COEDIT_CURSOR_CSS), so there is one focus ring only.
   const boxRef = useRef<HTMLDivElement>(null)
@@ -481,7 +494,7 @@ export function RichTextEditor({
         editor={editor}
         className='nivaro-rich-text min-h-[120px] px-3 py-2 text-[13px] [&_.tiptap]:outline-none [&_.tiptap]:min-h-[100px] [&_.tiptap_p]:my-1 [&_.tiptap_h1]:text-xl [&_.tiptap_h2]:text-lg [&_.tiptap_h3]:text-base [&_.tiptap_h1,&_.tiptap_h2,&_.tiptap_h3]:font-semibold [&_.tiptap_ul]:list-disc [&_.tiptap_ol]:list-decimal [&_.tiptap_ul]:!pl-6 [&_.tiptap_ol]:!pl-6 [&_.tiptap_ul]:list-outside [&_.tiptap_ol]:list-outside [&_.tiptap_li]:my-0.5 [&_.tiptap_blockquote]:border-l-2 [&_.tiptap_blockquote]:border-slate-300 [&_.tiptap_blockquote]:pl-3 [&_.tiptap_blockquote]:text-slate-500 dark:[&_.tiptap_blockquote]:border-slate-600 dark:[&_.tiptap_blockquote]:text-slate-400 [&_.tiptap_code]:bg-slate-100 dark:[&_.tiptap_code]:bg-[#1e293b] [&_.tiptap_code]:rounded [&_.tiptap_code]:px-1 [&_.tiptap_pre]:bg-slate-100 dark:[&_.tiptap_pre]:bg-[#1e293b] [&_.tiptap_pre]:rounded [&_.tiptap_pre]:p-2 [&_.tiptap_pre]:font-mono [&_.tiptap_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.tiptap_p.is-editor-empty:first-child::before]:text-slate-400 dark:[&_.tiptap_p.is-editor-empty:first-child::before]:text-slate-500 [&_.tiptap_p.is-editor-empty:first-child::before]:pointer-events-none [&_.tiptap_p.is-editor-empty:first-child::before]:float-left [&_.tiptap_p.is-editor-empty:first-child::before]:h-0'
       />
-      <CoeditNote peers={binding.peers} diverged={binding.diverged} />
+      <CoeditNote peers={notePeers} diverged={binding.diverged} />
     </div>
   )
 }
