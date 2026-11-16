@@ -493,7 +493,7 @@ export function CollectionCalendar({
                     'h-6 shrink-0 whitespace-nowrap rounded-md px-2 text-[11px] font-medium',
                     field === f.field
                       ? 'bg-nvr-cyan/15 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
-                      : 'text-slate-400 hover:text-slate-700'
+                      : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
                   )}
                 >
                   {fieldName(f)}
@@ -567,7 +567,7 @@ export function CollectionCalendar({
               // Today is its numeral; a drop target is a dashed outline with no fill, so the
               // two never read alike (rt9 review).
               className={cn(
-                'min-h-24 bg-white p-1.5 transition-colors dark:bg-card',
+                'min-h-24 min-w-0 bg-white p-1.5 transition-colors dark:bg-card',
                 isOver &&
                   'outline-dashed outline-2 -outline-offset-[3px] outline-nvr-cyan dark:outline-nvr-cyan/80'
               )}
@@ -607,8 +607,8 @@ export function CollectionCalendar({
                         data-tip='Where you dropped it'
                         className='flex items-center gap-1 truncate rounded border border-dashed border-nvr-cyan bg-white px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy dark:bg-card dark:text-[#7fe6ff]'
                       >
-                        <span className='truncate'>{clash?.label}</span>
-                        <span className='shrink-0 font-semibold text-[#007a99] dark:text-nvr-cyan'>
+                        <span className='min-w-0 flex-1 truncate'>{clash?.label}</span>
+                        <span className='min-w-0 truncate font-semibold text-[#007a99] dark:text-nvr-cyan'>
                           · Yours
                         </span>
                       </div>
@@ -624,8 +624,8 @@ export function CollectionCalendar({
                           data-tip={`${who} is moving this here`}
                           className='nvr-fade-in flex items-center gap-1 truncate rounded border border-dashed border-violet-400 bg-violet-50/70 px-1.5 py-0.5 text-[10px] font-medium text-violet-900 dark:border-violet-400/60 dark:bg-violet-500/10 dark:text-violet-100'
                         >
-                          <span className='truncate'>{label(row)}</span>
-                          <span className='shrink-0 font-semibold text-violet-700 dark:text-violet-300'>
+                          <span className='min-w-0 flex-1 truncate'>{label(row)}</span>
+                          <span className='min-w-0 truncate font-semibold text-violet-700 dark:text-violet-300'>
                             · {who.split(' ')[0]}
                           </span>
                         </div>
@@ -661,7 +661,7 @@ export function CollectionCalendar({
                             navigate(`/collections/${collection}/${id}`)
                           }}
                           className={cn(
-                            'flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-[10px] font-medium',
+                            'flex w-full min-w-0 items-center gap-1 overflow-hidden rounded px-1.5 py-0.5 text-left text-[10px] font-medium',
                             // Someone else's move (a live ghost or the newer move in a clash)
                             // wears their colour, text included — never cyan inside violet.
                             ghost || clashTheirs
@@ -676,9 +676,11 @@ export function CollectionCalendar({
                           )}
                           title={ghostWho ? `${ghostWho} is moving this` : label(it)}
                         >
-                          <span className='truncate'>{label(it)}</span>
+                          {/* The name marker keeps its width and the label gives way; on a
+                              phone cell both truncate inside the cell, never past its border. */}
+                          <span className='min-w-0 flex-1 truncate'>{label(it)}</span>
                           {clashTheirs && (
-                            <span className='shrink-0 font-semibold text-violet-700 dark:text-violet-300'>
+                            <span className='min-w-0 truncate font-semibold text-violet-700 dark:text-violet-300'>
                               · {theirFirst}
                             </span>
                           )}
