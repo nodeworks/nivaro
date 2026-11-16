@@ -90,7 +90,9 @@ export function DraftRecoveryBanner({
     >
       <div className='flex flex-wrap items-center gap-2'>
         <History className='h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400' />
-        <span className='min-w-0 flex-1'>
+        {/* The sentence keeps a readable width (14rem basis): on a phone the actions wrap onto
+            their own line instead of squeezing it to one word per line. */}
+        <span className='min-w-0 flex-1 basis-[14rem]'>
           {created ? (
             <span className='font-semibold' data-nvr-draft-created>
               {/* No row id (Rob's no-internal-ids rule): "Open the record" links to it. */}
@@ -125,7 +127,7 @@ export function DraftRecoveryBanner({
         <button
           type='button'
           onClick={() => setOpen((v) => !v)}
-          className='text-[11.5px] underline decoration-dotted underline-offset-2'
+          className='whitespace-nowrap text-[11.5px] underline decoration-dotted underline-offset-2'
         >
           {open ? 'Hide changes' : 'Show changes'}
         </button>
@@ -136,7 +138,7 @@ export function DraftRecoveryBanner({
               e.preventDefault()
               itemNav.open({ collection, itemId: createdId })
             }}
-            className='inline-flex h-7 items-center gap-1 rounded-md bg-amber-600 px-2.5 text-[11.5px] font-semibold text-white hover:bg-amber-700'
+            className='inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-amber-600 px-2.5 text-[11.5px] font-semibold text-white hover:bg-amber-700'
             data-nvr-draft-open-created
           >
             <ExternalLink className='h-3 w-3' /> Open the record
@@ -147,8 +149,8 @@ export function DraftRecoveryBanner({
           onClick={onRestore}
           className={
             created
-              ? 'inline-flex h-7 items-center gap-1 rounded-md border border-amber-300 px-2.5 text-[11.5px] font-medium hover:bg-amber-100 dark:border-amber-500/40 dark:hover:bg-amber-500/15'
-              : 'inline-flex h-7 items-center gap-1 rounded-md bg-amber-600 px-2.5 text-[11.5px] font-semibold text-white hover:bg-amber-700'
+              ? 'inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-amber-300 px-2.5 text-[11.5px] font-medium hover:bg-amber-100 dark:border-amber-500/40 dark:hover:bg-amber-500/15'
+              : 'inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-amber-600 px-2.5 text-[11.5px] font-semibold text-white hover:bg-amber-700'
           }
           data-nvr-draft-restore
         >
@@ -158,7 +160,7 @@ export function DraftRecoveryBanner({
         <button
           type='button'
           onClick={onDiscard}
-          className='inline-flex h-7 items-center gap-1 rounded-md border border-amber-300 px-2.5 text-[11.5px] font-medium hover:bg-amber-100 dark:border-amber-500/40 dark:hover:bg-amber-500/15'
+          className='inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-amber-300 px-2.5 text-[11.5px] font-medium hover:bg-amber-100 dark:border-amber-500/40 dark:hover:bg-amber-500/15'
           data-nvr-draft-discard
         >
           <Trash2 className='h-3 w-3' /> Discard

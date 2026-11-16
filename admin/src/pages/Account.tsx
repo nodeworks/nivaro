@@ -201,8 +201,8 @@ function PlanCard({
       </div>
       <div className='text-[11px] text-muted-foreground space-y-0.5 mb-4'>
         <div>{formatLargeNumber(plan.recordLimit)} records</div>
-        <div>{plan.storageGb} GB storage</div>
-        <div>{plan.maxUsers === 0 ? 'Unlimited' : plan.maxUsers} users</div>
+        <div>{plan.storageGb.toLocaleString('en-US')} GB storage</div>
+        <div>{plan.maxUsers === 0 ? 'Unlimited' : plan.maxUsers.toLocaleString('en-US')} users</div>
       </div>
       {isCurrent ? (
         <Button variant='outline' size='sm' className='w-full h-7 text-[12px]' onClick={onManage} disabled={isLoading}>

@@ -1109,15 +1109,19 @@ export function ItemEditPage() {
                         onClick={() => toggleExclusion.mutate()}
                         disabled={toggleExclusion.isPending}
                         title={isExcluded ? 'Show in pickers' : 'Hide from pickers'}
+                        aria-label={isExcluded ? 'Hidden from pickers — show in pickers' : 'Hide from pickers'}
                         className={cn(
-                          'inline-flex items-center gap-1.5 rounded-none border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+                          'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-none border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                           isExcluded
                             ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800'
                             : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'
                         )}
                       >
                         <EyeOff className='h-3.5 w-3.5' />
-                        {isExcluded ? 'Hidden from pickers' : 'Hide from pickers'}
+                        {/* Phone: the icon alone (named by aria-label) so the group never clips. */}
+                        <span className='hidden sm:inline'>
+                          {isExcluded ? 'Hidden from pickers' : 'Hide from pickers'}
+                        </span>
                       </button>
                     )}
                     {id && !isNew && canSchedule && (
