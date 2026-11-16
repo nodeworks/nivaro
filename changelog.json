@@ -1,10 +1,107 @@
 {
-  "generated_at": "2026-11-15T20:50:15.078Z",
+  "generated_at": "2026-11-16T15:33:33.449Z",
   "releases": [
+    {
+      "version": "0.3.162",
+      "tag": "v0.3.162",
+      "date": "2026-11-16T10:30:46-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "queues",
+              "text": "the queue default view is layout only, like CBV",
+              "hash": "070f5aeb0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "grouped problems sit one step in under their group",
+              "hash": "e4328fee4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "banner names what the partner is behind on; resends wait a minute",
+              "hash": "cf333593a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "the overflow menu shows the next row and a More tag",
+              "hash": "0bd06e27c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "queues",
+              "text": "narrow desktop queue keeps State pinned, Owners gives way",
+              "hash": "7ea13dca0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "phones show the record count once",
+              "hash": "3dfcbe748"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "phone tables, a real overflow menu and fitted pins",
+              "hash": "1b74f9495"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "phone drawer Esc and focus, queue filter pills fold into the rail",
+              "hash": "19dfc4511"
+            },
+            {
+              "section": "Fixed",
+              "scope": "owner-matrix",
+              "text": "announce owner changes after a spreadsheet apply",
+              "hash": "4969a9eb5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "readable initials on the sidebar user card in dark mode",
+              "hash": "66c332722"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "a focused row checkbox keeps focus through a live update",
+              "hash": "2ffedcea5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "view-as",
+              "text": "chat and comment uploads belong to the viewed person",
+              "hash": "e388a2173"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "mask every public link token in logs, traces and traffic",
+              "hash": "2cd1ae275"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "phone shell, one-line list toolbars, opaque row tints, dark pairs",
+              "hash": "8f9cfacbd"
+            }
+          ]
+        }
+      ],
+      "count": 14
+    },
     {
       "version": "0.3.161",
       "tag": "v0.3.161",
-      "date": "2026-11-15T15:49:41-05:00",
+      "date": "2026-11-15T15:50:15-05:00",
       "sections": [
         {
           "label": "Added",
