@@ -496,24 +496,27 @@ export function TicketDetailSheet({
                   </p>
                 ) : (
                   <ol className='space-y-2 border-l border-slate-200 pl-3.5 dark:border-border'>
-                    {foldShareHistory(t.history, { requester: t.created_by }).map((h) => {
-                      // Worded for this reader: the requester reads "… looked at your …"
-                      // (an administrator who raised the request is still its requester).
-                      const line = historyLine(h, {
-                        isRequester: t.can.requester ?? !t.can.work,
-                        requesterName: t.requester_name
-                      })
-                      return (
-                        <li key={h.id} className='text-[12px] text-slate-600 dark:text-slate-300'>
-                          <span className='text-slate-800 dark:text-slate-100'>{line.text}</span>
-                          <span className='text-slate-500 dark:text-slate-400'>
-                            {' '}
-                            · {line.showAuthor ? `${h.user_name ?? 'System'} · ` : ''}
-                            {when(h.at)}
-                          </span>
-                        </li>
-                      )
-                    })}
+                    {/* Newest first: a share that is running now is the first line. */}
+                    {foldShareHistory(t.history, { requester: t.created_by })
+                      .reverse()
+                      .map((h) => {
+                        // Worded for this reader: the requester reads "… looked at your …"
+                        // (an administrator who raised the request is still its requester).
+                        const line = historyLine(h, {
+                          isRequester: t.can.requester ?? !t.can.work,
+                          requesterName: t.requester_name
+                        })
+                        return (
+                          <li key={h.id} className='text-[12px] text-slate-600 dark:text-slate-300'>
+                            <span className='text-slate-800 dark:text-slate-100'>{line.text}</span>
+                            <span className='text-slate-500 dark:text-slate-400'>
+                              {' '}
+                              · {line.showAuthor ? `${h.user_name ?? 'System'} · ` : ''}
+                              {when(h.at)}
+                            </span>
+                          </li>
+                        )
+                      })}
                   </ol>
                 )}
               </section>

@@ -317,7 +317,9 @@ export function ScreenShareBar() {
 function PillRules() {
   return (
     <style>
-      {'@media (max-width: 639px){html[data-screen-sharing] [data-floating-help]{display:none!important}}' +
+      {'@media (max-width: 639px){html[data-screen-sharing] [data-floating-help]{display:none!important}' +
+        // A phone page ends above the pill, so its last row (a pager, a legend) scrolls clear of it.
+        'html[data-screen-sharing] main{padding-bottom:calc(3.5rem + env(safe-area-inset-bottom))}}' +
         'html[data-screen-share-covered] [role="dialog"] [data-sheet-body]{padding-bottom:calc(2.25rem + 2rem + env(safe-area-inset-bottom))}'}
     </style>
   )
