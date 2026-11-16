@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { recordNoun } from './AccessDeniedPanel'
+import { deniedWording, recordNoun } from './AccessDeniedPanel'
 
 // army 8 b14: the panel read "invoices · #5715898" — a table key and a database row id.
 describe('recordNoun — what the access/not-found panel calls the record', () => {
@@ -14,5 +14,25 @@ describe('recordNoun — what the access/not-found panel calls the record', () =
     expect(recordNoun('categories')).toBe('category')
     expect(recordNoun('status')).toBe('status')
     expect(recordNoun('')).toBe('record')
+  })
+})
+
+describe('deniedWording — one explanation (rt4 review)', () => {
+  it('names the refusal when the server gave reasons', () => {
+    const w = deniedWording('workflow', [{ type: 'scope', message: 'Outside your zones.' }])
+    expect(w).toMatchObject({ kind: 'denied', title: "You can't view this workflow" })
+  })
+  it('says the cause is unknown once when there are no reasons', () => {
+    for (const r of [null, []]) {
+      const w = deniedWording('workflow', r)
+      expect(w.kind).toBe('unknown')
+      expect(w.title).toBe('This workflow could not be opened')
+      expect(w.subtitle).toMatch(/deleted, or your access/)
+    }
+  })
+  it('a missing record is "not found"', () => {
+    expect(deniedWording('invoice', [{ type: 'not_found', message: 'x' }]).title).toBe(
+      'Invoice not found'
+    )
   })
 })

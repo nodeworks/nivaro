@@ -105,6 +105,13 @@ interface AttributeDef {
 
 // ─── AttributeSelect ──────────────────────────────────────────────────────────
 
+/** A 403/404 read: the record is refused or not there (axios error or SDK error). */
+function refusedStatus(err: unknown): boolean {
+  const e = err as { status?: number; response?: { status?: number } } | null
+  const status = e?.response?.status ?? e?.status
+  return status === 403 || status === 404
+}
+
 function AttributeSelect({
   value,
   options,
@@ -488,11 +495,17 @@ export function ItemEditPage() {
     return titleCase(key.replace(/_/g, ' '))
   }
 
-  const { data: itemData } = useQuery({
+  const { data: itemData, error: itemError } = useQuery({
     queryKey: ['item', collection, id],
     queryFn: () => api.get(`/items/${collection}/${id}`).then((r) => r.data.data),
-    enabled: !!collection && !!id && !isNew
+    enabled: !!collection && !!id && !isNew,
+    // A refusal answers the same on every try: say so at once.
+    retry: (n, err) => !refusedStatus(err) && n < 2
   })
+  // rt4 review: the record answered 403/404 — its tools (Hide from pickers, Schedule, History,
+  // Share) cannot work and hint at a record this person may not see; the header keeps only
+  // its title while the access card explains.
+  const recordRefused = !isNew && !itemData && refusedStatus(itemError)
 
   // #1835 — Ask AI on this page means this record (ids only; the server
   // reads it again as the asker). The label is for the chip.
@@ -1110,14 +1123,21 @@ export function ItemEditPage() {
                   {/* Header widgets render in ItemEditForm's own header strip — not here. */}
 
                   {/* Admin tool buttons */}
-                  <div className='flex overflow-hidden rounded-md max-sm:basis-full max-sm:flex-wrap max-sm:gap-y-2 max-sm:overflow-visible'>
+                  <div
+                    className={cn(
+                      'flex overflow-hidden rounded-md max-sm:basis-full max-sm:flex-wrap max-sm:gap-y-2 max-sm:overflow-visible',
+                      recordRefused && 'hidden'
+                    )}
+                  >
                     {id && !isNew && canDisablePickers && (
                       <button
                         type='button'
                         onClick={() => toggleExclusion.mutate()}
                         disabled={toggleExclusion.isPending}
                         title={isExcluded ? 'Show in pickers' : 'Hide from pickers'}
-                        aria-label={isExcluded ? 'Hidden from pickers — show in pickers' : 'Hide from pickers'}
+                        aria-label={
+                          isExcluded ? 'Hidden from pickers — show in pickers' : 'Hide from pickers'
+                        }
                         className={cn(
                           'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-none border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                           isExcluded

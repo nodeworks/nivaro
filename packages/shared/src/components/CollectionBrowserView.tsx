@@ -336,6 +336,7 @@ import {
 import {
   AccessGrantedNote,
   ItemActionChoiceList,
+  ListAccessDenied,
   type ItemActionChoiceOption,
   itemActionChoiceStep,
   RevisionsPanel,
@@ -8625,6 +8626,31 @@ export function CollectionBrowserView({
       approx: totalApprox
     })
   })()
+
+  // rt4 review: a list the person may not read shows the lock card in place of the grid,
+  // filters and totals (an empty table under a red bar read as broken). Rows kept from an
+  // earlier read (placeholderData) still show with the bar below.
+  if (
+    !itemsRes &&
+    (error as { status?: number } | null)?.status === 403 &&
+    !isFilterRefusal(error)
+  )
+    return (
+      <div
+        data-cbv
+        data-cbv-denied
+        className={
+          className ?? 'flex h-full min-h-0 flex-col bg-slate-50 text-[13px] dark:bg-slate-950'
+        }
+      >
+        <div className='flex min-h-0 flex-1 flex-col overflow-y-auto'>
+          <ListAccessDenied
+            collection={collection}
+            label={meta?.display_name || titleCase(collection)}
+          />
+        </div>
+      </div>
+    )
 
   return (
     <div

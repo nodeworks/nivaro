@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Check, Lock, Send } from 'lucide-react'
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
@@ -52,6 +52,169 @@ export function recordNoun(collection: string, singular?: string | null): string
 /** The access-request route keeps 300 characters of the note. */
 const NOTE_MAX = 300
 
+/** The lock card both refusals share: one heading, one plain line under it, then the way on. */
+function DeniedCard({
+  title,
+  subtitle,
+  children
+}: {
+  title: string
+  subtitle: string
+  children?: ReactNode
+}) {
+  return (
+    <div className='flex flex-1 items-start justify-center px-4 py-10 sm:px-6 sm:py-16'>
+      <div
+        className='w-full max-w-[560px] rounded-xl border border-slate-200 bg-white p-5 sm:p-8 dark:border-border dark:bg-card'
+        data-access-denied
+      >
+        <div className='flex items-start gap-3'>
+          <span className='flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 dark:bg-muted'>
+            <Lock className='h-[18px] w-[18px] text-slate-500 dark:text-slate-400' aria-hidden />
+          </span>
+          <div className='min-w-0 pt-0.5'>
+            <h2 className='text-[15px] font-semibold text-slate-800 dark:text-slate-100'>
+              {title}
+            </h2>
+            <p className='mt-0.5 text-[12.5px] leading-snug text-slate-600 dark:text-slate-400'>
+              {subtitle}
+            </p>
+          </div>
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/** "Need it? Say what for" + Request access (+ Go back on the same row). */
+function RequestAccess({
+  collection,
+  itemId,
+  noun,
+  placeholder,
+  onBack
+}: {
+  collection: string
+  itemId?: string
+  noun: string
+  placeholder: string
+  onBack?: () => void
+}) {
+  const client = useNivaroClient()
+  const [requested, setRequested] = useState(false)
+  // Army 11: the person may say why — the administrator used to read only a canned sentence.
+  const [note, setNote] = useState('')
+  const requestAccess = useMutation({
+    mutationFn: () =>
+      client.request(
+        post('/access-requests', {
+          collection,
+          ...(itemId ? { item: String(itemId) } : {}),
+          ...(note.trim() ? { note: note.trim().slice(0, NOTE_MAX) } : {})
+        })
+      ),
+    onSuccess: () => {
+      setRequested(true)
+      toast.success('Access request sent — an administrator has been notified')
+    },
+    onError: () => toast.error('Could not send the request')
+  })
+  const noteId = `access-note-${collection}-${itemId ?? 'list'}`
+  return (
+    <>
+      {!requested && (
+        <div className='mt-5'>
+          <label
+            htmlFor={noteId}
+            className='block text-[12px] font-medium text-slate-700 dark:text-slate-300'
+          >
+            Need it? Say what for{' '}
+            <span className='font-normal text-slate-500 dark:text-slate-400'>(optional)</span>
+          </label>
+          <textarea
+            id={noteId}
+            value={note}
+            onChange={(e) => setNote(e.target.value.slice(0, NOTE_MAX))}
+            rows={2}
+            maxLength={NOTE_MAX}
+            placeholder={placeholder}
+            className='mt-1.5 w-full resize-y rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-800 placeholder:text-slate-500 focus:border-nvr-cyan focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30 dark:border-border dark:bg-background dark:text-slate-100 dark:placeholder:text-slate-500'
+            data-request-access-note
+          />
+          <p className='mt-1 text-[11.5px] text-slate-500 dark:text-slate-400'>
+            Every administrator gets your request with this {noun} and your note.
+          </p>
+        </div>
+      )}
+      <div className='mt-3 flex flex-wrap items-center gap-2'>
+        <button
+          type='button'
+          disabled={requested || requestAccess.isPending}
+          onClick={() => requestAccess.mutate()}
+          className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-medium text-white hover:brightness-110 disabled:opacity-60'
+          data-request-access
+        >
+          {requested ? (
+            <>
+              <Check className='h-3.5 w-3.5' aria-hidden /> Request sent
+            </>
+          ) : (
+            <>
+              <Send className='h-3.5 w-3.5' aria-hidden />
+              {requestAccess.isPending ? 'Sending…' : 'Request access'}
+            </>
+          )}
+        </button>
+        {onBack && <BackButton onBack={onBack} />}
+      </div>
+    </>
+  )
+}
+
+function BackButton({ onBack }: { onBack: () => void }) {
+  return (
+    <button
+      type='button'
+      onClick={onBack}
+      className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-white/[0.04]'
+    >
+      <ArrowLeft className='h-3.5 w-3.5' aria-hidden />
+      Go back
+    </button>
+  )
+}
+
+/**
+ * Words for a refused record. One explanation only (rt4 review): with the server's reasons the
+ * card says "You can't view this …" and lists them; when the cause is unknown (the explain read
+ * failed) it says so once — deleted or out of reach — instead of claiming "outside your access"
+ * and then doubting it in a second box. Exported for tests.
+ */
+export function deniedWording(
+  noun: string,
+  reasons: AccessReason[] | null
+): { title: string; subtitle: string; kind: 'not_found' | 'denied' | 'unknown' } {
+  const Noun = `${noun.charAt(0).toUpperCase()}${noun.slice(1)}`
+  if (reasons?.some((r) => r.type === 'not_found'))
+    return {
+      kind: 'not_found',
+      title: `${Noun} not found`,
+      subtitle: 'The link may be wrong, or it was removed.'
+    }
+  if (reasons && reasons.length > 0)
+    return {
+      kind: 'denied',
+      title: `You can't view this ${noun}`,
+      subtitle: 'It is outside what your access lets you see.'
+    }
+  return {
+    kind: 'unknown',
+    title: `This ${noun} could not be opened`,
+    subtitle: 'It may have been deleted, or your access may not reach it.'
+  }
+}
+
 export function AccessDeniedPanel({
   collection,
   itemId,
@@ -67,24 +230,6 @@ export function AccessDeniedPanel({
 }) {
   const noun = recordNoun(collection, nounProp)
   const client = useNivaroClient()
-  const [requested, setRequested] = useState(false)
-  // Army 11: the person may say why — the administrator used to read only a canned sentence.
-  const [note, setNote] = useState('')
-  const requestAccess = useMutation({
-    mutationFn: () =>
-      client.request(
-        post('/access-requests', {
-          collection,
-          item: String(itemId),
-          ...(note.trim() ? { note: note.trim().slice(0, NOTE_MAX) } : {})
-        })
-      ),
-    onSuccess: () => {
-      setRequested(true)
-      toast.success('Access request sent — an administrator has been notified')
-    },
-    onError: () => toast.error('Could not send the request')
-  })
   const { data, isLoading } = useQuery<{ access: boolean; reasons: AccessReason[] } | null>({
     queryKey: ['access-explain', collection, String(itemId)],
     queryFn: () =>
@@ -99,111 +244,75 @@ export function AccessDeniedPanel({
     staleTime: 30_000
   })
 
-  const reasons = data?.reasons ?? []
-  const notFound = reasons.some((r) => r.type === 'not_found')
+  if (isLoading)
+    return (
+      <div className='flex flex-1 items-start justify-center px-4 py-10 sm:px-6 sm:py-16'>
+        <div className='w-full max-w-[560px] space-y-2.5 rounded-xl border border-slate-200 bg-white p-5 sm:p-8 dark:border-border dark:bg-card'>
+          <div className='h-4 w-1/2 animate-pulse rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
+          <div className='h-4 w-3/4 animate-pulse rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
+        </div>
+      </div>
+    )
+
+  const reasons = data?.reasons ?? null
+  const words = deniedWording(noun, reasons)
 
   return (
-    <div className='flex flex-1 items-start justify-center px-6 py-16'>
-      <div className='w-full max-w-[560px] rounded-xl border border-slate-200 bg-white p-8 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-3'>
-          <span className='flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 dark:bg-muted'>
-            <Lock className='h-[18px] w-[18px] text-slate-500 dark:text-slate-400' />
-          </span>
-          <div>
-            <h2 className='text-[15px] font-semibold text-slate-800 dark:text-slate-100'>
-              {notFound
-                ? `${noun.charAt(0).toUpperCase()}${noun.slice(1)} not found`
-                : `You can't view this ${noun}`}
-            </h2>
-            <p className='text-[12px] text-slate-500 dark:text-slate-400'>
-              {notFound
-                ? 'The link may be wrong, or it was removed.'
-                : 'It is outside what your access lets you see.'}
-            </p>
-          </div>
-        </div>
-
-        <div className='mt-5 space-y-2.5'>
-          {isLoading ? (
-            <>
-              <div className='animate-pulse h-4 w-3/4 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
-              <div className='animate-pulse h-4 w-1/2 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
-            </>
-          ) : notFound ? null : reasons.length > 0 ? (
-            // A missing record is said once, in the heading (army11 f3: the
-            // page gave two different reasons for the same thing).
-            reasons.map((r, i) => (
-              <div
-                key={`${r.type}-${r.dimension ?? i}`}
-                className='rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-[13px] leading-relaxed text-slate-700 dark:border-border dark:bg-muted/40 dark:text-slate-300'
-              >
-                {r.message}
-              </div>
-            ))
-          ) : (
-            <div className='rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-[13px] leading-relaxed text-slate-700 dark:border-border dark:bg-muted/40 dark:text-slate-300'>
-              This record could not be loaded. It may have been deleted, or an access rule may be
-              hiding it.
-            </div>
-          )}
-        </div>
-
-        {!notFound && !isLoading && !requested && (
-          <div className='mt-4'>
-            <label
-              htmlFor={`access-note-${collection}-${itemId}`}
-              className='block text-[12px] font-medium text-slate-700 dark:text-slate-300'
+    <DeniedCard title={words.title} subtitle={words.subtitle}>
+      {words.kind === 'denied' && reasons && (
+        <div className='mt-5 space-y-2'>
+          {reasons.map((r, i) => (
+            <div
+              key={`${r.type}-${r.dimension ?? i}`}
+              className='rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-[13px] leading-relaxed text-slate-700 dark:border-border dark:bg-muted/40 dark:text-slate-300'
             >
-              Need it? Say what for <span className='font-normal text-slate-500'>(optional)</span>
-            </label>
-            <textarea
-              id={`access-note-${collection}-${itemId}`}
-              value={note}
-              onChange={(e) => setNote(e.target.value.slice(0, NOTE_MAX))}
-              rows={2}
-              maxLength={NOTE_MAX}
-              placeholder={`e.g. I approve this ${noun} for my team`}
-              className='mt-1.5 w-full resize-y rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-800 placeholder:text-slate-400 focus:border-nvr-cyan focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30 dark:border-border dark:bg-background dark:text-slate-100'
-              data-request-access-note
-            />
-            <p className='mt-1 text-[11.5px] text-slate-500 dark:text-slate-400'>
-              Every administrator gets your request with this {noun} and your note.
-            </p>
+              {r.message}
+            </div>
+          ))}
+        </div>
+      )}
+      {words.kind === 'not_found' ? (
+        onBack && (
+          <div className='mt-5'>
+            <BackButton onBack={onBack} />
           </div>
-        )}
+        )
+      ) : (
+        <RequestAccess
+          collection={collection}
+          itemId={itemId}
+          noun={noun}
+          placeholder={`e.g. I approve this ${noun} for my team`}
+          onBack={onBack}
+        />
+      )}
+    </DeniedCard>
+  )
+}
 
-        {!notFound && !isLoading && (
-          <button
-            type='button'
-            disabled={requested || requestAccess.isPending}
-            onClick={() => requestAccess.mutate()}
-            className='mt-3 inline-flex items-center gap-1.5 rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-50'
-            data-request-access
-          >
-            {requested ? (
-              <>
-                <Check className='h-3.5 w-3.5' /> Request sent
-              </>
-            ) : (
-              <>
-                <Send className='h-3.5 w-3.5' />
-                {requestAccess.isPending ? 'Sending…' : 'Request access'}
-              </>
-            )}
-          </button>
-        )}
-
-        {onBack && (
-          <button
-            type='button'
-            onClick={onBack}
-            className='mt-5 inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-white/[0.03]'
-          >
-            <ArrowLeft className='h-3.5 w-3.5' />
-            Go back
-          </button>
-        )}
-      </div>
-    </div>
+/**
+ * A list the person may not read (rt4 review): the same lock card as a refused record, in place
+ * of the grid, filters and totals — "You can't see Workflows" + Request access — instead of a
+ * red "You do not have access to do this" bar above an empty table.
+ */
+export function ListAccessDenied({
+  collection,
+  label,
+  onBack
+}: {
+  collection: string
+  /** The list's plural label ("Workflows"). */
+  label: string
+  onBack?: () => void
+}) {
+  return (
+    <DeniedCard title={`You can't see ${label}`} subtitle='Your access does not include this list.'>
+      <RequestAccess
+        collection={collection}
+        noun='list'
+        placeholder={`e.g. I review ${label.toLowerCase()} for my team`}
+        onBack={onBack}
+      />
+    </DeniedCard>
   )
 }
