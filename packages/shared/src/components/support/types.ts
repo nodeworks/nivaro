@@ -45,6 +45,9 @@ export interface SupportTicket {
   created_at: string
   updated_at: string | null
   completed_at: string | null
+  /** When the requester last heard back (newest reply from anyone else), else when they asked.
+   *  Served by the list only (older APIs leave it out). */
+  waiting_since?: string | null
 }
 
 export interface SupportTicketDetail extends SupportTicket {
@@ -87,6 +90,33 @@ export interface SupportSummary {
   desk: boolean
   unassigned: number
   assigned_to_me: number
+}
+
+/** GET /support/workload — who has what on the desk the reader works. */
+export interface SupportWorkload {
+  assignees: Array<{
+    id: string
+    name: string
+    open: number
+    urgent: number
+    oldest_waiting: string | null
+    /** false = suspended / no longer active, still holding requests. */
+    active: boolean
+  }>
+  unassigned: { open: number; urgent: number; oldest_waiting: string | null }
+  /** Everyone who works this desk (the assignee filter's and Assign to…'s choices). */
+  workers: Array<{ id: string; name: string }>
+}
+
+/** POST /support/tickets/bulk — what happened to each request. */
+export interface SupportBulkResult {
+  results: Array<
+    | { id: number; outcome: 'updated' | 'unchanged' }
+    | { id: number; outcome: 'refused'; code: string; reason: string }
+  >
+  updated: number
+  unchanged: number
+  refused: number
 }
 
 export const STATUS_TONE: Record<TicketStatus, string> = {
