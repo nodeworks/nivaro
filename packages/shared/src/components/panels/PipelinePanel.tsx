@@ -3885,7 +3885,9 @@ function PipelinePanelInner({
           {/* Wraps instead of squeezing. On a phone the step, its time and the chips take their
               own line under "Progress" (indented to its text): squeezed between the title and
               the chevron, the step pill folded into a tall blob. */}
-          <div className='flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 max-sm:order-last max-sm:basis-full max-sm:pl-6'>
+          {/* No base flex-1 beside the phone width: a host stylesheet loading after full.css
+              re-emits .flex-1 and would beat a max-sm basis. */}
+          <div className='flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 sm:flex-1 max-sm:order-last max-sm:w-full max-sm:pl-6'>
             {addendumView && (
               <span className='flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400'>
                 Addendum workflow

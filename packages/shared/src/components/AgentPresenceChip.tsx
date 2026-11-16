@@ -43,11 +43,11 @@ export function AgentPresenceChip({
           />
         )}
       </span>
-      <span className='hidden truncate sm:inline'>
+      <span className='truncate max-sm:hidden'>
         <span className='font-medium text-slate-800 dark:text-foreground'>{first.name}</span>
         {agentSentence(first, me).slice(first.name.length)}
       </span>
-      {/* Phone: shorter, but still whose agent it is ("Rob Lee’s Desk Claude is updating"). */}
+      {/* Phone: shorter, but still whose agent it is ("Rob’s Desk Claude is updating"). */}
       <span className='truncate sm:hidden'>
         {owner ? `${owner} ` : ''}
         <span className='font-medium text-slate-800 dark:text-foreground'>{first.name}</span>
