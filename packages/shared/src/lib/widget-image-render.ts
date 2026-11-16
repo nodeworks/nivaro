@@ -137,9 +137,18 @@ export async function renderWidgetImage(
       const head = buildHeader(doc, label)
       cloned.insertBefore(head, cloned.firstChild)
       // The header takes room the figure had: grow the card by the same.
+      const used = Math.ceil(head.getBoundingClientRect().height + 10)
       if (!widened) {
-        const used = head.getBoundingClientRect().height + 10
-        s.height = `${height + Math.ceil(used)}px`
+        s.height = `${height + used}px`
+      } else {
+        // Reflowed at the picture width the card would end right under the figure: keep the
+        // room it has on screen (a KPI's number stays centred under the rule) and at least
+        // the card's top padding below the content, so nothing sits on the frame's edge.
+        s.minHeight = `${height + used}px`
+        const view = doc.defaultView ?? window
+        const top = Number.parseFloat(view.getComputedStyle(cloned).paddingTop) || 0
+        const bottom = Number.parseFloat(view.getComputedStyle(cloned).paddingBottom) || 0
+        s.paddingBottom = `${Math.max(24, top, bottom)}px`
       }
     }
   })
