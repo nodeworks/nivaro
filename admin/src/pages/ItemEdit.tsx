@@ -1186,7 +1186,7 @@ export function ItemEditPage() {
                             +{presence.viewers.length - 4}
                           </span>
                         )}
-                        <span className='ml-2 hidden text-[11px] text-slate-400 lg:inline'>
+                        <span className='ml-2 hidden text-[11px] text-slate-500 lg:inline dark:text-slate-400'>
                           viewing now
                         </span>
                       </div>
