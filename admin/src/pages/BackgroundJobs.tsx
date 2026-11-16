@@ -424,7 +424,7 @@ export default function BackgroundJobs() {
                 )}
               </p>
             </td>
-            <td className='py-1.5 pr-3 font-mono text-[11px] text-slate-400'>
+            <td className='py-1.5 pr-3 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
               {c.after && editing !== c.id && (
                 <span
                   className='mb-1 block rounded bg-violet-500/10 px-1.5 py-px font-sans text-[10px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300'
@@ -587,7 +587,7 @@ export default function BackgroundJobs() {
                   </span>
                 </span>
               ) : (
-                <span className='text-slate-300'>never recorded</span>
+                <span className='text-slate-500 dark:text-muted-foreground'>never recorded</span>
               )}
             </td>
             <td className='py-1.5 pr-3 text-slate-500 dark:text-muted-foreground'>
@@ -603,16 +603,16 @@ export default function BackgroundJobs() {
               {c.errors_7d > 0 ? (
                 <span className='font-medium text-red-600 dark:text-red-400'>{c.errors_7d}</span>
               ) : (
-                <span className='text-slate-300'>0</span>
+                <span className='text-slate-500 dark:text-muted-foreground'>0</span>
               )}
             </td>
             <td className='py-1.5'>
-              <div className='flex items-center justify-end gap-1.5'>
+              <div className='flex items-center justify-end gap-1.5 whitespace-nowrap'>
                 <button
                   type='button'
                   disabled={running === c.id}
                   onClick={() => runNow(c.id)}
-                  className='inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 px-2 text-[11px] leading-none text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:opacity-50 dark:border-border dark:text-muted-foreground'
+                  className='inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-slate-200 px-2 text-[11px] leading-none text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:opacity-50 dark:border-border dark:text-muted-foreground'
                 >
                   <Play className='h-3 w-3' strokeWidth={2} />
                   {running === c.id ? 'Running…' : 'Run now'}
@@ -620,7 +620,7 @@ export default function BackgroundJobs() {
                 <button
                   type='button'
                   onClick={() => pauseResume(c.id, !c.paused)}
-                  className='inline-flex h-6 items-center rounded-md border border-slate-200 px-2 text-[11px] leading-none text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-border dark:text-muted-foreground'
+                  className='inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded-md border border-slate-200 px-2 text-[11px] leading-none text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-border dark:text-muted-foreground'
                   title={
                     c.paused
                       ? 'Enable — ticks run again immediately'
@@ -635,7 +635,7 @@ export default function BackgroundJobs() {
                     disabled={dryRunning === c.id}
                     onClick={() => dryRun(c.id)}
                     data-cron-dry-run={c.id}
-                    className='inline-flex h-6 items-center rounded-md border border-slate-200 px-2 text-[11px] leading-none text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:opacity-50 dark:border-border dark:text-muted-foreground'
+                    className='inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded-md border border-slate-200 px-2 text-[11px] leading-none text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:opacity-50 dark:border-border dark:text-muted-foreground'
                     title='Dry run — the job reports what a tick would do, writing nothing'
                   >
                     {dryRunning === c.id ? 'Dry run…' : 'Dry run'}
@@ -662,7 +662,7 @@ export default function BackgroundJobs() {
                   <button
                     type='button'
                     onClick={() => revertSchedule(c.id)}
-                    className='inline-flex h-6 items-center rounded-md border border-slate-200 px-2 text-[11px] leading-none text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-border dark:text-muted-foreground'
+                    className='inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded-md border border-slate-200 px-2 text-[11px] leading-none text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-border dark:text-muted-foreground'
                     title={`Revert to the registered schedule (${c.default_expression ?? '?'})`}
                   >
                     Revert
