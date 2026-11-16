@@ -2411,6 +2411,17 @@ function OwnersSection({
                 }}
                 className='opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100'
               />
+              {/* Beside the person, not after the badges: the badges end on the same right
+                  edge as the owner-group chips, wrapped or not (idea-21 r-1116e). */}
+              <button
+                type='button'
+                aria-label={`Remove ${[o.first_name, o.last_name].filter(Boolean).join(' ') || o.email} as an owner`}
+                disabled={removeOwner.isPending}
+                onClick={() => removeOwner.mutate(o)}
+                className='shrink-0 rounded p-0.5 text-slate-300 opacity-0 transition-all hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100'
+              >
+                <X className='h-3 w-3' />
+              </button>
               <span className='ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1'>
                 <span className='shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'>
                   manual
@@ -2418,15 +2429,6 @@ function OwnersSection({
                 <span className='min-w-0 max-w-full truncate rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-slate-800 dark:text-slate-400'>
                   {o.state ? stateLabelFor(o.state) : 'all states'}
                 </span>
-                <button
-                  type='button'
-                  aria-label={`Remove ${[o.first_name, o.last_name].filter(Boolean).join(' ') || o.email} as an owner`}
-                  disabled={removeOwner.isPending}
-                  onClick={() => removeOwner.mutate(o)}
-                  className='shrink-0 rounded p-0.5 text-slate-300 opacity-0 transition-all hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100'
-                >
-                  <X className='h-3 w-3' />
-                </button>
               </span>
             </div>
           ))}
