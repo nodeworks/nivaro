@@ -1688,23 +1688,20 @@ function SessionRow({
           )}
         </p>
         {/* Wraps instead of truncating: "Ends in …" is the part an admin reads for. Each part
-            keeps its "·" so a separator never starts a line. */}
-        <p
-          data-session-meta
-          className='mt-0.5 text-[11.5px] leading-snug tabular-nums text-slate-500 dark:text-slate-400'
-        >
-          {meta.map((m, i) => (
-            <Fragment key={m}>
-              {i > 0 && ' '}
-              {/* The "·" is glued to its part with a no-break space; a part longer than a
-                  phone's column may still wrap inside itself rather than run under the button. */}
-              <span className='sm:whitespace-nowrap'>
-                {i > 0 && '·\u00a0'}
+            carries its "·" in a left gutter the box clips, so a part that starts a line shows
+            no separator — a line never starts (or ends) with "·". */}
+        <div data-session-meta className='mt-0.5 overflow-hidden'>
+          <p className='-ml-3 flex flex-wrap text-[11.5px] leading-snug tabular-nums text-slate-500 dark:text-slate-400'>
+            {meta.map((m) => (
+              <span
+                key={m}
+                className="relative whitespace-nowrap pl-3 before:absolute before:left-[0.3rem] before:content-['·']"
+              >
                 {m}
               </span>
-            </Fragment>
-          ))}
-        </p>
+            ))}
+          </p>
+        </div>
       </div>
       <span data-session-sign-out className='contents'>
         <ConfirmButton
