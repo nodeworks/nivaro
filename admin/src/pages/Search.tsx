@@ -689,7 +689,8 @@ export function SearchPage() {
 
           {live && !data && isFetching && <ResultsSkeleton />}
 
-          {live && data && cut.length > 0 && (
+          {/* A collection tab pages through its own uncut read: the note is for the answer. */}
+          {live && data && cut.length > 0 && !collectionTab && (
             <SearchCutNote
               parts={cut.map(cutLabel(scopeLabel))}
               empty={empty}
