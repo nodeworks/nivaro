@@ -424,7 +424,9 @@ export function OverflowRail({
               data-tip={hiddenActive ? `${moreLabel} — some are on` : moreLabel}
               data-rail-more={hidden.length}
               data-rail-more-active={hiddenActive ? '' : undefined}
-              className='relative flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'
+              // Keyboard focus only, in the app's own ring: no browser outline left on ⋯ after its
+              // menu closes, which beside an amber "Paused" read as a second state (rt2 review).
+              className='relative flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-500 outline-none hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'
             >
               <MoreHorizontal className='h-4 w-4' />
               {hiddenActive && (

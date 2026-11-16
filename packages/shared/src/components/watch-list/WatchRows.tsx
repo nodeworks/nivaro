@@ -270,7 +270,7 @@ export function WatchRow({
             <button
               type='button'
               onClick={() => onUnpin(row)}
-              className='shrink-0 rounded-md px-2 py-1 text-[11.5px] font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-slate-300 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+              className='shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[11.5px] font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:border-border dark:text-slate-200 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
             >
               Remove
             </button>

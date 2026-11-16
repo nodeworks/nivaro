@@ -101,10 +101,20 @@ function useDeadlineTick(facts: SendStatusFact[] | undefined): number {
   return now
 }
 
-/** The hover / screen-reader sentence: the line, then why it will not be retried. */
+/** The hover / screen-reader sentence: the line, then why it will not be retried. A part
+ *  that already ends a sentence is followed by a plain space, never " · " after a full stop. */
 function fullSentence(w: SendStatusWords, now: number): string {
   const left = retryCountdown(w.retry_at, now)
-  return [w.text + (left ? ` · ${left}` : ''), w.detail].filter(Boolean).join(' · ')
+  const parts = [w.text + (left ? ` · ${left}` : ''), w.detail].filter(Boolean) as string[]
+  return parts.reduce(
+    (out, part) => (out ? `${out}${/[.!?]$/.test(out) ? ' ' : ' · '}${part}` : part),
+    ''
+  )
+}
+
+/** "(attempt 2 of 5)" never breaks across lines (rt6 review): its spaces become no-break. */
+function keepTogether(text: string): string {
+  return text.replace(/\(attempt \d+ of \d+\)/g, (m) => m.replace(/ /g, '\u00a0'))
 }
 
 /** The arm for useLiveFade: the time of a background re-read, never the first load. */
@@ -194,7 +204,7 @@ export function SendStatusLines({
             <Icon aria-hidden className={cn('mt-[2px] h-3.5 w-3.5 shrink-0', cls)} />
             <div className='min-w-0 flex-1'>
               <p className='break-words'>
-                {w.text}
+                {keepTogether(w.text)}
                 {left && (
                   // rt6 #18 — the countdown to the automatic retry, quiet beside the sentence.
                   <span
