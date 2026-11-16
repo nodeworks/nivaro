@@ -11205,6 +11205,13 @@ export function CollectionBrowserView({
                             : `${ROW_SURFACE} ${ROW_SURFACE_HOVER}`
                       const stickyBg = PINNED_CELL_SURFACE
                       const movingChip = steadyGroups.movingTo(String(id))
+                      // Where the chip sits: over the tail of the row's longest text (a name,
+                      // already truncated), never over a short identifier it would hide.
+                      const movingChipKey = movingChip
+                        ? (orderedCols
+                            .map((c) => ({ k: c.key, n: String(row[c.key] ?? '').length }))
+                            .sort((a, b) => b.n - a.n)[0]?.k ?? orderedCols[0]?.key)
+                        : null
                       return (
                         <tr
                           key={String(id)}
@@ -11552,11 +11559,11 @@ export function CollectionBrowserView({
                                     cellText: (e.currentTarget as HTMLElement).innerText.trim()
                                   })
                                 }}
-                                className={`whitespace-nowrap px-3 py-1.5 ${isNumericCol(key) ? 'text-right' : ''} ${pinCls(key, 'z-[1]', stickyBg)}${movingChip && key === orderedCols[0]?.key ? ' relative' : ''}`}
+                                className={`whitespace-nowrap px-3 py-1.5 ${isNumericCol(key) ? 'text-right' : ''} ${pinCls(key, 'z-[1]', stickyBg)}${movingChip && key === movingChipKey ? ' relative' : ''}`}
                               >
                                 {/* rt9 review: a held row in a grouped list says where it goes, in
-                                    words, beside its first column (the counts above already moved). */}
-                                {movingChip && key === orderedCols[0]?.key && (
+                                    words (the counts above already moved). */}
+                                {movingChip && key === movingChipKey && (
                                   <MovingRowChip
                                     to={movingChip}
                                     className='absolute right-2 top-1/2 z-[2] -translate-y-1/2 shadow-sm'
