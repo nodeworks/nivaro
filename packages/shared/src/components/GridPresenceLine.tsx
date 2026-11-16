@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { GridEditor } from '../lib/grid-presence'
 import { cn } from '../lib/utils'
+import { UserChip } from './item-edit/UserChip'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 
 /**
@@ -115,15 +116,24 @@ export function GridPresenceLine({
 }
 
 function Person({ editor, children }: { editor: GridEditor; children: ReactNode }) {
+  // The whole entry opens the person's user card (message, profile) — the same card as anywhere
+  // a person is named. Reads as text until hovered.
   return (
-    <span className='inline-flex min-w-0 items-baseline gap-1.5' data-grid-presence-person>
-      <span
-        aria-hidden
-        className='h-2 w-2 shrink-0 translate-y-[-1px] self-center rounded-full'
-        style={{ background: editor.color }}
-      />
-      {/* Wraps on a narrow screen instead of cutting off where the person is. */}
-      <span className='min-w-0 break-words'>{children}</span>
-    </span>
+    <UserChip userId={editor.userId}>
+      <button
+        type='button'
+        data-grid-presence-person
+        aria-label={`Show ${editor.name}`}
+        className='inline-flex min-w-0 cursor-pointer items-baseline gap-1.5 rounded text-left decoration-slate-300 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:decoration-slate-600'
+      >
+        <span
+          aria-hidden
+          className='h-2 w-2 shrink-0 translate-y-[-1px] self-center rounded-full'
+          style={{ background: editor.color }}
+        />
+        {/* Wraps on a narrow screen instead of cutting off where the person is. */}
+        <span className='min-w-0 break-words'>{children}</span>
+      </button>
+    </UserChip>
   )
 }

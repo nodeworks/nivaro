@@ -187,6 +187,9 @@ const fmtNumber = (v: unknown) => {
 /** A fact's label on the read board: sentence case, and dark enough to read (the
  *  old 10px uppercase slate-400 fell under 3:1 on white). */
 const FACT_LABEL = 'text-[11.5px] font-medium text-slate-500 dark:text-slate-400'
+/** A field's label line: one line, always. The "changed by" tag beside the label shrinks
+ *  (and cuts with …) before the label does, so it never wraps and pushes the value down. */
+const FACT_LABEL_ROW = `${FACT_LABEL} flex min-w-0 items-center whitespace-nowrap`
 
 const Empty = () => <span className='text-slate-300 dark:text-slate-600'>—</span>
 
@@ -1177,10 +1180,13 @@ function RecordReadViewBody({
             data-field-touch-caller={t.caller.key}
             data-tip={`Changed ${formatRelative(t.at)} by ${t.caller.name} (through the API) — click for the request`}
             aria-label={`Changed ${formatRelative(t.at)} by ${t.caller.name} through the API`}
-            className='ml-1 inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 align-middle text-[9.5px] font-medium leading-4 text-amber-800 hover:bg-amber-100 dark:bg-amber-400/10 dark:text-amber-300 dark:hover:bg-amber-400/20'
+            className='ml-1 inline-flex min-w-0 items-center gap-1 overflow-hidden rounded-full bg-amber-50 px-1.5 align-middle text-[9.5px] font-medium leading-4 text-amber-800 hover:bg-amber-100 dark:bg-amber-400/10 dark:text-amber-300 dark:hover:bg-amber-400/20'
           >
-            <span className='h-1.5 w-1.5 rounded-full bg-amber-400' aria-hidden />
-            {t.caller.name} · <RelativeTime value={t.at} />
+            <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400' aria-hidden />
+            {/* Cut with … on a narrow column — the tip and the popover carry the whole line. */}
+            <span className='min-w-0 truncate'>
+              {t.caller.name} · <RelativeTime value={t.at} />
+            </span>
           </button>
         </InboundRequestPopover>
       )
@@ -1191,7 +1197,7 @@ function RecordReadViewBody({
         data-tip={`Changed ${formatRelative(t.at)} by ${t.who}${machine ? ` · ${t.via}` : ''}`}
         role='img'
         aria-label={`Changed ${formatRelative(t.at)} by ${t.who}`}
-        className={`ml-1 inline-block h-1.5 w-1.5 rounded-full align-middle ${machine ? 'bg-amber-400' : 'bg-slate-300 dark:bg-slate-600'}`}
+        className={`ml-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full align-middle ${machine ? 'bg-amber-400' : 'bg-slate-300 dark:bg-slate-600'}`}
       />
     )
   }
@@ -1844,8 +1850,8 @@ function RecordReadViewBody({
           {shell(
             fieldTarget(a),
             <>
-              <dt className={FACT_LABEL}>
-                {labelFor(a)}
+              <dt className={FACT_LABEL_ROW} data-fact-label>
+                <span className='max-w-full shrink-0 truncate'>{labelFor(a)}</span>
                 <IntegrityMark field={a.field} />
                 <PersonalDefaultMark field={a.field} />
                 {touchMark(a.field)}
@@ -2125,8 +2131,8 @@ function RecordReadViewBody({
                   {shell(
                     { kind: 'header', field: a.field },
                     <>
-                      <dt className={FACT_LABEL}>
-                        {labelFor(a)}
+                      <dt className={FACT_LABEL_ROW}>
+                        <span className='max-w-full shrink-0 truncate'>{labelFor(a)}</span>
                         <IntegrityMark field={a.field} />
                         <PersonalDefaultMark field={a.field} />
                         {touchMark(a.field)}
