@@ -830,7 +830,12 @@ export function NotificationCenterView({
           <span
             className={cn(
               'mt-2 h-2 w-2 shrink-0 rounded-full',
-              b.unread > 0 ? tone.dot : 'bg-transparent'
+              // The same dot an unread row inside the group shows.
+              b.unread > 0
+                ? b.lane === 'critical'
+                  ? 'bg-red-500'
+                  : 'bg-nvr-cyan'
+                : 'bg-transparent'
             )}
           />
           <div className='min-w-0 flex-1'>
@@ -855,7 +860,15 @@ export function NotificationCenterView({
                       : 'font-normal text-slate-600 dark:text-slate-400'
                   )}
                 >
-                  {bundleHeadline(b)}
+                  {/* The record id never breaks across lines. */}
+                  {b.label ? (
+                    <>
+                      {bundleHeadline(b).slice(0, -b.label.length)}
+                      <span className='whitespace-nowrap'>{b.label}</span>
+                    </>
+                  ) : (
+                    bundleHeadline(b)
+                  )}
                 </span>
                 <span className='shrink-0 text-[10.5px] text-slate-400'>
                   {b.newest ? formatRelative(b.newest) : ''}
@@ -898,8 +911,10 @@ export function NotificationCenterView({
                   Open {b.label}
                 </button>
               )}
-              {b.unread > 0 && b.unread < b.count && (
-                <span className='text-[10.5px] text-slate-400'>{b.unread} unread</span>
+              {b.unread > 0 && (
+                <span className='text-[10.5px] text-slate-500 dark:text-slate-400'>
+                  {b.unread} unread
+                </span>
               )}
             </div>
           </div>
@@ -908,10 +923,13 @@ export function NotificationCenterView({
               type='button'
               data-notification-bundle-read={key}
               onClick={() => markBundleMut.mutate(unreadIds)}
-              className='inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-muted'
+              aria-label='Mark read'
+              data-tip='Mark read'
+              // Icon-only on a phone so the headline keeps the width.
+              className='inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 p-1.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50 sm:px-2 sm:py-1 dark:border-border dark:text-slate-300 dark:hover:bg-muted'
             >
-              <Check className='h-3 w-3' />
-              Mark read
+              <Check className='h-3.5 w-3.5 sm:h-3 sm:w-3' />
+              <span className='max-sm:hidden'>Mark read</span>
             </button>
           )}
         </div>
