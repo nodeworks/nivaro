@@ -382,7 +382,7 @@ export function WatchDock() {
           side='right'
           // The sheet's own × sits in the header row, the same 28 px box and centre line as the
           // header's other icons (rt6 review: it sat higher).
-          className='flex w-full flex-col gap-0 p-0 sm:max-w-[400px] [&>button:last-child]:right-2 [&>button:last-child]:top-2 [&>button:last-child]:flex [&>button:last-child]:h-7 [&>button:last-child]:w-7 [&>button:last-child]:items-center [&>button:last-child]:justify-center [&>button:last-child]:rounded-md [&>button:last-child]:text-slate-500 [&>button:last-child]:bg-transparent [&>button:last-child]:opacity-100 [&>button:last-child]:hover:bg-slate-100 dark:[&>button:last-child]:text-slate-400 dark:[&>button:last-child]:hover:bg-white/[0.06]'
+          className='flex w-full flex-col gap-0 p-0 sm:max-w-[400px] [&>button:last-of-type]:right-2 [&>button:last-of-type]:top-2 [&>button:last-of-type]:flex [&>button:last-of-type]:h-7 [&>button:last-of-type]:w-7 [&>button:last-of-type]:items-center [&>button:last-of-type]:justify-center [&>button:last-of-type]:rounded-md [&>button:last-of-type]:text-slate-500 [&>button:last-of-type]:bg-transparent [&>button:last-of-type]:opacity-100 [&>button:last-of-type]:hover:bg-slate-100 dark:[&>button:last-of-type]:text-slate-400 dark:[&>button:last-of-type]:hover:bg-white/[0.06]'
           data-watch-dock='sheet'
           // Opening lands on the heading, not the first control with a ring around it.
           onOpenAutoFocus={(e) => {
@@ -715,12 +715,17 @@ function DockPanel({
   }, [tabSig])
   // The chosen tab is always fully in view (a shared list opened from the settings menu, the
   // New list pseudo-tab while making one).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run on the tab, not the measurer
   useEffect(() => {
     const el = stripRef.current?.querySelector(
       editing === 'new' ? '[data-tab-new]' : `[data-tab="${CSS.escape(tab)}"]`
     )
     if (el && typeof (el as HTMLElement).scrollIntoView === 'function')
       (el as HTMLElement).scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    // The pseudo-tab is always the last one: show the strip's end, clear of the arrow.
+    const strip = stripRef.current
+    if (editing === 'new' && strip) strip.scrollLeft = strip.scrollWidth
+    measureStrip()
   }, [tab, editing])
   const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
@@ -849,7 +854,7 @@ function DockPanel({
             tabIndex={-1}
             aria-hidden
             onClick={() => scrollStrip(-1)}
-            className='absolute inset-y-0 left-0 flex w-8 items-start justify-start bg-gradient-to-r from-card via-card/90 to-transparent pl-1 pt-0.5 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
+            className='absolute inset-y-0 left-0 flex w-8 items-start justify-start bg-[linear-gradient(to_right,hsl(var(--card))_70%,transparent)] pl-1 pt-0.5 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
           >
             <ChevronLeft className='h-4 w-4' />
           </button>
@@ -861,7 +866,7 @@ function DockPanel({
             aria-hidden
             onClick={() => scrollStrip(1)}
             data-tab-more
-            className='absolute inset-y-0 right-0 flex w-9 items-start justify-end bg-gradient-to-l from-card via-card/90 to-transparent pr-1 pt-0.5 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
+            className='absolute inset-y-0 right-0 flex w-9 items-start justify-end bg-[linear-gradient(to_left,hsl(var(--card))_70%,transparent)] pr-1 pt-0.5 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
           >
             <ChevronRight className='h-4 w-4' />
           </button>
@@ -1023,7 +1028,9 @@ function WatchingTab({
           prefs.alerts.some((a) => a.key === r.key) ? (
             <span className='flex items-center gap-1.5'>
               <AutoPinMark row={r} actions={actions} />
-              <AlertMark row={r} actions={actions} />
+              <span className='flex group-focus-within/row:hidden group-hover/row:hidden group-has-[[data-state=open]]/row:hidden'>
+                <AlertMark row={r} actions={actions} />
+              </span>
             </span>
           ) : null
         }

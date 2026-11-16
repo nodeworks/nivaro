@@ -344,15 +344,9 @@ export function WatchRow({
                   {title}
                 </span>
                 {mark && (
-                  <span
-                    className={`flex shrink-0 self-center ${
-                      hasActions
-                        ? 'group-focus-within/row:hidden group-hover/row:hidden group-has-[[data-state=open]]/row:hidden'
-                        : ''
-                    }`}
-                  >
-                    {mark}
-                  </span>
+                  // Stays on hover ("For you" must survive it, rt6 round 2); a host part that
+                  // should give way to the hover bell hides itself.
+                  <span className='flex shrink-0 self-center'>{mark}</span>
                 )}
                 {figure && (
                   <span

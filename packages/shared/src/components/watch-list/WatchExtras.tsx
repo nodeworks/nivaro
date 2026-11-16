@@ -496,7 +496,7 @@ function AlertForm({
           type='button'
           disabled={!ready || busy}
           onClick={() => void save()}
-          className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:hover:opacity-100'
+          className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:font-medium disabled:text-slate-400 disabled:hover:opacity-100 dark:disabled:bg-white/[0.06] dark:disabled:text-slate-500'
         >
           {busy ? 'Adding…' : 'Add alert'}
         </button>
@@ -901,7 +901,7 @@ export function TeamEditor({
         <button
           type='submit'
           disabled={!name.trim() || busy}
-          className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:hover:opacity-100'
+          className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:font-medium disabled:text-slate-400 disabled:hover:opacity-100 dark:disabled:bg-white/[0.06] dark:disabled:text-slate-500'
         >
           {busy ? 'Saving…' : team ? 'Save' : 'Make list'}
         </button>

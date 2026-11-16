@@ -56,6 +56,14 @@ function pad(n: number): string {
   return String(n).padStart(2, '0')
 }
 
+/** A date field as people read it: its label, else its key in plain words ("Project start date"). */
+function fieldName(f: { field: string; label?: string | null }): string {
+  const l = f.label?.trim()
+  if (l && l !== f.field) return l
+  const words = f.field.replace(/_/g, ' ').trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
 interface Clash {
   id: string
   label: string
@@ -485,7 +493,7 @@ export function CollectionCalendar({
                     : 'text-slate-400 hover:text-slate-700'
                 )}
               >
-                {f.label}
+                {fieldName(f)}
               </button>
             ))}
           </div>
@@ -680,9 +688,10 @@ export function CollectionCalendar({
       {isLoading && <p className='mt-2 text-[11px] text-slate-400'>Loading…</p>}
       {canDrag && !isLoading && (
         <p className='mt-2 text-[11px] text-slate-400'>
-          Drag an entry to another day to change its{' '}
-          {dateFields.find((f) => f.field === field)?.label ?? field}, or focus it, press Space,
-          move it with the arrow keys and press Enter.
+          Drag an entry to another day to change its {(() => {
+            const f = dateFields.find((d) => d.field === field)
+            return (f ? fieldName(f) : field).toLowerCase()
+          })()}, or focus it, press Space, move it with the arrow keys and press Enter.
         </p>
       )}
     </div>

@@ -48,6 +48,14 @@ const WINDOW_BACK = 30 * DAY
 const WINDOW_FWD = 120 * DAY
 const FIXED_DATE_FIELDS = new Set(['date_created', 'date_updated', 'created_at', 'updated_at'])
 
+/** A date field as people read it: its label, else its key in plain words ("Project start date"). */
+function fieldName(f: { field: string; label?: string | null }): string {
+  const l = f.label?.trim()
+  if (l && l !== f.field) return l
+  const words = f.field.replace(/_/g, ' ').trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
 interface Clash {
   id: string
   label: string
@@ -415,6 +423,17 @@ export function CollectionGantt({
     dayTicks.push({ pct: pct(wk.getTime()), label: String(wk.getDate()) })
     wk.setDate(wk.getDate() + weekStep)
   }
+  // Faint per-day marks between the week labels while a day is wide enough to read (≤ 90 days).
+  const dayMarks: number[] = []
+  if (span <= 90 * DAY) {
+    const d = new Date(windowStart)
+    d.setHours(0, 0, 0, 0)
+    d.setDate(d.getDate() + 1)
+    while (d.getTime() < windowEnd) {
+      if (d.getDay() !== 1) dayMarks.push(pct(d.getTime()))
+      d.setDate(d.getDate() + 1)
+    }
+  }
   // A bar ends at its end day's start, so the end day is `b` itself.
   const spanText = (a: number, b: number) =>
     dragSpanLabel(dragDayKey(new Date(a)), dragDayKey(new Date(Math.max(a, b))))
@@ -454,7 +473,7 @@ export function CollectionGantt({
                 : 'text-slate-400 hover:text-slate-700'
             )}
           >
-            {f.label}
+            {fieldName(f)}
           </button>
         ))}
     </div>
@@ -523,6 +542,14 @@ export function CollectionGantt({
                 {t.label}
               </span>
             ))}
+            {dayMarks.map((p) => (
+              <span
+                key={`m${p}`}
+                aria-hidden
+                className='absolute bottom-0 h-1 border-l border-slate-200 dark:border-slate-700'
+                style={{ left: `${p}%` }}
+              />
+            ))}
             {dayTicks.map((t) => (
               <span
                 key={`d${t.pct}`}
@@ -541,7 +568,10 @@ export function CollectionGantt({
           <p className='p-6 text-center text-[12px] text-slate-400'>Loading…</p>
         ) : rows.length === 0 ? (
           <p className='p-6 text-center text-[12px] text-slate-400'>
-            No records with {startField} in the visible window.
+            No records with a {(() => {
+              const f = dateFields.find((d) => d.field === startField)
+              return (f ? fieldName(f) : startField).toLowerCase()
+            })()} in the visible window.
           </p>
         ) : (
           <div className={cn('relative', drag && 'cursor-grabbing select-none')}>

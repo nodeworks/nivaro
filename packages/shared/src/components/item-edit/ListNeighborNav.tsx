@@ -76,7 +76,7 @@ export function ListNeighborNav({
         : `Last in ${listName}`
 
   const btn =
-    'flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 aria-disabled:cursor-default aria-disabled:text-slate-300 aria-disabled:hover:bg-transparent aria-disabled:hover:text-slate-300 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100 dark:aria-disabled:text-slate-600 dark:aria-disabled:hover:text-slate-600'
+    'flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 aria-disabled:cursor-default aria-disabled:text-slate-300 aria-disabled:hover:bg-transparent aria-disabled:hover:text-slate-300 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100 dark:aria-disabled:text-slate-600 dark:aria-disabled:hover:bg-transparent dark:aria-disabled:hover:text-slate-600'
   return (
     <nav
       aria-label={`Records in ${listName}`}
