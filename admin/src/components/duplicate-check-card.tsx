@@ -309,6 +309,25 @@ export function DuplicateCheckCard({ tableName }: { tableName: string }) {
         ? `On — ${plan.groups.filter((g) => g.runs).length === 1 ? 'one check' : `${plan.groups.filter((g) => g.runs).length} checks`} while a record is created`
         : plan.reason || 'Nothing to compare'
 
+  // A big table compares only on indexed fields: name the ones that are not, and how to fix it.
+  const unindexed = plan?.big
+    ? [
+        ...new Set(
+          plan.groups
+            .flatMap((g) => g.rules)
+            .filter((r) => !r.indexed)
+            .map((r) => name(r.field))
+        )
+      ]
+    : []
+  const indexNote = !plan?.big
+    ? ''
+    : unindexed.length > 0
+      ? ` — add an index on ${unindexed.slice(0, 2).join(' and ')}${unindexed.length > 2 ? ` and ${unindexed.length - 2} more` : ''} to compare on ${unindexed.length === 1 ? 'it' : 'them'} (Fields → the field → Index)`
+      : on
+        ? ''
+        : ' — a table this big compares only fields that have an index'
+
   return (
     <section
       aria-labelledby={`dup-title-${id}`}
@@ -346,7 +365,7 @@ export function DuplicateCheckCard({ tableName }: { tableName: string }) {
                 <span className='text-slate-500 dark:text-muted-foreground'>
                   {' · '}
                   {formatNumber(plan.rows)} records
-                  {plan.big ? ' — rules need an index here' : ''}
+                  {indexNote}
                 </span>
               )}
             </p>
