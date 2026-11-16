@@ -12,7 +12,7 @@ import {
   Users,
   X
 } from 'lucide-react'
-import { type ReactNode, useId, useMemo, useState } from 'react'
+import { type ReactNode, useId, useMemo, useRef, useState } from 'react'
 import { useOptionalNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { describeError } from '../../lib/error-message'
@@ -65,7 +65,7 @@ function Toggle({
       <div className='min-w-0 flex-1'>
         <label
           htmlFor={id}
-          className={`block text-[12.5px] font-medium ${
+          className={`block text-balance text-[12.5px] font-medium ${
             disabled ? 'text-slate-400 dark:text-slate-500' : 'text-slate-800 dark:text-slate-100'
           }`}
         >
@@ -496,7 +496,7 @@ function AlertForm({
           type='button'
           disabled={!ready || busy}
           onClick={() => void save()}
-          className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40'
+          className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:hover:opacity-100'
         >
           {busy ? 'Adding…' : 'Add alert'}
         </button>
@@ -505,10 +505,42 @@ function AlertForm({
   )
 }
 
+/**
+ * Where a popover opened from inside the dock goes: to the LEFT of the whole dock (rt6 review:
+ * opened beside the bell it covered the dock's own header and tabs). A dock with no room on its
+ * left (the phone sheet) opens it below the trigger instead.
+ */
+function besideDock(el: HTMLElement | null): { side: 'left' | 'bottom'; sideOffset: number } {
+  const dock = el?.closest('[data-watch-dock]')
+  if (!el || !dock) return { side: 'left', sideOffset: 6 }
+  const d = dock.getBoundingClientRect()
+  const t = el.getBoundingClientRect()
+  if (d.left < 300) return { side: 'bottom', sideOffset: 4 }
+  return { side: 'left', sideOffset: Math.max(6, Math.round(t.left - d.left) + 8) }
+}
+
+/** The quiet mark on a row that has alerts (the bell itself shows on hover). */
+export function AlertMark({ row, actions }: { row: WatchRowData; actions: Actions }) {
+  const mine = actions.prefs.alerts.filter((a) => a.key === row.key)
+  if (mine.length === 0) return null
+  const words = alertWords(mine[0]) + (mine.length > 1 ? ` +${mine.length - 1}` : '')
+  return (
+    <span data-tip={words} data-watch-alert-mark className='flex text-nvr-cyan'>
+      <BellRing aria-hidden className='h-3 w-3' />
+      <span className='sr-only'>Alert: {words}</span>
+    </span>
+  )
+}
+
 /** The bell on a watched row: its alert rules, and a form to add one. */
 export function AlertButton({ row, actions }: { row: WatchRowData; actions: Actions }) {
   const [open, setOpen] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [place, setPlace] = useState<ReturnType<typeof besideDock>>({
+    side: 'left',
+    sideOffset: 6
+  })
+  const trigger = useRef<HTMLButtonElement>(null)
   const mine = actions.prefs.alerts.filter((a) => a.key === row.key)
   const has = mine.length > 0
   const title = row.title ?? row.collection_label
@@ -516,12 +548,16 @@ export function AlertButton({ row, actions }: { row: WatchRowData; actions: Acti
     <Popover
       open={open}
       onOpenChange={(o) => {
+        if (o) {
+          setPlace(besideDock(trigger.current))
+          setAdding(!has)
+        }
         setOpen(o)
-        if (o) setAdding(!has)
       }}
     >
       <PopoverTrigger asChild>
         <button
+          ref={trigger}
           type='button'
           aria-label={has ? `Alerts on ${title} (${mine.length})` : `Add an alert on ${title}`}
           data-tip={
@@ -532,18 +568,23 @@ export function AlertButton({ row, actions }: { row: WatchRowData; actions: Acti
           data-watch-alert={has ? 'on' : 'off'}
           onClick={(e) => e.stopPropagation()}
           className={`flex h-6 w-6 items-center justify-center rounded-md transition-colors focus-visible:visible focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 group-hover/row:visible ${
+            open ? '' : 'invisible'
+          } ${
             has
               ? 'text-nvr-cyan hover:bg-nvr-cyan/10'
-              : `${open ? '' : 'invisible'} text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 dark:text-slate-500 dark:hover:bg-white/[0.08] dark:hover:text-slate-200`
+              : 'text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 dark:text-slate-500 dark:hover:bg-white/[0.08] dark:hover:text-slate-200'
           }`}
         >
           {has ? <BellRing className='h-3.5 w-3.5' /> : <Bell className='h-3.5 w-3.5' />}
         </button>
       </PopoverTrigger>
       <PopoverContent
-        align='end'
-        side='left'
-        className='w-[280px] p-3'
+        align={place.side === 'left' ? 'start' : 'end'}
+        side={place.side}
+        sideOffset={place.sideOffset}
+        // Clear of the app's top bar, aligned with the row it belongs to.
+        collisionPadding={{ top: 56, bottom: 12, left: 12, right: 12 }}
+        className='w-[296px] max-w-[calc(100vw-24px)] p-3'
         onClick={(e) => e.stopPropagation()}
       >
         <p className='text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
@@ -555,10 +596,11 @@ export function AlertButton({ row, actions }: { row: WatchRowData; actions: Acti
             {mine.map((a) => (
               <li
                 key={a.id}
-                className='flex items-center gap-2 rounded-md bg-slate-50 py-1 pl-2 pr-1 text-[12px] text-slate-700 dark:bg-white/[0.04] dark:text-slate-200'
+                className='flex items-start gap-2 rounded-md bg-slate-50 py-1 pl-2 pr-1 text-[12px] text-slate-700 dark:bg-white/[0.04] dark:text-slate-200'
               >
-                <BellRing aria-hidden className='h-3 w-3 shrink-0 text-nvr-cyan' />
-                <span className='min-w-0 flex-1 truncate' data-tip={alertWords(a)}>
+                <BellRing aria-hidden className='mt-[3px] h-3 w-3 shrink-0 text-nvr-cyan' />
+                {/* The whole rule, wrapped: a step name is the point of it. */}
+                <span className='min-w-0 flex-1 break-words py-px leading-snug'>
                   {alertWords(a)}
                 </span>
                 <button
@@ -837,7 +879,7 @@ export function TeamEditor({
         <button
           type='submit'
           disabled={!name.trim() || busy}
-          className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40'
+          className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:hover:opacity-100'
         >
           {busy ? 'Saving…' : team ? 'Save' : 'Make list'}
         </button>

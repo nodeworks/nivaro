@@ -11,13 +11,13 @@
   <tr>
     <td style="padding:10px 0;border-bottom:1px solid #e2e8f0;">
       <p style="margin:0;font-size:14px;font-weight:600;">
-        {% if item.url %}<a href="{{ item.url }}" style="color:#172940;text-decoration:none;">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}
+        {% if item.url %}<a href="{{ item.url }}" style="color:#0e7490;text-decoration:underline;text-underline-offset:2px;">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}{% if item.title != item.collection_label %}<span style="font-weight:400;color:#64748b;"> · {{ item.collection_label }}</span>{% endif %}
       </p>
       <p style="margin:2px 0 0;font-size:13px;color:#475569;">
         {{ item.text }}{% if item.by %} · {{ item.by }}{% endif %} · {{ item.when }}
       </p>
       {% if item.step %}
-      <p style="margin:2px 0 0;font-size:12px;color:#64748b;">{{ item.collection_label }} · now on {{ item.step }}</p>
+      <p style="margin:2px 0 0;font-size:12px;color:#64748b;">Now at {{ item.step }}</p>
       {% endif %}
     </td>
   </tr>

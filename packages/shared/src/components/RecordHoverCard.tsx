@@ -98,7 +98,8 @@ function CardBody({
   }, [isError, onGone])
   if (isPending)
     return (
-      <div className='space-y-2' aria-busy>
+      // In dark the popover and the skeleton token are the same grey: lift the bars a step.
+      <div className='space-y-2 dark:[&>div]:bg-white/[0.09]' aria-busy>
         <Skeleton className='h-4 w-40' />
         <Skeleton className='h-3 w-24' />
         <Skeleton className='h-3 w-32' />
