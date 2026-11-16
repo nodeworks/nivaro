@@ -239,8 +239,8 @@ export function UserRosterCluster({
       }}
       className='inline-flex cursor-pointer items-center'
     >
-      {/* The header's Owners tile (nameLabel) overlaps less, so two-letter initials stay whole. */}
-      <span className={nameLabel ? 'flex -space-x-1' : 'flex -space-x-2'}>
+      {/* A light overlap everywhere, so two-letter initials stay whole ("BM" read "BN" in lists). */}
+      <span className='flex -space-x-1'>
         {shown.map((o) => (
           <RosterAvatar key={o.id} user={o} avatarCls={avatarCls} />
         ))}
