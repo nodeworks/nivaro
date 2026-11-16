@@ -22,7 +22,7 @@ import { getDisplayTimezone } from './utils'
  *              the viewer may (`can_resend`), or "… Ask an admin to send it again."
  *              "Ledger was too busy to take it at 10:43 AM — nothing was sent. …"
  *   no_answer  "No answer from Ledger after 25 minutes — the send is held and will not be
- *              repeated automatically"
+ *              repeated automatically. An administrator can mark it received or not received."
  *
  * A failed send nothing will repeat says why on a quieter line (`detail`):
  * "It won't be sent again automatically — retries are not set up for Ledger".
@@ -185,7 +185,7 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
       return {
         state: 'no_answer',
         tone: 'held',
-        text: `No answer from ${p} after ${plainDuration(now - new Date(f.started_at).getTime())} — the send is held and will not be repeated automatically`
+        text: `No answer from ${p} after ${plainDuration(now - new Date(f.started_at).getTime())} — the send is held and will not be repeated automatically. An administrator can mark it received or not received.`
       }
     return {
       state: 'sending',
@@ -256,7 +256,15 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
       ...extra(true)
     }
   // The partner's own words are quoted; our reading of a failure is not.
-  const said = why.text ? (why.quoted ? `: “${why.text}.”` : `: ${why.text}.`) : '.'
+  // "The other system refused the request" is our reading of a bare refusal, not a
+  // reason: say none was given, so "Change that" never points at nothing (rt4-forms).
+  const bare = !why.quoted && /^The other system refused the request\.?$/.test(why.text)
+  const reason = bare ? '' : why.text
+  const said = reason
+    ? why.quoted
+      ? `: “${reason}.”`
+      : `: ${reason}.`
+    : ' without giving a reason.'
   const fixable = status === 'rejected' || ['validation', 'not_found'].includes(cls)
   return {
     state: 'refused',
@@ -264,7 +272,7 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
     text: `${refused}${said} ${
       retry
         ? retryText
-        : why.text
+        : reason
           ? `Change that on the record, then send it again from ${SEND_AGAIN_FROM}.`
           : `Check the record, then send it again from ${SEND_AGAIN_FROM}.`
     }`,

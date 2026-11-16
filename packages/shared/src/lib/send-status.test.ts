@@ -47,7 +47,7 @@ describe('sendStatusWords', () => {
     const w = words({ answer_by: '2026-11-14T15:45:00.000Z' })
     expect(w.state).toBe('no_answer')
     expect(w.text).toBe(
-      'No answer from Ledger after 8 minutes — the send is held and will not be repeated automatically'
+      'No answer from Ledger after 8 minutes — the send is held and will not be repeated automatically. An administrator can mark it received or not received.'
     )
   })
 
@@ -118,7 +118,18 @@ describe('sendStatusWords', () => {
         error_class: 'validation'
       }).text
     ).toBe(
-      'Ledger refused it at 10:43 AM. Check the record, then send it again from Integrations at the top of the record.'
+      'Ledger refused it at 10:43 AM without giving a reason. Check the record, then send it again from Integrations at the top of the record.'
+    )
+    // A bare HTTP 400 with no words is our reading, not a reason: never "Change that".
+    expect(
+      words({
+        status: 'failed',
+        finished_at: '2026-11-14T15:43:00.000Z',
+        error_class: 'validation',
+        reason: 'Submission failed — HTTP 400'
+      }).text
+    ).toBe(
+      'Ledger refused it at 10:43 AM without giving a reason. Check the record, then send it again from Integrations at the top of the record.'
     )
   })
 

@@ -1655,8 +1655,8 @@ function StateTrack({
         style={
           edges.left || edges.right
             ? {
-                maskImage: `linear-gradient(to right, ${edges.left ? 'transparent, #000 28px' : '#000'}, ${edges.right ? '#000 calc(100% - 28px), transparent' : '#000'})`,
-                WebkitMaskImage: `linear-gradient(to right, ${edges.left ? 'transparent, #000 28px' : '#000'}, ${edges.right ? '#000 calc(100% - 28px), transparent' : '#000'})`
+                maskImage: `linear-gradient(to right, ${edges.left ? 'transparent, #000 56px' : '#000'}, ${edges.right ? '#000 calc(100% - 56px), transparent' : '#000'})`,
+                WebkitMaskImage: `linear-gradient(to right, ${edges.left ? 'transparent, #000 56px' : '#000'}, ${edges.right ? '#000 calc(100% - 56px), transparent' : '#000'})`
               }
             : undefined
         }
@@ -2030,19 +2030,24 @@ function OwnerPersonButton({
   userId,
   name,
   email,
-  initials
+  initials,
+  className
 }: {
   userId: string
   name: string
   email: string
   initials: string
+  className?: string
 }) {
   return (
     <UserChip userId={userId}>
       <button
         type='button'
         aria-label={`${name} — profile`}
-        className='group/owner flex min-w-0 flex-1 items-center gap-2.5 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+        className={cn(
+          'group/owner flex min-w-0 flex-1 items-center gap-2.5 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+          className
+        )}
       >
         <UserAvatar
           userId={userId}
@@ -2329,64 +2334,74 @@ function OwnersSection({
             return (
               <div
                 key={`group-${o.id}`}
-                className='group/row -mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50 dark:hover:bg-white/5'
+                className='group/row -mx-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50 dark:hover:bg-white/5'
               >
-                <OwnerPersonButton userId={o.id} name={name} email={o.email} initials={initials} />
+                {/* Name keeps ~60% of the row; badges wrap under it on a narrow panel (idea-21 r-1116d). */}
+                <OwnerPersonButton
+                  userId={o.id}
+                  name={name}
+                  email={o.email}
+                  initials={initials}
+                  className='basis-[60%]'
+                />
                 <ViewAsPersonButton
                   person={{ id: String(o.id), name, firstName: o.first_name }}
                   className='opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100'
                 />
-                {(() => {
-                  const u = unavailableById.get(String(o.id).toUpperCase())
-                  if (!u) return null
-                  return (
+                <span className='ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1'>
+                  {(() => {
+                    const u = unavailableById.get(String(o.id).toUpperCase())
+                    if (!u) return null
+                    return (
+                      <span
+                        data-owner-unavailable={u.reason}
+                        className={cn(
+                          'shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium',
+                          u.delegate
+                            ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+                            : 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300'
+                        )}
+                        data-tip={
+                          u.delegate
+                            ? `${name} is ${REASON_WORD[u.reason] ?? u.reason} — ${u.delegate.name} covers`
+                            : `${name} is ${REASON_WORD[u.reason] ?? u.reason} and can't approve this step`
+                        }
+                      >
+                        {u.delegate
+                          ? `${REASON_WORD[u.reason] ?? u.reason} · ${u.delegate.name} covers`
+                          : (REASON_WORD[u.reason] ?? u.reason)}
+                      </span>
+                    )
+                  })()}
+                  {o.queue_only ? (
                     <span
-                      data-owner-unavailable={u.reason}
-                      className={cn(
-                        'shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium',
-                        u.delegate
-                          ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
-                          : 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300'
-                      )}
-                      data-tip={
-                        u.delegate
-                          ? `${name} is ${REASON_WORD[u.reason] ?? u.reason} — ${u.delegate.name} covers`
-                          : `${name} is ${REASON_WORD[u.reason] ?? u.reason} and can't approve this step`
-                      }
+                      className='shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                      data-tip='The record is in their queue, but only the step’s owners can move it'
                     >
-                      {u.delegate
-                        ? `${REASON_WORD[u.reason] ?? u.reason} · ${u.delegate.name} covers`
-                        : (REASON_WORD[u.reason] ?? u.reason)}
+                      {standInOnly && standInSet.has(String(o.id).toUpperCase())
+                        ? 'stand-in'
+                        : 'in their queue'}
                     </span>
-                  )
-                })()}
-                {o.queue_only ? (
-                  <span
-                    className='shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400'
-                    data-tip='The record is in their queue, but only the step’s owners can move it'
-                  >
-                    {standInOnly && standInSet.has(String(o.id).toUpperCase())
-                      ? 'stand-in'
-                      : 'in their queue'}
-                  </span>
-                ) : (
-                  <span className='shrink-0 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy/70 dark:text-nvr-cyan'>
-                    owner group
-                  </span>
-                )}
+                  ) : (
+                    <span className='shrink-0 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy/70 dark:text-nvr-cyan'>
+                      owner group
+                    </span>
+                  )}
+                </span>
               </div>
             )
           })}
           {(owners ?? []).map((o) => (
             <div
               key={o.id}
-              className='group -mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50 dark:hover:bg-white/5'
+              className='group -mx-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50 dark:hover:bg-white/5'
             >
               <OwnerPersonButton
                 userId={o.user}
                 name={[o.first_name, o.last_name].filter(Boolean).join(' ') || o.email}
                 email={o.email}
                 initials={ownerInitials(o)}
+                className='basis-[60%]'
               />
               <ViewAsPersonButton
                 person={{
@@ -2396,21 +2411,23 @@ function OwnersSection({
                 }}
                 className='opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100'
               />
-              <span className='shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'>
-                manual
+              <span className='ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1'>
+                <span className='shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'>
+                  manual
+                </span>
+                <span className='min-w-0 max-w-full truncate rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-slate-800 dark:text-slate-400'>
+                  {o.state ? stateLabelFor(o.state) : 'all states'}
+                </span>
+                <button
+                  type='button'
+                  aria-label={`Remove ${[o.first_name, o.last_name].filter(Boolean).join(' ') || o.email} as an owner`}
+                  disabled={removeOwner.isPending}
+                  onClick={() => removeOwner.mutate(o)}
+                  className='shrink-0 rounded p-0.5 text-slate-300 opacity-0 transition-all hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100'
+                >
+                  <X className='h-3 w-3' />
+                </button>
               </span>
-              <span className='shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500'>
-                {o.state ? stateLabelFor(o.state) : 'all states'}
-              </span>
-              <button
-                type='button'
-                aria-label={`Remove ${[o.first_name, o.last_name].filter(Boolean).join(' ') || o.email} as an owner`}
-                disabled={removeOwner.isPending}
-                onClick={() => removeOwner.mutate(o)}
-                className='shrink-0 rounded p-0.5 text-slate-300 opacity-0 transition-all hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100'
-              >
-                <X className='h-3 w-3' />
-              </button>
             </div>
           ))}
         </div>
@@ -2754,13 +2771,16 @@ function ApprovalChainView({
                         <span
                           data-chain-step-progress
                           className={cn(
-                            'max-w-[220px] text-[11px] leading-snug',
+                            'text-[11px] leading-snug',
+                            // A step with no owners gives its note the owners' room.
+                            owners.length === 0 ? 'max-w-[340px]' : 'max-w-[220px]',
                             progress.kind === 'waiting'
                               ? 'text-sky-700 dark:text-sky-300'
                               : 'text-slate-500 dark:text-slate-400'
                           )}
                         >
-                          {progress.text}
+                          {/* "4:37 PM" never splits across lines. */}
+                          {progress.text.replace(/ (AM|PM)\b/g, '\u00a0$1')}
                         </span>
                       )}
                     </div>

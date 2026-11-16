@@ -453,6 +453,21 @@ export function footerSum(
   return Math.round(total * 1e6) / 1e6
 }
 
+/**
+ * Picked lines on a narrow form (phone, a half-width section): the item and its chips
+ * keep the first line and the number boxes (price · quantity · total) share the next one,
+ * each a third of the width — at a fixed 80 px each the quantity box ran off the card and
+ * Total was never in view (rt4-forms r-1116d). `!important` beats a resized column's
+ * inline width, which only means something on a wide grid.
+ */
+const CPF_LINES_CSS = `[data-cpf-lines]{container:cpflines/inline-size}
+@container cpflines (max-width: 559px){
+[data-cpf-lines] [data-cpf-line-main]{flex-wrap:wrap;column-gap:8px;row-gap:6px}
+[data-cpf-lines] [data-cpf-line-break]{display:block!important;flex-basis:100%;height:0}
+[data-cpf-lines] [data-cpf-line-break]~:not(button):not([data-cpf-fixed]){flex:1 1 0!important;min-width:0!important;width:auto!important}
+[data-cpf-lines] [data-cpf-line-break]~:not(button):not([data-cpf-fixed])>span,[data-cpf-lines] [data-cpf-line-break]~:not(button):not([data-cpf-fixed]) input{width:100%!important}
+}`
+
 /** The note under a refused quantity box: the reason and what was typed
  *  ("Whole numbers only — 2.5 not used"). The box itself shows the quantity
  *  that still counts. */
@@ -3154,8 +3169,12 @@ export function CatalogPickerField({
             const sumKey = (c: string) =>
               editableFields.includes(c) && !readOnly ? undefined : `s:${c}`
             return (
-              <div>
-                <div className='flex items-center gap-4 border-b border-slate-200 px-3 py-1.5 dark:border-border'>
+              <div data-cpf-lines>
+                <style>{CPF_LINES_CSS}</style>
+                <div
+                  data-cpf-line-main
+                  className='flex items-center gap-4 border-b border-slate-200 px-3 py-1.5 dark:border-border'
+                >
                   <span className='flex flex-1 items-center gap-1 text-[11px] font-medium text-slate-500 dark:text-slate-400'>
                     Item
                     {readOnly && (
@@ -3166,6 +3185,7 @@ export function CatalogPickerField({
                       />
                     )}
                   </span>
+                  <span data-cpf-line-break aria-hidden className='hidden' />
                   {copyCols.map((c) => (
                     <Fragment key={c}>{numHead(titleCase(c), sumKey(c))}</Fragment>
                   ))}
@@ -3174,7 +3194,7 @@ export function CatalogPickerField({
                     <Fragment key={c}>{numHead(titleCase(c), `s:${c}`)}</Fragment>
                   ))}
                   {!readOnly && (
-                    <span className='-my-1 flex w-6 shrink-0 justify-end'>
+                    <span data-cpf-fixed className='-my-1 flex w-6 shrink-0 justify-end'>
                       <ResetColumnsButton show={sumCols.customized} onReset={sumCols.reset} />
                     </span>
                   )}
@@ -3198,6 +3218,7 @@ export function CatalogPickerField({
                       )}
                     >
                       <div
+                        data-cpf-line-main
                         className={cn(
                           'flex items-center gap-4',
                           isStagedDelete && 'line-through decoration-slate-400'
@@ -3250,6 +3271,7 @@ export function CatalogPickerField({
                             </span>
                           )
                         })}
+                        <span data-cpf-line-break aria-hidden className='hidden' />
                         {copyCols.map((c) =>
                           cellEditable(e.key, c) ? (
                             cellInput(e.key, c, e.row)

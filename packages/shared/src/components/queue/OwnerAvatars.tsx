@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { cn } from '../../lib/utils'
-import { UserAvatar } from '../UserAvatar'
 import { UserChip } from '../item-edit/UserChip'
+import { UserAvatar } from '../UserAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
 // Compact owner display: overlapping initial avatars (Linear/GitHub assignee
@@ -156,11 +156,12 @@ export function OwnerAvatars({
               <Avatar
                 key={o.id}
                 owner={o}
-                className={cn(i > 0 && '-ml-1.5', o.inactive && 'opacity-50 grayscale')}
+                // A light overlap: a deeper one clipped initials ("BM" read "BN").
+                className={cn(i > 0 && '-ml-0.5', o.inactive && 'opacity-50 grayscale')}
               />
             ))}
             {overflow > 0 && (
-              <span className='-ml-1.5 inline-flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-full bg-slate-100 px-1 text-[9px] font-semibold text-slate-600 ring-2 ring-white dark:bg-muted dark:text-slate-300 dark:ring-card'>
+              <span className='-ml-0.5 inline-flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-full bg-slate-100 px-1 text-[9px] font-semibold text-slate-600 ring-2 ring-white dark:bg-muted dark:text-slate-300 dark:ring-card'>
                 +{overflow}
               </span>
             )}
