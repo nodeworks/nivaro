@@ -271,24 +271,16 @@ export function SearchPage() {
     fetchFresh: () =>
       api
         .get<{ data: GlobalSearchResponse }>('/global-search', { params: { q, fresh: '1' } })
-        .then((r) => {
-          // A re-ask the time budget cut short says nothing about the rows it never searched:
-          // keep the page as it is (nothing dims) rather than read "not searched" as "gone".
-          if (cutsShown(r.data.data, records)) throw new Error('search cut short')
-          return withExactFirst(r.data.data.records ?? [], r.data.data.exact)
-        }),
+        .then((r) => withExactFirst(keepUnsearched(r.data.data, records), r.data.data.exact)),
     onShow: () =>
       void api
         .get<{ data: GlobalSearchResponse }>('/global-search', { params: { q, fresh: '1' } })
         .then((r) => {
-          // Never swap shown results for an answer cut short on the same collections.
-          if (cutsShown(r.data.data, records)) {
-            toast.message('Search is slow right now', {
-              description: 'The new matches did not finish loading. Press Show again in a moment.'
-            })
-            return
-          }
-          qc.setQueryData(['global-search', q], r.data.data)
+          // A part the time budget cut never takes shown results away (they were not searched).
+          qc.setQueryData(['global-search', q], {
+            ...r.data.data,
+            records: keepUnsearched(r.data.data, records)
+          })
           void qc.invalidateQueries({ queryKey: ['global-search-counts'] })
         })
         .catch(() => void refetch())
@@ -783,12 +775,15 @@ export function SearchPage() {
   )
 }
 
-/** The page's results come from a collection the re-ask's time budget cut: that answer cannot
- *  say whether those rows still match. */
-function cutsShown(answer: GlobalSearchResponse, shown: SearchRecord[]): boolean {
+/** A re-ask's records, plus the shown rows it could not vouch for: a collection the time budget
+ *  cut was only partly searched, so a shown row missing from it is "not searched", never "gone"
+ *  (it must not dim, and Show must not drop it). New matches the re-ask did find still count. */
+function keepUnsearched(answer: GlobalSearchResponse, shown: SearchRecord[]): SearchRecord[] {
+  const fresh = answer.records ?? []
   const cut = new Set(answer.partial ?? [])
-  if (cut.size === 0) return false
-  return shown.some((r) => cut.has(r.collection))
+  if (cut.size === 0) return fresh
+  const have = new Set(fresh.map(searchRowKey))
+  return [...fresh, ...shown.filter((r) => cut.has(r.collection) && !have.has(searchRowKey(r)))]
 }
 
 const CUT_KINDS: Record<string, string> = {
