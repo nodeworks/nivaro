@@ -36,25 +36,26 @@ describe('baseline + chip', () => {
   it('says how far it moved since this morning', () => {
     let b = advanceBaseline(null, 14, at(2026, 11, 14, 8))
     b = advanceBaseline(b, 17, at(2026, 11, 14, 10))
-    expect(deltaChip(b)?.text).toBe('+3 since this morning')
+    expect(deltaChip(b)?.text).toBe('+3 today')
+    expect(deltaChip(b)?.phrase).toBe('+3 since this morning')
     b = advanceBaseline(b, 12, at(2026, 11, 14, 11))
-    expect(deltaChip(b)?.text).toBe('−2 since this morning')
+    expect(deltaChip(b)?.text).toBe('−2 today')
     b = advanceBaseline(b, 14, at(2026, 11, 14, 11))
     expect(deltaChip(b)).toBeNull()
   })
   it('afternoon first sight reads "earlier today"', () => {
     let b = advanceBaseline(null, 5, at(2026, 11, 14, 14))
     b = advanceBaseline(b, 6, at(2026, 11, 14, 15))
-    expect(deltaChip(b)?.text).toBe('+1 since earlier today')
+    expect(deltaChip(b)?.phrase).toBe('+1 since earlier today')
   })
   it('a new day compares with where yesterday ended', () => {
     let b = advanceBaseline(null, 14, at(2026, 11, 13, 9))
     b = advanceBaseline(b, 16, at(2026, 11, 13, 17))
     b = advanceBaseline(b, 13, at(2026, 11, 14, 8))
-    expect(deltaChip(b)?.text).toBe('−3 since yesterday')
+    expect(deltaChip(b)?.text).toBe('−3 vs yesterday')
     // once something moves today, today's own baseline wins
     b = advanceBaseline(b, 15, at(2026, 11, 14, 9))
-    expect(deltaChip(b)?.text).toBe('+2 since this morning')
+    expect(deltaChip(b)?.phrase).toBe('+2 since this morning')
   })
   it('an older visit is no yesterday', () => {
     let b = advanceBaseline(null, 14, at(2026, 11, 10, 9))
