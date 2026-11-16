@@ -267,9 +267,16 @@ function ScheduleChangeDialog({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button size='sm' variant='outline' className={triggerClassName}>
-          <CalendarClock className='mr-1.5 h-3.5 w-3.5' />
-          Schedule
+        <Button
+          size='sm'
+          variant='outline'
+          className={triggerClassName}
+          title='Schedule a field change'
+          aria-label='Schedule a field change'
+        >
+          <CalendarClock className='h-3.5 w-3.5 sm:mr-1.5' />
+          {/* Phone: the icon alone, so the header group fits. */}
+          <span className='hidden sm:inline'>Schedule</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent className='w-80 p-4' align='end'>
@@ -865,12 +872,13 @@ export function ItemEditPage() {
             )}
             <div className='flex flex-1 min-h-0 flex-col'>
               {/* Admin sticky header */}
-              <div className='sticky top-0 z-20 shrink-0 border-b border-slate-200 bg-white px-8 py-4 dark:border-border dark:bg-background'>
-                <div className='flex items-center gap-4'>
+              <div className='sticky top-0 z-20 shrink-0 border-b border-slate-200 bg-white px-8 py-4 max-sm:px-4 dark:border-border dark:bg-background'>
+                {/* A phone wraps the tool group onto its own row instead of clipping it. */}
+                <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
                   <Button variant='ghost' size='icon' onClick={goBack}>
                     <ArrowLeft className='h-4 w-4' />
                   </Button>
-                  <div className='flex-1'>
+                  <div className='min-w-0 flex-1'>
                     <div className='flex items-center gap-2'>
                       <h1 className='text-[18px] font-semibold text-slate-900 dark:text-slate-100'>
                         {displayName}
@@ -1102,7 +1110,7 @@ export function ItemEditPage() {
                   {/* Header widgets render in ItemEditForm's own header strip — not here. */}
 
                   {/* Admin tool buttons */}
-                  <div className='flex overflow-hidden rounded-md'>
+                  <div className='flex overflow-hidden rounded-md max-sm:basis-full max-sm:flex-wrap max-sm:gap-y-2 max-sm:overflow-visible'>
                     {id && !isNew && canDisablePickers && (
                       <button
                         type='button'
