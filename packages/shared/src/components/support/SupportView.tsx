@@ -8,13 +8,14 @@ import { useLiveRefresh } from '../../lib/live-counts'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { LiveCount } from '../LiveCount'
 import { SimpleSelect } from '../ui/SimpleSelect'
+import { AssignRulesView } from './AssignRules'
 import { RequestList } from './RequestList'
 import { SupportAnalytics } from './SupportAnalytics'
 import { SupportRequestDialog } from './SupportRequestDialog'
 import { TicketDetailSheet } from './TicketDetailSheet'
 import type { SupportCategory, SupportSummary } from './types'
 
-type Tab = 'mine' | 'desk' | 'analytics' | 'types'
+type Tab = 'mine' | 'desk' | 'analytics' | 'types' | 'rules'
 
 /**
  * The support page (#999). Everyone sees My requests (raise one, follow it).
@@ -89,7 +90,8 @@ export function SupportView({
     { key: 'mine', label: 'My requests', count: summary?.mine_open },
     ...(desk ? [{ key: 'desk' as Tab, label: 'Desk', count: summary?.unassigned }] : []),
     ...(desk ? [{ key: 'analytics' as Tab, label: 'Analytics' }] : []),
-    ...(isAdmin ? [{ key: 'types' as Tab, label: 'Request types' }] : [])
+    ...(isAdmin ? [{ key: 'types' as Tab, label: 'Request types' }] : []),
+    ...(isAdmin ? [{ key: 'rules' as Tab, label: 'Assignment rules' }] : [])
   ]
 
   return (
@@ -135,6 +137,8 @@ export function SupportView({
 
       {tab === 'types' ? (
         <SupportTypesEditor />
+      ) : tab === 'rules' ? (
+        <AssignRulesView />
       ) : tab === 'analytics' ? (
         <SupportAnalytics />
       ) : (
@@ -149,6 +153,7 @@ export function SupportView({
         }}
         initialTitle={draft?.title}
         initialDescription={draft?.description}
+        source={draft ? 'error' : undefined}
         onCreated={(t) => {
           setTab('mine')
           openTicket(t.id)

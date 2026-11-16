@@ -149,6 +149,12 @@ export function TicketDetailSheet({
         ref={fadeRef}
         className={`flex max-w-[96vw] flex-col gap-0 p-0 transition-[width] duration-300 ease-out dark:bg-card ${wide ? 'w-[min(1280px,96vw)] sm:max-w-[min(1280px,96vw)]' : 'w-[560px] sm:max-w-[560px]'}`}
         data-support-ticket={ticketId ?? ''}
+        // Opening focuses the sheet itself, not its close button: the button's ring is for
+        // keyboard focus only (a Tab reaches it), never a mouse-opened sheet's first paint.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          ;(e.currentTarget as HTMLElement | null)?.focus({ preventScroll: true })
+        }}
       >
         {!validId || isError ? (
           <div className='flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center'>
@@ -511,9 +517,12 @@ export function TicketDetailSheet({
                             <span className='text-slate-800 dark:text-slate-100'>{line.text}</span>
                             <span className='text-slate-500 dark:text-slate-400'>
                               {' '}
-                              · {line.showAuthor ? `${h.user_name ?? 'System'} · ` : ''}
-                              {/* A line breaks before the time, never inside it ("1:29 / AM"). */}
-                              <span className='whitespace-nowrap'>{when(h.at)}</span>
+                              {/* Name and time wrap as one piece: a line breaks before them,
+                                  never inside a name ("Sam / Rivera") or a time ("1:29 / AM"). */}
+                              <span className='whitespace-nowrap'>
+                                · {line.showAuthor ? `${h.user_name ?? 'System'} · ` : ''}
+                                {when(h.at)}
+                              </span>
                             </span>
                           </li>
                         )

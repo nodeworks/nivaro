@@ -30,6 +30,7 @@ export function SupportRequestDialog({
   recordLabel,
   initialTitle,
   initialDescription,
+  source,
   onCreated
 }: {
   open: boolean
@@ -41,6 +42,8 @@ export function SupportRequestDialog({
   /** Prefill (an error's "Get help": what happened and its reference). */
   initialTitle?: string
   initialDescription?: string
+  /** 'error' = opened from an error's Get help (assignment rules may route on it). */
+  source?: 'error'
   onCreated?: (ticket: SupportTicket) => void
 }) {
   const client = useNivaroClient()
@@ -122,7 +125,8 @@ export function SupportRequestDialog({
           collection: onRecord ? collection : null,
           item: onRecord ? String(item) : null,
           attachments: [...files.map((f) => f.id), ...(ctx.fileId ? [ctx.fileId] : [])],
-          ...(ctx.replay ? { replay: ctx.replay } : {})
+          ...(ctx.replay ? { replay: ctx.replay } : {}),
+          ...(source ? { source } : {})
         })
       )
     },

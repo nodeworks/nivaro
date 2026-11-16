@@ -690,7 +690,7 @@ export async function decideAssignment(
       rule: ruleRef,
       note:
         a.kind === 'share'
-          ? `Shared among ${people.length}: ${pick.ranking[0]?.measure ?? ''}.`
+          ? `Picked from ${people.length} ${people.length === 1 ? 'person' : 'people'} (${pick.ranking[0]?.measure ?? ''}).`
           : a.kind === 'step_owner'
             ? 'The record’s step owner.'
             : 'Assigned by name.'

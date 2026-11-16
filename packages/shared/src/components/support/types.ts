@@ -125,3 +125,138 @@ export const STATUS_TONE: Record<TicketStatus, string> = {
   done: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300',
   cancelled: 'bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-slate-300'
 }
+
+// ── Auto-assign rules (/api/support/assign-rules; the server owns the meaning) ──
+
+export type AssignSetOp = 'in' | 'not_in'
+export type AssignFieldOp =
+  | 'is'
+  | 'is_not'
+  | 'in'
+  | 'not_in'
+  | 'contains'
+  | 'not_contains'
+  | 'empty'
+  | 'not_empty'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+export type AssignSource = 'general' | 'record' | 'error' | 'report_problem'
+
+export type AssignCondition =
+  | { kind: 'type'; op: AssignSetOp; values: number[] }
+  | { kind: 'about'; op: 'record_in' | 'general'; collections: string[] }
+  | { kind: 'field'; collection: string; field: string; op: AssignFieldOp; values: string[] }
+  | { kind: 'step'; op: AssignSetOp; states: string[] }
+  | { kind: 'requester'; op: AssignSetOp; users: string[] }
+  | { kind: 'requester_role'; op: AssignSetOp; roles: string[] }
+  | { kind: 'requester_team'; op: AssignSetOp; teams: number[] }
+  | { kind: 'priority'; op: AssignSetOp; values: string[] }
+  | { kind: 'text'; op: 'any' | 'all' | 'none'; words: string[] }
+  | { kind: 'source'; op: AssignSetOp; values: AssignSource[] }
+  | { kind: 'hours'; op: 'inside' | 'outside' }
+
+export type AssignStrategy =
+  | 'fewest_open'
+  | 'least_recent'
+  | 'fewest_today'
+  | 'fewest_week'
+  | 'fewest_urgent'
+  | 'most_closed_type'
+  | 'last_helped'
+  | 'step_owner'
+  | 'random'
+
+export interface AssignSharePerson {
+  id: string
+  cap: number | null
+  when: 'always' | 'business_hours' | 'online'
+}
+
+export type AssignAction =
+  | { kind: 'person'; user: string }
+  | {
+      kind: 'share'
+      people: AssignSharePerson[]
+      strategy: AssignStrategy
+      give_to_cover: boolean
+    }
+  | { kind: 'step_owner'; pick: 'first' | 'fewest_open' }
+  | { kind: 'team'; team: number }
+
+export interface AssignRule {
+  id: string
+  name: string
+  active: boolean
+  match: 'all' | 'any'
+  conditions: AssignCondition[]
+  action: AssignAction
+  fallback: { kind: 'desk' } | { kind: 'person'; user: string }
+  on_type_change: boolean
+  note: string | null
+}
+
+export interface AssignHours {
+  start: string
+  end: string
+  days: number[]
+}
+
+export interface AssignRuleSet {
+  rules: AssignRule[]
+  hours: AssignHours
+}
+
+export interface AssignOptions {
+  types: Array<{ id: number; name: string; collection: string | null }>
+  teams: Array<{ id: number; name: string }>
+  roles: Array<{ id: string; name: string }>
+  collections: Array<{ collection: string; name: string; hidden: boolean }>
+  steps: Record<string, Array<{ id: string; label: string }>>
+}
+
+export interface AssignField {
+  field: string
+  label: string
+  type: string
+  related: string | null
+  choices: Array<{ value: string; label: string }> | null
+}
+
+export interface AssignTestResult {
+  trace: Array<{
+    id: string
+    name: string
+    active: boolean
+    result: 'matched' | 'no_match' | 'not_reached' | 'held'
+    reasons: string[]
+  }>
+  outcome:
+    | {
+        kind: 'person'
+        user: { id: string; name: string }
+        via: 'rule' | 'rule_fallback' | 'type_default'
+        rule: { id: string; name: string } | null
+        note: string
+      }
+    | {
+        kind: 'team'
+        team: { id: number; name: string }
+        via: 'rule'
+        rule: { id: string; name: string }
+        note: string
+      }
+    | {
+        kind: 'desk'
+        via: 'rule_fallback' | 'no_rule' | 'keep'
+        rule: { id: string; name: string } | null
+        note: string
+      }
+  pick: {
+    winner: { id: string; name: string } | null
+    ranking: Array<{ id: string; name: string; measure: string; for?: string }>
+    skipped: Array<{ id: string; name: string; reason: string }>
+    used: AssignStrategy
+  } | null
+}

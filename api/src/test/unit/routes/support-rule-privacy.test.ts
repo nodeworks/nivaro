@@ -26,7 +26,9 @@ const activity = vi.hoisted(
 )
 /** A read of nivaro_activity honours the collection(s) the route bound. */
 const activityRows = vi.hoisted(() => (bindings: unknown[]) => {
-  const cols = bindings.filter((b) => b === 'nivaro_tasks' || b === 'nivaro_support_rules')
+  const cols: unknown[] = bindings.filter(
+    (b) => b === 'nivaro_tasks' || b === 'nivaro_support_rules'
+  )
   return activity
     .filter((a) => cols.includes(a.collection))
     .map((a, i) => ({
