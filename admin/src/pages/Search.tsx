@@ -636,6 +636,7 @@ export function SearchPage() {
         <LiveNewMatchesPill
           count={collectionTab ? tabLive.newCount : tab ? 0 : allLive.newCount}
           onShow={collectionTab ? tabLive.show : allLive.show}
+          className='bg-slate-50 dark:bg-background'
         />
         <div className='space-y-5 px-6 py-5'>
           {!live && (

@@ -1037,7 +1037,11 @@ export function CommandPalette() {
           <div className='flex'>
             <CommandList ref={listRef} className='max-h-[400px] flex-1'>
               {!collectionTab && !activeExtra && (
-                <LiveNewMatchesPill count={recordsLive.newCount} onShow={recordsLive.show} />
+                <LiveNewMatchesPill
+                  count={recordsLive.newCount}
+                  onShow={recordsLive.show}
+                  className='bg-popover'
+                />
               )}
               {collectionTab ? (
                 <>

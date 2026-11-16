@@ -1138,7 +1138,10 @@ export function ItemEditPage() {
                         {presence.viewers.slice(0, 4).map((v, i) => (
                           <span
                             key={v.id}
-                            className='-ml-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-nvr-navy text-[9px] font-bold text-nvr-cyan first:ml-0 dark:border-card'
+                            // The shared avatar pair (UserAvatar): a light disc in light, a visible
+                            // mid-slate disc in dark — navy-on-white read as a dark-mode token,
+                            // and in dark the navy disc vanished into the page.
+                            className='-ml-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-[#cbd5e1] text-[9px] font-bold text-[#334155] first:ml-0 dark:border-card dark:bg-[#475569] dark:text-[#f1f5f9]'
                             style={{ zIndex: 10 - i }}
                           >
                             {v.name
@@ -1150,7 +1153,7 @@ export function ItemEditPage() {
                           </span>
                         ))}
                         {presence.viewers.length > 4 && (
-                          <span className='-ml-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-slate-200 text-[9px] font-semibold text-slate-600 dark:border-card'>
+                          <span className='-ml-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-slate-100 text-[9px] font-semibold text-slate-600 dark:border-card dark:bg-muted dark:text-slate-300'>
                             +{presence.viewers.length - 4}
                           </span>
                         )}
