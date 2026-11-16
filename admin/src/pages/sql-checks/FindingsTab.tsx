@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Check, Copy, ExternalLink, Search } from 'lucide-react'
+import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, Search, Wand2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
@@ -189,14 +189,26 @@ export function FindingsTab({
               }}
               aria-pressed={bulk}
               className={cn(
-                'rounded-md border border-slate-200 px-2.5 py-1.5 text-left text-[12px] hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border',
-                bulk && 'bg-accent'
+                'flex items-start gap-2 rounded-md border border-nvr-cyan/40 px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-nvr-cyan/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-nvr-cyan/10',
+                bulk && 'bg-nvr-cyan/10 dark:bg-nvr-cyan/15'
               )}
             >
-              <span className='font-medium text-foreground'>Fix them all at once…</span>
-              <span className='block text-muted-foreground'>
-                Review and apply the announce fix procedure by procedure.
+              <Wand2
+                className='mt-0.5 h-3.5 w-3.5 shrink-0 text-[#0e7490] dark:text-[#67e8f9]'
+                aria-hidden='true'
+              />
+              <span className='min-w-0 flex-1'>
+                <span className='font-medium text-[#0e7490] dark:text-[#67e8f9]'>
+                  Fix them all at once
+                </span>
+                <span className='block text-muted-foreground'>
+                  Review the fix for each procedure, then apply the ones you choose.
+                </span>
               </span>
+              <ChevronRight
+                className='mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground'
+                aria-hidden='true'
+              />
             </button>
           )}
           {object && (
