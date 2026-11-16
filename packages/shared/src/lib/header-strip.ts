@@ -110,6 +110,19 @@ export const HEADER_DOCK_INLINE =
 /** A cell inside the dock (no cap — a chip is as wide as its partners). */
 export const HEADER_DOCK_CELL = 'flex min-h-[40px] items-center gap-3 py-2 pr-4 pl-5'
 
+/** A field tile's "changed by" mark (HeaderFreshness ⓘ). Stacked: pinned
+ *  top-right beside Copy, over the room the label reserves (`pr-6`). Dense
+ *  and list: back in flow, ordered right after the label — pinned there it
+ *  sat on the value's letters ("LINX ID NUVCPJ00057ⓘ21"), since those
+ *  formats put label and value on the mark's line. Empty (no touch) = gone,
+ *  so it never costs a gap. Pair with HEADER_VALUE_AFTER_MARK on the value. */
+export const HEADER_MARK =
+  'absolute top-2 right-6 flex empty:hidden [[data-header-dense]_&]:static [[data-header-dense]_&]:order-1 [[data-header-dense]_&]:shrink-0 [[data-header-list]_&]:static [[data-header-list]_&]:order-1 [[data-header-list]_&]:shrink-0 [[data-header-list]_&]:mr-auto [[data-header-list]_&]:-ml-4'
+
+/** The value of a tile with a HEADER_MARK: follows the mark in dense / list. */
+export const HEADER_VALUE_AFTER_MARK =
+  '[[data-header-dense]_&]:order-2 [[data-header-list]_&]:order-2'
+
 /** A figure's provenance / sub-clause (Σ = 27,024 − 7,333.87; "across 7
  *  lines"): sits on the value's baseline, one step quieter. */
 export const HEADER_SUB =
@@ -259,7 +272,9 @@ export function headerEstimateDenseWidth(cell: Element): number {
   for (const label of labels) {
     const value =
       label.parentElement?.querySelector<HTMLElement>(':scope > [data-header-value]') ?? values[i]
-    w += label.scrollWidth + (value?.scrollWidth ?? 0) + 8 + 28
+    // A "changed by" mark rides in flow in dense chips: 12px + a gap-x-2.
+    const mark = label.parentElement?.querySelector(':scope > [data-header-freshness] > *')
+    w += label.scrollWidth + (value?.scrollWidth ?? 0) + 8 + 28 + (mark ? 20 : 0)
     i++
   }
   return w
@@ -335,6 +350,7 @@ export function headerCellIsEmpty(cell: Element): boolean {
  * the DOM in place as out-of-flow children (`data-header-folded`) so the
  * text can still be sized. Before the band has flipped to dense the widths
  * are estimated from that text; the next observer pass measures them.
+ * A cell wider than the band itself always folds (no row can show it whole).
  * Cells marked `data-header-pin` never fold. When the layout order does not
  * fit, rows are packed first-fit (`rows`), so fewer cells fold.
  */
@@ -372,15 +388,28 @@ export function headerFoldPlan(
       tailWidth,
       firstFit
     )
-  const folded = new Set<number>()
-  // Layout order when it fits: the author's order is only given up to save a fold.
-  if (pack(folded, false).count <= HEADER_MAX_ROWS) return { folded: [], rows: null }
   const empty = cells.map(headerCellIsEmpty)
   const money = cells.map(
     (c) => c.hasAttribute('data-header-money') || c.querySelector('[data-header-money]') != null
   )
   // Pinned cells (the owners) never fold.
   const pinned = cells.map((c) => c.hasAttribute('data-header-pin'))
+  // A cell wider than the whole band has no row it fits: on a row of its
+  // own the group's overflow-hidden cut it at the band's edge (a 985px
+  // five-figure budget widget in a 774px band beside the lg dock showed
+  // "$320,012.4" — PW26-71393, 2026-11-16). It folds, whatever it holds.
+  const describe = (set: Set<number>) =>
+    [...set]
+      .sort((a, b) => a - b)
+      .map((index) => ({
+        index,
+        key: keys[index],
+        empty: empty[index],
+        label: cells[index].querySelector('[data-header-label]')?.textContent?.trim() ?? ''
+      }))
+  const folded = new Set(widths.flatMap((w, i) => (!pinned[i] && w > available + 0.5 ? [i] : [])))
+  // Layout order when it fits: the author's order is only given up to save a fold.
+  if (pack(folded, false).count <= HEADER_MAX_ROWS) return { folded: describe(folded), rows: null }
   const idx = (keep: (i: number) => boolean) =>
     cells
       .map((_, i) => i)
@@ -394,6 +423,7 @@ export function headerFoldPlan(
   let packed = pack(folded, true)
   for (const i of order) {
     if (packed.count <= HEADER_MAX_ROWS) break
+    if (folded.has(i)) continue
     folded.add(i)
     packed = pack(folded, true)
   }
@@ -402,17 +432,7 @@ export function headerFoldPlan(
     if (r >= 0) rows[String(keys[i])] = r
   })
   if (packed.chipRow >= 0) rows[HEADER_MORE_ROW_KEY] = packed.chipRow
-  return {
-    folded: [...folded]
-      .sort((a, b) => a - b)
-      .map((index) => ({
-        index,
-        key: keys[index],
-        empty: empty[index],
-        label: cells[index].querySelector('[data-header-label]')?.textContent?.trim() ?? ''
-      })),
-    rows
-  }
+  return { folded: describe(folded), rows }
 }
 
 /** The fold alone (`headerFoldPlan` without the row order). */

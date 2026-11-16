@@ -263,6 +263,84 @@ describe('headerFoldPlan — first fit folds less, and never a pinned cell', () 
     expect(plan.folded.map((c) => c.key)).not.toContain('__owners__')
   })
 
+  it('folds a cell wider than the band instead of clipping it on a row of its own', () => {
+    // PW26-71393 at 1250px (2026-11-16, measured): the band is 774px beside
+    // the lg dock and the five-figure budget widget renders 985px. Given a
+    // row to itself it was cut at the band's edge ("$320,012.4"): no row
+    // can show it whole, so it folds, money or not.
+    const group = document.createElement('div')
+    Object.defineProperty(group, 'clientWidth', { value: 774 })
+    const add = (key: string, w: number, money = false) => {
+      const t = pair(key, 'value', w - 76, 40)
+      t.setAttribute('data-header-cell', key)
+      if (money) t.setAttribute('data-header-money', '')
+      W.set(t, w)
+      group.append(t)
+      return t
+    }
+    add('requisition_amount', 270, true)
+    add('forecast_left', 199, true)
+    add('__widget_1__', 985, true)
+    add('__owners__', 96).setAttribute('data-header-pin', '')
+    for (const [k, w] of [
+      ['nuvolo_id', 208],
+      ['nuvolo_payment_status', 283],
+      ['forecast_status_label', 224],
+      ['purchase_orders', 247],
+      ['creator', 227],
+      ['__summary__workflow_lines', 216]
+    ] as const)
+      add(k, w)
+    const plan = headerFoldPlan(group, true, new Map())
+    expect(plan.folded.map((c) => c.key)).toContain('__widget_1__')
+    // Every cell still shown fits its row whole, chip included.
+    const shown = new Map(
+      [
+        'requisition_amount',
+        'forecast_left',
+        '__owners__',
+        'nuvolo_id',
+        'nuvolo_payment_status',
+        'forecast_status_label',
+        'purchase_orders',
+        'creator',
+        '__summary__workflow_lines'
+      ].map((k) => [k, W.get(group.querySelector(`[data-header-cell="${k}"]`) as Element) ?? 0])
+    )
+    const used: number[] = []
+    for (const [k, r] of Object.entries(plan.rows ?? {})) {
+      if (plan.folded.some((c) => c.key === k)) continue
+      used[r] = (used[r] ?? 0) + (k === HEADER_MORE_ROW_KEY ? 96 : (shown.get(k) ?? 0))
+    }
+    expect(used.length).toBeLessThanOrEqual(2)
+    for (const u of used) expect(u).toBeLessThanOrEqual(774)
+    // Folding the widget frees room: the text tiles go up instead of folding.
+    expect(plan.folded.length).toBeLessThan(6)
+    // A fixed point: re-deciding with the widget folded keeps it folded.
+    const cache = new Map<string | number, number>()
+    headerFoldPlan(group, true, cache)
+    group.querySelector('[data-header-cell="__widget_1__"]')?.setAttribute('data-header-folded', '')
+    expect(headerFoldPlan(group, true, cache).folded.map((c) => c.key)).toContain('__widget_1__')
+  })
+
+  it('a band where only an over-wide cell overflows keeps layout order', () => {
+    const group = document.createElement('div')
+    Object.defineProperty(group, 'clientWidth', { value: 774 })
+    for (const [k, w] of [
+      ['a', 270],
+      ['wide', 985],
+      ['b', 199]
+    ] as const) {
+      const t = pair(k, '$1.00', w - 76, 40)
+      t.setAttribute('data-header-cell', k)
+      W.set(t, w)
+      group.append(t)
+    }
+    const plan = headerFoldPlan(group, true, new Map())
+    expect(plan.folded.map((c) => c.key)).toEqual(['wide'])
+    expect(plan.rows).toBeNull()
+  })
+
   it('keeps layout order (no rows) when the band fits in order', () => {
     const plan = headerFoldPlan(demoBand(2400, 300), true, new Map())
     expect(plan).toEqual({ folded: [], rows: null })

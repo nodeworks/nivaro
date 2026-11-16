@@ -103,10 +103,12 @@ import {
   HEADER_DOCK_CELL,
   HEADER_DOCK_INLINE,
   HEADER_LABEL,
+  HEADER_MARK,
   HEADER_ROW,
   HEADER_TILE,
   HEADER_TILES,
   HEADER_VALUE,
+  HEADER_VALUE_AFTER_MARK,
   HEADER_VALUE_HERO,
   HEADER_VALUE_LINE
 } from '../lib/header-strip'
@@ -14400,12 +14402,23 @@ function ItemEditFormView({
                                           {!isNew &&
                                             itemTitle &&
                                             (copiedHeaderField === '__title__' ? (
-                                              <Check className='h-3 w-3 shrink-0 text-emerald-500' />
+                                              // Same 24 px box as the copy button and the pin, so
+                                              // nothing beside them moves while "Copied" shows.
+                                              <span
+                                                data-nvr-title-copy='done'
+                                                className='-ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center'
+                                              >
+                                                <Check className='h-3 w-3 text-emerald-500' />
+                                              </span>
                                             ) : (
+                                              // Always shown (not on hover only): a phone has no hover and
+                                              // people look for it. Same box + colour as the pin beside it.
                                               <button
                                                 type='button'
                                                 aria-label='Copy title'
-                                                className='cursor-pointer opacity-0 transition-opacity group-hover/title:opacity-100'
+                                                data-tip='Copy'
+                                                data-nvr-title-copy
+                                                className='-ml-1 inline-flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-slate-500 dark:hover:bg-white/[0.06] dark:hover:text-slate-300'
                                                 onClick={() => {
                                                   navigator.clipboard
                                                     .writeText(itemTitle ?? '')
@@ -14420,16 +14433,18 @@ function ItemEditFormView({
                                                   )
                                                 }}
                                               >
-                                                <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
+                                                <Copy className='h-3 w-3' />
                                               </button>
                                             ))}
-                                          {/* rt5: pin to the watch list (W on the page). */}
+                                          {/* rt5: pin to the watch list (W on the page). Pulled in so the
+                                          copy and pin icons read as one pair, on one centre line. */}
                                           {!isNew && !designMode && (
                                             <WatchPinButton
                                               collection={collection}
                                               itemId={itemId}
                                               shortcut
                                               size='sm'
+                                              className={itemTitle ? '-ml-1.5' : ''}
                                             />
                                           )}
                                           {!isNew && itemId && !designMode && approvalBadgeOn && (
@@ -16636,10 +16651,11 @@ function ItemEditFormView({
                                                       <span
                                                         // Room for the "changed by" icon pinned top-right of the
                                                         // tile (absolute), so it never sits on the label's
-                                                        // letters ("PROJECT ⓘ ID") — stacked tiles only.
+                                                        // letters ("PROJECT ⓘ ID") — stacked tiles only; dense
+                                                        // chips and list rows carry the mark in flow (HEADER_MARK).
                                                         className={cn(
                                                           HEADER_LABEL,
-                                                          '[[data-header-field]:has(>[data-header-freshness]>*)>&]:pr-6 [[data-header-dense]_[data-header-field]:has(>[data-header-freshness]>*)>&]:pr-0'
+                                                          '[[data-header-field]:has(>[data-header-freshness]>*)>&]:pr-6 [[data-header-dense]_[data-header-field]:has(>[data-header-freshness]>*)>&]:pr-0 [[data-header-list]_[data-header-field]:has(>[data-header-freshness]>*)>&]:pr-0'
                                                         )}
                                                         data-header-label
                                                       >
@@ -16649,6 +16665,7 @@ function ItemEditFormView({
                                                         data-header-value
                                                         className={[
                                                           HEADER_VALUE_LINE,
+                                                          HEADER_VALUE_AFTER_MARK,
                                                           isPill || isTag
                                                             ? 'max-w-[232px] truncate leading-tight'
                                                             : 'max-w-[232px] items-baseline truncate leading-tight',
@@ -16768,14 +16785,15 @@ function ItemEditFormView({
                                                       </span>
                                                       {/* Who last changed it, as an info icon beside the
                                                       copy button: a line under the value was cut off
-                                                      in short tiles and sat inside the value's link. */}
+                                                      in short tiles and sat inside the value's link.
+                                                      Dense / list: in flow after the label (HEADER_MARK). */}
                                                       {f.cmsField &&
                                                         !f.cmsField.computed_type &&
                                                         !isNew &&
                                                         !viewingAddendum && (
                                                           <span
                                                             data-header-freshness
-                                                            className='absolute top-2 right-6 flex'
+                                                            className={HEADER_MARK}
                                                           >
                                                             <HeaderFreshness
                                                               collection={collection}

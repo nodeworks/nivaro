@@ -24,6 +24,13 @@ describe('record header title', () => {
     expect(h1).not.toMatch(/\bmin-w-0\b/)
   })
 
+  it('the title copy button always shows, in the same box as the pin', () => {
+    const copy = classOf(form, 'data-nvr-title-copy\n')
+    expect(copy).not.toMatch(/\bopacity-0\b/)
+    expect(copy).toMatch(/\bh-6 w-6\b/)
+    expect(copy).toMatch(/\btext-slate-400\b/)
+  })
+
   it("the back arrow sits on the id's line, not the middle of the title block", () => {
     const back = classOf(form, 'data-nvr-header-back')
     expect(back).toMatch(/\bself-start\b/)
