@@ -1038,21 +1038,20 @@ export function FileM2MField({
                   />
                 </a>
                 <div className='flex-1 min-w-0'>
-                  {processing.isProcessing(id) && (
-                    <span className='float-right ml-1.5'>
-                      <FileProcessingBadge />
-                    </span>
-                  )}
-                  <a
-                    href={`${getUrl(id)}?download=1`}
-                    download={f?.filename_download || true}
-                    onClick={downloadClick(`${getUrl(id)}?download=1`, f?.filename_download)}
-                    title='Download'
-                    data-file-name
-                    className='block w-full truncate text-left text-[12px] font-medium text-slate-700 hover:underline dark:text-slate-100'
-                  >
-                    {fileDisplayName(f) || id}
-                  </a>
+                  {/* "Processing…" sits right after the name it is about, not at the far edge. */}
+                  <div className='flex min-w-0 items-center gap-1.5'>
+                    <a
+                      href={`${getUrl(id)}?download=1`}
+                      download={f?.filename_download || true}
+                      onClick={downloadClick(`${getUrl(id)}?download=1`, f?.filename_download)}
+                      title='Download'
+                      data-file-name
+                      className='min-w-0 truncate text-left text-[12px] font-medium text-slate-700 hover:underline dark:text-slate-100'
+                    >
+                      {fileDisplayName(f) || id}
+                    </a>
+                    {processing.isProcessing(id) && <FileProcessingBadge />}
+                  </div>
                   <div className='flex flex-wrap items-center gap-x-2 mt-0.5'>
                     {f?.type && (
                       <span className='text-[10px] text-slate-500 dark:text-slate-400'>
