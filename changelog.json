@@ -1,10 +1,1117 @@
 {
-  "generated_at": "2026-11-16T19:05:33.653Z",
+  "generated_at": "2026-11-16T20:39:02.626Z",
   "releases": [
+    {
+      "version": "0.3.164",
+      "tag": "v0.3.164",
+      "date": "2026-11-16T15:38:46-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "users",
+              "text": "poke the admin access-requests topic when the awaiting list moves",
+              "hash": "31bb3ee52"
+            },
+            {
+              "section": "Added",
+              "scope": "react",
+              "text": "export RemoteConflictNotice and RemoteChangeMark",
+              "hash": "48ad1ee0a"
+            },
+            {
+              "section": "Added",
+              "scope": "payload-templates",
+              "text": "discard a draft back to the live version",
+              "hash": "a631e7a46"
+            },
+            {
+              "section": "Added",
+              "scope": "payload-templates",
+              "text": "pick each list item's field through relations",
+              "hash": "8ef5118e5"
+            },
+            {
+              "section": "Added",
+              "scope": "env-refresh",
+              "text": "flow steps keep each environment's own outbound settings",
+              "hash": "3ba1fb02d"
+            },
+            {
+              "section": "Added",
+              "scope": "support",
+              "text": "Assignment rules tab for administrators",
+              "hash": "59c0b43d1"
+            },
+            {
+              "section": "Added",
+              "scope": "support",
+              "text": "auto-assign rules for support requests",
+              "hash": "53c193512"
+            },
+            {
+              "section": "Added",
+              "scope": "support",
+              "text": "request list with filters, sort, who-has-what and bulk",
+              "hash": "e3f061165"
+            },
+            {
+              "section": "Added",
+              "scope": "queues",
+              "text": "owner, team and viewer avatars open the user card",
+              "hash": "d9a091696"
+            },
+            {
+              "section": "Added",
+              "scope": "support",
+              "text": "desk list filters, sorts, workload and bulk changes",
+              "hash": "54615eeb0"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "phone",
+              "text": "notification row actions reachable on touch; pipeline rows fit",
+              "hash": "02b3e7fcb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payload-templates",
+              "text": "resolve relation hops the field map reads",
+              "hash": "2d9beb176"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "body id on PATCH, image transform errors, false release notices",
+              "hash": "7681901f9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "drop the \"Back to <queue>\" chip and the list switcher",
+              "hash": "3ffc1fe43"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pickers",
+              "text": "say when a search matches a row the table already has",
+              "hash": "d886e0bc2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "approvals",
+              "text": "admin approval panel reads in dark",
+              "hash": "d257060b2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "cell copy button stands down while a record card is open",
+              "hash": "dc8c54762"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "manual owner badges end on the owner-group chip edge",
+              "hash": "15d3d7586"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "live trace names step and linked records, not $ tokens",
+              "hash": "6cc765882"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ready-to-send",
+              "text": "phone problem list stays on screen; select focus ring",
+              "hash": "2388046f4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "owners",
+              "text": "list owner avatars overlap less so initials read whole",
+              "hash": "cad589164"
+            },
+            {
+              "section": "Fixed",
+              "scope": "send-status",
+              "text": "a plain-text partner answer is its own words",
+              "hash": "9b579e999"
+            },
+            {
+              "section": "Fixed",
+              "scope": "refresh",
+              "text": "the partial dot stays a minute and says how many parts failed",
+              "hash": "a87d16cc7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "files",
+              "text": "never a raw file id; thumbnail returns after processing",
+              "hash": "9d6508469"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "owner rows wrap badges, chain avatars read, phone line grid",
+              "hash": "5b9101b97"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "no browser outline on the ticket sheet it focuses itself",
+              "hash": "d6cf54872"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "ticket sheet controls match the app; review round 3 minors",
+              "hash": "db2b870e1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "calendar",
+              "text": "phone cells show the mover's name alone",
+              "hash": "527686d85"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ui",
+              "text": "send line, watch Remove and overflow focus nits",
+              "hash": "b479f488a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "calendar",
+              "text": "dark hover on date chips; name markers stay in their cell",
+              "hash": "d7ea5d03c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "design review round 2 on the desk and assignment rules",
+              "hash": "d04e1bed0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime,profile",
+              "text": "trace events keep time and acknowledged on one line; phone verdict time not indented",
+              "hash": "ca4f096e6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "my-work",
+              "text": "owned_by_me rows carry state_id so My Work names the step",
+              "hash": "c02532681"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hover-card",
+              "text": "no card that only repeats the link; list cells open right",
+              "hash": "18fef03bc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "my-work",
+              "text": "one SLA reading for tab and chip; step label; phone layout",
+              "hash": "7c152d1bd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "long-text changes show the part that differs; conflict notice stacks",
+              "hash": "4a7f7622b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "keep rule detail out of nivaro_tasks activity",
+              "hash": "aa87dac8d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "phone header, outside-writes cards, busy strip stacks under banners",
+              "hash": "b72abb83a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "duplicates",
+              "text": "phone rule rows, one empty-label message, field labels in notes",
+              "hash": "1c9920ebc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "notifications",
+              "text": "group dot, unread count and phone headline",
+              "hash": "08ea290ce"
+            },
+            {
+              "section": "Fixed",
+              "scope": "clone",
+              "text": "checkbox include, wrapped labels, empty fields folded, Copied from",
+              "hash": "41c181426"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "live trace shows a dash for unacknowledged events; drops bookkeeping fields",
+              "hash": "8f742c1cc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "profile",
+              "text": "sign-in troubleshooter folds repeat failures; phone time on meta line",
+              "hash": "b275d4cdc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "owner matrix disabled Apply reads disabled in dark; counts skip blocked rows",
+              "hash": "e0d9a5f7a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "dashboards",
+              "text": "widget picture keeps room under the figure; no copy while loading",
+              "hash": "6b897809e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "ready-to-send drops empty line labels; phone grouping above the list",
+              "hash": "541b7d515"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "rule names stay with the desk; editor labels route",
+              "hash": "40fa8f451"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ui",
+              "text": "dark buttons and active pills that washed out white in efp-new",
+              "hash": "79db8b915"
+            },
+            {
+              "section": "Fixed",
+              "scope": "calendar,gantt",
+              "text": "phone date-field row never wraps; ghost gets its own lane",
+              "hash": "7d1229338"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pages",
+              "text": "page drawers fill a phone; the jobs tray steps aside",
+              "hash": "59c074ec6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "chip icon follows the state; a refusal names where to resend",
+              "hash": "aff346270"
+            },
+            {
+              "section": "Fixed",
+              "scope": "outbox",
+              "text": "Theirs/Yours previews show where the values differ",
+              "hash": "0037fb248"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "the share history follows the watchers; times never wrap",
+              "hash": "a7860bfa7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "rows paint once with their labels; the floating pill floats",
+              "hash": "6d47bbaca"
+            },
+            {
+              "section": "Fixed",
+              "scope": "dashboards",
+              "text": "a change chip keeps its time anchor on a narrow tile",
+              "hash": "f0c618a7c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "watch-list",
+              "text": "no empty state before the pins answer; the name never eats the joiner",
+              "hash": "b43185d6f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "watch-list",
+              "text": "dark disabled buttons read disabled, owner stack keeps its initials",
+              "hash": "5b1961e46"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "header folds its tools when moves land late, so none run off the edge",
+              "hash": "3ce0588bb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "calendar",
+              "text": "a full day ends on +N more instead of a scroll box",
+              "hash": "d05fff174"
+            },
+            {
+              "section": "Fixed",
+              "scope": "split",
+              "text": "the own-move note outlives a slow move and re-read",
+              "hash": "839b6c3aa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "data-model",
+              "text": "the index hint names the one field to open",
+              "hash": "99e1bec05"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "a file row never shows a raw id or an empty thumbnail gap",
+              "hash": "2f2218232"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "a file's Processing… chip sits beside its name",
+              "hash": "f2f025ee9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "sql-checks",
+              "text": "offer Fix them all only while findings are open",
+              "hash": "0dc3b0f69"
+            },
+            {
+              "section": "Fixed",
+              "scope": "split",
+              "text": "moved lines are your own change, not \"changed by others\"",
+              "hash": "c70cc592c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "the conflict note's dot stays with its sentence on a phone",
+              "hash": "dabf1e228"
+            },
+            {
+              "section": "Fixed",
+              "scope": "search",
+              "text": "no time-budget note on a collection tab",
+              "hash": "a6d9c93d9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "search",
+              "text": "a live re-ask cut short keeps the rows it never searched",
+              "hash": "ae371fe76"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "never-copied list says a column-name label in words",
+              "hash": "463aec8af"
+            },
+            {
+              "section": "Fixed",
+              "scope": "form",
+              "text": "Needed by badge sits under the input, not in the label line",
+              "hash": "ade25409d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "Ready to send lists records first on a phone",
+              "hash": "6c685d7bf"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "a file that is not the owner matrix says so once",
+              "hash": "50d41782e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "a conflict note in a narrow field keeps its sentence readable",
+              "hash": "e12bab208"
+            },
+            {
+              "section": "Fixed",
+              "scope": "people",
+              "text": "sign-in stat tiles fill the row on a phone; folded rows show their newest time",
+              "hash": "ffaabd603"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "Ready to send line names drop dangling separators",
+              "hash": "677d5e899"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "a long header subtitle ends in an ellipsis, not a clipped letter",
+              "hash": "f2710cdff"
+            },
+            {
+              "section": "Fixed",
+              "scope": "live-trace",
+              "text": "plain 'Not acknowledged', no focus ring on open, plain footer",
+              "hash": "a3b5bbbd2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "live-updates",
+              "text": "each choice says what it does; clearer off states",
+              "hash": "e59d3b8d2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "list",
+              "text": "saved-view pill keeps digest and update in one menu",
+              "hash": "891eb364f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support,notifications",
+              "text": "phone tabs scroll in one row; headers fit",
+              "hash": "8fd31342d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ui",
+              "text": "an off switch is visible in dark; duplicate card names the field to index",
+              "hash": "559bbf376"
+            },
+            {
+              "section": "Fixed",
+              "scope": "calendar,jobs",
+              "text": "job names use the row; day overflow says +N more; jobs table contrast",
+              "hash": "e73090fba"
+            },
+            {
+              "section": "Fixed",
+              "scope": "sql-checks",
+              "text": "bulk announce fix reads as a button, says who owns each procedure",
+              "hash": "ec563527b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "outside writes list collections by label; last caught agrees with the count",
+              "hash": "ff337a7d4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "See changes matches the header buttons and skips EFP save stamps",
+              "hash": "fcd7f6d62"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "grouped problems sit one step in under their group",
+              "hash": "1550f55dc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "comments",
+              "text": "posted images keep their width on a phone; lightbox steps through them",
+              "hash": "53cb46a1c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "form",
+              "text": "the Needed by badge stays on its label line",
+              "hash": "55f13cea6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipeline",
+              "text": "the owner-opened line wraps as one left-aligned sentence",
+              "hash": "14610fe02"
+            },
+            {
+              "section": "Fixed",
+              "scope": "split",
+              "text": "one refusal inside the popover; settings chips say each list once",
+              "hash": "824c85927"
+            },
+            {
+              "section": "Fixed",
+              "scope": "dashboards",
+              "text": "a dashboard on a phone is one column with a wrapping header",
+              "hash": "167530b98"
+            },
+            {
+              "section": "Fixed",
+              "scope": "proposals",
+              "text": "Now while waiting, current value on a stale row, stacked on a phone",
+              "hash": "889f19241"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "header refresh is a real control; draft banner wraps cleanly",
+              "hash": "ce1ca1eee"
+            },
+            {
+              "section": "Fixed",
+              "scope": "access",
+              "text": "one explanation on a refused record; a refused list shows the lock card",
+              "hash": "01461f694"
+            },
+            {
+              "section": "Fixed",
+              "scope": "dashboards",
+              "text": "widget picture menu shows it is open; the saved toast names the file",
+              "hash": "9ed7c60b0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "owner sheet review names filter columns in words",
+              "hash": "918a7db36"
+            },
+            {
+              "section": "Fixed",
+              "scope": "people",
+              "text": "sign-in troubleshooter folds repeats, flags an old directory check",
+              "hash": "1eb66d1dc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "Duplicate and Clone say how they differ",
+              "hash": "b56973bb3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "owner matrix upload review states",
+              "hash": "160d7cd51"
+            },
+            {
+              "section": "Fixed",
+              "scope": "dashboards",
+              "text": "a widget picture is at least 640 px wide",
+              "hash": "15ecc978c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "Ready to send names collections, adds up its counts, stacks on a phone",
+              "hash": "a974490ec"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "step pill stays one line; times read \"on Sep 25 at 4:41 PM\"",
+              "hash": "72881761c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "a signal with nothing open reads quiet, not as a warning",
+              "hash": "7a7b53fde"
+            },
+            {
+              "section": "Fixed",
+              "scope": "collections",
+              "text": "no hidden count until link tables are known",
+              "hash": "a535d9102"
+            },
+            {
+              "section": "Fixed",
+              "scope": "search",
+              "text": "a search cut short by its time budget never reads as Nothing matched",
+              "hash": "4a4fd7830"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "no grey loading disc on a move button's corner",
+              "hash": "3b0bb43dd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "others' saves read clearly — real buttons, named writer, no system stamps",
+              "hash": "ef5d7bddf"
+            },
+            {
+              "section": "Fixed",
+              "scope": "queues",
+              "text": "the queue default view is layout only, like CBV",
+              "hash": "3306fe85a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "the floating N new pill sits under the page header, not over the top bar",
+              "hash": "cb2143685"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "a feed further down a phone page takes new rows while its top is in view",
+              "hash": "29cd5f0c5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "\"viewing now\" label meets contrast in light mode",
+              "hash": "3bebc63af"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "presence lists each person once; \"viewing now\" keeps clear of the AI button",
+              "hash": "72c991813"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "history newest first; a phone page ends above the sharing pill",
+              "hash": "0079b47da"
+            },
+            {
+              "section": "Fixed",
+              "scope": "watch-list,calendar,gantt",
+              "text": "round-2 review fixes",
+              "hash": "277cb0484"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists,watch-list",
+              "text": "rows glide cell by cell; quiet secondary buttons",
+              "hash": "9ad2d13e3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "agents",
+              "text": "MCP connections keep their actions in view when the table scrolls",
+              "hash": "d7390cb17"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "a rich-text change reads as words, not markup",
+              "hash": "6fa02424f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "the page header's tool group gets its own row on a phone",
+              "hash": "9d717adeb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipeline",
+              "text": "step-count chips show their hover in dark mode",
+              "hash": "04150923d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lines",
+              "text": "line-grid headers stay readable on a phone",
+              "hash": "133e166cb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "the moving-row chip sits over the row's longest text",
+              "hash": "c6df50f47"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ui",
+              "text": "checkbox borders and warning toast text meet contrast",
+              "hash": "012f6422f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "coedit",
+              "text": "the kept-apart note names who is writing sooner",
+              "hash": "60ba0fd8f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record,account",
+              "text": "phone draft banner, Hide from pickers, plan card numbers",
+              "hash": "6ba57aaa1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "a renamed link flashes its field box, not the text",
+              "hash": "70b3e6b4d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lines",
+              "text": "the change banner does not repeat the line the removed-line note names",
+              "hash": "620175802"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "removed lines named by number in the change banner; value source sits by its label",
+              "hash": "86ee83959"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "stronger renamed-link flash on dark",
+              "hash": "1f6f4a24b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "upload chips stay one line, renamed link flash shows in dark",
+              "hash": "3b6554915"
+            },
+            {
+              "section": "Fixed",
+              "scope": "account,people",
+              "text": "plan name not key, one usage figure, session meta wraps cleanly",
+              "hash": "5cd953083"
+            },
+            {
+              "section": "Fixed",
+              "scope": "approvals",
+              "text": "an empty old value in the brief reads \"empty\", as in the resubmission diff",
+              "hash": "c65f936b5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "rt8",
+              "text": "queue in-step cell is bounded; agent record link reads as a link",
+              "hash": "d982c5c14"
+            },
+            {
+              "section": "Fixed",
+              "scope": "approvals",
+              "text": "the send-back brief formats values and counts only real changes",
+              "hash": "622b4f111"
+            },
+            {
+              "section": "Fixed",
+              "scope": "queue",
+              "text": "owners roster keeps an 8 px gutter on a phone",
+              "hash": "0f7a99894"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "record header counts the whole list; held rows say where they go",
+              "hash": "6c3781866"
+            },
+            {
+              "section": "Fixed",
+              "scope": "agents",
+              "text": "one name per connection, everywhere",
+              "hash": "54cb1e093"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "history names the requester right and shows each look once",
+              "hash": "8c938a9a4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "gantt",
+              "text": "ghost and clash bars end where every bar ends",
+              "hash": "971a7d8f7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "people",
+              "text": "count-aware sign-out confirm, own row says Sign out here",
+              "hash": "f36e35957"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "cause note keeps its time on the sentence, hides on empty fields",
+              "hash": "ef3a20194"
+            },
+            {
+              "section": "Fixed",
+              "scope": "public-pages",
+              "text": "round-2 copy and wrap on decision, status and banner",
+              "hash": "c7e4c8949"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "header title keeps its room with the dock open; phone actions wrap",
+              "hash": "545c1a660"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "phone header chips wrap under the title instead of squeezing it",
+              "hash": "418fb8aaf"
+            },
+            {
+              "section": "Fixed",
+              "scope": "resubmission",
+              "text": "an empty old value reads \"empty\", not a struck-through \"(empty)\"",
+              "hash": "cc02f3ffb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "agents",
+              "text": "records by name, phone actions on one line",
+              "hash": "05aac99c2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "in-step name ends in an ellipsis, notice choices sit beside their line",
+              "hash": "d6a1ceaf5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "resubmission",
+              "text": "dates and figures read like the form, plainer header",
+              "hash": "a48e87aae"
+            },
+            {
+              "section": "Fixed",
+              "scope": "people",
+              "text": "session rows fit a phone",
+              "hash": "8ce2cd380"
+            },
+            {
+              "section": "Fixed",
+              "scope": "gantt",
+              "text": "clash on two lanes, true end day in the readout, month named",
+              "hash": "ec8ab998b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "alerts",
+              "text": "a saved rule's operator, unit and category no longer show blank",
+              "hash": "a4fbe6cc3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "keep the figure-Σ gap while a total updates; phone gutter on the schedule popover",
+              "hash": "565e7e5ec"
+            },
+            {
+              "section": "Fixed",
+              "scope": "people",
+              "text": "sign out the rest in one request, not one per session",
+              "hash": "69fd8d879"
+            },
+            {
+              "section": "Fixed",
+              "scope": "approvals",
+              "text": "changed-after-approval diff scrolls inside an opaque panel",
+              "hash": "2e6eb8fb6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "editing-together notes, avatars, pointer and value source",
+              "hash": "e8a7f2284"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "save progress, recalculating totals and scheduled changes read clearly",
+              "hash": "b92c1766a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "calendar and Gantt drag ghosts reach the people watching",
+              "hash": "c2e1fb5c3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "calendar,gantt",
+              "text": "a date column sits on its own day, not the evening before",
+              "hash": "9afdd7c8b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "help chip, derived-cause copy, upload and linked-name cues",
+              "hash": "3e7aa00a3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "people",
+              "text": "signed-in browsers at real scale, account plans anchor",
+              "hash": "6f059d9d5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "public-pages",
+              "text": "decision and status pages, threshold banner design review",
+              "hash": "4b2cc419b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "list-nav",
+              "text": "plainer count tooltip when only the rows shown are known",
+              "hash": "7acc54af5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "list-nav",
+              "text": "edge tooltips do not claim the list ends where the page does",
+              "hash": "b360db651"
+            },
+            {
+              "section": "Fixed",
+              "scope": "watch-list",
+              "text": "mark auto pins, keep the row clear while its alert popover is open",
+              "hash": "50063e37a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "rt8",
+              "text": "phone header and agent pill survive the host stylesheet",
+              "hash": "0102222f5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipeline",
+              "text": "phone header line and track opening position",
+              "hash": "b14e945d7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "calendar,gantt",
+              "text": "mark both sides of a drag clash, lift your own drag",
+              "hash": "949e4f596"
+            },
+            {
+              "section": "Fixed",
+              "scope": "watch-list",
+              "text": "design review round 2 fixes",
+              "hash": "85960cacb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "list-nav",
+              "text": "count against the whole list, honest page edges, phone peek sheet",
+              "hash": "d9f359b94"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "one keep decision on bulk notices, in-step reads time first",
+              "hash": "25a405247"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipeline",
+              "text": "calm track history, dark track, phone scroller",
+              "hash": "44c811734"
+            },
+            {
+              "section": "Fixed",
+              "scope": "agents",
+              "text": "presence avatars, rename popover, new-matches row",
+              "hash": "9387dce77"
+            },
+            {
+              "section": "Fixed",
+              "scope": "approvals",
+              "text": "HTML-vs-HTML comparison keeps entities as written",
+              "hash": "e44279772"
+            },
+            {
+              "section": "Fixed",
+              "scope": "approvals",
+              "text": "rich-text equality only treats the legacy conversion as words",
+              "hash": "0449ebd14"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "bugs found shooting the approval and record-move screens",
+              "hash": "5983f9954"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "search",
+              "text": "related-label ids never ride as an OR'd OPENJSON list",
+              "hash": "47104fb5b"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "payload-templates",
+              "text": "discard draft, relation paths, nested expand",
+              "hash": "ffd88ee2a"
+            },
+            {
+              "section": "Documentation",
+              "scope": "support",
+              "text": "desk filters and bulk, assigned-to-you email, assignment rules",
+              "hash": "3681c7ba1"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "lists",
+              "text": "totals fake server answers the one batched read (sum=a,b)",
+              "hash": "c4a56e8e5"
+            },
+            {
+              "section": "Other",
+              "scope": "record",
+              "text": "refresh design-mode snapshot for the record header wrap",
+              "hash": "d56356ce1"
+            }
+          ]
+        }
+      ],
+      "count": 179
+    },
     {
       "version": "0.3.163",
       "tag": "v0.3.163",
-      "date": "2026-11-16T14:05:06-05:00",
+      "date": "2026-11-16T14:05:33-05:00",
       "sections": [
         {
           "label": "Added",
