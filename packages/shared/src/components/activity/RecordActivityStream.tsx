@@ -8,7 +8,7 @@ import { post } from '../../lib/commands'
 import { useLiveCollection } from '../../lib/live'
 import { scrollParentOf, slideIn, stickyTopOffset, useTopInserts } from '../../lib/live-screen'
 import { cn, titleCase } from '../../lib/utils'
-import { ActivityEntry, useActivityLabels } from '../ActivityEntry'
+import { ActivityEntry, useActivityLabelsState } from '../ActivityEntry'
 import { ErrorNotice } from '../ErrorNotice'
 import { activityLinkable } from '../profile/ActivityFeedCard'
 
@@ -188,7 +188,9 @@ export function RecordActivityStream({
   const rows = merged ? feed.rows : []
   const groups = useMemo(() => groupActivity(rows), [rows])
   const labelsOn = rows.length > 0
-  const labels = useActivityLabels(rows, { enabled: labelsOn })
+  // Rows paint once, with their labels: a sentence never swaps "changed Objective" for "set
+  // Objective to …" after first paint (which re-wraps every row on a phone).
+  const { labels, settled: labelsSettled } = useActivityLabelsState(rows, { enabled: labelsOn })
   // The stream's own record(s) are the page: their phrase is left out of every sentence.
   const omitPhrases = useMemo(
     () =>
@@ -285,7 +287,18 @@ export function RecordActivityStream({
     else nav.open(target)
   }
 
-  const loading = merged === undefined && !head.isError
+  const loading = (merged === undefined && !head.isError) || (labelsOn && !labelsSettled)
+  // More rows below the card's own scroll box (desktop): a bottom fade says "scroll", not "cut".
+  const [moreBelow, setMoreBelow] = useState(false)
+  const scrollerRef = useRef<HTMLDivElement | null>(null)
+  const checkBelow = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return
+    setMoreBelow(el.scrollHeight - el.scrollTop - el.clientHeight > 2)
+  }, [])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-check when the rows change
+  useEffect(() => {
+    checkBelow(scrollerRef.current)
+  }, [groups, checkBelow])
   return (
     <section
       ref={cardRef}
@@ -300,7 +313,10 @@ export function RecordActivityStream({
         className='flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-slate-100 px-4 py-2.5 dark:border-border/60'
       >
         <Activity className='h-4 w-4 shrink-0 text-nvr-navy dark:text-nvr-cyan' aria-hidden />
-        <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Activity</h3>
+        {/* leading-6 = the pill's height: the header does not grow when "N new" appears. */}
+        <h3 className='text-[13px] font-semibold leading-6 text-slate-800 dark:text-slate-100'>
+          Activity
+        </h3>
         {feed.held > 0 && (
           // In the header, never over the rows: it takes no room from the list and covers no text.
           <button
@@ -320,8 +336,10 @@ export function RecordActivityStream({
               type='button'
               data-activity-new-pill-float={feed.held}
               onClick={feed.reveal}
-              style={{ top: floatTop + 8 }}
-              className='fixed left-1/2 z-[60] inline-flex h-7 -translate-x-1/2 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-white px-3 text-[12px] font-medium text-nvr-navy shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:bg-card dark:text-nvr-cyan'
+              style={{ top: floatTop + 10 }}
+              // Raised above the rows (its own surface and a real shadow), so it reads as a
+              // control floating over the text, not a box drawn on it (rt6 review).
+              className='fixed left-1/2 z-[60] inline-flex h-7 -translate-x-1/2 items-center gap-1 rounded-full border border-nvr-cyan/50 bg-white px-3 text-[12px] font-medium text-nvr-navy shadow-[0_6px_18px_-4px_rgba(15,23,42,0.35),0_2px_4px_-1px_rgba(15,23,42,0.12)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:bg-[#2a3140] dark:text-nvr-cyan dark:shadow-[0_8px_20px_-4px_rgba(0,0,0,0.6)]'
             >
               <ChevronUp className='h-3.5 w-3.5' aria-hidden />
               {feed.held} new
@@ -368,8 +386,12 @@ export function RecordActivityStream({
         </p>
       ) : (
         <div
+          ref={scrollerRef}
           className={cn('relative md:overflow-y-auto', maxHeightClass)}
-          onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 2)}
+          onScroll={(e) => {
+            setScrolled(e.currentTarget.scrollTop > 2)
+            checkBelow(e.currentTarget)
+          }}
         >
           {scrolled && (
             <div
@@ -396,6 +418,13 @@ export function RecordActivityStream({
               </div>
             ))}
           </div>
+          {moreBelow && (
+            <div
+              aria-hidden
+              data-activity-scroll-fade-bottom
+              className='pointer-events-none sticky bottom-0 z-10 -mt-6 h-6 bg-gradient-to-t from-white via-white/80 to-transparent dark:from-card dark:via-card/80'
+            />
+          )}
           {(hasMore || olderError != null) && (
             <div className='flex justify-center border-t border-slate-100 px-4 py-2.5 dark:border-border/60'>
               {olderError != null ? (

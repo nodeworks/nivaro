@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   Bot,
   ChevronDown,
@@ -294,7 +294,7 @@ export function ActivityEntry({
         <AgentBadge label={entry.via_agent} />
         {showTime && time && (
           <span
-            className='shrink-0 pt-px text-[11px] tabular-nums text-slate-400'
+            className='shrink-0 pt-0.5 text-[11px] leading-5 tabular-nums text-slate-400'
             data-tip={time.full}
           >
             {time.short}
@@ -410,11 +410,23 @@ export function useActivityLabels(
   entries: ActivityEntryInput[],
   opts: { enabled?: boolean } = {}
 ): ActivityLabels | undefined {
+  return useActivityLabelsState(entries, opts).labels
+}
+
+/**
+ * The same labels plus whether the first answer is in (`settled`: answered, failed or not
+ * needed). A new page keeps the previous labels while its own load, so rows already on screen
+ * never fall back to the label-less sentence ("changed Objective") and back (rt6 review).
+ */
+export function useActivityLabelsState(
+  entries: ActivityEntryInput[],
+  opts: { enabled?: boolean } = {}
+): { labels: ActivityLabels | undefined; settled: boolean } {
   const client = useOptionalNivaroClient()
   const body = useMemo(() => activityLabelRefs(entries), [entries])
   const key = useMemo(() => JSON.stringify(body), [body])
   const empty = body.refs.length === 0 && body.users.length === 0 && body.collections.length === 0
-  const { data } = useQuery({
+  const { data, isError } = useQuery({
     queryKey: ['activity-labels', key],
     queryFn: async () =>
       (
@@ -424,9 +436,11 @@ export function useActivityLabels(
       ).data,
     enabled: !!client && !empty && opts.enabled !== false,
     staleTime: 60_000,
-    retry: false
+    retry: false,
+    placeholderData: keepPreviousData
   })
-  return useMemo(() => {
+  const on = !!client && !empty && opts.enabled !== false
+  const labels = useMemo(() => {
     let timeZone: string | null = null
     try {
       timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? null
@@ -435,4 +449,5 @@ export function useActivityLabels(
     }
     return data ? { ...data, timeZone } : undefined
   }, [data])
+  return { labels, settled: !on || data !== undefined || isError }
 }

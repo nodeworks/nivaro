@@ -468,6 +468,16 @@ function viewerAway(): boolean {
 }
 
 /** A small accent dot in a row's gutter, until the row has been in view. */
+/** The first opaque background behind `el` (the card it sits on); white when none is found. */
+function surfaceColour(el: HTMLElement): string {
+  if (typeof getComputedStyle !== 'function') return '#fff'
+  for (let n: HTMLElement | null = el; n; n = n.parentElement) {
+    const bg = getComputedStyle(n).backgroundColor
+    if (bg && bg !== 'transparent' && !/rgba\([^)]*,\s*0\)$/.test(bg)) return bg
+  }
+  return '#fff'
+}
+
 function markUnseen(row: HTMLElement, dot: string): void {
   if (row.querySelector('[data-live-new-dot]')) return
   if (typeof getComputedStyle === 'function' && getComputedStyle(row).position === 'static')
@@ -475,7 +485,8 @@ function markUnseen(row: HTMLElement, dot: string): void {
   const el = document.createElement('span')
   el.setAttribute('data-live-new-dot', '')
   el.setAttribute('aria-hidden', 'true')
-  el.style.cssText = `position:absolute;left:3px;top:6px;width:6px;height:6px;border-radius:9999px;background:${dot};pointer-events:none;z-index:1`
+  // A 2 px ring in the surface colour: a badge in the gutter, never touching what it sits by.
+  el.style.cssText = `position:absolute;left:3px;top:6px;width:6px;height:6px;border-radius:9999px;background:${dot};box-shadow:0 0 0 2px ${surfaceColour(row)};pointer-events:none;z-index:1`
   row.appendChild(el)
   const clear = () => {
     el.remove()
