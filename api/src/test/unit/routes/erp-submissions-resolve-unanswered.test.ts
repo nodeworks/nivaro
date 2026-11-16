@@ -325,7 +325,7 @@ describe('POST /:id/retry of a failed send while another send of it has no answe
     const res = await app().inject({ method: 'POST', url: '/51/retry', headers: ADMIN })
     expect(res.statusCode).toBe(200)
     expect(order).toEqual(['mark', 'send'])
-    expect(markResendStarting).toHaveBeenCalledWith(51, 1, 30_000)
+    expect(markResendStarting).toHaveBeenCalledWith(51, 1, 60_000)
   })
 })
 
@@ -371,8 +371,8 @@ describe('POST / — an admin’s ad-hoc push', () => {
     expect(seen).toMatchObject({ status: 'sending', attempts: 0, collection: 'orders', item: 'r9' })
     const payload = JSON.parse(String(seen?.payload))
     expect(payload).toMatchObject({ endpoint_path: '/orders' })
-    // 30 s resend call + 60 s margin.
-    expect(Math.abs(Date.parse(payload.answer_by) - (NOW.getTime() + 90_000))).toBeLessThan(1_000)
+    // 60 s resend call + 60 s margin.
+    expect(Math.abs(Date.parse(payload.answer_by) - (NOW.getTime() + 120_000))).toBeLessThan(1_000)
     expect(store.rows.find((r) => r.id === 900)?.status).toBe('sending')
   })
 })

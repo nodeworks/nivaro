@@ -1191,7 +1191,7 @@ describe('Send now while an earlier send has no answer (erp-unanswered.ts)', () 
     })
     await sendNow(1, 'user-rob')
     expect(order).toEqual(['mark', 'send'])
-    expect(markResendStarting).toHaveBeenCalledWith(50, 1, 30_000)
+    expect(markResendStarting).toHaveBeenCalledWith(50, 1, 60_000)
   })
 
   it('someone else’s resend of the row is already out: nothing sent', async () => {
