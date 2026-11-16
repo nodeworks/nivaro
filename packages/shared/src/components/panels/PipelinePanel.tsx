@@ -1453,9 +1453,13 @@ function StateTrack({
     if (!el || el.scrollWidth <= el.clientWidth) return
     const cur = el.querySelector<HTMLElement>('[data-track-current]')
     if (!cur) return
+    // Open on the step before the current one, whole, at the left edge: centring the
+    // current step cut both neighbours' labels mid-word ("aiting on Level 1").
+    const step = cur.closest<HTMLElement>('[data-track-step]')
+    const anchor = (step?.previousElementSibling as HTMLElement | null) ?? step
+    if (!anchor) return
     const box = el.getBoundingClientRect()
-    const node = cur.getBoundingClientRect()
-    el.scrollLeft += node.left + node.width / 2 - (box.left + box.width / 2)
+    el.scrollLeft += anchor.getBoundingClientRect().left - box.left - 2
   }, [currentStateId])
   // Which edges have more track beyond them: a scrolled-off label fades out
   // at that edge instead of being cut mid-word with nothing saying "more".
@@ -1671,7 +1675,7 @@ function StateTrack({
             const nextState = !isLast ? relevant[i + 1] : null
             const edge = nextState ? edgeEntries(s.id, nextState.id) : []
             return (
-              <div key={s.id} className='flex flex-1 items-start'>
+              <div key={s.id} className='flex flex-1 items-start' data-track-step>
                 {/* The label column keeps a readable floor of its own: the old
                 floor sat on the step AND its 40px connector together, leaving
                 the label a few pixels on a narrow track. */}
@@ -3872,15 +3876,16 @@ function PipelinePanelInner({
           tabIndex={0}
           onClick={() => setExpanded((v) => !v)}
           onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setExpanded((v) => !v)}
-          className='flex w-full cursor-pointer items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
+          className='flex w-full cursor-pointer items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 max-sm:flex-wrap max-sm:gap-y-2 dark:hover:bg-white/[0.02]'
         >
           <GitBranch className='h-3.5 w-3.5 shrink-0 text-slate-400' />
           <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>
             {title || 'Pipeline'}
           </span>
-          {/* Wraps instead of squeezing: on a phone "for 3 d 4 h" and the chips drop under the
-              step badge rather than folding its label into a tall blob. */}
-          <div className='flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1'>
+          {/* Wraps instead of squeezing. On a phone the step, its time and the chips take their
+              own line under "Progress" (indented to its text): squeezed between the title and
+              the chevron, the step pill folded into a tall blob. */}
+          <div className='flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 max-sm:order-last max-sm:basis-full max-sm:pl-6'>
             {addendumView && (
               <span className='flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400'>
                 Addendum workflow
@@ -3890,10 +3895,8 @@ function PipelinePanelInner({
               long step name wraps inside the pill and "for 3 d 4 h" stays beside it on the
               pill's centre line, never hanging under its left edge. */}
             {currentState && (
-              <span className='inline-flex min-w-0 max-w-full items-center gap-1.5'>
-                <span className='min-w-0'>
-                  <StateBadge label={currentState.label} color={currentState.color} />
-                </span>
+              <span className='inline-flex max-w-full items-center gap-1.5'>
+                <StateBadge label={currentState.label} color={currentState.color} />
                 {!instance?.completed_at && (
                   <StepForLine
                     className='shrink-0'
@@ -3975,7 +3978,7 @@ function PipelinePanelInner({
           </div>
           <ChevronDown
             className={cn(
-              'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150',
+              'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150 max-sm:ml-auto',
               expanded && 'rotate-180'
             )}
           />
