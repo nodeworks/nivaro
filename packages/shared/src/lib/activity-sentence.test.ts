@@ -14,7 +14,8 @@ import {
   o2mSentence,
   parseTransitionComment,
   renderActivityGroupSentence,
-  renderActivitySentence
+  renderActivitySentence,
+  valueText
 } from './activity-sentence'
 
 const PAT = 'aaaaaaaa-0000-0000-0000-000000000001'
@@ -488,5 +489,19 @@ describe('split sentences (idea 4)', () => {
     expect(
       activityPredicate({ action: 'split-out', collection: 'purchase_orders', comment: 'x' })
     ).toBe('moved lines to a new record')
+  })
+})
+
+describe('valueText — rich text', () => {
+  it('reads a rich-text value as its words, never its markup', () => {
+    expect(
+      valueText('projects', 'objective', '<p>Splice the <b>Dover</b> feeders &amp; recheck.</p>')
+    ).toBe('Splice the Dover feeders & recheck.')
+  })
+  it('an all-markup value reads as empty', () => {
+    expect(valueText('projects', 'objective', '<p></p>')).toBe('empty')
+  })
+  it('leaves plain text with a lone angle bracket alone', () => {
+    expect(valueText('workflows', 'note', 'qty < 5')).toBe('qty < 5')
   })
 })
