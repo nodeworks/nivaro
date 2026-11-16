@@ -14341,7 +14341,11 @@ function ItemEditFormView({
                                           type='button'
                                           onClick={backWithGuard}
                                           aria-label='Back'
-                                          className='group/back shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+                                          // Top-aligned on the id's line (32 px box on a ~21 px title
+                                          // line): centred on the whole block, a 4–6 line title put the
+                                          // arrow beside the "Edited…" line, rows below the id.
+                                          data-nvr-header-back
+                                          className='group/back -mt-1.5 shrink-0 self-start flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
                                         >
                                           <ArrowLeft
                                             aria-hidden

@@ -24,6 +24,12 @@ describe('record header title', () => {
     expect(h1).not.toMatch(/\bmin-w-0\b/)
   })
 
+  it("the back arrow sits on the id's line, not the middle of the title block", () => {
+    const back = classOf(form, 'data-nvr-header-back')
+    expect(back).toMatch(/\bself-start\b/)
+    expect(back).toMatch(/-mt-1\.5\b/)
+  })
+
   it('the title block grows from its floor once the row wraps', () => {
     const block = classOf(form, 'data-nvr-header-title')
     expect(block).toContain('[[data-nvr-header-wrap]>&]:flex-1')

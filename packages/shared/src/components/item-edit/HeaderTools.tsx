@@ -114,6 +114,33 @@ export function useCloseWhenRowOpensLayer(
   }, [open])
 }
 
+/**
+ * How much wider the record title's line would have to be for its chips (Changed after
+ * approval, Help requested…) to sit beside the id instead of wrapping under it — 0 when they
+ * already fit, or when the tool strip is not on the title's line (phones put the actions on a
+ * line of their own, so folding the tools would give the title nothing). An inline toolbar that
+ * squeezes the title into a 5–6 line block without ever overflowing the row folds on this
+ * (2026-11-16 design review: the 1548 px header was taller than the 1248 px one).
+ */
+export function titleChipDeficit(header: HTMLElement, strip: HTMLElement | null): number {
+  const block = header.querySelector<HTMLElement>('[data-nvr-header-title]')
+  const id = block?.querySelector<HTMLElement>('[data-nvr-record-title]')
+  const line = id?.parentElement
+  if (!block || !id || !line || !strip) return 0
+  const blockBox = block.getBoundingClientRect()
+  const stripBox = strip.getBoundingClientRect()
+  // The tools sit on a line below the title (phones, the wrapped stage): nothing to win.
+  if (stripBox.top >= blockBox.bottom - 1) return 0
+  const idTop = id.getBoundingClientRect().top
+  const items = Array.from(line.children).filter(
+    (c): c is HTMLElement => c instanceof HTMLElement && c.offsetWidth > 0
+  )
+  if (!items.some((c) => c.getBoundingClientRect().top > idTop + 2)) return 0
+  const gap = Number.parseFloat(getComputedStyle(line).columnGap) || 0
+  const oneLine = items.reduce((w, c) => w + c.offsetWidth, 0) + gap * (items.length - 1)
+  return Math.max(0, Math.ceil(oneLine - line.clientWidth))
+}
+
 export function HeaderTools({ children }: { children: ReactNode }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -148,6 +175,16 @@ export function HeaderTools({ children }: { children: ReactNode }) {
       if (!collapsedRef.current) {
         if (header.scrollWidth > header.clientWidth + 2) {
           neededRef.current = header.scrollWidth
+          setCollapsed(true)
+          setOpen(false)
+          return
+        }
+        // The row fits, but only by squeezing the title until its chips wrap under the id:
+        // fold too. neededRef is the width at which they would fit beside it, so the same
+        // +32 px margin below keeps it from unfolding straight back into the squeeze.
+        const deficit = titleChipDeficit(header, wrapRef.current?.parentElement ?? null)
+        if (deficit > 0) {
+          neededRef.current = header.clientWidth + deficit
           setCollapsed(true)
           setOpen(false)
         }
