@@ -187,7 +187,10 @@ export function CallFigures({ s }: { s: McpConnectionStats | null }) {
   )
 }
 
-export function KindPill({ kind }: { kind: McpConnKind }) {
+export function KindPill({ kind, name }: { kind: McpConnKind; name?: string | null }) {
+  // "Personal token  [Personal token]" said one thing twice: the pill shows only when it adds
+  // something to the name beside it.
+  if (name && name.trim().toLowerCase() === KIND_LABEL[kind].toLowerCase()) return null
   return <Pill tone={kind === 'oauth' ? 'brand' : 'neutral'}>{KIND_LABEL[kind]}</Pill>
 }
 
@@ -256,7 +259,7 @@ function ConnectionRow({
             appName={c.name}
             forName='you'
             scope='mine'
-            trailing={<KindPill kind={c.kind} />}
+            trailing={<KindPill kind={c.kind} name={c.display_name ?? c.name} />}
           />
         </div>
         <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400'>

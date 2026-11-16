@@ -8,6 +8,7 @@ import {
   readAgentActivity,
   undoAgentWrite
 } from '../services/mcp-activity.js'
+import { PERSONAL_TOKEN_NAME } from '../services/mcp-attribution.js'
 import {
   AGENT_NAME_MAX,
   agentDisplayName,
@@ -168,6 +169,10 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
           return [conn, agentDisplayName(conn, g.client_name, settings)]
         })
       )
+      // The person's own token goes by the same name here as in their Connected apps list
+      // (the log's caller slug read "Sam Rivera token").
+      const own = `u${userId.toLowerCase()}`
+      names.set(own, agentDisplayName(own, PERSONAL_TOKEN_NAME, settings))
       const page = await readAgentActivity(userId, {
         conn: conn ?? null,
         before: before ?? null,

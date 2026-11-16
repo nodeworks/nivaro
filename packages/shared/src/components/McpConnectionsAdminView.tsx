@@ -579,7 +579,7 @@ export function McpConnectionsAdminView({
                               forName={c.user_name ?? 'this person'}
                               scope='admin'
                               editIn='popover'
-                              trailing={<KindPill kind={c.kind} />}
+                              trailing={<KindPill kind={c.kind} name={c.display_name ?? c.name} />}
                             />
                           </div>
                         </td>
