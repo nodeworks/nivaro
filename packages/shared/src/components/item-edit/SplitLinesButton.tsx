@@ -11,6 +11,7 @@ import {
   lineSplitKey,
   lineSplitPath
 } from '../../lib/line-split'
+import { noteOwnWrite } from '../../lib/own-writes'
 import { fetchCollectionMeta, queryKeys } from '../../lib/query-keys'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -88,6 +89,8 @@ export function SplitLinesButton({
   const run = async () => {
     setBusy(true)
     setRefusal(null)
+    // The moved lines leave this grid by this person's own hand: never "changed by others".
+    for (const id of selectedIds) noteOwnWrite(lineCollection, id)
     try {
       const res = await client.request<SplitAnswer>(
         post(lineSplitPath(parentCollection, parentId), {
