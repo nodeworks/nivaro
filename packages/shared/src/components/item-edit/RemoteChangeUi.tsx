@@ -509,7 +509,13 @@ const SYSTEM_STAMPS = new Set([
   'user_created',
   'created_by',
   'modified_at',
-  'modified_by'
+  'modified_by',
+  'date_modified',
+  'last_modified',
+  'last_updated',
+  // EFP-style stamps: `changed` / `created` carry the save time on workflows.
+  'changed',
+  'created'
 ])
 
 export function isSystemStampField(name: string): boolean {
@@ -585,7 +591,7 @@ export function RemoteChangesButton({
           type='button'
           data-remote-changes-button
           className={cn(
-            'inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-[12px] font-medium transition-colors',
+            'inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium shadow-sm transition-colors',
             open_ > 0
               ? 'border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-400/30 dark:text-amber-200 dark:hover:bg-amber-400/10'
               : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-100 dark:hover:bg-muted'
