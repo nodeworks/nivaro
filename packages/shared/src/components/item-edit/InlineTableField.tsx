@@ -8970,8 +8970,10 @@ export function InlineTableField({
           if (diff?.removed.length) parts.push(`${diff.removed.length} removed`)
           // Named like the removed-line note does ("Line 3 · 27\" monitor"), never a bare "Line":
           // the number is the row's place when this person opened the grid.
+          // The line the removed-line note above already names is not repeated here.
           const baseOrder = [...(baselineRef.current?.keys() ?? [])]
-          const removedLabels = (diff?.removed ?? [])
+          const otherRemoved = (diff?.removed ?? []).filter((id) => id !== removedLine?.rowId)
+          const removedLabels = otherRemoved
             .slice(0, 5)
             .map((id) =>
               removedLineName(
@@ -8996,8 +8998,8 @@ export function InlineTableField({
                   {removedLabels.length > 0 && (
                     <span className='text-amber-700/80 dark:text-amber-300/80'>
                       removed: {removedLabels.join(', ')}
-                      {diff.removed.length > removedLabels.length
-                        ? ` +${diff.removed.length - removedLabels.length}`
+                      {otherRemoved.length > removedLabels.length
+                        ? ` +${otherRemoved.length - removedLabels.length}`
                         : ''}
                     </span>
                   )}
