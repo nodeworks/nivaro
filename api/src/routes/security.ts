@@ -39,6 +39,8 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Querystring: { user_id?: string } }>('/sessions', async (req) => {
     const filterUser = String(req.query?.user_id ?? '').toUpperCase()
+    // The session this request came in on: an admin on their own page sees "This browser".
+    const currentSid = (req.session as unknown as { sessionId?: string })?.sessionId ?? null
     const sessions: Array<{
       sid: string
       user_id: string | null
@@ -104,6 +106,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
         user_id: s.user_id,
         user_name: nameById.get(String(s.user_id).toUpperCase()) ?? s.user_id,
         ttl_seconds: s.ttl_seconds,
+        current: currentSid != null && s.sid === currentSid,
         // Realtime round 9: what the admin sees of a session — browser, address, sign-in time
         // (stamped at sign-in; older sessions have none). Never more of the id than the prefix.
         ...s.detail

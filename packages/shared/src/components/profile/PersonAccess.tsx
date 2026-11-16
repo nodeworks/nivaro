@@ -18,7 +18,7 @@ import {
   Trash2,
   Undo2
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post, put } from '../../lib/commands'
@@ -1415,6 +1415,26 @@ export interface PersonSession {
   device?: string | null
   ip?: string | null
   signed_in_at?: string | null
+  /** The session this page is being read from (an admin on their own page). */
+  current?: boolean
+}
+
+/** Rows shown before "Show all": the newest with details, this browser first. */
+const SESSIONS_SHOWN = 6
+
+const hasDetail = (s: PersonSession) => !!(s.device || s.ip || s.signed_in_at)
+
+/** This browser first, then the newest sign-ins with details, then the ones from before
+ *  details were recorded (longest left to live first). Pure. */
+export function orderSessions(rows: PersonSession[]): PersonSession[] {
+  const at = (s: PersonSession) => (s.signed_in_at ? Date.parse(s.signed_in_at) || 0 : 0)
+  return [...rows].sort(
+    (a, b) =>
+      Number(!!b.current) - Number(!!a.current) ||
+      Number(hasDetail(b)) - Number(hasDetail(a)) ||
+      at(b) - at(a) ||
+      b.ttl_seconds - a.ttl_seconds
+  )
 }
 
 /** "Ends in 7h" / "Ends in 25 min" from the session's remaining life. */
@@ -1461,9 +1481,43 @@ export function SessionsCard({ userId }: { userId: string }) {
     },
     onError: (e) => toastError(e, 'Could not sign that browser out')
   })
-  const sessions = list.data ?? []
+  const sessions = useMemo(() => orderSessions(list.data ?? []), [list.data])
   const fresh = useFreshIds(sessions.map((s) => s.sid_prefix))
   const { quiet } = useLivePreference()
+  const [showAll, setShowAll] = useState(false)
+  // Many sign-ins from before browser details were recorded read as a column of identical
+  // "Browser" rows: three or more of them fold into one line until asked for.
+  const bare = sessions.filter((s) => !s.current && !hasDetail(s))
+  const head = bare.length >= 3 ? sessions.filter((s) => s.current || hasDetail(s)) : sessions
+  const shown = showAll ? sessions : head.slice(0, SESSIONS_SHOWN)
+  const hiddenCount = sessions.length - shown.length
+  const hiddenAllBare =
+    hiddenCount > 0 && hiddenCount === bare.length && head.length <= SESSIONS_SHOWN
+  const isSelf = sessions.some((s) => s.current)
+  const others = sessions.filter((s) => !s.current)
+  // Every browser but this one (or all of them, on someone else's page). Phones keep their
+  // own sign-in, as on the Signed-in phones card.
+  const signOutAll = useMutation({
+    mutationFn: async (prefixes: string[]) => {
+      let failed = 0
+      for (const prefix of prefixes) {
+        try {
+          await client.request(del(`/security/sessions/${prefix}`))
+        } catch {
+          failed++
+        }
+      }
+      return { failed, total: prefixes.length }
+    },
+    onSuccess: ({ failed, total }) => {
+      void qc.invalidateQueries({ queryKey: key })
+      if (failed === 0)
+        toast.success(total === 1 ? 'That browser is signed out' : `${total} browsers signed out`)
+      else toast.error(`${failed} of ${total} browsers could not be signed out. Try again.`)
+    },
+    onError: (e) => toastError(e, 'Could not sign those browsers out')
+  })
+  const allLabel = isSelf ? 'Sign out all other browsers' : 'Sign out all browsers'
   return (
     <SectionCard
       icon={<MonitorSmartphone className='h-4 w-4' />}
@@ -1481,17 +1535,71 @@ export function SessionsCard({ userId }: { userId: string }) {
       ) : sessions.length === 0 ? (
         <EmptyLine>Not signed in on any browser.</EmptyLine>
       ) : (
-        <ul data-sessions-list className='-my-2 divide-y divide-slate-100 dark:divide-border/60'>
-          {sessions.map((sn) => (
-            <SessionRow
-              key={sn.sid_prefix}
-              session={sn}
-              fresh={!quiet && fresh.has(sn.sid_prefix)}
-              pending={revoke.isPending && revoke.variables === sn.sid_prefix}
-              onRevoke={() => revoke.mutate(sn.sid_prefix)}
-            />
-          ))}
-        </ul>
+        <>
+          <ul
+            data-sessions-list
+            className={cn(
+              '-my-2 divide-y divide-slate-100 dark:divide-border/60',
+              // A long list scrolls inside the card, so its count header stays in view.
+              showAll && sessions.length > SESSIONS_SHOWN && 'max-h-[26rem] overflow-y-auto pr-1'
+            )}
+          >
+            {shown.map((sn) => (
+              <SessionRow
+                key={sn.sid_prefix}
+                session={sn}
+                fresh={!quiet && fresh.has(sn.sid_prefix)}
+                pending={
+                  (revoke.isPending && revoke.variables === sn.sid_prefix) ||
+                  (signOutAll.isPending && !!signOutAll.variables?.includes(sn.sid_prefix))
+                }
+                onRevoke={() => revoke.mutate(sn.sid_prefix)}
+              />
+            ))}
+          </ul>
+          {(hiddenCount > 0 || showAll || others.length > 1) && (
+            <div
+              data-sessions-foot
+              className='-mx-4 -mb-4 mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-slate-100 px-4 py-2.5 dark:border-border/60'
+            >
+              {hiddenCount > 0 ? (
+                <button
+                  type='button'
+                  data-sessions-show-all
+                  onClick={() => setShowAll(true)}
+                  className='min-w-0 rounded text-left text-[12px] font-medium text-slate-600 underline decoration-slate-300 underline-offset-2 hover:text-slate-900 hover:decoration-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-slate-300 dark:decoration-slate-600 dark:hover:text-slate-100'
+                >
+                  {hiddenAllBare
+                    ? `${hiddenCount} older sign-in${hiddenCount === 1 ? '' : 's'} with no browser details · Show`
+                    : `Show all ${sessions.length}`}
+                </button>
+              ) : showAll && sessions.length > head.slice(0, SESSIONS_SHOWN).length ? (
+                <button
+                  type='button'
+                  onClick={() => setShowAll(false)}
+                  className='rounded text-[12px] font-medium text-slate-600 underline decoration-slate-300 underline-offset-2 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-slate-300 dark:decoration-slate-600 dark:hover:text-slate-100'
+                >
+                  Show fewer
+                </button>
+              ) : null}
+              {others.length > 1 && (
+                <span className='ml-auto'>
+                  <ConfirmButton
+                    title={allLabel}
+                    onConfirm={() => signOutAll.mutate(others.map((o) => o.sid_prefix))}
+                    confirmLabel={`Sign out ${others.length} browsers?`}
+                    disabled={signOutAll.isPending}
+                    className='inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 transition-colors hover:border-red-300 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:opacity-40 dark:border-border dark:text-slate-300 dark:hover:border-red-500/40 dark:hover:text-red-400'
+                    armedClassName='border-red-300 font-semibold text-red-600 dark:border-red-500/40 dark:text-red-400'
+                  >
+                    <LogOut className='h-3 w-3' aria-hidden />
+                    {signOutAll.isPending ? 'Signing out…' : allLabel}
+                  </ConfirmButton>
+                </span>
+              )}
+            </div>
+          )}
+        </>
       )}
     </SectionCard>
   )
@@ -1515,11 +1623,8 @@ function SessionRow({
       ? `Signed in ${formatDateTime(sn.signed_in_at)}`
       : 'Signed in before this was recorded',
     sessionEndsIn(sn.ttl_seconds)
-  ]
-    .filter(Boolean)
-    .join(' · ')
+  ].filter((x): x is string => !!x)
   const nameRef = useOverflowTip<HTMLSpanElement>(name)
-  const metaRef = useOverflowTip<HTMLParagraphElement>(meta)
   return (
     <li
       data-session-row
@@ -1537,19 +1642,38 @@ function SessionRow({
         )}
       </span>
       <div className='min-w-0 flex-1'>
-        <span
-          ref={nameRef}
-          data-session-device
-          className='block truncate text-[12.5px] font-medium text-slate-800 dark:text-slate-100'
-        >
-          {name}
-        </span>
+        <p className='flex min-w-0 items-center gap-2'>
+          <span
+            ref={nameRef}
+            data-session-device
+            className='truncate text-[12.5px] font-medium text-slate-800 dark:text-slate-100'
+          >
+            {name}
+          </span>
+          {sn.current && (
+            <span
+              data-session-current
+              className='shrink-0 rounded-full bg-nvr-cyan/10 px-1.5 py-px text-[10.5px] font-medium text-sky-700 dark:text-nvr-cyan'
+            >
+              This browser
+            </span>
+          )}
+        </p>
+        {/* Wraps instead of truncating: "Ends in …" is the part an admin reads for. Each part
+            keeps its "·" so a separator never starts a line. */}
         <p
-          ref={metaRef}
           data-session-meta
-          className='mt-0.5 truncate text-[11.5px] tabular-nums text-slate-500 dark:text-slate-400'
+          className='mt-0.5 text-[11.5px] leading-snug tabular-nums text-slate-500 dark:text-slate-400'
         >
-          {meta}
+          {meta.map((m, i) => (
+            <Fragment key={m}>
+              {i > 0 && ' '}
+              <span className='whitespace-nowrap'>
+                {i > 0 && '· '}
+                {m}
+              </span>
+            </Fragment>
+          ))}
         </p>
       </div>
       <span data-session-sign-out className='contents'>

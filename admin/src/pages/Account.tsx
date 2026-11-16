@@ -576,7 +576,8 @@ export function AccountPage() {
 
           {/* Available plans */}
           {(plans.length > 0 || plansQuery.isLoading) && (
-            <div>
+            // `#account-plans`: a hosting layer's usage meter scrolls here from "Upgrade plan".
+            <div id='account-plans' className='scroll-mt-4'>
               <h2 className='text-sm font-semibold text-slate-900 dark:text-foreground mb-3'>
                 Available plans
               </h2>
