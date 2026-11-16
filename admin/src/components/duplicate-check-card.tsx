@@ -323,7 +323,7 @@ export function DuplicateCheckCard({ tableName }: { tableName: string }) {
   const indexNote = !plan?.big
     ? ''
     : unindexed.length > 0
-      ? ` — add an index on ${unindexed.slice(0, 2).join(' and ')}${unindexed.length > 2 ? ` and ${unindexed.length - 2} more` : ''} to compare on ${unindexed.length === 1 ? 'it' : 'them'} (Fields → the field → Index)`
+      ? ` — add an index on ${unindexed.slice(0, 2).join(' and ')}${unindexed.length > 2 ? ` and ${unindexed.length - 2} more` : ''} to compare on ${unindexed.length === 1 ? 'it' : 'them'} (Fields → ${unindexed.length === 1 ? unindexed[0] : 'the field'} → Index)`
       : on
         ? ''
         : ' — a table this big compares only fields that have an index'
