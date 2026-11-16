@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Gauge, X } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { Fragment, type ReactNode, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
@@ -44,9 +44,35 @@ function withUnit(n: number, unit: string): string {
     ? n.toLocaleString()
     : n.toLocaleString(undefined, { maximumFractionDigits: 2 })
   if (!u || u === 'count') return s
-  if (u === '%') return `${s}%`
-  if (u === '$' || u === 'USD') return `$${s}`
+  if (u === '%' || u === 'percent') return `${s}%`
+  if (u === '$' || u === 'USD' || u === 'dollar') return `$${s}`
   return `${s} ${u}`
+}
+
+/** The rule's name only says something the headline does not ("Spent 90% of PUB" restates
+ *  "just crossed 90%"): a name that carries the threshold's own number is left out. Pure. */
+export function nameRestatesPhrase(name: string, threshold: number): boolean {
+  const digits = (v: string) => v.replace(/[^0-9.]/g, '').replace(/\.$/, '')
+  const t = digits(String(threshold))
+  if (!t) return false
+  return (name.match(/[0-9][0-9,.]*/g) ?? []).some((n) => digits(n) === t)
+}
+
+/** The quiet details after the headline: the value now, the rule's name (when it adds
+ *  something), how long ago. */
+function details(b: AlertBannerData): Array<{ key: string; node: ReactNode }> {
+  const out: Array<{ key: string; node: ReactNode }> = []
+  if (b.value != null) out.push({ key: 'now', node: `now ${withUnit(b.value, b.unit)}` })
+  if (b.name && !nameRestatesPhrase(b.name, b.threshold)) out.push({ key: 'name', node: b.name })
+  out.push({
+    key: 'at',
+    node: (
+      <time dateTime={b.triggered_at} title={new Date(b.triggered_at).toLocaleString()}>
+        {formatRelative(b.triggered_at)}
+      </time>
+    )
+  })
+  return out
 }
 
 export function AlertBanners({
@@ -140,14 +166,14 @@ export function AlertBanners({
           key={b.log_id}
           data-alert-banner={b.log_id}
           role='status'
-          className={`${fresh.has(b.log_id) && motion ? 'nvr-expand-in ' : ''}flex items-center gap-2.5 rounded-md border border-amber-200 bg-amber-50 py-1.5 pl-3 pr-1.5 dark:border-amber-400/25 dark:bg-amber-400/[0.08]`}
+          className={`${fresh.has(b.log_id) && motion ? 'nvr-expand-in ' : ''}flex items-start gap-2.5 rounded-md border border-amber-200 bg-amber-50 py-1.5 pl-3 pr-1.5 dark:border-amber-400/25 dark:bg-amber-400/[0.08]`}
         >
           <Gauge
             aria-hidden
-            className='h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300'
+            className='mt-[3px] h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300'
             strokeWidth={2}
           />
-          <p className='min-w-0 flex-1 text-[12.5px] leading-snug text-amber-950 dark:text-amber-100'>
+          <p className='min-w-0 flex-1 py-[3px] text-[12.5px] leading-snug text-amber-950 [overflow-wrap:anywhere] dark:text-amber-100'>
             {!itemId && onOpenRecord ? (
               <button
                 type='button'
@@ -160,11 +186,18 @@ export function AlertBanners({
               <span className='font-semibold'>{b.record}</span>
             )}{' '}
             {b.phrase}
-            <span className='text-amber-800/80 dark:text-amber-200/70'>
-              {b.value != null && <> · now {withUnit(b.value, b.unit)}</>} · {b.name} ·{' '}
-              <time dateTime={b.triggered_at} title={new Date(b.triggered_at).toLocaleString()}>
-                {formatRelative(b.triggered_at)}
-              </time>
+            {/* One wrap unit per detail with its "·" glued on, so a separator never sits alone
+                on a line. On a phone the details take their own line under the headline. */}
+            <span className='block text-amber-800 sm:inline dark:text-amber-200/80'>
+              {details(b).map((x, i) => (
+                <Fragment key={x.key}>
+                  <span className={i === 0 ? 'hidden sm:inline' : ''}> </span>
+                  <span className='whitespace-nowrap'>
+                    <span className={i === 0 ? 'hidden sm:inline' : ''}>· </span>
+                    {x.node}
+                  </span>
+                </Fragment>
+              ))}
             </span>
           </p>
           <button
@@ -172,19 +205,20 @@ export function AlertBanners({
             aria-label={`Hide this banner for me: ${b.record} ${b.phrase}`}
             data-tip='Hide for me'
             onClick={() => dismiss.mutate(b.log_id)}
-            className='shrink-0 rounded p-1 text-amber-700/70 hover:bg-amber-100 hover:text-amber-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-500 dark:text-amber-200/60 dark:hover:bg-amber-400/15 dark:hover:text-amber-100'
+            className='shrink-0 rounded p-1 text-amber-700/80 hover:bg-amber-100 hover:text-amber-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-500 dark:text-amber-200/60 dark:hover:bg-amber-400/15 dark:hover:text-amber-100'
           >
             <X className='h-3.5 w-3.5' />
           </button>
         </div>
       ))}
-      {hidden > 0 && (
+      {(hidden > 0 || (expanded && !itemId && list.length > max)) && (
         <button
           type='button'
-          onClick={() => setExpanded(true)}
-          className='self-start rounded px-1 text-[12px] font-medium text-amber-800 hover:underline dark:text-amber-200'
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+          className='self-start rounded-md px-2 py-0.5 text-[12px] font-medium text-amber-800 underline decoration-amber-700/30 underline-offset-2 hover:bg-amber-100 hover:decoration-amber-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-500 dark:text-amber-200 dark:decoration-amber-200/30 dark:hover:bg-amber-400/15 dark:hover:decoration-amber-200'
         >
-          {hidden} more
+          {hidden > 0 ? `Show ${hidden} more` : 'Show fewer'}
         </button>
       )}
     </div>

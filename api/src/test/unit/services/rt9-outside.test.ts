@@ -18,7 +18,11 @@ import {
   linkStateSignature,
   redactLinkState
 } from '../../../services/approval-link-state.js'
-import { publicLiveCsp, publicLivePageHtml } from '../../../services/public-live-page.js'
+import {
+  publicLiveCsp,
+  publicLivePageHtml,
+  publicMessagePageHtml
+} from '../../../services/public-live-page.js'
 import { maskUrlPath, maskUrlQuery } from '../../../services/secret-mask.js'
 
 const base: ApprovalLinkState = {
@@ -79,6 +83,23 @@ describe('decision link headline (rt9 #21)', () => {
     expect(JSON.stringify(ask)).not.toContain('Beth')
   })
 
+  it('never puts a bare "by <person>" under a waiting headline', () => {
+    const h = linkHeadline(base, 'approve')
+    expect(h.title).toBe('Waiting on Finance review')
+    expect(h.by).toEqual({
+      lead: 'Manager approved',
+      name: 'Beth Lee',
+      at: '2026-11-14T15:42:00.000Z'
+    })
+    const html = linkStateHtml(h, {})
+    expect(html).toContain('Manager approved by <strong>Beth Lee</strong> at')
+  })
+
+  it('anonymous notes match the Open in Nivaro link', () => {
+    const h = linkHeadline(redactLinkState({ ...base, status: 'approved' }), 'approve')
+    expect(h.note).toBe('Open it in Nivaro to see who decided and when.')
+  })
+
   it('handles withdrawn and removed approvals', () => {
     expect(linkHeadline({ ...base, status: 'cancelled' }, 'approve').title).toMatch(/withdrawn/)
     expect(linkHeadline({ ...base, status: 'gone' }, 'approve').decidable).toBe(false)
@@ -115,6 +136,35 @@ describe('public live page shell', () => {
     expect(html).toContain('<script nonce="abc">')
     expect(html).toContain('&lt;b&gt;t&lt;/b&gt;')
     expect(html).toContain('name="referrer" content="no-referrer"')
+  })
+
+  it('names the subject only when given, escaped', () => {
+    const html = publicLivePageHtml({
+      title: 't',
+      subject: 'US201979 <b>',
+      liveHtml: '',
+      nonce: 'n',
+      streamUrl: null,
+      refreshUrl: '/x'
+    })
+    expect(html).toContain('<p class="subj">US201979 &lt;b&gt;</p>')
+    expect(
+      publicLivePageHtml({
+        title: 't',
+        liveHtml: '',
+        nonce: 'n',
+        streamUrl: null,
+        refreshUrl: '/x'
+      })
+    ).not.toContain('class="subj"')
+  })
+
+  it('a message page carries the link its text promises', () => {
+    const html = publicMessagePageHtml('Link expired', 'Open the request in Nivaro to decide.', {
+      href: 'https://app.test/collections/projects/7',
+      label: 'Open in Nivaro'
+    })
+    expect(html).toContain('<a href="https://app.test/collections/projects/7">Open in Nivaro</a>')
   })
 })
 

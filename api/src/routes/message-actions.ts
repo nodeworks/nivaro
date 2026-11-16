@@ -234,8 +234,39 @@ export async function sendApprovalCard(opts: {
   })
 }
 
-function htmlPage(title: string, body: string, status = 200) {
-  return { status, html: publicMessagePageHtml(title, body) }
+function htmlPage(
+  title: string,
+  body: string,
+  status = 200,
+  link?: { href: string; label: string } | null
+) {
+  return { status, html: publicMessagePageHtml(title, body, link) }
+}
+
+/**
+ * Where an expired link's "Open in Nivaro" goes: the record it was minted for when the token is
+ * ours (signature good, this tenant) and only its time ran out; anything else — tampered,
+ * another tenant's — gets the app's front page. The record still opens as the reader.
+ */
+export function expiredLinkTarget(token: string | undefined): { href: string; label: string } {
+  const front = { href: `${adminLinkBase()}/`, label: 'Open Nivaro' }
+  if (!token) return front
+  const dot = token.lastIndexOf('.')
+  if (dot <= 0) return front
+  const body = token.slice(0, dot)
+  try {
+    const given = Buffer.from(token.slice(dot + 1), 'base64url')
+    const expected = hmac(body)
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) return front
+    const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as ActionTokenPayload
+    if ((p.t ?? '') !== currentTenantKey() || !p.collection || !p.item) return front
+    return {
+      href: `${adminLinkBase()}/collections/${encodeURIComponent(p.collection)}/${encodeURIComponent(p.item)}`,
+      label: 'Open in Nivaro'
+    }
+  } catch {
+    return front
+  }
 }
 
 const escapeHtml = (v: string) => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -364,6 +395,20 @@ async function viewerCanReadRecord(
   }
 }
 
+/** The approval's record as the viewer reads it ("US201979 · Pump replacement"); null on any
+ *  failure — the page then simply does not name it. */
+async function recordLabelFor(viewer: User, payload: ActionTokenPayload): Promise<string | null> {
+  if (!payload.collection || !payload.item) return null
+  try {
+    const { recordLabelsAsViewer } = await import('../services/record-labels-as-viewer.js')
+    const ref = { collection: payload.collection, id: String(payload.item) }
+    const out = await recordLabelsAsViewer(viewer, [ref])
+    return out[`${ref.collection}:${ref.id}`]?.trim() || null
+  } catch {
+    return null
+  }
+}
+
 /** The landing page for a decision link: where the approval stands, live while open. */
 export function linkPage(opts: {
   token: string
@@ -371,6 +416,8 @@ export function linkPage(opts: {
   state: ApprovalLinkState
   /** The approver the link names is signed in here (the decide form may show). */
   holderHere: boolean
+  /** The record's label, read as the viewer — null when they cannot read it. */
+  record?: string | null
   spent: boolean
   liveMode: LiveMode
   nonce: string
@@ -386,6 +433,7 @@ export function linkPage(opts: {
   return publicLivePageHtml({
     title: h.title,
     context: opts.state.chain_name ? `Approval · ${opts.state.chain_name}` : 'Approval',
+    subject: opts.record ?? null,
     liveHtml: linkStateHtml(h, {
       formHtml: decidable ? decideForm(opts.token, verb) : undefined,
       openUrl
@@ -422,6 +470,8 @@ export function decisionPostFromOwnPage(
 }
 
 const EXPIRED_TEXT = 'This link has expired or was changed. Open the request in Nivaro to decide.'
+const expiredPage = (token: string | undefined) =>
+  htmlPage('Link expired', EXPIRED_TEXT, 401, expiredLinkTarget(token))
 const INCOMPLETE_TEXT = 'This link is missing a part. Open the request in Nivaro.'
 
 export async function messageActionsRoutes(app: FastifyInstance) {
@@ -462,7 +512,10 @@ export async function messageActionsRoutes(app: FastifyInstance) {
   ) => {
     const spent = !!app.redis && !!payload.jti && !!(await app.redis.exists(usedKey(payload.jti)))
     const nonce = randomUUID().replace(/-/g, '')
+    // The record is named only to someone who can read it, and read as them.
+    let record: string | null = null
     if (!(await viewerCanReadRecord(viewer, payload))) state = redactLinkState(state)
+    else if (viewer) record = await recordLabelFor(viewer, payload)
     return reply
       .code(status)
       .header('cache-control', 'no-store')
@@ -475,6 +528,7 @@ export async function messageActionsRoutes(app: FastifyInstance) {
           payload,
           state,
           holderHere: !!holder,
+          record,
           spent,
           liveMode: await liveModeOf(holder),
           nonce
@@ -505,7 +559,7 @@ export async function messageActionsRoutes(app: FastifyInstance) {
     const token = req.query.token
     if (!token) return send(reply, htmlPage('Link incomplete', INCOMPLETE_TEXT, 400))
     const payload = verifyActionToken(token)
-    if (!payload) return send(reply, htmlPage('Link expired', EXPIRED_TEXT, 401))
+    if (!payload) return send(reply, expiredPage(token))
     if (isView(payload)) return reply.redirect(viewRedirect(payload))
     if (payload.kind !== 'approval')
       return send(reply, htmlPage('Link not recognised', 'Open the request in Nivaro.', 400))
@@ -596,7 +650,7 @@ export async function messageActionsRoutes(app: FastifyInstance) {
       const token = req.query.token ?? (req.body as { token?: string } | null)?.token
       if (!token) return send(reply, htmlPage('Link incomplete', INCOMPLETE_TEXT, 400))
       const payload = verifyActionToken(token)
-      if (!payload) return send(reply, htmlPage('Link expired', EXPIRED_TEXT, 401))
+      if (!payload) return send(reply, expiredPage(token))
       if (isView(payload)) return reply.redirect(viewRedirect(payload))
       if (payload.kind !== 'approval')
         return send(reply, htmlPage('Link not recognised', 'Open the request in Nivaro.', 400))

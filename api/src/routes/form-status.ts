@@ -13,7 +13,8 @@ import {
   type PublicStage,
   type PublicStatus,
   type ResolvedStatusLink,
-  resolveStatusLink
+  resolveStatusLink,
+  STAGE_LABELS
 } from '../services/submission-status.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { takeBudget } from '../services/widget-live.js'
@@ -35,37 +36,45 @@ const ORDER: PublicStage[] = ['received', 'in_review', 'decided']
 const NOTE: Record<PublicStage, string> = {
   received: 'Nobody has picked it up yet. This page changes as soon as someone does.',
   in_review: 'Someone is working on it. You do not need to do anything.',
-  decided: 'A decision has been made. Nothing more is needed from you.'
+  decided: 'This request is closed. Nothing more is needed from you.'
 }
 
-/** The live block. Pure (tested). */
+/** A decided label that reads as a refusal ("Rejected", "Declined", "Not approved"). Pure. */
+const REFUSAL = /\b(reject|declin|denied|deny|refus|not approved|unsuccessful|cancel|withdrawn)/i
+
+/** The outcome's colour: green for a yes, red for a no, the accent for a neutral close. */
+export function decidedTone(label: string): 'tone-ok' | 'tone-bad' | 'tone-done' {
+  if (REFUSAL.test(label)) return 'tone-bad'
+  if (/\b(approv|accept|grant|complet|done|resolv|success)/i.test(label)) return 'tone-ok'
+  return 'tone-done'
+}
+
+/** The live block. Pure (tested). The track always names the three stages the same way — the
+ *  owner's label for where it stands is the headline, never a fourth step name. */
 export function statusBlockHtml(link: ResolvedStatusLink, st: PublicStatus): string {
   if (st.gone)
     return `<div class="state"><span class="dot" aria-hidden="true"></span><div><h1>This request is no longer available</h1><p class="note">It may have been withdrawn or removed. If you still need it, send the form again or contact whoever shared it with you.</p></div></div>`
   const at = ORDER.indexOf(st.stage)
   const tone =
-    st.stage === 'decided' ? 'tone-done' : st.stage === 'in_review' ? 'tone-wait' : 'tone-ask'
+    st.stage === 'decided'
+      ? decidedTone(st.label)
+      : st.stage === 'in_review'
+        ? 'tone-wait'
+        : 'tone-ask'
   const steps = ORDER.map((s, i) => {
-    const name =
-      s === st.stage
-        ? st.label
-        : s === 'received'
-          ? 'Received'
-          : s === 'in_review'
-            ? 'In review'
-            : 'Decided'
     const cls = i < at ? 'done' : i === at ? 'now' : ''
-    return `<li class="${cls}"${i === at ? ' aria-current="step"' : ''}>${esc(name)}</li>`
+    return `<li class="${cls}"${i === at ? ' aria-current="step"' : ''}>${esc(STAGE_LABELS[s])}</li>`
   }).join('')
+  const when = st.stage === 'decided' && st.since ? ` · Decided ${timeTag(st.since)}` : ''
   return `<div class="state ${tone}"><span class="dot" aria-hidden="true"></span><div>
-<h1>${esc(st.label)}</h1><p class="by">Submitted ${timeTag(link.createdAt)}</p></div></div>
-<ol class="track" aria-label="Progress">${steps}</ol>
+<h1>${esc(st.label)}</h1><p class="by">Submitted ${timeTag(link.createdAt)}${when}</p></div></div>
+<ol class="track at${at} ${tone}" aria-label="Progress">${steps}</ol>
 <p class="note">${esc(NOTE[st.stage])}</p>`
 }
 
 function signatureOf(st: PublicStatus): string {
   return createHash('sha256')
-    .update(JSON.stringify([st.gone, st.stage, st.label]))
+    .update(JSON.stringify([st.gone, st.stage, st.label, st.since ?? null]))
     .digest('hex')
 }
 
