@@ -188,6 +188,38 @@ async function takeOffline(sql: SqlRunner, db: string) {
   }
 }
 
+/** Right after a RESTORE the target can refuse logins for a while (recovery, user re-mapping):
+ *  2026-11-16 the dev refresh failed at "keep" on "Login failed for user ..." and ran about three
+ *  minutes on the source's settings. Wait until the target answers a read, up to ~3 minutes. */
+export function isTransientAfterRestore(e: unknown): boolean {
+  const nums = ((e as any)?.errors ?? []).map((x: any) => x?.number)
+  const code = String((e as any)?.code ?? '')
+  const text = String((e as any)?.message ?? '')
+  return (
+    nums.some((n: number) => [4060, 18456, 922, 942, 952, 976].includes(n)) ||
+    ['ELOGIN', 'ESOCKET', 'ECONNRESET', 'ECONNCLOSED', 'ETIMEOUT'].includes(code) ||
+    /login failed|cannot open database|is being recovered|in transition|connection (is )?closed/i.test(
+      text
+    )
+  )
+}
+
+async function waitForTarget(sql: SqlRunner, db: string, maxMs = 180_000): Promise<void> {
+  const start = Date.now()
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await sql.raw(`SELECT TOP 1 1 AS ok FROM ${qtable(db, 'nivaro_migrations')}`)
+      if (attempt > 1)
+        say(`  ${db} answers again after ${Math.round((Date.now() - start) / 1000)} s`)
+      return
+    } catch (e) {
+      if (!isTransientAfterRestore(e) || Date.now() - start > maxMs) throw e
+      if (attempt === 1) say(`  ${db} is not taking logins yet (${sqlError(e)}) — waiting`)
+      await new Promise((r) => setTimeout(r, Math.min(15_000, 1000 * attempt)))
+    }
+  }
+}
+
 /** MOVE clauses: the backup's logical files onto the target's existing files, by type and order. */
 export function moveClauses(
   backupFiles: Array<{ LogicalName: string; Type: string }>,
@@ -414,6 +446,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       if (!hdr || String(hdr.DatabaseName).toLowerCase() !== S.toLowerCase())
         throw new StepFailed(`${files.copy} is not a backup of ${S}`)
       await restoreOver(sql, files.copy, T)
+      await waitForTarget(sql, T)
       restored = true
       if (state) {
         state.restored_at = now()
@@ -463,6 +496,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
     // 6. put back what the target keeps
     await phase('keep', async () => {
+      await waitForTarget(sql, T)
       const results = await applyKeepSet(sql, saved(), T)
       let bad = 0
       for (const r of results) {

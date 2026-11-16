@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { refreshRunRefusal, rollbackUntil } from '../../../routes/env-refresh.js'
 import {
   EXIT_REFUSED,
+  isTransientAfterRestore,
   loadedConfig,
   main,
   moveClauses,
@@ -1218,5 +1219,20 @@ describe('flow steps keep each environment’s own outbound settings', () => {
       values: { fields: 'url, headers', outbound: 'set' }
     })
     expect(planLines(plan).join('\n')).not.toMatch(/hook\.staging/)
+  })
+})
+
+describe('isTransientAfterRestore', () => {
+  it('waits on a login refused right after a restore', () => {
+    expect(
+      isTransientAfterRestore({ code: 'ELOGIN', message: "Login failed for user 'EFP_DB_RW'." })
+    ).toBe(true)
+    expect(isTransientAfterRestore({ errors: [{ number: 4060 }] })).toBe(true)
+    expect(isTransientAfterRestore({ message: 'Database is being recovered' })).toBe(true)
+  })
+  it('does not wait on a real error', () => {
+    expect(
+      isTransientAfterRestore({ errors: [{ number: 208 }], message: "Invalid object name 'x'." })
+    ).toBe(false)
   })
 })
