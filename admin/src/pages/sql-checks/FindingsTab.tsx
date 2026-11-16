@@ -24,6 +24,7 @@ import {
   objectLabel,
   SeverityPill,
   StatusText,
+  type Summary,
   TYPE_LABEL
 } from './shared'
 
@@ -95,6 +96,12 @@ export function FindingsTab({
     }
   }, [initialObject])
 
+  // Same key and shape as the page header's summary read: shared, never a second fetch.
+  const summary = useQuery({
+    queryKey: ['sql-checks', 'summary'],
+    queryFn: () => api.get<{ data: Summary }>('/sql-checks/summary').then((r) => r.data.data)
+  })
+  const lastRunAt = summary.data?.last_run?.finished_at ?? summary.data?.last_run?.started_at
   const list = useQuery({
     queryKey: ['sql-checks', 'findings', status, severity, check, q, object, pageNo],
     queryFn: () =>
@@ -246,7 +253,10 @@ export function FindingsTab({
             <p className='m-0 p-4 text-[12.5px] text-muted-foreground'>
               {status === 'open' && !severity && !check && !q && !object
                 ? 'No open findings.'
-                : 'Nothing matches these filters.'}
+                : status === 'open' && check && !severity && !q && !object
+                  ? // Only the check is picked: say what that means, not "nothing matches".
+                    `No open “${CHECK_LABEL[check] ?? check}” findings${lastRunAt ? ` (last run ${formatDateTime(lastRunAt)})` : ''}.`
+                  : 'Nothing matches these filters.'}
             </p>
           ) : (
             <ul className='m-0 list-none divide-y divide-slate-100 p-0 dark:divide-border'>

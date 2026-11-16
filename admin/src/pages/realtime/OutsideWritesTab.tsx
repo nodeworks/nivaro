@@ -296,85 +296,128 @@ export function OutsideWritesTab() {
               : 'Nobody has a collection open right now, and nothing was caught today.'}
           </p>
         ) : (
-          <div className='overflow-x-auto rounded-lg border border-slate-200 dark:border-border'>
-            <table className='w-full text-[12px]'>
-              <thead>
-                <tr className='border-b border-slate-200 bg-slate-50 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted/40'>
-                  <th className='px-3 py-2 font-medium'>Collection</th>
-                  <th className='px-3 py-2 font-medium'>How</th>
-                  <th className='px-3 py-2 font-medium'>Now</th>
-                  <th className='px-3 py-2 text-right font-medium'>Caught, 24 h</th>
-                  <th className='px-3 py-2 font-medium'>Last caught</th>
-                </tr>
-              </thead>
-              <tbody className='divide-y divide-slate-100 bg-white dark:divide-border/60 dark:bg-card'>
-                {rows.map((r) => (
-                  <tr key={r.collection} className='align-top'>
-                    <td className='px-3 py-2'>
-                      <span className='font-medium'>{labelOf(r.collection)}</span>
-                      {r.viewers > 0 && (
-                        <span className='ml-1.5 text-muted-foreground'>· {r.viewers} open</span>
-                      )}
-                      <span className='block font-mono text-[11px] text-muted-foreground'>
-                        {r.collection}
-                      </span>
-                    </td>
-                    <td className='px-3 py-2'>
-                      {r.method === 'change-tracking' ? (
-                        <span>
-                          Change tracking
-                          <span className='block text-[11px] text-muted-foreground'>
-                            adds, changes and removals
-                          </span>
-                        </span>
-                      ) : r.watchable ? (
-                        <span>
-                          Changed-at column{' '}
-                          <span className='font-mono text-[11.5px]'>{r.ts_column}</span>
-                          <span className='block text-[11px] text-muted-foreground'>
-                            adds and changes
-                          </span>
-                        </span>
-                      ) : (
-                        <span className='block max-w-[44ch] text-muted-foreground'>{r.reason}</span>
-                      )}
-                    </td>
-                    <td className='px-3 py-2'>
+          <>
+            {/* Phone: one card per collection (review r-1116b) — a 5-column table clips. */}
+            <ul className='space-y-2 md:hidden' data-outside-writes-cards>
+              {rows.map((r) => (
+                <li
+                  key={r.collection}
+                  className='rounded-lg border border-slate-200 bg-white p-3 text-[12px] dark:border-border dark:bg-card'
+                >
+                  <CollectionCell row={r} labelOf={labelOf} />
+                  <dl className='mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5'>
+                    <dt className='text-[11px] text-muted-foreground'>How</dt>
+                    <dd className='min-w-0'>
+                      <HowCell row={r} />
+                    </dd>
+                    <dt className='text-[11px] text-muted-foreground'>Now</dt>
+                    <dd>
                       <StateText row={r} />
-                    </td>
-                    <td
-                      className={cn(
-                        'px-3 py-2 text-right tabular-nums',
-                        r.caught_24h > 0 && 'font-semibold text-amber-700 dark:text-amber-300'
-                      )}
-                    >
-                      {r.caught_24h ? formatNumber(r.caught_24h) : '—'}
-                      {r.deduped_24h > 0 && (
-                        <span
-                          className='block text-[11px] font-normal text-muted-foreground'
-                          data-tip='Rows the app had already announced: skipped, so no screen re-read them twice'
-                        >
-                          {formatNumber(r.deduped_24h)} already told
-                        </span>
-                      )}
-                    </td>
-                    <td className='px-3 py-2 text-muted-foreground'>
-                      {/* Agrees with the 24 h count: a catch outside the window (or a look that
-                          only re-read already-announced rows) is not "just now" next to "—". */}
-                      {r.last_caught_at && (r.caught_24h > 0 || r.deduped_24h > 0)
-                        ? formatRelative(new Date(r.last_caught_at).toISOString())
-                        : '—'}
-                    </td>
+                    </dd>
+                    <dt className='text-[11px] text-muted-foreground'>Caught, 24 h</dt>
+                    <dd className={caughtTone(r)}>
+                      <CaughtCell row={r} />
+                    </dd>
+                    <dt className='text-[11px] text-muted-foreground'>Last caught</dt>
+                    <dd className='text-muted-foreground'>{lastCaught(r)}</dd>
+                  </dl>
+                </li>
+              ))}
+            </ul>
+            <div className='overflow-x-auto rounded-lg border border-slate-200 max-md:hidden dark:border-border'>
+              <table className='w-full text-[12px]'>
+                <thead>
+                  <tr className='border-b border-slate-200 bg-slate-50 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted/40'>
+                    <th className='px-3 py-2 font-medium'>Collection</th>
+                    <th className='px-3 py-2 font-medium'>How</th>
+                    <th className='px-3 py-2 font-medium'>Now</th>
+                    <th className='whitespace-nowrap px-3 py-2 text-right font-medium'>
+                      Caught, 24 h
+                    </th>
+                    <th className='whitespace-nowrap px-3 py-2 font-medium'>Last caught</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className='divide-y divide-slate-100 bg-white dark:divide-border/60 dark:bg-card'>
+                  {rows.map((r) => (
+                    <tr key={r.collection} className='align-top'>
+                      <td className='px-3 py-2'>
+                        <CollectionCell row={r} labelOf={labelOf} />
+                      </td>
+                      <td className='px-3 py-2'>
+                        <HowCell row={r} />
+                      </td>
+                      <td className='px-3 py-2'>
+                        <StateText row={r} />
+                      </td>
+                      <td className={cn('px-3 py-2 text-right', caughtTone(r))}>
+                        <CaughtCell row={r} />
+                      </td>
+                      <td className='px-3 py-2 text-muted-foreground'>{lastCaught(r)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </section>
     </div>
   )
 }
+
+function CollectionCell({ row: r, labelOf }: { row: Row; labelOf: (c: string) => string }) {
+  return (
+    <>
+      <span className='font-medium'>{labelOf(r.collection)}</span>
+      {r.viewers > 0 && <span className='ml-1.5 text-muted-foreground'>· {r.viewers} open</span>}
+      <span className='block font-mono text-[11px] text-muted-foreground'>{r.collection}</span>
+    </>
+  )
+}
+
+function HowCell({ row: r }: { row: Row }) {
+  if (r.method === 'change-tracking')
+    return (
+      <span>
+        Change tracking
+        <span className='block text-[11px] text-muted-foreground'>adds, changes and removals</span>
+      </span>
+    )
+  if (r.watchable)
+    return (
+      <span>
+        Changed-at column <span className='font-mono text-[11.5px]'>{r.ts_column}</span>
+        <span className='block text-[11px] text-muted-foreground'>adds and changes</span>
+      </span>
+    )
+  return <span className='block max-w-[44ch] text-muted-foreground'>{r.reason}</span>
+}
+
+const caughtTone = (r: Row) =>
+  cn('tabular-nums', r.caught_24h > 0 && 'font-semibold text-amber-700 dark:text-amber-300')
+
+function CaughtCell({ row: r }: { row: Row }) {
+  return (
+    <>
+      {r.caught_24h ? formatNumber(r.caught_24h) : '—'}
+      {r.deduped_24h > 0 && (
+        <span
+          className='block text-[11px] font-normal text-muted-foreground'
+          data-tip='Rows the app had already announced: skipped, so no screen re-read them twice'
+        >
+          {formatNumber(r.deduped_24h)} already told
+        </span>
+      )}
+    </>
+  )
+}
+
+/** Agrees with the 24 h count: a catch outside the window (or a look that only re-read
+ *  already-announced rows) is not "just now" next to "—". */
+const lastCaught = (r: Row) =>
+  r.last_caught_at && (r.caught_24h > 0 || r.deduped_24h > 0)
+    ? formatRelative(new Date(r.last_caught_at).toISOString())
+    : '—'
 
 function StateText({ row }: { row: Row }) {
   const map: Record<string, { label: string; tone: string }> = {

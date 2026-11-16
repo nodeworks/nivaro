@@ -5,8 +5,8 @@ import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
-import { OutsideWritesTab } from './realtime/OutsideWritesTab'
 import { MissedUpdatesTab } from './realtime/MissedUpdatesTab'
+import { OutsideWritesTab } from './realtime/OutsideWritesTab'
 import { SocketHealthTab } from './realtime/SocketHealthTab'
 import { AutoReloadControl, MinBuildControl, RememberedRefreshes } from './realtime/StickyRefresh'
 import { TeamBoardTab } from './realtime/TeamBoardTab'
@@ -136,11 +136,12 @@ export default function Realtime() {
   })
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between gap-4'>
-          <div className='flex items-center gap-2.5'>
-            <Radio className='h-5 w-5 text-muted-foreground' />
-            <div>
+      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 max-md:px-4 dark:border-border dark:bg-card'>
+        {/* Below md the title block sits over a wrapping action row (review r-1116b). */}
+        <div className='flex justify-between gap-4 max-md:flex-col max-md:gap-3 md:items-center'>
+          <div className='flex min-w-0 items-start gap-2.5'>
+            <Radio className='mt-0.5 h-5 w-5 shrink-0 text-muted-foreground' />
+            <div className='min-w-0'>
               <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
                 Realtime
               </h1>
@@ -149,7 +150,7 @@ export default function Realtime() {
               </p>
             </div>
           </div>
-          <div className='flex shrink-0 items-center gap-2'>
+          <div className='flex flex-wrap items-center gap-2 md:shrink-0'>
             <AutoReloadControl />
             <MinBuildControl />
             <ForceRefreshControl />
@@ -179,7 +180,7 @@ export default function Realtime() {
           ))}
         </div>
       </header>
-      <div className='flex-1 overflow-y-auto p-6'>
+      <div className='flex-1 overflow-y-auto p-6 max-md:p-4'>
         {tab === 'sockets' && <SocketsTab />}
         {tab === 'health' && <SocketHealthTab />}
         {tab === 'payload' && <PayloadTab />}

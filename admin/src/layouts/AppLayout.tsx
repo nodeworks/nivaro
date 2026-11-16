@@ -109,9 +109,9 @@ import {
   recordNavigation,
   restoreTrailScroll,
   ScreenRefreshButton,
-  SentViewCards,
   ScreenShareHost,
   type ScreenShareRuntime,
+  SentViewCards,
   SOMETHING_WENT_WRONG,
   scrollPathOf,
   scrollToRestore,
@@ -737,6 +737,8 @@ export function AppLayout() {
           {/* #2840 / #2856 — browser chaos mode: the panel + the "on" pill (portals to body). */}
           <ClientChaosToolbar user={authUser} />
           <RealtimeStatusBanner />
+          {/* Right after the reconnect strip: the two stack, never overlay (review r-1116b). */}
+          <SystemBusy />
           <DbOutageBanner />
           <NivaroProvider client={announcementsClient}>
             <AnnouncementBanner />
@@ -1190,7 +1192,6 @@ export function AppLayout() {
             polite screen-reader region for live changes (#22). Both honour Profile → Display. */}
         <TabCountHost />
         <LiveAnnouncer />
-        <SystemBusy />
         <AutofillChips />
         <JobsTrayHost />
         <IntentPrefetchHost />

@@ -2,10 +2,10 @@ import { useLiveEvent, useLiveWatchRoom } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { cn } from '@/lib/utils'
 
 /**
  * "System busy: nightly reforecast running, about 12 minutes left" (#2024).
@@ -131,22 +131,35 @@ function SystemBusyPill() {
 
   const items = q.data?.items ?? []
   if (items.length === 0) return null
-  return createPortal(
+  // A strip in the page's top status stack (with the reconnect strip), never a pill floating
+  // over it or over the environment tag (review r-1116b). The tag hangs over the window's top
+  // centre, so the first strip's text starts below it; a strip after the reconnect strip
+  // (which already makes that room) keeps the normal padding.
+  const underEdge =
+    typeof document !== 'undefined' && !!document.querySelector('[data-environment-edge]')
+  return (
     <div
       role='status'
       aria-live='polite'
-      className='fixed left-1/2 top-2 z-[60] max-w-[min(92vw,640px)] -translate-x-1/2'
+      data-system-busy-strip
+      className={cn(
+        'flex justify-center border-b border-amber-200 bg-amber-50 px-4 pb-1.5 dark:border-amber-500/30 dark:bg-amber-500/10',
+        underEdge ? 'pt-[26px] [[data-realtime-banner]~&]:pt-1.5' : 'pt-1.5'
+      )}
     >
       <button
         type='button'
         data-system-busy
         onClick={() => navigate('/jobs')}
-        className='flex w-full items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[12px] font-medium text-amber-800 shadow-sm transition-colors hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300 dark:hover:bg-amber-500/20'
+        data-tip='Open Jobs'
+        className='flex min-w-0 max-w-full items-center gap-2 rounded text-[12px] font-medium text-amber-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-amber-200'
       >
-        <Loader2 className='h-3 w-3 shrink-0 animate-spin motion-reduce:animate-none' aria-hidden />
-        <span className='truncate'>{busyText(items)}</span>
+        <Loader2
+          className='h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none'
+          aria-hidden
+        />
+        <span className='min-w-0 text-left'>{busyText(items)}</span>
       </button>
-    </div>,
-    document.body
+    </div>
   )
 }
