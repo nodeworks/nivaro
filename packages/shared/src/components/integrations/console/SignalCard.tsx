@@ -442,7 +442,15 @@ function RowList({
                 />
               </span>
             </div>
-            <ul className='divide-y divide-border'>{g.rows.map((r) => renderRow(r, true))}</ul>
+            {/* The group's problems sit one step in, under a hairline from the group's own
+                checkbox, so a row's checkbox lines up with the group label and never reads as
+                another group header. */}
+            <ul
+              data-ic-group-rows={g.key}
+              className='ml-[23px] divide-y divide-border border-l border-border'
+            >
+              {g.rows.map((r) => renderRow(r, true))}
+            </ul>
           </div>
         )
       })}
