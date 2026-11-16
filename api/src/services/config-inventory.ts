@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db as defaultDb } from '../db/index.js'
+import { isRedactedColumn } from './secret-columns.js'
 import { isSensitiveHeaderName } from './secret-mask.js'
 
 /**
@@ -394,76 +395,15 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_agent_triggers', // migration 510 — endpoints/secrets per environment (promote SKIP)
   'nivaro_agent_trigger_deliveries',
   'nivaro_agent_questions', // migration 511 — questions agents asked people
+  'nivaro_change_proposals', // migration 527 — record changes people proposed (their data, not config)
   'nivaro_activity_views', // migration 517 — saved audit views per person (promote SKIP)
   // Not a migration: a deployment's one-off data-move scratch table, staged by an extension
   // script and carried by database copies. Classified so it never reads as a new migration.
   'nivaro_forecast_stage'
 ]
 
-/**
- * Columns stripped from every snapshot, unconditionally.
- *
- * A snapshot is a file an operator downloads and mails to a colleague, so the
- * threat model is simply "this leaves the building". Secrets are removed
- * rather than masked with a constant, because a constant mask makes two
- * different secrets compare EQUAL and the diff would then claim the
- * environments agree about a credential when they do not. A dropped column is
- * absent on both sides and honestly compares as "not covered".
- *
- * `'*'` drops the column from every table.
- */
-const REDACTED: Record<string, string[]> = {
-  '*': ['password_hash', 'static_token', 'totp_secret', 'key_hash', 'signing_secret'],
-  nivaro_settings: [
-    'smtp_pass',
-    'anthropic_api_key',
-    'vapid_private_key',
-    'sms_auth_token',
-    'sms_account_sid',
-    'teams_bot_app_secret',
-    // #2803 review — credentials the list had missed (stored in clear text, not enc:v1).
-    'ai_gateway_client_secret',
-    'storage_s3_access_key',
-    'storage_s3_secret',
-    'provision_secret',
-    'directory_password',
-    'directory_refresh_token'
-  ],
-  nivaro_external_apis: ['auth_config'],
-  nivaro_environment_components: ['api_token', 'git_token'],
-  nivaro_webhooks: ['secret'],
-  nivaro_sso_providers: ['client_secret'],
-  nivaro_users: ['external_id', 'preferences'],
-  nivaro_submission_forms: ['password_hash'],
-  nivaro_widget_feeds: ['token'],
-  nivaro_persisted_queries: [],
-  // Not secrets: per-database facts (what THIS database last got from config). A snapshot of
-  // another instance must not claim them, and a restore keeps the live value.
-  nivaro_managed_procedures: ['deployed_hash', 'deployed_at', 'deployed_by']
-}
-
-/**
- * Deny by name, so a credential column a later migration adds cannot slip into a snapshot
- * before someone lists it above: any column whose name has one of these words as a whole
- * `_`-separated part is dropped, unless SECRET_NAME_ALLOW says it is reviewed and harmless.
- */
-export const SECRET_NAME_RE =
-  /(^|_)(secret|password|passwd|pass|pwd|token|api_key|private_key|access_key|refresh_token|client_secret|credentials?)($|_)/i
-
-/** Reviewed columns the name rule would catch that hold no credential (table.column). */
-export const SECRET_NAME_ALLOW = new Set([
-  'nivaro_settings.ai_gateway_token_url', // the token endpoint URL, not a token
-  'nivaro_activity.api_key_id', // which key made the call — an id
-  'nivaro_api_logs.api_key_id'
-])
-
-/** Whether a snapshot strips this column — a write path must never set it from a snapshot. */
-export function isRedactedColumn(table: string, column: string): boolean {
-  if ((REDACTED['*'] ?? []).includes(column) || (REDACTED[table] ?? []).includes(column)) {
-    return true
-  }
-  return SECRET_NAME_RE.test(column) && !SECRET_NAME_ALLOW.has(`${table}.${column}`)
-}
+// The credential-column rule lives in a leaf module (secret-columns.ts); re-exported here.
+export { isRedactedColumn, SECRET_NAME_ALLOW, SECRET_NAME_RE } from './secret-columns.js'
 
 // ─── Redaction by value ─────────────────────────────────────────────────────
 // Some config columns hold credentials INSIDE a JSON value next to plain config: per-instance

@@ -20,6 +20,7 @@
  */
 import { createHash, createHmac } from 'node:crypto'
 import { db } from '../db/index.js'
+import { readFallback } from './storage/fallback.js'
 import { getStorage } from './storage/index.js'
 import { instrumentStorage } from './storage/instrument.js'
 
@@ -398,8 +399,15 @@ export async function readStoredObject(key: string): Promise<Buffer> {
   try {
     return await active.get(key)
   } catch (err) {
-    if (active.name === 'local') throw err
-    return getStorage().get(key)
+    try {
+      if (active.name === 'local') throw err
+      return await getStorage().get(key)
+    } catch (err2) {
+      // After an environment refresh: the source's uploads, read-only (FILES_FALLBACK_DIR).
+      const copy = await readFallback(key)
+      if (copy) return copy
+      throw err2
+    }
   }
 }
 

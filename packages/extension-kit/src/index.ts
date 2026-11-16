@@ -14,6 +14,7 @@ export {
   type KitDeprecation,
   watchDeprecatedMembers
 } from './deprecations.js'
+export type * from './environments.js'
 export type * from './flows.js'
 export type * from './help-videos.js'
 export type * from './hooks.js'

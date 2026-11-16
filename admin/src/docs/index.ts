@@ -36,6 +36,7 @@ export * from './sections/detail-sheets.js'
 export * from './sections/devex.js'
 export * from './sections/disaster-recovery.js'
 export * from './sections/duplicate-warnings.js'
+export * from './sections/env-refresh.js'
 export * from './sections/ext-assistant-tools.js'
 export * from './sections/extensions-system.js'
 export * from './sections/features.js'
@@ -247,6 +248,7 @@ import {
 } from './sections/devex.js'
 import { disasterRecoveryDocs } from './sections/disaster-recovery.js'
 import { duplicateWarningsDocs } from './sections/duplicate-warnings.js'
+import { envRefreshDocs } from './sections/env-refresh.js'
 import { extAssistantTools } from './sections/ext-assistant-tools.js'
 import {
   extContext,
@@ -763,7 +765,8 @@ export const navSections: NavGroup[] = [
       extPluginBuildGuide,
       extPluginIntegrationTypes,
       eventsAndFlags,
-      qualityChecksDocs
+      qualityChecksDocs,
+      envRefreshDocs
     ]
   },
   {

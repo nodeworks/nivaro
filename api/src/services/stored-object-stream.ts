@@ -6,6 +6,7 @@ import { pipeline } from 'node:stream/promises'
 import type { FastifyReply } from 'fastify'
 import { storageChaos } from './chaos/faults/storage.js'
 import { dispositionMode, storedFileSecurityHeaders } from './file-serving-safety.js'
+import { existingFallback } from './storage/fallback.js'
 import { getStorage } from './storage/index.js'
 import { LocalStorage } from './storage/local.js'
 import { getActiveStorageDriver, readStoredObject } from './storage-drivers.js'
@@ -63,7 +64,8 @@ async function localPath(key: string): Promise<string | null> {
     await stat(path)
     return path
   } catch {
-    return null
+    // After an environment refresh: the source's copy, streamed read-only (FILES_FALLBACK_DIR).
+    return (await existingFallback(key))?.path ?? null
   }
 }
 

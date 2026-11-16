@@ -18,6 +18,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Extension System** — drop a folder into `api/extensions/`, no restart needed
 - **Flow Extension API** — extensions register custom operation types and trigger types; appear in the flow editor with schema-driven config UI
 - **External API Flow Operation** — call any configured External API or custom URL from a flow, with SSRF protection
+- **Environment Refresh** — copy production over staging or development (or staging over development) from Environments → Runbooks while the target keeps its own external APIs, mail, keys, switches and test accounts; a dry-run plan first, a safety pass after every copy, roll back within 24 hours
 - **Background Jobs** — scheduled jobs, backfills and remediations run in-process, recorded with outcome and history; one process fires scheduled jobs (Redis lease) so replicas never double-run them
 - **AI Features** — field generation and record summarization via Claude, fill a new record from a document (SOW, quote, spreadsheet → fields, lines, schedule, reviewed before save)
 - **AI Assistants (MCP)** — ChatGPT, Claude (claude.ai, Desktop, Code), Codex and Cursor work with your data through a hosted MCP endpoint (`/api/mcp`, sign-in via OAuth or an API key) or the `@nivaro/mcp` npm server; the assistant acts as you, under your permissions

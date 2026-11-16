@@ -557,7 +557,7 @@ const mark: Record<StepState['status'], string> = {
   cancelled: '■'
 }
 
-function RunbookRunView({ id, runbook }: { id: string; runbook?: Runbook }) {
+export function RunbookRunView({ id, runbook }: { id: string; runbook?: Runbook }) {
   const qc = useQueryClient()
   const offset = useRef(0)
   const [log, setLog] = useState('')
