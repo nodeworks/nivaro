@@ -93,20 +93,18 @@ RUN pnpm --filter @nivaro/extension-kit build
 # The API hosts the MCP server (/api/mcp) from the same package the npm stdio server ships.
 RUN pnpm --filter @nivaro/mcp build
 # Inject cloud-only extensions before API build (fail-safe: exits 0 on any error).
-# CLOUD_EXTENSIONS_REPO is a plain build ARG. The token is a BuildKit SECRET
-# with id CLOUD_EXTENSIONS_TOKEN (`docker build --secret
-# id=CLOUD_EXTENSIONS_TOKEN,env=CLOUD_EXTENSIONS_TOKEN`; Railway mounts a
-# service variable of that name the same way): a secret never enters the
-# build metadata, the layer cache or `docker history`. The CLOUD_EXTENSIONS_TOKEN
-# build ARG still works as a fallback for builders that cannot pass secrets
-# yet, and the script warns when it is used.
+# CLOUD_EXTENSIONS_REPO and CLOUD_EXTENSIONS_TOKEN are build ARGs (Railway passes
+# service variables of those names). Railway's builder accepts only cache mounts,
+# so a `--mount=type=secret` here fails the whole build (2026-11-16). An ARG is
+# already in the step's environment: the token is NEVER written into the RUN
+# text, because Railway prints that text in the build log with ARGs expanded
+# (the deprecated api/Dockerfile leaked the token that way). The ARG lives only
+# in this build stage; the runner stages start from a fresh base and never see it.
+# A builder that can mount secrets may still pass CLOUD_EXTENSIONS_TOKEN_FILE.
 ARG CLOUD_EXTENSIONS_REPO=""
 ARG CLOUD_EXTENSIONS_TOKEN=""
-RUN --mount=type=secret,id=CLOUD_EXTENSIONS_TOKEN,required=false \
-    CLOUD_EXTENSIONS_REPO="$CLOUD_EXTENSIONS_REPO" \
-    CLOUD_EXTENSIONS_TOKEN_FILE=/run/secrets/CLOUD_EXTENSIONS_TOKEN \
-    CLOUD_EXTENSIONS_TOKEN="$CLOUD_EXTENSIONS_TOKEN" \
-    bash api/scripts/inject-cloud-extensions.sh
+ARG CLOUD_EXTENSIONS_TOKEN_FILE=""
+RUN bash api/scripts/inject-cloud-extensions.sh
 RUN pnpm --filter @nivaro/api build
 
 FROM build AS build-admin

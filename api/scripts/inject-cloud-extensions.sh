@@ -4,15 +4,12 @@
 #
 # Required env vars:
 #   CLOUD_EXTENSIONS_REPO        — GitHub repo slug, e.g. "acme/nivaro-cloud"
-#   CLOUD_EXTENSIONS_TOKEN_FILE  — file holding a GitHub token with read access
-#                                  to the private repo (a BuildKit secret mount:
-#                                  Dockerfile.release mounts the build secret
-#                                  CLOUD_EXTENSIONS_TOKEN at
-#                                  /run/secrets/CLOUD_EXTENSIONS_TOKEN)
-#   CLOUD_EXTENSIONS_TOKEN       — the same token as a plain value; DEPRECATED
-#                                  (a build ARG is recorded in the build
-#                                  metadata and cache). Used only when no
-#                                  token file is readable.
+#   CLOUD_EXTENSIONS_TOKEN       — GitHub token with read access to the private
+#                                  repo (Dockerfile.release: a build ARG, read
+#                                  from the environment, never written into a
+#                                  logged command — Railway cannot mount secrets)
+#   CLOUD_EXTENSIONS_TOKEN_FILE  — optional: a file holding the token instead
+#                                  (a builder that can mount secrets)
 #
 # The token reaches git through GIT_CONFIG_* environment variables (an
 # Authorization header for github.com only): never on argv, never in a clone
@@ -31,8 +28,6 @@ if [ -n "$TOKEN_FILE" ] && [ -r "$TOKEN_FILE" ]; then
 fi
 if [ -z "$TOKEN" ] && [ -n "${CLOUD_EXTENSIONS_TOKEN:-}" ]; then
   TOKEN="$CLOUD_EXTENSIONS_TOKEN"
-  echo "[cloud-ext] WARNING: CLOUD_EXTENSIONS_TOKEN came in as a build ARG;" \
-    "pass it as a build secret (id CLOUD_EXTENSIONS_TOKEN) instead" >&2
 fi
 # Destination: api/dist/cloud-extensions/ (where loader.js resolves at runtime)
 DEST="${CLOUD_EXTENSIONS_DEST:-$(dirname "$0")/../cloud-extensions}"
