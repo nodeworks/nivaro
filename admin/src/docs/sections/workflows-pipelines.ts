@@ -219,6 +219,89 @@ Reading: "approve a 25k budget from the South division"
   ]
 }
 
+export const pipelineStartState: DocSection = {
+  id: 'pipeline-start-state',
+  label: 'Create in a Step',
+  content: [
+    { type: 'h1', id: 'pipeline-start-state', text: 'Create a Record in a Step' },
+    {
+      type: 'p',
+      text: "A record normally starts its pipeline in the initial step (or the binding's **Start in** step). A partner that already knows where its record stands can name the step on the create itself, in one call: the record is created and its pipeline starts in that step."
+    },
+    { type: 'h2', id: 'pipeline-start-state-graphql', text: 'GraphQL' },
+    {
+      type: 'pre',
+      code: `mutation {
+  create_workflows_item(
+    data: { name: "Fiber install", project: 4312 }
+    start_state: "waiting_on_manager_approval"
+  ) {
+    id
+    workflow_instance { currentState { key label } }
+  }
+}`
+    },
+    {
+      type: 'p',
+      text: "`start_state` is on `create_<collection>_item` (and `create_<collection>`), the batch `create_<collection>_items` (every row; a row's own `$start_state`, sent through variables, wins) and `create_<collection>_dry_run`. The value is the step's key; its id works too."
+    },
+    { type: 'h2', id: 'pipeline-start-state-rest', text: 'REST' },
+    {
+      type: 'pre',
+      code: `POST /api/items/workflows
+{ "name": "Fiber install", "$start_state": "waiting_on_manager_approval" }
+
+POST /api/items/workflows?start_state=waiting_on_manager_approval   (same thing)
+
+→ 201 { "data": { "id": 80412, "name": "Fiber install", …,
+        "$state": { "key": "waiting_on_manager_approval", "label": "Waiting on Manager Approval",
+                    "is_terminal": false, "entered_at": "…", "instance_id": "…" } } }`
+    },
+    {
+      type: 'p',
+      text: 'The batch route (`POST /api/items/:collection/batch`) takes `$start_state` per row. A rehearsal (`?dry_run=1`, sandbox keys) judges the step and starts nothing. SDK: `createItem(collection, data, { startState })`.'
+    },
+    { type: 'h2', id: 'pipeline-start-state-who', text: 'Who may do it' },
+    {
+      type: 'ul',
+      items: [
+        'Administrators, in any step.',
+        'Roles listed on the pipeline binding under **Who may create records in a later step** (pipeline editor → Applied to Collections). **Which steps** limits them to certain steps; empty means any step.',
+        'Never while an administrator is viewing as someone who is not an administrator.',
+        'The caller must also be allowed to create the record at all; scoped API keys keep their scopes.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'A refusal comes back before anything is written, so no record is left behind:'
+    },
+    {
+      type: 'table',
+      head: ['Status', 'Code', 'When'],
+      rows: [
+        ['422', 'START_STATE_NOT_BOUND', 'The collection runs no pipeline'],
+        ['422', 'START_STATE_UNKNOWN', 'The bound pipeline has no such step'],
+        ['422', 'START_STATE_INVALID', 'The value is not a step key or id'],
+        ['403', 'START_STATE_FORBIDDEN', 'Your role may not create records in a later step'],
+        ['403', 'START_STATE_STEP_FORBIDDEN', 'Your role may, but not in this step'],
+        ['403', 'START_STATE_VIEW_AS', 'Viewing as someone who is not an administrator']
+      ]
+    },
+    { type: 'h2', id: 'pipeline-start-state-effects', text: 'What happens' },
+    {
+      type: 'ul',
+      items: [
+        'One pipeline instance in that step and one history entry, "Created in <step>", with the caller as the person who did it. A final step closes the pipeline at once.',
+        "It happens in the same request: the create's answer already shows the step.",
+        'The step\'s owners are told, as after a move into it (flows on the workflow transition event, state subscriptions, "waiting on you"). Imports and rehearsals stay quiet.',
+        "Queues, deadlines and the record's state field follow the step, and automatic transitions from that step are checked right after.",
+        'It is not a transition: no transition runs, so none of its actions do (partner pushes, emails or field writes set on a move, requirements). If the record needs those, create it and then run the transition.',
+        "A create that the collection's natural key turns into an update of an existing record keeps that record's current step."
+      ]
+    }
+  ]
+}
+
 export const pipelineDimensions: DocSection = {
   id: 'pipeline-dimensions',
   label: 'Dimensions & Filter Axes',

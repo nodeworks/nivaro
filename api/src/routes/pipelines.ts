@@ -61,6 +61,7 @@ import {
 import { labelSeatFilters } from '../services/seat-labels.js'
 import { skippedSendBackTargets, withoutSkippedSendBacks } from '../services/send-back-skips.js'
 import { loadSignOffs } from '../services/sign-offs.js'
+import { parseIdList } from '../services/start-state.js'
 import { type TransitionAdvisory, transitionAdvisories } from '../services/transition-checks.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
 import { runsInBackground, transitionRunState } from '../services/transition-runs.js'
@@ -156,6 +157,29 @@ interface WorkflowBinding {
   auto_start: boolean
   auto_start_state: string | null
   owner_fallback_field: string | null
+  /** Migration 531: JSON role ids that may create a record in a later step (start-state.ts). */
+  start_state_roles?: string | null
+  /** Migration 531: JSON state keys those roles may pick; empty = any. */
+  start_state_allowed?: string | null
+}
+
+/**
+ * The start-step settings of a binding write (migration 531), as columns.
+ * Absent from the body = untouched; null / [] = cleared. Columns the database
+ * does not have yet are left out, so an unmigrated tenant keeps saving.
+ */
+async function startStateColumns(body: {
+  start_state_roles?: unknown
+  start_state_allowed?: unknown
+}): Promise<Record<string, string | null>> {
+  const out: Record<string, string | null> = {}
+  for (const col of ['start_state_roles', 'start_state_allowed'] as const) {
+    if (body[col] === undefined) continue
+    if (!(await hasColumn('nivaro_workflow_bindings', col))) continue
+    const list = parseIdList(body[col])
+    out[col] = list.length > 0 ? JSON.stringify(list) : null
+  }
+  return out
 }
 
 /**
@@ -2178,8 +2202,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       auto_start?: boolean | number
       auto_start_state?: string | null
       owner_fallback_field?: string | null
+      start_state_roles?: unknown
+      start_state_allowed?: unknown
     }
     if (!body.collection?.trim()) return reply.code(400).send({ error: 'collection is required' })
+    const startCols = await startStateColumns(body)
 
     // Upsert: update if binding for this collection already exists
     const existing = await db<WorkflowBinding>('nivaro_workflow_bindings')
@@ -2205,7 +2232,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           owner_fallback_field:
             body.owner_fallback_field !== undefined
               ? body.owner_fallback_field?.trim() || null
-              : existing.owner_fallback_field
+              : existing.owner_fallback_field,
+          ...startCols
         })
     } else {
       await db('nivaro_workflow_bindings').insert({
@@ -2215,7 +2243,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         state_field_map: toJsonStr(body.state_field_map ?? null),
         auto_start: body.auto_start ? 1 : 0,
         auto_start_state: body.auto_start_state ?? null,
-        owner_fallback_field: body.owner_fallback_field?.trim() || null
+        owner_fallback_field: body.owner_fallback_field?.trim() || null,
+        ...startCols
       })
     }
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
@@ -2265,7 +2294,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         | 'auto_start_state'
         | 'owner_fallback_field'
       >
-    >
+    > & { start_state_roles?: unknown; start_state_allowed?: unknown }
     const existing = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ id: bindingId })
       .first()
@@ -2288,7 +2317,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         owner_fallback_field:
           body.owner_fallback_field !== undefined
             ? body.owner_fallback_field?.trim() || null
-            : existing.owner_fallback_field
+            : existing.owner_fallback_field,
+        ...(await startStateColumns(body))
       })
     const updated = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ id: bindingId })

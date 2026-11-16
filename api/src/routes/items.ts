@@ -2168,6 +2168,18 @@ export async function itemsRoutes(app: FastifyInstance) {
     // real response, but NOTHING persists — integration test traffic against
     // production stays side-effect free.
     const dryRun = q.dry_run === '1' || q.dry_run === 'true'
+    // `?start_state=<key>` = the body's `$start_state` (services/start-state.ts):
+    // the record starts its pipeline in that step. The body's own key wins.
+    if (
+      typeof q.start_state === 'string' &&
+      q.start_state.trim() !== '' &&
+      req.body &&
+      typeof req.body === 'object' &&
+      !Array.isArray(req.body) &&
+      (req.body as Record<string, unknown>).$start_state == null
+    ) {
+      ;(req.body as Record<string, unknown>).$start_state = q.start_state.trim()
+    }
     if (req.user?.api_key_sandbox || dryRun) {
       // A rehearsal: everything a create runs, nothing stored. A sandbox key
       // gets it on every create; any caller gets it with ?dry_run=1.
@@ -2243,9 +2255,9 @@ export async function itemsRoutes(app: FastifyInstance) {
           .code(201)
           .send({ data: item, meta: { upserted: true, ...upsert, ...linkMeta } })
       }
-      return reply
-        .code(201)
-        .send({ data: item, ...(made.linkFailures.length ? { meta: linkMeta } : {}) })
+      // Started in the step the create named: the answer shows where it stands.
+      const data = made.startState && item ? { ...item, $state: made.startState } : item
+      return reply.code(201).send({ data, ...(made.linkFailures.length ? { meta: linkMeta } : {}) })
     } catch (err) {
       return handleError(err, reply)
     }

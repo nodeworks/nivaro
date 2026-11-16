@@ -103,6 +103,7 @@ import {
   statementHash
 } from './read-caches.js'
 import { broadcastCollectionUpdate } from './realtime.js'
+import { announceRecalc } from './recalc-announce.js'
 import { attachRecordInstance, splitInstanceField } from './record-instance.js'
 import {
   applyAgingFilter,
@@ -134,7 +135,6 @@ import {
   rollupFieldsFedBy,
   roundToScale
 } from './rollups.js'
-import { announceRecalc } from './recalc-announce.js'
 import {
   applyRowLocksOnWrite,
   applyRowRulesOnCreate,
@@ -156,6 +156,16 @@ import {
 } from './search-relations.js'
 import { fitExpansion, searchVariants } from './search-synonyms.js'
 import { applySectionLocks } from './section-locks.js'
+import {
+  normalizeStartState,
+  resolveStartState,
+  StartStateRefusal,
+  type StartStateRun,
+  type StartStateTarget,
+  startedRecordState,
+  takeStartState,
+  takeStartStateSoft
+} from './start-state.js'
 import {
   isSecretColumn,
   isSystemCollection,
@@ -7172,6 +7182,8 @@ export interface CreateOutcome {
   linkFailures?: string[]
   /** The natural key matched an existing record: this "create" updated it. */
   upserted?: boolean
+  /** The create named a start step and the record was started there: its `$state`. */
+  startState?: Record<string, unknown> | null
 }
 
 const outOfView = new WeakSet<object>()
@@ -7203,19 +7215,23 @@ export async function createOneReported(
   collection: string,
   data: Record<string, unknown>,
   req?: FastifyRequest,
-  workspaceId?: string
+  workspaceId?: string,
+  opts?: { startState?: unknown }
 ): Promise<{
   item: Record<string, unknown> | null
   id: string | number | null
   readable: boolean
   linkFailures: string[]
   upserted: boolean
+  /** The record was started in the step the create named: its `$state`. */
+  startState?: Record<string, unknown> | null
 }> {
   const outcome: CreateOutcome = {}
   const item = (await createOne(user, collection, data, req, workspaceId, {
     outcome,
     scopeGuard: true,
-    callerPayload: true
+    callerPayload: true,
+    ...(opts?.startState !== undefined ? { startState: opts.startState } : {})
   })) as Record<string, unknown> | null
   const hidden = item == null || isOutOfView(item)
   const id = (item?.id as string | number | undefined) ?? outcome.id ?? null
@@ -7224,7 +7240,8 @@ export async function createOneReported(
     id,
     readable: !hidden,
     linkFailures: outcome.linkFailures ?? [],
-    upserted: outcome.upserted === true
+    upserted: outcome.upserted === true,
+    startState: outcome.startState ?? null
   }
 }
 
@@ -7243,8 +7260,16 @@ export async function createOne(
     scopeGuard?: boolean
     /** The payload is the caller's own (write routes): read-only fields are dropped too. */
     callerPayload?: boolean
+    /** Start the record's pipeline in this step (state key or id) — GraphQL `start_state`.
+     *  The payload's own `$start_state` is the same thing (services/start-state.ts). */
+    startState?: unknown
   }
 ) {
+  // The start step is never a column: off the payload before anything reads it.
+  const payloadStartState = takeStartState(data)
+  let startStateValue = normalizeStartState(
+    opts?.startState !== undefined && opts.startState !== null ? opts.startState : payloadStartState
+  )
   await assertServable(user, collection, 'create')
   const dry = opts?.dryRun ?? null
   const col = await getCollection(collection)
@@ -7278,6 +7303,11 @@ export async function createOne(
   if (!allowed) throw new ForbiddenError()
   // A new child row of a record waiting on someone else (edit-lock.ts).
   if (!dry) await assertNotEditLocked(user, collection, { payload: data }, req)
+  // A start step is judged before anything is written (and before the hooks,
+  // which may write on the caller's behalf): a refusal leaves no record behind.
+  let startTarget: StartStateTarget | null = startStateValue
+    ? await resolveStartState({ user, collection, req, value: startStateValue })
+    : null
 
   // Natural-key upsert: when the collection declares upsert_keys and a row
   // already matches every key in this payload, the create becomes an update
@@ -7379,9 +7409,30 @@ export async function createOne(
     user,
     database: db,
     req,
+    // A before-hook may name the start step (`payload.$start_state`) — an
+    // integration whose own payload says where the record stands.
+    acceptsStartState: true,
     ...(dry ? { dryRun: true } : {})
   }
   await hooks.trigger('before', ctx)
+  {
+    const hookedPayload = ctx.payload as Record<string, unknown>
+    const soft = takeStartStateSoft(hookedPayload)
+    let hooked: string | null = null
+    try {
+      hooked = normalizeStartState(takeStartState(hookedPayload))
+      if (hooked && hooked !== startStateValue) {
+        startTarget = await resolveStartState({ user, collection, req, value: hooked })
+        startStateValue = hooked
+      }
+    } catch (err) {
+      // A hook's soft step the gate refuses: the record starts as it always did.
+      if (!soft || !(err instanceof StartStateRefusal)) throw err
+      console.warn(
+        `[start-state] ${collection}: a hook named start step "${hooked ?? '?'}", refused (${err.code}); created in the usual step`
+      )
+    }
+  }
   // Values the linked records supply (the form copies them when the link is
   // picked). After the hooks, which may set the link; before the rules, which
   // may read what was copied.
@@ -7680,12 +7731,18 @@ export async function createOne(
       (result ?? ctx.payload) as Record<string, unknown>
     )
 
+    // The start step rides the after-hook context: pipeline-autostart starts the
+    // instance THERE (in this request) and fills in the instance it wrote.
+    const startRun: StartStateRun | undefined = startTarget ? { ...startTarget } : undefined
     await hooks.trigger('after', {
       ...ctx,
       keys: [returnedId as string | number],
       result,
-      changeReason: createReason || undefined
+      changeReason: createReason || undefined,
+      ...(startRun ? { startState: startRun } : {})
     })
+    if (startRun?.instanceId && opts?.outcome)
+      opts.outcome.startState = startedRecordState(startRun)
 
     // Auto-watch (#400): creators subscribe to their own records when the
     // preference says so — fire-and-forget.

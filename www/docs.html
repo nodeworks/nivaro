@@ -148,6 +148,7 @@
           <a class="docs-nav-item" data-section="pipeline-flow-map" href="#pipeline-flow-map">Flow Map &amp; Replay</a>
           <a class="docs-nav-item" data-section="pipeline-simulator" href="#pipeline-simulator">Pipeline Simulator</a>
           <a class="docs-nav-item" data-section="pipeline-overview" href="#pipeline-overview">Overview</a>
+          <a class="docs-nav-item" data-section="pipeline-start-state" href="#pipeline-start-state">Create in a Step</a>
           <a class="docs-nav-item" data-section="pipeline-dimensions" href="#pipeline-dimensions">Dimensions</a>
           <a class="docs-nav-item" data-section="pipeline-owners" href="#pipeline-owners">Owner Groups</a>
           <a class="docs-nav-item" data-section="pipeline-no-owner-steps" href="#pipeline-no-owner-steps">Steps With No Owner</a>
@@ -2259,6 +2260,60 @@ Reading: "approve a 25k budget from the South division"
 
 → { "data": { "from": {...}, "to": {...}, "ended": {...} | null, "history_id": 542210 } }</code></pre>
           <!-- /SYNC:pipeline-overview -->
+        </div>
+
+        <div class="doc-section" id="s-pipeline-start-state" data-toc='[{"id":"pipeline-start-state","label":"Create a Record in a Step"},{"id":"pipeline-start-state-graphql","label":"GraphQL"},{"id":"pipeline-start-state-rest","label":"REST"},{"id":"pipeline-start-state-who","label":"Who may do it"},{"id":"pipeline-start-state-effects","label":"What happens"}]'>
+          <!-- SYNC:pipeline-start-state -->
+          <h1 class="doc-h1" id="pipeline-start-state">Create a Record in a Step</h1>
+          <p class="doc-p">A record normally starts its pipeline in the initial step (or the binding's **Start in** step). A partner that already knows where its record stands can name the step on the create itself, in one call: the record is created and its pipeline starts in that step.</p>
+          <h2 class="doc-h2" id="pipeline-start-state-graphql">GraphQL</h2>
+          <pre class="doc-pre"><code>mutation {
+  create_workflows_item(
+    data: { name: "Fiber install", project: 4312 }
+    start_state: "waiting_on_manager_approval"
+  ) {
+    id
+    workflow_instance { currentState { key label } }
+  }
+}</code></pre>
+          <p class="doc-p"><code class="doc-code">start_state</code> is on <code class="doc-code">create_&lt;collection&gt;_item</code> (and <code class="doc-code">create_&lt;collection&gt;</code>), the batch <code class="doc-code">create_&lt;collection&gt;_items</code> (every row; a row's own <code class="doc-code">$start_state</code>, sent through variables, wins) and <code class="doc-code">create_&lt;collection&gt;_dry_run</code>. The value is the step's key; its id works too.</p>
+          <h2 class="doc-h2" id="pipeline-start-state-rest">REST</h2>
+          <pre class="doc-pre"><code>POST /api/items/workflows
+{ "name": "Fiber install", "$start_state": "waiting_on_manager_approval" }
+
+POST /api/items/workflows?start_state=waiting_on_manager_approval   (same thing)
+
+→ 201 { "data": { "id": 80412, "name": "Fiber install", …,
+        "$state": { "key": "waiting_on_manager_approval", "label": "Waiting on Manager Approval",
+                    "is_terminal": false, "entered_at": "…", "instance_id": "…" } } }</code></pre>
+          <p class="doc-p">The batch route (<code class="doc-code">POST /api/items/:collection/batch</code>) takes <code class="doc-code">$start_state</code> per row. A rehearsal (<code class="doc-code">?dry_run=1</code>, sandbox keys) judges the step and starts nothing. SDK: <code class="doc-code">createItem(collection, data, { startState })</code>.</p>
+          <h2 class="doc-h2" id="pipeline-start-state-who">Who may do it</h2>
+          <ul class="doc-ul">
+            <li>Administrators, in any step.</li>
+            <li>Roles listed on the pipeline binding under **Who may create records in a later step** (pipeline editor → Applied to Collections). **Which steps** limits them to certain steps; empty means any step.</li>
+            <li>Never while an administrator is viewing as someone who is not an administrator.</li>
+            <li>The caller must also be allowed to create the record at all; scoped API keys keep their scopes.</li>
+          </ul>
+          <p class="doc-p">A refusal comes back before anything is written, so no record is left behind:</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Status</th><th>Code</th><th>When</th></tr></thead>
+            <tbody><tr><tr><td>422</td><td>START_STATE_NOT_BOUND</td><td>The collection runs no pipeline</td></tr>
+              <tr><td>422</td><td>START_STATE_UNKNOWN</td><td>The bound pipeline has no such step</td></tr>
+              <tr><td>422</td><td>START_STATE_INVALID</td><td>The value is not a step key or id</td></tr>
+              <tr><td>403</td><td>START_STATE_FORBIDDEN</td><td>Your role may not create records in a later step</td></tr>
+              <tr><td>403</td><td>START_STATE_STEP_FORBIDDEN</td><td>Your role may, but not in this step</td></tr>
+              <tr><td>403</td><td>START_STATE_VIEW_AS</td><td>Viewing as someone who is not an administrator</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="pipeline-start-state-effects">What happens</h2>
+          <ul class="doc-ul">
+            <li>One pipeline instance in that step and one history entry, "Created in &lt;step&gt;", with the caller as the person who did it. A final step closes the pipeline at once.</li>
+            <li>It happens in the same request: the create's answer already shows the step.</li>
+            <li>The step's owners are told, as after a move into it (flows on the workflow transition event, state subscriptions, "waiting on you"). Imports and rehearsals stay quiet.</li>
+            <li>Queues, deadlines and the record's state field follow the step, and automatic transitions from that step are checked right after.</li>
+            <li>It is not a transition: no transition runs, so none of its actions do (partner pushes, emails or field writes set on a move, requirements). If the record needs those, create it and then run the transition.</li>
+            <li>A create that the collection's natural key turns into an update of an existing record keeps that record's current step.</li>
+          </ul>
+          <!-- /SYNC:pipeline-start-state -->
         </div>
 
         <div class="doc-section" id="s-pipeline-dimensions" data-toc='[{"id":"pipeline-dimensions","label":"Dimensions &amp; Filter Axes"}]'>

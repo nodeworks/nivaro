@@ -534,6 +534,8 @@ export type PipelineBinding = {
   auto_start: boolean
   auto_start_state: string | null
   owner_fallback_field: string | null
+  start_state_roles?: string | null
+  start_state_allowed?: string | null
   dimensions?: PipelineOwnerDimension[]
 }
 

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import { writeStartHistory } from '../services/instance-start.js'
 import { isMachineAccount } from '../services/machine-accounts.js'
+import type { StartStateRun } from '../services/start-state.js'
 import { deferEffect } from '../services/unit-of-work.js'
 import type { HookContext } from './registry.js'
 import { hooks } from './registry.js'
@@ -88,9 +89,115 @@ async function reportAutostartFailure(f: {
   }
 }
 
+/**
+ * Whether a start the CALLER chose (`$start_state` / `start_state`) is
+ * announced. It is the creator's own word on where the record stands — the
+ * one-call twin of "create, then move it there" — so its owners hear about it
+ * the way they would after that move, whoever (person or integration) made
+ * it. Only a rehearsal, a start in the initial state and bulk loads are quiet.
+ */
+export function chosenStartSilenceReason(
+  ctx: Pick<HookContext, 'req' | 'dryRun'>,
+  startState: { is_initial?: unknown }
+): string | null {
+  if (ctx.dryRun) return 'dry-run'
+  if (coerceBool(startState.is_initial)) return 'initial-state'
+  const req = ctx.req as { url?: string; raw?: { url?: string } } | undefined
+  const path = String(req?.raw?.url ?? req?.url ?? '').split('?')[0]
+  if (BULK_CREATE_PATH.test(path)) return 'bulk-create'
+  return null
+}
+
+/**
+ * The create named its start step and passed the gate (services/start-state.ts):
+ * ONE instance in that step and ONE start history row, in the request — the
+ * create's answer already shows the state, and the after-hooks that follow
+ * (queue materialization, auto transitions) see it. Not a move: no transition
+ * and none of its actions run. The announcement (flows, state subscriptions,
+ * "waiting on you") waits for the unit of work like every other effect.
+ */
+async function startAtChosenState(ctx: HookContext, run: StartStateRun): Promise<void> {
+  const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : null
+  if (!item) return
+  let step = "reading the record's workflow instance"
+  let started = false
+  try {
+    // Never a second instance (a before-hook or a nested write may have started one).
+    const existing = await db('nivaro_workflow_instances')
+      .where({ collection: ctx.collection, item })
+      .first('id')
+    if (existing) return
+
+    const instanceId = randomUUID()
+    const now = new Date()
+    const state = run.state
+    step = 'writing the workflow instance'
+    await db('nivaro_workflow_instances').insert({
+      id: instanceId,
+      template: run.template,
+      collection: ctx.collection,
+      item,
+      current_state: state.id,
+      started_at: now,
+      completed_at: state.is_terminal ? now : null
+    })
+    started = true
+    run.instanceId = instanceId
+    run.startedAt = now
+
+    step = 'writing the start history'
+    const machine =
+      !ctx.user ||
+      isMachineAccount(ctx.user) ||
+      MACHINE_AUTH.has(String((ctx.req as { authMethod?: string } | undefined)?.authMethod ?? ''))
+    await writeStartHistory({
+      instanceId,
+      stateId: state.id,
+      userId: ctx.user?.id ?? null,
+      comment: `Created in ${state.label}`,
+      origin: machine ? 'integration' : 'person',
+      timestamp: now
+    })
+
+    if (run.stateField && state.key) {
+      step = 'mirroring the state field'
+      const { syncStateField } = await import('../services/workflow-transitions.js')
+      await syncStateField(ctx.collection, item, state).catch(() => {})
+    }
+
+    if (chosenStartSilenceReason(ctx, state) === null) {
+      const userId = ctx.user?.id ?? null
+      void deferEffect('pipeline-start-state:announce', async () => {
+        const { emitWorkflowStartEvent } = await import('../services/workflow-transitions.js')
+        await emitWorkflowStartEvent({
+          instanceId,
+          collection: ctx.collection,
+          item,
+          template: run.template,
+          stateId: state.id,
+          userId,
+          label: `Created in ${state.label}`,
+          source: 'start'
+        })
+      })
+    }
+  } catch (err) {
+    await reportAutostartFailure({
+      collection: ctx.collection,
+      item,
+      step,
+      started,
+      err,
+      userId: ctx.user?.id ?? null
+    })
+  }
+}
+
 export function registerPipelineAutostartHooks() {
-  hooks.after('*', 'create', (ctx) =>
-    deferEffect('pipeline-autostart', async () => {
+  hooks.after('*', 'create', (ctx) => {
+    // A start step the caller chose: in the request, never deferred.
+    if (ctx.startState) return startAtChosenState(ctx, ctx.startState)
+    return deferEffect('pipeline-autostart', async () => {
       if (ctx.collection.startsWith('nivaro_')) return
       const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : null
       if (!item) return
@@ -184,5 +291,5 @@ export function registerPipelineAutostartHooks() {
         })
       }
     })
-  )
+  })
 }

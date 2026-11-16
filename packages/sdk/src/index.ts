@@ -285,6 +285,10 @@ export interface WorkflowBinding {
   state_field: string | null
   auto_start: boolean
   auto_start_state: string | null
+  /** JSON role ids that may create a record in a later step (migration 531). */
+  start_state_roles?: string | null
+  /** JSON state keys those roles may pick; empty = any (migration 531). */
+  start_state_allowed?: string | null
 }
 
 export interface WorkflowInstanceData {
@@ -830,11 +834,23 @@ export interface ItemWriteMeta {
   matched_id?: string | number
 }
 
+/**
+ * Create a record. `startState` (a pipeline state key) starts the record's
+ * pipeline in that step instead of the initial one — administrators, or roles
+ * the pipeline binding allows; no transition runs. The answer's `data.$state`
+ * shows the step.
+ */
 export function createItem<T = Record<string, unknown>>(
   collection: string,
-  data: Partial<T>
+  data: Partial<T>,
+  opts?: { startState?: string }
 ): Command<{ data: T; meta?: ItemWriteMeta }> {
-  return cmd('POST', `/items/${collection}`, undefined, data)
+  return cmd(
+    'POST',
+    `/items/${collection}`,
+    opts?.startState ? { start_state: opts.startState } : undefined,
+    data
+  )
 }
 
 /** What a create would do. Nothing is stored and no number is taken. */
@@ -1070,7 +1086,14 @@ export function readWorkflowBindings(): Command<{ data: WorkflowBinding[] }> {
 /** Update a pipeline binding's auto-start settings (admin). */
 export function updateWorkflowBinding(
   bindingId: number | string,
-  body: { auto_start?: boolean; auto_start_state?: string | null }
+  body: {
+    auto_start?: boolean
+    auto_start_state?: string | null
+    /** Roles that may create a record in a later step (empty = administrators only). */
+    start_state_roles?: string[]
+    /** Steps those roles may pick (empty = any). */
+    start_state_allowed?: string[]
+  }
 ): Command<{ data: WorkflowBinding }> {
   return cmd('PATCH', `/pipelines/bindings/${bindingId}`, undefined, body)
 }
