@@ -10194,7 +10194,8 @@ export function CollectionBrowserView({
               className='ml-0.5 border-l border-slate-200 pl-2 dark:border-slate-700'
             />
           )}
-          <span className='ml-auto text-[11px] text-slate-400'>
+          {/* Phones show the count once, in the pager — not here as well. */}
+          <span className='ml-auto hidden text-[11px] text-slate-400 md:inline'>
             {totalUnknown ? (
               'count unavailable'
             ) : (
