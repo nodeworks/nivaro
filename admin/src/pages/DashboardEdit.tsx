@@ -259,7 +259,8 @@ export function WidgetCard({
   onDelete,
   onDrill,
   pin,
-  fill
+  fill,
+  narrow = false
 }: {
   widget: DashboardWidget
   globalFilters: GlobalFilter[]
@@ -270,6 +271,8 @@ export function WidgetCard({
   pin?: { pinned: boolean; onToggle: () => void }
   /** Fill the parent instead of spanning the dashboard's 12-column grid. */
   fill?: boolean
+  /** Phone width: the card takes the whole single column. */
+  narrow?: boolean
 }) {
   const qc = useQueryClient()
   const filtersKey = JSON.stringify(globalFilters)
@@ -331,7 +334,7 @@ export function WidgetCard({
         fill
           ? undefined
           : {
-              gridColumn: `span ${widget.width}`,
+              gridColumn: narrow ? '1 / -1' : `span ${widget.width}`,
               gridRow: `span ${widget.height}`
             }
       }
@@ -1263,6 +1266,22 @@ function DrillSheet({
 
 const PRETEND_SCOPE = 'dashboard-edit'
 
+/** Phone width (under md): the widget grid becomes one column. */
+function useNarrow(): boolean {
+  const q = '(max-width: 767px)'
+  const [narrow, setNarrow] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia?.(q).matches
+  )
+  useEffect(() => {
+    const m = window.matchMedia?.(q)
+    if (!m) return
+    const on = () => setNarrow(m.matches)
+    m.addEventListener('change', on)
+    return () => m.removeEventListener('change', on)
+  }, [])
+  return narrow
+}
+
 export function DashboardEditPage() {
   // Each widget can be pinned onto the person's Overview page (stored per person).
   const pinToOverview = usePinToOverview()
@@ -1272,6 +1291,7 @@ export function DashboardEditPage() {
   const queryClient = useQueryClient()
   const [showAddWidget, setShowAddWidget] = useState(false)
   const [editingName, setEditingName] = useState(false)
+  const narrow = useNarrow()
   const [nameInput, setNameInput] = useState('')
   const [drill, setDrill] = useState<DrillTarget | null>(null)
   // #2858 — Pretend down: this viewer's dependencies, cleared when the page closes.
@@ -1418,8 +1438,8 @@ export function DashboardEditPage() {
   return (
     <>
       {/* ── Header ────────────────────────────────────────────────── */}
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white dark:border-white/[0.07] dark:bg-[#0d1117] px-8 py-4'>
-        <div className='flex items-center gap-4'>
+      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-3 dark:border-white/[0.07] dark:bg-[#0d1117] md:px-8 md:py-4'>
+        <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
           <button
             type='button'
             onClick={goBack}
@@ -1429,7 +1449,7 @@ export function DashboardEditPage() {
             <ArrowLeft className='h-4 w-4' />
           </button>
 
-          <div className='flex flex-1 items-center gap-3'>
+          <div className='flex min-w-0 flex-1 items-center gap-3'>
             {editingName ? (
               <form
                 onSubmit={(e) => {
@@ -1450,7 +1470,7 @@ export function DashboardEditPage() {
               <button
                 type='button'
                 onClick={startEditName}
-                className='rounded px-1 text-[18px] font-semibold text-slate-900 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors'
+                className='min-w-0 rounded px-1 text-left text-[18px] font-semibold text-slate-900 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors'
               >
                 {data.name}
               </button>
@@ -1463,7 +1483,7 @@ export function DashboardEditPage() {
             )}
           </div>
 
-          <div className='flex items-center gap-2'>
+          <div className='flex flex-wrap items-center gap-2'>
             {widgets.length > 0 && (
               <PretendDownButton scope={PRETEND_SCOPE} options={pretendOptions} user={user} />
             )}
@@ -1490,7 +1510,7 @@ export function DashboardEditPage() {
       </div>
 
       {/* ── Widget grid ───────────────────────────────────────────── */}
-      <div className='flex-1 overflow-auto p-8'>
+      <div className='flex-1 overflow-auto p-4 md:p-8'>
         {sorted.length > 0 && (
           <GlobalFilterBar widgets={widgets} filters={globalFilters} onChange={setGlobalFilters} />
         )}
@@ -1513,7 +1533,7 @@ export function DashboardEditPage() {
           <div
             className='grid gap-4'
             style={{
-              gridTemplateColumns: 'repeat(4, 1fr)',
+              gridTemplateColumns: narrow ? 'minmax(0, 1fr)' : 'repeat(4, 1fr)',
               gridAutoRows: '180px'
             }}
           >
@@ -1521,6 +1541,7 @@ export function DashboardEditPage() {
               <WidgetCard
                 key={widget.id}
                 widget={widget}
+                narrow={narrow}
                 globalFilters={globalFilters}
                 onDelete={() => deleteWidget.mutate(widget.id)}
                 pin={
