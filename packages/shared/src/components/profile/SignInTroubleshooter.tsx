@@ -190,7 +190,7 @@ function Body({
 
       <dl
         className={cn(
-          'grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border',
+          'grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 max-sm:[&>*:last-child:nth-child(odd)]:col-span-2 dark:border-border dark:bg-border',
           sessions == null ? 'sm:grid-cols-3' : 'sm:grid-cols-4'
         )}
       >
@@ -465,9 +465,7 @@ function AttemptRow({ a, times = 1, first }: { a: Attempt; times?: number; first
                 : formatDateTime(a.at)
             }
           >
-            {times > 1 && first && formatRelative(first) !== formatRelative(a.at)
-              ? `${formatRelative(first)} – ${formatRelative(a.at)}`
-              : formatRelative(a.at)}
+            {formatRelative(a.at)}
           </span>
         </div>
         <p className='truncate text-[11px] text-slate-500 dark:text-slate-400'>
