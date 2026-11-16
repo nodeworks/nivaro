@@ -151,9 +151,11 @@ export function useResubmissionDiff(
 const MUTED = 'text-slate-500 dark:text-slate-400'
 const STRONG = 'font-medium text-slate-700 dark:text-slate-200'
 
+/** Who and when sit right after their change (a far-right column left a ~600 px gap on a
+ *  wide record, so the eye lost which row a name belonged to). */
 function Who({ by, at }: { by: string | null; at: string }) {
   return (
-    <span className={cn('block whitespace-nowrap text-[11px] sm:shrink-0 sm:text-[12px]', MUTED)}>
+    <span className={cn('block whitespace-nowrap text-[11px] sm:shrink-0 sm:text-[11.5px]', MUTED)}>
       {by ? `${by} · ` : ''}
       <RelativeTime value={at} />
     </span>
@@ -183,8 +185,8 @@ function rowsOf(d: ResubmissionDiffData): Row[] {
       node: (
         <div className='flex items-start gap-2' data-resub-field={f.field}>
           <KindIcon kind='changed' />
-          <div className='min-w-0 flex-1 sm:flex sm:items-start sm:gap-4'>
-            <p className='min-w-0 break-words sm:flex-1'>
+          <div className='min-w-0 flex-1 sm:flex sm:items-baseline sm:gap-3'>
+            <p className='min-w-0 break-words'>
               <span className={STRONG}>{f.label}</span>
               {f.auto ? <span className={MUTED}> (updated automatically)</span> : null}
               <span className={MUTED}>: </span>
@@ -215,8 +217,8 @@ function rowsOf(d: ResubmissionDiffData): Row[] {
         node: (
           <div className='flex items-start gap-2' data-resub-line={it.kind}>
             <KindIcon kind={it.kind} />
-            <div className='min-w-0 flex-1 sm:flex sm:items-start sm:gap-4'>
-              <p className='min-w-0 break-words sm:flex-1'>
+            <div className='min-w-0 flex-1 sm:flex sm:items-baseline sm:gap-3'>
+              <p className='min-w-0 break-words'>
                 <span className={MUTED}>{g.label}: </span>
                 <span className={STRONG}>{it.label}</span>
                 <span className={MUTED}>
@@ -257,8 +259,8 @@ function rowsOf(d: ResubmissionDiffData): Row[] {
           ) : (
             <KindIcon kind={f.kind} />
           )}
-          <div className='min-w-0 flex-1 sm:flex sm:items-start sm:gap-4'>
-            <p className='min-w-0 break-words sm:flex-1'>
+          <div className='min-w-0 flex-1 sm:flex sm:items-baseline sm:gap-3'>
+            <p className='min-w-0 break-words'>
               <span className={MUTED}>{f.field_label}: </span>
               {f.kind === 'replaced' ? (
                 <>

@@ -1424,7 +1424,8 @@ function StateTrack({
   history,
   onPathIds,
   skippedStates,
-  travel
+  travel,
+  onShowHistory
 }: {
   states: PipelineState[]
   allTransitions: PipelineTransition[]
@@ -1438,6 +1439,9 @@ function StateTrack({
   skippedStates?: Map<string, string[]> | null
   /** rt8 #17: someone else just moved the record — the track draws the hop. */
   travel?: TrackTravel | null
+  /** Opens the panel's Transition history — the "+N" under a connector that
+   *  saw several moves points there instead of stacking every move. */
+  onShowHistory?: () => void
 }) {
   // A narrow host (a phone-width sheet) scrolls the track sideways instead of
   // crushing each step to one letter per line; the current step is brought
@@ -1453,6 +1457,29 @@ function StateTrack({
     const node = cur.getBoundingClientRect()
     el.scrollLeft += node.left + node.width / 2 - (box.left + box.width / 2)
   }, [currentStateId])
+  // Which edges have more track beyond them: a scrolled-off label fades out
+  // at that edge instead of being cut mid-word with nothing saying "more".
+  const [edges, setEdges] = useState<{ left: boolean; right: boolean }>({
+    left: false,
+    right: false
+  })
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const read = () => {
+      const left = el.scrollLeft > 2
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+      setEdges((p) => (p.left === left && p.right === right ? p : { left, right }))
+    }
+    read()
+    el.addEventListener('scroll', read, { passive: true })
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(read) : null
+    ro?.observe(el)
+    return () => {
+      el.removeEventListener('scroll', read)
+      ro?.disconnect()
+    }
+  }, [])
   const visitedIds = new Set(history.map((h) => h.to_state))
   // The initial state is never any transition's destination, so history alone
   // never marks it — leaving "Started" hollow on a record that plainly
@@ -1602,8 +1629,28 @@ function StateTrack({
     <TooltipProvider delayDuration={200}>
       {/* pt/pb: the scroll box clips vertically too — room for the current
         step's ring. */}
-      <div ref={scrollRef} className='overflow-x-auto pt-1.5 pb-1' data-state-track>
-        <div className='flex w-full items-start'>
+      <div
+        ref={scrollRef}
+        className='overflow-x-auto pt-1.5 pb-1 [scrollbar-width:thin]'
+        data-state-track
+        data-track-more-left={edges.left || undefined}
+        data-track-more-right={edges.right || undefined}
+        style={
+          edges.left || edges.right
+            ? {
+                maskImage: `linear-gradient(to right, ${edges.left ? 'transparent, #000 28px' : '#000'}, ${edges.right ? '#000 calc(100% - 28px), transparent' : '#000'})`,
+                WebkitMaskImage: `linear-gradient(to right, ${edges.left ? 'transparent, #000 28px' : '#000'}, ${edges.right ? '#000 calc(100% - 28px), transparent' : '#000'})`
+              }
+            : undefined
+        }
+      >
+        {/* min-width: each step keeps its 76px label floor plus its 40px
+          connector, so a narrow host scrolls a whole track (with its own end
+          padding) instead of cutting the first and last labels at the edge. */}
+        <div
+          className='flex w-full items-start px-2'
+          style={{ minWidth: `${relevant.length * 116 - 40 + 16}px` }}
+        >
           {relevant.map((s, i) => {
             const isCurrent = s.id === currentStateId
             const isVisited = visitedIds.has(s.id)
@@ -1635,9 +1682,18 @@ function StateTrack({
                     }`}
                     data-track-current={isCurrent || undefined}
                     data-track-arrive={plan && plan.arriveIndex === i ? '' : undefined}
-                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
-                      isCurrent || isDone ? 'nvr-fill-sweep' : ''
-                    } ${plan && plan.arriveIndex === i ? 'nvr-track-arrive' : ''}`}
+                    className={cn(
+                      'flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
+                      (isCurrent || isDone) && 'nvr-fill-sweep',
+                      plan && plan.arriveIndex === i && 'nvr-track-arrive',
+                      // Steps still to come stay muted in both themes: the
+                      // current step is always the strongest node on the track.
+                      !isCurrent &&
+                        !isDone &&
+                        (isSkipped
+                          ? 'border-[1.5px] border-dashed border-slate-300 bg-transparent dark:border-slate-600'
+                          : 'border-[1.5px] border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800')
+                    )}
                     // Per-state help text (#81) — instant tip via TipLayer.
                     data-tip={
                       doneBefore
@@ -1649,15 +1705,12 @@ function StateTrack({
                       ...(plan && plan.arriveIndex === i
                         ? ({ '--nvr-track-arrive': `${plan.arriveDelay}ms` } as React.CSSProperties)
                         : null),
-                      backgroundColor:
-                        isCurrent || isDone ? nodeColor : isSkipped ? 'transparent' : '#f1f5f9',
-                      border:
-                        isCurrent || isDone
-                          ? 'none'
-                          : isSkipped
-                            ? '1.5px dashed #cbd5e1'
-                            : '1.5px solid #e2e8f0',
-                      boxShadow: isCurrent ? `0 0 0 3px white, 0 0 0 5px ${nodeColor}` : undefined
+                      backgroundColor: isCurrent || isDone ? nodeColor : undefined,
+                      // The gap ring is the surface colour, not white — a white
+                      // halo was the brightest thing on a dark page.
+                      boxShadow: isCurrent
+                        ? `0 0 0 3px hsl(var(--card, 0 0% 100%)), 0 0 0 5px ${nodeColor}`
+                        : undefined
                     }}
                   >
                     {isDone ? (
@@ -1665,9 +1718,12 @@ function StateTrack({
                     ) : isCurrent ? (
                       <div className='h-2.5 w-2.5 rounded-full bg-white/80' />
                     ) : isSkipped ? (
-                      <Minus className='h-3 w-3 text-slate-400' strokeWidth={2.5} />
+                      <Minus
+                        className='h-3 w-3 text-slate-400 dark:text-slate-500'
+                        strokeWidth={2.5}
+                      />
                     ) : (
-                      <div className='h-2 w-2 rounded-full bg-slate-300' />
+                      <div className='h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600' />
                     )}
                   </div>
                   {isSkipped ? (
@@ -1708,11 +1764,12 @@ function StateTrack({
                       // #94a3b8 was near-invisible in light mode (army 11 a1).
                       className={cn(
                         'w-full break-words text-center leading-snug',
-                        !isCurrent && !isDone && 'text-slate-500 dark:text-slate-400'
+                        !isCurrent && !isDone && 'text-slate-500 dark:text-slate-400',
+                        isDone && 'text-slate-600 dark:text-slate-300'
                       )}
                       style={{
                         fontSize: '11px',
-                        color: isCurrent ? nodeColor : isDone ? '#475569' : undefined,
+                        color: isCurrent ? nodeColor : undefined,
                         fontWeight: isCurrent ? 600 : isDone ? 500 : 400,
                         wordBreak: 'break-word'
                       }}
@@ -1724,10 +1781,17 @@ function StateTrack({
                 {!isLast && (
                   <div className='mt-[13px] flex w-10 shrink-0 flex-col items-center gap-1.5'>
                     {(() => {
-                      const lineColor = isDone ? `${nodeColor}55` : '#e8ecf0'
+                      // Done: the step's own colour, faint. To come: a muted
+                      // token pair (a fixed #e8ecf0 read as a white arrow in dark).
+                      const lineColor = isDone ? `${nodeColor}55` : 'currentColor'
                       const draw = plan?.segments.get(i)
                       return (
-                        <div className='flex w-full shrink-0 items-center'>
+                        <div
+                          className={cn(
+                            'flex w-full shrink-0 items-center',
+                            !isDone && 'text-slate-200 dark:text-slate-700'
+                          )}
+                        >
                           <div
                             key={draw != null ? `t${travel?.n}` : 'line'}
                             className={cn(
@@ -1758,7 +1822,7 @@ function StateTrack({
                         </div>
                       )
                     })()}
-                    {edge.map((h) => {
+                    {edge.slice(-1).map((h) => {
                       const isSendback = h.from_state !== s.id
                       const hopSpan =
                         Math.abs(
@@ -1809,6 +1873,50 @@ function StateTrack({
                         </Tooltip>
                       )
                     })}
+                    {/* Only the latest move sits under the connector; earlier
+                      ones fold into "+N" (a send-back loop used to stack every
+                      move here and grow the track by a row per round). */}
+                    {edge.length > 1 && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type='button'
+                            onClick={onShowHistory}
+                            data-track-more-moves={edge.length - 1}
+                            aria-label={`${edge.length - 1} earlier ${
+                              edge.length - 1 === 1 ? 'move' : 'moves'
+                            } here — open the transition history`}
+                            className='rounded px-1 text-[9px] font-semibold leading-[14px] tabular-nums text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-nvr-cyan dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-200'
+                          >
+                            +{edge.length - 1}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side='bottom' className='max-w-[260px] text-[12px]'>
+                          <p className='font-medium'>Earlier moves here</p>
+                          <ul className='mt-1 space-y-0.5'>
+                            {edge
+                              .slice(0, -1)
+                              .reverse()
+                              .slice(0, 6)
+                              .map((h) => (
+                                <li key={h.id} className='text-muted-foreground'>
+                                  {h.from_state !== s.id ? '↩ ' : ''}
+                                  {isMachineEntry(h) ? machineHeadline(h) : entryName(h)} ·{' '}
+                                  {formatDateTime(h.timestamp)}
+                                </li>
+                              ))}
+                          </ul>
+                          {edge.length - 1 > 6 && (
+                            <p className='mt-1 text-muted-foreground'>and {edge.length - 7} more</p>
+                          )}
+                          {onShowHistory && (
+                            <p className='mt-1 text-muted-foreground'>
+                              Click for the full history.
+                            </p>
+                          )}
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
                   </div>
                 )}
               </div>
@@ -2966,6 +3074,7 @@ function PipelinePanelInner({
   const [comment, setComment] = useState('')
   const [pendingTransition, setPendingTransition] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
+  const historyAnchorRef = useRef<HTMLDivElement>(null)
   // Follows the layout's "Starts open" whenever it changes (the editor's toggle, live).
   const [expanded, setExpanded] = useStartsOpen(defaultExpanded, false)
   const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
@@ -3777,17 +3886,26 @@ function PipelinePanelInner({
                 Addendum workflow
               </span>
             )}
-            {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
-            {/* rt8 — how long it has been in this step, on the page's shared clock. */}
-            {currentState && !instance?.completed_at && (
-              <StepForLine
-                stepLabel={currentState.label}
-                enteredAt={enteredAtFromHistory(
-                  instance?.current_state,
-                  history,
-                  (instance as { started_at?: string | null } | null)?.started_at ?? null
+            {/* rt8 — the step and how long it has been in it travel as one unit: on a phone a
+              long step name wraps inside the pill and "for 3 d 4 h" stays beside it on the
+              pill's centre line, never hanging under its left edge. */}
+            {currentState && (
+              <span className='inline-flex min-w-0 max-w-full items-center gap-1.5'>
+                <span className='min-w-0'>
+                  <StateBadge label={currentState.label} color={currentState.color} />
+                </span>
+                {!instance?.completed_at && (
+                  <StepForLine
+                    className='shrink-0'
+                    stepLabel={currentState.label}
+                    enteredAt={enteredAtFromHistory(
+                      instance?.current_state,
+                      history,
+                      (instance as { started_at?: string | null } | null)?.started_at ?? null
+                    )}
+                  />
                 )}
-              />
+              </span>
             )}
             <RecordFlagChips flags={data?.flags} />
             {(data?.auto_held?.length ?? 0) > 0 && (
@@ -3935,6 +4053,15 @@ function PipelinePanelInner({
                         onPathIds={onPathIds}
                         skippedStates={skippedStates}
                         travel={trackTravel}
+                        onShowHistory={() => {
+                          setShowHistory(true)
+                          requestAnimationFrame(() =>
+                            historyAnchorRef.current?.scrollIntoView({
+                              block: 'nearest',
+                              behavior: 'smooth'
+                            })
+                          )
+                        }}
                       />
                     )}
                     {data?.branches && <BranchLanes data={data.branches} />}
@@ -3974,7 +4101,7 @@ function PipelinePanelInner({
                     {fixPanel}
                   </div>
                 )}
-                <div className='px-5 py-3'>
+                <div className='px-5 py-3' ref={historyAnchorRef}>
                   <button
                     type='button'
                     className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-slate-600'
