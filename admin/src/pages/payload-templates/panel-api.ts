@@ -194,6 +194,21 @@ export function usePublish(key: string) {
   })
 }
 
+/** Throw the draft away (back to the live version); a 409 carries `current` (staleCurrent). */
+export function useDiscardDraft(key: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (args: { base_rev: number; base_published_version: number | null }) =>
+      api
+        .post<{ rev: number; unchanged: boolean }>(
+          `/payload-templates/${enc(key)}/discard-draft`,
+          args
+        )
+        .then((r) => r.data),
+    onSuccess: () => invalidateTemplate(qc, key)
+  })
+}
+
 export function useRestoreVersion(key: string) {
   const qc = useQueryClient()
   return useMutation({

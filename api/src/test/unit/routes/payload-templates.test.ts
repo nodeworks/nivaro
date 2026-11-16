@@ -287,6 +287,30 @@ vi.mock('../../../services/payload-templates/index.js', async (orig) => {
       })
       return { ok: true, version }
     },
+    // As the service: back to the live version, rev + 1; unpublished = 409; stale = current.
+    discardDraft: async (
+      key: string,
+      input: { base_rev: number; base_published_version?: number | null }
+    ) => {
+      const r = need(key)
+      fake.draftInputs.push(structuredClone(input))
+      if (r.published_version == null)
+        throw new PayloadTemplateError('unpublished', `'${key}' was never published`)
+      if (r.draft_rev !== input.base_rev) return { ok: false, current: structuredClone(r) }
+      if (
+        input.base_published_version !== undefined &&
+        input.base_published_version !== r.published_version
+      ) {
+        return { ok: false, current: structuredClone(r) }
+      }
+      Object.assign(r, {
+        draft_mode: r.published_mode,
+        draft_body: r.published_body,
+        draft_lookups: r.lookups,
+        draft_rev: r.draft_rev + 1
+      })
+      return { ok: true, rev: r.draft_rev, unchanged: false }
+    },
     listVersions: async (key: string) => {
       const r = need(key)
       return r.published_version
@@ -681,6 +705,35 @@ describe('payload template routes', () => {
     expect(pub.body).toEqual({ version: 3 })
     const after = await call('GET', '?external_api=MWF')
     expect(after.body.data[0]).toMatchObject({ status: 'live', published_version: 3 })
+  })
+
+  it('discards a draft back to the live version; stale, missing base_rev and unpublished refused', async () => {
+    await call('PUT', '/mwf-ir-order/draft', {
+      mode: 'map',
+      body: SPEC.replace('"queue"', '"q"'),
+      base_rev: 3
+    })
+    expect((await call('GET', '?external_api=MWF')).body.data[0].status).toBe('draft')
+    expect((await call('POST', '/mwf-ir-order/discard-draft', {})).status).toBe(400)
+    const stale = await call('POST', '/mwf-ir-order/discard-draft', { base_rev: 3 })
+    expect(stale.status).toBe(409)
+    expect(stale.body.current.draft_rev).toBe(4)
+    const moved = await call('POST', '/mwf-ir-order/discard-draft', {
+      base_rev: 4,
+      base_published_version: 1
+    })
+    expect(moved.status).toBe(409)
+    const ok = await call('POST', '/mwf-ir-order/discard-draft', {
+      base_rev: 4,
+      base_published_version: 2
+    })
+    expect(ok.status).toBe(200)
+    expect(ok.body).toEqual({ rev: 5, unchanged: false })
+    const after = await call('GET', '/mwf-ir-order')
+    expect(after.body.data).toMatchObject({ status: 'live', draft_body: SPEC, draft_rev: 5 })
+    const never = await call('POST', '/fusion-transfer-order/discard-draft', { base_rev: 0 })
+    expect(never.status).toBe(409)
+    expect(never.body.error).toBe('unpublished')
   })
 
   it('lists, reads and restores versions; resets to the shipped default', async () => {

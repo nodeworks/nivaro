@@ -159,6 +159,7 @@ const {
   MODE_CHANGE_MESSAGE,
   PayloadTemplateError,
   bustPayloadTemplateCache,
+  discardDraft,
   getTemplate,
   getVersion,
   hasNewerDefault,
@@ -613,6 +614,76 @@ describe('draft lookups', () => {
     // The draft row is never touched by registration.
     expect(row?.draft_lookups).toEqual(LK)
     expect(hasNewerDefault(row as NonNullable<typeof row>)).toBe(false)
+  })
+})
+
+describe('discardDraft', () => {
+  const LK = { wh: { collection: 'warehouses' } }
+  const same = (r: Awaited<ReturnType<typeof getTemplate>>) =>
+    r?.draft_mode === r?.published_mode &&
+    r?.draft_body === r?.published_body &&
+    JSON.stringify(r?.draft_lookups ?? null) === JSON.stringify(r?.lookups ?? null)
+
+  it('puts the live body, mode and lookups back (rev + 1) and logs it', async () => {
+    await registerPayloadTemplate('efp-ops', def())
+    await saveDraft(KEY, { mode: 'map', body: spec('record.label'), base_rev: 1 }, USER)
+    await saveDraftLookups(KEY, { lookups: LK, base_rev: 2 }, USER)
+    expect(same(await getTemplate(KEY))).toBe(false)
+    vi.mocked(logActivity).mockClear()
+    expect(await discardDraft(KEY, { base_rev: 3, base_published_version: 1 }, USER)).toEqual({
+      ok: true,
+      rev: 4,
+      unchanged: false
+    })
+    const row = await getTemplate(KEY)
+    expect(same(row)).toBe(true)
+    expect(row?.draft_body).toBe(spec('record.status'))
+    expect(row?.draft_rev).toBe(4)
+    expect(logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'payload-template-discard',
+        item: KEY,
+        comment: 'Discarded the draft (back to v1)'
+      })
+    )
+    // Nothing to discard now: left alone, nothing logged.
+    vi.mocked(logActivity).mockClear()
+    expect(await discardDraft(KEY, { base_rev: 4 }, USER)).toEqual({
+      ok: true,
+      rev: 4,
+      unchanged: true
+    })
+    expect(logActivity).not.toHaveBeenCalled()
+  })
+
+  it('a stale revision or a publish since is refused with the current row; nothing written', async () => {
+    await registerPayloadTemplate('efp-ops', def())
+    await saveDraft(KEY, { mode: 'map', body: spec('record.label'), base_rev: 1 }, USER)
+    const before = snapshot()
+    const stale = await discardDraft(KEY, { base_rev: 1 }, USER)
+    expect(stale.ok).toBe(false)
+    if (!stale.ok) expect(stale.current.draft_rev).toBe(2)
+    const moved = await discardDraft(KEY, { base_rev: 2, base_published_version: null }, USER)
+    expect(moved.ok).toBe(false)
+    expect(snapshot()).toBe(before)
+  })
+
+  it('a never-published template has nothing to go back to', async () => {
+    store.tables[T] = [
+      {
+        id: 7,
+        key: 'loose',
+        label: 'Loose',
+        collection: 'inventory_request',
+        published_mode: null,
+        published_body: null,
+        published_version: null
+      }
+    ]
+    store.tables[D] = [{ template_id: 7, mode: 'map', body: spec('record.status'), rev: 1 }]
+    const err = await discardDraft('loose', { base_rev: 1 }, USER).catch((e) => e)
+    expect(err).toBeInstanceOf(PayloadTemplateError)
+    expect(err.code).toBe('unpublished')
   })
 })
 

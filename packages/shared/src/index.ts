@@ -639,7 +639,10 @@ export {
 export { PersonDidPanel } from './components/profile/PersonDidPanel'
 export { PersonHeader } from './components/profile/PersonHeader'
 export { PersonProfile, type PersonProfileTab } from './components/profile/PersonProfile'
-export { SectionCard as ProfileSectionCard } from './components/profile/primitives'
+export {
+  ConfirmButton,
+  SectionCard as ProfileSectionCard
+} from './components/profile/primitives'
 export {
   type SignedInDevice,
   SignedInDevices
