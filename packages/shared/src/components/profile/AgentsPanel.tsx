@@ -395,7 +395,7 @@ function WriteLine({
               e.preventDefault()
               open(target)
             }}
-            className='text-[12px] font-medium text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+            className='text-[12px] font-medium text-[#007a99] underline-offset-2 hover:underline dark:text-nvr-cyan'
           >
             <RecordName collection={target.collection} id={String(target.itemId)} />
           </a>
@@ -495,7 +495,7 @@ function CallRow({
                 e.preventDefault()
                 open(target)
               }}
-              className='text-[12px] font-medium text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+              className='text-[12px] font-medium text-[#007a99] underline-offset-2 hover:underline dark:text-nvr-cyan'
             >
               <RecordName collection={target.collection} id={String(target.itemId)} />
             </a>

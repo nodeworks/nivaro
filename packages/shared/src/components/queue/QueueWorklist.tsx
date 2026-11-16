@@ -3341,11 +3341,15 @@ export function QueueWorklist({
       key: QUEUE_IN_STEP_COLUMN,
       header: aliasFor(QUEUE_IN_STEP_COLUMN, 'In step'),
       sortable: true,
+      // A bounded box: the table sizes columns to their content, so without a max width the
+      // step name ran on under the pinned State column instead of ending in "…".
       render: (row) => (
-        <InStepCell
-          stepLabel={row.state ? stateLabel(row.state) : null}
-          enteredAt={row.state_entered_at}
-        />
+        <div className='min-w-0 max-w-[240px]'>
+          <InStepCell
+            stepLabel={row.state ? stateLabel(row.state) : null}
+            enteredAt={row.state_entered_at}
+          />
+        </div>
       )
     },
     {
