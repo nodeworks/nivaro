@@ -194,19 +194,22 @@ export function RemoteConflictNotice({
     >
       {/* The sentence keeps a readable width (16rem basis): in a narrow field column the
           buttons drop to their own row instead of squeezing it to three words a line. */}
-      <div className='flex flex-wrap items-start gap-x-2 gap-y-1.5'>
-        <span className='mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-400' />
-        <span className='min-w-0 flex-1 basis-[16rem] self-center'>
-          <span className='font-medium'>{change.by ?? 'Someone'}</span> saved{' '}
-          <span
-            className='font-medium text-slate-900 dark:text-slate-50'
-            data-tip={shown(change.theirs, 400)}
-          >
-            {shown(change.theirs)}
-          </span>
-          <span className='text-slate-500 dark:text-slate-400'>
-            {' '}
-            · <RelativeTime value={change.at} />
+      <div className='flex flex-wrap items-center gap-x-2 gap-y-1.5'>
+        {/* The dot travels with its sentence: never alone on a line of its own. */}
+        <span className='flex min-w-0 flex-1 basis-[14rem] items-start gap-2'>
+          <span className='mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-400' />
+          <span className='min-w-0'>
+            <span className='font-medium'>{change.by ?? 'Someone'}</span> saved{' '}
+            <span
+              className='font-medium text-slate-900 dark:text-slate-50'
+              data-tip={shown(change.theirs, 400)}
+            >
+              {shown(change.theirs)}
+            </span>
+            <span className='text-slate-500 dark:text-slate-400'>
+              {' '}
+              · <RelativeTime value={change.at} />
+            </span>
           </span>
         </span>
         <span className='flex shrink-0 flex-wrap items-center gap-1.5'>
