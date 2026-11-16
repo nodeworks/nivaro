@@ -894,7 +894,7 @@ export function ItemEditPage() {
                     <ArrowLeft className='h-4 w-4' />
                   </Button>
                   <div className='min-w-0 flex-1'>
-                    <div className='flex items-center gap-2'>
+                    <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
                       <h1 className='text-[18px] font-semibold text-slate-900 dark:text-slate-100'>
                         {displayName}
                       </h1>
@@ -910,7 +910,7 @@ export function ItemEditPage() {
                             <span
                               data-record-ref
                               data-tip={friendly ? `#${key}` : undefined}
-                              className='font-mono text-[12px] bg-slate-100 text-slate-500 rounded px-2 py-0.5 dark:bg-muted dark:text-slate-400'
+                              className='whitespace-nowrap font-mono text-[12px] bg-slate-100 text-slate-500 rounded px-2 py-0.5 dark:bg-muted dark:text-slate-400'
                             >
                               {friendly ?? `#${id}`}
                             </span>
