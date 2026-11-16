@@ -15744,6 +15744,17 @@ function ItemEditFormView({
                                           <RemoteChangesButton
                                             entries={remoteLog}
                                             conflicts={remoteChanges}
+                                            fieldOf={(f) =>
+                                              (fieldConfig ?? []).find((x) => x.field === f) ?? null
+                                            }
+                                            relatedOf={(f) =>
+                                              relations.find(
+                                                (r) =>
+                                                  r.many_collection === collection &&
+                                                  r.many_field === f &&
+                                                  !r.junction_field
+                                              )?.one_collection ?? null
+                                            }
                                             labelOf={(f) => {
                                               const fc = (fieldConfig ?? []).find(
                                                 (x) => x.field === f

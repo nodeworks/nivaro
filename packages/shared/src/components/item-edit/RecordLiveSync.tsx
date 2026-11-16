@@ -230,6 +230,7 @@ export function RecordLiveSync({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [flash, setFlash] = useState(false)
+  const [flashBy, setFlashBy] = useState<string | null>(null)
   // Co-viewers' uploads no mounted file field shows itself (rt9 #9, lib/upload-presence.ts).
   const uploads = useRemoteUploads(collection, String(itemId), 'unclaimed')
   const [gone, setGoneState] = useState<RecordGone | null>(null)
@@ -458,7 +459,11 @@ export function RecordLiveSync({
     // late — rollups, hooks, a slow replica) names them, and is not "someone else".
     const touchKey = ['last-touch', collection, String(itemId)]
     await qc.invalidateQueries({ queryKey: touchKey }).catch(() => {})
-    if (!flashIt || writtenBySelf(qc.getQueryData(touchKey), userIdRef.current)) return
+    const touch = qc.getQueryData(touchKey)
+    if (!flashIt || writtenBySelf(touch, userIdRef.current)) return
+    // Name the writer when the activity row knows them ("by Beth Ray").
+    const name = (touch as { user_name?: unknown } | null | undefined)?.user_name
+    setFlashBy(typeof name === 'string' && name.trim() ? name.trim() : null)
     setFlash(true)
     if (flashTimer.current) clearTimeout(flashTimer.current)
     flashTimer.current = setTimeout(() => setFlash(false), 4000)
@@ -737,9 +742,12 @@ export function RecordLiveSync({
       {realtime && (flash || uploads.length > 0) && (
         <div className='flex flex-wrap items-center gap-2'>
           {flash && (
-            <span className='inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-2.5 py-0.5 text-[11px] font-medium text-[#0e7490] dark:text-slate-200'>
-              <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
-              Updated just now by someone else
+            <span
+              data-record-updated-by
+              className='inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-2.5 py-0.5 text-[11px] font-medium text-[#0e7490] dark:text-slate-200'
+            >
+              <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-nvr-cyan' />
+              <span className='min-w-0'>Updated just now by {flashBy ?? 'someone else'}</span>
             </span>
           )}
           {/* One line per chip: the sentence truncates (full text in the tip), the percent never

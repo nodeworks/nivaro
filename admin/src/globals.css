@@ -246,14 +246,15 @@
   outline-offset: 2px;
   border-radius: 6px;
 }
-/* The name rides the cell's hover tip (data-tip, realtime item 25); a cell marked by an
-   older client (no colour) keeps the pill. */
-[data-grid-cell].nvr-remote-editing[data-tip]::after { display: none; }
+/* Every cursor outlines the whole cell, whatever wraps the control. */
+div[data-grid-cell].nvr-remote-editing { width: 100%; }
+/* The name is a small flag on the outline's top edge — readable without hovering (touch)
+   and never over the next row's value. */
 [data-grid-cell].nvr-remote-editing::after {
   content: attr(data-remote-editor);
   position: absolute;
-  right: 4px;
-  top: -9px;
+  left: 4px;
+  top: -10px;
   z-index: 2;
   max-width: 160px;
   overflow: hidden;

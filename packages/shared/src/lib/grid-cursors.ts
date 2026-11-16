@@ -131,15 +131,20 @@ export function markRemoteCell(
   color?: string
 ): () => void {
   const hadTip = el.getAttribute('data-tip')
+  const hadSide = el.getAttribute('data-tip-side')
   el.classList.add('nvr-remote-editing')
   el.dataset.remoteEditor = person.name
   el.style.setProperty('--nvr-cursor', color ?? cursorColor(person.id ?? person.name))
   el.setAttribute('data-tip', `${person.name} is here`)
+  // Above the cell: a tip below it covered the next row's value.
+  el.setAttribute('data-tip-side', 'top')
   return () => {
     el.classList.remove('nvr-remote-editing')
     delete el.dataset.remoteEditor
     el.style.removeProperty('--nvr-cursor')
     if (hadTip == null) el.removeAttribute('data-tip')
     else el.setAttribute('data-tip', hadTip)
+    if (hadSide == null) el.removeAttribute('data-tip-side')
+    else el.setAttribute('data-tip-side', hadSide)
   }
 }

@@ -146,7 +146,7 @@ import { del, get, patch, post } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
 import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
-import { createCellAnnouncer } from '../../lib/grid-cursors'
+import { createCellAnnouncer, personInitials } from '../../lib/grid-cursors'
 import { LineLockContext, lineLockMoves, useLineLocks } from '../../lib/line-locks'
 import { isOwnWrite } from '../../lib/own-writes'
 import { fetchCollectionRelations, queryKeys } from '../../lib/query-keys'
@@ -9711,6 +9711,17 @@ export function InlineTableField({
                                 </button>
                               ) : (
                                 <>
+                                  {/* Who holds this line, without hovering (touch has no hover). */}
+                                  {lineLock.readOnly && (
+                                    <span
+                                      data-line-lock-holder
+                                      aria-label={`${lineLock.by ?? 'Someone'} is editing this line`}
+                                      className='mr-0.5 inline-flex h-5 shrink-0 items-center gap-1 rounded-full border border-amber-300 bg-amber-50 pl-1 pr-1.5 text-[10px] font-semibold text-amber-800 dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-200'
+                                    >
+                                      <Lock className='h-2.5 w-2.5' aria-hidden />
+                                      {personInitials(lineLock.by ?? '?')}
+                                    </span>
+                                  )}
                                   {isPendingEdit && (
                                     <button
                                       type='button'

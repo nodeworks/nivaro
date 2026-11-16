@@ -1164,6 +1164,16 @@ export const FieldRow = memo(function FieldRow({
               {fieldIsRecommended(field) && <RecommendedMarker />}
             </Label>
           )}
+          {/* Right beside the label it belongs to — after the AI chip it read as detached. */}
+          {remoteChange && !remoteChange.conflict && (
+            <RemoteChangeMark
+              change={remoteChange}
+              now={draft[field.field]}
+              field={field}
+              relatedCollection={cascadeRelatedCollection ?? null}
+              onDismiss={() => affordances?.dismissRemoteChange(field.field)}
+            />
+          )}
           {partnerNeedShown && partnerNeed && (
             <PartnerNeedBadge field={field.field} mark={partnerNeed} />
           )}
@@ -1311,15 +1321,6 @@ export const FieldRow = memo(function FieldRow({
             name={field.field}
             label={label}
           />
-          {remoteChange && !remoteChange.conflict && (
-            <RemoteChangeMark
-              change={remoteChange}
-              now={draft[field.field]}
-              field={field}
-              relatedCollection={cascadeRelatedCollection ?? null}
-              onDismiss={() => affordances?.dismissRemoteChange(field.field)}
-            />
-          )}
           {(locked || field.readonly) && lockReason ? (
             <LockReasonBadge reason={lockReason} onHover={affordances?.onLockHover} />
           ) : locked ? (
