@@ -24,7 +24,7 @@ export const DEFAULT_SEND_TIMEOUT_MS = 120_000
 export const MAX_SEND_TIMEOUT_MS = 10 * 60_000
 const MIN_SEND_TIMEOUT_MS = 5_000
 /** The partner-call timeout of a resend of a stored request (routes/erp-submissions sendPayload). */
-export const RESEND_TIMEOUT_MS = 30_000
+export const RESEND_TIMEOUT_MS = 60_000
 /** How long past its timeout a call may still be finishing its own row. */
 export const ANSWER_MARGIN_MS = 60_000
 

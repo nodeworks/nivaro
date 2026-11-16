@@ -61,6 +61,18 @@ export async function obligationRecordLabels(
   return out
 }
 const RECORD_CAP = 50
+
+/** The plain "what the partner is behind on" an obligation's detail carries
+ *  (`{note, subject}`, written by the reconcile sweep) — null when it has none. */
+export function obligationSubject(detail: unknown): string | null {
+  if (typeof detail !== 'string' || !detail.trim().startsWith('{')) return null
+  try {
+    const o = JSON.parse(detail) as { subject?: unknown }
+    return typeof o.subject === 'string' && o.subject.trim() ? o.subject.trim() : null
+  } catch {
+    return null
+  }
+}
 const SUMMARY_ID_CAP = 500
 
 // The core integration-obligations readiness check. WARN once ANY unmet row
@@ -463,7 +475,8 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
           'outcome',
           'reason',
           'submission_id',
-          'resolved_at'
+          'resolved_at',
+          'detail'
         )
       // Task 19 — a read this banner already makes once per record, never a
       // second probe per row: same reasoning as /summary above. Same
@@ -497,8 +510,9 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
           kind: string
           trigger: string | null
           trigger_ref: string | null
+          detail?: string | null
         }>
-      ).map(({ trigger_ref, ...r }) => {
+      ).map(({ trigger_ref, detail, ...r }) => {
         const tx =
           r.trigger === 'transition' && trigger_ref
             ? txLabels.get(String(trigger_ref).toUpperCase())
@@ -507,6 +521,9 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
         return {
           ...r,
           label: def?.label ?? null,
+          // Only the plain subject leaves the server ("Workflow ID HQ26-81459"), never the
+          // technical note — the banner names what the partner is behind on.
+          subject: obligationSubject(detail),
           transition_id: tx ? String(trigger_ref) : null,
           transition_label: tx ?? null,
           // What Send now may offer here (repeat a stored request / send the

@@ -247,7 +247,23 @@ export async function reconcileKind(
       ackGraceMinutes: grace.ack,
       skipGraceMinutes: skipGrace
     })
-    if (d.outcome === 'none') continue
+    if (d.outcome === 'none') {
+      // A "never told" row opened before its kind named a subject gets one now, so the
+      // record banner can say what the partner is behind on (detail is only text).
+      const open = latest.get(item)
+      if (expected.subject && open?.outcome === 'missing') {
+        await database('nivaro_integration_obligations')
+          .where({ id: open.id, outcome: 'missing' })
+          .where((q) => q.whereNull('detail').orWhere('detail', 'not like', '%"subject"%'))
+          .update({
+            detail: JSON.stringify({
+              ...(expected.detail ? { note: expected.detail } : {}),
+              subject: expected.subject
+            })
+          })
+      }
+      continue
+    }
     if (d.outcome === 'missing') {
       missing++
       await recordObligation({
@@ -261,7 +277,13 @@ export async function reconcileKind(
         due_at: expected.due_at,
         outcome: 'missing',
         reason: d.reason,
-        detail: expected.detail ? { note: expected.detail } : undefined
+        detail:
+          expected.detail || expected.subject
+            ? {
+                ...(expected.detail ? { note: expected.detail } : {}),
+                ...(expected.subject ? { subject: expected.subject } : {})
+              }
+            : undefined
       })
     } else if (d.outcome === 'overdue') {
       overdue++

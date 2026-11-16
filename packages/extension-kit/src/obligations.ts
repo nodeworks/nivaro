@@ -33,6 +33,10 @@ export interface ExpectedObligation {
   due_at: Date
   signature?: string | null
   detail?: string | null
+  /** What the partner is behind on, in the record's own words — the field as people
+   *  see it and its value ("Workflow ID HQ26-81459"). The record banner shows it after
+   *  the kind's label; `detail` stays the technical note for the integrations console. */
+  subject?: string | null
 }
 
 export interface ObligationResolvePatch {

@@ -39,6 +39,8 @@ interface Row {
   /** The kind's human label from the registry ("Fusion — transfer order
    *  submitted"); null when the server no longer knows the kind. */
   label?: string | null
+  /** What the partner is behind on, in the record's words ("Workflow ID HQ26-81459"). */
+  subject?: string | null
   submission_id?: number | null
   transition_id?: string | null
   transition_label?: string | null
@@ -125,7 +127,10 @@ export function bannerLines(rows: Row[], now: Date = new Date()): BannerLine[] {
       ? ` — ${plain !== r.reason.trim() ? plain : (partnerFailureText(r.reason) ?? plain)}`
       : ''
     const what = r.label?.trim() || (r.trigger === 'transition' ? humanizeKind(r.kind) : '')
-    const ctx = what ? ` · ${what}` : ''
+    // The subject names the field and value the partner is behind on, so a reader can
+    // find it on the record: "MWF — requisition id (Workflow ID HQ26-81459)".
+    const subject = r.subject?.trim()
+    const ctx = what ? ` · ${what}${subject ? ` (${subject})` : ''}` : subject ? ` · ${subject}` : ''
     let text: string
     if (r.outcome === 'sent') text = `told ${when}${ctx}`
     else if (r.outcome === 'pending') {
