@@ -210,6 +210,13 @@ export function RecordHoverCard({
           onPointerLeave={(e) => {
             if (e.pointerType === 'mouse') card.hide()
           }}
+          // A part that carries its own tip ([data-no-hovercard]) keeps the card shut while
+          // the pointer is on it: one overlay at a time (rt6 review).
+          onPointerOver={(e) => {
+            if (e.pointerType !== 'mouse') return
+            if ((e.target as Element).closest?.('[data-no-hovercard]')) card.close()
+            else if (!card.open) show()
+          }}
           onPointerDown={card.close}
           onFocus={show}
           onBlur={card.hide}

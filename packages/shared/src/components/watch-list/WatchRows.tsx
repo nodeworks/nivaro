@@ -77,10 +77,12 @@ export function OwnerStack({
         <span
           key={o.id}
           aria-hidden
-          className={`relative inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-200 text-[8.5px] font-semibold text-slate-600 ring-2 ring-card dark:bg-slate-700 dark:text-slate-200 ${
+          className={`relative inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#e2e8f0] text-[8.5px] font-semibold text-[#334155] ring-2 ring-card dark:bg-[#334155] dark:text-[#e2e8f0] ${
             i > 0 ? '-ml-1' : ''
           } ${o.inactive ? 'opacity-50 grayscale' : ''}`}
-          style={{ zIndex: shown.length - i }}
+          // Later avatars sit on top: the ring cuts a clean edge into the one
+          // before, so an initials disc never loses its first letter under a photo.
+          style={{ zIndex: i + 1 }}
         >
           <UserAvatar
             userId={o.id}
@@ -94,6 +96,7 @@ export function OwnerStack({
         <span
           aria-hidden
           className='relative -ml-1 inline-flex h-[18px] min-w-[22px] shrink-0 items-center justify-center rounded-full bg-slate-100 px-1 text-[9px] font-semibold tabular-nums text-slate-600 ring-2 ring-card dark:bg-slate-800 dark:text-slate-300'
+          style={{ zIndex: shown.length + 1 }}
         >
           +{extra}
         </span>
@@ -346,7 +349,9 @@ export function WatchRow({
                 {mark && (
                   // Stays on hover ("For you" must survive it, rt6 round 2); a host part that
                   // should give way to the hover bell hides itself.
-                  <span className='flex shrink-0 self-center'>{mark}</span>
+                  <span data-no-hovercard className='flex shrink-0 self-center'>
+                    {mark}
+                  </span>
                 )}
                 {figure && (
                   <span
