@@ -319,7 +319,7 @@ import { relatedMissing } from './item-edit/related-missing'
 import { UserChip, UserRosterCluster } from './item-edit/UserChip'
 import { LiveCount } from './LiveCount'
 import { LiveBurstPill, LivePauseButton } from './LiveListControls'
-import { LiveRowMark } from './LiveRowMark'
+import { LiveRowMark, MovingRowChip } from './LiveRowMark'
 import { CopyListLinkButton } from './list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from './list/InlineEdit'
 import { ListViewers } from './list/ListViewers'
@@ -7927,7 +7927,11 @@ export function CollectionBrowserView({
         label: meta?.display_name ?? titleCase(collection),
         rows: rows.map((r) => ({ collection, id: String(r.id) })),
         opened: { collection, id: String(id) },
-        entry: ensureHistoryKey()
+        entry: ensureHistoryKey(),
+        // The whole list's count and where this page starts, so the record says "3 of 49",
+        // never the page size (rt-nav review). A grouped list holds every row it shows.
+        ...(totalUnknown ? {} : { total, totalApprox }),
+        offset: groupBy || aiResult ? 0 : (page - 1) * effPageSize
       })
     if (onOpenItem) onOpenItem(id)
     else openTarget({ collection, itemId: String(id) })
@@ -11200,6 +11204,7 @@ export function CollectionBrowserView({
                             ? `${VIEW_CHANGED_ROW_CLASS} ${ROW_SURFACE_HOVER}`
                             : `${ROW_SURFACE} ${ROW_SURFACE_HOVER}`
                       const stickyBg = PINNED_CELL_SURFACE
+                      const movingChip = steadyGroups.movingTo(String(id))
                       return (
                         <tr
                           key={String(id)}
@@ -11547,8 +11552,16 @@ export function CollectionBrowserView({
                                     cellText: (e.currentTarget as HTMLElement).innerText.trim()
                                   })
                                 }}
-                                className={`whitespace-nowrap px-3 py-1.5 ${isNumericCol(key) ? 'text-right' : ''} ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                className={`whitespace-nowrap px-3 py-1.5 ${isNumericCol(key) ? 'text-right' : ''} ${pinCls(key, 'z-[1]', stickyBg)}${movingChip && key === orderedCols[0]?.key ? ' relative' : ''}`}
                               >
+                                {/* rt9 review: a held row in a grouped list says where it goes, in
+                                    words, beside its first column (the counts above already moved). */}
+                                {movingChip && key === orderedCols[0]?.key && (
+                                  <MovingRowChip
+                                    to={movingChip}
+                                    className='absolute right-2 top-1/2 z-[2] -translate-y-1/2 shadow-sm'
+                                  />
+                                )}
                                 {wrapInline(
                                   row,
                                   key,

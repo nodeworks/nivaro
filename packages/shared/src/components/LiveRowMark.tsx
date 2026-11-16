@@ -78,7 +78,7 @@ export function MovingRowChip({ to, className }: { to: string; className?: strin
     <span
       data-moving-chip
       data-tip={movingRowTitle(to)}
-      className={`nvr-fade-in inline-flex h-[18px] max-w-[11rem] shrink-0 items-center gap-1 rounded-full bg-[#e6f8fd] px-1.5 text-[10.5px] font-medium text-[#006d8a] ring-1 ring-inset ring-[#0089ad]/25 dark:bg-nvr-cyan/[0.12] dark:text-nvr-cyan dark:ring-nvr-cyan/30 ${className ?? ''}`}
+      className={`nvr-fade-in inline-flex h-[18px] max-w-[11rem] shrink-0 items-center gap-1 rounded-full bg-[#e6f8fd] px-1.5 text-[10.5px] font-medium text-[#006d8a] ring-1 ring-inset ring-[#0089ad]/25 dark:bg-[#0c2a33] dark:text-nvr-cyan dark:ring-nvr-cyan/30 ${className ?? ''}`}
     >
       <ArrowDownUp className='h-2.5 w-2.5 shrink-0' aria-hidden />
       <span className='truncate'>Moving to {to}</span>

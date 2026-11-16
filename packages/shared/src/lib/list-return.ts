@@ -268,12 +268,18 @@ export function markReturnRow(root: ParentNode | null | undefined, key: string):
     setTimeout(() => row.removeAttribute('data-return-row'), 1800)
     return true
   }
+  // The tint is an inset shadow painted OVER each cell's own (opaque) background, so pinned
+  // sticky cells stay opaque. A step stronger on light surfaces, where 10% all but vanished
+  // on a bright screen (rt-nav review); dark keeps 10%, which already reads.
+  const dark =
+    typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+  const wash = `rgba(0, 206, 255, ${dark ? 0.1 : 0.16})`
   cells.forEach((cell, i) => {
     const edge = i === 0 ? 'inset 3px 0 0 0 rgba(0, 206, 255, 0.85), ' : ''
     cell.animate(
       [
-        { boxShadow: `${edge}inset 0 0 0 9999px rgba(0, 206, 255, 0.10)` },
-        { boxShadow: `${edge}inset 0 0 0 9999px rgba(0, 206, 255, 0.10)`, offset: 0.55 },
+        { boxShadow: `${edge}inset 0 0 0 9999px ${wash}` },
+        { boxShadow: `${edge}inset 0 0 0 9999px ${wash}`, offset: 0.55 },
         {
           boxShadow: `${i === 0 ? 'inset 3px 0 0 0 rgba(0, 206, 255, 0), ' : ''}inset 0 0 0 9999px rgba(0, 206, 255, 0)`
         }
