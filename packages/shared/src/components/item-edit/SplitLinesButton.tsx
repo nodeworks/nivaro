@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../../context'
 import { post } from '../../lib/commands'
-import { toastError } from '../../lib/error-toast'
+import { describeError } from '../../lib/error-message'
 import {
   canOfferLineSplit,
   lineSplitBlocker,
@@ -64,6 +64,10 @@ export function SplitLinesButton({
   const { open: openItem } = useItemNavigation()
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  // A refusal is said once, inside the popover, in the server's own sentence (idea-04 review:
+  // a toast stacked two explanations that disagreed on who could help, and "Move 2 lines"
+  // stayed live behind it). `final` = asking again would get the same answer.
+  const [refusal, setRefusal] = useState<{ text: string; final: boolean } | null>(null)
   const { data: meta } = useQuery({
     queryKey: queryKeys.collectionMeta(parentCollection),
     queryFn: () => fetchCollectionMeta(client, parentCollection),
@@ -83,6 +87,7 @@ export function SplitLinesButton({
 
   const run = async () => {
     setBusy(true)
+    setRefusal(null)
     try {
       const res = await client.request<SplitAnswer>(
         post(lineSplitPath(parentCollection, parentId), {
@@ -112,14 +117,23 @@ export function SplitLinesButton({
           : {})
       })
     } catch (err) {
-      toastError(err, 'The lines could not be moved')
+      const d = describeError(err, 'The lines could not be moved')
+      const status = d.status ?? 0
+      setRefusal({ text: d.title, final: status >= 400 && status < 500 })
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <Popover open={open} onOpenChange={(o) => !busy && setOpen(o)}>
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        if (busy) return
+        setOpen(o)
+        if (!o) setRefusal(null)
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           type='button'
@@ -153,7 +167,16 @@ export function SplitLinesButton({
             </li>
             <li>Both {noun}s get a note naming the other.</li>
           </ul>
-          {blocker && (
+          {refusal && (
+            <p
+              role='alert'
+              className='rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-[12px] text-rose-800 dark:border-rose-800/60 dark:bg-rose-950/30 dark:text-rose-200'
+              data-split-lines-refused
+            >
+              {refusal.text}
+            </p>
+          )}
+          {blocker && !refusal && (
             <p
               className='rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[12px] text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-200'
               data-split-lines-blocker
@@ -165,22 +188,27 @@ export function SplitLinesButton({
         <div className='flex justify-end gap-2 border-t border-slate-100 px-3 py-2 dark:border-border'>
           <button
             type='button'
-            onClick={() => setOpen(false)}
+            onClick={() => {
+              setOpen(false)
+              setRefusal(null)
+            }}
             disabled={busy}
-            className='h-7 px-2 text-[12px] text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+            className='h-7 px-2 text-[12px] text-slate-600 hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
           >
-            Cancel
+            {refusal?.final ? 'Close' : 'Cancel'}
           </button>
-          <button
-            type='button'
-            onClick={() => void run()}
-            disabled={busy || !!blocker}
-            data-split-lines-confirm
-            className='inline-flex h-7 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white disabled:opacity-50'
-          >
-            {busy && <Loader2 className='h-3 w-3 animate-spin' aria-hidden='true' />}
-            {busy ? 'Moving…' : `Move ${plural(n, 'line')}`}
-          </button>
+          {!refusal?.final && (
+            <button
+              type='button'
+              onClick={() => void run()}
+              disabled={busy || !!blocker}
+              data-split-lines-confirm
+              className='inline-flex h-7 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white disabled:opacity-50'
+            >
+              {busy && <Loader2 className='h-3 w-3 animate-spin' aria-hidden='true' />}
+              {busy ? 'Moving…' : refusal ? 'Try again' : `Move ${plural(n, 'line')}`}
+            </button>
+          )}
         </div>
       </PopoverContent>
     </Popover>

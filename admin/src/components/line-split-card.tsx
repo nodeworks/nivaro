@@ -1,6 +1,5 @@
 import { queryKeys, toastError } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Split } from 'lucide-react'
 import { toast } from 'sonner'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
@@ -85,6 +84,28 @@ export function copyableFields(fields: MetaField[]): MetaField[] {
   })
 }
 
+/** Lists that keep a log of the record rather than lines of it (notes, partner logs, queues). */
+const LOG_LIST_RE =
+  /(^|_)(notes?|logs?|queues?|history|histories|activity|comments?|events?|audits?)(_|$)/i
+
+/** True for a one-to-many list that is a log, not order lines. Exported for tests. */
+export function isLogList(collection: string, field: string | null): boolean {
+  return LOG_LIST_RE.test(collection) || (!!field && LOG_LIST_RE.test(field))
+}
+
+/** "Notes · Notes" → "Notes": the collection is named only when it says something new. */
+export function listChipLabel(
+  fieldLabel: string,
+  collection: string
+): {
+  label: string
+  of: string | null
+} {
+  const squash = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const of = titleCase(collection.replace(/_/g, ' '))
+  return { label: fieldLabel, of: squash(fieldLabel) === squash(of) ? null : of }
+}
+
 export function readLineSplit(bc: Record<string, unknown> | null | undefined): LineSplitDraft {
   const raw = (bc?.line_split ?? null) as Record<string, unknown> | null
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [])
@@ -157,24 +178,54 @@ export function LineSplitCard({ tableName }: { tableName: string }) {
   const toggle = (list: string[], v: string) =>
     list.includes(v) ? list.filter((x) => x !== v) : [...list, v]
 
+  // Order lines first; logs (notes, partner logs, queues) fold into a quieter row below —
+  // unless one is already switched on, which keeps its place with the lines.
+  const isOn = (r: MetaRelation) => cfg.relations.includes(`${r.many_collection}.${r.many_field}`)
+  const lines = lineLists.filter((r) => isOn(r) || !isLogList(r.many_collection, r.one_field))
+  const logs = lineLists.filter((r) => !lines.includes(r))
+  const relationChip = (r: MetaRelation) => {
+    const key = `${r.many_collection}.${r.many_field}`
+    const on = cfg.relations.includes(key)
+    const chip = listChipLabel(labelOf(r.one_field ?? ''), r.many_collection)
+    return (
+      <button
+        key={key}
+        type='button'
+        disabled={busy}
+        aria-pressed={on}
+        onClick={() => set({ relations: toggle(cfg.relations, key) })}
+        data-line-split-relation={key}
+        data-tip={chip.of ? `${chip.label} · ${chip.of}` : undefined}
+        className={cn(
+          'inline-flex max-w-[260px] items-center whitespace-nowrap rounded-md border px-2.5 py-1 text-[12px] transition-colors',
+          on
+            ? 'border-nvr-cyan bg-nvr-cyan/10 font-medium text-nvr-navy dark:text-nvr-cyan'
+            : 'border-slate-200 text-slate-600 hover:border-slate-400 dark:border-border dark:text-slate-300'
+        )}
+      >
+        <span className='truncate'>{chip.label}</span>
+        {chip.of && (
+          <span className='ml-1 truncate text-slate-500 dark:text-slate-400'>· {chip.of}</span>
+        )}
+      </button>
+    )
+  }
+
   return (
     <div
       className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
       data-line-split-card
     >
       <div className='flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-3 dark:border-border'>
-        <div className='flex gap-2.5'>
-          <Split className='mt-0.5 h-4 w-4 shrink-0 rotate-90 text-slate-400' aria-hidden='true' />
-          <div>
-            <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
-              Move lines to a new {noun}
-            </p>
-            <p className='mt-0.5 max-w-prose text-[12px] text-slate-500 dark:text-muted-foreground'>
-              People tick some lines on a {noun} and move them to a new one: the details are copied,
-              the lines move with their history, and both get a note naming the other. Useful when
-              part ships now and the rest later. Off by default.
-            </p>
-          </div>
+        <div className='min-w-0'>
+          <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+            Move lines to a new {noun}
+          </p>
+          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            People tick some lines on a {noun} and move them to a new one: the details are copied,
+            the lines move with their history, and both get a note naming the other. Useful when
+            part ships now and the rest later. Off by default.
+          </p>
         </div>
         <Switch
           checked={cfg.enabled}
@@ -207,31 +258,17 @@ export function LineSplitCard({ tableName }: { tableName: string }) {
             <p className='text-[12.5px] font-medium text-slate-700 dark:text-foreground'>
               Lines that can move
             </p>
-            <div className='mt-2 flex flex-wrap gap-1.5'>
-              {lineLists.map((r) => {
-                const key = `${r.many_collection}.${r.many_field}`
-                const on = cfg.relations.includes(key)
-                return (
-                  <button
-                    key={key}
-                    type='button'
-                    disabled={busy}
-                    aria-pressed={on}
-                    onClick={() => set({ relations: toggle(cfg.relations, key) })}
-                    data-line-split-relation={key}
-                    className={cn(
-                      'rounded-full border px-2.5 py-1 text-[12px] transition-colors',
-                      on
-                        ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                        : 'border-slate-200 text-slate-600 hover:border-slate-400 dark:border-border dark:text-slate-300'
-                    )}
-                  >
-                    {labelOf(r.one_field ?? '')}
-                    <span className='ml-1 text-slate-400'>· {titleCase(r.many_collection)}</span>
-                  </button>
-                )
-              })}
-            </div>
+            <div className='mt-2 flex flex-wrap gap-1.5'>{lines.map((r) => relationChip(r))}</div>
+            {logs.length > 0 && (
+              <div className='mt-2.5'>
+                <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                  Also offered — these keep a log of the {noun} rather than its lines:
+                </p>
+                <div className='mt-1.5 flex flex-wrap gap-1.5'>
+                  {logs.map((r) => relationChip(r))}
+                </div>
+              </div>
+            )}
             {cfg.enabled && cfg.relations.length === 0 && (
               <p className='mt-2 text-[11.5px] text-amber-700 dark:text-amber-300'>
                 Pick at least one list — until then nobody can move lines.
@@ -244,8 +281,8 @@ export function LineSplitCard({ tableName }: { tableName: string }) {
             </p>
             <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
               The same fields More → Duplicate copies. Click one to leave it behind (a partner’s
-              status, an order number). Generated ids, hidden, read-only and “do not duplicate”
-              fields never copy, and the new {noun} starts at the first step.
+              status, an order number) — it shows struck through. Generated ids, hidden, read-only
+              and “do not duplicate” fields never copy, and the new {noun} starts at the first step.
             </p>
             <div className='mt-2 flex flex-wrap gap-1.5'>
               {copyable.map((f) => {
@@ -260,9 +297,9 @@ export function LineSplitCard({ tableName }: { tableName: string }) {
                     data-line-split-field={f.field}
                     data-tip={left ? 'Not copied — click to copy it' : 'Copied — click to leave it'}
                     className={cn(
-                      'rounded border px-2 py-0.5 text-[11.5px] transition-colors',
+                      'max-w-[240px] truncate whitespace-nowrap rounded-md border px-2 py-0.5 text-[11.5px] transition-colors',
                       left
-                        ? 'border-dashed border-slate-300 text-slate-400 line-through dark:border-slate-600'
+                        ? 'border-dashed border-slate-300 bg-transparent text-slate-500 line-through decoration-slate-400 hover:border-slate-400 dark:border-slate-600 dark:text-slate-400 dark:decoration-slate-500'
                         : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-400 dark:border-border dark:bg-muted/40 dark:text-slate-200'
                     )}
                   >
