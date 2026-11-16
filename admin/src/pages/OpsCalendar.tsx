@@ -63,7 +63,7 @@ const KIND_META: Record<string, { label: string; cls: string; bar: string }> = {
 }
 
 /** Entries a day shows before "+N more". */
-const DAY_LIMIT = 14
+const DAY_LIMIT = 10
 
 const DAY = 86_400_000
 
@@ -230,7 +230,13 @@ export default function OpsCalendar() {
                       <span className='ml-1.5 text-[10px] font-medium uppercase'>today</span>
                     )}
                   </div>
-                  <div className='max-h-[440px] space-y-1 overflow-y-auto p-2'>
+                  <div
+                    className={cn(
+                      'space-y-1 p-2',
+                      // Collapsed days end on "+N more" (never cut by a scroll box); an opened day scrolls.
+                      openDays.has(dayKey) && 'max-h-[560px] overflow-y-auto'
+                    )}
+                  >
                     {d.events.length === 0 && (
                       <p className='px-1 py-2 text-[11px] text-slate-300 dark:text-slate-600'>—</p>
                     )}
