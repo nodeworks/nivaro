@@ -1,7 +1,7 @@
 import { payloadLiquid } from '../payload-filters.js'
 import { makeSecretTokens, neutralizeSecretMarkers, SECRET_NAME_RE } from '../secret-markers.js'
 import { evaluateMap } from './evaluate.js'
-import type { Field, MapSpec, Problem, ProblemCode } from './types.js'
+import type { Field, HopTable, MapSpec, Problem, ProblemCode } from './types.js'
 
 // ─── Render entry ────────────────────────────────────────────────────────────
 // One call turns a stored template body (map spec JSON or Liquid) plus a scope
@@ -18,6 +18,8 @@ export type RenderOpts = {
   secretNames?: string[]
   /** Code mode only: rules by dotted output path (code has no field map to carry them). */
   rules?: Record<string, Rules>
+  /** Map mode: what the hop loader read for this scope (hops.ts templateHops). */
+  hops?: HopTable | null
 }
 
 export type RenderResult = {
@@ -423,7 +425,7 @@ export async function renderBody(
       values: {}
     }
   }
-  const r = await evaluateMap(spec, scope, { secretNames: opts.secretNames })
+  const r = await evaluateMap(spec, scope, { secretNames: opts.secretNames, hops: opts.hops })
   const fields = Array.isArray(spec?.fields) ? spec.fields : []
   checkLockedSpec(fields, opts.lockedKeys, r.problems)
   checkMapRules(fields, r.body, '', r.problems)

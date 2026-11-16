@@ -5,6 +5,7 @@ import { bodySecretNames } from '../body-secrets.js'
 import { parseJson, toJsonStr } from '../pipeline-engine.js'
 import { currentTenantKey } from '../tenant-rooms.js'
 import { validateSpec } from './evaluate.js'
+import { templateHops } from './hops.js'
 import { blockingProblems, renderBody } from './render.js'
 import type { Problem } from './types.js'
 import type { ValidateMode } from './validate.js'
@@ -985,6 +986,8 @@ async function logInstall(key: string, userId: string | null, comment: string): 
 type PublishedTemplate = {
   key: string
   external_api: string | null
+  /** The record collection (the hop loader reads `scope.record` as one of these). */
+  collection: string | null
   locked_keys: string[]
   published_mode: PayloadMode | null
   published_body: string | null
@@ -1011,6 +1014,7 @@ async function publishedTemplate(key: string): Promise<PublishedTemplate | null>
     .first(
       'key',
       'external_api',
+      'collection',
       'locked_keys',
       'published_mode',
       'published_body',
@@ -1021,6 +1025,7 @@ async function publishedTemplate(key: string): Promise<PublishedTemplate | null>
   return {
     key: String(r.key),
     external_api: (r.external_api as string | null) ?? null,
+    collection: r.collection == null ? null : String(r.collection),
     locked_keys: parseLocked(r.locked_keys),
     published_mode: isMode(r.published_mode) ? r.published_mode : null,
     published_body: (r.published_body as string | null) ?? null,
@@ -1139,7 +1144,13 @@ export async function renderPayloadTemplate(
     if (body == null) {
       return { body: null, problems: [problem('The draft is empty')], values: {}, version: null }
     }
-    const r = await renderBody(mode, body, scope, { lockedKeys: row.locked_keys, secretNames })
+    // Previews and sends load relation hops the same way (one render path).
+    const hops = await templateHops(mode, body, scope, row.collection)
+    const r = await renderBody(mode, body, scope, {
+      lockedKeys: row.locked_keys,
+      secretNames,
+      hops
+    })
     return { ...r, version: null }
   }
 
@@ -1152,9 +1163,11 @@ export async function renderPayloadTemplate(
     )
   }
   const secretNames = await secretNamesFor(row.external_api, resolver, canonical)
+  const hops = await templateHops(row.published_mode, row.published_body, scope, row.collection)
   const r = await renderBody(row.published_mode, row.published_body, scope, {
     lockedKeys: row.locked_keys,
-    secretNames
+    secretNames,
+    hops
   })
   const blocking = blockingProblems(r.problems)
   if (blocking.length) {

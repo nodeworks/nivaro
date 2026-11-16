@@ -85,6 +85,19 @@ vi.mock('../../db/index.js', () => {
         for (const [k, v] of Object.entries(a)) conds.push((r) => (r[k] ?? null) === (v ?? null))
         return b
       },
+      // The hop loader's reads (hops.ts dbHopReads): relations, column lists, rows by id.
+      whereNotNull(col: string) {
+        conds.push((r) => r[col] != null)
+        return b
+      },
+      whereIn(col: string, ids: unknown[]) {
+        const want = new Set(ids.map((i) => String(i).toUpperCase()))
+        conds.push((r) => want.has(String(r[col]).toUpperCase()))
+        return b
+      },
+      async columnInfo() {
+        return Object.fromEntries(Object.keys(all()[0] ?? {}).map((c) => [c, {}]))
+      },
       orderBy(col: string, dir = 'asc') {
         order = [col, dir]
         return b
@@ -93,8 +106,12 @@ vi.mock('../../db/index.js', () => {
         const r = matched()[0]
         return r ? project(r, cols) : undefined
       },
-      async select(...cols: string[]) {
-        return matched().map((r) => project(r, cols))
+      async select(...cols: Array<string | string[]>) {
+        const flat = cols.flat()
+        // A plain table read with a column list (hop rows): just those columns.
+        if (!join && flat.length)
+          return matched().map((r) => Object.fromEntries(flat.map((c) => [c, r[c] ?? null])))
+        return matched().map((r) => project(r, flat))
       },
       async insert(row: Row) {
         store.beforeInsert?.(table, row)
@@ -676,6 +693,28 @@ describe('renderPayloadTemplate', () => {
       ...noSecrets
     })
     expect(unsaved.body).toEqual({ status: 'APPROVED' })
+  })
+
+  it('a preview (draft) and a send (published) load the same relation hops', async () => {
+    const body = spec('record.project.name')
+    await registerPayloadTemplate('efp-ops', def(body))
+    store.tables.nivaro_relations = [
+      { many_collection: 'workflows', many_field: 'project', one_collection: 'projects' }
+    ]
+    store.tables.projects = [{ id: 'P9', name: 'Main St', code: 'MS' }]
+    const scope = { record: { id: 1, status: 'Approved', project: 'P9' } }
+    const before = JSON.stringify(scope)
+    const pub = await renderPayloadTemplate(KEY, scope, noSecrets)
+    const draft = await renderPayloadTemplate(KEY, scope, { draft: true, ...noSecrets })
+    const unsaved = await renderPayloadTemplate(KEY, scope, {
+      draftBody: { mode: 'map', body },
+      ...noSecrets
+    })
+    expect(pub.body).toEqual({ status: 'Main St' })
+    expect(draft.body).toEqual(pub.body)
+    expect(unsaved.body).toEqual(pub.body)
+    expect(draft.problems).toEqual(pub.problems)
+    expect(JSON.stringify(scope)).toBe(before)
   })
 
   it('a publish replaces the cached published body', async () => {

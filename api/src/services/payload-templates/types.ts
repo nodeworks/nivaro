@@ -132,3 +132,13 @@ export type ProblemCode =
   | 'duplicate_output_key'
   | 'unjsonified'
   | 'invalid_spec'
+
+/**
+ * What the hop loader (hops.ts) read for one render, beside the scope (never on it): `fill`
+ * holds columns a partial row lacked (`cifa_data.task`), `hop` the related row an M2O id
+ * walks into when the path goes on (`cifa_data.task.name` → `hop.get(cifa_data).task`).
+ */
+export type HopTable = {
+  fill: WeakMap<object, Record<string, unknown>>
+  hop: WeakMap<object, Record<string, Record<string, unknown>>>
+}

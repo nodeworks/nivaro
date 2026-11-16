@@ -17,6 +17,7 @@ import {
   secretsForScrub
 } from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
+import { tagRows } from './context-rows.js'
 import { selectInChunks, whereInList } from './db-batch.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
@@ -89,11 +90,23 @@ export interface ContextQueryDef {
    *  junction carries a specific warehouse id). */
   junction_filter?: { junction: string; fk_to_row: string; field: string; value: unknown }
   limit?: number
-  /** Per-row M2O expansion: fk column → {collection, fields}; merged as <fk>_data. */
-  expand?: Record<string, { collection: string; fields: string[] }>
+  /** Per-row M2O expansion: fk column → {collection, fields, expand?}; merged as <fk>_data.
+   *  A nested `expand` expands the related rows the same way (at most 3 levels deep). */
+  expand?: Record<string, ContextExpandDef>
   /** Order rows: column name, '-' prefix for desc (e.g. '-id' = newest first). */
   sort?: string
 }
+
+/** One M2O expansion of a context row: the related row's `fields` land on `<fk>_data`. */
+export interface ContextExpandDef {
+  collection: string
+  fields: string[]
+  /** The related rows' own M2O expansions (their fk columns are read even if not listed). */
+  expand?: Record<string, ContextExpandDef>
+}
+
+/** How deep nested `expand`s go (the payload-template hop loader stops at the same depth). */
+export const MAX_EXPAND_DEPTH = 3
 
 /** One child-row writeback (on_success_children / on_failure_children). */
 export interface ChildWriteback {
@@ -340,6 +353,7 @@ export async function buildContext(
       const rows = (await q.limit(Math.min(Number(cfg.limit ?? 500), 2000))) as Array<
         Record<string, unknown>
       >
+      tagRows(rows, cfg.collection, false)
       await expandContextRows(cfg, rows)
       out[key] = rows
     } catch {
@@ -358,13 +372,21 @@ export async function buildContext(
  * One read per target for ALL the rows given — the ready-to-send batch passes many records'.
  */
 async function expandContextRows(
-  cfg: ContextQueryDef,
-  rows: Array<Record<string, unknown>>
+  cfg: Pick<ContextQueryDef, 'collection' | 'expand'>,
+  rows: Array<Record<string, unknown>>,
+  depth = 1
 ): Promise<void> {
   for (const [fk, exp] of Object.entries(cfg.expand ?? {})) {
     if (!IDENTIFIER_RE.test(fk) || !collectionAllowed(exp?.collection)) continue
-    const fields = (exp.fields ?? []).filter((f) => IDENTIFIER_RE.test(f))
-    if (fields.length === 0) continue
+    const listed = (exp.fields ?? []).filter((f) => IDENTIFIER_RE.test(f))
+    if (listed.length === 0) continue
+    // A nested expand reads its fk columns on the related rows (deduped, case-insensitively).
+    const nested =
+      depth < MAX_EXPAND_DEPTH && exp.expand && typeof exp.expand === 'object' ? exp.expand : null
+    const fields = [...listed]
+    for (const nfk of Object.keys(nested ?? {}))
+      if (IDENTIFIER_RE.test(nfk) && !fields.some((f) => f.toLowerCase() === nfk.toLowerCase()))
+        fields.push(nfk)
     if (!rows.some((r) => r[fk] != null)) continue
     try {
       const m2a = await m2aItemLeg(cfg.collection, fk)
@@ -379,6 +401,9 @@ async function expandContextRows(
         const related = (await selectInChunks(ids as Array<string | number>, 1000, (chunk) =>
           whereInList(db(target), 'id', chunk).select(['id', ...cols])
         )) as Array<Record<string, unknown>>
+        tagRows(related, target, true)
+        if (nested)
+          await expandContextRows({ collection: target, expand: nested }, related, depth + 1)
         const byId = new Map(related.map((x) => [String(x.id).toUpperCase(), x]))
         for (const r of members) r[`${fk}_data`] = byId.get(String(r[fk]).toUpperCase()) ?? null
       }
@@ -505,6 +530,7 @@ export async function buildContextBatch(
         .where('__nvr_rn', '<=', limit)
         .orderBy('__nvr_rn')) as Array<Record<string, unknown>>
       for (const r of rows) delete r.__nvr_rn
+      tagRows(rows, cfg.collection, false)
       await expandContextRows(cfg, rows)
       const byValue = new Map<string, Array<Record<string, unknown>>>()
       for (const r of rows) {

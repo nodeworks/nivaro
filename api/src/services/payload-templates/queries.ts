@@ -2,7 +2,7 @@ import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
 import { parseJson, toJsonStr } from '../pipeline-engine.js'
 import { isSystemCollection } from '../system-collections.js'
-import { actingUser, buildContext, erpActionGate } from '../workflow-actions.js'
+import { actingUser, buildContext, erpActionGate, MAX_EXPAND_DEPTH } from '../workflow-actions.js'
 import type { ConditionRule } from '../workflow-conditions.js'
 import {
   bustPayloadTemplateCache,
@@ -481,9 +481,46 @@ function collectionError(c: unknown, at: string): string | null {
   return null
 }
 
+const EXPAND_KEYS = new Set(['collection', 'fields', 'expand'])
+
+/**
+ * An `expand` (`{ fk: { collection, fields, expand? } }`): every level passes the
+ * system-collection guard, at most MAX_EXPAND_DEPTH levels (workflow-actions reads no deeper).
+ */
+function expandErrors(raw: unknown, at: string, depth: number, errors: string[]): void {
+  if (!isObj(raw)) {
+    errors.push(`${at} must be an object { fk: { collection, fields } }`)
+    return
+  }
+  if (depth > MAX_EXPAND_DEPTH) {
+    errors.push(`${at}: expansions go at most ${MAX_EXPAND_DEPTH} levels deep`)
+    return
+  }
+  for (const [fk, exp] of Object.entries(raw)) {
+    const here = `${at}.${fk}`
+    if (!IDENT_RE.test(fk)) errors.push(`${at}: '${fk}' is not a field name`)
+    if (!isObj(exp)) {
+      errors.push(`${here} must be an object { collection, fields }`)
+      continue
+    }
+    for (const k of Object.keys(exp))
+      if (!EXPAND_KEYS.has(k)) errors.push(`${here}.${k} is not an expand setting`)
+    const ee = collectionError(exp.collection, `${here}.collection`)
+    if (ee) errors.push(ee)
+    if (
+      !Array.isArray(exp.fields) ||
+      !exp.fields.length ||
+      !exp.fields.every((f) => typeof f === 'string' && IDENT_RE.test(f))
+    )
+      errors.push(`${here}.fields must be a list of field names`)
+    if (exp.expand !== undefined) expandErrors(exp.expand, `${here}.expand`, depth + 1, errors)
+  }
+}
+
 /**
  * Check template lookups — the erp_submit `context` shape (workflow-actions.ts ContextQueryDef):
- * `{ <name>: { collection, filter?, junction_filter?, sort?, limit?, expand? } }`. Every
+ * `{ <name>: { collection, filter?, junction_filter?, sort?, limit?, expand? } }` (`expand` may
+ * nest: `{ fk: { collection, fields, expand? } }`, 3 levels at most). Every
  * collection, junction and expansion passes the system-collection guard. Null clears them.
  */
 export function validateLookups(
@@ -538,27 +575,7 @@ export function validateLookups(
         (d.limit as number) > MAX_LOOKUP_LIMIT)
     )
       errors.push(`${name}.limit must be a whole number from 1 to ${MAX_LOOKUP_LIMIT}`)
-    if (d.expand !== undefined) {
-      if (!isObj(d.expand))
-        errors.push(`${name}.expand must be an object { fk: { collection, fields } }`)
-      else
-        for (const [fk, exp] of Object.entries(d.expand)) {
-          const at = `${name}.expand.${fk}`
-          if (!IDENT_RE.test(fk)) errors.push(`${name}.expand: '${fk}' is not a field name`)
-          if (!isObj(exp)) {
-            errors.push(`${at} must be an object { collection, fields }`)
-            continue
-          }
-          const ee = collectionError(exp.collection, `${at}.collection`)
-          if (ee) errors.push(ee)
-          if (
-            !Array.isArray(exp.fields) ||
-            !exp.fields.length ||
-            !exp.fields.every((f) => typeof f === 'string' && IDENT_RE.test(f))
-          )
-            errors.push(`${at}.fields must be a list of field names`)
-        }
-    }
+    if (d.expand !== undefined) expandErrors(d.expand, `${name}.expand`, 1, errors)
   }
   return errors.length ? { ok: false, errors } : { ok: true, value: raw }
 }
