@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto'
 import type { GraphQLSchema } from 'graphql'
 import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
+import { cronTicksEnabled } from './cron-ticks.js'
 import { getApp } from './io-holder.js'
 import { notificationRowMeta, notifyUser } from './notification-channels.js'
 import { rawWriterReason, reasonColumn } from './notification-reason.js'
+import { compareBuilds } from './sticky-refresh.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -290,7 +292,7 @@ export async function recordGraphQLSchema(schema: GraphQLSchema): Promise<void> 
         diff: lines.slice(0, 200).join('\n'),
         breaking
       })
-      if (breaking && (await shouldNotifyBreak('graphql', lines))) {
+      if (breaking && cronTicksEnabled() && (await shouldNotifyBreak('graphql', lines))) {
         const hits = await partnerBreaksFrom(lines)
         if (hits.length > 0) {
           const callers = [...new Set(hits.map((h) => h.caller))]
@@ -337,6 +339,10 @@ export async function recordRestRoutes(version: string, routes: string[]): Promi
       | { version: string; routes: string }
       | undefined
     if (last?.version === version) return // same release — nothing to record
+    // An OLDER build booting against this database (a throwaway or rolled-back process on a
+    // shared dev DB) is not a release: recording it made the next newer boot "remove" routes
+    // again, and two versions taking turns sent admins 80 false notices (dev, 2026-11-16).
+    if (last && (compareBuilds(version, last.version) ?? 1) < 0) return
     let diff: string | null = null
     let breaking = false
     const lines: string[] = []
@@ -359,7 +365,9 @@ export async function recordRestRoutes(version: string, routes: string[]): Promi
       diff,
       breaking
     })
-    if (breaking && (await shouldNotifyBreak('rest', lines))) {
+    // Only a process that runs the scheduled jobs (a deployed instance) tells people: a local
+    // or throwaway API on a shared database (CRON_TICKS=off / development) records, never notifies.
+    if (breaking && cronTicksEnabled() && (await shouldNotifyBreak('rest', lines))) {
       const used = await partnerRoutesHit(lines)
       if (used.length > 0) {
         await notifyAdminsOfBreak(

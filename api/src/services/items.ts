@@ -52,6 +52,7 @@ import {
   recomputeAutoIdPrefix,
   resolveAutoIdPattern
 } from './auto-ids.js'
+import { BodyIdMismatchError, takeBodyId } from './body-id.js'
 import { applyChangedFilter, CHANGED_FIELD, resolveChangedCondition } from './changed-filter.js'
 import { isPresencePageChange } from './collection-live-mode.js'
 import { getCollection, getFields, getRelations as getRegisteredRelations } from './collections.js'
@@ -1095,6 +1096,8 @@ export class ListTimeoutError extends Error {
     this.name = 'ListTimeoutError'
   }
 }
+
+export { BodyIdMismatchError }
 
 export class ItemNotFoundError extends Error {
   /** Picked up by Fastify's default error handler so re-thrown errors return 404. */
@@ -7824,6 +7827,7 @@ export async function updateOne(
   await assertServable(user, collection, 'update')
   assertRecordId(id)
   if (!(await idFitsCollection(collection, id))) throw new ItemNotFoundError()
+  takeBodyId(data, id)
   await enforceContracts(collection, user?.id, data, 'update')
   // Creator, stamps, read-only and unlisted fields are the server's (see createOne).
   await dropServerSetFields(user, collection, data, 'update', req, opts?.callerPayload === true, [

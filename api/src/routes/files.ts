@@ -550,27 +550,36 @@ export async function filesRoutes(app: FastifyInstance) {
     const contentType = `image/${format}`
     const storage = getStorage()
 
-    reply
-      .header('Content-Type', contentType)
-      // private: a transform of an access-checked file must never sit in a
-      // shared cache that answers the next person without the check.
-      .header('Cache-Control', 'private, max-age=31536000, immutable')
+    // The image headers go on only with the image: a JSON refusal sent after an image
+    // Content-Type failed with "Attempted to send payload of invalid type 'object'" (a stored
+    // file missing from disk, 2026-11-16) instead of answering 404.
+    const sendImage = (body: Buffer) =>
+      reply
+        .header('Content-Type', contentType)
+        // private: a transform of an access-checked file must never sit in a
+        // shared cache that answers the next person without the check.
+        .header('Cache-Control', 'private, max-age=31536000, immutable')
+        .send(body)
 
     const cached = await storage.get(cacheKey).catch(() => null)
-    if (cached) return reply.send(cached)
+    if (cached) return sendImage(cached)
 
     const original = await readFileBuffer(file).catch(() => null)
     if (!original) return reply.code(404).send({ error: 'Stored object not found' })
 
-    let pipeline = sharp(original)
-    if (width || height) pipeline = pipeline.resize({ width, height, fit })
-    if (format === 'webp') pipeline = pipeline.webp({ quality })
-    else if (format === 'jpeg') pipeline = pipeline.jpeg({ quality })
-    else pipeline = pipeline.png()
-
-    const transformed = await pipeline.toBuffer()
+    let transformed: Buffer
+    try {
+      let pipeline = sharp(original)
+      if (width || height) pipeline = pipeline.resize({ width, height, fit })
+      if (format === 'webp') pipeline = pipeline.webp({ quality })
+      else if (format === 'jpeg') pipeline = pipeline.jpeg({ quality })
+      else pipeline = pipeline.png()
+      transformed = await pipeline.toBuffer()
+    } catch {
+      return reply.code(422).send({ error: 'This image could not be read' })
+    }
     await storage.put(cacheKey, transformed, contentType).catch(() => null)
-    return reply.send(transformed)
+    return sendImage(transformed)
   })
 
   app.get('/:id', { compress: false }, async (req, reply) => {
