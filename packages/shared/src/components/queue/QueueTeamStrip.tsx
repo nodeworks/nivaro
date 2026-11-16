@@ -375,7 +375,11 @@ export function QueueTeamStrip({
             )}
           </button>
         </PopoverTrigger>
-        <PopoverContent align='start' className='w-[340px] p-1'>
+        <PopoverContent
+          align='start'
+          collisionPadding={8}
+          className='w-[min(340px,calc(100vw-16px))] p-1'
+        >
           <Roster rows={rows} more={more} note={note} />
         </PopoverContent>
       </Popover>
