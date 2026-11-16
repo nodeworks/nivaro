@@ -10,6 +10,7 @@ import {
   widgetImageFileName,
   widgetImageSubtitleLines
 } from './widget-image'
+import { MIN_PICTURE_WIDTH, pictureWidth } from './widget-image-render'
 
 describe('formatAsOf', () => {
   it('reads in 12-hour local time', () => {
@@ -154,5 +155,17 @@ describe('widgetImageFileName', () => {
   })
   it('an empty title still names the file', () => {
     expect(widgetImageFileName('', new Date(2026, 0, 2, 3, 4))).toBe('figure-2026-01-02-0304.png')
+  })
+})
+
+describe('pictureWidth', () => {
+  it('never draws a picture narrower than 640 px (phone widget columns)', () => {
+    expect(MIN_PICTURE_WIDTH).toBe(640)
+    expect(pictureWidth(164)).toBe(640)
+    expect(pictureWidth(358.4)).toBe(640)
+    expect(pictureWidth(0)).toBe(640)
+  })
+  it('keeps the on-screen width when it is wider', () => {
+    expect(pictureWidth(912.6)).toBe(913)
   })
 })
