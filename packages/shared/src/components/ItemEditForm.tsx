@@ -14356,11 +14356,12 @@ function ItemEditFormView({
                                             : 'flex min-w-[180px] flex-col md:min-w-[260px]'
                                         }
                                       >
-                                        {/* Phones: the chips (Changed after approval, Help requested)
-                                        wrap to their own line under the title instead of squeezing
-                                        it to "Pump …" — a flex line breaks on the title's full
-                                        width, so it truncates only when it alone is too long. */}
-                                        <div className='group/title flex items-center gap-1.5 max-md:flex-wrap max-md:gap-y-1'>
+                                        {/* The chips (Changed after approval, Help requested) wrap to
+                                        their own line under the title instead of squeezing it to
+                                        "Pump …" (phones) or "TP…" (desktop with the watch-list dock
+                                        open): a flex line breaks on the title's full width, so it
+                                        truncates only when it alone is too long. */}
+                                        <div className='group/title flex flex-wrap items-center gap-x-1.5 gap-y-1'>
                                           <h1 className='min-w-0 max-w-full truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
                                             {isNew ? (
                                               `New ${singularTitle}`
@@ -14619,7 +14620,9 @@ function ItemEditFormView({
                                           </div>
                                         )}
                                       </div>
-                                      <div className='ml-auto flex items-center gap-1.5 [&_button]:whitespace-nowrap'>
+                                      {/* Phones: the actions take the full width and wrap, so the
+                                      last one (Request help) is never cut at the screen edge. */}
+                                      <div className='ml-auto flex items-center gap-1.5 [&_button]:whitespace-nowrap max-md:ml-0 max-md:w-full max-md:flex-wrap max-md:gap-y-1.5'>
                                         {!isNew && !designOn && <ScreenRefreshButton />}
                                         {headerExtra}
                                         <HeaderTools>
