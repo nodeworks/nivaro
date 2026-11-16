@@ -121,25 +121,42 @@ export function useLiveFileList(
   return { fresh, removed, leaving }
 }
 
+/** Who made the record's latest write (RecordLiveSync's `last-touch` read), for "Removed by …". */
+export function lastWriterName(touch: unknown): string | null {
+  const n = (touch as { user_name?: unknown } | null | undefined)?.user_name
+  return typeof n === 'string' && n.trim() ? n.trim() : null
+}
+
 /** The quiet row a file leaves behind for a few seconds after someone else removed it. */
-export function RemovedFileRow({ name, leaving }: { name: string; leaving?: boolean }) {
+export function RemovedFileRow({
+  name,
+  leaving,
+  by
+}: {
+  name: string
+  leaving?: boolean
+  /** Who removed it, when known ("Removed by Sam · just now"). */
+  by?: string | null
+}) {
   return (
     <div
       data-file-removed
       aria-live='polite'
-      className={`flex items-center gap-2 rounded-lg border border-dashed border-slate-200 p-2 transition-opacity duration-500 motion-reduce:transition-none dark:border-border ${
+      className={`flex items-center gap-2 rounded-lg border border-dashed border-slate-300 p-2 transition-opacity duration-500 motion-reduce:transition-none dark:border-border ${
         leaving ? 'opacity-0' : 'opacity-100'
       }`}
     >
       <div className='flex h-10 w-10 shrink-0 items-center justify-center rounded bg-slate-100 dark:bg-muted'>
         <FileX className='h-4 w-4 text-slate-400 dark:text-muted-foreground' />
       </div>
-      <p className='min-w-0 flex-1 truncate text-[12px] text-slate-500 line-through decoration-slate-300 dark:text-muted-foreground dark:decoration-border'>
-        {name}
-      </p>
-      <span className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-muted dark:text-muted-foreground'>
-        Removed
-      </span>
+      <div className='min-w-0 flex-1'>
+        <p className='truncate text-[12px] text-slate-500 line-through decoration-slate-300 dark:text-muted-foreground dark:decoration-border'>
+          {name}
+        </p>
+        <p className='mt-0.5 text-[10.5px] text-slate-500 dark:text-slate-400' data-file-removed-by>
+          Removed{by ? ` by ${by}` : ''} · just now
+        </p>
+      </div>
     </div>
   )
 }

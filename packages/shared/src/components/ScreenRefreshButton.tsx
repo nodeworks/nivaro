@@ -19,7 +19,8 @@ import { LiveOffNote } from './LiveOffNote'
  * shows its own error where it renders, and the button keeps a small amber dot with a tip.
  *
  * `variant`:
- * - `header` (default): beside a page or record header's actions, a 32 px ghost button.
+ * - `header` (default): beside a page or record header's actions, a 36 px bordered button
+ *   matching the toolbar boxes around it (44 px hit area).
  * - `rail`: the admin sidebar's always-dark footer strip.
  * - `bar`: a portal top bar (inherits the bar's text colour).
  *
@@ -70,8 +71,10 @@ export function ScreenRefreshButton({
         'relative inline-flex shrink-0 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
         variant === 'rail' &&
           'h-8 w-8 text-slate-400 hover:bg-white/[0.05] hover:text-white focus-visible:ring-offset-0',
+        // A toolbar control like its bordered neighbours (a bare glyph read as stray), with an
+        // invisible 44 px hit area for touch.
         variant === 'header' &&
-          'h-8 w-8 text-slate-400 hover:bg-muted hover:text-slate-700 dark:text-muted-foreground dark:hover:text-foreground',
+          "h-9 w-9 border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-800 after:absolute after:-inset-1 after:content-[''] dark:border-border dark:bg-card dark:text-slate-300 dark:hover:bg-muted dark:hover:text-foreground",
         variant === 'bar' && 'h-8 w-8 opacity-80 hover:opacity-100',
         className
       )}

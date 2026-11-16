@@ -56,14 +56,18 @@ export function RealtimeStatusBanner() {
   }, [down, status?.refreshed])
 
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return null
+  // The environment tag (EnvironmentEdge) hangs over the window's top centre: the strip's
+  // text starts below it, or "Live updates paused" is unreadable on every non-production app.
+  const underEdge =
+    typeof document !== 'undefined' && !!document.querySelector('[data-environment-edge]')
   if (paused && down)
     return (
       <div
         role='status'
         data-realtime-banner='paused'
-        className='flex items-center justify-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+        className={`flex items-center justify-center gap-2 border-b border-amber-200 bg-amber-50 px-4 pb-1.5 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 ${underEdge ? 'pt-[26px]' : 'pt-1.5'}`}
       >
-        <Unplug className='h-3.5 w-3.5' />
+        <Unplug className='h-3.5 w-3.5 shrink-0' />
         Live updates paused, reconnecting. Lists may be out of date until then.
       </div>
     )
@@ -72,9 +76,9 @@ export function RealtimeStatusBanner() {
       <div
         role='status'
         data-realtime-banner='resumed'
-        className='flex items-center justify-center gap-2 border-b border-emerald-200 bg-emerald-50 px-4 py-1.5 text-[12px] text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200'
+        className={`flex items-center justify-center gap-2 border-b border-emerald-200 bg-emerald-50 px-4 pb-1.5 text-[12px] text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200 ${underEdge ? 'pt-[26px]' : 'pt-1.5'}`}
       >
-        <RefreshCw className='h-3.5 w-3.5' />
+        <RefreshCw className='h-3.5 w-3.5 shrink-0' />
         {resumed}
       </div>
     )
