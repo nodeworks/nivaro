@@ -70,6 +70,25 @@ const PRIORITIES = ['low', 'normal', 'urgent']
 
 /** History rows that name an assignment rule: shown only to people who work the ticket. */
 export const SUPPORT_RULE_ACTION = 'support-rule'
+/**
+ * Where those rows live: nivaro_activity under this pseudo collection (item = the ticket id),
+ * never under nivaro_tasks — so every reader keyed on (nivaro_tasks, id) (tasks history, record
+ * timelines, my_records) can never return them. Only GET /support/tickets/:id reads them, for
+ * people who work the ticket; the whole activity log is administrators' anyway.
+ */
+export const SUPPORT_RULE_LOG = 'nivaro_support_rules'
+
+/** The desk-only line naming the rule that routed a ticket. */
+async function logRuleDetail(ticketId: number, comment: string, req: FastifyRequest) {
+  await logActivity({
+    action: SUPPORT_RULE_ACTION,
+    user: null,
+    collection: SUPPORT_RULE_LOG,
+    item: String(ticketId),
+    comment,
+    req
+  })
+}
 
 function serializeCategory(c: CategoryRow & Record<string, unknown>) {
   return {
@@ -425,7 +444,7 @@ export async function raiseTicket(
   const id = Number(typeof row === 'object' ? row.id : row)
   await logTicketEvent(id, req.user!.id, 'Raised the request', req, 'create')
   if (publicEvent) await logTicketEvent(id, null, publicEvent, req)
-  if (ruleEvent) await logTicketEvent(id, null, ruleEvent, req, SUPPORT_RULE_ACTION)
+  if (ruleEvent) await logRuleDetail(id, ruleEvent, req)
   assign.noteAssignment(app.redis, assignee, id)
   const t = (await loadTicket(id))!
   announceRecordHelp(t)
@@ -641,7 +660,7 @@ export async function applyTicketChange(
     })
   }
   await logTicketEvent(t.id, req.user!.id, events.join(' · '), req)
-  if (ruleDetail) await logTicketEvent(t.id, null, ruleDetail, req, SUPPORT_RULE_ACTION)
+  if (ruleDetail) await logRuleDetail(t.id, ruleDetail, req)
   if (patch.assignee !== undefined || patch.team_id !== undefined || patch.status !== undefined)
     await screenShareTicketChanged(app, t.id)
   const updated = (await loadTicket(t.id))!
@@ -1037,9 +1056,12 @@ export async function supportRoutes(app: FastifyInstance) {
       .select('c.id', 'c.text', 'c.user', 'c.created_at', 'u.first_name', 'u.last_name')) as Array<
       Record<string, unknown>
     >
+    const work = await canWorkTicket(viewer, t)
+    // The rule detail rows (SUPPORT_RULE_LOG) only for people who work the ticket.
     const history = (await db('nivaro_activity as a')
       .leftJoin('nivaro_users as u', 'a.user', 'u.id')
-      .where({ 'a.collection': 'nivaro_tasks', 'a.item': String(t.id) })
+      .where('a.item', String(t.id))
+      .whereIn('a.collection', work ? ['nivaro_tasks', SUPPORT_RULE_LOG] : ['nivaro_tasks'])
       .whereNotNull('a.comment')
       .orderBy('a.timestamp', 'asc')
       .limit(200)
@@ -1052,8 +1074,7 @@ export async function supportRoutes(app: FastifyInstance) {
         'u.first_name',
         'u.last_name'
       )) as Array<Record<string, unknown>>
-    const work = await canWorkTicket(viewer, t)
-    // Rule detail rows name the assignment rule (which can echo record values): desk only.
+    // Defence in depth: a rule row that ever lands under nivaro_tasks is still desk only.
     const visibleHistory = work ? history : history.filter((h) => h.action !== SUPPORT_RULE_ACTION)
     const files = ticket.attachments.length
       ? ((await db('nivaro_files')
