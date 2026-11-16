@@ -35,8 +35,8 @@ export function flashLabelRef(el: HTMLElement | null): void {
   if (!el || typeof el.animate !== 'function') return
   const dark =
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
-  const a = dark ? 0.3 : 0.2
-  const r = dark ? 0.75 : 0.45
+  const a = dark ? 0.4 : 0.2
+  const r = dark ? 0.9 : 0.45
   el.animate(
     [
       {
