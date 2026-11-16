@@ -27,7 +27,7 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post, put } from '../../lib/commands'
@@ -253,6 +253,20 @@ export function AssignRulesView() {
     }
   })
 
+  const saveBarEnd = useRef<HTMLDivElement | null>(null)
+  const [saveBarStuck, setSaveBarStuck] = useState(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-observe when the bar appears
+  useEffect(() => {
+    const el = saveBarEnd.current
+    if (!el || typeof IntersectionObserver === 'undefined') return setSaveBarStuck(false)
+    const io = new IntersectionObserver(([e]) => {
+      const bottom = e.rootBounds?.bottom ?? window.innerHeight
+      setSaveBarStuck(!e.isIntersecting && e.boundingClientRect.top >= bottom - 1)
+    })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [dirty])
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -372,7 +386,13 @@ export function AssignRulesView() {
       )}
 
       {dirty && (
-        <div className='sticky -bottom-6 z-10 -mx-1 bg-slate-50 px-1 pb-9 pt-2 dark:bg-background'>
+        <div
+          className={cn(
+            'sticky -bottom-6 z-10 -mx-1 bg-slate-50 px-1 pt-2 dark:bg-background',
+            // Stuck to the bottom: room for the host's padding below. In place: a normal gap.
+            saveBarStuck ? 'pb-9' : 'pb-1'
+          )}
+        >
           <div
             className='flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-[0_-2px_12px_rgba(15,23,42,0.08)] dark:border-border dark:bg-card dark:shadow-[0_-2px_12px_rgba(0,0,0,0.4)]'
             data-support-rules-savebar
@@ -408,6 +428,8 @@ export function AssignRulesView() {
           </div>
         </div>
       )}
+      {/* Where the save bar would end in place; out of view below = the bar is stuck. */}
+      {dirty && <div ref={saveBarEnd} aria-hidden className='-mt-4 h-px' />}
 
       <TryRequest draft={draft} options={options} dirty={dirty} />
     </div>

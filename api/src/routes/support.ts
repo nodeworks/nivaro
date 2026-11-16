@@ -403,7 +403,7 @@ export async function raiseTicket(
         assignee = o.user.id
         if (o.rule) {
           publicEvent = `Assigned to ${o.user.name}`
-          ruleEvent = `Assigned to ${o.user.name} by rule '${o.rule.name}'${
+          ruleEvent = `Assigned to ${o.user.name} by rule “${o.rule.name}”${
             o.via === 'rule_fallback' ? ' (nobody on it could take it; its fallback)' : ''
           }`
         }
@@ -411,10 +411,10 @@ export async function raiseTicket(
         assignee = null
         teamId = o.team.id
         publicEvent = `Sent to ${o.team.name}`
-        ruleEvent = `Sent to ${o.team.name} by rule '${o.rule.name}'`
+        ruleEvent = `Sent to ${o.team.name} by rule “${o.rule.name}”`
       } else if (o.rule) {
         assignee = null
-        ruleEvent = `Left on the desk by rule '${o.rule.name}' (nobody on it could take it)`
+        ruleEvent = `Left on the desk by rule “${o.rule.name}” (nobody on it could take it)`
       }
     } catch (err) {
       req.log.warn({ err }, 'support assignment rules failed; the type default stands')
@@ -624,17 +624,17 @@ export async function applyTicketChange(
           patch.assignee = o.user.id
           events.push(`Assigned to ${o.user.name}`)
           ruleDetail = o.rule
-            ? `Assigned to ${o.user.name} by rule '${o.rule.name}'`
+            ? `Assigned to ${o.user.name} by rule “${o.rule.name}”`
             : `Assigned to ${o.user.name} (the type’s default)`
         } else if (o.kind === 'team') {
           patch.team_id = o.team.id
           if (t.assignee) patch.assignee = null
           events.push(`Sent to ${o.team.name}`)
-          ruleDetail = `Sent to ${o.team.name} by rule '${o.rule.name}'`
+          ruleDetail = `Sent to ${o.team.name} by rule “${o.rule.name}”`
         } else if (o.kind === 'desk' && o.rule && t.assignee) {
           patch.assignee = null
           events.push('Unassigned')
-          ruleDetail = `Back on the desk by rule '${o.rule.name}' (nobody on it could take it)`
+          ruleDetail = `Back on the desk by rule “${o.rule.name}” (nobody on it could take it)`
         }
       } catch (err) {
         req.log.warn({ err }, 'support assignment rules failed on a type change')
@@ -1075,7 +1075,24 @@ export async function supportRoutes(app: FastifyInstance) {
         'u.last_name'
       )) as Array<Record<string, unknown>>
     // Defence in depth: a rule row that ever lands under nivaro_tasks is still desk only.
-    const visibleHistory = work ? history : history.filter((h) => h.action !== SUPPORT_RULE_ACTION)
+    // A desk worker sees the rule line ("Assigned to Beth by rule “…”") instead of its neutral
+    // twin ("Assigned to Beth", written at the same moment for the requester).
+    const ruleRows = history.filter((h) => h.action === SUPPORT_RULE_ACTION)
+    const isTwin = (h: Record<string, unknown>) =>
+      h.action !== SUPPORT_RULE_ACTION &&
+      ruleRows.some(
+        (r) =>
+          String(r.comment ?? '').startsWith(`${String(h.comment ?? '')} by rule`) &&
+          Math.abs(
+            new Date(r.timestamp as string).getTime() - new Date(h.timestamp as string).getTime()
+          ) < 5000
+      )
+    const visibleHistory =
+      work && ruleRows.length
+        ? history.filter((h) => !isTwin(h))
+        : work
+          ? history
+          : history.filter((h) => h.action !== SUPPORT_RULE_ACTION)
     const files = ticket.attachments.length
       ? ((await db('nivaro_files')
           .whereIn('id', ticket.attachments)

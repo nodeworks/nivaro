@@ -195,7 +195,7 @@ describe('assignment rule names stay with the desk', () => {
         collection: 'nivaro_support_rules',
         item: '1',
         action: 'support-rule',
-        comment: `Assigned to Beth Lawson by rule '${SECRET}'`
+        comment: `Assigned to Beth Lawson by rule “${SECRET}”`
       }
     ])
     await app.close()
