@@ -43,7 +43,7 @@ export function ScreenRefreshButton({
   const pageOwn = variant === 'header'
   useEffect(() => (pageOwn ? registerPageRefreshButton() : undefined), [pageOwn])
   const pageHasOne = usePageRefreshButtonShown()
-  const { phase } = useScreenRefreshState()
+  const { phase, failed = 0 } = useScreenRefreshState()
   const running = phase === 'running'
   // Live updates Off (Profile → Display): the ↻ is how this person sees others' changes, so a
   // small note says so beside it (a corner dot on the narrow rail).
@@ -54,7 +54,7 @@ export function ScreenRefreshButton({
       : phase === 'running'
         ? 'Refreshing this page’s data…'
         : phase === 'partial'
-          ? 'Some parts of this page did not refresh. Refresh again'
+          ? `${failed > 1 ? `${failed} parts` : 'One part'} of this page did not refresh — ${failed > 1 ? 'each shows' : 'it shows'} its own error. Refresh again`
           : 'Refresh this page’s data (keeps your edits and place)'
   if (!pageOwn && pageHasOne) return null
   const button = (

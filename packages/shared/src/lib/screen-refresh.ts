@@ -36,6 +36,8 @@ export interface ScreenRefreshState {
   at: number
   /** What asked for the last refresh ('button', 'palette', 'idle-…'). */
   reason: string | null
+  /** In 'partial': how many parts of the screen did not refresh. */
+  failed?: number
 }
 
 export interface ScreenRefreshResult {
@@ -52,6 +54,8 @@ export interface ScreenRefreshResult {
 
 /** How long the quiet "done" mark stays before the button goes back to rest. */
 export const SCREEN_REFRESH_DONE_MS = 1600
+/** How long the amber "some parts did not refresh" dot stays (it gave 1.6 s to notice). */
+export const SCREEN_REFRESH_PARTIAL_MS = 60_000
 /** Automatic refreshes closer together than this are one refresh. */
 export const SCREEN_REFRESH_MIN_GAP_MS = 1000
 /** A loader that has not answered by now counts as failed (the refresh does not wait forever). */
@@ -203,11 +207,18 @@ export function refreshScreenData(
       running = null
       lastFinishedAt = now()
       lastResult = r
-      setState({ phase: r.failed > 0 ? 'partial' : 'done', at: now(), reason })
-      restTimer = setTimeout(() => {
-        restTimer = null
-        if (state.phase !== 'running') setState({ phase: 'idle', at: Date.now(), reason })
-      }, SCREEN_REFRESH_DONE_MS)
+      setState(
+        r.failed > 0
+          ? { phase: 'partial', at: now(), reason, failed: r.failed }
+          : { phase: 'done', at: now(), reason }
+      )
+      restTimer = setTimeout(
+        () => {
+          restTimer = null
+          if (state.phase !== 'running') setState({ phase: 'idle', at: Date.now(), reason })
+        },
+        r.failed > 0 ? SCREEN_REFRESH_PARTIAL_MS : SCREEN_REFRESH_DONE_MS
+      )
       ;(restTimer as { unref?: () => void }).unref?.()
       return r
     })
