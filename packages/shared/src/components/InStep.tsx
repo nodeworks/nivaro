@@ -28,13 +28,17 @@ export function InStepCell({
     <span
       data-in-step=''
       data-tip={`In ${label || 'this step'} since ${formatDateTime(enteredAt as string)}`}
-      className='inline-flex max-w-[240px] items-baseline gap-1.5 whitespace-nowrap'
+      className='flex min-w-0 max-w-full items-baseline gap-1.5 overflow-hidden whitespace-nowrap'
     >
       <span className='shrink-0 font-medium tabular-nums text-slate-800 dark:text-slate-100'>
         {span}
       </span>
       {label && (
-        <span className='truncate text-[0.92em] text-slate-500 dark:text-slate-400'>{label}</span>
+        // min-w-0: a flex item never shrinks below its text without it, so the name was cut
+        // mid-word by the cell ("Submissio") instead of ending in an ellipsis.
+        <span className='min-w-0 truncate text-[0.92em] text-slate-500 dark:text-slate-400'>
+          {label}
+        </span>
       )}
     </span>
   )

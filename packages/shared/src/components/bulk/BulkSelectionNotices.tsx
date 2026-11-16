@@ -45,9 +45,11 @@ const TONE = {
     line: 'text-slate-200 dark:text-foreground',
     soft: 'text-slate-400 dark:text-muted-foreground',
     dot: 'bg-amber-300 dark:bg-amber-400',
-    btn: 'h-7 rounded-md px-2 text-[12px] font-medium text-slate-200 hover:bg-white/10 hover:text-white dark:text-foreground dark:hover:bg-muted',
+    // Scoped choices read as buttons (a quiet outline), never bare text; Keep all is the
+    // filled one.
+    btn: 'h-7 shrink-0 whitespace-nowrap rounded-md border border-white/15 px-2.5 text-[12px] font-medium text-slate-200 hover:border-white/30 hover:bg-white/10 hover:text-white dark:border-border dark:text-foreground dark:hover:bg-muted',
     btnStrong:
-      'h-7 rounded-md border border-white/20 px-2.5 text-[12px] font-medium text-white hover:bg-white/10 dark:border-border dark:text-foreground dark:hover:bg-muted',
+      'h-7 shrink-0 whitespace-nowrap rounded-md border border-white/25 bg-white/10 px-2.5 text-[12px] font-medium text-white hover:bg-white/20 dark:border-border dark:bg-muted dark:text-foreground dark:hover:bg-muted/70',
     list: 'border-white/10 dark:border-border',
     link: 'text-[#7fe7ff] hover:text-white dark:text-nvr-cyan dark:hover:text-foreground'
   },
@@ -55,9 +57,9 @@ const TONE = {
     line: 'text-slate-700 dark:text-slate-200',
     soft: 'text-slate-500 dark:text-slate-400',
     dot: 'bg-amber-500 dark:bg-amber-400',
-    btn: 'h-7 rounded-md px-2 text-[12px] font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted',
+    btn: 'h-7 shrink-0 whitespace-nowrap rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-800 dark:border-border dark:text-slate-300 dark:hover:bg-muted',
     btnStrong:
-      'h-7 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:text-slate-200 dark:hover:bg-muted',
+      'h-7 shrink-0 whitespace-nowrap rounded-md border border-slate-300 bg-white px-2.5 text-[12px] font-medium text-slate-800 shadow-sm hover:bg-slate-50 dark:border-border dark:bg-muted dark:text-slate-100 dark:hover:bg-muted/70',
     list: 'border-slate-100 dark:border-border',
     link: 'text-nvr-navy hover:text-nvr-cyan dark:text-nvr-cyan dark:hover:text-foreground'
   }
@@ -182,7 +184,9 @@ export function BulkSelectionNotices({
       className={
         framed
           ? 'nvr-fade-in flex w-[min(640px,calc(100vw-2rem))] flex-col gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-[0_6px_20px_rgba(15,30,45,0.12)] dark:border-border dark:bg-card dark:shadow-none'
-          : 'flex w-full basis-full flex-col gap-1'
+          : // In a full-width bar the block keeps a reading width, so each choice sits beside
+            // its sentence (it ended ~1,100 px away on a wide list page).
+            'flex w-full max-w-[760px] basis-full flex-col gap-1'
       }
     >
       {openText && (
