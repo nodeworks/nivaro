@@ -413,8 +413,15 @@ export function ResubmissionStrip({
           <span className='block text-[12.5px] font-medium text-slate-800 dark:text-slate-100'>
             {resubmissionTitle(data)}
             <span className='font-normal text-slate-500 dark:text-slate-400'>
-              {' · '}
-              {resubmissionSummary(data)}
+              {/* Each "3 fields" chunk stays whole, so a number never ends a line. */}
+              {resubmissionSummary(data)
+                .split(' · ')
+                .map((part) => (
+                  <span key={part}>
+                    {' · '}
+                    <span className='whitespace-nowrap'>{part}</span>
+                  </span>
+                ))}
             </span>
           </span>
           <SentBackLine data={data} />

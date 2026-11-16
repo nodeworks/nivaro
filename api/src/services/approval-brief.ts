@@ -17,6 +17,11 @@ export interface BriefFieldChange {
   /** The record derives this value itself (a built title, a write formula) —
    *  shown as "updated automatically", never counted as someone's edit. */
   auto?: boolean
+  /** Dates, date-times and numbers arrive raw with their kind so the viewer formats them
+   *  like the form (time zone, currency, precision) — same contract as resubmission-diff. */
+  kind?: 'date' | 'datetime' | 'number'
+  format?: string | null
+  precision?: number | null
 }
 
 export interface ApprovalBrief {
@@ -191,25 +196,77 @@ export async function buildApprovalBrief(
     }
   }
   const labels = want.size ? await getLabels(want).catch(() => ({}) as Record<string, string>) : {}
+  const optionsOf = (k: string): Record<string, unknown> => {
+    const o = metaOf.get(k)?.options
+    if (o && typeof o === 'object') return o as Record<string, unknown>
+    if (typeof o === 'string') {
+      try {
+        const p = JSON.parse(o)
+        return p && typeof p === 'object' ? p : {}
+      } catch {
+        return {}
+      }
+    }
+    return {}
+  }
+  const kindOf = (k: string): BriefFieldChange['kind'] => {
+    if (targetOf.get(k)) return undefined
+    const t = String(metaOf.get(k)?.type ?? '').toLowerCase()
+    if (t === 'date') return 'date'
+    if (t === 'datetime' || t === 'timestamp' || t === 'datetimeoffset') return 'datetime'
+    if (['integer', 'biginteger', 'bigint', 'decimal', 'float', 'double', 'number'].includes(t))
+      return 'number'
+    return undefined
+  }
   const show = (k: string, v: unknown) => {
     const t = targetOf.get(k)
     if (t && v != null && v !== '' && typeof v !== 'object')
       return labels[`${t}:${String(v)}`] ?? fmt(v)
     // A yes/no field that was never set reads "No", not "(empty)" (army11 a1 F-4).
     if (isBooleanField(metaOf.get(k))) return v === true || v === 1 || v === '1' ? 'Yes' : 'No'
+    const kind = kindOf(k)
+    if (kind && v != null && v !== '' && typeof v !== 'object') {
+      if (kind === 'number') {
+        const n = Number(v)
+        if (Number.isFinite(n)) return String(n)
+      } else {
+        const iso = v instanceof Date ? v.toISOString() : String(v)
+        if (!Number.isNaN(Date.parse(iso))) return iso
+      }
+    }
     return fmt(v)
   }
 
-  const fieldChanges: BriefFieldChange[] = top.map((field) => ({
-    field,
-    label: labelOf.get(field) || titleCase(field),
-    old: field in oldRow ? show(field, oldRow[field]) : '',
-    new: show(field, changed.get(field)),
-    ...(isDerivedField(metaOf.get(field)) ? { auto: true } : {})
-  }))
+  // A value saved back to what it was ("(empty) → (empty)", null → '') changed nothing:
+  // it is neither shown nor counted (rt8 review r3).
+  const noop = new Set(
+    top.filter((k) => k in oldRow && show(k, oldRow[k]) === show(k, changed.get(k)))
+  )
+  const realKeys = keys.filter((k) => !noop.has(k))
+  const fieldChanges: BriefFieldChange[] = top
+    .filter((field) => !noop.has(field))
+    .map((field) => {
+      const kind = kindOf(field)
+      const o = kind === 'number' ? optionsOf(field) : null
+      const p = Number(o?.precision)
+      return {
+        field,
+        label: labelOf.get(field) || titleCase(field),
+        old: field in oldRow ? show(field, oldRow[field]) : '',
+        new: show(field, changed.get(field)),
+        ...(isDerivedField(metaOf.get(field)) ? { auto: true } : {}),
+        ...(kind ? { kind } : {}),
+        ...(o
+          ? {
+              format: typeof o.format === 'string' ? o.format : null,
+              precision: Number.isFinite(p) ? p : null
+            }
+          : {})
+      }
+    })
   // "N fields changed by <person>" counts what people changed (army11 f3).
   const autoKeys = new Set(fieldChanges.filter((f) => f.auto).map((f) => f.field))
-  const personTotal = keys.filter((k) => !autoKeys.has(k)).length
+  const personTotal = realKeys.filter((k) => !autoKeys.has(k)).length
 
   let editorNames: string[] = []
   if (editors.size > 0) {
@@ -228,7 +285,7 @@ export async function buildApprovalBrief(
     days_in_state: Math.floor((Date.now() - enteredAt.getTime()) / 86_400_000),
     revisions: inWindow.length,
     field_changes: fieldChanges,
-    changed_total: keys.length,
+    changed_total: realKeys.length,
     changed_by_people: personTotal,
     comments: Number(commentCount?.c ?? 0),
     addendums: {

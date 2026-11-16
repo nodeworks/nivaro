@@ -123,7 +123,7 @@ import {
   waitingFill,
   workingFill
 } from './PipelineInsight'
-import { ResubmissionBrief } from './ResubmissionDiff'
+import { ResubmissionBrief, resubValueText } from './ResubmissionDiff'
 import { SlaClockLine } from './SlaClock'
 import { type StandInReason, StandInReasonLines, standInIds } from './StandInReason'
 import type { TransitionRequirementsPayload } from './TransitionRequirementsDialog'
@@ -635,6 +635,9 @@ type ApprovalBriefData = {
     old?: unknown
     new: unknown
     auto?: boolean
+    kind?: 'date' | 'datetime' | 'number'
+    format?: string | null
+    precision?: number | null
   }>
   changed_total: number
   changed_by_people?: number
@@ -2921,8 +2924,21 @@ function ApprovalBriefStrip({
     retry: false
   })
   if (!data) return <ResubmissionBrief collection={collection} item={item} />
+  // Values read like the form (dates, money; rt8 review r3), and a value saved back to what it
+  // was is no change: an older server still sends "(empty) → (empty)" rows, so they are
+  // dropped here and taken off the count too.
+  const fieldRows = data.field_changes.map((f) => {
+    const fmt = (v: unknown) =>
+      v === null || v === undefined || v === '' ? v : resubValueText(String(v), f)
+    const pair = briefDiffPair(f.old === undefined ? undefined : fmt(f.old), fmt(f.new))
+    return { f, pair, noop: pair.old !== null && pair.old === pair.new }
+  })
+  const shownRows = fieldRows.filter((r) => !r.noop)
+  const droppedPeople = fieldRows.filter((r) => r.noop && !r.f.auto).length
+  const droppedAll = fieldRows.length - shownRows.length
+  const changedTotal = Math.max(0, data.changed_total - droppedAll)
   // What people changed — a title the record rebuilt is not someone's edit.
-  const byPeople = data.changed_by_people ?? data.changed_total
+  const byPeople = Math.max(0, (data.changed_by_people ?? data.changed_total) - droppedPeople)
   const omitted = new Set((omitLines ?? []).map(briefLineKey))
   const lines = (data.lines ?? []).filter((l) => !omitted.has(briefLineKey(l)))
 
@@ -2936,7 +2952,7 @@ function ApprovalBriefStrip({
             Since entering this state
           </span>{' '}
           ({briefAgeText(data.days_in_state)}):{' '}
-          {data.changed_total === 0 && data.comments === 0 && data.addendums.count === 0 ? (
+          {changedTotal === 0 && data.comments === 0 && data.addendums.count === 0 ? (
             <span>no changes to this record.</span>
           ) : (
             <>
@@ -2947,7 +2963,7 @@ function ApprovalBriefStrip({
                 </span>
               )}
               {byPeople === 0 &&
-                data.changed_total > 0 &&
+                changedTotal > 0 &&
                 data.comments === 0 &&
                 data.addendums.count === 0 && (
                   <span>only values the record fills in itself changed.</span>
@@ -2970,12 +2986,11 @@ function ApprovalBriefStrip({
             </>
           )}
         </p>
-        {data.field_changes.length > 0 && (
+        {shownRows.length > 0 && (
           <div className='mt-1 space-y-0.5'>
-            {data.field_changes.slice(0, 5).map((f) => {
+            {shownRows.slice(0, 5).map(({ f, pair }) => {
               // Labels, not column keys (army11 f3/f4 M5, a1 F-4); a long value is cut
               // around where the two differ, so the change itself stays visible.
-              const pair = briefDiffPair(f.old, f.new)
               return (
                 <p
                   key={f.field}
@@ -2999,9 +3014,9 @@ function ApprovalBriefStrip({
                 </p>
               )
             })}
-            {data.field_changes.length > 5 && (
+            {shownRows.length > 5 && (
               <p className='text-[10.5px] text-slate-400'>
-                +{data.field_changes.length - 5} more — see History for the full trail
+                +{shownRows.length - 5} more — see History for the full trail
               </p>
             )}
           </div>
@@ -3798,7 +3813,7 @@ function PipelinePanelInner({
           <span className='text-[12px] font-medium text-slate-700'>{pendingTx.label}</span>
         )}
         {currentState && landedState && (
-          <div className='ml-auto flex items-center gap-1.5'>
+          <div className='flex items-center gap-1.5 sm:ml-auto'>
             <StateBadge label={currentState.label} color={currentState.color} small />
             <ArrowRight className='h-3 w-3 shrink-0 text-slate-300' />
             <StateBadge label={landedState.label} color={landedState.color} small />
@@ -4682,6 +4697,16 @@ function PipelineTransitionButtonsInner({
     const host = rootRef.current?.closest('[role="dialog"]')?.getBoundingClientRect()
     return Math.max(260, Math.min(600, box.right - (host?.left ?? 0) - 12))
   })()
+  // On a phone the panel spans the screen with 16 px gutters (rt8 review r3: anchored to the
+  // buttons it came out ~260 px wide with the page showing beside it). It stays absolutely
+  // placed under the buttons; `right` reaches from their right edge to the screen's.
+  const confirmPlace: CSSProperties = (() => {
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1024
+    const box = rootRef.current?.getBoundingClientRect()
+    const inSheet = !!rootRef.current?.closest('[role="dialog"]')
+    if (!box || vw >= 480 || inSheet) return { width: confirmWidth }
+    return { width: vw - 32, right: box.right - (vw - 16) }
+  })()
 
   return (
     <div ref={rootRef} className='relative' data-tip={heldTip}>
@@ -4916,7 +4941,7 @@ function PipelineTransitionButtonsInner({
       {pendingTransition && (
         <div
           className='absolute right-0 top-full z-50 mt-1 space-y-3 rounded-lg border border-slate-200 bg-white shadow-lg dark:bg-card dark:border-border p-3.5'
-          style={{ width: confirmWidth }}
+          style={confirmPlace}
         >
           <div className='flex flex-wrap items-center gap-2'>
             <span className='text-[11px] font-semibold text-slate-400'>Confirming</span>
@@ -4924,7 +4949,7 @@ function PipelineTransitionButtonsInner({
               <span className='text-[12px] font-medium text-slate-700'>{pendingTx.label}</span>
             )}
             {currentState && landedState && (
-              <div className='ml-auto flex items-center gap-1.5'>
+              <div className='flex items-center gap-1.5 sm:ml-auto'>
                 <StateBadge label={currentState.label} color={currentState.color} small />
                 <ArrowRight className='h-3 w-3 shrink-0 text-slate-300' />
                 <StateBadge label={landedState.label} color={landedState.color} small />
@@ -5011,7 +5036,7 @@ function PipelineTransitionButtonsInner({
             confirms: moveConfirms(armedTx, data.states ?? [], data.instance.current_state)
           }}
           className='absolute right-0 top-full z-50 mt-1'
-          style={{ width: confirmWidth }}
+          style={confirmPlace}
           onDismiss={() => setArmedMove(null)}
           onFixed={(thenMove) => {
             setArmedMove(null)
@@ -5026,7 +5051,7 @@ function PipelineTransitionButtonsInner({
           item={String(item)}
           offer={fixOffer}
           className='absolute right-0 top-full z-50 mt-1 shadow-lg'
-          style={{ width: confirmWidth }}
+          style={confirmPlace}
           onDismiss={() => setFixOffer(null)}
           onFixed={() =>
             runTransition({ transition_id: fixOffer.transitionId, comment: fixOffer.comment })
