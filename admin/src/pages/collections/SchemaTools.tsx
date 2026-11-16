@@ -62,7 +62,7 @@ export function SchemaToolsMenu({
         <PopoverTrigger asChild>
           <button
             type='button'
-            className='inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 px-2 text-[12px] font-medium text-slate-600 hover:bg-slate-50 dark:border-white/[0.1] dark:text-slate-300 dark:hover:bg-white/[0.05]'
+            className='inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-slate-200 px-2 text-[12px] font-medium text-slate-600 hover:bg-slate-50 dark:border-white/[0.1] dark:text-slate-300 dark:hover:bg-white/[0.05]'
           >
             Data model
             {waiting > 0 && (

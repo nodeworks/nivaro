@@ -91,6 +91,18 @@ describe('collections page model', () => {
     expect(m.counts).toMatchObject({ total: 7, hidden: 2, links: 1 })
   })
 
+  it('without link facts (stats loading or failed) no hidden / link numbers are claimed', () => {
+    const hiddenLink = [...rows, col('vendor_tags', { hidden: true })]
+    const m = buildPageModel(hiddenLink, undefined, base, '', usage)
+    expect(m.counts.pending).toBe(true)
+    expect(m.counts.chip.hidden).toBe(0)
+    expect(m.counts.chip.link).toBe(0)
+    expect(m.sections.every((s) => s.hiddenCount === 0)).toBe(true)
+    // The folder whose rows are hidden still shows, just without a count.
+    expect(m.sections.map((s) => s.folder.key)).toEqual(['inv', 'wf'])
+    expect(buildPageModel(hiddenLink, stats, base, '', usage).counts.pending).toBe(false)
+  })
+
   it('show hidden / show links bring them back into place', () => {
     const m = buildPageModel(rows, stats, { ...base, showHidden: true, showLinks: true }, '', usage)
     expect(m.sections.find((s) => s.folder.key === 'wf')?.cols.map((c) => c.collection)).toEqual([

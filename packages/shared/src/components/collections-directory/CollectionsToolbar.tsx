@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { cn } from '../../lib/utils'
 import { Input } from '../ui/input'
 import { Switch } from '../ui/switch'
+import type { PageModel } from './page-model'
 import type { ChipKey, Density, PageState, ViewMode } from './types'
 
 interface Props {
@@ -11,7 +12,7 @@ interface Props {
   filter: string
   onFilterChange: (v: string) => void
   filterRef?: React.Ref<HTMLInputElement>
-  counts: { total: number; hidden: number; links: number; chip: Partial<Record<ChipKey, number>> }
+  counts: PageModel['counts']
   isAdmin: boolean
   selectedCount: number
   onMoveSelected: () => void
@@ -290,7 +291,7 @@ export function CollectionsToolbar({
                 id='coll-show-hidden'
                 className='h-4 w-7 data-[state=checked]:bg-nvr-cyan [&>span]:h-3 [&>span]:w-3 [&>span]:data-[state=checked]:translate-x-3'
               />
-              Show hidden collections ({counts.hidden})
+              Show hidden collections{counts.pending ? '' : ` (${counts.hidden})`}
             </label>
           )}
           {counts.links > 0 && (
@@ -304,7 +305,7 @@ export function CollectionsToolbar({
                 id='coll-show-links'
                 className='h-4 w-7 data-[state=checked]:bg-nvr-cyan [&>span]:h-3 [&>span]:w-3 [&>span]:data-[state=checked]:translate-x-3'
               />
-              Show link tables ({counts.links})
+              Show link tables{counts.pending ? '' : ` (${counts.links})`}
             </label>
           )}
         </div>
