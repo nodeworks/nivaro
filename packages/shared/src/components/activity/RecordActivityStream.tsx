@@ -6,7 +6,7 @@ import { useItemNavigation, useNivaroClient } from '../../context'
 import { type ActivityEntryInput, groupActivity, recordPhrase } from '../../lib/activity-sentence'
 import { post } from '../../lib/commands'
 import { useLiveCollection } from '../../lib/live'
-import { slideIn, useTopInserts } from '../../lib/live-screen'
+import { slideIn, stickyTopOffset, useTopInserts } from '../../lib/live-screen'
 import { cn, titleCase } from '../../lib/utils'
 import { ActivityEntry, useActivityLabels } from '../ActivityEntry'
 import { ErrorNotice } from '../ErrorNotice'
@@ -51,24 +51,9 @@ type FeedEntry = ActivityEntryInput & { id: number }
 
 const PAGE = 30
 
-/**
- * How far down the screen the host's own sticky or fixed bars reach (a phone's project header),
- * ignoring anything inside `card`. 0 when nothing sticks to the top.
- */
-export function stickyTopOffset(card: Element | null): number {
-  if (typeof document === 'undefined') return 0
-  let max = 0
-  for (const el of document.body.querySelectorAll<HTMLElement>('*')) {
-    if (card?.contains(el)) continue
-    const pos = getComputedStyle(el).position
-    if (pos !== 'sticky' && pos !== 'fixed') continue
-    const r = el.getBoundingClientRect()
-    if (r.top > 200 || r.bottom <= 0 || r.width < window.innerWidth * 0.5) continue
-    if (r.height > window.innerHeight * 0.5) continue
-    max = Math.max(max, r.bottom)
-  }
-  return max
-}
+/** Re-exported: the stream's floating pill and the feed's top check share it. */
+export { stickyTopOffset }
+
 const entryKey = (e: FeedEntry) => String(e.id)
 
 export function RecordActivityStream({

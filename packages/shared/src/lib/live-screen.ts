@@ -321,6 +321,25 @@ export function scrollParentOf(el: Element | null): HTMLElement | null {
 const AT_TOP_SLACK = 24
 
 /**
+ * How far down the screen the host's own sticky or fixed bars reach (a phone's project header),
+ * ignoring anything inside `inside`. 0 when nothing sticks to the top.
+ */
+export function stickyTopOffset(inside: Element | null): number {
+  if (typeof document === 'undefined') return 0
+  let max = 0
+  for (const el of document.body.querySelectorAll<HTMLElement>('*')) {
+    if (inside?.contains(el)) continue
+    const pos = getComputedStyle(el).position
+    if (pos !== 'sticky' && pos !== 'fixed') continue
+    const r = el.getBoundingClientRect()
+    if (r.top > 200 || r.bottom <= 0 || r.width < window.innerWidth * 0.5) continue
+    if (r.height > window.innerHeight * 0.5) continue
+    max = Math.max(max, r.bottom)
+  }
+  return max
+}
+
+/**
  * `holdTopInserts` wired to the feed's scroller. `resetKey` (a filter, a page) starts over:
  * whatever the new view's first answer is shows as it is.
  */
@@ -345,12 +364,27 @@ export function useTopInserts<T>(
     const sc = scrollParentOf(root)
     scrollerRef.current = sc
     if (!sc) return
-    const target: HTMLElement | Window =
-      sc === document.scrollingElement || sc === document.documentElement ? window : sc
-    const read = () => setAtTop(sc.scrollTop <= AT_TOP_SLACK)
+    const page = sc === document.scrollingElement || sc === document.documentElement
+    const target: HTMLElement | Window = page ? window : sc
+    // A feed further down a scrolled page (a phone) is "at the top" while its own first row is
+    // in view below the page's sticky bars — not only when the whole page is at its top.
+    let bars = page ? stickyTopOffset(root) : 0
+    const read = () => {
+      if (sc.scrollTop <= AT_TOP_SLACK) return setAtTop(true)
+      const viewTop = page ? bars : sc.getBoundingClientRect().top
+      setAtTop(root.getBoundingClientRect().top >= viewTop - AT_TOP_SLACK)
+    }
+    const onResize = () => {
+      if (page) bars = stickyTopOffset(root)
+      read()
+    }
     read()
     target.addEventListener('scroll', read, { passive: true })
-    return () => target.removeEventListener('scroll', read)
+    window.addEventListener('resize', onResize)
+    return () => {
+      target.removeEventListener('scroll', read)
+      window.removeEventListener('resize', onResize)
+    }
   }, [root])
 
   const bump = useCallback(() => setRevealTick((n) => n + 1), [])
