@@ -71,7 +71,7 @@ export function RecalcValue({
         data-tip={tip}
         className={cn('inline-flex min-w-0 items-baseline gap-x-1.5', stale, className)}
       >
-        <span className='min-w-0 underline decoration-nvr-cyan decoration-dotted decoration-2 underline-offset-[3px]'>
+        <span className='inline-flex min-w-0 items-baseline gap-x-1.5 underline decoration-nvr-cyan decoration-dotted decoration-2 underline-offset-[3px]'>
           {children}
         </span>
         <span className='sr-only'>Updating…</span>

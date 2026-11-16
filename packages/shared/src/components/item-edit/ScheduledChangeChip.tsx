@@ -181,7 +181,13 @@ export function ScheduledChangeChip({
           {more > 0 && <span className='shrink-0 opacity-70'>+{more}</span>}
         </button>
       </PopoverTrigger>
-      <PopoverContent align='start' className='w-[340px] p-0' data-scheduled-panel>
+      <PopoverContent
+        align='start'
+        // 16 px from every screen edge (phones: the right one too).
+        collisionPadding={16}
+        className='w-[min(340px,calc(100vw-2rem))] p-0'
+        data-scheduled-panel
+      >
         <div className='border-b border-slate-100 px-3 py-2 dark:border-border'>
           <p className='text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
             {rows.length === 1 ? 'Scheduled change' : `${rows.length} scheduled changes`}
