@@ -1,5 +1,13 @@
 import { MoreHorizontal } from 'lucide-react'
-import { type ReactNode, type RefObject, useEffect, useRef, useState } from 'react'
+import {
+  createContext,
+  type ReactNode,
+  type RefObject,
+  useContext,
+  useEffect,
+  useRef,
+  useState
+} from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '../../lib/utils'
 
@@ -27,6 +35,85 @@ function escapeIsOurs(e: KeyboardEvent, anchor: HTMLElement | null): boolean {
   return !dlg || !!(anchor && dlg.contains(anchor))
 }
 
+/** Whether the HeaderTools strip is on screen (inline, or folded with its panel open). A
+ *  HeaderMenu nested in a folded panel closes with it — the panel keeps its tools mounted
+ *  while hidden, so the menu would otherwise float on alone. */
+const HeaderToolsShownContext = createContext(true)
+
+const DIALOG_SELECTOR = '[role="dialog"],[role="alertdialog"]'
+
+/** A sheet / dialog that `added` brings onto the page, which is not part of the panel itself
+ *  (`isOwn`) and not a popover (Radix popovers also carry role=dialog, inside their popper
+ *  wrapper — Quick pick, chat share — and those belong beside the panel). */
+export function openedLayerIn(added: Node, isOwn: (el: Element) => boolean): boolean {
+  if (!(added instanceof Element)) return false
+  const found = added.matches(DIALOG_SELECTOR)
+    ? [added]
+    : Array.from(added.querySelectorAll(DIALOG_SELECTOR))
+  return found.some((d) => !d.closest('[data-radix-popper-content-wrapper]') && !isOwn(d))
+}
+
+/** How long after a press inside the panel a sheet that appears still counts as opened by it
+ *  (lazy sheets — Revision history — mount a beat after the click). */
+const OPEN_WINDOW_MS = 1500
+
+/**
+ * While a header panel is open: a row pressed inside it (`isOwn`) that opens a drawer, a
+ * dialog or navigates closes the panel, so it never sits on top of the sheet it opened
+ * (2026-11-16: the clock opened Revision history and the ⋯ panel stayed over the dimmed page).
+ * The panel keeps its rows mounted while hidden, so the sheet a row owns lives on.
+ * Rows that open nothing outside (Find, Quick pick, two-press confirms) leave it open.
+ */
+export function useCloseWhenRowOpensLayer(
+  open: boolean,
+  close: () => void,
+  isOwn: (el: Element) => boolean
+) {
+  const closeRef = useRef(close)
+  closeRef.current = close
+  const isOwnRef = useRef(isOwn)
+  isOwnRef.current = isOwn
+  useEffect(() => {
+    if (!open) return
+    let armedUntil = 0
+    const timers: ReturnType<typeof setTimeout>[] = []
+    // Capture on window, so a row whose handler stops propagation is still seen; the checks
+    // run after the row's own handler (a navigate() changes the address there, a sheet mounts
+    // then or a beat later through the observer below).
+    const onPress = (e: MouseEvent) => {
+      const t = e.target as Element | null
+      if (!t?.closest || !isOwnRef.current(t)) return
+      const href = window.location.href
+      const link = !!t.closest('a[href]')
+      armedUntil = Date.now() + OPEN_WINDOW_MS
+      const checkNav = () => {
+        if (link || window.location.href !== href) closeRef.current()
+      }
+      timers.push(setTimeout(checkNav, 0), setTimeout(checkNav, 250))
+    }
+    const mo =
+      typeof MutationObserver === 'undefined'
+        ? null
+        : new MutationObserver((records) => {
+            if (Date.now() > armedUntil) return
+            for (const r of records)
+              for (const n of Array.from(r.addedNodes))
+                if (openedLayerIn(n, isOwnRef.current)) {
+                  armedUntil = 0
+                  closeRef.current()
+                  return
+                }
+          })
+    mo?.observe(document.body, { childList: true, subtree: true })
+    window.addEventListener('click', onPress, true)
+    return () => {
+      mo?.disconnect()
+      window.removeEventListener('click', onPress, true)
+      for (const t of timers) clearTimeout(t)
+    }
+  }, [open])
+}
+
 export function HeaderTools({ children }: { children: ReactNode }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -36,6 +123,20 @@ export function HeaderTools({ children }: { children: ReactNode }) {
   const neededRef = useRef(0)
   const wrapNeededRef = useRef(0)
   const [open, setOpen] = useState(false)
+  const panelRef = useRef<HTMLDivElement>(null)
+  // Once opened, the folded panel keeps its tools mounted while hidden: a tool owns the sheet
+  // it opens (Revision history, Help videos, Send), so closing the panel must not unmount it.
+  // Mounted on first open only — the folded tools fetch nothing until someone looks.
+  const keptRef = useRef(false)
+  if (!collapsed) keptRef.current = false
+  else if (open) keptRef.current = true
+  useCloseWhenRowOpensLayer(
+    open,
+    () => setOpen(false),
+    (el) => {
+      return !!(panelRef.current?.contains(el) || el.closest('[data-nvr-header-menu-panel]'))
+    }
+  )
 
   // No deps on purpose: the tool set changes as queries land (custom actions,
   // PDF layouts…), and each render re-checks. The check is a couple of layout
@@ -150,7 +251,7 @@ export function HeaderTools({ children }: { children: ReactNode }) {
     // wrapper contributes no box of its own.
     return (
       <div ref={wrapRef} className='contents' data-nvr-header-tools='inline'>
-        {children}
+        <HeaderToolsShownContext.Provider value>{children}</HeaderToolsShownContext.Provider>
       </div>
     )
   }
@@ -183,36 +284,40 @@ export function HeaderTools({ children }: { children: ReactNode }) {
       >
         <MoreHorizontal className='h-4 w-4' />
       </button>
-      {open &&
-        rect &&
+      {keptRef.current &&
         createPortal(
           <div
+            ref={panelRef}
             data-nvr-header-tools-panel
             // A transformed dialog re-anchors position: fixed — inside a sheet
             // the coords must be container-relative absolute instead.
             style={
-              container === document.body
-                ? {
-                    position: 'fixed',
-                    top: rect.bottom + 6,
-                    right: Math.max(8, window.innerWidth - rect.right),
-                    maxWidth: Math.min(440, roomLeft),
-                    zIndex: 110
-                  }
-                : {
-                    position: 'absolute',
-                    top: rect.bottom - container.getBoundingClientRect().top + 6,
-                    right: Math.max(8, container.getBoundingClientRect().right - rect.right),
-                    maxWidth: Math.min(440, roomLeft),
-                    zIndex: 110
-                  }
+              !(open && rect)
+                ? { display: 'none' }
+                : container === document.body
+                  ? {
+                      position: 'fixed',
+                      top: rect.bottom + 6,
+                      right: Math.max(8, window.innerWidth - rect.right),
+                      maxWidth: Math.min(440, roomLeft),
+                      zIndex: 110
+                    }
+                  : {
+                      position: 'absolute',
+                      top: rect.bottom - container.getBoundingClientRect().top + 6,
+                      right: Math.max(8, container.getBoundingClientRect().right - rect.right),
+                      maxWidth: Math.min(440, roomLeft),
+                      zIndex: 110
+                    }
             }
             // A tool group is one unbreakable pill in the header row; here it
             // must wrap, or a group wider than the panel ran off its LEFT edge
             // (justify-end) and the first tools could not be reached on a phone.
             className='flex flex-wrap items-center justify-end gap-1.5 rounded-lg border border-slate-200 bg-white p-2 shadow-xl dark:border-border dark:bg-card [&_[data-nvr-header-tool-group]]:h-auto [&_[data-nvr-header-tool-group]]:min-h-9 [&_[data-nvr-header-tool-group]]:max-w-full [&_[data-nvr-header-tool-group]]:shrink [&_[data-nvr-header-tool-group]]:flex-wrap'
           >
-            {children}
+            <HeaderToolsShownContext.Provider value={open}>
+              {children}
+            </HeaderToolsShownContext.Provider>
           </div>,
           container
         )}
@@ -295,7 +400,23 @@ export function HeaderMenu({
   className?: string
 }) {
   const btnRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
+  // Rows stay mounted after the first open (hidden while closed): a row owns the dialog or
+  // sheet it opens (Clone, Import, Delete), so closing the menu must not unmount it.
+  const keptRef = useRef(false)
+  if (open) keptRef.current = true
+  useCloseWhenRowOpensLayer(
+    open,
+    () => setOpen(false),
+    (el) => !!panelRef.current?.contains(el)
+  )
+  // Folded into a ⋯ panel that just closed (a tool there opened a sheet, or the panel was
+  // dismissed): the menu goes with it instead of floating on alone.
+  const stripShown = useContext(HeaderToolsShownContext)
+  useEffect(() => {
+    if (!stripShown) setOpen(false)
+  }, [stripShown])
 
   useEffect(() => {
     if (!open) return
@@ -349,10 +470,10 @@ export function HeaderMenu({
         <MoreHorizontal className='h-4 w-4' />
         <span className='hidden lg:inline'>{label}</span>
       </button>
-      {open &&
-        rect &&
+      {keptRef.current &&
         createPortal(
           <div
+            ref={panelRef}
             data-nvr-header-menu-panel
             role='menu'
             // Rows that open something OUTSIDE the menu (Raw edit's sheet
@@ -364,22 +485,24 @@ export function HeaderMenu({
               if ((e.target as HTMLElement).closest('[data-nvr-menu-close]')) setOpen(false)
             }}
             style={
-              container === document.body
-                ? {
-                    position: 'fixed',
-                    top: rect.bottom + 6,
-                    right: menuRight(window.innerWidth - rect.right, window.innerWidth),
-                    zIndex: 110
-                  }
-                : {
-                    position: 'absolute',
-                    top: rect.bottom - container.getBoundingClientRect().top + 6,
-                    right: menuRight(
-                      container.getBoundingClientRect().right - rect.right,
-                      container.getBoundingClientRect().width
-                    ),
-                    zIndex: 110
-                  }
+              !(open && rect)
+                ? { display: 'none' }
+                : container === document.body
+                  ? {
+                      position: 'fixed',
+                      top: rect.bottom + 6,
+                      right: menuRight(window.innerWidth - rect.right, window.innerWidth),
+                      zIndex: 110
+                    }
+                  : {
+                      position: 'absolute',
+                      top: rect.bottom - container.getBoundingClientRect().top + 6,
+                      right: menuRight(
+                        container.getBoundingClientRect().right - rect.right,
+                        container.getBoundingClientRect().width
+                      ),
+                      zIndex: 110
+                    }
             }
             // Every child button becomes a menu row: full width, left-aligned,
             // no border/shadow of its own. Rows keep their own handlers.
