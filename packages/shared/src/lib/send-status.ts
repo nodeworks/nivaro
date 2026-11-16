@@ -14,7 +14,9 @@ import { getDisplayTimezone } from './utils'
  *   accepted   "Ledger accepted it at 10:43 AM — PO 12345" (the API's reference label;
  *              "reference" when none is set)
  *   refused    "Ledger refused it at 10:43 AM: “The project is closed.” Change that on
- *              the record, then send it again." (the partner's own words quoted, ours not)
+ *              the record, then send it again from Integrations at the top of the record."
+ *              (the partner's own words quoted, ours not; the same stored request would be
+ *              refused again, so the line names where a fresh send is made, rt6 review)
  *   not_taken  "Couldn't reach Ledger — nothing was sent. Retrying at 10:45 AM (attempt 2
  *              of 5)" when a sweep will try again (rt6 #18); else a Send again button when
  *              the viewer may (`can_resend`), or "… Ask an admin to send it again."
@@ -28,6 +30,9 @@ import { getDisplayTimezone } from './utils'
  * There is no "queued" state: a send runs as part of its move, in parallel across
  * records, never behind other records' sends — so no position is ever shown.
  */
+
+/** Where a fresh send of a refused request is made: the record's Integrations chip (Re-run). */
+const SEND_AGAIN_FROM = 'Integrations at the top of the record'
 
 export interface SendStatusFact {
   id: number
@@ -260,8 +265,8 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
       retry
         ? retryText
         : why.text
-          ? 'Change that on the record, then send it again.'
-          : 'Check the record, then send it again.'
+          ? `Change that on the record, then send it again from ${SEND_AGAIN_FROM}.`
+          : `Check the record, then send it again from ${SEND_AGAIN_FROM}.`
     }`,
     // "Repeating it cannot fix it" is already what the next step says.
     ...extra(!fixable)

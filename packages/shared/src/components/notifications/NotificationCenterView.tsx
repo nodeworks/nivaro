@@ -553,11 +553,7 @@ export function NotificationCenterView({
             <RelativeTime value={n.created_at ?? new Date()} />
           </span>
         </div>
-        {n.message && (
-          <p className='mt-0.5 line-clamp-3 whitespace-pre-line text-[12px] text-slate-500'>
-            {n.message.replace(/<[^>]+>/g, '')}
-          </p>
-        )}
+        {n.message && <MessageBody text={n.message.replace(/<[^>]+>/g, '')} />}
         <ResolvedLine resolved={n.detail?.resolved} className='text-[11.5px]' />
       </>
     )
@@ -1474,4 +1470,34 @@ export function NotificationCenterView({
 function titleWords(collection: string): string {
   const t = collection.replace(/_/g, ' ').trim()
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : collection
+}
+
+/**
+ * A notification's body. A one-paragraph message clamps at three lines; a message of several
+ * lines (one per problem) clamps each line on its own, so a long first line can never hide the
+ * next problem (rt6 review: the stock line vanished under the price sentence on a phone).
+ */
+function MessageBody({ text }: { text: string }) {
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+  if (lines.length <= 1)
+    return (
+      <p className='mt-0.5 line-clamp-3 whitespace-pre-line text-[12px] text-slate-500'>{text}</p>
+    )
+  const shown = lines.slice(0, 4)
+  return (
+    <div className='mt-0.5 space-y-0.5 text-[12px] text-slate-500'>
+      {shown.map((l, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: static lines of one message
+        <p key={i} className='line-clamp-2'>
+          {l}
+        </p>
+      ))}
+      {lines.length > shown.length && (
+        <p className='text-[11.5px] text-slate-400'>+{lines.length - shown.length} more</p>
+      )}
+    </div>
+  )
 }

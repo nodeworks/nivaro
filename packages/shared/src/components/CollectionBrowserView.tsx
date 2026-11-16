@@ -98,6 +98,7 @@ import {
   formatValue
 } from '../lib/format-value'
 import { IN_STEP_COLUMN, IN_STEP_SORT, inStepText } from '../lib/in-step'
+import { dotsForRecord } from '../lib/integration-dots'
 import type { JobProgressPayload } from '../lib/jobs-tray'
 import { useKeepRowCheckboxFocus } from '../lib/keep-row-focus'
 import {
@@ -11371,9 +11372,10 @@ export function CollectionBrowserView({
                                           </span>
                                         )}
                                       </span>
-                                    ) : (
+                                    ) : integrationsEnabled ||
+                                      !(sendStatus?.[String(id)]?.length ?? 0) ? (
                                       <span className='text-[12px] text-slate-300'>—</span>
-                                    )}
+                                    ) : null}
                                     {/* rt4 #10 — the row's sends, beside its state when the list has
                                       no integrations column to carry them. */}
                                     {!integrationsEnabled && (
@@ -11497,6 +11499,13 @@ export function CollectionBrowserView({
                               )
                             }
                             if (col.kind === 'integrations') {
+                              const sendFacts = sendStatus?.[String(id)]
+                              const dotRows = integrationsSummary?.[String(id)]
+                              // The empty dash only when nothing else is in the cell: never "— ⊗".
+                              const showDots =
+                                dotsForRecord(dotRows ?? []).length > 0 ||
+                                !Array.isArray(sendFacts) ||
+                                sendFacts.length === 0
                               return (
                                 <td
                                   key={key}
@@ -11504,8 +11513,8 @@ export function CollectionBrowserView({
                                   className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
                                 >
                                   <span className='inline-flex items-center gap-2'>
-                                    <IntegrationDots rows={integrationsSummary?.[String(id)]} />
-                                    <SendStatusMarks facts={sendStatus?.[String(id)]} />
+                                    {showDots && <IntegrationDots rows={dotRows} />}
+                                    <SendStatusMarks facts={sendFacts} />
                                   </span>
                                 </td>
                               )

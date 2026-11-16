@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   atWhen,
-  withoutContactLine,
   msUntilNoAnswer,
   msUntilRetryTick,
   plainDuration,
   retryCountdown,
   type SendStatusFact,
-  sendStatusWords
+  sendStatusWords,
+  withoutContactLine
 } from './send-status'
 
 const NOW = Date.parse('2026-11-14T15:50:00Z')
@@ -106,7 +106,7 @@ describe('sendStatusWords', () => {
       no_retry: 'sending the same thing again cannot fix it'
     })
     expect(w.text).toBe(
-      'Ledger refused it at 10:43 AM: \u201cThe project is closed.\u201d Change that on the record, then send it again.'
+      'Ledger refused it at 10:43 AM: \u201cThe project is closed.\u201d Change that on the record, then send it again from Integrations at the top of the record.'
     )
     // The next step already says repeating it will not do: no second line.
     expect(w.detail).toBeUndefined()
@@ -117,7 +117,9 @@ describe('sendStatusWords', () => {
         finished_at: '2026-11-14T15:43:00.000Z',
         error_class: 'validation'
       }).text
-    ).toBe('Ledger refused it at 10:43 AM. Check the record, then send it again.')
+    ).toBe(
+      'Ledger refused it at 10:43 AM. Check the record, then send it again from Integrations at the top of the record.'
+    )
   })
 
   it('refused sign-in: an administrator checks the connection', () => {

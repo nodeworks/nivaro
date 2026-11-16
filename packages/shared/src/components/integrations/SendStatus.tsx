@@ -47,7 +47,8 @@ export const SEND_STATUS_KEY = 'send-status'
 function iconFor(w: SendStatusWords): { Icon: typeof Loader2; cls: string; label: string } {
   const sky = 'text-sky-600 dark:text-sky-400'
   const amber = 'text-amber-600 dark:text-amber-400'
-  if (w.retry_at) return { Icon: RefreshCw, cls: sky, label: 'Retrying' }
+  // Amber, like the partner's dot in the header chip: one colour for "retrying" everywhere.
+  if (w.retry_at) return { Icon: RefreshCw, cls: amber, label: 'Retrying' }
   switch (w.state) {
     case 'sending':
       return {
