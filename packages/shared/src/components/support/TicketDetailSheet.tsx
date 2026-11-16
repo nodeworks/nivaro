@@ -496,10 +496,11 @@ export function TicketDetailSheet({
                   </p>
                 ) : (
                   <ol className='space-y-2 border-l border-slate-200 pl-3.5 dark:border-border'>
-                    {foldShareHistory(t.history).map((h) => {
-                      // Worded for this reader: the requester reads "… looked at your …".
+                    {foldShareHistory(t.history, { requester: t.created_by }).map((h) => {
+                      // Worded for this reader: the requester reads "… looked at your …"
+                      // (an administrator who raised the request is still its requester).
                       const line = historyLine(h, {
-                        isRequester: !t.can.work,
+                        isRequester: t.can.requester ?? !t.can.work,
                         requesterName: t.requester_name
                       })
                       return (

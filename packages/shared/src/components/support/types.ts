@@ -72,7 +72,14 @@ export interface SupportTicketDetail extends SupportTicket {
     user_name: string | null
     at: string
   }>
-  can: { work: boolean; reply: boolean; cancel: boolean; reopen: boolean }
+  can: {
+    work: boolean
+    reply: boolean
+    cancel: boolean
+    reopen: boolean
+    /** The reader raised this request (older APIs leave it out). */
+    requester?: boolean
+  }
 }
 
 export interface SupportSummary {

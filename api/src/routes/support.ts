@@ -692,6 +692,7 @@ export async function supportRoutes(app: FastifyInstance) {
         })),
         can: {
           work: work,
+          requester: isRequester,
           reply: work || isRequester,
           cancel: (work || isRequester) && OPEN_STATUSES.includes(t.status as TicketStatus),
           reopen: (work || isRequester) && !OPEN_STATUSES.includes(t.status as TicketStatus)
@@ -947,18 +948,21 @@ export async function supportRoutes(app: FastifyInstance) {
     const share = await readShare(app.redis as unknown as ShareRedis, tenant, t.id).catch(
       () => null
     )
-    void logActivityThrottled(
-      app.redis as unknown as Parameters<typeof logActivityThrottled>[0],
-      `support-traffic:${tenant}:${t.id}:${viewer.id}:${share?.id ?? 'none'}`,
-      share ? Math.max(60, Math.ceil((share.expires_at - Date.now()) / 1000) + 3600) : 86_400,
-      {
-        action: 'support-traffic-view',
-        user: viewer.id,
-        collection: 'nivaro_tasks',
-        item: String(t.id),
-        comment: 'Viewed the requester’s traffic around the ticket'
-      }
-    )
+    // The requester looking at their own activity (an admin who raised it) is not an access.
+    const own = String(t.created_by).toUpperCase() === String(viewer.id).toUpperCase()
+    if (!own)
+      void logActivityThrottled(
+        app.redis as unknown as Parameters<typeof logActivityThrottled>[0],
+        `support-traffic:${tenant}:${t.id}:${viewer.id}:${share?.id ?? 'none'}`,
+        share ? Math.max(60, Math.ceil((share.expires_at - Date.now()) / 1000) + 3600) : 86_400,
+        {
+          action: 'support-traffic-view',
+          user: viewer.id,
+          collection: 'nivaro_tasks',
+          item: String(t.id),
+          comment: 'Viewed the requester’s traffic around the ticket'
+        }
+      )
     return reply.send({
       data: {
         ...data,
