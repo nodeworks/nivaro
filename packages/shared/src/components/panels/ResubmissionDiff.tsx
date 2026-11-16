@@ -226,9 +226,14 @@ function rowsOf(d: ResubmissionDiffData): Row[] {
               <span className={MUTED}>: </span>
               {f.old !== '' && (
                 <>
-                  <span className='text-red-600 line-through decoration-red-300 dark:text-red-400 dark:decoration-red-500/50'>
-                    {resubValueText(f.old, f)}
-                  </span>
+                  {f.old === '(empty)' ? (
+                    // Nothing was there: say so quietly, never a struck-through "(empty)".
+                    <span className={cn('italic', MUTED)}>empty</span>
+                  ) : (
+                    <span className='text-red-600 line-through decoration-red-300 dark:text-red-400 dark:decoration-red-500/50'>
+                      {resubValueText(f.old, f)}
+                    </span>
+                  )}
                   <span aria-hidden='true' className={MUTED}>
                     {' '}
                     →{' '}
