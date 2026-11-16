@@ -23,11 +23,11 @@ import { FileDownloadCount, useFileDownloadStats } from './FileDownloadCount'
 import { FileUsageChip, useFileUsage, useOnceVisible } from './FileUsage'
 import { useFileDownload } from './file-download'
 import {
+  lastWriterName,
   noteOwnFileChange,
   OWN_FILE_CHANGE_MS,
   REMOVED_FADE_MS,
   REMOVED_SHOW_MS,
-  lastWriterName,
   RemovedFileRow,
   useLiveFileList
 } from './file-live'
@@ -154,21 +154,44 @@ function FileThumb({
   const [thumbFailed, setThumbFailed] = useState(false)
   // Neither rendition loads: the type tile, never an empty gap where the picture was.
   const [broken, setBroken] = useState(false)
+  // When processing ends the thumbnail now exists: ask again (a fresh URL, so a cached
+  // "not ready" answer is never reused) and forget earlier failures (rt-record r-1116d:
+  // the photo row kept an empty tile after "Processing…" went).
+  const [bust, setBust] = useState(0)
+  const wasProcessing = useRef(processing)
+  useEffect(() => {
+    if (wasProcessing.current && !processing) {
+      setThumbFailed(false)
+      setBroken(false)
+      setBust(Date.now())
+    }
+    wasProcessing.current = processing
+  }, [processing])
   if (isImage(type) && processing) return <FileProcessingTile className={dim} />
   if (isImage(type) && !broken) {
+    const fail = () => {
+      if (!thumbFailed && chipThumbUrl(url) !== url) {
+        setThumbFailed(true)
+        return
+      }
+      setBroken(true)
+    }
+    const src = thumbFailed ? url : chipThumbUrl(url)
     return (
       <img
-        src={thumbFailed ? url : chipThumbUrl(url)}
+        src={
+          bust && !/^(blob|data):/i.test(src)
+            ? `${src}${src.includes('?') ? '&' : '?'}v=${bust}`
+            : src
+        }
         alt={filename}
         data-file-thumb
         className={cn(dim, 'object-cover rounded shrink-0')}
         loading='lazy'
-        onError={(e) => {
-          if (!thumbFailed && chipThumbUrl(url) !== url) {
-            setThumbFailed(true)
-            return
-          }
-          setBroken(true)
+        onError={fail}
+        // An answer that decodes to nothing is a failure too: the type tile, never a blank.
+        onLoad={(e) => {
+          if (e.currentTarget.naturalWidth === 0) fail()
         }}
       />
     )
@@ -541,17 +564,25 @@ export function FilePickerField({
             </a>
           )}
           <div className='flex-1 min-w-0'>
-            <div className='flex items-center gap-1'>
-              {!hasPending && !!fileId && processing.isProcessing(fileId) && (
-                <FileProcessingBadge />
-              )}
+            {/* "Processing…" sits right after the name, as on the multi-file rows. */}
+            <div className='flex min-w-0 items-center gap-1.5'>
               {hasPending && <Clock className='h-3 w-3 text-amber-400 shrink-0' />}
               <p
                 data-file-name
-                className='text-[12px] font-medium text-slate-700 truncate dark:text-slate-100'
+                className='min-w-0 text-[12px] font-medium text-slate-700 truncate dark:text-slate-100'
               >
-                {hasPending ? pendingFile!.name : fileDisplayName(file) || fileId}
+                {hasPending ? (
+                  pendingFile!.name
+                ) : file ? (
+                  fileDisplayName(file) || 'Untitled file'
+                ) : (
+                  // Never the raw file id while the name loads.
+                  <span className='text-slate-400 dark:text-slate-500'>Loading name…</span>
+                )}
               </p>
+              {!hasPending && !!fileId && processing.isProcessing(fileId) && (
+                <FileProcessingBadge />
+              )}
               {/* Dead link: the row exists but the bytes are gone — stamped by
                   the file-integrity sweep / verify route. */}
               {!hasPending && (health.verdict(fileId) ?? !!file?.missing_at) && (
@@ -908,12 +939,20 @@ export function FileM2MField({
           })
         )
         .then((r) => r.data ?? [])
+      // Keyed lower-case: the link row and the files read may spell a GUID differently,
+      // and a miss showed the row without its name (rt-record r-1116d).
       const map: Record<string, NivaroFile> = {}
-      for (const f of data) map[f.id] = f
+      for (const f of data) map[String(f.id).toLowerCase()] = f
       return map
     },
     enabled: allFileIds.length > 0,
     staleTime: 60_000,
+    // A file linked a moment ago may not read yet: ask again a few times, not for a minute.
+    refetchInterval: (q) => {
+      const m = q.state.data as Record<string, NivaroFile> | undefined
+      if (!m || q.state.dataUpdateCount > 8) return false
+      return allFileIds.some((id) => !m[id.toLowerCase()]) ? 2000 : false
+    },
     // A changed id list keeps the names already known on screen while the new read runs.
     placeholderData: (prev) => prev
   })
@@ -1010,7 +1049,7 @@ export function FileM2MField({
       {(allFileIds.length > 0 || pendingFiles.length > 0 || removedRows.length > 0) && (
         <div ref={usageRef} className='flex flex-col gap-1.5'>
           {allFileIds.map((id) => {
-            const f = filesMap[id]
+            const f = filesMap[id.toLowerCase()]
             const fresh = live.fresh.has(id)
             // Someone else's new file waits for its name, then fades in — never a bare id.
             if (fresh && !f) return null
