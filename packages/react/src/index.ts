@@ -647,6 +647,10 @@ export {
   type RecordSurfaceValue,
   RelatedRecordsPanel,
   RelationCombobox,
+  // Someone else's save under the person's edit (realtime): grids outside the record form
+  // (efp-new's forecast worksheet) reuse the notice and the mark.
+  RemoteChangeMark,
+  RemoteConflictNotice,
   RenderSettingsButton,
   type ReplayClipKind,
   type ReplayLink,
