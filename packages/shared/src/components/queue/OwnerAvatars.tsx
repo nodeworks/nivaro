@@ -102,7 +102,9 @@ export function OwnerAvatars({
 
   if (owners.length === 0) {
     return (
-      <span className='text-[12px] text-slate-300 dark:text-muted-foreground'>{emptyLabel}</span>
+      <span data-cell-empty className='text-[12px] text-slate-300 dark:text-muted-foreground'>
+        {emptyLabel}
+      </span>
     )
   }
 

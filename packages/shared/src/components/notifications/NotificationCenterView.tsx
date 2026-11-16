@@ -942,7 +942,24 @@ export function NotificationCenterView({
       <header className='shrink-0 border-b border-slate-200 bg-white px-4 py-5 dark:border-border dark:bg-background sm:px-8'>
         <div className='flex flex-wrap items-center justify-between gap-x-3 gap-y-2'>
           <div>
-            <h1 className='text-xl font-bold text-slate-900 dark:text-slate-100'>Notifications</h1>
+            <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
+              <h1 className='text-xl font-bold text-slate-900 dark:text-slate-100'>
+                Notifications
+              </h1>
+              {/* New arrivals held while scrolled down: a control in the header row, so it
+                  takes no room from the rows and never covers their text. */}
+              {heldNew > 0 && (
+                <button
+                  type='button'
+                  data-notification-new-pill={heldNew}
+                  onClick={revealNew}
+                  className='inline-flex h-7 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-3 text-[12px] font-medium text-nvr-navy transition-colors hover:bg-nvr-cyan/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:border-nvr-cyan/40 dark:bg-nvr-cyan/15 dark:text-nvr-cyan dark:hover:bg-nvr-cyan/25'
+                >
+                  <ChevronUp className='h-3.5 w-3.5' aria-hidden />
+                  {heldNew} new
+                </button>
+              )}
+            </div>
             <p className='mt-0.5 text-[13px] text-slate-400'>
               {total} notification{total === 1 ? '' : 's'}
               {counts?.attention != null && counts.attention > 0
@@ -1354,20 +1371,6 @@ export function NotificationCenterView({
           </div>
         ) : (
           <>
-            {heldNew > 0 && (
-              // Zero-height and sticky: floats over the list, never pushes it.
-              <div className='sticky top-2 z-10 flex h-0 justify-center overflow-visible'>
-                <button
-                  type='button'
-                  data-notification-new-pill={heldNew}
-                  onClick={revealNew}
-                  className='mt-1 inline-flex h-7 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-white px-3 text-[12px] font-medium text-nvr-navy shadow-sm transition-colors hover:bg-nvr-cyan/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:border-nvr-cyan/40 dark:bg-card dark:text-nvr-cyan dark:hover:bg-nvr-cyan/10'
-                >
-                  <ChevronUp className='h-3.5 w-3.5' aria-hidden />
-                  {heldNew} new
-                </button>
-              </div>
-            )}
             <div
               ref={setListEl}
               className='mx-8 my-6 divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'

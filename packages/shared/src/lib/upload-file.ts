@@ -27,12 +27,63 @@ export function uploadFailureMessage(status: number, body: string): string {
   return 'Upload failed'
 }
 
-/** Starts the upload; `abort` cancels it. */
+/**
+ * True in a "View as" tab: its person rides a window.fetch wrapper (window flag
+ * `__nvrViewAsFetch`, admin lib/masquerade-core.ts) that adds the `nvm_` bearer. An
+ * XMLHttpRequest never passes through that wrapper, so it would go out on the admin's own
+ * cookie and the file would belong to the admin.
+ */
+export function viewAsFetchActive(): boolean {
+  if (typeof window === 'undefined') return false
+  return (window as unknown as { __nvrViewAsFetch?: boolean }).__nvrViewAsFetch === true
+}
+
+/** The upload as one fetch (no progress): the View-as tab's path, or where XHR is missing. */
+function startFetchUpload(
+  cfg: UploadConfig,
+  file: File,
+  handlers: UploadHandlers
+): { xhr: { abort: () => void }; abort: () => void } {
+  const ctrl = new AbortController()
+  const fd = new FormData()
+  fd.append('file', file)
+  // `fetch` is read at call time, so a View-as tab gets its wrapped window.fetch.
+  fetch(`${cfg.apiBase}/files/upload`, {
+    method: 'POST',
+    headers: cfg.authHeaders,
+    credentials: cfg.credentials,
+    body: fd,
+    signal: ctrl.signal
+  })
+    .then(async (res) => {
+      const text = await res.text().catch(() => '')
+      if (!res.ok) return handlers.onError(uploadFailureMessage(res.status, text))
+      try {
+        handlers.onProgress?.(1)
+        handlers.onDone((JSON.parse(text) as { data: { id: string } }).data.id)
+      } catch {
+        handlers.onError('Upload failed')
+      }
+    })
+    .catch(() => {
+      // A cancel is the caller's own doing (an aborted XHR reports nothing either).
+      if (!ctrl.signal.aborted) handlers.onError('Upload failed')
+    })
+  const abort = () => ctrl.abort()
+  return { xhr: { abort }, abort }
+}
+
+/**
+ * Starts the upload; `abort` cancels it. With progress (XMLHttpRequest), except in a
+ * "View as" tab, which uploads through fetch so the file belongs to the viewed person.
+ */
 export function startFileUpload(
   cfg: UploadConfig,
   file: File,
   handlers: UploadHandlers
-): { xhr: XMLHttpRequest; abort: () => void } {
+): { xhr: { abort: () => void }; abort: () => void } {
+  if (viewAsFetchActive() || typeof XMLHttpRequest === 'undefined')
+    return startFetchUpload(cfg, file, handlers)
   const xhr = new XMLHttpRequest()
   xhr.upload.onprogress = (e) => {
     if (e.lengthComputable) handlers.onProgress?.(e.loaded / e.total)

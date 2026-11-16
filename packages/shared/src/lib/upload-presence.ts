@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react'
-import { startFileUpload, type UploadConfig } from './upload-file'
+import { startFileUpload, type UploadConfig, viewAsFetchActive } from './upload-file'
 
 /**
  * "Beth is uploading quote.pdf (60%)" (realtime #282, round 9 item 9).
@@ -58,7 +58,7 @@ export function reportUploadState(d: Omit<UploadStateDetail, 'state'>): void {
  */
 export function progressUploadAllowed(): boolean {
   if (typeof window === 'undefined' || typeof XMLHttpRequest === 'undefined') return false
-  return (window as unknown as { __nvrViewAsFetch?: boolean }).__nvrViewAsFetch !== true
+  return !viewAsFetchActive()
 }
 
 /**

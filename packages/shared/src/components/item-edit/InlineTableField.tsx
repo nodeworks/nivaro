@@ -261,6 +261,7 @@ import {
 import { RowWatchButton } from './RowWatchButton'
 import { RuleProvenanceChip } from './RuleProvenancePopover'
 import {
+  cleanLineLabel,
   type LineRemovedBy,
   nextLineAfter,
   restorableLine,
@@ -7691,7 +7692,8 @@ export function InlineTableField({
     // otherwise reduce a perfectly good "2026" to "#6423129".
     const tmpl = ownCollectionMeta?.display_template
     if (tmpl) {
-      const rendered = applyDisplayTemplate(tmpl, row).trim()
+      // An empty template part leaves bare separators ("Line 1 · · Line 1", "· Line"): drop them.
+      const rendered = cleanLineLabel(applyDisplayTemplate(tmpl, row))
       if (rendered && rendered !== '-' && rendered !== String(row.id ?? ''))
         return rendered.length > 60 ? `${rendered.slice(0, 60)}…` : rendered
     }

@@ -22,6 +22,25 @@ vi.mock('../../../services/owner-matrix-versions.js', () => ({
   })
 }))
 const state = vi.hoisted(() => ({ hash: 'a'.repeat(64), applied: 0 }))
+// The announcement open screens hear (queue Owners row, owner chips, coverage).
+const live = vi.hoisted(() => ({ order: [] as string[], announced: [] as unknown[] }))
+vi.mock('../../../services/owner-change-live.js', () => ({
+  ownerChangeBaseline: vi.fn(async () => {
+    live.order.push('baseline')
+    return 0
+  }),
+  announceOwnerChange: vi.fn((scope: unknown) => {
+    live.order.push('announce')
+    live.announced.push(scope)
+  })
+}))
+vi.mock('../../../db/index.js', () => ({
+  db: () => ({
+    where: () => ({
+      select: async () => [{ collection: 'requests' }, { collection: 'requests' }]
+    })
+  })
+}))
 vi.mock('../../../services/owner-matrix-sheet-db.js', async () => {
   const { fixtureContext: fx } = await import('../../fixtures/owner-matrix-sheet.js')
   class OwnerSheetStaleError extends Error {}
@@ -31,6 +50,7 @@ vi.mock('../../../services/owner-matrix-sheet-db.js', async () => {
       id === 'MISSING' ? null : { ...fx({ matrixHash: state.hash }), lookUp: async () => {} }
     ),
     applyOwnerSheetOps: vi.fn(async () => {
+      live.order.push('apply')
       state.applied++
       return {
         groups_added: 0,
@@ -85,6 +105,8 @@ beforeEach(() => {
   state.hash = 'a'.repeat(64)
   state.applied = 0
   versions.calls = 0
+  live.order = []
+  live.announced = []
 })
 
 describe('owner matrix spreadsheet routes', () => {
@@ -140,6 +162,10 @@ describe('owner matrix spreadsheet routes', () => {
     expect(res.json().data).toMatchObject({ applied: true, version: 7, groups_changed: 1 })
     expect(versions.calls).toBe(1)
     expect(state.applied).toBe(1)
+    // Open owners are remembered before the write, and the change is announced after it,
+    // scoped to the pipeline's bound collections.
+    expect(live.order).toEqual(['baseline', 'apply', 'announce'])
+    expect(live.announced).toEqual([{ collections: ['requests'], reason: 'owner-matrix-sheet' }])
   })
 
   it('stale apply: the matrix changed since the preview → 409 with the fresh preview', async () => {
@@ -162,6 +188,7 @@ describe('owner matrix spreadsheet routes', () => {
     expect(res.json().data.plan_hash).not.toBe(hash)
     expect(state.applied).toBe(0)
     expect(versions.calls).toBe(0)
+    expect(live.announced).toEqual([]) // nothing changed: nothing announced
   })
 
   it('apply refuses a file with problems, and needs a preview hash', async () => {

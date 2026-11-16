@@ -53,12 +53,13 @@ export function RemovedLineNote({
       role='status'
       className='nvr-expand-in flex items-start gap-2.5 rounded-lg border border-slate-200 bg-slate-50 py-2 pr-1.5 pl-3 text-[11.5px] text-slate-700 dark:border-border dark:bg-muted/40 dark:text-slate-200'
     >
-      <span
-        aria-hidden
-        className='mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400 dark:bg-slate-500'
-      />
-      <div className='flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5'>
+      <div className='flex min-h-6 min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5'>
         <p className='min-w-0 leading-snug'>
+          {/* Inline, so it sits on the words' first line however the row wraps. */}
+          <span
+            aria-hidden
+            className='mr-2 inline-block h-1.5 w-1.5 rounded-full bg-slate-400 align-middle dark:bg-slate-500'
+          />
           <span className='font-medium'>{removedLineText(state.by, selfId)}</span>
           {details.map((d) => (
             <span key={d} className='text-slate-500 dark:text-slate-400'>

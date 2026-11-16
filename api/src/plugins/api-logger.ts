@@ -440,7 +440,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       ip: clientIp(req as unknown as { headers: Record<string, unknown>; ip: string }),
       user_agent: typeof ua === 'string' ? ua.slice(0, 300) : null,
       error: (req as unknown as { __nvrErr?: string }).__nvrErr ?? null,
-      query: mark < 0 ? null : maskQueryString(rawUrl.slice(mark + 1)),
+      query: mark < 0 ? null : maskQueryString(rawUrl.slice(mark + 1), path),
       request_body: captureRequestBody(
         req as unknown as {
           method: string

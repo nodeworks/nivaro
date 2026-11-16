@@ -49,6 +49,9 @@ async function app(opts: { trustProxy?: boolean } = { trustProxy: true }) {
     return { data: {} }
   })
   a.get('/share/:token', async () => 'page')
+  a.get('/api/dashboard-links/public/:token', async () => ({ data: {} }))
+  a.get('/api/teams/connect', async () => 'page')
+  a.get('/api/help-videos/:id/stream', async () => 'video')
   await a.ready()
   return a
 }
@@ -104,5 +107,25 @@ describe('public pages', () => {
     })
     await a.close()
     expect(vi.mocked(notePublicHit).mock.calls[0][0]).toMatchObject({ ip: '127.0.0.1' })
+  })
+})
+
+describe('link tokens in the stored row (follow-ups 2026-11-15)', () => {
+  it('masks a public dashboard token in the path and link tokens in the query', async () => {
+    const a = await app()
+    await a.inject({ method: 'GET', url: '/api/dashboard-links/public/Zx81kQp0aLmN3vB7?w=1' })
+    await a.inject({ method: 'GET', url: '/api/teams/connect?t=Zx81kQp0aLmN3vB7' })
+    await a.inject({ method: 'GET', url: '/api/help-videos/v1/stream?st=Zx81kQp0aLmN3vB7' })
+    await a.close()
+    expect(inserted).toHaveLength(3)
+    for (const row of inserted) {
+      expect(JSON.stringify(row)).not.toContain('Zx81kQp0aLmN3vB7')
+    }
+    expect(inserted[0]).toMatchObject({
+      path: `/api/dashboard-links/public/${MASK}`,
+      query: 'w=1'
+    })
+    expect(inserted[1]).toMatchObject({ path: '/api/teams/connect', query: `t=${MASK}` })
+    expect(inserted[2]).toMatchObject({ query: `st=${MASK}` })
   })
 })

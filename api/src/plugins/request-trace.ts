@@ -12,7 +12,7 @@ import {
   markSerializeStart,
   setWideTables
 } from '../services/request-trace.js'
-import { maskUrlQuery } from '../services/secret-mask.js'
+import { maskUrlPath, maskUrlQuery } from '../services/secret-mask.js'
 import { flushTraceExport, setTraceExportInstance } from '../services/trace-export.js'
 import {
   attachInflightQueries,
@@ -91,7 +91,9 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
       clearTrace()
       return
     }
-    beginTrace(path, req, req.id)
+    // The trace's url hint reaches the trace ring, the Traffic Map and the OTLP export: a link
+    // token riding the path (/api/dashboard-links/public/<token>…) is masked first.
+    beginTrace(maskUrlPath(path), req, req.id)
     // The trace id IS the request id: the API log row, the Traffic Map events, the trace ring
     // and the response header all carry it, so one id joins them.
     req.requestId = currentTraceMeta()?.id
@@ -134,7 +136,7 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
         method: req.method,
         // routerPath collapses ids into the pattern (/api/items/:collection/:id),
         // so traces for the same endpoint group instead of fragmenting per record.
-        route: (req as { routeOptions?: { url?: string } }).routeOptions?.url ?? path,
+        route: (req as { routeOptions?: { url?: string } }).routeOptions?.url ?? maskUrlPath(path),
         // Credentials riding the query (?kiosk=, ?token=…) never reach the trace ring.
         url: maskUrlQuery(req.raw.url ?? req.url).slice(0, 500),
         status: reply.statusCode,

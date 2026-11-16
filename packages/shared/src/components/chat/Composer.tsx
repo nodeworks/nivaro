@@ -59,7 +59,8 @@ interface PendingFile {
   type: string | null
   progress: number
   id: string | null
-  xhr: XMLHttpRequest | null
+  /** Cancels the upload while it runs (an XHR, or a fetch in a View-as tab). */
+  xhr: { abort: () => void } | null
   error: string | null
 }
 

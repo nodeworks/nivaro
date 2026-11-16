@@ -19,6 +19,7 @@
  * seconds, and a failure is counted and dropped. Off in cloud mode (no tenant attribute).
  */
 import { randomBytes } from 'node:crypto'
+import { maskUrlPath } from './secret-mask.js'
 
 const DEFAULT_SAMPLE = 0.02
 const QUEUE_MAX = 2000
@@ -159,7 +160,7 @@ export function buildSpans(
       attributes: [
         str('http.request.method', input.method),
         str('http.route', input.route),
-        str('url.path', input.path.split('?')[0].slice(0, 500)),
+        str('url.path', maskUrlPath(input.path.split('?')[0]).slice(0, 500)),
         int('http.response.status_code', input.status),
         ...(input.user ? [str('enduser.id', input.user)] : []),
         str('nivaro.request_id', input.requestId),
