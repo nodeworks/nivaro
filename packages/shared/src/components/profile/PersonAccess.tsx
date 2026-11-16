@@ -1495,29 +1495,25 @@ export function SessionsCard({ userId }: { userId: string }) {
     hiddenCount > 0 && hiddenCount === bare.length && head.length <= SESSIONS_SHOWN
   const isSelf = sessions.some((s) => s.current)
   const others = sessions.filter((s) => !s.current)
-  // Every browser but this one (or all of them, on someone else's page). Phones keep their
-  // own sign-in, as on the Signed-in phones card.
+  // One request, however many sessions (a busy admin account holds hundreds): on your own page
+  // every other browser and phone (POST /security/my/sessions/sign-out-others keeps this one);
+  // on someone else's, all of theirs (the same call as Admin tools → Sign out everywhere).
   const signOutAll = useMutation({
-    mutationFn: async (prefixes: string[]) => {
-      let failed = 0
-      for (const prefix of prefixes) {
-        try {
-          await client.request(del(`/security/sessions/${prefix}`))
-        } catch {
-          failed++
-        }
-      }
-      return { failed, total: prefixes.length }
-    },
-    onSuccess: ({ failed, total }) => {
+    mutationFn: () =>
+      client.request<{ data: { revoked: number } }>(
+        isSelf
+          ? post('/security/my/sessions/sign-out-others', {})
+          : post(`/security/users/${encodeURIComponent(userId)}/sign-out`, {})
+      ),
+    onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: key })
-      if (failed === 0)
-        toast.success(total === 1 ? 'That browser is signed out' : `${total} browsers signed out`)
-      else toast.error(`${failed} of ${total} browsers could not be signed out. Try again.`)
+      void qc.invalidateQueries({ queryKey: ['nvr-signed-in-devices', userId] })
+      const n = r?.data?.revoked ?? 0
+      toast.success(n === 1 ? '1 sign-in ended' : `${formatNumber(n)} sign-ins ended`)
     },
-    onError: (e) => toastError(e, 'Could not sign those browsers out')
+    onError: (e) => toastError(e, 'Could not sign those out')
   })
-  const allLabel = isSelf ? 'Sign out all other browsers' : 'Sign out all browsers'
+  const allLabel = isSelf ? 'Sign out everywhere else' : 'Sign out everywhere'
   return (
     <SectionCard
       icon={<MonitorSmartphone className='h-4 w-4' />}
@@ -1551,7 +1547,7 @@ export function SessionsCard({ userId }: { userId: string }) {
                 fresh={!quiet && fresh.has(sn.sid_prefix)}
                 pending={
                   (revoke.isPending && revoke.variables === sn.sid_prefix) ||
-                  (signOutAll.isPending && !!signOutAll.variables?.includes(sn.sid_prefix))
+                  (signOutAll.isPending && !sn.current)
                 }
                 onRevoke={() => revoke.mutate(sn.sid_prefix)}
               />
@@ -1586,8 +1582,12 @@ export function SessionsCard({ userId }: { userId: string }) {
                 <span className='ml-auto'>
                   <ConfirmButton
                     title={allLabel}
-                    onConfirm={() => signOutAll.mutate(others.map((o) => o.sid_prefix))}
-                    confirmLabel={`Sign out ${others.length} browsers?`}
+                    onConfirm={() => signOutAll.mutate()}
+                    confirmLabel={
+                      isSelf
+                        ? `Sign out ${formatNumber(others.length)} browsers and other phones?`
+                        : `Sign out all ${formatNumber(others.length)} browsers and phones?`
+                    }
                     disabled={signOutAll.isPending}
                     className='inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 transition-colors hover:border-red-300 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:opacity-40 dark:border-border dark:text-slate-300 dark:hover:border-red-500/40 dark:hover:text-red-400'
                     armedClassName='border-red-300 font-semibold text-red-600 dark:border-red-500/40 dark:text-red-400'
