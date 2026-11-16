@@ -90,7 +90,7 @@ export function SplitLinesButton({
     setBusy(true)
     setRefusal(null)
     // The moved lines leave this grid by this person's own hand: never "changed by others".
-    for (const id of selectedIds) noteOwnWrite(lineCollection, id)
+    for (const id of selectedIds) noteOwnWrite(lineCollection, id, 60_000)
     try {
       const res = await client.request<SplitAnswer>(
         post(lineSplitPath(parentCollection, parentId), {
@@ -99,6 +99,9 @@ export function SplitLinesButton({
         })
       )
       const made = res.data
+      // Again on the answer, held for a minute: the grid re-reads after this and a slow
+      // re-read must still find the note.
+      for (const id of selectedIds) noteOwnWrite(lineCollection, id, 60_000)
       setOpen(false)
       onMoved(selectedIds)
       qc.invalidateQueries({ queryKey: ['o2m-rows', lineCollection, linkField, parentId] })
