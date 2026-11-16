@@ -174,6 +174,9 @@ interface LockPlan {
   childLinks: Map<string, ChildLink[]>
   /** own-row collection → the FK columns that point at any parent (person-held locks) */
   heldLinks: Map<string, ChildLink[]>
+  /** Collections with change proposals on (summary_mode_rules.change_proposals): the
+   *  admin-only sentence points at Propose change. */
+  proposalsOn?: Set<string>
   /** Parents whose lines lock one at a time (summary_mode_rules.line_locks): their
    *  person-held record lock no longer covers their own rows (realtime item 7). */
   lineLockParents?: Set<string>
@@ -241,6 +244,7 @@ async function readPlan(): Promise<LockPlan> {
     .catch(() => [])) as Array<{ collection: string; summary_mode_rules: string | null }>
   const locks = new Map<string, EditLockConfig>()
   const lineLockParents = new Set<string>()
+  const proposalsOn = new Set<string>()
   for (const r of rows) {
     let obj: unknown = null
     try {
@@ -252,6 +256,8 @@ async function readPlan(): Promise<LockPlan> {
     if (lock) locks.set(r.collection, lock)
     if ((obj as { line_locks?: unknown } | null)?.line_locks === true)
       lineLockParents.add(r.collection)
+    if ((obj as { change_proposals?: unknown } | null)?.change_proposals === true)
+      proposalsOn.add(r.collection)
   }
   const rels = (await db('nivaro_relations')
     .whereNotNull('one_collection')
@@ -267,6 +273,7 @@ async function readPlan(): Promise<LockPlan> {
     locks,
     ...links,
     lineLockParents,
+    proposalsOn,
     lineLockChildren: lineLockChildrenOf(links.heldLinks, lineLockParents)
   }
 }
@@ -432,10 +439,14 @@ export async function adminOnlyStatesFor(collection: string): Promise<Set<string
  * actions, which the tier does not lock) — then the sentence says so instead
  * of sending them to Request help for something they can do themselves.
  */
-export function adminOnlyLockMessage(step: string, hasMove: boolean): string {
+export function adminOnlyLockMessage(step: string, hasMove: boolean, proposals = false): string {
+  // Idea 6 review: with proposals on, the way to a field change is Propose change.
+  const ask = proposals
+    ? 'Use Propose change to suggest new values, or Request help for anything else.'
+    : null
   return hasMove
-    ? `This record is at ${step} — only administrators can change its fields. You can still use the actions above; use Request help to ask for any other change.`
-    : `This record is at ${step} — only administrators can change its fields. Use Request help to ask for a change.`
+    ? `This record is at ${step} — only administrators can change its fields. You can still use the actions above; ${ask ? ask.charAt(0).toLowerCase() + ask.slice(1) : 'use Request help to ask for any other change.'}`
+    : `This record is at ${step} — only administrators can change its fields. ${ask ?? 'Use Request help to ask for a change.'}`
 }
 
 /**
@@ -503,7 +514,8 @@ export async function editLockVerdictFor(
         allowed: false,
         message: adminOnlyLockMessage(
           latest.label ?? latest.key,
-          await offersAMove(user, parent, String(parentId), latest)
+          await offersAMove(user, parent, String(parentId), latest),
+          !!(await lockPlan()).proposalsOn?.has(parent)
         ),
         tier: 'admin_only',
         // A FINISHED run (Completed, Canceled) leaves nothing open: putting a finished

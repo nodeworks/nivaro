@@ -29,9 +29,13 @@ export function ProposeChangeButton({
         data-tip='Suggest new values — the owners of this step accept or decline them'
         data-propose-change-button
         onClick={() => setOpen(true)}
-        className='inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-nvr-cyan/50 bg-nvr-cyan/10 px-3 text-sm font-medium text-[#0e7490] shadow-sm transition-colors hover:bg-nvr-cyan/20 dark:text-[#67e8f9]'
+        // Outline like Request help beside it: a tinted fill read as a toggled-on button.
+        className='inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
       >
-        <GitPullRequestArrow className='h-3.5 w-3.5' />
+        <GitPullRequestArrow
+          className='h-3.5 w-3.5 text-[#0e7490] dark:text-[#67e8f9]'
+          aria-hidden
+        />
         Propose change
       </button>
       <ProposeChangeDialog

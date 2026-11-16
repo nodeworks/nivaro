@@ -17,7 +17,12 @@ import { noteOwnWrite } from '../../lib/own-writes'
 import { invalidateRecordRow } from '../../lib/record-loader'
 import { cn, formatRelative } from '../../lib/utils'
 import { ProposalValue } from './ProposalValue'
-import { type ProposalView, proposalsQueryKey, type RecordProposals } from './types'
+import {
+  type ProposalChangeView,
+  type ProposalView,
+  proposalsQueryKey,
+  type RecordProposals
+} from './types'
 
 /** The record's proposals (one read shared by the panel and the Propose button). */
 export function useRecordProposals(collection: string, item: string | null, enabled: boolean) {
@@ -45,14 +50,54 @@ const STATUS_WORD: Record<string, { text: string; cls: string }> = {
   withdrawn: { text: 'Withdrawn', cls: 'bg-slate-500/10 text-slate-600 dark:text-slate-400' }
 }
 
+/**
+ * Old → new per field. While the proposal waits the left column is what the record holds
+ * **Now** (plain, never struck through — nothing has changed yet); once decided it reads
+ * **Before** and the old value is struck. A field that moved since the proposal shows its
+ * current value with what it was when proposed. Under 640 px each change stacks
+ * (Field, then Now, then Proposed) instead of a four-column table.
+ */
 function ChangesTable({ p }: { p: ProposalView }) {
+  const waiting = p.status === 'pending' || p.status === 'accepting'
+  const leftHead = waiting ? 'Now' : 'Before'
+  const left = (c: ProposalChangeView) => {
+    const shown = c.stale && 'now' in c ? c.now : c.from
+    return (
+      <>
+        <span
+          className={cn(!waiting && 'line-through decoration-slate-300 dark:decoration-slate-600')}
+        >
+          <ProposalValue value={shown} kind={c.kind} relation={c.relation} choices={c.choices} />
+        </span>
+        {c.stale && (
+          <span className='mt-0.5 block text-[11px] text-amber-700 dark:text-amber-400'>
+            Was{' '}
+            <ProposalValue value={c.from} kind={c.kind} relation={c.relation} choices={c.choices} />{' '}
+            when proposed
+          </span>
+        )}
+      </>
+    )
+  }
+  const staleMark = (c: ProposalChangeView) =>
+    c.stale && (
+      <span
+        className='mt-0.5 flex items-center gap-1 text-[11px] font-normal text-amber-700 dark:text-amber-400'
+        data-tip='Someone changed this field after the proposal was made'
+      >
+        <AlertTriangle className='h-3 w-3' aria-hidden /> Changed since
+      </span>
+    )
+  const to = (c: ProposalChangeView) => (
+    <ProposalValue value={c.to} kind={c.kind} relation={c.relation} choices={c.choices} />
+  )
   return (
     <div className='overflow-hidden rounded-md border border-slate-200 dark:border-border'>
-      <table className='w-full table-fixed text-[12.5px]'>
+      <table className='hidden w-full table-fixed text-[12.5px] sm:table'>
         <thead className='bg-slate-50 text-left text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:bg-muted/40 dark:text-muted-foreground'>
           <tr>
             <th className='w-[30%] px-3 py-1.5 font-medium'>Field</th>
-            <th className='w-[30%] px-3 py-1.5 font-medium'>Before</th>
+            <th className='w-[30%] px-3 py-1.5 font-medium'>{leftHead}</th>
             <th className='w-5' aria-hidden />
             <th className='px-3 py-1.5 font-medium'>Proposed</th>
           </tr>
@@ -62,38 +107,37 @@ function ChangesTable({ p }: { p: ProposalView }) {
             <tr key={c.field} data-proposal-change={c.field} className='align-top'>
               <td className='px-3 py-2 font-medium text-slate-700 dark:text-slate-200'>
                 <span className='break-words'>{c.label}</span>
-                {c.stale && (
-                  <span
-                    className='mt-0.5 flex items-center gap-1 text-[11px] font-normal text-amber-700 dark:text-amber-400'
-                    data-tip='Someone changed this field after the proposal was made'
-                  >
-                    <AlertTriangle className='h-3 w-3' /> Changed since
-                  </span>
-                )}
+                {staleMark(c)}
               </td>
-              <td className='px-3 py-2 text-slate-500 line-through decoration-slate-300 dark:text-slate-400 dark:decoration-slate-600'>
-                <ProposalValue
-                  value={c.from}
-                  kind={c.kind}
-                  relation={c.relation}
-                  choices={c.choices}
-                />
-              </td>
+              <td className='px-3 py-2 text-slate-600 dark:text-slate-400'>{left(c)}</td>
               <td className='py-2 text-slate-400' aria-hidden>
                 <ArrowRight className='mt-0.5 h-3.5 w-3.5' />
               </td>
-              <td className='px-3 py-2 font-medium text-slate-900 dark:text-slate-50'>
-                <ProposalValue
-                  value={c.to}
-                  kind={c.kind}
-                  relation={c.relation}
-                  choices={c.choices}
-                />
-              </td>
+              <td className='px-3 py-2 font-medium text-slate-900 dark:text-slate-50'>{to(c)}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      <ul className='divide-y divide-slate-100 text-[12.5px] sm:hidden dark:divide-border'>
+        {p.changes.map((c) => (
+          <li key={c.field} data-proposal-change-stacked={c.field} className='px-3 py-2.5'>
+            <p className='font-medium text-slate-800 dark:text-slate-100'>
+              <span className='break-words'>{c.label}</span>
+              {staleMark(c)}
+            </p>
+            <dl className='mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1'>
+              <dt className='text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
+                {leftHead}
+              </dt>
+              <dd className='min-w-0 text-slate-600 dark:text-slate-400'>{left(c)}</dd>
+              <dt className='text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
+                Proposed
+              </dt>
+              <dd className='min-w-0 font-medium text-slate-900 dark:text-slate-50'>{to(c)}</dd>
+            </dl>
+          </li>
+        ))}
+      </ul>
       {p.hidden_fields > 0 && (
         <p className='border-t border-slate-100 px-3 py-1.5 text-[11.5px] text-slate-500 dark:border-border dark:text-muted-foreground'>
           {p.hidden_fields === 1 ? 'One more field' : `${p.hidden_fields} more fields`} you can’t

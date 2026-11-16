@@ -16,6 +16,7 @@ import {
   CommandList
 } from '../ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
+import { Input } from '../ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { ProposalValue } from './ProposalValue'
@@ -96,23 +97,22 @@ function ProposalInput({
         />
       )
     case 'date':
+      // The record form's own date control (FieldRenderer: ui/Input type date).
       return (
-        <input
+        <Input
           type='date'
           aria-label={label}
           value={value == null ? '' : String(value).slice(0, 10)}
           onChange={(e) => onChange(e.target.value)}
-          className={inputCls}
         />
       )
     case 'datetime':
       return (
-        <input
+        <Input
           type='datetime-local'
           aria-label={label}
           value={value == null ? '' : String(value).slice(0, 16)}
           onChange={(e) => onChange(e.target.value)}
-          className={inputCls}
         />
       )
     case 'number':
@@ -149,6 +149,28 @@ function startValue(f: ProposableField): unknown {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
   }
   return v
+}
+
+/**
+ * The typed value is what the record already holds ("Same as now"): such a row is not a
+ * change — it is not sent and does not enable Send. Exported for tests.
+ */
+export function sameAsNow(f: ProposableField, typed: unknown): boolean {
+  const now = f.current
+  const blank = (v: unknown) => v == null || v === ''
+  if (blank(typed) || blank(now)) return blank(typed) && blank(now)
+  if (f.kind === 'date') return String(typed).slice(0, 10) === String(now).slice(0, 10)
+  if (f.kind === 'datetime') {
+    const a = new Date(String(typed)).getTime()
+    const b = new Date(String(now)).getTime()
+    return !Number.isNaN(a) && Math.floor(a / 60_000) === Math.floor(b / 60_000)
+  }
+  if (f.kind === 'number') return Number(typed) === Number(now)
+  if (f.kind === 'boolean') {
+    const t = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true'
+    return t(typed) === t(now)
+  }
+  return String(typed).trim() === String(now).trim()
 }
 
 /** A typed value as sent: a local date-time goes out as an instant. */
@@ -216,11 +238,17 @@ export function ProposeChangeDialog({
     })
   }
 
+  // Rows whose new value is what the record holds now are not changes.
+  const changed = picked.filter((k) => {
+    const f = byName.get(k)
+    return !!f && !sameAsNow(f, values[k])
+  })
+
   const send = useMutation({
     mutationFn: () =>
       client.request<{ data: { id: number } }>(
         post(`/change-proposals/record/${collection}/${encodeURIComponent(item)}`, {
-          values: Object.fromEntries(picked.map((k) => [k, outgoing(byName.get(k), values[k])])),
+          values: Object.fromEntries(changed.map((k) => [k, outgoing(byName.get(k), values[k])])),
           reason: reason.trim()
         })
       ),
@@ -236,7 +264,7 @@ export function ProposeChangeDialog({
     }
   })
 
-  const canSend = picked.length > 0 && reason.trim().length >= 3 && !send.isPending
+  const canSend = changed.length > 0 && reason.trim().length >= 3 && !send.isPending
 
   return (
     <Dialog
@@ -309,6 +337,14 @@ export function ProposeChangeDialog({
                             value={values[name]}
                             onChange={(v) => setValues((cur) => ({ ...cur, [name]: v }))}
                           />
+                          {!changed.includes(name) && (
+                            <p
+                              className='mt-1 text-[11.5px] text-slate-500 dark:text-slate-400'
+                              data-proposal-same
+                            >
+                              Same as now — not part of the proposal
+                            </p>
+                          )}
                         </div>
                       </div>
                     </li>
