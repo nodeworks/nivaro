@@ -192,9 +192,11 @@ export function RemoteConflictNotice({
       data-remote-conflict
       className='nvr-expand-in rounded-md border border-amber-200/80 bg-amber-50/60 px-2 py-1.5 text-[11.5px] text-slate-700 dark:border-amber-400/25 dark:bg-amber-400/[0.06] dark:text-slate-200'
     >
-      <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
-        <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-400' />
-        <span className='min-w-0 flex-1'>
+      {/* The sentence keeps a readable width (16rem basis): in a narrow field column the
+          buttons drop to their own row instead of squeezing it to three words a line. */}
+      <div className='flex flex-wrap items-start gap-x-2 gap-y-1.5'>
+        <span className='mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-400' />
+        <span className='min-w-0 flex-1 basis-[16rem] self-center'>
           <span className='font-medium'>{change.by ?? 'Someone'}</span> saved{' '}
           <span
             className='font-medium text-slate-900 dark:text-slate-50'
