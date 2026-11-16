@@ -47,6 +47,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Tree Permissions** — subtree-scoped role rules (allow/deny per action) that restrict reads, updates, and deletes below a node
 - **At-Risk Flagging** — per-collection risk rules with cross-field `{{field}}` expressions; red/amber row highlighting and an "At risk" filter chip
 - **Queue SLA Timers** — live green/amber/red SLA countdown column in the collection browser for workflow-bound items
+- **Create in a step** — one create call (GraphQL `start_state`, REST `$start_state`) starts a record's pipeline in a later step; administrators and roles the binding allows, refused before anything is written
 - **Conditional Branching** — pipeline transitions carry field conditions; only matching paths are offered and the server revalidates on execute
 - **Multi-collection Hierarchy** — define named trees spanning multiple collections, one per level, linked by FK columns; each level keeps its own independent schema, workflows, and RBAC
 - **Test Suite** — Playwright E2E with WCAG accessibility checks (axe-core), Vitest API integration tests, and Vitest + Testing Library admin unit tests

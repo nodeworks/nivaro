@@ -2,6 +2,7 @@ import type { HookAction, HookTiming } from '@nivaro/extension-kit'
 import type { FastifyRequest } from 'fastify'
 import type { Database } from '../db/index.js'
 import { noteExtensionMs, span } from '../services/request-trace.js'
+import type { StartStateRun } from '../services/start-state.js'
 import type { User } from '../types.js'
 
 export type { HookAction, HookTiming } from '@nivaro/extension-kit'
@@ -19,6 +20,12 @@ export interface HookContext {
   /** True while a write is being rehearsed (`dry_run`): a hook may read and
    *  shape the payload, and must not write, send or notify. */
   dryRun?: boolean
+  /** Create, before-hooks: the core reads `payload.$start_state` after the
+   *  hooks, so a hook may name the step the record starts in (start-state.ts). */
+  acceptsStartState?: boolean
+  /** Create, after-hooks: the create named a start step that passed the gate —
+   *  pipeline-autostart starts the instance there and fills in `instanceId`. */
+  startState?: StartStateRun
   user?: User
   database: Database
   req?: FastifyRequest

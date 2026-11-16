@@ -8,6 +8,8 @@ const state = vi.hoisted(() => ({
   binding: null as Record<string, unknown> | null,
   startState: null as Record<string, unknown> | null,
   inserted: [] as unknown[],
+  existing: undefined as Record<string, unknown> | undefined,
+  deferred: [] as string[],
   captured: null as null | ((ctx: unknown) => Promise<void> | void)
 }))
 
@@ -20,16 +22,20 @@ vi.mock('../../../hooks/registry.js', () => ({
 }))
 // Effects run at once (no unit of work in a test).
 vi.mock('../../../services/unit-of-work.js', () => ({
-  deferEffect: (_l: string, run: () => Promise<unknown>) => run()
+  deferEffect: (l: string, run: () => Promise<unknown>) => {
+    state.deferred.push(l)
+    return run()
+  }
 }))
 const writeStartHistory = vi.hoisted(() => vi.fn(async () => {}))
 vi.mock('../../../services/instance-start.js', () => ({ writeStartHistory }))
 const trackError = vi.hoisted(() => vi.fn(async (_issue: Record<string, unknown>) => {}))
 vi.mock('../../../services/error-tracking.js', () => ({ trackError }))
 const emitWorkflowStartEvent = vi.hoisted(() => vi.fn(async () => {}))
+const syncStateField = vi.hoisted(() => vi.fn(async () => {}))
 vi.mock('../../../services/workflow-transitions.js', () => ({
   emitWorkflowStartEvent,
-  syncStateField: vi.fn(async () => {})
+  syncStateField
 }))
 vi.mock('../../../db/index.js', () => ({
   db: (table: string) => {
@@ -41,7 +47,9 @@ vi.mock('../../../db/index.js', () => ({
         ? state.binding
         : table === 'nivaro_workflow_states'
           ? state.startState
-          : undefined
+          : table === 'nivaro_workflow_instances'
+            ? state.existing
+            : undefined
     c.insert = async (row: unknown) => {
       state.inserted.push(row)
     }
@@ -51,8 +59,10 @@ vi.mock('../../../db/index.js', () => ({
 
 import {
   autostartSilenceReason,
+  chosenStartSilenceReason,
   registerPipelineAutostartHooks
 } from '../../../hooks/pipeline-autostart.js'
+import type { StartStateRun } from '../../../services/start-state.js'
 
 const PERSON = { id: 'U-MIKE', email: 'mike@x.test', role: 'R' }
 const req = (url = '/api/items/inventory_request', authMethod: string | null = 'session') => ({
@@ -69,8 +79,11 @@ async function create(ctx: Record<string, unknown>) {
 beforeEach(() => {
   emitWorkflowStartEvent.mockClear()
   writeStartHistory.mockClear()
+  syncStateField.mockClear()
   trackError.mockClear()
   state.inserted.length = 0
+  state.deferred.length = 0
+  state.existing = undefined
   state.binding = {
     collection: 'inventory_request',
     template: 'T-IR',
@@ -207,5 +220,123 @@ describe('autostartSilenceReason', () => {
         later
       )
     ).toBeNull()
+  })
+})
+
+// Create in a chosen step (2026-11-16): `$start_state` / GraphQL `start_state`
+// passed the gate in createOne, which hands the resolved step to the hook.
+describe('a create that names its start step', () => {
+  const run = (over: Partial<StartStateRun['state']> = {}, stateField: string | null = null) =>
+    ({
+      template: 'T-WF',
+      stateField,
+      state: {
+        id: 'S-WOMA',
+        key: 'waiting_on_manager_approval',
+        label: 'Waiting on Manager Approval',
+        external_label: null,
+        color: null,
+        is_initial: false,
+        is_terminal: false,
+        ...over
+      }
+    }) as StartStateRun
+
+  it('starts ONE instance in that step, in the request, whatever auto_start says', async () => {
+    state.binding = { collection: 'workflows', template: 'T-WF', auto_start: false }
+    const r = run()
+    await create({ collection: 'workflows', user: PERSON, req: req(), startState: r })
+    expect(state.inserted).toHaveLength(1)
+    expect(state.inserted[0]).toMatchObject({
+      template: 'T-WF',
+      collection: 'workflows',
+      item: '37653',
+      current_state: 'S-WOMA',
+      completed_at: null
+    })
+    // Not deferred: the instance exists before the create answers.
+    expect(state.deferred).not.toContain('pipeline-autostart')
+    expect(r.instanceId).toBe((state.inserted[0] as { id: string }).id)
+    expect(r.startedAt).toBeInstanceOf(Date)
+  })
+
+  it('writes one start history row "Created in <label>" with the caller as actor', async () => {
+    await create({ collection: 'workflows', user: PERSON, req: req(), startState: run() })
+    expect(writeStartHistory).toHaveBeenCalledTimes(1)
+    expect(writeStartHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stateId: 'S-WOMA',
+        userId: 'U-MIKE',
+        comment: 'Created in Waiting on Manager Approval',
+        origin: 'person'
+      })
+    )
+  })
+
+  it('an integration token is the integration, not a person', async () => {
+    await create({
+      collection: 'workflows',
+      user: PERSON,
+      req: req('/api/graphql', 'token'),
+      startState: run()
+    })
+    expect(writeStartHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ origin: 'integration' })
+    )
+  })
+
+  it('sets completed_at when the step is terminal', async () => {
+    await create({ user: PERSON, req: req(), startState: run({ is_terminal: true }) })
+    expect((state.inserted[0] as { completed_at: unknown }).completed_at).toBeInstanceOf(Date)
+  })
+
+  it('never starts a second instance', async () => {
+    state.existing = { id: 'I-OLD' }
+    const r = run()
+    await create({ user: PERSON, req: req(), startState: r })
+    expect(state.inserted).toHaveLength(0)
+    expect(writeStartHistory).not.toHaveBeenCalled()
+    expect(r.instanceId).toBeUndefined()
+  })
+
+  it('announces the step to its owners after the unit — integrations included', async () => {
+    await create({ user: PERSON, req: req('/api/graphql', 'token'), startState: run() })
+    expect(state.deferred).toContain('pipeline-start-state:announce')
+    await vi.waitFor(() => expect(emitWorkflowStartEvent).toHaveBeenCalled())
+    expect(emitWorkflowStartEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stateId: 'S-WOMA',
+        template: 'T-WF',
+        label: 'Created in Waiting on Manager Approval'
+      })
+    )
+  })
+
+  it('mirrors the state field the way a move does', async () => {
+    await create({ user: PERSON, req: req(), startState: run({}, 'status') })
+    expect(syncStateField).toHaveBeenCalledWith(
+      'inventory_request',
+      '37653',
+      expect.objectContaining({ key: 'waiting_on_manager_approval' })
+    )
+  })
+
+  it('a failed history write is filed, never thrown', async () => {
+    writeStartHistory.mockRejectedValueOnce(new Error('boom'))
+    await expect(create({ user: PERSON, req: req(), startState: run() })).resolves.toBeUndefined()
+    expect(trackError).toHaveBeenCalledTimes(1)
+    expect(trackError.mock.calls[0][0].severity).toBe('high')
+  })
+
+  it('chosenStartSilenceReason: quiet only for rehearsals, the initial step and bulk loads', () => {
+    const later = { is_initial: false }
+    expect(chosenStartSilenceReason({ req: req('/api/graphql', 'token') as any }, later)).toBeNull()
+    expect(chosenStartSilenceReason({ req: req() as any, dryRun: true }, later)).toBe('dry-run')
+    expect(chosenStartSilenceReason({ req: req() as any }, { is_initial: true })).toBe(
+      'initial-state'
+    )
+    expect(chosenStartSilenceReason({ req: req('/api/imports/run') as any }, later)).toBe(
+      'bulk-create'
+    )
   })
 })

@@ -275,6 +275,10 @@ export type PipelineBinding = {
   auto_start: boolean
   auto_start_state: string | null
   owner_fallback_field: string | null
+  /** Migration 531: JSON role ids that may create a record in a later step. */
+  start_state_roles?: string | null
+  /** Migration 531: JSON state keys those roles may pick; empty = any. */
+  start_state_allowed?: string | null
   dimensions?: PipelineOwnerDimension[]
 }
 

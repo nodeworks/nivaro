@@ -80,6 +80,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Skeleton } from '../ui/skeleton'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
+import { BindingStartStateSettings } from './BindingStartStateSettings'
 import { FieldPicker, type PickedField } from './FieldPicker'
 import { OwnerMatrix } from './OwnerMatrix'
 import { OwnerMatrixSheetActions } from './OwnerMatrixSheet'
@@ -3509,6 +3510,8 @@ export function PipelineEditorView({
         auto_start?: boolean
         auto_start_state?: string | null
         owner_fallback_field?: string | null
+        start_state_roles?: string[]
+        start_state_allowed?: string[]
       }
     }) => client.request(patch(`/pipelines/bindings/${bindingId}`, body)),
     onSuccess: () => invalidate(),
@@ -4391,6 +4394,18 @@ export function PipelineEditorView({
                             </div>
                           )}
                         </div>
+                        <BindingStartStateSettings
+                          collection={b.collection}
+                          roles={b.start_state_roles}
+                          allowed={b.start_state_allowed}
+                          states={(templateData?.states ?? []).map((s) => ({
+                            id: String(s.id),
+                            key: s.key,
+                            label: s.label,
+                            is_initial: !!s.is_initial
+                          }))}
+                          onSave={(body) => updateBinding.mutate({ bindingId: b.id, body })}
+                        />
                       </div>
                       <div className='flex items-center gap-1 shrink-0'>
                         <button

@@ -337,7 +337,6 @@ import { collabLiveConflicts } from './sections/live-conflicts.js'
 import { liveEditingDocs } from './sections/live-editing.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { liveFormsDocs } from './sections/live-forms.js'
-import { liveSavesDocs } from './sections/live-saves.js'
 import { collabLiveGroupsDrags } from './sections/live-groups-drags.js'
 import { collabLiveConfig, collabLiveCounts, collabLiveLists } from './sections/live-lists.js'
 import {
@@ -357,6 +356,7 @@ import {
   collabLiveRecords,
   collabPresence
 } from './sections/live-records.js'
+import { liveSavesDocs } from './sections/live-saves.js'
 import { liveScreensDocs } from './sections/live-screens.js'
 import { liveSelectionDocs } from './sections/live-selection.js'
 import { collabLiveSetting } from './sections/live-setting.js'
@@ -592,6 +592,7 @@ import {
   pipelineOwnerMatrix,
   pipelineOwnerOpened,
   pipelineSpecificity,
+  pipelineStartState,
   userWorkflows,
   workflowsApi
 } from './sections/workflows-pipelines.js'
@@ -649,6 +650,7 @@ export const navSections: NavGroup[] = [
       pipelineSimulatorDocs,
       pipelineHealthDocs,
       pipelineOverview,
+      pipelineStartState,
       pipelineDimensions,
       pipelineOwnerMatrix,
       pipelineNoOwnerSteps,

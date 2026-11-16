@@ -317,6 +317,10 @@ const DeleteManyResponseType = new GraphQLObjectType({
 
 // ─── Error conversion ─────────────────────────────────────────────────────────
 
+/** The `start_state` argument of the create mutations (services/start-state.ts). */
+const START_STATE_ARG_DOC =
+  "Start the record's pipeline in this step (state key; the state id works too) instead of the initial step. Administrators, or roles the pipeline binding allows. Not a transition: no transition actions run."
+
 const STATUS_CODES_GQL: Record<number, string> = {
   400: 'BAD_REQUEST',
   401: 'UNAUTHENTICATED',
@@ -1619,15 +1623,23 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
 
     mutationFields[`create_${name}`] = {
       type: itemType,
-      args: { data: { type: new GraphQLNonNull(GraphQLJSON) } },
-      resolve: async (_root, { data }: { data: Record<string, unknown> }, ctx: GQLContext) => {
+      args: {
+        data: { type: new GraphQLNonNull(GraphQLJSON) },
+        start_state: { type: GraphQLString, description: START_STATE_ARG_DOC }
+      },
+      resolve: async (
+        _root,
+        { data, start_state }: { data: Record<string, unknown>; start_state?: string | null },
+        ctx: GQLContext
+      ) => {
         if (!ctx.user)
           throw Object.assign(new Error('Unauthorized'), {
             extensions: { code: 'UNAUTHENTICATED' }
           })
         try {
           const item = await createOne(ctx.user, name, data, ctx.req, undefined, {
-            callerPayload: true
+            callerPayload: true,
+            ...(start_state != null ? { startState: start_state } : {})
           })
           const upsert = upsertInfoOf(item)
           if (upsert) ctx.upserts?.push({ collection: name, ...upsert })
@@ -1648,14 +1660,26 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     mutationFields[`create_${name}_dry_run`] = {
       type: GraphQLJSON,
       description: `What creating a ${col.singular ?? name} record with this data would do: the record as it would be stored, what the server would fill, and the refusal if there is one. Nothing is stored and no number is taken.`,
-      args: { data: { type: new GraphQLNonNull(GraphQLJSON) } },
-      resolve: async (_root, { data }: { data: Record<string, unknown> }, ctx: GQLContext) => {
+      args: {
+        data: { type: new GraphQLNonNull(GraphQLJSON) },
+        start_state: { type: GraphQLString, description: START_STATE_ARG_DOC }
+      },
+      resolve: async (
+        _root,
+        { data, start_state }: { data: Record<string, unknown>; start_state?: string | null },
+        ctx: GQLContext
+      ) => {
         if (!ctx.user)
           throw Object.assign(new Error('Unauthorized'), {
             extensions: { code: 'UNAUTHENTICATED' }
           })
         try {
-          return await rehearseCreate(ctx.user, name, data, ctx.req)
+          return await rehearseCreate(
+            ctx.user,
+            name,
+            start_state != null ? { ...data, $start_state: start_state } : data,
+            ctx.req
+          )
         } catch (e) {
           wrapError(e)
         }
@@ -1724,8 +1748,18 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     // purpose: line rows read earlier rows (line numbering, rollups).
     mutationFields[`create_${name}_items`] = {
       type: new GraphQLList(itemType),
-      args: { data: { type: new GraphQLNonNull(GraphQLJSON) } },
-      resolve: async (_root, { data }: { data: unknown }, ctx: GQLContext) => {
+      args: {
+        data: { type: new GraphQLNonNull(GraphQLJSON) },
+        start_state: {
+          type: GraphQLString,
+          description: `${START_STATE_ARG_DOC} Applies to every row; a row's own \`$start_state\` wins.`
+        }
+      },
+      resolve: async (
+        _root,
+        { data, start_state }: { data: unknown; start_state?: string | null },
+        ctx: GQLContext
+      ) => {
         if (!ctx.user)
           throw Object.assign(new Error('Unauthorized'), {
             extensions: { code: 'UNAUTHENTICATED' }
@@ -1736,6 +1770,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           const results: unknown[] = []
           try {
             for (const row of rows) {
+              const own = (row as Record<string, unknown> | null)?.$start_state
               const item = await createOne(
                 user,
                 name,
@@ -1743,7 +1778,8 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                 ctx.req,
                 undefined,
                 {
-                  callerPayload: true
+                  callerPayload: true,
+                  ...(start_state != null && own == null ? { startState: start_state } : {})
                 }
               )
               const upsert = upsertInfoOf(item)
