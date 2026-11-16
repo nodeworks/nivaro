@@ -353,6 +353,12 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
   )
 }
 
+/** A line's label from a display template with an empty part ("· Line 1"): the dangling
+ *  separators go, so a list reads "Line 1, Line 2". */
+export function tidyRowLabel(label: string): string {
+  return label.replace(/^[\s·•|,–—-]+|[\s·•|,–—-]+$/g, '').trim() || label
+}
+
 /** The collection's own name for a row; nothing when only its raw key is known. */
 function collectionWord(labels: Record<string, string> | undefined, key: string): string | null {
   const l = labels?.[key]?.trim()
@@ -570,7 +576,7 @@ function ReadyRow({
                     {' — '}
                     {rows
                       .slice(0, 3)
-                      .map((r) => r.label)
+                      .map((r) => tidyRowLabel(r.label))
                       .join(', ')}
                     {rows.length > 3 ? ` and ${rows.length - 3} more` : ''}
                   </span>
