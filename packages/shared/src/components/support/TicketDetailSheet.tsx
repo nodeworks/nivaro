@@ -155,7 +155,7 @@ export function TicketDetailSheet({
       <SheetContent
         side='right'
         ref={fadeRef}
-        className={`flex max-w-[96vw] flex-col gap-0 p-0 transition-[width] duration-300 ease-out dark:bg-card ${wide ? 'w-[min(1280px,96vw)] sm:max-w-[min(1280px,96vw)]' : 'w-[560px] sm:max-w-[560px]'}`}
+        className={`flex max-w-[96vw] flex-col gap-0 p-0 outline-none focus:outline-none transition-[width] duration-300 ease-out dark:bg-card ${wide ? 'w-[min(1280px,96vw)] sm:max-w-[min(1280px,96vw)]' : 'w-[560px] sm:max-w-[560px]'}`}
         data-support-ticket={ticketId ?? ''}
         // Opening focuses the sheet itself, not its close button: the button's ring is for
         // keyboard focus only (a Tab reaches it), never a mouse-opened sheet's first paint.
