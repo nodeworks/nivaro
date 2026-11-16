@@ -27,7 +27,7 @@ import {
 import {
   assertRecordCollection,
   CollectionRefusedError,
-  contextKeys,
+  contextCollections,
   createTemplate,
   deleteTemplate,
   RecordNotFoundError,
@@ -241,12 +241,15 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
     const row = await loadOr404(req.params.key, reply)
     if (!row) return reply
     const def = registeredDef(row.key)
+    // key → the collection its rows come from (the editor's "From each <item>" picker)
+    const contextFrom = await contextCollections(row)
     return {
       data: {
         ...(await withPeopleNames(row)),
         status: statusOf(row),
         used_by: await usedBy(row.key),
-        context_keys: await contextKeys(row),
+        context_keys: Object.keys(contextFrom).sort((a, b) => a.localeCompare(b)),
+        context_collections: contextFrom,
         newer_default: hasNewerDefault(row),
         has_default: !!def,
         ...(def

@@ -536,6 +536,11 @@ describe('payload template routes', () => {
     if (row) row.lookups = { shipping_location: { collection: 'locations' } }
     const res = await call('GET', '/mwf-ir-order')
     expect(res.body.data.context_keys).toEqual(['mwf_queue', 'shipping_location'])
+    // …and the collection each key's rows come from (the "From each <item>" picker).
+    expect(res.body.data.context_collections).toEqual({
+      mwf_queue: 'mwf_queue',
+      shipping_location: 'locations'
+    })
   })
 
   it('a half-built draft saves and previews with problems instead of a 400', async () => {

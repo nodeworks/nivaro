@@ -26,6 +26,18 @@ export interface PickedField {
   relatedCollection?: string
 }
 
+/**
+ * How far the picker walks relations. Default: every relation kind, any depth. A caller whose
+ * reader follows many-to-one links only, a few deep (payload-template field maps: hops.ts),
+ * narrows it so the picker never offers a path that reads nothing.
+ */
+export interface RelationWalk {
+  /** Offer only many-to-one links to drill into; one-to-many / many-to-many fields are hidden. */
+  m2oOnly?: boolean
+  /** Links to drill through at most; at the limit a link is offered as its own value. */
+  maxHops?: number
+}
+
 interface FieldPickerProps {
   collection: string
   fields: CMSField[]
@@ -35,6 +47,7 @@ interface FieldPickerProps {
   onChange: (picked: PickedField) => void
   onClear?: () => void
   placeholder?: string
+  walk?: RelationWalk
 }
 
 export function FieldPicker({
@@ -45,7 +58,8 @@ export function FieldPicker({
   valueLabel,
   onChange,
   onClear,
-  placeholder
+  placeholder,
+  walk
 }: FieldPickerProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -150,6 +164,7 @@ export function FieldPicker({
                     pathPrefix={[]}
                     labelPrefix={[]}
                     depth={0}
+                    walk={walk}
                     onSelect={(picked) => {
                       onChange(picked)
                       setOpen(false)
@@ -172,12 +187,14 @@ function PickerRelatedFields({
   relatedCollection,
   pathPrefix,
   labelPrefix,
-  onSelect
+  onSelect,
+  walk
 }: {
   relatedCollection: string
   pathPrefix: string[]
   labelPrefix: string[]
   onSelect: (picked: PickedField) => void
+  walk?: RelationWalk
 }) {
   const { data, isLoading } = useCollectionBody(relatedCollection)
 
@@ -206,6 +223,7 @@ function PickerRelatedFields({
           pathPrefix={pathPrefix}
           labelPrefix={labelPrefix}
           depth={0}
+          walk={walk}
           onSelect={onSelect}
         />
       ))}
@@ -224,6 +242,7 @@ interface PickerFieldRowProps {
   labelPrefix: string[]
   depth: number
   onSelect: (picked: PickedField) => void
+  walk?: RelationWalk
 }
 
 export function CollectionFieldPicker({
@@ -232,7 +251,8 @@ export function CollectionFieldPicker({
   valueLabel,
   onChange,
   onClear,
-  placeholder
+  placeholder,
+  walk
 }: {
   collection: string
   value: string
@@ -240,6 +260,7 @@ export function CollectionFieldPicker({
   onChange: (picked: PickedField) => void
   onClear?: () => void
   placeholder?: string
+  walk?: RelationWalk
 }) {
   const { data, isLoading } = useCollectionBody(collection)
 
@@ -273,6 +294,7 @@ export function CollectionFieldPicker({
       onChange={onChange}
       onClear={onClear}
       placeholder={placeholder}
+      walk={walk}
     />
   )
 }
@@ -284,7 +306,8 @@ function PickerFieldRow({
   pathPrefix,
   labelPrefix,
   depth,
-  onSelect
+  onSelect,
+  walk
 }: PickerFieldRowProps) {
   const [subOpen, setSubOpen] = useState(false)
 
@@ -340,13 +363,18 @@ function PickerFieldRow({
       ) ?? null)
     : null
 
-  const relatedCollection =
+  const linked =
     m2oRel?.one_collection ??
     m2mRelJunction?.one_collection ??
     m2mParentTargetRel?.one_collection ??
     m2mRelParent?.many_collection ??
     o2mRel?.many_collection ??
     null
+  // A narrowed walk: a one-to-many / many-to-many field reads nothing for this caller, and a
+  // link past the hop limit is a plain value (its id). Each drill adds one path segment.
+  if (walk?.m2oOnly && linked && !m2oRel) return null
+  const atLimit = walk?.maxHops != null && pathPrefix.length >= walk.maxHops
+  const relatedCollection = atLimit ? null : linked
 
   const relLabel = m2oRel ? 'M2O' : m2mRel ? 'M2M' : o2mRel ? 'O2M' : null
 
@@ -390,6 +418,7 @@ function PickerFieldRow({
             relatedCollection={relatedCollection}
             pathPrefix={[...pathPrefix, field.field]}
             labelPrefix={[...labelPrefix, titleCase(field.field)]}
+            walk={walk}
             onSelect={(picked) => {
               onSelect(picked)
               setSubOpen(false)

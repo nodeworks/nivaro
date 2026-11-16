@@ -147,12 +147,30 @@ export async function usedBy(key: string): Promise<TemplateUse[]> {
  * Sorted, each once.
  */
 export async function contextKeys(row: Pick<TemplateRow, 'key' | 'lookups'>): Promise<string[]> {
-  const keys = new Set<string>()
+  return Object.keys(await contextCollections(row)).sort((a, b) => a.localeCompare(b))
+}
+
+/**
+ * Each `context.<key>` a render can read → the collection its rows come from ('' when the def
+ * names none), from the same sources as contextKeys: the referencing action's `context` under
+ * the template's own lookups (the action wins a clash, as the render merges them). The editor's
+ * "From each <item>" picker walks that collection's fields.
+ */
+export async function contextCollections(
+  row: Pick<TemplateRow, 'key' | 'lookups'>
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {}
+  const add = (defs: unknown) => {
+    if (!isObj(defs)) return
+    for (const [k, d] of Object.entries(defs)) {
+      const c = isObj(d) && typeof d.collection === 'string' ? d.collection : ''
+      out[k] = IDENT_RE.test(c) ? c : ''
+    }
+  }
+  add(typeof row.lookups === 'string' ? parseJson(row.lookups) : row.lookups)
   const [ref] = await referencingTransitions(row.key)
-  if (ref && isObj(ref.action.context)) for (const k of Object.keys(ref.action.context)) keys.add(k)
-  const own = typeof row.lookups === 'string' ? parseJson(row.lookups) : row.lookups
-  if (isObj(own)) for (const k of Object.keys(own)) keys.add(k)
-  return [...keys].sort((a, b) => a.localeCompare(b))
+  if (ref) add(ref.action.context)
+  return out
 }
 
 /** How many transitions name the key (registrar senders not counted). */
