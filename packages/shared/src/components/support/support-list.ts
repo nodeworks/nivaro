@@ -9,7 +9,7 @@ export type ListTab = 'mine' | 'desk'
 export type TicketSort = 'attention' | 'newest' | 'oldest' | 'updated' | 'priority'
 
 export interface ListFilters {
-  /** open (open + in progress) | in_progress | closed (done + cancelled) | done | cancelled | all */
+  /** open ("Not closed": open + in progress) | in_progress | closed (done + cancelled) | done | cancelled | all */
   status: string
   /** '' anyone | 'me' | 'unassigned' | a user id */
   assignee: string
@@ -21,7 +21,7 @@ export interface ListFilters {
 }
 
 export const STATUS_FILTERS: Array<{ value: string; label: string }> = [
-  { value: 'open', label: 'Open' },
+  { value: 'open', label: 'Not closed' },
   { value: 'in_progress', label: 'In progress' },
   { value: 'closed', label: 'Closed' },
   { value: 'done', label: 'Done' },

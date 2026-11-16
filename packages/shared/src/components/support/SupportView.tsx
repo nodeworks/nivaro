@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { type SupportDraft, takeSupportDraft } from '../../lib/error-actions'
@@ -94,12 +94,48 @@ export function SupportView({
     ...(isAdmin ? [{ key: 'rules' as Tab, label: 'Assignment rules' }] : [])
   ]
 
+  // Tab strip on a phone: fade the side with more tabs past the edge, and bring the chosen
+  // tab to the middle of the strip (the strip scrolls, never the page).
+  const stripRef = useRef<HTMLDivElement | null>(null)
+  const [stripEdges, setStripEdges] = useState({ left: false, right: false })
+  const measureStrip = useCallback(() => {
+    const el = stripRef.current
+    if (!el) return
+    const left = el.scrollLeft > 2
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+    setStripEdges((e) => (e.left === left && e.right === right ? e : { left, right }))
+  }, [])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when tabs appear (desk/admin load late)
+  useEffect(() => {
+    measureStrip()
+    window.addEventListener('resize', measureStrip)
+    return () => window.removeEventListener('resize', measureStrip)
+  }, [measureStrip, tabs.length])
+  useEffect(() => {
+    const el = stripRef.current
+    const btn = el?.querySelector<HTMLElement>(`[data-support-tab="${tab}"]`)
+    if (!el || !btn || el.scrollWidth <= el.clientWidth) return
+    const target = btn.offsetLeft - (el.clientWidth - btn.offsetWidth) / 2
+    el.scrollTo({ left: Math.max(0, target), behavior: 'smooth' })
+  }, [tab])
+  const stripMask =
+    stripEdges.left || stripEdges.right
+      ? (() => {
+          const m = `linear-gradient(to right, ${stripEdges.left ? 'transparent' : 'black'}, black 20px, black calc(100% - 28px), ${stripEdges.right ? 'transparent' : 'black'})`
+          return { maskImage: m, WebkitMaskImage: m }
+        })()
+      : undefined
+
   return (
     <div className={className} data-support-view>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         {/* One row that scrolls sideways on a phone: tab names never break onto two lines. */}
         <div
-          className='-mx-1 flex min-w-0 max-w-full items-center gap-1 overflow-x-auto px-1 [scrollbar-width:none]'
+          ref={stripRef}
+          onScroll={measureStrip}
+          className='relative -mx-1 flex min-w-0 max-w-full items-center gap-1 overflow-x-auto px-1 [scrollbar-width:none]'
+          // A soft fade on a side that has more tabs past the edge (a phone), none at rest.
+          style={stripMask}
           role='tablist'
         >
           {tabs.map((t) => (

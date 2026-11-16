@@ -695,7 +695,7 @@ function TicketRow({ t, desk, departed, open, selected, onToggle, onOpen }: RowP
       className={cn(
         'cursor-pointer align-middle',
         selected
-          ? 'bg-[#ecfbff] dark:bg-[#0f2a33]'
+          ? 'bg-[#dcf3fa] dark:bg-[#0f2a33]'
           : open
             ? 'bg-slate-50 dark:bg-white/[0.04]'
             : 'hover:bg-slate-50 dark:hover:bg-white/[0.03]',
@@ -761,7 +761,7 @@ function TicketCard({ t, desk, departed, open, selected, onToggle, onOpen }: Row
       data-departed={departed || undefined}
       className={cn(
         'flex gap-3 px-3 py-3',
-        selected ? 'bg-[#ecfbff] dark:bg-[#0f2a33]' : open && 'bg-slate-50 dark:bg-white/[0.04]',
+        selected ? 'bg-[#dcf3fa] dark:bg-[#0f2a33]' : open && 'bg-slate-50 dark:bg-white/[0.04]',
         departed && 'opacity-50'
       )}
     >
@@ -881,102 +881,107 @@ function BulkBar({
 }) {
   const btn =
     'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-200 dark:hover:bg-white/10'
-  const armed = '!bg-red-600 !text-white hover:!bg-red-700'
+  // dark:hover:… too: a dark hover tint otherwise wins over the armed red while the pointer is on it.
+  const armed = '!bg-red-600 !text-white hover:!bg-red-700 dark:!bg-red-600 dark:hover:!bg-red-700'
   return (
-    <div
-      data-support-bulk-bar
-      className='sticky bottom-0 z-10 mt-3 flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 shadow-[0_-2px_12px_rgba(15,23,42,0.08)] max-md:-mx-1 dark:border-border dark:bg-card dark:shadow-[0_-2px_12px_rgba(0,0,0,0.4)]'
-    >
-      <span className='flex items-center pl-2 pr-1 text-[12.5px] font-semibold tabular-nums text-slate-900 dark:text-slate-100'>
-        {count} selected
-        <button
-          type='button'
-          onClick={onClear}
-          data-tip='Clear selection'
-          aria-label='Clear selection'
-          className='ml-1 inline-flex h-6 w-6 items-center justify-center rounded text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-muted-foreground dark:hover:bg-white/10 dark:hover:text-slate-100'
+    // The page colour under and around the bar. Sticky stops above the host's bottom padding
+    // (24 px in admin): -bottom-6 lets the backdrop reach the edge, so rows never show below it.
+    <div className='sticky -bottom-6 z-10 -mx-1 mt-3 bg-slate-50 px-1 pb-9 pt-2 dark:bg-background'>
+      <div
+        data-support-bulk-bar
+        className='flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 shadow-[0_-2px_12px_rgba(15,23,42,0.08)] dark:border-border dark:bg-card dark:shadow-[0_-2px_12px_rgba(0,0,0,0.4)]'
+      >
+        <span className='flex items-center pl-2 pr-1 text-[12.5px] font-semibold tabular-nums text-slate-900 dark:text-slate-100'>
+          {count} selected
+          <button
+            type='button'
+            onClick={onClear}
+            data-tip='Clear selection'
+            aria-label='Clear selection'
+            className='ml-1 inline-flex h-6 w-6 items-center justify-center rounded text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-muted-foreground dark:hover:bg-white/10 dark:hover:text-slate-100'
+          >
+            <X className='h-3.5 w-3.5' />
+          </button>
+        </span>
+        <span className='mx-1 h-5 w-px bg-slate-200 dark:bg-border' aria-hidden />
+        <ConfirmButton
+          onConfirm={() => onRun({ kind: 'status', status: 'done' })}
+          disabled={busy}
+          className={btn}
+          armedClassName={armed}
+          confirmLabel={`Close ${count}?`}
+          title='Close as done'
         >
-          <X className='h-3.5 w-3.5' />
-        </button>
-      </span>
-      <span className='mx-1 h-5 w-px bg-slate-200 dark:bg-border' aria-hidden />
-      <ConfirmButton
-        onConfirm={() => onRun({ kind: 'status', status: 'done' })}
-        disabled={busy}
-        className={btn}
-        armedClassName={armed}
-        confirmLabel={`Close ${count}?`}
-        title='Close as done'
-      >
-        Close
-      </ConfirmButton>
-      <ConfirmButton
-        onConfirm={() => onRun({ kind: 'status', status: 'cancelled' })}
-        disabled={busy}
-        className={btn}
-        armedClassName={armed}
-        confirmLabel={`Cancel ${count}?`}
-        title='Cancel the requests'
-      >
-        Cancel
-      </ConfirmButton>
-      <PersonPick
-        value=''
-        ariaLabel='Assign to'
-        align='start'
-        fixed={[
-          { value: 'me', label: 'Me' },
-          { value: 'unassigned', label: 'Nobody (back to the desk)' }
-        ]}
-        people={people}
-        onPick={(v, label) =>
-          onRun(
-            v === 'unassigned'
-              ? { kind: 'assign', assignee: null, name: '' }
-              : { kind: 'assign', assignee: v, name: v === 'me' ? 'you' : label }
-          )
-        }
-        trigger={
-          <button type='button' disabled={busy} className={btn} data-support-bulk-assign>
-            Assign to… <PickCaret />
-          </button>
-        }
-      />
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button type='button' disabled={busy} className={btn}>
-            Status <PickCaret />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align='start' className='text-[12.5px]'>
-          {(
-            [
-              ['open', 'Open'],
-              ['in_progress', 'In progress'],
-              ['done', 'Done'],
-              ['cancelled', 'Cancelled']
-            ] as const
-          ).map(([v, l]) => (
-            <DropdownMenuItem key={v} onSelect={() => onRun({ kind: 'status', status: v })}>
-              {l}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button type='button' disabled={busy} className={btn}>
-            Priority <PickCaret />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align='start' className='text-[12.5px]'>
-          {(['urgent', 'normal', 'low'] as const).map((p) => (
-            <DropdownMenuItem key={p} onSelect={() => onRun({ kind: 'priority', priority: p })}>
-              <span className='capitalize'>{p}</span>
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+          Close
+        </ConfirmButton>
+        <ConfirmButton
+          onConfirm={() => onRun({ kind: 'status', status: 'cancelled' })}
+          disabled={busy}
+          className={btn}
+          armedClassName={armed}
+          confirmLabel={`Cancel ${count}?`}
+          title='Cancel these requests'
+        >
+          Cancel requests
+        </ConfirmButton>
+        <PersonPick
+          value=''
+          ariaLabel='Assign to'
+          align='start'
+          fixed={[
+            { value: 'me', label: 'Me' },
+            { value: 'unassigned', label: 'Nobody (back to the desk)' }
+          ]}
+          people={people}
+          onPick={(v, label) =>
+            onRun(
+              v === 'unassigned'
+                ? { kind: 'assign', assignee: null, name: '' }
+                : { kind: 'assign', assignee: v, name: v === 'me' ? 'you' : label }
+            )
+          }
+          trigger={
+            <button type='button' disabled={busy} className={btn} data-support-bulk-assign>
+              Assign to… <PickCaret />
+            </button>
+          }
+        />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type='button' disabled={busy} className={btn}>
+              Status <PickCaret />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='start' className='text-[12.5px]'>
+            {(
+              [
+                ['open', 'Open'],
+                ['in_progress', 'In progress'],
+                ['done', 'Done'],
+                ['cancelled', 'Cancelled']
+              ] as const
+            ).map(([v, l]) => (
+              <DropdownMenuItem key={v} onSelect={() => onRun({ kind: 'status', status: v })}>
+                {l}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type='button' disabled={busy} className={btn}>
+              Priority <PickCaret />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='start' className='text-[12.5px]'>
+            {(['urgent', 'normal', 'low'] as const).map((p) => (
+              <DropdownMenuItem key={p} onSelect={() => onRun({ kind: 'priority', priority: p })}>
+                <span className='capitalize'>{p}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
   )
 }

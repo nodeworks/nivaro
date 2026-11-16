@@ -81,6 +81,9 @@ const INPUT =
   'h-8 rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-900 outline-none placeholder:text-slate-400 focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-100'
 const SELECT =
   'h-8 w-auto min-w-[8rem] gap-1.5 rounded-md border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-800 dark:border-border dark:bg-background dark:text-slate-100'
+/** A record picker (RelationCombobox) sized and filled like the SimpleSelects beside it. */
+const PICKER =
+  'min-w-0 [&>div>button]:h-8 [&>div>button]:rounded-md [&>div>button]:border-slate-200 [&>div>button]:bg-white [&>div>button]:px-2.5 [&>div>button]:text-[12.5px] dark:[&>div>button]:border-border dark:[&>div>button]:bg-card'
 const QUIET_BTN =
   'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10'
 const PRIMARY_BTN =
@@ -369,38 +372,40 @@ export function AssignRulesView() {
       )}
 
       {dirty && (
-        <div
-          className='sticky bottom-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-[0_-2px_12px_rgba(15,23,42,0.08)] dark:border-border dark:bg-card dark:shadow-[0_-2px_12px_rgba(0,0,0,0.4)]'
-          data-support-rules-savebar
-        >
-          <span className='text-[12.5px] font-medium text-slate-800 dark:text-slate-100'>
-            Unsaved changes
-          </span>
-          <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-            New requests keep using the saved rules until you save.
-          </span>
-          <span className='ml-auto flex items-center gap-1'>
-            <button
-              type='button'
-              className={QUIET_BTN}
-              onClick={() => {
-                setDraft(stored.data?.data ?? draft)
-                setErrors([])
-                setEditing(null)
-              }}
-            >
-              Discard
-            </button>
-            <button
-              type='button'
-              className={PRIMARY_BTN}
-              disabled={save.isPending}
-              onClick={() => save.mutate(draft)}
-              data-support-rules-save
-            >
-              {save.isPending ? 'Saving…' : 'Save rules'}
-            </button>
-          </span>
+        <div className='sticky -bottom-6 z-10 -mx-1 bg-slate-50 px-1 pb-9 pt-2 dark:bg-background'>
+          <div
+            className='flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-[0_-2px_12px_rgba(15,23,42,0.08)] dark:border-border dark:bg-card dark:shadow-[0_-2px_12px_rgba(0,0,0,0.4)]'
+            data-support-rules-savebar
+          >
+            <span className='text-[12.5px] font-medium text-slate-800 dark:text-slate-100'>
+              Unsaved changes
+            </span>
+            <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+              New requests keep using the saved rules until you save.
+            </span>
+            <span className='ml-auto flex items-center gap-1'>
+              <button
+                type='button'
+                className={QUIET_BTN}
+                onClick={() => {
+                  setDraft(stored.data?.data ?? draft)
+                  setErrors([])
+                  setEditing(null)
+                }}
+              >
+                Discard
+              </button>
+              <button
+                type='button'
+                className={PRIMARY_BTN}
+                disabled={save.isPending}
+                onClick={() => save.mutate(draft)}
+                data-support-rules-save
+              >
+                {save.isPending ? 'Saving…' : 'Save rules'}
+              </button>
+            </span>
+          </div>
         </div>
       )}
 
@@ -574,7 +579,7 @@ function RuleCard({
             title='Delete'
             confirmLabel='Delete?'
             className='inline-flex h-7 min-w-7 items-center justify-center rounded px-1.5 text-[11.5px] text-slate-500 hover:bg-slate-100 hover:text-red-600 dark:hover:bg-white/10'
-            armedClassName='!bg-red-600 !text-white'
+            armedClassName='!bg-red-600 !text-white hover:!bg-red-700 dark:!bg-red-600 dark:hover:!bg-red-700'
           >
             <Trash2 className='h-3.5 w-3.5' />
           </ConfirmButton>
@@ -663,17 +668,21 @@ function RuleEditor({
       <Section title='When'>
         <div className='flex flex-wrap items-center gap-2 text-[12.5px] text-slate-700 dark:text-slate-200'>
           A request matches when
-          <SimpleSelect
-            value={rule.match}
-            onChange={(v) => set({ match: v as 'all' | 'any' })}
-            options={[
-              { value: 'all', label: 'all of these' },
-              { value: 'any', label: 'any of these' }
-            ]}
-            ariaLabel='Match all or any'
-            className={SELECT}
-          />
-          are true{rule.conditions.length === 0 ? ' — with none, every request matches.' : ':'}
+          {/* The choice and "are true" stay together: never an orphan "are true:" line. */}
+          <span className='inline-flex items-center gap-2 whitespace-nowrap'>
+            <SimpleSelect
+              value={rule.match}
+              onChange={(v) => set({ match: v as 'all' | 'any' })}
+              options={[
+                { value: 'all', label: 'all of these' },
+                { value: 'any', label: 'any of these' }
+              ]}
+              ariaLabel='Match all or any'
+              className={SELECT}
+            />
+            are true{rule.conditions.length === 0 ? '' : ':'}
+          </span>
+          {rule.conditions.length === 0 && <span>— with none, every request matches.</span>}
         </div>
         <div className='space-y-2'>
           {rule.conditions.map((c, i) => (
@@ -721,7 +730,7 @@ function RuleEditor({
               className={SELECT}
             />
             {rule.fallback.kind === 'person' && (
-              <div className='w-64'>
+              <div className={cn('w-64', PICKER)}>
                 <RelationCombobox
                   collection='nivaro_users'
                   value={rule.fallback.user || null}
@@ -821,7 +830,7 @@ function ConditionRow({
   const kindLabel = KIND_OPTIONS.find((k) => k.value === cond.kind)?.label ?? cond.kind
   return (
     <div
-      className='flex flex-wrap items-start gap-2 rounded-md bg-slate-50 px-2.5 py-2 dark:bg-white/[0.03]'
+      className='flex flex-wrap items-start gap-2 rounded-md bg-slate-50 px-2.5 py-2 dark:bg-white/[0.05] dark:ring-1 dark:ring-inset dark:ring-white/[0.06]'
       data-support-condition={cond.kind}
     >
       <span className='mt-1.5 w-9 shrink-0 text-right text-[11.5px] font-medium uppercase tracking-wide text-slate-400 max-sm:w-auto'>
@@ -1185,7 +1194,7 @@ function RelatedValues({
     <div className='flex flex-wrap items-center gap-1.5'>
       {values.map((v, i) => (
         <div key={v} className='flex items-center gap-0.5'>
-          <div className='w-48'>
+          <div className={cn('w-48', PICKER)}>
             <RelationCombobox
               collection={collection}
               value={v}
@@ -1207,7 +1216,7 @@ function RelatedValues({
           </button>
         </div>
       ))}
-      <div className='w-48'>
+      <div className={cn('w-48', PICKER)}>
         <RelationCombobox
           key={values.length}
           collection={collection}
@@ -1379,7 +1388,7 @@ function PeopleChips({ users, onChange }: { users: string[]; onChange: (u: strin
           </button>
         </span>
       ))}
-      <div className='w-52'>
+      <div className={cn('w-52', PICKER)}>
         <RelationCombobox
           key={users.length}
           collection='nivaro_users'
@@ -1468,7 +1477,7 @@ function ActionEditor({
         triggerProps={{ 'data-support-action': action.kind }}
       />
       {action.kind === 'person' && (
-        <div className='w-72'>
+        <div className={cn('w-72', PICKER)}>
           <RelationCombobox
             collection='nivaro_users'
             value={action.user || null}
@@ -1558,7 +1567,7 @@ function ShareEditor({
                     { value: 'online', label: 'Only while online' }
                   ]}
                   ariaLabel='When they take requests'
-                  className={cn(SELECT, 'h-7 min-w-[9rem]')}
+                  className={cn(SELECT, 'h-7 w-[10.5rem] min-w-0')}
                 />
                 <button
                   type='button'
@@ -1576,7 +1585,7 @@ function ShareEditor({
           </ul>
         )}
         <div className='border-t border-slate-100 bg-slate-50 px-2.5 py-1.5 dark:border-border/60 dark:bg-white/[0.03]'>
-          <div className='w-64'>
+          <div className={cn('w-64', PICKER)}>
             <RelationCombobox
               key={action.people.length}
               collection='nivaro_users'
@@ -1817,23 +1826,27 @@ function TryRequest({
         {form.collection
           ? field(
               'Record',
-              <RelationCombobox
-                key={form.collection}
-                collection={form.collection}
-                value={form.item || null}
-                onChange={(v) => set({ item: v == null ? '' : String(v) })}
-                placeholder='Pick a record'
-              />
+              <div className={PICKER}>
+                <RelationCombobox
+                  key={form.collection}
+                  collection={form.collection}
+                  value={form.item || null}
+                  onChange={(v) => set({ item: v == null ? '' : String(v) })}
+                  placeholder='Pick a record'
+                />
+              </div>
             )
           : null}
         {field(
           'Requester',
-          <RelationCombobox
-            collection='nivaro_users'
-            value={form.requester || null}
-            onChange={(v) => set({ requester: v ? String(v) : '' })}
-            placeholder='Anyone'
-          />
+          <div className={PICKER}>
+            <RelationCombobox
+              collection='nivaro_users'
+              value={form.requester || null}
+              onChange={(v) => set({ requester: v ? String(v) : '' })}
+              placeholder='Anyone'
+            />
+          </div>
         )}
         {field(
           'Priority',
@@ -2007,11 +2020,14 @@ function TryResult({ result }: { result: AssignTestResult }) {
           </h4>
           <ol className='space-y-1'>
             {result.trace.map((t, i) => (
-              <li key={t.id} className='flex flex-wrap items-baseline gap-x-2 text-[12.5px]'>
+              <li
+                key={t.id}
+                className='flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12.5px]'
+              >
                 <span className='w-4 text-right tabular-nums text-slate-400'>{i + 1}</span>
                 <span
                   className={cn(
-                    'rounded px-1.5 py-px text-[11px] font-medium',
+                    'inline-flex w-[5.75rem] shrink-0 justify-center rounded px-1.5 py-px text-[11px] font-medium',
                     t.result === 'matched'
                       ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300'
                       : 'bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-slate-300'
@@ -2027,8 +2043,10 @@ function TryResult({ result }: { result: AssignTestResult }) {
                 </span>
                 <span className='font-medium text-slate-800 dark:text-slate-100'>{t.name}</span>
                 {t.reasons.length > 0 && (
-                  <span className='text-slate-500 dark:text-muted-foreground'>
-                    — {t.reasons.join('; ')}
+                  // Phone: the reason on its own line under the rule name, no hanging dash.
+                  <span className='text-slate-500 max-sm:basis-full max-sm:pl-6 dark:text-muted-foreground'>
+                    <span className='max-sm:hidden'>— </span>
+                    {t.reasons.join('; ')}
                   </span>
                 )}
               </li>
