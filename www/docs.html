@@ -7747,6 +7747,7 @@ export const qualityChecks: QualityCheck[] = [
               <tr><td>External APIs: base URL, credentials (including payload body secrets), headers, mocks, instance overrides, on/off</td><td>Matched by name</td></tr>
               <tr><td>Webhook targets, secrets and on/off</td><td>Matched by name</td></tr>
               <tr><td>Agent trigger targets, signing secrets and on/off; flows on/off</td><td>Matched by name</td></tr>
+              <tr><td>Outbound settings inside flow steps — webhook URLs, headers, secrets, an external-API path override (the rest of each step follows the source)</td><td>Matched by flow name + step key</td></tr>
               <tr><td>Sign-in providers (SSO / OIDC)</td><td>Matched by key</td></tr>
               <tr><td>Partner sync jobs and scheduled report emails on/off</td><td>Matched by name</td></tr>
               <tr><td>Service, integration and bot accounts, and test accounts on reserved test domains (.test, .invalid, .example, .internal, example.com), with their API keys</td><td>Rows put back by id</td></tr>

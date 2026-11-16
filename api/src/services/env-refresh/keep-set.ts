@@ -15,6 +15,7 @@
  * fake in tests) and cross-database names (`[DB].dbo.[table]`), so nothing depends on which
  * database the connection opened.
  */
+import { applyFlowOps, captureFlowOps, FLOW_OPS_ID } from './flow-ops.js'
 import type { EnvKeepEntry } from './registry.js'
 
 export interface SqlRunner {
@@ -146,6 +147,11 @@ export async function captureKeepSet(
       continue
     }
     base.identity = await identityColumn(sql, o.targetDb, e.table)
+    if (e.id === FLOW_OPS_ID) {
+      // Outbound options inside flow steps, matched by flow name + step key (flow-ops.ts).
+      out.push(await captureFlowOps(sql, o.targetDb, base))
+      continue
+    }
     const T = qtable(o.targetDb, e.table)
     // rows: the predicate picks the rows; table: an optional predicate narrows what the target
     // keeps (the rest of the table goes — e.g. only the newest quality baseline).
@@ -266,6 +272,8 @@ export interface ApplyResult {
   dropped_columns: string[]
   /** Source rows the target never had (columns entries) — keys, for the safety pass. */
   new_from_source: string[]
+  /** Not a failure: what was left as the source has it, and why. */
+  notes: string[]
   errors: string[]
 }
 
@@ -344,6 +352,7 @@ export async function applyKeepSet(
       skipped: 0,
       dropped_columns: [],
       new_from_source: [],
+      notes: [],
       errors: e.missing ? [e.missing] : []
     })
     if (!e.missing) metaCols.set(e.table, await tableColumns(sql, db, e.table))
@@ -367,6 +376,10 @@ export async function applyKeepSet(
 
   for (const e of live) {
     const r = results.get(e.id)!
+    if (e.id === FLOW_OPS_ID) {
+      await applyFlowOps(sql, db, e, r)
+      continue
+    }
     const now = metaCols.get(e.table) ?? []
     const T = qtable(db, e.table)
     const savedCols = e.kind === 'columns' ? e.columns : Object.keys(e.rows[0] ?? {})

@@ -130,6 +130,13 @@ describe('environment refresh registry — every table and settings column has a
   it('every core entry names tables and columns that exist', () => {
     const problems: string[] = []
     for (const e of CORE_KEEPS) {
+      // flow-ops.ts keys steps by flow name + step key and keeps parts of the options JSON.
+      if (e.id === 'core:flow-op-endpoints') {
+        expect(COLUMNS.nivaro_flow_operations).toEqual(
+          expect.arrayContaining(['key', 'name', 'options', 'flow'])
+        )
+        continue
+      }
       const cols = COLUMNS[e.table]
       if (!cols) {
         problems.push(`${e.id}: no table ${e.table}`)

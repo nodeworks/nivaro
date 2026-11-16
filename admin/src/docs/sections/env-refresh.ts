@@ -43,6 +43,10 @@ export const envRefreshDocs: DocSection = {
         ],
         ['Webhook targets, secrets and on/off', 'Matched by name'],
         ['Agent trigger targets, signing secrets and on/off; flows on/off', 'Matched by name'],
+        [
+          'Outbound settings inside flow steps — webhook URLs, headers, secrets, an external-API path override (the rest of each step follows the source)',
+          'Matched by flow name + step key'
+        ],
         ['Sign-in providers (SSO / OIDC)', 'Matched by key'],
         ['Partner sync jobs and scheduled report emails on/off', 'Matched by name'],
         [

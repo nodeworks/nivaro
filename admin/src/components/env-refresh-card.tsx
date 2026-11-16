@@ -110,9 +110,11 @@ export function keptWhat(k: Pick<Kept, 'kind' | 'rows' | 'columns' | 'note' | 't
   const fields = `${k.columns.length} field${k.columns.length === 1 ? '' : 's'}`
   if (k.kind === 'table') return `The whole table — ${rows}`
   if (k.kind === 'columns')
-    return k.table === 'nivaro_settings'
-      ? `${fields} of the settings row`
-      : `${fields} on ${rows}, matched by ${k.table === 'nivaro_sso_providers' ? 'key' : 'name'}`
+    return k.table === 'nivaro_flow_operations'
+      ? `${rows.replace('row', 'step')} with their own addresses or secrets, matched by flow + step`
+      : k.table === 'nivaro_settings'
+        ? `${fields} of the settings row`
+        : `${fields} on ${rows}, matched by ${k.table === 'nivaro_sso_providers' ? 'key' : 'name'}`
   if (k.kind === 'rows') return rows
   return k.note ?? 'Kept by its own step'
 }

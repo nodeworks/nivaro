@@ -80,6 +80,19 @@ export class FakeSqlServer implements SqlRunner {
         )
         .map((f) => ({ id: f.id, name: f.name }))
     }
+    if (
+      (m = q.match(
+        /^SELECT o\.\[id\] AS id, f\.\[name\] AS flow_name, .+ FROM \[(\w+)\]\.dbo\.\[nivaro_flow_operations\] o JOIN/
+      ))
+    ) {
+      const flows = this.get(m[1], 'nivaro_flows')?.rows ?? []
+      return (this.get(m[1], 'nivaro_flow_operations')?.rows ?? []).flatMap((o) => {
+        const f = flows.find((x) => x.id === o.flow)
+        return f
+          ? [{ id: o.id, flow_name: f.name, op_key: o.key, op_name: o.name, options: o.options }]
+          : []
+      })
+    }
     if ((m = q.match(/^DELETE FROM \[(\w+)\]\.dbo\.\[(\w+)\]( WHERE \[id\] IN \((.+)\))?$/))) {
       this.writes.push(q)
       const t = this.need(m[1], m[2])

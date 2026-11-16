@@ -18,6 +18,12 @@ import {
   validateRefreshDecl
 } from '../../../services/env-refresh/directions.js'
 import {
+  FLOW_OPS_ID,
+  isOutboundOptionKey,
+  mergeOutbound,
+  outboundPart
+} from '../../../services/env-refresh/flow-ops.js'
+import {
   applyKeepSet,
   captureKeepSet,
   decodeValue,
@@ -1039,5 +1045,178 @@ describe('plan masking', () => {
     expect(vals.client_secret).toBe('set')
     expect(vals.webhook_secret).toBe('set')
     expect(JSON.stringify(plan)).not.toMatch(/hunter2|"abc"/)
+  })
+})
+
+describe('flow steps keep each environment’s own outbound settings', () => {
+  const flows = (db: string, s: FakeSqlServer, ops: Array<Record<string, unknown>>) =>
+    s
+      .table(db, 'nivaro_flows', {
+        cols: ['id', 'name', 'status'],
+        rows: [
+          { id: 'f1', name: 'Notify partner', status: 'active' },
+          { id: 'f2', name: 'Only on the source', status: 'active' }
+        ]
+      })
+      .table(db, 'nivaro_flow_operations', {
+        cols: ['id', 'flow', 'name', 'key', 'type', 'options'],
+        rows: ops
+      })
+
+  it('picks URLs, headers, secrets and path overrides out of a step — nothing else', () => {
+    for (const k of [
+      'url',
+      'headers',
+      'path_override',
+      'callback_url',
+      'signing_secret',
+      'api_key',
+      'partner_endpoint'
+    ])
+      expect(isOutboundOptionKey(k), k).toBe(true)
+    for (const k of ['body', 'method', 'collection', 'filter', 'to', 'subject', 'api_id'])
+      expect(isOutboundOptionKey(k), k).toBe(false)
+    expect(outboundPart('{"url":"u","body":"b","headers":{"X":"1"}}')).toEqual({
+      url: 'u',
+      headers: { X: '1' }
+    })
+    expect(outboundPart('{"body":"b"}')).toBeNull()
+    expect(outboundPart('not json')).toBeNull()
+    // A secret the source brought that the target never had does not survive.
+    expect(
+      JSON.parse(mergeOutbound('{"url":"prod","body":"new","token":"PROD"}', { url: 'stg' }))
+    ).toEqual({
+      body: 'new',
+      url: 'stg'
+    })
+  })
+
+  it('saves the target’s step options and writes them onto the copy by flow name + step key', async () => {
+    const s = flows('T', new FakeSqlServer(), [
+      {
+        id: 1,
+        flow: 'f1',
+        name: 'Post',
+        key: 'post',
+        type: 'webhook',
+        options: JSON.stringify({
+          url: 'https://hook.staging',
+          headers: { Authorization: 'stg' },
+          body: 'old'
+        })
+      },
+      {
+        id: 2,
+        flow: 'f1',
+        name: 'Mail',
+        key: 'mail',
+        type: 'mail',
+        options: JSON.stringify({ to: 'x', subject: 'y' })
+      }
+    ])
+    const entry = CORE_KEEPS.find((e) => e.id === FLOW_OPS_ID)!
+    const saved = await captureKeepSet(s, {
+      entries: [entry],
+      direction: 'production-to-staging',
+      sourceDb: 'S',
+      targetDb: 'T'
+    })
+    expect(s.writes).toEqual([])
+    const e = saved.entries[0]
+    expect(e.rows).toEqual([
+      {
+        flow_name: 'Notify partner',
+        key: 'post',
+        fields: 'url, headers',
+        outbound: JSON.stringify({ url: 'https://hook.staging', headers: { Authorization: 'stg' } })
+      }
+    ])
+    // The restore: the target now holds the source's steps (new body, the source's address and secret).
+    flows('T', s, [
+      {
+        id: 10,
+        flow: 'f1',
+        name: 'Post',
+        key: 'POST ',
+        type: 'webhook',
+        options: JSON.stringify({
+          url: 'https://hook.prod',
+          headers: { Authorization: 'PROD' },
+          token: 'PRODSECRET',
+          body: 'new'
+        })
+      },
+      {
+        id: 11,
+        flow: 'f2',
+        name: 'Call',
+        key: 'call',
+        type: 'webhook',
+        options: JSON.stringify({ url: 'https://only.prod' })
+      }
+    ])
+    const [r] = await applyKeepSet(s, saved)
+    const ops = s.get('T', 'nivaro_flow_operations')!.rows
+    expect(JSON.parse(String(ops[0].options))).toEqual({
+      body: 'new',
+      url: 'https://hook.staging',
+      headers: { Authorization: 'stg' }
+    })
+    expect(JSON.parse(String(ops[1].options))).toEqual({ url: 'https://only.prod' })
+    expect(r).toMatchObject({
+      id: FLOW_OPS_ID,
+      written: 1,
+      skipped: 0,
+      new_from_source: ['Only on the source / call'],
+      errors: []
+    })
+  })
+
+  it('the plan counts the kept steps and masks their values', () => {
+    const plan = buildRefreshPlan({
+      direction: 'production-to-staging',
+      source: DECL.environments[0],
+      target: DECL.environments[1],
+      entries: CORE_KEEPS.filter((e) => e.id === FLOW_OPS_ID),
+      captured: {
+        format: 1,
+        captured_at: '',
+        direction: 'production-to-staging',
+        source_database: 'EFP',
+        target_database: 'EFP_staging',
+        target_ledger: [],
+        entries: [
+          {
+            id: FLOW_OPS_ID,
+            label: 'Flow steps',
+            table: 'nivaro_flow_operations',
+            kind: 'columns',
+            key: ['flow_name', 'key'],
+            columns: ['fields', 'outbound'],
+            identity: null,
+            total: 1,
+            rows: [
+              {
+                flow_name: 'Notify partner',
+                key: 'post',
+                fields: 'url, headers',
+                outbound: '{"url":"https://hook.staging"}'
+              }
+            ]
+          }
+        ]
+      },
+      safety: [],
+      preflight: [],
+      sourceTables: { tables: 1, rows: 1, used_mb: 1 },
+      filesFallback: null,
+      rollbackHours: 24
+    })
+    expect(plan.kept[0]).toMatchObject({ rows: 1 })
+    expect(plan.kept[0].sample[0]).toEqual({
+      key: 'Notify partner / post',
+      values: { fields: 'url, headers', outbound: 'set' }
+    })
+    expect(planLines(plan).join('\n')).not.toMatch(/hook\.staging/)
   })
 })

@@ -305,7 +305,9 @@ export function planLines(p: RefreshPlan): string[] {
       k.kind === 'table'
         ? `whole table, ${k.rows} row(s)`
         : k.kind === 'columns'
-          ? `${k.columns.length} column(s) on ${k.rows} row(s), matched by ${k.table === 'nivaro_settings' ? 'the settings row' : 'name'}`
+          ? k.table === 'nivaro_flow_operations'
+            ? `${k.rows} flow step(s) with their own addresses or secrets, matched by flow name + step key`
+            : `${k.columns.length} column(s) on ${k.rows} row(s), matched by ${k.table === 'nivaro_settings' ? 'the settings row' : 'name'}`
           : k.kind === 'rows'
             ? `${k.rows} row(s)`
             : (k.note ?? 'kept by its own step')

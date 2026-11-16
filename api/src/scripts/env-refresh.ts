@@ -480,6 +480,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           `  ${r.errors.length ? '✗' : '✓'} ${r.id}: ${r.written} written${extra ? ` · ${extra}` : ''}`
         )
         for (const e of r.errors.slice(0, 3)) say(`      ${e}`)
+        for (const n of r.notes.slice(0, 3)) say(`      note: ${n}`)
         if (r.errors.length) bad++
       }
       runDelegates(targetEntries, 'restore', T, apiDir)

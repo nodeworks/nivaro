@@ -316,6 +316,20 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
   },
   {
     source: 'core',
+    // Handled by flow-ops.ts: the key is flow name + step key, the kept part is the outbound
+    // options (URL, headers, secrets, path override) inside each step's options JSON.
+    id: 'core:flow-op-endpoints',
+    label: 'Flow step addresses, headers and secrets',
+    reason:
+      'A flow step that calls out (webhook URL, headers, secrets, an external-API path override) keeps this environment’s values, matched by flow name + step key; the rest of the step follows the source.',
+    table: 'nivaro_flow_operations',
+    kind: 'columns',
+    key: ['flow_name', 'key'],
+    columns: ['fields', 'outbound'],
+    secret_columns: ['outbound']
+  },
+  {
+    source: 'core',
     id: 'core:sso',
     label: 'Sign-in providers (SSO / OIDC)',
     reason: 'Each environment signs in through its own app registration.',
