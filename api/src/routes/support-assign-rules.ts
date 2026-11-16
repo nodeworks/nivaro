@@ -13,6 +13,7 @@ import {
 } from '../services/support-assign-rules.js'
 import { userName } from '../services/support-tickets.js'
 import { isSystemCollection } from '../services/system-collections.js'
+import { resolveFriendlyIds } from '../services/workflow-transitions.js'
 
 /**
  * /api/support/assign-rules — administrators set who new support requests go to
@@ -173,11 +174,93 @@ export async function checkReferences(set: AssignRuleSet): Promise<RuleError[]> 
   return errors
 }
 
+/** Names the editor shows for a rule set: people, and field values (a linked record's readable
+ *  id or label, a choice's label). Admin-only. */
+export async function ruleLabels(set: { rules: AssignRuleSet['rules'] }): Promise<{
+  people: Record<string, string>
+  values: Record<string, string>
+}> {
+  const people = new Set<string>()
+  const fieldVals = new Map<string, { collection: string; field: string; values: Set<string> }>()
+  for (const r of set.rules) {
+    for (const c of r.conditions) {
+      if (c.kind === 'requester') for (const u of c.users) people.add(u.toUpperCase())
+      if (c.kind === 'field' && c.values.length) {
+        const k = `${c.collection}.${c.field}`
+        const e = fieldVals.get(k) ?? {
+          collection: c.collection,
+          field: c.field,
+          values: new Set()
+        }
+        for (const v of c.values) e.values.add(v)
+        fieldVals.set(k, e)
+      }
+    }
+    if (r.action.kind === 'person') people.add(r.action.user.toUpperCase())
+    if (r.action.kind === 'share') for (const p of r.action.people) people.add(p.id.toUpperCase())
+    if (r.fallback.kind === 'person') people.add(r.fallback.user.toUpperCase())
+  }
+  const out = { people: {} as Record<string, string>, values: {} as Record<string, string> }
+  if (people.size) {
+    const rows = (await db('nivaro_users')
+      .whereIn('id', [...people].slice(0, 500))
+      .select('id', 'first_name', 'last_name', 'email')
+      .catch(() => [])) as Array<{
+      id: string
+      first_name: string | null
+      last_name: string | null
+      email: string | null
+    }>
+    for (const u of rows) out.people[String(u.id).toUpperCase()] = userName(u) ?? 'Unknown person'
+  }
+  for (const e of fieldVals.values()) {
+    if (isSystemCollection(e.collection)) continue
+    const [defs, rel] = await Promise.all([
+      getFields(e.collection).catch(() => []),
+      db('nivaro_relations')
+        .where({ many_collection: e.collection, many_field: e.field })
+        .whereNull('junction_field')
+        .first('one_collection')
+        .catch(() => undefined) as Promise<{ one_collection: string | null } | undefined>
+    ])
+    const def = defs.find((d) => d.field === e.field)
+    const choices = (def?.options as { choices?: Array<{ value: unknown; text?: string }> } | null)
+      ?.choices
+    const ids = [...e.values].slice(0, 200)
+    if (Array.isArray(choices))
+      for (const v of ids) {
+        const ch = choices.find((c) => String(c.value) === v)
+        if (ch) out.values[`${e.collection}.${e.field}:${v}`] = String(ch.text ?? ch.value)
+      }
+    if (rel?.one_collection && !isSystemCollection(rel.one_collection)) {
+      const names = await resolveFriendlyIds(rel.one_collection, ids).catch(() => null)
+      for (const v of ids) {
+        const n = names?.get(v)
+        if (n) out.values[`${e.collection}.${e.field}:${v}`] = n
+      }
+    }
+  }
+  return out
+}
+
 export async function supportAssignRuleRoutes(app: FastifyInstance) {
   // GET /assign-rules — the ordered rules and business hours.
   app.get('/assign-rules', { preHandler: requireAdmin }, async (_req, reply) => {
-    return reply.send({ data: await loadRuleSet() })
+    const set = await loadRuleSet()
+    return reply.send({ data: set, labels: await ruleLabels(set) })
   })
+
+  // POST /assign-rules/labels {rules} — the names for an unsaved draft (nothing is written).
+  app.post<{ Body: { rules?: unknown } }>(
+    '/assign-rules/labels',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const v = validateRuleSet({ rules: req.body?.rules ?? [] })
+      // A half-filled draft still gets names for what it has: read what validates loosely.
+      const rules = v.ok ? v.set.rules : []
+      return reply.send({ data: await ruleLabels({ rules }) })
+    }
+  )
 
   // PUT /assign-rules {rules, hours} — replace the whole set (order = precedence).
   app.put<{ Body: unknown }>('/assign-rules', { preHandler: requireAdmin }, async (req, reply) => {

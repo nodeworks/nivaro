@@ -68,6 +68,9 @@ interface CategoryRow {
 
 const PRIORITIES = ['low', 'normal', 'urgent']
 
+/** History rows that name an assignment rule: shown only to people who work the ticket. */
+export const SUPPORT_RULE_ACTION = 'support-rule'
+
 function serializeCategory(c: CategoryRow & Record<string, unknown>) {
   return {
     id: c.id,
@@ -347,6 +350,9 @@ export async function raiseTicket(
   // the desk (services/support-assign.ts). A rule that fails to evaluate never stops a request.
   let assignee: string | null = f.category?.default_assignee ?? null
   let teamId: number | null = f.category?.team_id ?? null
+  // What the requester may read ("Assigned to Beth") and the desk-only detail naming the rule
+  // (a rule's name or reasons can echo record values the requester may not read).
+  let publicEvent: string | null = null
   let ruleEvent: string | null = null
   const assign = await import('../services/support-assign.js')
   const rules = await assign.loadRuleSet()
@@ -376,13 +382,16 @@ export async function raiseTicket(
       const o = d.outcome
       if (o.kind === 'person') {
         assignee = o.user.id
-        if (o.rule)
+        if (o.rule) {
+          publicEvent = `Assigned to ${o.user.name}`
           ruleEvent = `Assigned to ${o.user.name} by rule '${o.rule.name}'${
             o.via === 'rule_fallback' ? ' (nobody on it could take it; its fallback)' : ''
           }`
+        }
       } else if (o.kind === 'team') {
         assignee = null
         teamId = o.team.id
+        publicEvent = `Sent to ${o.team.name}`
         ruleEvent = `Sent to ${o.team.name} by rule '${o.rule.name}'`
       } else if (o.rule) {
         assignee = null
@@ -415,7 +424,8 @@ export async function raiseTicket(
     .returning('id')) as Array<{ id: number } | number>
   const id = Number(typeof row === 'object' ? row.id : row)
   await logTicketEvent(id, req.user!.id, 'Raised the request', req, 'create')
-  if (ruleEvent) await logTicketEvent(id, null, ruleEvent, req)
+  if (publicEvent) await logTicketEvent(id, null, publicEvent, req)
+  if (ruleEvent) await logTicketEvent(id, null, ruleEvent, req, SUPPORT_RULE_ACTION)
   assign.noteAssignment(app.redis, assignee, id)
   const t = (await loadTicket(id))!
   announceRecordHelp(t)
@@ -562,6 +572,7 @@ export async function applyTicketChange(
   // A new type runs the assignment rules (then the type's default) unless the same change names
   // an assignee. Someone who already has it keeps it unless a rule says "also when the type
   // changes".
+  let ruleDetail: string | null = null
   if (typeChanged && b.assignee === undefined) {
     const assign = await import('../services/support-assign.js')
     const rules = await assign.loadRuleSet()
@@ -592,18 +603,19 @@ export async function applyTicketChange(
           o.user.id.toUpperCase() !== String(t.assignee ?? '').toUpperCase()
         ) {
           patch.assignee = o.user.id
-          events.push(
-            o.rule
-              ? `Assigned to ${o.user.name} by rule '${o.rule.name}'`
-              : `Assigned to ${o.user.name} (the type’s default)`
-          )
+          events.push(`Assigned to ${o.user.name}`)
+          ruleDetail = o.rule
+            ? `Assigned to ${o.user.name} by rule '${o.rule.name}'`
+            : `Assigned to ${o.user.name} (the type’s default)`
         } else if (o.kind === 'team') {
           patch.team_id = o.team.id
           if (t.assignee) patch.assignee = null
-          events.push(`Sent to ${o.team.name} by rule '${o.rule.name}'`)
+          events.push(`Sent to ${o.team.name}`)
+          ruleDetail = `Sent to ${o.team.name} by rule '${o.rule.name}'`
         } else if (o.kind === 'desk' && o.rule && t.assignee) {
           patch.assignee = null
-          events.push(`Back on the desk by rule '${o.rule.name}' (nobody on it could take it)`)
+          events.push('Unassigned')
+          ruleDetail = `Back on the desk by rule '${o.rule.name}' (nobody on it could take it)`
         }
       } catch (err) {
         req.log.warn({ err }, 'support assignment rules failed on a type change')
@@ -629,6 +641,7 @@ export async function applyTicketChange(
     })
   }
   await logTicketEvent(t.id, req.user!.id, events.join(' · '), req)
+  if (ruleDetail) await logTicketEvent(t.id, null, ruleDetail, req, SUPPORT_RULE_ACTION)
   if (patch.assignee !== undefined || patch.team_id !== undefined || patch.status !== undefined)
     await screenShareTicketChanged(app, t.id)
   const updated = (await loadTicket(t.id))!
@@ -647,7 +660,13 @@ export async function applyTicketChange(
     category: 'workflow'
   })
   if (newlyAssigned)
-    await notifyAssigned(app, updated, newlyAssigned, req.user!.id, `${me}: ${events.join(' · ')}`)
+    await notifyAssigned(
+      app,
+      updated,
+      newlyAssigned,
+      req.user!.id,
+      `${me}: ${events.join(' · ')}${ruleDetail ? `\n\n${ruleDetail}.` : ''}`
+    )
   return { ok: true, ticket: updated, changed: true }
 }
 
@@ -1033,6 +1052,9 @@ export async function supportRoutes(app: FastifyInstance) {
         'u.first_name',
         'u.last_name'
       )) as Array<Record<string, unknown>>
+    const work = await canWorkTicket(viewer, t)
+    // Rule detail rows name the assignment rule (which can echo record values): desk only.
+    const visibleHistory = work ? history : history.filter((h) => h.action !== SUPPORT_RULE_ACTION)
     const files = ticket.attachments.length
       ? ((await db('nivaro_files')
           .whereIn('id', ticket.attachments)
@@ -1040,7 +1062,6 @@ export async function supportRoutes(app: FastifyInstance) {
           Record<string, unknown>
         >)
       : []
-    const work = await canWorkTicket(viewer, t)
     const isRequester = String(t.created_by).toUpperCase() === viewer.id
     return reply.send({
       data: {
@@ -1054,7 +1075,7 @@ export async function supportRoutes(app: FastifyInstance) {
           created_at: c.created_at,
           from_requester: String(c.user).toUpperCase() === String(t.created_by).toUpperCase()
         })),
-        history: history.map((h) => ({
+        history: visibleHistory.map((h) => ({
           id: h.id,
           // Lets the sheet fold one screen share's start / watch / stop rows into one line.
           action: h.action,
