@@ -122,9 +122,11 @@ function FieldCommentControl({
           data-tip={count ? undefined : `Comment on ${label}`}
           className={cn(
             'inline-flex items-center gap-0.5 rounded px-0.5 py-0.5 text-[10px] font-semibold transition-[opacity,color]',
+            // Always shown where comments are on (Rob 2026-11-16: a hover-only icon was easy to
+            // miss and jumped in beside the lock); quiet grey until a thread exists.
             count || open
-              ? 'text-[#0e7490] opacity-100 dark:text-nvr-cyan'
-              : 'text-slate-400 opacity-0 hover:text-[#0e7490] focus-visible:opacity-100 group-hover/fieldrow:opacity-100 group-focus-within/fieldrow:opacity-100 dark:text-slate-400 dark:hover:text-nvr-cyan'
+              ? 'text-[#0e7490] dark:text-nvr-cyan'
+              : 'text-slate-400 hover:text-[#0e7490] dark:text-slate-500 dark:hover:text-nvr-cyan'
           )}
         >
           <MessageSquare aria-hidden className='h-3 w-3' />
