@@ -289,7 +289,8 @@ function LimitCell({ c, onSaved }: { c: McpConnection; onSaved: () => void }) {
         }
         className={cn(
           inputCls,
-          'h-7 w-16',
+          // The default shows as a placeholder in both themes (dark read it as a set value).
+          'h-7 w-16 placeholder:text-slate-400 dark:placeholder:text-slate-500',
           save.isError && 'border-red-400 dark:border-red-500/60'
         )}
       />

@@ -1647,9 +1647,10 @@ function OwnProfile({
               )}
               <a
                 href={`mailto:${view.email}`}
-                className='inline-flex items-center gap-1.5 transition-colors hover:text-nvr-navy dark:hover:text-nvr-cyan'
+                className='inline-flex min-w-0 max-w-full items-center gap-1.5 transition-colors hover:text-nvr-navy dark:hover:text-nvr-cyan'
               >
-                <Mail className='h-3.5 w-3.5' /> {view.email}
+                <Mail className='h-3.5 w-3.5 shrink-0' />{' '}
+                <span className='min-w-0 break-all'>{view.email}</span>
               </a>
               {view.phone && (
                 <a
@@ -1836,7 +1837,8 @@ function OwnProfileTabs({
     <div
       role='tablist'
       aria-label='Profile sections'
-      className='flex gap-1 border-b border-slate-200 dark:border-border'
+      // Scrolls sideways on a phone instead of wrapping a tab onto a second line.
+      className='flex gap-1 overflow-x-auto overflow-y-hidden border-b border-slate-200 [scrollbar-width:none] dark:border-border'
     >
       {items.map(([key, label]) => (
         <button
@@ -1846,7 +1848,7 @@ function OwnProfileTabs({
           aria-selected={tab === key}
           onClick={() => pick(key)}
           className={cn(
-            '-mb-px border-b-2 px-3 py-2 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40',
+            '-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40',
             tab === key
               ? 'border-nvr-cyan text-slate-900 dark:text-white'
               : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'

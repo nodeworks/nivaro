@@ -21,6 +21,7 @@ import {
   formatNumber,
   formatRelative
 } from '../../lib/utils'
+import { useRecordLabels } from '../item-edit/useRecordLabels'
 import { McpScopeSheet, type McpScopeSummary, ScopeBadge } from '../McpConnectionScope'
 import { SimpleSelectXs } from '../ui/SimpleSelect'
 import { Skeleton } from '../ui/skeleton'
@@ -104,6 +105,24 @@ interface AgentCall {
   record: { collection: string; id: string } | null
   api_calls: number
   writes: AgentWrite[]
+}
+
+/** A record the agent touched, by the name the viewer sees for it ("TP26-91115"), read as the
+ *  viewer; the collection rides along muted. Never "workflows #371515" (rt8 review r2). */
+function RecordName({ collection, id }: { collection: string; id: string }) {
+  const labels = useRecordLabels(collection, [id])
+  const label = labels.get(String(id))
+  const kind = collection.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  return (
+    <span data-tip={`${kind} · id ${id}`}>
+      {label ?? <span className='text-slate-500 dark:text-slate-400'>A {kind} record</span>}
+      {label && (
+        <span className='ml-1.5 text-[11px] font-normal text-slate-500 dark:text-slate-400'>
+          {kind}
+        </span>
+      )}
+    </span>
+  )
 }
 
 const KIND_LABEL: Record<McpConnKind, string> = {
@@ -275,13 +294,14 @@ function ConnectionRow({
           </span>
         ))}
       </div>
-      <div className='ml-auto flex items-center gap-1.5'>
+      {/* Wraps as a row, left-aligned under the app on a phone; each action stays on one line. */}
+      <div className='flex flex-wrap items-center gap-1.5 sm:ml-auto'>
         {c.scope_editable && (
           <>
             <button
               type='button'
               onClick={() => setLimits(true)}
-              className='h-7 rounded-md px-2 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:hover:text-white'
+              className='h-7 whitespace-nowrap rounded-md px-2 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:hover:text-white'
             >
               Limits
             </button>
@@ -299,7 +319,7 @@ function ConnectionRow({
           <button
             type='button'
             onClick={onShowCalls}
-            className='h-7 rounded-md px-2 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:hover:text-white'
+            className='h-7 whitespace-nowrap rounded-md px-2 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:hover:text-white'
           >
             View calls
           </button>
@@ -309,7 +329,7 @@ function ConnectionRow({
           onClick={() => setRollingBack((v) => !v)}
           aria-expanded={rollingBack}
           data-tip='Undo what this app changed in a time window'
-          className='h-7 rounded-md px-2 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:hover:text-white'
+          className='h-7 whitespace-nowrap rounded-md px-2 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:hover:text-white'
         >
           Roll back…
         </button>
@@ -372,15 +392,15 @@ function WriteLine({
               e.preventDefault()
               open(target)
             }}
-            className='font-mono text-[11.5px] text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+            className='text-[12px] font-medium text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
           >
-            {w.collection} #{w.item}
+            <RecordName collection={target.collection} id={String(target.itemId)} />
           </a>
-        ) : (
-          <span className='font-mono text-[11.5px]'>
-            {w.collection ?? ''} {w.item ? `#${w.item}` : ''}
+        ) : w.collection && w.item ? (
+          <span className='text-[12px]'>
+            <RecordName collection={w.collection} id={String(w.item)} />
           </span>
-        )}
+        ) : null}
       </span>
       {w.undoable ? (
         <ConfirmButton
@@ -472,13 +492,13 @@ function CallRow({
                 e.preventDefault()
                 open(target)
               }}
-              className='font-mono text-[11.5px] text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+              className='text-[12px] font-medium text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
             >
-              {rec?.collection} #{rec?.id}
+              <RecordName collection={target.collection} id={String(target.itemId)} />
             </a>
           ) : rec ? (
-            <span className='font-mono text-[11.5px] text-slate-600 dark:text-slate-300'>
-              {rec.collection}
+            <span className='text-[12px] text-slate-600 dark:text-slate-300'>
+              {rec.collection.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
             </span>
           ) : (
             <span className='text-slate-400 dark:text-slate-500'>—</span>
