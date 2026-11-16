@@ -7,6 +7,9 @@ import { cn } from '../lib/utils'
 import { ErrorNotice } from './ErrorNotice'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 
+/** Stamps an event carries for bookkeeping, not fields a person changed. */
+const BOOKKEEPING_FIELDS = new Set(['changed', 'updated_at', 'date_updated', 'user_updated'])
+
 /**
  * "Why didn't my page update?" — the admin-only trace (GET /api/realtime/trace). For one
  * record, or for one person, and a time window: the live events the server sent, the writes
@@ -422,29 +425,39 @@ export function LiveTraceView({
                   </tr>
                 </thead>
                 <tbody>
-                  {events.slice(0, 100).map((e) => (
-                    <tr key={e.seq} className='border-t border-slate-100 dark:border-border/60'>
-                      <td className='px-3 py-1 tabular-nums text-slate-500'>{e.seq}</td>
-                      <td className='px-3 py-1 tabular-nums'>{clock(e.at)}</td>
-                      <td className='px-3 py-1'>
-                        {e.action ?? e.event}
-                        {e.item === '*' ? ` (${e.bulk ?? 'many'} records)` : ''}
-                        {e.source ? ` · ${e.source}` : ''}
-                      </td>
-                      <td className='max-w-[260px] truncate px-3 py-1' title={e.fields.join(', ')}>
-                        {e.fields.length ? e.fields.join(', ') : '—'}
-                      </td>
-                      <td className='px-3 py-1'>
-                        {e.acked_by.length > 0 ? (
-                          `${e.acked_by.length} ${e.acked_by.length === 1 ? 'person' : 'people'}`
-                        ) : (
-                          <span className='text-slate-500 dark:text-slate-400'>
-                            not sampled / none
-                          </span>
+                  {events.slice(0, 100).map((e) => {
+                    const fields = e.fields.filter((f) => !BOOKKEEPING_FIELDS.has(f))
+                    const acked = e.acked_by.length > 0
+                    return (
+                      <tr
+                        key={e.seq}
+                        className={cn(
+                          'border-t border-slate-100 dark:border-border/60',
+                          acked && 'bg-emerald-50/70 dark:bg-emerald-500/[0.07]'
                         )}
-                      </td>
-                    </tr>
-                  ))}
+                      >
+                        <td className='px-3 py-1 tabular-nums text-slate-500'>{e.seq}</td>
+                        <td className='px-3 py-1 tabular-nums'>{clock(e.at)}</td>
+                        <td className='px-3 py-1'>
+                          {e.action ?? e.event}
+                          {e.item === '*' ? ` (${e.bulk ?? 'many'} records)` : ''}
+                          {e.source ? ` · ${e.source}` : ''}
+                        </td>
+                        <td className='max-w-[260px] truncate px-3 py-1' title={fields.join(', ')}>
+                          {fields.length ? fields.join(', ') : '—'}
+                        </td>
+                        <td className='px-3 py-1'>
+                          {acked ? (
+                            <span className='font-medium text-emerald-800 dark:text-emerald-300'>
+                              {e.acked_by.length} {e.acked_by.length === 1 ? 'person' : 'people'}
+                            </span>
+                          ) : (
+                            <span className='text-slate-400 dark:text-slate-500'>—</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             )}
@@ -455,7 +468,7 @@ export function LiveTraceView({
               ? `The server checks delivery on about 1 in ${d.ack.sampled_about_one_in} events`
               : 'The server is not checking delivery here'}
             {d.ack.sampled_about_one_in
-              ? ` (${d.ack.acked_events} confirmed in this window).`
+              ? ` (${d.ack.acked_events} confirmed in this window). A dash under Acknowledged by means the event was not checked, or nobody confirmed it.`
               : '.'}
           </p>
         </>
