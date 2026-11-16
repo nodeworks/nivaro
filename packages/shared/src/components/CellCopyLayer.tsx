@@ -23,6 +23,9 @@ export const COPY_TEXT_EVENT = 'nvr:copy-text'
 
 type CopyTextDetail = { provide: (text: Promise<string>) => void }
 
+/** Fired on window when a record card opens: the copy button stands down. */
+export const RECORD_CARD_OPEN_EVENT = 'nvr:record-card-open'
+
 /** Answer a `data-copy-source` element's copy request; returns the remover. */
 export function provideCopyText(el: HTMLElement, getText: () => Promise<string>): () => void {
   const handler = (e: Event) => (e as CustomEvent<CopyTextDetail>).detail.provide(getText())
@@ -92,6 +95,14 @@ export function CellCopyLayer() {
         setTarget((t) => (t ? null : t))
         return
       }
+      // A record card open from this cell's link: no button over its corner.
+      if (
+        td.querySelector('[data-record-card-anchor]') &&
+        document.querySelector('[data-record-card]')
+      ) {
+        setTarget((t) => (t ? null : t))
+        return
+      }
       if (td.querySelector('input[type="checkbox"]') || td.querySelector('[data-no-copy]')) {
         setTarget((t) => (t ? null : t))
         return
@@ -129,9 +140,11 @@ export function CellCopyLayer() {
     const clear = () => setTarget(null)
     window.addEventListener('mouseover', over)
     window.addEventListener('scroll', clear, true)
+    window.addEventListener(RECORD_CARD_OPEN_EVENT, clear)
     return () => {
       window.removeEventListener('mouseover', over)
       window.removeEventListener('scroll', clear, true)
+      window.removeEventListener(RECORD_CARD_OPEN_EVENT, clear)
     }
   }, [owns])
 

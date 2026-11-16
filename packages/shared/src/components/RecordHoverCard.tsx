@@ -4,6 +4,7 @@ import { useNivaroClient } from '../context'
 import { get } from '../lib/commands'
 import { useLiveRecord } from '../lib/live'
 import { formatRelative } from '../lib/utils'
+import { RECORD_CARD_OPEN_EVENT } from './CellCopyLayer'
 import { useHoverIntent } from './collections-directory/CollectionHoverCard'
 import { Popover, PopoverAnchor, PopoverContent } from './ui/popover'
 import { Skeleton } from './ui/skeleton'
@@ -198,6 +199,12 @@ export function RecordHoverCard({
   const eligible = !disabled && hoverCardEligible(collection, id)
   const card = useHoverIntent(eligible, delayMs)
   const qc = useQueryClient()
+  // One overlay at a time: a list cell's copy button stands down while this card is open
+  // (it sat over the card's corner, rt3-record r-1116e).
+  useEffect(() => {
+    if (!card.open || typeof window === 'undefined') return
+    window.dispatchEvent(new CustomEvent(RECORD_CARD_OPEN_EVENT))
+  }, [card.open])
   // A record already answered 404 for this viewer, or its card would only repeat the link:
   // no card, not even a skeleton.
   const show = () => {
