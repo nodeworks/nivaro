@@ -1668,8 +1668,10 @@ function SessionRow({
           {meta.map((m, i) => (
             <Fragment key={m}>
               {i > 0 && ' '}
-              <span className='whitespace-nowrap'>
-                {i > 0 && '· '}
+              {/* The "·" is glued to its part with a no-break space; a part longer than a
+                  phone's column may still wrap inside itself rather than run under the button. */}
+              <span className='sm:whitespace-nowrap'>
+                {i > 0 && '·\u00a0'}
                 {m}
               </span>
             </Fragment>
@@ -1686,7 +1688,8 @@ function SessionRow({
           armedClassName='border-red-300 font-semibold text-red-600 dark:border-red-500/40 dark:text-red-400'
         >
           <LogOut className='h-3 w-3' aria-hidden />
-          {pending ? 'Signing out…' : 'Sign out'}
+          {/* A phone keeps the row's text its width: the button is the icon, named by title. */}
+          <span className='sr-only sm:not-sr-only'>{pending ? 'Signing out…' : 'Sign out'}</span>
         </ConfirmButton>
       </span>
     </li>
