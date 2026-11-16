@@ -570,11 +570,11 @@ export function CollectionGantt({
               const ghost = liveDrag.ghosts.get(id)
               const ghostWho = ghost ? (liveDrag.names.get(ghost.userId) ?? 'Someone') : null
               const gs = ghost?.start ? new Date(`${ghost.start}T00:00:00`).getTime() : null
-              const ge = ghost?.end ? new Date(`${ghost.end}T00:00:00`).getTime() + DAY : null
+              const ge = ghost?.end ? new Date(`${ghost.end}T00:00:00`).getTime() : null
               const mineDragging = drag?.id === id
               const clashHere = clash?.id === id ? clash : null
               const ms = clashHere ? new Date(`${clashHere.start}T00:00:00`).getTime() : null
-              const me = clashHere ? new Date(`${clashHere.end}T00:00:00`).getTime() + DAY : null
+              const me = clashHere ? new Date(`${clashHere.end}T00:00:00`).getTime() : null
               const theirFirstName = theirName ? theirName.split(' ')[0] : 'Theirs'
               return (
                 <div
