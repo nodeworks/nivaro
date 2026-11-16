@@ -1299,6 +1299,7 @@ export {
   type SharedQueryKey
 } from './lib/query-keys'
 export * from './lib/query-stats'
+export { useQueryEntryState } from './lib/use-query-entry'
 export * from './lib/queue-grouping'
 export {
   type CollectionUpdateEvent,

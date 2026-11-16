@@ -3942,6 +3942,8 @@ export function ReportStudioEditPage() {
       // drop every client-side widget result too — fresh fetches repopulate
       queryClient.invalidateQueries({ queryKey: ['rs-widget'] })
       queryClient.invalidateQueries({ queryKey: ['nivaro-report-query'] })
+      // The shared report view's server-resolved widgets (the same reset as the portal's).
+      queryClient.invalidateQueries({ queryKey: ['nivaro-report-widget'] })
       toast.success(`Cache cleared — ${r.data.data.queries} queries reset`)
     }
   })

@@ -26,13 +26,7 @@ import {
   saveReportFilterPreset,
   toggleReportAlert
 } from '@nivaro/sdk'
-import {
-  isCancelledError,
-  skipToken,
-  useMutation,
-  useQuery,
-  useQueryClient
-} from '@tanstack/react-query'
+import { isCancelledError, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Bell,
   Camera,
@@ -123,6 +117,7 @@ import { changedWidgetIds, useConfigWatch } from '../lib/config-watch'
 import { type RunEnvelope, useAutoRefreshPref, useLiveStamp } from '../lib/live-data-changed'
 import { liveWidgetInterval, useLiveWidget } from '../lib/live-widgets'
 import { loadErrorText, serverErrorText } from '../lib/load-error'
+import { useQueryEntryState } from '../lib/use-query-entry'
 import {
   cascadeFilter,
   fetchCascadeRelations,
@@ -821,8 +816,9 @@ function QueryDataChangedChip({
   const qc = useQueryClient()
   const auto = useContext(ReportAutoRefreshContext)
   const key = ['nivaro-report-query', slug, params]
-  // Observe the rows' entry (no fetch of its own): a new run re-renders this chip.
-  const { dataUpdatedAt } = useQuery({ queryKey: key, queryFn: skipToken })
+  // Watch the rows' entry (never an observer of it: a skipToken observer left the Query's
+  // queryFn as skipToken and Reset cache failed every widget): a new run re-renders this chip.
+  const dataUpdatedAt = useQueryEntryState(key)?.dataUpdatedAt ?? 0
   const [busy, setBusy] = useState(false)
   const keyJson = JSON.stringify(key)
   // biome-ignore lint/correctness/useExhaustiveDependencies: dataUpdatedAt marks a new run
