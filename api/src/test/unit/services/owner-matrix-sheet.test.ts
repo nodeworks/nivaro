@@ -6,6 +6,7 @@ import {
   H,
   type OwnerSheetContext,
   opsEmpty,
+  pathWords,
   planHash,
   planOwnerSheet,
   resolvePerson,
@@ -205,8 +206,8 @@ describe('owner matrix spreadsheet — upload', () => {
       { field: 'step', before: 'Approve', after: 'Review' },
       { field: 'priority', before: '5', after: '1' }
     ])
-    expect(change?.filters_before).toEqual(['Region: East', 'project.project_id is not 1234'])
-    expect(change?.filters_after).toEqual(['Region: West', 'project.project_id is not 1234'])
+    expect(change?.filters_before).toEqual(['Region: East', 'Project is not 1234'])
+    expect(change?.filters_after).toEqual(['Region: West', 'Project is not 1234'])
   })
 
   it('teams added and removed', () => {
@@ -350,5 +351,14 @@ describe('owner matrix spreadsheet — binding', () => {
     ctx.groups[0].members.push('EEEEEEEE-0000-4000-8000-000000000001')
     const plan = roundTrip(ctx)
     expect(opsEmpty(plan.ops)).toBe(true)
+  })
+})
+
+describe('pathWords', () => {
+  it('names a column path in words, never the raw path', () => {
+    expect(pathWords('project_type.name')).toBe('Project Type')
+    expect(pathWords('divisions.short_name')).toBe('Division')
+    expect(pathWords('region')).toBe('Region')
+    expect(pathWords('project.project_type_id')).toBe('Project')
   })
 })
