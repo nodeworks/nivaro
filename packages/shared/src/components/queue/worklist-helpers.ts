@@ -47,3 +47,12 @@ export function formulaColumnKeys(
     .filter((fc) => fc?.key && fc.formula)
     .map((fc) => `formula.${fc.key}`)
 }
+
+/** Which right pins a narrow desktop queue table keeps longest (DataTable pinKeepRank):
+ *  Actions, then State (what the row waits on), then data columns; Owners gives way first. */
+export function queuePinKeepRank(key: string): number {
+  if (key === '__actions__') return 3
+  if (key === 'state') return 2
+  if (key === 'owners') return 0
+  return 1
+}

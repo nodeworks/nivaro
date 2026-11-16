@@ -24,6 +24,11 @@ export function fitPins(
     /** Cap on the right-hand pins alone, as a share of the visible width (the record list:
      *  State / Owners / Actions there squeezed Name out of sight at 1280 px). */
     rightShare?: number
+    /** Which right pins give way first: lower ranks are released before higher ones
+     *  (ties keep the outer-edge rule). The kept right pins come back in the caller's
+     *  order; a host that ranks must move the released ones out of the pinned block so
+     *  the kept ones stay contiguous with the edge. */
+    rank?: (key: string) => number
   } = {}
 ): { left: string[]; right: string[] } {
   // Phone width: only the record's identifier stays pinned, everything else scrolls.
@@ -42,14 +47,22 @@ export function fitPins(
   }
   const rightBudget =
     opts.rightShare != null ? viewport * opts.rightShare : Number.POSITIVE_INFINITY
-  const keptRight: string[] = []
+  const rank = opts.rank
+  // Stable sort: equal ranks keep the outer-edge order.
+  const order = rank
+    ? right
+        .map((key, i) => ({ key, i, r: rank(key) }))
+        .sort((a, b) => a.r - b.r || a.i - b.i)
+        .map((e) => e.key)
+    : right
+  const kept = new Set<string>()
   let rightUsed = 0
-  for (let i = right.length - 1; i >= 0; i--) {
-    const w = widthOf(right[i])
+  for (let i = order.length - 1; i >= 0; i--) {
+    const w = widthOf(order[i])
     if (used + w > budget || rightUsed + w > rightBudget) break
-    keptRight.unshift(right[i])
+    kept.add(order[i])
     used += w
     rightUsed += w
   }
-  return { left: keptLeft, right: keptRight }
+  return { left: keptLeft, right: right.filter((k) => kept.has(k)) }
 }

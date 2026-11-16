@@ -154,6 +154,14 @@ export interface DataTableProps<T = Record<string, unknown>> {
    *  hover-revealed pin button cycling none → left → right → none. */
   columnPins?: Record<string, 'left' | 'right'>
   onColumnPinChange?: (key: string, pin: 'left' | 'right' | null) => void
+  /** On a narrow desktop table, which right pins give way first (lib/table-pins.ts
+   *  fitPins `rank`): lower ranks are released first. A pinned column whose cells on
+   *  this page are all empty ("—", blank, or text marked `data-cell-empty`) is released
+   *  before any other. Released columns scroll with the data columns; the view's
+   *  pins are untouched. */
+  pinKeepRank?: (key: string) => number
+  /** Cap on the right pins alone, as a share of the visible width (fitPins `rightShare`). */
+  pinRightShare?: number
   /** Render a compact per-column filter row under the headers — each column
    *  whose key matches a FilterDef gets that def's control inline (the
    *  CollectionBrowserView column-filter pattern). Independent of the
@@ -916,6 +924,8 @@ export function DataTable<T = Record<string, unknown>>({
   pinFirstColumn = false,
   columnPins,
   onColumnPinChange,
+  pinKeepRank,
+  pinRightShare,
   columnFilterRow = false,
   hScrollProxy = false,
   selectedIds,
@@ -949,13 +959,18 @@ export function DataTable<T = Record<string, unknown>>({
   // right pins last, offsets from live header-cell measurement (guarded — only
   // sets state when values actually change, so the every-render effect is safe).
   const pinsActive = columnPins !== undefined
+  // Right pins the width fit let go of (pinKeepRank): they join the scrolling columns so
+  // the kept right pins stay one block against the edge. Set by the measuring effect.
+  const [releasedRight, setReleasedRight] = useState<string[]>([])
   const orderedColumns = useMemo(() => {
     if (!pinsActive || !columnPins) return columns
+    const released = new Set(releasedRight)
+    const isRight = (k: string) => columnPins[k] === 'right' && !released.has(k)
     const left = columns.filter((c) => columnPins[c.key] === 'left')
-    const right = columns.filter((c) => columnPins[c.key] === 'right')
-    const mid = columns.filter((c) => !columnPins[c.key])
+    const right = columns.filter((c) => isRight(c.key))
+    const mid = columns.filter((c) => columnPins[c.key] !== 'left' && !isRight(c.key))
     return [...left, ...mid, ...right]
-  }, [columns, columnPins, pinsActive])
+  }, [columns, columnPins, pinsActive, releasedRight])
 
   const headCellRefs = useRef<Record<string, HTMLTableCellElement | null>>({})
   const hScrollRef = useRef<HTMLDivElement | null>(null)
@@ -1003,14 +1018,40 @@ export function DataTable<T = Record<string, unknown>>({
     const checkboxWidth = onSelectionChange
       ? (checkboxHeadRef.current?.getBoundingClientRect().width ?? 40)
       : 0
+    // A pinned column with nothing in it on this page ("—" in every row) gives way first.
+    let bodyCells: HTMLElement[] | null = null
+    const emptyOnPage = (key: string) => {
+      bodyCells ??= [
+        ...(hScrollRef.current?.querySelectorAll<HTMLElement>('tbody td[data-dt-col]') ?? [])
+      ]
+      const cells = bodyCells.filter((td) => td.dataset.dtCol === key)
+      if (cells.length === 0) return false
+      for (const td of cells) {
+        // A cell may say it is empty in words ("No owners") by marking that text.
+        if (td.querySelector('[data-cell-empty]')) continue
+        if (td.querySelector('img, svg, button, input, a')) return false
+        const text = (td.textContent ?? '').trim()
+        if (text !== '' && text !== '—' && text !== '-') return false
+      }
+      return true
+    }
+    const rightKeys = columns.filter((c) => columnPins[c.key] === 'right').map((c) => c.key)
     const { left, right } = fitPins(
       orderedColumns.filter((c) => columnPins[c.key] === 'left').map((c) => c.key),
-      orderedColumns.filter((c) => columnPins[c.key] === 'right').map((c) => c.key),
+      rightKeys,
       widthOf,
       checkboxWidth,
       hScrollRef.current?.clientWidth ?? 0,
-      { compact: compactPins }
+      {
+        compact: compactPins,
+        rightShare: pinRightShare,
+        rank: pinKeepRank ? (k) => (emptyOnPage(k) ? -1e6 : pinKeepRank(k)) : undefined
+      }
     )
+    // Only a ranked fit moves columns: unranked, a dropped right pin is always the inner
+    // end of the block and simply scrolls in place (phones drop them all).
+    const released = pinKeepRank && !compactPins ? rightKeys.filter((k) => !right.includes(k)) : []
+    setReleasedRight((prev) => (prev.join('|') === released.join('|') ? prev : released))
     const next: Record<string, { side: 'left' | 'right'; offset: number; seam: boolean }> = {}
     let acc = checkboxWidth
     // Floor so adjacent pinned cells overlap by a sub-pixel instead of meeting
@@ -1146,6 +1187,7 @@ export function DataTable<T = Record<string, unknown>>({
         {orderedColumns.map((col, colIdx) => (
           <TableCell
             key={col.key}
+            data-dt-col={col.key}
             style={pinStyle(col.key)}
             className={cn(
               'px-3',

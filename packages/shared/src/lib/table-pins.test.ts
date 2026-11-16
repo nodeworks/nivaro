@@ -60,4 +60,40 @@ describe('fitPins', () => {
       fitPins(['request'], ['state', 'owners', 'actions'], widthOf, 40, 900, { rightShare: 0.4 })
     ).toEqual({ left: ['request'], right: ['owners', 'actions'] })
   })
+
+  it('ranked: Owners gives way before State, and kept pins keep the caller order', () => {
+    // 1100 px queue at 1400: right cap 45% = 495. Unranked from the edge keeps Actions +
+    // Owners and drops State; ranked (Owners lowest) keeps State + Actions instead.
+    const w: Record<string, number> = { request: 120, state: 200, owners: 260, actions: 80 }
+    const rank = (k: string) => (k === 'actions' ? 3 : k === 'state' ? 2 : k === 'owners' ? 0 : 1)
+    const of = (k: string) => w[k] ?? 100
+    expect(
+      fitPins(['request'], ['state', 'owners', 'actions'], of, 40, 1100, { rightShare: 0.45 })
+    ).toEqual({ left: ['request'], right: ['owners', 'actions'] })
+    expect(
+      fitPins(['request'], ['state', 'owners', 'actions'], of, 40, 1100, {
+        rightShare: 0.45,
+        rank
+      })
+    ).toEqual({ left: ['request'], right: ['state', 'actions'] })
+  })
+
+  it('ranked: data columns go after Owners and before State', () => {
+    const w: Record<string, number> = {
+      request: 120,
+      state: 180,
+      owners: 150,
+      amount: 120,
+      actions: 80
+    }
+    const rank = (k: string) => (k === 'actions' ? 3 : k === 'state' ? 2 : k === 'owners' ? 0 : 1)
+    // Right cap 0.45 × 900 = 405: Actions (80) + State (180) + Amount (120) = 380 fit;
+    // Owners would pass the cap.
+    expect(
+      fitPins(['request'], ['amount', 'state', 'owners', 'actions'], (k) => w[k] ?? 100, 0, 900, {
+        rightShare: 0.45,
+        rank
+      })
+    ).toEqual({ left: ['request'], right: ['amount', 'state', 'actions'] })
+  })
 })

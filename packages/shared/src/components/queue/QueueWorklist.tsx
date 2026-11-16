@@ -235,6 +235,7 @@ import {
   atRiskBreakdown,
   extraChoiceText,
   formulaColumnKeys as formulaKeysOf,
+  queuePinKeepRank,
   worklistKeyTarget
 } from './worklist-helpers'
 
@@ -6076,6 +6077,10 @@ export function QueueWorklist({
                   hideFilterRow
                   nowrapCells
                   columnPins={effectivePins}
+                  // Same give-way order as the record list on a narrow desktop: Owners
+                  // first, then data columns, then State; Actions last.
+                  pinKeepRank={queuePinKeepRank}
+                  pinRightShare={0.45}
                   onColumnPinChange={(key, pin) => {
                     setColumnPins((prev) => {
                       const next = { ...(prev ?? effectivePins) }
