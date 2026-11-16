@@ -16,6 +16,9 @@ export interface OwnedEntry {
   item: string
   label: string
   state: string | null
+  /** The step's label as the record page shows it ("Waiting on Level 1 Approval"), never the
+   *  lowercase key (rt2-record r-1116b). Null when the state row was not found. */
+  state_label?: string | null
   state_color: string | null
   url: string
   sla: SlaBatchEntry | null
@@ -34,6 +37,8 @@ const SLA_RANK: Record<string, number> = { breached: 0, warning: 1, ok: 2 }
 export interface OwnedDeps {
   owned(userId: string): Promise<SourceResult>
   sla(collection: string, ids: string[]): Promise<Record<string, SlaBatchEntry>>
+  /** State id → label (one read for the distinct states on the page). */
+  stateLabels?(ids: string[]): Promise<Map<string, string>>
 }
 
 const ownedDefaults: OwnedDeps = {
@@ -44,6 +49,12 @@ const ownedDefaults: OwnedDeps = {
   async sla(collection, ids) {
     const { computeStatusBatch } = await import('../routes/sla.js')
     return computeStatusBatch(collection, ids)
+  },
+  async stateLabels(ids) {
+    const rows = (await db('nivaro_workflow_states')
+      .whereIn('id', ids)
+      .select('id', 'label')) as Array<{ id: string; label: string | null }>
+    return new Map(rows.filter((r) => r.label).map((r) => [String(r.id), String(r.label)]))
   }
 }
 
@@ -64,6 +75,21 @@ export async function ownedWithSla(
     url: i.url,
     sla: null
   }))
+  // The step's label, not its key: one read for the few distinct states on the page.
+  const stateIds = [
+    ...new Set(
+      result.items
+        .map((i) => (i as { state_id?: string | null }).state_id)
+        .filter((x): x is string => !!x)
+    )
+  ]
+  if (deps.stateLabels && stateIds.length > 0 && stateIds.length <= 500) {
+    const labels = await deps.stateLabels(stateIds).catch(() => new Map<string, string>())
+    result.items.forEach((i, n) => {
+      const id = (i as { state_id?: string | null }).state_id
+      if (id && labels.has(id)) owned[n].state_label = labels.get(id) as string
+    })
+  }
   const byCollection = new Map<string, string[]>()
   for (const o of owned) {
     const list = byCollection.get(o.collection) ?? []
