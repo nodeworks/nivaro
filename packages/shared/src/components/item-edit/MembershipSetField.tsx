@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, Search, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { fetchCollectionMeta, fetchCollectionRelations, queryKeys } from '../../lib/query-keys'
@@ -173,6 +173,9 @@ export function MembershipSetField({
   const emptyLabel = config.empty_label ?? 'All'
   const emptyLabel2 = config.empty_label_2 ?? emptyLabel
   const [search, setSearch] = useState('')
+  // "Show it" from the Add picker: the row to scroll to and briefly highlight.
+  const [flashKey, setFlashKey] = useState<string | null>(null)
+  const tableRef = useRef<HTMLUListElement>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -313,6 +316,25 @@ export function MembershipSetField({
     return q ? all.filter((l) => matchesAllTokens(l.label, q)) : all
   }, [keyIds, keyLabels, search])
 
+  useEffect(() => {
+    if (!flashKey) return
+    const frame = requestAnimationFrame(() => {
+      const row = tableRef.current?.querySelector<HTMLElement>(
+        `[data-membership-key="${CSS.escape(flashKey)}"]`
+      )
+      if (!row) return
+      const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      row.scrollIntoView({ block: 'nearest', behavior: still ? 'auto' : 'smooth' })
+      // Keyboard users land on the row's first control, ready to add zones.
+      row.querySelector<HTMLElement>('button:not([disabled])')?.focus({ preventScroll: true })
+    })
+    const done = window.setTimeout(() => setFlashKey(null), 2200)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.clearTimeout(done)
+    }
+  }, [flashKey])
+
   const keyTitle = config.key_label ?? titleCase(keyCollection ?? keyField)
   const valueTitle = config.value_label ?? titleCase(valueCollection ?? valueField)
   const valueTitle2 = valueField2
@@ -343,6 +365,14 @@ export function MembershipSetField({
               extraFilter={
                 keyIds.length && keyIds.length <= 400 ? { id: { _nin: keyIds } } : undefined
               }
+              alreadyAdded={{
+                items: keyIds.map((k) => ({ id: k, label: keyLabels.get(k) ?? `#${k}` })),
+                where: 'in this table',
+                onShow: (k) => {
+                  setSearch('')
+                  setFlashKey(k)
+                }
+              }}
             />
           </div>
           {keyIds.length > 8 && (
@@ -395,7 +425,10 @@ export function MembershipSetField({
             {keyIds.length ? 'Nothing matches that filter.' : `No ${keyTitle.toLowerCase()} yet.`}
           </p>
         ) : (
-          <ul className='max-h-[480px] divide-y divide-slate-100 overflow-y-auto dark:divide-border'>
+          <ul
+            ref={tableRef}
+            className='max-h-[480px] divide-y divide-slate-100 overflow-y-auto dark:divide-border'
+          >
             {lines.map((line) => {
               const mine = byKey.get(line.key) ?? []
               const picked = new Set(
@@ -410,8 +443,9 @@ export function MembershipSetField({
                   data-membership-key={line.key}
                   className={cn(
                     gridCols,
-                    'grid items-center gap-3 px-3 py-1.5 text-[12px]',
-                    busy === line.key && 'opacity-60'
+                    'grid items-center gap-3 px-3 py-1.5 text-[12px] transition-colors duration-700 ease-out',
+                    busy === line.key && 'opacity-60',
+                    flashKey === line.key && 'bg-nvr-cyan/10'
                   )}
                 >
                   <span

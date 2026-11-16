@@ -117,9 +117,19 @@ export function RelationCombobox({
   missPlacement,
   defaultOpen,
   onClose,
-  displayTemplate
+  displayTemplate,
+  alreadyAdded
 }: {
   collection: string
+  /** Records the caller already holds (a membership table's rows), which the picker's filter
+   *  hides. A search that matches one says so and offers to jump to it, instead of a silent
+   *  "No results" (BOM categories, 2026-11-16: CIFA 104838 "missing" — it was already a row). */
+  alreadyAdded?: {
+    items: Array<{ id: string; label: string }>
+    /** Ends the sentence: "<label> is already <where>." */
+    where: string
+    onShow: (id: string) => void
+  }
   /** Overrides the collection's display template for this picker's options —
    *  a catalog's "Add any item" shows the item number AND its description
    *  (army11 f1: bare numbers made people pick blind). */
@@ -170,6 +180,11 @@ export function RelationCombobox({
   const readRow = useRecordReader()
   const [open, setOpen] = useState(defaultOpen ?? false)
   const [query, setQuery] = useState('')
+  const addedMatches = useMemo(() => {
+    const q = query.trim()
+    if (!q || !alreadyAdded?.items.length) return []
+    return alreadyAdded.items.filter((m) => matchesAllTokens(m.label, q)).slice(0, 3)
+  }, [query, alreadyAdded])
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   const wasOpenRef = useRef(open)
@@ -1094,6 +1109,32 @@ export function RelationCombobox({
                   </span>
                 </button>
               )}
+              {addedMatches.length > 0 && alreadyAdded && (
+                <div
+                  data-picker-already-added
+                  className='space-y-1 border-b border-slate-100 px-3 py-2 text-[12px] leading-5 text-muted-foreground dark:border-border'
+                >
+                  {addedMatches.map((m) => (
+                    <p key={m.id} className='flex items-center gap-2'>
+                      <span className='min-w-0 flex-1'>
+                        <span className='font-medium text-foreground'>{m.label}</span> is already{' '}
+                        {alreadyAdded.where}.
+                      </span>
+                      <button
+                        type='button'
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setOpen(false)
+                          alreadyAdded.onShow(m.id)
+                        }}
+                        className='shrink-0 rounded-md border border-border bg-background px-2 py-0.5 text-[11.5px] font-medium text-foreground transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                      >
+                        Show it
+                      </button>
+                    </p>
+                  ))}
+                </div>
+              )}
               {data === undefined && isLoadingOptions ? (
                 <div className='flex items-center justify-center py-4'>
                   <Loader2 className='h-4 w-4 animate-spin text-muted-foreground' />
@@ -1101,7 +1142,7 @@ export function RelationCombobox({
               ) : listOptions.length === 0 && !optionsSettled ? (
                 <p className='px-3 py-2 text-[13px] text-muted-foreground'>Searching…</p>
               ) : listOptions.length === 0 ? (
-                pinnedShown && query.trim() ? null : narrowedBy &&
+                (pinnedShown || addedMatches.length > 0) && query.trim() ? null : narrowedBy &&
                   narrowedBy.labels.length > 0 &&
                   !query.trim() ? (
                   <div className='px-3 py-2 text-[12px] leading-5 text-muted-foreground'>
@@ -1218,7 +1259,8 @@ export function RelationCombobox({
                 search={debouncedQuery}
                 filter={combinedFilter}
                 narrowedLabels={narrowedBy?.labels ?? []}
-                auto={(data ?? []).length === 0 && !!debouncedQuery}
+                auto={(data ?? []).length === 0 && !!debouncedQuery && addedMatches.length === 0}
+                explained={addedMatches.length}
               />
             )}
           </div>,
@@ -1250,13 +1292,16 @@ function PickerNarrowingNote({
   search,
   filter,
   narrowedLabels,
-  auto
+  auto,
+  explained = 0
 }: {
   collection: string
   search: string
   filter: Record<string, unknown> | undefined
   narrowedLabels: string[]
   auto: boolean
+  /** Filter-hidden matches the panel already explains ("… is already in this table"). */
+  explained?: number
 }) {
   const client = useNivaroClient()
   const [asked, setAsked] = useState(false)
@@ -1296,9 +1341,10 @@ function PickerNarrowingNote({
   if (!data) return null
   const lines: string[] = []
   const what = search ? `match “${search}”` : 'exist'
-  if (data.by_field_filter > 0)
+  const byFilter = Math.max(0, data.by_field_filter - explained)
+  if (byFilter > 0)
     lines.push(
-      `${data.by_field_filter.toLocaleString()} more ${what} but this field only offers ${
+      `${byFilter.toLocaleString()} more ${what} but this field only offers ${
         narrowedLabels.length
           ? `records that fit ${narrowedLabels.join(' · ')}`
           : 'records its filter allows'
