@@ -451,7 +451,7 @@ export function CollectionCalendar({
       <p className='sr-only' aria-live='polite' data-cal-say>
         {say}
       </p>
-      <div className='mb-3 flex items-center gap-2'>
+      <div className='mb-3 flex flex-wrap items-center gap-2'>
         <Button
           variant='outline'
           size='sm'
@@ -478,24 +478,34 @@ export function CollectionCalendar({
         >
           Today
         </Button>
-        <div className='ml-auto flex items-center gap-1.5'>
-          <span className='text-[11px] text-slate-400'>Date field</span>
-          <div className='flex items-center rounded-lg border border-slate-200 p-0.5 dark:border-border'>
-            {dateFields.slice(0, 4).map((f) => (
-              <button
-                key={f.field}
-                type='button'
-                onClick={() => setField(f.field)}
-                className={cn(
-                  'h-6 rounded-md px-2 text-[11px] font-medium',
-                  field === f.field
-                    ? 'bg-nvr-cyan/15 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
-                    : 'text-slate-400 hover:text-slate-700'
-                )}
-              >
-                {fieldName(f)}
-              </button>
-            ))}
+        {/* Phone: its own full-width row under the month, chips never wrap; the strip
+            scrolls sideways behind an edge fade instead (rt9 review). */}
+        <div className='flex w-full min-w-0 items-center gap-1.5 sm:ml-auto sm:w-auto'>
+          <span className='shrink-0 text-[11px] text-slate-400'>Date field</span>
+          <div className='relative min-w-0 flex-1 sm:flex-none'>
+            <div className='flex items-center overflow-x-auto rounded-lg border border-slate-200 p-0.5 [scrollbar-width:none] dark:border-border [&::-webkit-scrollbar]:hidden'>
+              {dateFields.slice(0, 4).map((f) => (
+                <button
+                  key={f.field}
+                  type='button'
+                  onClick={() => setField(f.field)}
+                  className={cn(
+                    'h-6 shrink-0 whitespace-nowrap rounded-md px-2 text-[11px] font-medium',
+                    field === f.field
+                      ? 'bg-nvr-cyan/15 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
+                      : 'text-slate-400 hover:text-slate-700'
+                  )}
+                >
+                  {fieldName(f)}
+                </button>
+              ))}
+            </div>
+            {dateFields.length > 1 && (
+              <span
+                aria-hidden
+                className='pointer-events-none absolute inset-y-px right-px w-6 rounded-r-lg bg-gradient-to-l from-white to-transparent sm:hidden dark:from-background'
+              />
+            )}
           </div>
         </div>
       </div>
@@ -577,7 +587,7 @@ export function CollectionCalendar({
                       {day}
                     </span>
                     {isToday && (
-                      <span className='ml-1 text-[9.5px] font-medium text-slate-500 dark:text-slate-400'>
+                      <span className='ml-1 hidden text-[9.5px] font-medium text-slate-500 sm:inline dark:text-slate-400'>
                         Today
                       </span>
                     )}

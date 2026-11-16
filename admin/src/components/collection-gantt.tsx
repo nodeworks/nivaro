@@ -21,6 +21,7 @@ import {
   valueOnDay
 } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { ChevronRight } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { api } from '@/lib/api'
@@ -439,6 +440,7 @@ export function CollectionGantt({
     dragSpanLabel(dragDayKey(new Date(a)), dragDayKey(new Date(Math.max(a, b))))
   // A label beside a bar goes on whichever side has room.
   const sideLabel = (endPct: number) => (endPct > 72 ? 'right-full mr-1.5' : 'left-full ml-1.5')
+  const rawPct = (t: number) => ((t - windowStart) / span) * 100
 
   if (dateFields.length < 2) {
     return (
@@ -621,11 +623,18 @@ export function CollectionGantt({
                     {label(it)}
                   </button>
                   {/* A clash draws two lanes: theirs (where it is now) above, yours below. */}
-                  <div className={cn('relative flex-1 py-1.5', clashHere && 'min-h-[54px]')}>
+                  <div
+                    className={cn(
+                      'relative flex-1 py-1.5',
+                      (clashHere || (ghost && gs != null && ge != null)) && 'min-h-[54px]'
+                    )}
+                  >
                     {ghost && gs != null && ge != null && (
                       <div
                         data-gantt-ghost={id}
-                        className='nvr-fade-in pointer-events-none absolute top-1/2 flex h-4 -translate-y-1/2 items-center rounded-full border border-dashed border-violet-400 bg-violet-50/60 dark:border-violet-400/70 dark:bg-violet-500/10'
+                        // Its own lane under the resting bar (like a clash's two lanes): the
+                        // name and dates never sit on the record's own bar (rt9 review).
+                        className='nvr-fade-in pointer-events-none absolute top-[38px] flex h-4 -translate-y-1/2 items-center rounded-full border border-dashed border-violet-400 bg-violet-50/60 dark:border-violet-400/70 dark:bg-violet-500/10'
                         style={{
                           left: `${pct(gs)}%`,
                           width: `${Math.max(0.6, pct(ge) - pct(gs))}%`
@@ -642,6 +651,13 @@ export function CollectionGantt({
                             ? dragSpanLabel(ghost.start as string, ghost.end as string)
                             : dragDayLabel(ghost.start as string)}
                         </span>
+                        {rawPct(ge) > 100 && (
+                          // It runs past the window: say it continues instead of a cut end.
+                          <ChevronRight
+                            aria-hidden
+                            className='absolute -right-0.5 h-3 w-3 text-violet-500 dark:text-violet-300'
+                          />
+                        )}
                       </div>
                     )}
                     {clashHere && ms != null && me != null && (
@@ -683,7 +699,7 @@ export function CollectionGantt({
                       }}
                       className={cn(
                         'absolute h-3 -translate-y-1/2 rounded-full focus-visible:outline-none focus-visible:ring-2',
-                        clashHere ? 'top-[16px]' : 'top-1/2',
+                        clashHere || (ghost && gs != null && ge != null) ? 'top-[16px]' : 'top-1/2',
                         clashHere
                           ? 'nvr-clash-pulse bg-violet-200 ring-2 ring-violet-500 dark:bg-violet-500/40 dark:ring-violet-400'
                           : 'bg-[#00ceff66] ring-1 ring-[#00ceff]',
