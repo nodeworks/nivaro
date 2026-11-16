@@ -382,7 +382,7 @@ export function OwnerSheetDrawer({
             </h2>
             <p className='truncate text-[11.5px] text-slate-500 dark:text-muted-foreground'>
               {fileName}
-              {preview ? ` · ${plural(preview.rows, 'row')}` : ''}
+              {preview && !wrongFile ? ` · ${plural(preview.rows, 'row')}` : ''}
             </p>
           </div>
           <button
@@ -452,7 +452,7 @@ export function OwnerSheetDrawer({
                   </span>
                 </div>
               )}
-              {!preview.nothing_to_do && <Summary preview={preview} />}
+              {!preview.nothing_to_do && <Summary preview={preview} blockedRows={blockedRows} />}
               {preview.problems.length > 0 && <Problems preview={preview} />}
               {preview.nothing_to_do && preview.errors === 0 && (
                 <p className='rounded-md border border-dashed border-slate-200 px-3 py-6 text-center text-[13px] text-slate-500 dark:border-border dark:text-muted-foreground'>
@@ -544,7 +544,7 @@ export function OwnerSheetDrawer({
           ) : (
             <Button
               size='sm'
-              className='h-8 gap-1.5 bg-nvr-cyan text-[12.5px] text-white hover:bg-nvr-cyan/90 disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:bg-muted dark:disabled:text-muted-foreground'
+              className='h-8 gap-1.5 bg-nvr-cyan text-[12.5px] text-white hover:bg-nvr-cyan/90 disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 dark:disabled:border dark:disabled:border-border dark:disabled:!bg-transparent dark:disabled:!text-slate-500'
               onClick={onApply}
               disabled={!canApply || applying}
               data-owner-sheet-apply
@@ -560,8 +560,33 @@ export function OwnerSheetDrawer({
   )
 }
 
-function Summary({ preview }: { preview: OwnerSheetPreview }) {
-  const c = preview.counts
+/** Whether a change comes from a row whose problem stops Apply. */
+const isBlocked = (c: GroupChange, blockedRows: Set<number | null>) =>
+  c.row != null && blockedRows.has(c.row)
+
+function Summary({
+  preview,
+  blockedRows
+}: {
+  preview: OwnerSheetPreview
+  blockedRows: Set<number | null>
+}) {
+  // The tiles count what an Apply would do: changes from rows waiting on a fix are left out
+  // and named once under the tiles.
+  const c = { ...preview.counts }
+  let waiting = 0
+  for (const step of preview.steps) {
+    for (const ch of step.changes) {
+      if (!isBlocked(ch, blockedRows)) continue
+      waiting++
+      if (ch.kind === 'added') c.groups_added--
+      else if (ch.kind === 'removed') c.groups_removed--
+      else c.groups_changed--
+      c.people_added -= ch.people_added.length
+      c.people_removed -= ch.people_removed.length
+    }
+  }
+  for (const k of Object.keys(c) as Array<keyof typeof c>) c[k] = Math.max(0, c[k])
   const items: Array<{ n: number; label: string; tone: 'add' | 'remove' | 'change' | 'plain' }> = [
     {
       n: c.groups_added,
@@ -596,17 +621,29 @@ function Summary({ preview }: { preview: OwnerSheetPreview }) {
     plain: 'text-slate-700 dark:text-foreground'
   }
   return (
-    <div className='flex flex-wrap gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
-      {items.map((it) => (
-        <div key={it.label} className='min-w-[104px] flex-1 bg-white px-3 py-2 dark:bg-card'>
-          <div
-            className={`text-[17px] font-semibold tabular-nums ${it.n ? tone[it.tone] : 'text-slate-300 dark:text-slate-600'}`}
-          >
-            {it.n}
+    <div className='space-y-1'>
+      <div className='flex flex-wrap gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
+        {items.map((it) => (
+          <div key={it.label} className='min-w-[104px] flex-1 bg-white px-3 py-2 dark:bg-card'>
+            <div
+              className={`text-[17px] font-semibold tabular-nums ${it.n ? tone[it.tone] : 'text-slate-300 dark:text-slate-600'}`}
+            >
+              {it.n}
+            </div>
+            <div className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              {it.label}
+            </div>
           </div>
-          <div className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>{it.label}</div>
-        </div>
-      ))}
+        ))}
+      </div>
+      {waiting > 0 && (
+        <p
+          className='text-[11.5px] text-slate-500 dark:text-muted-foreground'
+          data-owner-sheet-waiting
+        >
+          Not counted: {plural(waiting, 'group change')} waiting on a fix in the file.
+        </p>
+      )}
     </div>
   )
 }
@@ -687,6 +724,16 @@ function StepSection({
   step: StepChanges
   blockedRows: Set<number | null>
 }) {
+  // +N / −N count only what an Apply would do; changes waiting on a fix are named apart.
+  let added = step.people_added
+  let removed = step.people_removed
+  let waiting = 0
+  for (const ch of step.changes) {
+    if (!isBlocked(ch, blockedRows)) continue
+    waiting++
+    added -= ch.people_added.length
+    removed -= ch.people_removed.length
+  }
   return (
     <section aria-label={step.state_label}>
       <div className='mb-1.5 flex items-baseline gap-2'>
@@ -694,9 +741,14 @@ function StepSection({
           {step.state_label}
         </h3>
         <span className='text-[11.5px] text-slate-500 tabular-nums dark:text-muted-foreground'>
-          {plural(step.changes.length, 'group')}
-          {step.people_added > 0 && ` · +${step.people_added}`}
-          {step.people_removed > 0 && ` · −${step.people_removed}`}
+          {[
+            step.changes.length > waiting ? plural(step.changes.length - waiting, 'group') : '',
+            added > 0 ? `+${added}` : '',
+            removed > 0 ? `−${removed}` : '',
+            waiting > 0 ? `${waiting} waiting on a fix` : ''
+          ]
+            .filter(Boolean)
+            .join(' · ')}
         </span>
       </div>
       <ul className='divide-y divide-slate-100 overflow-hidden rounded-md border border-slate-200 dark:divide-border dark:border-border'>
@@ -704,7 +756,7 @@ function StepSection({
           <ChangeRow
             key={`${c.group_id ?? ''}:${c.row ?? ''}`}
             change={c}
-            blocked={c.row != null && blockedRows.has(c.row)}
+            blocked={isBlocked(c, blockedRows)}
           />
         ))}
       </ul>
