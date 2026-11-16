@@ -5,6 +5,7 @@ import { useItemNavigation } from '../../../context'
 import { toastError } from '../../../lib/error-toast'
 import { cn } from '../../../lib/utils'
 import { QueryErrorState } from '../../QueryErrorState'
+import { SimpleSelect } from '../../ui/SimpleSelect'
 import { useCheckReadyRecord, useReadyBoard, useRunReadyCheck } from './api'
 import { Segment } from './EventsView'
 import { agoText, exactTime, TONE_BORDER, TONE_FILL, TONE_SOFT, TONE_TEXT, type Tone } from './tone'
@@ -238,8 +239,9 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
         </div>
       ) : (
         <div className='grid items-start gap-5 lg:grid-cols-[260px_minmax(0,1fr)]'>
-          {/* On a phone the records come first; the partner and problem groups follow them. */}
-          <aside className='order-2 space-y-5 lg:order-none' aria-label='Group the board'>
+          {/* On a phone the rails would sit under every record; there a compact Partner /
+              Problem pair above the list does the same grouping. */}
+          <aside className='hidden space-y-5 lg:block' aria-label='Group the board'>
             <RailSection title='Partner'>
               <RailButton
                 on={!partner}
@@ -289,7 +291,35 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
             </RailSection>
           </aside>
 
-          <section className='order-1 min-w-0 space-y-3 lg:order-none' aria-label='Records'>
+          <section className='min-w-0 space-y-3' aria-label='Records'>
+            <div className='grid grid-cols-2 gap-2 lg:hidden' data-ic-ready-phone-groups>
+              <SimpleSelect
+                ariaLabel='Partner'
+                value={partner ?? ''}
+                onChange={(v) => setPartner(v || null)}
+                className='h-9 min-w-0 text-[12.5px]'
+                options={[
+                  { value: '', label: `All partners (${totals.records})` },
+                  ...(data.partners ?? []).map((p) => ({
+                    value: p.partner,
+                    label: `${p.partner} (${p.records})`
+                  }))
+                ]}
+              />
+              <SimpleSelect
+                ariaLabel='Problem'
+                value={problem ?? ''}
+                onChange={(v) => setProblem(v || null)}
+                className='h-9 min-w-0 text-[12.5px]'
+                options={[
+                  { value: '', label: 'All problems' },
+                  ...(data.problems ?? []).map((g) => ({
+                    value: g.key,
+                    label: `${g.label} (${g.records})`
+                  }))
+                ]}
+              />
+            </div>
             <div className='flex flex-wrap items-center gap-2'>
               <Segment<SeverityFilter>
                 label='Show'
@@ -355,9 +385,10 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
 }
 
 /** A line's label from a display template with an empty part ("· Line 1"): the dangling
- *  separators go, so a list reads "Line 1, Line 2". */
+ *  separators go, so a list reads "Line 1, Line 2". A label of separators only ("-") is
+ *  empty — the caller drops it. */
 export function tidyRowLabel(label: string): string {
-  return label.replace(/^[\s·•|,–—-]+|[\s·•|,–—-]+$/g, '').trim() || label
+  return label.replace(/^[\s·•|,–—-]+|[\s·•|,–—-]+$/g, '').trim()
 }
 
 /** The collection's own name for a row; nothing when only its raw key is known. */
@@ -572,16 +603,19 @@ function ReadyRow({
                 <span className={i.severity === 'ask' ? 'text-foreground' : TONE_TEXT[t]}>
                   {i.message}
                 </span>
-                {rows.length > 0 && (
-                  <span className='text-muted-foreground'>
-                    {' — '}
-                    {rows
-                      .slice(0, 3)
-                      .map((r) => tidyRowLabel(r.label))
-                      .join(', ')}
-                    {rows.length > 3 ? ` and ${rows.length - 3} more` : ''}
-                  </span>
-                )}
+                {(() => {
+                  // Rows whose label is only separators ("-") say nothing; with none left
+                  // the " — " goes too.
+                  const named = rows.map((r) => tidyRowLabel(r.label)).filter(Boolean)
+                  if (named.length === 0) return null
+                  return (
+                    <span className='text-muted-foreground'>
+                      {' — '}
+                      {named.slice(0, 3).join(', ')}
+                      {named.length > 3 ? ` and ${named.length - 3} more` : ''}
+                    </span>
+                  )
+                })()}
               </span>
             </li>
           )

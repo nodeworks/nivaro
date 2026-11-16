@@ -7,7 +7,8 @@ describe('tidyRowLabel', () => {
     expect(tidyRowLabel('Cable assy · ')).toBe('Cable assy')
     expect(tidyRowLabel('Cable assy · Line 3')).toBe('Cable assy · Line 3')
   })
-  it('keeps a label that is only punctuation as it is', () => {
-    expect(tidyRowLabel('—')).toBe('—')
+  it('empties a label that is only separators, so the caller drops it', () => {
+    expect(tidyRowLabel('—')).toBe('')
+    expect(tidyRowLabel('-')).toBe('')
   })
 })
