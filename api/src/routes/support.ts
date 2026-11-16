@@ -330,6 +330,8 @@ export async function raiseTicket(
     issueId?: number | null
     /** Told before the desk, e.g. a form's owner for a form change request (#2609/#2656). */
     notifyFirst?: string[]
+    /** Where it was raised from when the client says (an error's Get help); else derived. */
+    source?: 'error' | null
   }
 ) {
   const replayCols =
@@ -341,6 +343,55 @@ export async function raiseTicket(
       ? { issue_id: f.issueId }
       : {}
   const now = new Date()
+  // Who gets it: the first matching assignment rule, then the type's default assignee, then
+  // the desk (services/support-assign.ts). A rule that fails to evaluate never stops a request.
+  let assignee: string | null = f.category?.default_assignee ?? null
+  let teamId: number | null = f.category?.team_id ?? null
+  let ruleEvent: string | null = null
+  const assign = await import('../services/support-assign.js')
+  const rules = await assign.loadRuleSet()
+  if (rules.rules.some((r) => r.active)) {
+    try {
+      const d = await assign.decideAssignment(
+        rules,
+        {
+          category_id: f.category?.id ?? null,
+          collection: f.collection,
+          item: f.item,
+          requester: String(req.user!.id).toUpperCase(),
+          priority: f.priority,
+          title: f.title,
+          description: f.description,
+          source: f.source ?? null,
+          issue_id: f.issueId ?? null,
+          at: now
+        },
+        {
+          trigger: 'create',
+          hasAssignee: false,
+          typeDefault: f.category?.default_assignee ?? null,
+          redis: app.redis
+        }
+      )
+      const o = d.outcome
+      if (o.kind === 'person') {
+        assignee = o.user.id
+        if (o.rule)
+          ruleEvent = `Assigned to ${o.user.name} by rule '${o.rule.name}'${
+            o.via === 'rule_fallback' ? ' (nobody on it could take it; its fallback)' : ''
+          }`
+      } else if (o.kind === 'team') {
+        assignee = null
+        teamId = o.team.id
+        ruleEvent = `Sent to ${o.team.name} by rule '${o.rule.name}'`
+      } else if (o.rule) {
+        assignee = null
+        ruleEvent = `Left on the desk by rule '${o.rule.name}' (nobody on it could take it)`
+      }
+    } catch (err) {
+      req.log.warn({ err }, 'support assignment rules failed; the type default stands')
+    }
+  }
   const [row] = (await db('nivaro_tasks')
     .insert({
       ...replayCols,
@@ -350,12 +401,12 @@ export async function raiseTicket(
       item: f.item,
       title: f.title.slice(0, 500),
       description: f.description,
-      assignee: f.category?.default_assignee ?? null,
+      assignee,
       category_id: f.category?.id ?? null,
-      team_id: f.category?.team_id ?? null,
+      team_id: teamId,
       attachments: f.attachments.length ? JSON.stringify(f.attachments) : null,
       priority: f.priority,
-      status: f.category?.default_assignee ? 'in_progress' : 'open',
+      status: assignee ? 'in_progress' : 'open',
       created_by: req.user!.id,
       completed_at: null,
       created_at: now,
@@ -364,6 +415,8 @@ export async function raiseTicket(
     .returning('id')) as Array<{ id: number } | number>
   const id = Number(typeof row === 'object' ? row.id : row)
   await logTicketEvent(id, req.user!.id, 'Raised the request', req, 'create')
+  if (ruleEvent) await logTicketEvent(id, null, ruleEvent, req)
+  assign.noteAssignment(app.redis, assignee, id)
   const t = (await loadTicket(id))!
   announceRecordHelp(t)
   const [s] = await serializeTickets([t])
@@ -386,7 +439,13 @@ export async function raiseTicket(
     actorId: req.user!.id,
     category: 'system'
   })
-  await notifyAssigned(app, t, t.assignee, req.user!.id, message)
+  await notifyAssigned(
+    app,
+    t,
+    t.assignee,
+    req.user!.id,
+    ruleEvent ? `${ruleEvent}.\n\n${message}` : message
+  )
   return s
 }
 
@@ -472,20 +531,24 @@ export async function applyTicketChange(
     patch.assignee = b.assignee || null
     events.push(b.assignee ? `Assigned to ${assignedName}` : 'Unassigned')
   }
+  let typeChanged = false
+  let typeDefault: string | null = null
   if (b.category_id !== undefined && (b.category_id ?? null) !== (t.category_id ?? null)) {
     let label = 'no type'
     if (b.category_id != null) {
       const c = (await db('nivaro_task_categories')
         .where({ id: safeId(b.category_id) ?? -1 })
-        .first('id', 'name', 'team_id')) as
-        | { id: number; name: string; team_id: number | null }
+        .first('id', 'name', 'team_id', 'default_assignee')) as
+        | { id: number; name: string; team_id: number | null; default_assignee: string | null }
         | undefined
       if (!c) return refuse('Unknown support type', 'UNKNOWN_TYPE')
       label = c.name
       patch.team_id = c.team_id
+      typeDefault = c.default_assignee
     }
     patch.category_id = b.category_id ?? null
     events.push(`Type changed to ${label}`)
+    typeChanged = true
   }
   if (b.priority !== undefined && b.priority !== t.priority) {
     if (!PRIORITIES.includes(b.priority)) return refuse('Unknown priority')
@@ -496,8 +559,63 @@ export async function applyTicketChange(
     patch.title = String(b.title).trim().slice(0, 500)
     events.push('Summary edited')
   }
+  // A new type runs the assignment rules (then the type's default) unless the same change names
+  // an assignee. Someone who already has it keeps it unless a rule says "also when the type
+  // changes".
+  if (typeChanged && b.assignee === undefined) {
+    const assign = await import('../services/support-assign.js')
+    const rules = await assign.loadRuleSet()
+    if (rules.rules.some((r) => r.active) || (!t.assignee && typeDefault)) {
+      try {
+        const d = await assign.decideAssignment(
+          rules,
+          {
+            category_id: (patch.category_id as number | null) ?? null,
+            collection: t.collection,
+            item: t.item,
+            requester: t.created_by ? String(t.created_by).toUpperCase() : null,
+            priority: String(patch.priority ?? t.priority),
+            title: String(patch.title ?? t.title),
+            description: t.description,
+            issue_id: (t.issue_id as number | null | undefined) ?? null
+          },
+          {
+            trigger: 'type_change',
+            hasAssignee: !!t.assignee,
+            typeDefault,
+            redis: app.redis
+          }
+        )
+        const o = d.outcome
+        if (
+          o.kind === 'person' &&
+          o.user.id.toUpperCase() !== String(t.assignee ?? '').toUpperCase()
+        ) {
+          patch.assignee = o.user.id
+          events.push(
+            o.rule
+              ? `Assigned to ${o.user.name} by rule '${o.rule.name}'`
+              : `Assigned to ${o.user.name} (the type’s default)`
+          )
+        } else if (o.kind === 'team') {
+          patch.team_id = o.team.id
+          if (t.assignee) patch.assignee = null
+          events.push(`Sent to ${o.team.name} by rule '${o.rule.name}'`)
+        } else if (o.kind === 'desk' && o.rule && t.assignee) {
+          patch.assignee = null
+          events.push(`Back on the desk by rule '${o.rule.name}' (nobody on it could take it)`)
+        }
+      } catch (err) {
+        req.log.warn({ err }, 'support assignment rules failed on a type change')
+      }
+    }
+  }
   if (!events.length) return { ok: true, ticket: t, changed: false }
   await db('nivaro_tasks').where({ id: t.id }).update(patch)
+  if (typeof patch.assignee === 'string') {
+    const { noteAssignment } = await import('../services/support-assign.js')
+    noteAssignment(app.redis, patch.assignee as string, t.id)
+  }
   announceRecordHelp(t)
   // Closing settles the request's notifications: "Closed by <who>".
   if (patch.status === 'done' || patch.status === 'cancelled') {
@@ -968,6 +1086,8 @@ export async function supportRoutes(app: FastifyInstance) {
       attachments?: string[]
       /** #1377 — the requester's own recording + where they asked. */
       replay?: { recording_id?: string; offset_ms?: number | null } | null
+      /** 'error' = raised from an error's Get help (assignment rules may route on it). */
+      source?: string | null
     }
   }>('/tickets', async (req, reply) => {
     const b = req.body ?? {}
@@ -1046,7 +1166,8 @@ export async function supportRoutes(app: FastifyInstance) {
         category: category ?? null,
         priority,
         attachments: await ownFilesOf(req, b.attachments),
-        replay: await ownReplayLink(req.user!.id, b.replay)
+        replay: await ownReplayLink(req.user!.id, b.replay),
+        source: b.source === 'error' ? 'error' : null
       })
     } catch (err) {
       // Nothing was filed: free the claim so the person can send again at once.
@@ -1244,6 +1365,8 @@ export async function supportRoutes(app: FastifyInstance) {
       .where({ id: t.id })
       .update({ assignee: req.user!.id, status: 'in_progress', updated_at: new Date() })
     const me = (await nameOf(req.user!.id)) ?? 'Someone'
+    const { noteAssignment } = await import('../services/support-assign.js')
+    noteAssignment(app.redis, String(req.user!.id), t.id)
     await logTicketEvent(t.id, req.user!.id, `Picked up by ${me} · In progress`, req)
     // A live screen share goes to whoever it was started with: taken over = it ends.
     await screenShareTicketChanged(app, t.id)
@@ -1316,4 +1439,7 @@ export async function supportRoutes(app: FastifyInstance) {
 
   // Share my screen with support (realtime idea 24): start / read / stop a live screen share.
   await app.register(supportScreenShareRoutes)
+  // Auto-assign rules (administrators): /assign-rules, /options, /fields, /test.
+  const { supportAssignRuleRoutes } = await import('./support-assign-rules.js')
+  await app.register(supportAssignRuleRoutes)
 }
