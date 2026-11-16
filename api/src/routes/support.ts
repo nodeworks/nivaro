@@ -6,6 +6,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { singular as singularTitle } from '../services/access-words.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
 import { getCollection } from '../services/collections.js'
+import { selectInChunks } from '../services/db-batch.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { readOne } from '../services/items.js'
 import { cleanAppLabel } from '../services/page-at.js'
@@ -13,6 +14,13 @@ import { announceRecordHelp, loadRecordHelp } from '../services/record-help.js'
 import { collectionTitle } from '../services/record-label-fallback.js'
 import { readShare, type ShareRedis } from '../services/screen-share.js'
 import { DEFAULT_TARGETS, loadSupportAnalytics } from '../services/support-analytics.js'
+import {
+  parseBulkBody,
+  parseTicketListQuery,
+  type TicketChange,
+  ticketOrderClauses,
+  WAITING_SQL
+} from '../services/support-list.js'
 import {
   canSeeTicket,
   canWorkDesk,
@@ -361,19 +369,168 @@ export async function raiseTicket(
   const [s] = await serializeTickets([t])
   const where = s.record_label ? ` on ${s.record_label}` : ' (General Support)'
   const who = s.requester_name ?? 'Someone'
+  const message = `${who} asked${where}${s.category_name ? ` · ${s.category_name}` : ''}.${
+    s.description ? `\n\n${String(s.description).slice(0, 400)}` : ''
+  }`
+  // A request that lands with someone (the type's default assignee) tells THEM "Assigned to
+  // you" — with email — instead of the desk's "New support request".
   const audience = [
-    ...(f.notifyFirst ?? []),
-    ...(t.assignee ? [t.assignee] : await supportAudience(t.team_id))
+    ...(f.notifyFirst ?? []).filter(
+      (r) => !t.assignee || String(r).toUpperCase() !== String(t.assignee).toUpperCase()
+    ),
+    ...(t.assignee ? [] : await supportAudience(t.team_id))
   ]
   await notifyTicket(app, t, audience, {
     subject: `New support request: ${s.title}`,
-    message: `${who} asked${where}${s.category_name ? ` · ${s.category_name}` : ''}.${
-      s.description ? `\n\n${String(s.description).slice(0, 400)}` : ''
-    }`,
+    message,
     actorId: req.user!.id,
     category: 'system'
   })
+  await notifyAssigned(app, t, t.assignee, req.user!.id, message)
   return s
+}
+
+export type TicketChangeResult =
+  | { ok: true; ticket: TicketRow & Record<string, unknown>; changed: boolean }
+  | { ok: false; http: number; code: string; reason: string }
+
+/** "Assigned to you: <title>" — the one ticket notice that also asks for email (their own
+ *  per-category email setting decides: instant, daily summary or off). Never to the actor. */
+export async function notifyAssigned(
+  app: FastifyInstance,
+  t: TicketRow,
+  assignee: string | null | undefined,
+  actorId: string | null,
+  message: string
+): Promise<void> {
+  if (!assignee) return
+  if (actorId && String(assignee).toUpperCase() === String(actorId).toUpperCase()) return
+  await notifyTicket(app, t, [assignee], {
+    subject: `Assigned to you: ${t.title}`,
+    message,
+    actorId,
+    category: 'workflow',
+    email: true
+  })
+}
+
+/**
+ * One change to one ticket — THE path for PATCH /tickets/:id and every id of
+ * POST /tickets/bulk: who may make it, validation, the history line, settling
+ * the request's notifications on close, the screen share, the record's help
+ * badge, and telling people. The caller has already checked the ticket is
+ * visible to them (404 otherwise).
+ */
+export async function applyTicketChange(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  t: TicketRow & Record<string, unknown>,
+  b: TicketChange
+): Promise<TicketChangeResult> {
+  const viewer = viewerOf(req)
+  const work = await canWorkTicket(viewer, t)
+  const isRequester = String(t.created_by).toUpperCase() === viewer.id
+  const onlyStatus = Object.keys(b).every((k) => k === 'status')
+  if (!work && !(isRequester && onlyStatus && (b.status === 'cancelled' || b.status === 'open'))) {
+    return {
+      ok: false,
+      http: 403,
+      code: 'FORBIDDEN',
+      reason: isRequester
+        ? 'You can only cancel or reopen your own request'
+        : 'You do not work this request'
+    }
+  }
+  const refuse = (reason: string, code = 'INVALID') =>
+    ({ ok: false, http: 400, code, reason }) as const
+  const patch: Record<string, unknown> = { updated_at: new Date() }
+  const events: string[] = []
+  const me = (await nameOf(req.user!.id)) ?? 'Someone'
+  if (b.status !== undefined && b.status !== t.status) {
+    if (!(TICKET_STATUSES as readonly string[]).includes(b.status))
+      return refuse(`status must be one of ${TICKET_STATUSES.join(', ')}`)
+    patch.status = b.status
+    patch.completed_at = b.status === 'done' || b.status === 'cancelled' ? new Date() : null
+    // Who closed it (#1001), where the column exists.
+    const { taskColumns } = await import('../services/tasks.js')
+    if ((await taskColumns()).completedBy)
+      patch.completed_by = b.status === 'done' ? viewer.id : null
+    events.push(
+      `${STATUS_LABELS[t.status as TicketStatus] ?? t.status} → ${STATUS_LABELS[b.status as TicketStatus]}`
+    )
+  }
+  let assignedName: string | null = null
+  if (
+    b.assignee !== undefined &&
+    String(b.assignee ?? '').toUpperCase() !== String(t.assignee ?? '').toUpperCase()
+  ) {
+    if (b.assignee) {
+      const u = await db('nivaro_users').where({ id: b.assignee }).first('id')
+      if (!u) return refuse('Unknown assignee', 'UNKNOWN_ASSIGNEE')
+      assignedName = (await nameOf(b.assignee)) ?? 'someone'
+    }
+    patch.assignee = b.assignee || null
+    events.push(b.assignee ? `Assigned to ${assignedName}` : 'Unassigned')
+  }
+  if (b.category_id !== undefined && (b.category_id ?? null) !== (t.category_id ?? null)) {
+    let label = 'no type'
+    if (b.category_id != null) {
+      const c = (await db('nivaro_task_categories')
+        .where({ id: safeId(b.category_id) ?? -1 })
+        .first('id', 'name', 'team_id')) as
+        | { id: number; name: string; team_id: number | null }
+        | undefined
+      if (!c) return refuse('Unknown support type', 'UNKNOWN_TYPE')
+      label = c.name
+      patch.team_id = c.team_id
+    }
+    patch.category_id = b.category_id ?? null
+    events.push(`Type changed to ${label}`)
+  }
+  if (b.priority !== undefined && b.priority !== t.priority) {
+    if (!PRIORITIES.includes(b.priority)) return refuse('Unknown priority')
+    patch.priority = b.priority
+    events.push(`Priority ${b.priority}`)
+  }
+  if (b.title !== undefined && String(b.title).trim() && b.title !== t.title) {
+    patch.title = String(b.title).trim().slice(0, 500)
+    events.push('Summary edited')
+  }
+  if (!events.length) return { ok: true, ticket: t, changed: false }
+  await db('nivaro_tasks').where({ id: t.id }).update(patch)
+  announceRecordHelp(t)
+  // Closing settles the request's notifications: "Closed by <who>".
+  if (patch.status === 'done' || patch.status === 'cancelled') {
+    const { resolveNotifications } = await import('../services/notification-resolve.js')
+    await resolveNotifications({
+      on: 'ticket',
+      id: t.id,
+      at: new Date(),
+      actorId: req.user!.id,
+      status: patch.status as 'done' | 'cancelled'
+    })
+  }
+  await logTicketEvent(t.id, req.user!.id, events.join(' · '), req)
+  if (patch.assignee !== undefined || patch.team_id !== undefined || patch.status !== undefined)
+    await screenShareTicketChanged(app, t.id)
+  const updated = (await loadTicket(t.id))!
+  const statusMoved = patch.status !== undefined
+  const newlyAssigned = typeof patch.assignee === 'string' ? (patch.assignee as string) : null
+  // The new assignee hears "Assigned to you" (with email) instead of the general notice.
+  const recipients = [t.created_by, updated.assignee].filter(
+    (r) => !newlyAssigned || String(r ?? '').toUpperCase() !== newlyAssigned.toUpperCase()
+  )
+  await notifyTicket(app, updated, recipients, {
+    subject: statusMoved
+      ? `${STATUS_LABELS[updated.status as TicketStatus]}: ${t.title}`
+      : `Support request updated: ${t.title}`,
+    message: `${me}: ${events.join(' · ')}`,
+    actorId: req.user!.id,
+    category: 'workflow'
+  })
+  if (newlyAssigned)
+    await notifyAssigned(app, updated, newlyAssigned, req.user!.id, `${me}: ${events.join(' · ')}`)
+  return { ok: true, ticket: updated, changed: true }
 }
 
 export async function supportRoutes(app: FastifyInstance) {
@@ -381,10 +538,10 @@ export async function supportRoutes(app: FastifyInstance) {
 
   // ── Categories (ticket types) ──────────────────────────────────────────────
 
-  // GET /categories?collection=<c>  — the types offered for that kind of record
+  // GET /categories?collection=<c>&any=1  — the types offered for that kind of record
   //   (plus types with no collection). No collection = General Support types.
   //   ?all=1 (admins) = every category incl. inactive, for the editor.
-  app.get<{ Querystring: { collection?: string; all?: string } }>(
+  app.get<{ Querystring: { collection?: string; all?: string; any?: string } }>(
     '/categories',
     async (req, reply) => {
       const q = db('nivaro_task_categories as c')
@@ -396,8 +553,11 @@ export async function supportRoutes(app: FastifyInstance) {
       if (!(req.query.all === '1' && req.isAdmin)) {
         q.where('c.is_active', true)
         const col = req.query.collection
-        if (col) q.where((w) => w.where('c.collection', col).orWhereNull('c.collection'))
-        else q.whereNull('c.collection')
+        // ?any=1 — every active type wherever it is offered (the list filters' Type choices).
+        if (req.query.any !== '1') {
+          if (col) q.where((w) => w.where('c.collection', col).orWhereNull('c.collection'))
+          else q.whereNull('c.collection')
+        }
       }
       const rows = (await q) as Array<CategoryRow & Record<string, unknown>>
       return reply.send({ data: rows.map(serializeCategory) })
@@ -562,26 +722,17 @@ export async function supportRoutes(app: FastifyInstance) {
     }
   )
 
-  // GET /tickets?scope=mine|desk&status=open|closed|all|<status>&category=&assignee=me|unassigned&q=&page=&limit=
-  app.get<{
-    Querystring: {
-      scope?: string
-      status?: string
-      category?: string
-      assignee?: string
-      q?: string
-      collection?: string
-      item?: string
-      page?: string
-      limit?: string
-    }
-  }>('/tickets', async (req, reply) => {
+  // GET /tickets?scope=mine|desk&status=open|closed|all|<status>&category=&priority=
+  //   &assignee=me|unassigned|<user id>&requester=<user id, desk>&q=&sort=&page=&limit=
+  //   sort: attention (desk default: urgent, then unassigned, then longest waiting) | newest |
+  //   oldest | updated | priority. Each row carries waiting_since (when the requester last
+  //   heard back, else when they asked).
+  app.get<{ Querystring: Record<string, string | undefined> }>('/tickets', async (req, reply) => {
     const viewer = viewerOf(req)
     const qs = req.query
-    const limit = Math.min(Math.max(Number(qs.limit) || 50, 1), 200)
-    const page = Math.min(Math.max(Math.trunc(Number(qs.page)) || 1, 1), 100_000)
     let q = ticketQuery()
-    if (qs.scope === 'desk') {
+    const deskScope = qs.scope === 'desk'
+    if (deskScope) {
       if (!(await canWorkDesk(viewer))) return reply.code(403).send({ error: 'Forbidden' })
       if (!viewer.isAdmin) {
         const teams = await teamIdsOf(viewer.id)
@@ -596,23 +747,24 @@ export async function supportRoutes(app: FastifyInstance) {
     } else {
       q = q.where('t.created_by', viewer.id)
     }
-    const status = qs.status ?? 'open'
-    if (status === 'open') q = q.whereIn('t.status', OPEN_STATUSES)
-    else if (status === 'closed') q = q.whereIn('t.status', ['done', 'cancelled'])
-    else if ((TICKET_STATUSES as readonly string[]).includes(status))
-      q = q.where('t.status', status)
-    if (qs.category) q = q.where('t.category_id', safeId(qs.category) ?? -1)
-    if (qs.assignee === 'me') q = q.where('t.assignee', viewer.id)
-    else if (qs.assignee === 'unassigned') q = q.whereNull('t.assignee')
-    const search = qs.q?.trim() ?? ''
-    if (search) {
-      const term = `%${search.replace(/[%_[]/g, (m) => `[${m}]`)}%`
+    const lq = parseTicketListQuery(qs, { desk: deskScope, statuses: TICKET_STATUSES })
+    if (lq.status.kind === 'open') q = q.whereIn('t.status', OPEN_STATUSES)
+    else if (lq.status.kind === 'closed') q = q.whereIn('t.status', ['done', 'cancelled'])
+    else if (lq.status.kind === 'one') q = q.where('t.status', lq.status.status)
+    if (lq.category != null) q = q.where('t.category_id', lq.category)
+    if (lq.priority) q = q.where('t.priority', lq.priority)
+    if (lq.requester) q = q.where('t.created_by', lq.requester)
+    if (lq.assignee?.kind === 'me') q = q.where('t.assignee', viewer.id)
+    else if (lq.assignee?.kind === 'unassigned') q = q.whereNull('t.assignee')
+    else if (lq.assignee?.kind === 'user') q = q.where('t.assignee', lq.assignee.id)
+    if (lq.q) {
+      const term = `%${lq.q.replace(/[%_[]/g, (m) => `[${m}]`)}%`
       q = q.where((w) =>
         w
           .where('t.title', 'like', term)
           .orWhere('t.description', 'like', term)
           .orWhere('t.item', 'like', term)
-          .orWhereRaw('CAST(t.id AS nvarchar(20)) = ?', [search])
+          .orWhereRaw('CAST(t.id AS nvarchar(20)) = ?', [lq.q])
       )
     }
     const total = Number(
@@ -622,13 +774,116 @@ export async function supportRoutes(app: FastifyInstance) {
           | undefined
       )?.n ?? 0
     )
-    const rows = (await q
-      .orderByRaw("CASE t.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END")
-      .orderByRaw("CASE t.priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END")
-      .orderBy('t.created_at', status === 'closed' ? 'desc' : 'asc')
-      .offset((page - 1) * limit)
-      .limit(limit)) as Array<TicketRow & Record<string, unknown>>
-    return reply.send({ data: await serializeTickets(rows), total, page, limit })
+    q = q.select(db.raw(`${WAITING_SQL} as waiting_since`))
+    for (const clause of ticketOrderClauses(lq.sort, lq.status)) q = q.orderByRaw(clause)
+    const rows = (await q.offset((lq.page - 1) * lq.limit).limit(lq.limit)) as Array<
+      TicketRow & Record<string, unknown>
+    >
+    return reply.send({
+      data: await serializeTickets(rows),
+      total,
+      page: lq.page,
+      limit: lq.limit,
+      sort: lq.sort
+    })
+  })
+
+  // GET /workload — "who has what" on the desk the caller works (same visibility as
+  //   scope=desk): open requests per assignee with the longest wait, the unassigned pile, and
+  //   the people who work this desk (the assignee filter's and Assign to…'s choices).
+  app.get('/workload', async (req, reply) => {
+    const viewer = viewerOf(req)
+    if (!(await canWorkDesk(viewer))) return reply.code(403).send({ error: 'Forbidden' })
+    const teams = viewer.isAdmin ? null : await teamIdsOf(viewer.id)
+    const open = db('nivaro_tasks as t')
+      .where('t.kind', SUPPORT_KIND)
+      .whereIn('t.status', OPEN_STATUSES)
+      .select('t.assignee', 't.priority', db.raw(`${WAITING_SQL} as w`))
+    if (teams)
+      open.where((w) =>
+        w.whereIn('t.team_id', teams.length ? teams : [-1]).orWhere('t.assignee', viewer.id)
+      )
+    const grouped = (await db
+      .from(open.as('x'))
+      .groupBy('x.assignee')
+      .select('x.assignee')
+      .count('* as n')
+      .select(db.raw("SUM(CASE WHEN x.priority = 'urgent' THEN 1 ELSE 0 END) as urgent"))
+      .min('x.w as oldest')) as Array<{
+      assignee: string | null
+      n: number
+      urgent: number
+      oldest: Date | string | null
+    }>
+    // Who works this desk: administrators (or the caller's teams), plus anyone holding a request.
+    const workerIds = new Set<string>()
+    if (teams) {
+      if (teams.length) {
+        const rows = (await db('nivaro_user_group_members as m')
+          .join('nivaro_users as u', 'u.id', 'm.user')
+          .whereIn('m.group_id', teams)
+          .where('u.status', 'active')
+          .whereNull('u.account_kind')
+          .select('u.id')) as Array<{ id: string }>
+        for (const r of rows) workerIds.add(String(r.id).toUpperCase())
+      }
+    } else {
+      for (const id of await supportAudience(null)) workerIds.add(id)
+      const routed = (await db('nivaro_task_categories')
+        .where('is_active', true)
+        .whereNotNull('team_id')
+        .distinct('team_id')) as Array<{ team_id: number }>
+      for (const r of routed)
+        for (const id of await supportAudience(Number(r.team_id))) workerIds.add(id)
+    }
+    workerIds.add(viewer.id)
+    for (const g of grouped) if (g.assignee) workerIds.add(String(g.assignee).toUpperCase())
+    const people = workerIds.size
+      ? ((await selectInChunks([...workerIds], 500, (chunk) =>
+          db('nivaro_users')
+            .whereIn('id', chunk)
+            .select('id', 'first_name', 'last_name', 'email', 'status')
+        )) as Array<{
+          id: string
+          first_name: string | null
+          last_name: string | null
+          email: string | null
+          status: string | null
+        }>)
+      : []
+    const byId = new Map(people.map((p) => [String(p.id).toUpperCase(), p]))
+    const iso = (v: Date | string | null) =>
+      v == null ? null : v instanceof Date ? v.toISOString() : String(v)
+    const held = grouped.filter((g) => g.assignee)
+    const unassigned = grouped.find((g) => !g.assignee)
+    const assignees = held
+      .map((g) => {
+        const id = String(g.assignee).toUpperCase()
+        return {
+          id,
+          name: userName(byId.get(id)) ?? 'Unknown person',
+          open: Number(g.n),
+          urgent: Number(g.urgent ?? 0),
+          oldest_waiting: iso(g.oldest),
+          active: (byId.get(id)?.status ?? 'active') === 'active'
+        }
+      })
+      .sort((a, b) => b.open - a.open || a.name.localeCompare(b.name))
+    const workers = [...workerIds]
+      .map((id) => ({ id, name: userName(byId.get(id)) ?? 'Unknown person' }))
+      .filter((p) => byId.has(p.id))
+      .sort((a, b) => a.name.localeCompare(b.name))
+    return reply.send({
+      data: {
+        assignees,
+        unassigned: {
+          open: Number(unassigned?.n ?? 0),
+          urgent: Number(unassigned?.urgent ?? 0),
+          oldest_waiting: iso(unassigned?.oldest ?? null)
+        },
+        workers
+      }
+    })
   })
 
   // GET /tickets/:id — the ticket, its thread and its history.
@@ -1019,100 +1274,44 @@ export async function supportRoutes(app: FastifyInstance) {
     const viewer = viewerOf(req)
     const t = await loadTicket(Number(req.params.id))
     if (!t || !(await canSeeTicket(viewer, t))) return reply.code(404).send({ error: 'Not found' })
-    const work = await canWorkTicket(viewer, t)
-    const isRequester = String(t.created_by).toUpperCase() === viewer.id
-    const b = req.body ?? {}
-    const onlyStatus = Object.keys(b).every((k) => k === 'status')
-    if (
-      !work &&
-      !(isRequester && onlyStatus && (b.status === 'cancelled' || b.status === 'open'))
-    ) {
-      return reply.code(403).send({ error: 'Forbidden' })
-    }
-    const patch: Record<string, unknown> = { updated_at: new Date() }
-    const events: string[] = []
-    const me = (await nameOf(req.user!.id)) ?? 'Someone'
-    if (b.status !== undefined && b.status !== t.status) {
-      if (!(TICKET_STATUSES as readonly string[]).includes(b.status)) {
-        return reply
-          .code(400)
-          .send({ error: `status must be one of ${TICKET_STATUSES.join(', ')}` })
+    const out = await applyTicketChange(app, req, t, req.body ?? {})
+    if (!out.ok) return reply.code(out.http).send({ error: out.reason, code: out.code })
+    return reply.send({ data: (await serializeTickets([out.ticket]))[0] })
+  })
+
+  // POST /tickets/bulk {ids, status?, assignee?, priority?, category_id?} — the same change on
+  //   many requests. Each one goes through PATCH's own path (who may work it, validation, the
+  //   history line, closing its notifications, telling people, the screen share, the record's
+  //   help badge); the answer says per id what happened. Not exempt from the maintenance freeze.
+  app.post<{ Body: Record<string, unknown> }>('/tickets/bulk', async (req, reply) => {
+    const viewer = viewerOf(req)
+    const parsed = parseBulkBody(req.body, viewer.id)
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
+    const results: Array<
+      | { id: number; outcome: 'updated' | 'unchanged' }
+      | { id: number; outcome: 'refused'; code: string; reason: string }
+    > = []
+    for (const id of parsed.ids) {
+      const t = await loadTicket(id)
+      if (!t || !(await canSeeTicket(viewer, t))) {
+        results.push({ id, outcome: 'refused', code: 'NOT_FOUND', reason: 'Not found' })
+        continue
       }
-      patch.status = b.status
-      patch.completed_at = b.status === 'done' || b.status === 'cancelled' ? new Date() : null
-      // Who closed it (#1001), where the column exists.
-      const { taskColumns } = await import('../services/tasks.js')
-      if ((await taskColumns()).completedBy)
-        patch.completed_by = b.status === 'done' ? viewer.id : null
-      events.push(
-        `${STATUS_LABELS[t.status as TicketStatus] ?? t.status} → ${STATUS_LABELS[b.status as TicketStatus]}`
+      const out = await applyTicketChange(app, req, t, parsed.change)
+      results.push(
+        out.ok
+          ? { id, outcome: out.changed ? 'updated' : 'unchanged' }
+          : { id, outcome: 'refused', code: out.code, reason: out.reason }
       )
     }
-    if (b.assignee !== undefined && (b.assignee ?? null) !== (t.assignee ?? null)) {
-      if (b.assignee) {
-        const u = await db('nivaro_users').where({ id: b.assignee }).first('id')
-        if (!u) return reply.code(400).send({ error: 'Unknown assignee' })
+    return reply.send({
+      data: {
+        results,
+        updated: results.filter((r) => r.outcome === 'updated').length,
+        unchanged: results.filter((r) => r.outcome === 'unchanged').length,
+        refused: results.filter((r) => r.outcome === 'refused').length
       }
-      patch.assignee = b.assignee || null
-      events.push(
-        b.assignee ? `Assigned to ${(await nameOf(b.assignee)) ?? 'someone'}` : 'Unassigned'
-      )
-    }
-    if (b.category_id !== undefined && (b.category_id ?? null) !== (t.category_id ?? null)) {
-      let label = 'no type'
-      if (b.category_id != null) {
-        const c = (await db('nivaro_task_categories')
-          .where({ id: safeId(b.category_id) ?? -1 })
-          .first('id', 'name', 'team_id')) as
-          | { id: number; name: string; team_id: number | null }
-          | undefined
-        if (!c) return reply.code(400).send({ error: 'Unknown support type' })
-        label = c.name
-        patch.team_id = c.team_id
-      }
-      patch.category_id = b.category_id ?? null
-      events.push(`Type changed to ${label}`)
-    }
-    if (b.priority !== undefined && b.priority !== t.priority) {
-      if (!PRIORITIES.includes(b.priority))
-        return reply.code(400).send({ error: 'Unknown priority' })
-      patch.priority = b.priority
-      events.push(`Priority ${b.priority}`)
-    }
-    if (b.title !== undefined && String(b.title).trim() && b.title !== t.title) {
-      patch.title = String(b.title).trim().slice(0, 500)
-      events.push('Summary edited')
-    }
-    if (!events.length) return reply.send({ data: (await serializeTickets([t]))[0] })
-    await db('nivaro_tasks').where({ id: t.id }).update(patch)
-    announceRecordHelp(t)
-    // Closing settles the request's notifications: "Closed by <who>".
-    if (patch.status === 'done' || patch.status === 'cancelled') {
-      const { resolveNotifications } = await import('../services/notification-resolve.js')
-      await resolveNotifications({
-        on: 'ticket',
-        id: t.id,
-        at: new Date(),
-        actorId: req.user!.id,
-        status: patch.status as 'done' | 'cancelled'
-      })
-    }
-    await logTicketEvent(t.id, req.user!.id, events.join(' · '), req)
-    if (patch.assignee !== undefined || patch.team_id !== undefined || patch.status !== undefined)
-      await screenShareTicketChanged(app, t.id)
-    const updated = (await loadTicket(t.id))!
-    const statusMoved = patch.status !== undefined
-    const recipients = [t.created_by, updated.assignee]
-    if (patch.assignee && patch.assignee !== req.user!.id) recipients.push(patch.assignee as string)
-    await notifyTicket(app, updated, recipients, {
-      subject: statusMoved
-        ? `${STATUS_LABELS[updated.status as TicketStatus]}: ${t.title}`
-        : `Support request updated: ${t.title}`,
-      message: `${me}: ${events.join(' · ')}`,
-      actorId: req.user!.id,
-      category: 'workflow'
     })
-    return reply.send({ data: (await serializeTickets([updated]))[0] })
   })
 
   // Share my screen with support (realtime idea 24): start / read / stop a live screen share.
