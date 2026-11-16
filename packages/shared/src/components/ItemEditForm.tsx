@@ -15427,6 +15427,7 @@ function ItemEditFormView({
                                                       fields={cloneFields}
                                                       relations={relations}
                                                       currentValues={itemData ?? {}}
+                                                      recordLabel={itemTitle}
                                                       onSuccess={(newId) =>
                                                         onSaved?.(String(newId))
                                                       }

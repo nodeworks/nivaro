@@ -757,6 +757,8 @@ export function ItemEditPage() {
     values: Record<string, unknown>
     links: Record<string, unknown[]>
     rows: Record<string, Array<Record<string, unknown>>>
+    /** The record it was duplicated from, for the "Copied from" line. */
+    source?: { id: string; label: string }
   } | null>(() => {
     const key = searchParams.get('dupe')
     if (!key) return null
@@ -916,8 +918,24 @@ export function ItemEditPage() {
                         })()}
                       <span className='text-[12px] text-slate-400 font-mono'>{collection}</span>
                     </div>
-                    {!(ancestors && ancestors.length > 1) && (
-                      <PageTrail currentLabel={trailLabel} showCurrent={false} className='mt-1' />
+                    {isNew && dupePayload?.source ? (
+                      // A duplicate names where it came from (review r-1116b), not a bare id.
+                      <p
+                        className='mt-1 text-[12px] text-slate-500 dark:text-slate-400'
+                        data-copied-from
+                      >
+                        Copied from{' '}
+                        <Link
+                          to={`/collections/${collection}/${dupePayload.source.id}`}
+                          className='font-medium text-nvr-cyan hover:underline'
+                        >
+                          {dupePayload.source.label}
+                        </Link>
+                      </p>
+                    ) : (
+                      !(ancestors && ancestors.length > 1) && (
+                        <PageTrail currentLabel={trailLabel} showCurrent={false} className='mt-1' />
+                      )
                     )}
                     {ancestors && ancestors.length > 1 && (
                       <nav className='flex items-center gap-1 text-[12px] text-slate-400 mt-1 flex-wrap'>
@@ -1290,7 +1308,7 @@ export function ItemEditPage() {
                       onClick={() => setEditingLayoutId(formView.summaryLayoutId)}
                     >
                       <LayoutTemplate className='h-3.5 w-3.5' />
-                      Edit summary
+                      Edit summary layout
                     </Button>
                   ) : editableLayoutId != null ? (
                     <Button
@@ -1375,7 +1393,17 @@ export function ItemEditPage() {
                     : (payload) => {
                         const key = `nvr-dupe-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
                         try {
-                          sessionStorage.setItem(key, JSON.stringify(payload))
+                          const label =
+                            friendlyIdOf(
+                              colMeta,
+                              itemData as Record<string, unknown> | undefined
+                            ) ??
+                            trailLabel ??
+                            `#${id}`
+                          sessionStorage.setItem(
+                            key,
+                            JSON.stringify({ ...payload, source: { id: String(id), label } })
+                          )
                         } catch {
                           /* storage full — the new page just opens blank */
                         }
