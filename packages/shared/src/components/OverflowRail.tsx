@@ -1,4 +1,4 @@
-import { Check, MoreHorizontal } from 'lucide-react'
+import { Check, ChevronDown, MoreHorizontal } from 'lucide-react'
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -101,6 +101,37 @@ function menuStops(menu: HTMLElement): HTMLElement[] {
  * and words; a pressed filter keeps its tint; extra controls in a row (a clear ×, a minutes
  * chip) stay at its end.
  */
+/** Share of the first row below the fold the menu shows, so it reads as cut, not finished. */
+const MENU_PEEK = 0.55
+
+/**
+ * When the menu is taller than the space it gets, end it part-way through a row
+ * (MENU_PEEK of it) instead of wherever the space runs out: on a phone the cap often
+ * fell on a row boundary, so the menu looked complete. Writes `--nvr-rail-menu-cut`,
+ * which can only shorten Radix's available height (the class takes the min of both).
+ */
+export function fitMenuPeek(el: HTMLElement): void {
+  const avail = Number.parseFloat(
+    getComputedStyle(el).getPropertyValue('--radix-popover-content-available-height')
+  )
+  if (!Number.isFinite(avail) || avail <= 0 || el.scrollHeight <= avail + 1) {
+    el.style.removeProperty('--nvr-rail-menu-cut')
+    return
+  }
+  const box = el.getBoundingClientRect()
+  const border = el.offsetHeight - el.clientHeight
+  let cut = 0
+  for (const row of el.querySelectorAll<HTMLElement>('[data-rail-row]')) {
+    const r = row.getBoundingClientRect()
+    if (r.height <= 0) continue
+    const end = r.top - box.top + el.scrollTop + r.height * MENU_PEEK + border
+    if (end > avail) break
+    cut = end
+  }
+  if (cut > 0) el.style.setProperty('--nvr-rail-menu-cut', `${Math.floor(cut)}px`)
+  else el.style.removeProperty('--nvr-rail-menu-cut')
+}
+
 const MENU_ROWS = cn(
   '[&_[data-rail-wrap]]:flex [&_[data-rail-wrap]]:w-full [&_[data-rail-wrap]]:max-w-none [&_[data-rail-wrap]]:items-center [&_[data-rail-wrap]]:gap-1',
   '[&_[data-rail-primary]]:flex [&_[data-rail-primary]]:h-9 [&_[data-rail-primary]]:w-full [&_[data-rail-primary]]:min-w-0 [&_[data-rail-primary]]:flex-1 [&_[data-rail-primary]]:items-center [&_[data-rail-primary]]:justify-start [&_[data-rail-primary]]:gap-2 [&_[data-rail-primary]]:whitespace-nowrap [&_[data-rail-primary]]:rounded-md [&_[data-rail-primary]]:!border-transparent [&_[data-rail-primary]]:px-2.5 [&_[data-rail-primary]]:text-left [&_[data-rail-primary]]:text-[12.5px] [&_[data-rail-primary]]:font-medium [&_[data-rail-primary]]:!shadow-none',
@@ -221,10 +252,13 @@ export function OverflowRail({
     menuRef.current = el
     setMenuEl(el)
   }, [])
-  // More rows below the menu's fold (a phone, a long menu): a fade at its foot says so.
+  // More rows below the menu's fold (a phone, a long menu): the menu ends part-way through
+  // a row so that row peeks out, and a "More" tag sits at its foot. A menu that ended on a
+  // whole row read as finished (design review round 4: Bulk select was never found).
   const [moreBelow, setMoreBelow] = useState(false)
   const checkMoreBelow = useCallback(() => {
     const el = menuRef.current
+    if (el) fitMenuPeek(el)
     const next = !!el && el.scrollHeight - el.scrollTop - el.clientHeight > 4
     setMoreBelow((prev) => (prev === next ? prev : next))
   }, [])
@@ -418,7 +452,8 @@ export function OverflowRail({
             onScroll={checkMoreBelow}
             className={cn(
               'flex w-64 max-w-[calc(100vw-2rem)] flex-col gap-px overflow-y-auto overscroll-contain p-1',
-              'max-h-[var(--radix-popover-content-available-height)]',
+              // The peek cut (fitMenuPeek) only ever shortens the space Radix gives.
+              'max-h-[min(var(--radix-popover-content-available-height),var(--nvr-rail-menu-cut,100000px))]',
               MENU_ROWS,
               compact && nestedOpen > 0 && 'pointer-events-none opacity-0'
             )}
@@ -461,11 +496,18 @@ export function OverflowRail({
                     )}
                     {actions.map(row)}
                     {moreBelow && (
+                      // A short fade (the peeking row stays readable) and a tag at the
+                      // corner, clear of the row's icon and words.
                       <div
                         aria-hidden
                         data-rail-more-below=''
-                        className='pointer-events-none sticky -bottom-1 -mt-8 h-8 shrink-0 bg-gradient-to-t from-popover to-transparent'
-                      />
+                        className='pointer-events-none sticky -bottom-1 -mt-2.5 flex h-2.5 shrink-0 items-end justify-end bg-gradient-to-t from-popover to-transparent'
+                      >
+                        <span className='mb-1.5 mr-1 inline-flex items-center gap-0.5 rounded-full border border-slate-200 bg-popover py-0.5 pl-2 pr-1.5 text-[11px] font-medium text-slate-600 shadow-sm dark:border-border dark:text-slate-300'>
+                          More
+                          <ChevronDown className='h-3 w-3' />
+                        </span>
+                      </div>
                     )}
                   </>
                 )

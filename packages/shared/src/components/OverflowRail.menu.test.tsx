@@ -2,7 +2,13 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { markRailMenu, OverflowRail, type RailItem, railMenuGroups } from './OverflowRail'
+import {
+  fitMenuPeek,
+  markRailMenu,
+  OverflowRail,
+  type RailItem,
+  railMenuGroups
+} from './OverflowRail'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 
 // The ⋯ menu (design review 2026-11-15): one left-aligned column, filters above a divider,
@@ -284,6 +290,45 @@ describe('the ⋯ menu', () => {
     const inner = document.querySelector('[data-testid="inner-pop"]') as HTMLElement
     expect(inner).not.toBeNull()
     expect(inner.hasAttribute('data-rail-popover')).toBe(false)
+  })
+})
+
+// Design review round 4: on a phone the menu's cap fell on a row boundary, so it looked
+// finished. It now ends part-way through the first row below the fold.
+describe('fitMenuPeek', () => {
+  function menu(rows: number, rowH: number, avail: number) {
+    const el = document.createElement('div')
+    el.style.setProperty('--radix-popover-content-available-height', `${avail}px`)
+    for (let i = 0; i < rows; i++) {
+      const row = document.createElement('div')
+      row.setAttribute('data-rail-row', '')
+      row.getBoundingClientRect = () =>
+        ({ top: 4 + i * rowH, height: rowH, bottom: 4 + (i + 1) * rowH }) as DOMRect
+      el.appendChild(row)
+    }
+    el.getBoundingClientRect = () => ({ top: 0, height: avail }) as DOMRect
+    Object.defineProperty(el, 'scrollHeight', { value: 8 + rows * rowH })
+    Object.defineProperty(el, 'offsetHeight', { value: avail })
+    Object.defineProperty(el, 'clientHeight', { value: avail - 2 })
+    document.body.appendChild(el)
+    return el
+  }
+
+  it('ends a menu that fell on a row boundary part-way through the next row', () => {
+    // 36 px rows, 220 px of room: six whole rows (4 + 216) and the seventh hidden.
+    const el = menu(10, 36, 222)
+    fitMenuPeek(el)
+    // Row 6 (top 184) shows 55%: 184 + 19.8 + 2 → 205 px; rows 1–5 whole.
+    expect(el.style.getPropertyValue('--nvr-rail-menu-cut')).toBe('205px')
+    el.remove()
+  })
+
+  it('leaves a menu that fits alone', () => {
+    const el = menu(4, 36, 400)
+    el.style.setProperty('--nvr-rail-menu-cut', '100px')
+    fitMenuPeek(el)
+    expect(el.style.getPropertyValue('--nvr-rail-menu-cut')).toBe('')
+    el.remove()
   })
 })
 
