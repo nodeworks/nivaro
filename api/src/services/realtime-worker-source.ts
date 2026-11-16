@@ -47,6 +47,9 @@ var PROTO = ${REALTIME_WORKER_PROTO}
 var ORIGIN = self.location.origin
 var PING_MS = 5000
 var DEAD_AFTER_MS = 16000
+/* The last page gone: wait this long (a reload on the same build re-attaches), then close. */
+var EMPTY_CLOSE_MS = 30000
+var emptyTimer = null
 var TOKEN_WAIT_MS = 5000
 /* A tab that answers with no token cannot mint one (signed out, or a failed request): ask again
    with a doubling wait, not every second (one signed-out tab sent 16,000 401s in 8 hours; staging
@@ -629,6 +632,27 @@ function drop(port) {
   if (activePort === port) activePort = null
   if (tokenReq.port === port) tokenReq.port = null
   try { port.close() } catch (e) { /* already closed */ }
+  if (!ports.size) emptied()
+}
+
+/* No page left (2026-11-16, prod: an Edge kept a reloaded tab's OLD-build worker running
+   after the new page opened its own worker, so the person read as "Old build" for good and a
+   force refresh had no page to reach). At once: say hello with no build or tab, so the server
+   stops judging this socket as an open tab. After EMPTY_CLOSE_MS still empty: close the socket
+   and the worker. A page arriving in between (a reload on the same build) cancels it. */
+function emptied() {
+  if (hello) {
+    hello = { app: hello.app, features: hello.features, version: {} }
+    if (socket && socket.connected) sendHello()
+  }
+  if (emptyTimer) clearTimeout(emptyTimer)
+  emptyTimer = setTimeout(function () {
+    emptyTimer = null
+    if (ports.size) return
+    try { if (socket) socket.disconnect() } catch (e) { /* already closed */ }
+    socket = null
+    try { self.close() } catch (e) { /* not closable here */ }
+  }, EMPTY_CLOSE_MS)
 }
 
 function onMessage(port, ev) {
@@ -689,6 +713,7 @@ function onMessage(port, ev) {
 
 self.onconnect = function (e) {
   var port = e.ports[0]
+  if (emptyTimer) { clearTimeout(emptyTimer); emptyTimer = null }
   ports.set(port, { rooms: new Set(), lastPong: Date.now(), pageAt: null, hello: null })
   port.onmessage = function (ev) { onMessage(port, ev) }
   port.onmessageerror = function () { drop(port) }

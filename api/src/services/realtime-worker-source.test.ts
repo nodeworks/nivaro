@@ -340,7 +340,12 @@ describe('realtime shared worker source (#2475)', () => {
     expect(a.events('presence:rows').length).toBe(0)
     expect(b.events('presence:rows').length).toBe(1)
     // a calendar / Gantt drag ghost reaches the tab watching the row, not the record room
-    socket.fire('record:drag', { collection: 'orders', item: '7', view: 'calendar:due', phase: 'move' })
+    socket.fire('record:drag', {
+      collection: 'orders',
+      item: '7',
+      view: 'calendar:due',
+      phase: 'move'
+    })
     expect(a.events('record:drag').length).toBe(0)
     expect(b.events('record:drag').length).toBe(1)
     // an old server names no record on field events: every tab holding any record hears it
@@ -385,5 +390,44 @@ describe('realtime shared worker source (#2475)', () => {
     await Promise.resolve()
     expect(scope.fetch).toHaveBeenCalledTimes(1)
     expect(a.received.some((m) => m.t === 'fallback' && m.reason === 'socket-blocked')).toBe(true)
+  })
+
+  it('closes the socket and the worker 30 s after the last page leaves (2026-11-16)', () => {
+    const { socket, scope, attach } = boot()
+    scope.close = vi.fn()
+    const a = attach()
+    a.send({ t: 'hello', app: 'efp-new', version: { build: 'old', tab: 't1', loaded: 1000 } })
+    socket.connect()
+    a.send({ t: 'bye' })
+    // At once: a hello with no build, so the server stops counting this socket as a tab.
+    const hellos = socket.sent('client:hello') as Array<Record<string, unknown>>
+    const last = hellos[hellos.length - 1]
+    expect(last.build).toBeUndefined()
+    expect(last.tab).toBeUndefined()
+    // Then, 30 s later and still empty: the socket and the worker close.
+    const timers = (scope.setTimeout as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => c[1] === 30000
+    )
+    expect(timers.length).toBe(1)
+    ;(timers[0][0] as () => void)()
+    expect(socket.connected).toBe(false)
+    expect(scope.close).toHaveBeenCalled()
+  })
+
+  it('a page that comes back within 30 s keeps the worker', () => {
+    const { socket, scope, attach } = boot()
+    scope.close = vi.fn()
+    const a = attach()
+    a.send({ t: 'hello', app: 'efp-new', version: { build: 'b1', tab: 't1', loaded: 1000 } })
+    socket.connect()
+    a.send({ t: 'bye' })
+    const timer = (scope.setTimeout as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => c[1] === 30000
+    )
+    attach() // the reloaded page, same build
+    expect(scope.clearTimeout).toHaveBeenCalled()
+    ;(timer?.[0] as () => void)() // even if the cancelled timer fired, a page is there
+    expect(socket.connected).toBe(true)
+    expect(scope.close).not.toHaveBeenCalled()
   })
 })
