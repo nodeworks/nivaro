@@ -335,7 +335,7 @@ export function WatchRow({
                 className={`flex items-baseline gap-2 ${
                   hasActions
                     ? rowActions
-                      ? 'group-focus-within/row:pr-12 group-hover/row:pr-12'
+                      ? 'group-focus-within/row:pr-12 group-hover/row:pr-12 group-has-[[data-state=open]]/row:pr-12'
                       : 'group-focus-within/row:pr-6 group-hover/row:pr-6'
                     : ''
                 }`}
@@ -346,7 +346,9 @@ export function WatchRow({
                 {mark && (
                   <span
                     className={`flex shrink-0 self-center ${
-                      hasActions ? 'group-focus-within/row:hidden group-hover/row:hidden' : ''
+                      hasActions
+                        ? 'group-focus-within/row:hidden group-hover/row:hidden group-has-[[data-state=open]]/row:hidden'
+                        : ''
                     }`}
                   >
                     {mark}
@@ -355,7 +357,9 @@ export function WatchRow({
                 {figure && (
                   <span
                     className={`shrink-0 text-[12px] font-medium tabular-nums text-slate-700 dark:text-slate-200 ${
-                      hasActions ? 'group-focus-within/row:hidden group-hover/row:hidden' : ''
+                      hasActions
+                        ? 'group-focus-within/row:hidden group-hover/row:hidden group-has-[[data-state=open]]/row:hidden'
+                        : ''
                     }`}
                   >
                     {cardAmountText(figure)}

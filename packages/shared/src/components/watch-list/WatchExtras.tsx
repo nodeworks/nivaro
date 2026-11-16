@@ -532,6 +532,28 @@ export function AlertMark({ row, actions }: { row: WatchRowData; actions: Action
   )
 }
 
+/**
+ * "For you" on a record the list pinned itself because it landed on the person's step (rt6
+ * review: an auto pin looked like any other). Says whether it leaves on its own.
+ */
+export function AutoPinMark({ row, actions }: { row: WatchRowData; actions: Actions }) {
+  const pin = actions.prefs.pins.find((p) => p.key === row.key)
+  if (!pin?.auto) return null
+  const tip = actions.prefs.settings.auto_remove
+    ? 'Pinned for you: it landed on your step. It unpins when it leaves your step.'
+    : 'Pinned for you: it landed on your step.'
+  return (
+    <span
+      data-tip={tip}
+      data-watch-auto-pin
+      className='inline-flex h-4 items-center rounded px-1 text-[10px] font-medium text-slate-500 ring-1 ring-inset ring-slate-200 dark:text-slate-400 dark:ring-white/[0.12]'
+    >
+      For you
+      <span className='sr-only'>. {tip}</span>
+    </span>
+  )
+}
+
 /** The bell on a watched row: its alert rules, and a form to add one. */
 export function AlertButton({ row, actions }: { row: WatchRowData; actions: Actions }) {
   const [open, setOpen] = useState(false)

@@ -63,7 +63,7 @@ import { ConfirmButton } from '../profile/primitives'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
-import { AlertButton, AlertMark, TeamEditor, WatchSettingsMenu } from './WatchExtras'
+import { AlertButton, AlertMark, AutoPinMark, TeamEditor, WatchSettingsMenu } from './WatchExtras'
 import { agoText, StepChip, WatchRowList } from './WatchRows'
 
 /**
@@ -382,7 +382,7 @@ export function WatchDock() {
           side='right'
           // The sheet's own × sits in the header row, the same 28 px box and centre line as the
           // header's other icons (rt6 review: it sat higher).
-          className='flex w-full flex-col gap-0 p-0 sm:max-w-[400px] [&>button:last-child]:right-2 [&>button:last-child]:top-2 [&>button:last-child]:flex [&>button:last-child]:h-7 [&>button:last-child]:w-7 [&>button:last-child]:items-center [&>button:last-child]:justify-center [&>button:last-child]:rounded-md [&>button:last-child]:text-slate-500 [&>button:last-child]:opacity-100 [&>button:last-child]:hover:bg-slate-100 dark:[&>button:last-child]:text-slate-400 dark:[&>button:last-child]:hover:bg-white/[0.06]'
+          className='flex w-full flex-col gap-0 p-0 sm:max-w-[400px] [&>button:last-child]:right-2 [&>button:last-child]:top-2 [&>button:last-child]:flex [&>button:last-child]:h-7 [&>button:last-child]:w-7 [&>button:last-child]:items-center [&>button:last-child]:justify-center [&>button:last-child]:rounded-md [&>button:last-child]:text-slate-500 [&>button:last-child]:bg-transparent [&>button:last-child]:opacity-100 [&>button:last-child]:hover:bg-slate-100 dark:[&>button:last-child]:text-slate-400 dark:[&>button:last-child]:hover:bg-white/[0.06]'
           data-watch-dock='sheet'
           // Opening lands on the heading, not the first control with a ring around it.
           onOpenAutoFocus={(e) => {
@@ -703,7 +703,7 @@ function DockPanel({
   }
   const scrollStrip = (dir: 1 | -1) =>
     stripRef.current?.scrollBy({ left: dir * 140, behavior: 'smooth' })
-  const tabSig = tabs.map((t) => `${t.key}:${t.count ?? ''}`).join('|')
+  const tabSig = `${tabs.map((t) => `${t.key}:${t.count ?? ''}`).join('|')}${editing === 'new' ? '|new' : ''}`
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when the tabs change
   useEffect(() => {
     measureStrip()
@@ -713,12 +713,15 @@ function DockPanel({
     ro.observe(el)
     return () => ro.disconnect()
   }, [tabSig])
-  // The chosen tab is always fully in view (a shared list opened from the settings menu).
+  // The chosen tab is always fully in view (a shared list opened from the settings menu, the
+  // New list pseudo-tab while making one).
   useEffect(() => {
-    const el = stripRef.current?.querySelector(`[data-tab="${CSS.escape(tab)}"]`)
+    const el = stripRef.current?.querySelector(
+      editing === 'new' ? '[data-tab-new]' : `[data-tab="${CSS.escape(tab)}"]`
+    )
     if (el && typeof (el as HTMLElement).scrollIntoView === 'function')
       (el as HTMLElement).scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [tab])
+  }, [tab, editing])
   const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
     const i = tabs.findIndex((t) => t.key === tab)
@@ -781,7 +784,7 @@ function DockPanel({
           onKeyDown={onTabKey}
           ref={stripRef}
           onScroll={measureStrip}
-          className={`-mb-px flex overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+          className={`-mb-px flex scroll-px-10 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
             prefs.teams.length > 0 || editing === 'new' ? 'gap-3' : 'gap-4'
           }`}
         >
@@ -1015,7 +1018,15 @@ function WatchingTab({
           if (r?.change?.changed || r?.completed_at) actions.markSeen([key])
         }}
         rowActions={(r) => <AlertButton row={r} actions={actions} />}
-        rowMark={(r) => <AlertMark row={r} actions={actions} />}
+        rowMark={(r) =>
+          prefs.pins.some((p) => p.key === r.key && p.auto) ||
+          prefs.alerts.some((a) => a.key === r.key) ? (
+            <span className='flex items-center gap-1.5'>
+              <AutoPinMark row={r} actions={actions} />
+              <AlertMark row={r} actions={actions} />
+            </span>
+          ) : null
+        }
       />
       {missing > 0 && <LoadingRows n={Math.min(3, missing)} />}
       <p className='px-4 py-3 text-[11px] text-slate-500 dark:text-slate-400'>
