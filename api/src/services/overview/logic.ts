@@ -120,7 +120,7 @@ export function adminNeedsYou(f: AdminNeedsFacts): NeedsYouItem[] {
       key: 'jobs',
       tone: 'warn',
       count: f.failedJobs,
-      sentence: `${plural(f.failedJobs, 'background job run')} failed in the last 24 hours`,
+      sentence: `${plural(f.failedJobs, 'background job')} failed in the last 24 hours`,
       action: { label: 'Review', href: '/jobs' }
     })
   if (f.failedImports > 0)

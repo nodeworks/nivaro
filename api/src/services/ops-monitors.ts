@@ -48,6 +48,12 @@ export interface EvalResult {
   metric?: number
   /** event_loop: what ran through the stalls (kept in the monitor's state while failing). */
   causes?: StallCauses
+  /**
+   * A heads-up, not a breakage (a certificate that still works but expires soon): the monitor
+   * still alerts and files its issue, but its job run completes as a warning instead of failing,
+   * so one expiring certificate checked every 5 minutes is not hundreds of failed runs.
+   */
+  warning?: boolean
 }
 
 /** Room the causes may take in `nivaro_monitors.state` (the whole state is capped at 8000). */
@@ -576,6 +582,7 @@ async function evalSslCert(cfg: {
   if (daysLeft <= warnDays)
     return {
       status: 'failing',
+      warning: true,
       metric: daysLeft,
       detail: `${host} certificate expires in ${daysLeft}d (${when}, ${issuer}) — renew now`
     }
@@ -725,8 +732,8 @@ export async function evaluateMonitor(
     result.metric != null
       ? `${result.status} · ${result.metric} · ${result.detail}`
       : `${result.status} · ${result.detail}`
-  if (result.status === 'failing') await run.fail(result.detail)
-  else await run.complete(outcome.slice(0, 500))
+  if (result.status === 'failing' && !result.warning) await run.fail(result.detail)
+  else await run.complete((result.warning ? `warning · ${outcome}` : outcome).slice(0, 500))
   return result
 }
 

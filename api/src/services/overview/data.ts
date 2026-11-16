@@ -136,11 +136,17 @@ async function adminFacts(userId: string): Promise<AdminNeedsFacts> {
   const shared = memo('needs:admin', 60_000, async () => {
     const [failedJobs, queueErrors, jobErrors, erpRejects, unassigned, sqlCritical, readiness] =
       await Promise.all([
+        // Failing JOBS, not runs: one job failing every 5 minutes is one thing to look at.
         count(() =>
-          db('nivaro_job_runs')
-            .where('status', 'error')
-            .where('started_at', '>=', since)
+          db
             .count({ n: '*' })
+            .from(
+              db('nivaro_job_runs')
+                .where('status', 'error')
+                .where('started_at', '>=', since)
+                .distinct('kind', 'job_id')
+                .as('failing_jobs')
+            )
         ),
         hasTable('nivaro_import_queue').then((ok) =>
           ok
