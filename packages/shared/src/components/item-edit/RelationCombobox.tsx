@@ -5,7 +5,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 import { createPortal } from 'react-dom'
 import { useItemEditAuth, useNivaroClient, useStaleFieldReporter } from '../../context'
 import { get, post } from '../../lib/commands'
-import { useLabelFlash } from '../../lib/label-flash'
+import { flashLabelRef, useLabelFlash } from '../../lib/label-flash'
 import { compareByMatch } from '../../lib/picker-rank'
 import { useRecordReader } from '../../lib/record-loader'
 import { useOnlineUsers } from '../../lib/use-online-users'
@@ -979,7 +979,8 @@ export function RelationCombobox({
               <span
                 key={labelFlash}
                 data-label-flash={labelFlash > 0 || undefined}
-                className={cn('truncate', labelFlash > 0 && 'nvr-value-pulse-bg rounded-sm')}
+                ref={labelFlash > 0 ? flashLabelRef : undefined}
+                className={cn('truncate', labelFlash > 0 && 'rounded-sm')}
               >
                 {selectedLabel ?? placeholder ?? 'Select…'}
               </span>

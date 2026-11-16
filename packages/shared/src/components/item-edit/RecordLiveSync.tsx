@@ -742,23 +742,47 @@ export function RecordLiveSync({
               Updated just now by someone else
             </span>
           )}
-          {uploads.map((u) => (
+          {/* One line per chip: the sentence truncates (full text in the tip), the percent never
+              shrinks. More than two uploads fold into one chip that names who is uploading. */}
+          {(uploads.length > 2 ? [] : uploads).map((u) => {
+            const sentence = uploadSentence({ ...u, pct: null })
+            return (
+              <span
+                key={u.key}
+                data-remote-upload-chip={u.key}
+                data-tip={sentence}
+                className='inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
+              >
+                <UploadCloud
+                  className='h-3 w-3 shrink-0 text-cyan-700 dark:text-nvr-cyan'
+                  aria-hidden
+                />
+                <span className='min-w-0 truncate'>{sentence}</span>
+                {/* The percent reads the same as in the field's own row: a bare tabular "60%". */}
+                {u.pct != null && u.pct > 0 && u.pct < 100 && (
+                  <span className='shrink-0 tabular-nums text-slate-500 dark:text-slate-400'>
+                    {u.pct}%
+                  </span>
+                )}
+              </span>
+            )
+          })}
+          {uploads.length > 2 && (
             <span
-              key={u.key}
-              data-remote-upload-chip={u.key}
-              className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
+              data-remote-upload-chip='many'
+              data-tip={uploads.map((u) => uploadSentence(u)).join('\n')}
+              className='inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
             >
               <UploadCloud
                 className='h-3 w-3 shrink-0 text-cyan-700 dark:text-nvr-cyan'
                 aria-hidden
               />
-              {uploadSentence({ ...u, pct: null })}
-              {/* The percent reads the same as in the field's own row: a bare tabular "60%". */}
-              {u.pct != null && u.pct > 0 && u.pct < 100 && (
-                <span className='tabular-nums text-slate-500 dark:text-slate-400'>{u.pct}%</span>
-              )}
+              <span className='min-w-0 truncate'>
+                {uploads.length} uploads in progress ·{' '}
+                {[...new Set(uploads.map((u) => u.user))].join(', ')}
+              </span>
             </span>
-          ))}
+          )}
         </div>
       )}
     </div>
