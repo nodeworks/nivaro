@@ -311,6 +311,8 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
                 value={problem ?? ''}
                 onChange={(v) => setProblem(v || null)}
                 className='h-9 min-w-0 text-[12.5px]'
+                // Inside the phone screen: long problem names wrap so the "(13)" count shows.
+                contentClassName='max-w-[calc(100vw-2rem)] [&_[role=option]]:whitespace-normal'
                 options={[
                   { value: '', label: 'All problems' },
                   ...(data.problems ?? []).map((g) => ({
