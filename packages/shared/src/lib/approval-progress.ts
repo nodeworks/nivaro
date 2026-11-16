@@ -1,4 +1,4 @@
-import { atClock } from './send-status'
+import { atWhen } from './send-status'
 
 /**
  * Approval progress in words (rt4 #8): what each step of an approval chain says as
@@ -80,12 +80,12 @@ export function chainStepText(opts: {
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
   if (!out) return null
   const who = personOf(out)
-  const when = atClock(out.timestamp, now)
+  const when = atWhen(out.timestamp, now)
   const past = pastMove(out.transition_label)
   if (past)
-    return { kind: 'done', text: `${past}${who ? ` by ${who}` : ''}${when ? ` at ${when}` : ''}` }
+    return { kind: 'done', text: `${past}${who ? ` by ${who}` : ''}${when ? ` ${when}` : ''}` }
   const label = out.transition_label?.trim() || 'Moved on'
-  return { kind: 'done', text: `${label}${who ? ` — ${who}` : ''}${when ? ` at ${when}` : ''}` }
+  return { kind: 'done', text: `${label}${who ? ` — ${who}` : ''}${when ? ` ${when}` : ''}` }
 }
 
 /**
@@ -105,10 +105,10 @@ export function approvalDecisionText(
 ): string | null {
   const v = String(d.decision ?? d.status ?? 'pending').toLowerCase()
   const who = d.approver_name?.trim() || ''
-  const when = d.decided_at ? atClock(d.decided_at, now) : ''
+  const when = d.decided_at ? atWhen(d.decided_at, now) : ''
   if (v === 'approved' || v === 'rejected') {
     const word = v === 'approved' ? 'Approved' : 'Rejected'
-    return `${word}${who ? ` by ${who}` : ''}${when ? ` at ${when}` : ''}`
+    return `${word}${who ? ` by ${who}` : ''}${when ? ` ${when}` : ''}`
   }
   if (isCurrent) return who ? `Waiting on ${who}` : 'Waiting'
   return null

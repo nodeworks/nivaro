@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  atWhen,
+  withoutContactLine,
   msUntilNoAnswer,
   msUntilRetryTick,
   plainDuration,
@@ -233,5 +235,24 @@ describe('helpers', () => {
     expect(msUntilNoAnswer(base, NOW)).toBe(5 * 60_000 + 500)
     expect(msUntilNoAnswer({ ...base, status: 'pending' }, NOW)).toBeNull()
     expect(msUntilNoAnswer({ ...base, answer_by: '2026-11-14T15:00:00.000Z' }, NOW)).toBeNull()
+  })
+})
+
+describe('atWhen', () => {
+  it('says "at" for today and "on <day> at" for another day', () => {
+    expect(atWhen(NOW, NOW)).toMatch(/^at \d{1,2}:\d{2}\s?[AP]M$/)
+    expect(atWhen(NOW - 50 * 86_400_000, NOW)).toMatch(
+      /^on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2}\s?[AP]M$/
+    )
+  })
+})
+
+describe('withoutContactLine', () => {
+  it('drops a closing "Contact Support." footer, never the whole reason', () => {
+    expect(withoutContactLine('BEMO is not supported. Contact Support.')).toBe(
+      'BEMO is not supported.'
+    )
+    expect(withoutContactLine('Contact support')).toBe('Contact support')
+    expect(withoutContactLine('The project is closed.')).toBe('The project is closed.')
   })
 })

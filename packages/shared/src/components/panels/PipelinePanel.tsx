@@ -1260,7 +1260,9 @@ function StateBadge({
     <span
       key={label}
       className={cn(
-        'nvr-state-pulse inline-flex items-center gap-1.5 rounded-full border font-medium transition-colors duration-300',
+        // One line always: a wrapped rounded-full pill becomes an oval. A long step name
+        // truncates and the tip carries all of it.
+        'nvr-state-pulse inline-flex min-w-0 max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border font-medium transition-colors duration-300',
         size,
         tone &&
           'border-slate-300 bg-slate-100 text-slate-700 dark:border-slate-500 dark:bg-slate-700/60 dark:text-slate-100'
@@ -1275,8 +1277,9 @@ function StateBadge({
             }
       }
       data-state-badge-tone={tone ? 'muted' : 'colour'}
+      data-tip={label.length > 24 ? label : undefined}
     >
-      {label}
+      <span className='min-w-0 truncate'>{label}</span>
     </span>
   )
 }
@@ -1803,7 +1806,9 @@ function StateTrack({
                         <div
                           className={cn(
                             'flex w-full shrink-0 items-center',
-                            !isDone && 'text-slate-200 dark:text-slate-700'
+                            // Arbitrary hex: a host re-pointing bare slate tokens must not
+                            // turn the arrow after the current step white in dark.
+                            !isDone && 'text-[#e2e8f0] dark:text-[#334155]'
                           )}
                         >
                           <div
@@ -2671,12 +2676,23 @@ function ApprovalChainView({
           <Users className='h-3.5 w-3.5' />
         </button>
       </PopoverTrigger>
-      <PopoverContent align='end' sideOffset={6} className='w-[576px] p-0 overflow-hidden'>
-        <div className='border-b border-slate-100 px-4 py-3'>
-          <p className='text-[12px] font-semibold text-slate-700'>Approval Chain</p>
-          <p className='text-[11px] text-slate-400 mt-0.5'>Owners per pipeline state</p>
+      <PopoverContent
+        align='end'
+        sideOffset={6}
+        collisionPadding={12}
+        className='w-[576px] max-w-[calc(100vw-24px)] p-0 overflow-hidden'
+      >
+        <div className='border-b border-slate-100 px-4 py-3 dark:border-border'>
+          <p className='text-[12px] font-semibold text-slate-700 dark:text-slate-100'>
+            Approval Chain
+          </p>
+          <p className='text-[11px] text-slate-500 mt-0.5 dark:text-slate-400'>
+            Owners per pipeline state
+          </p>
         </div>
-        <div className='max-h-[504px] overflow-y-auto'>
+        {/* Never taller than the room Radix found: the list scrolls rather than
+            running off the top of the window. */}
+        <div className='max-h-[min(504px,calc(var(--radix-popover-content-available-height,504px)-64px))] overflow-y-auto overscroll-contain'>
           {isLoading ? (
             <div className='space-y-px p-3'>
               {[1, 2, 3].map((i) => (
@@ -2731,7 +2747,8 @@ function ApprovalChainView({
                         />
                       )}
                     </span>
-                    <div className='flex shrink-0 flex-col gap-0.5'>
+                    {/* items-start: each pill sizes to its own label ("Started" was a long bar). */}
+                    <div className='flex min-w-0 shrink-0 flex-col items-start gap-0.5'>
                       <StateBadge label={s.label} color={s.color} small />
                       {progress && !isSkipped && (
                         <span
@@ -3924,7 +3941,7 @@ function PipelinePanelInner({
               long step name wraps inside the pill and "for 3 d 4 h" stays beside it on the
               pill's centre line, never hanging under its left edge. */}
             {currentState && (
-              <span className='inline-flex max-w-full items-center gap-1.5'>
+              <span className='inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-1'>
                 <StateBadge label={currentState.label} color={currentState.color} />
                 {!instance?.completed_at && (
                   <StepForLine

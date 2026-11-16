@@ -1,7 +1,7 @@
 import { Check, GitBranch, GitMerge } from 'lucide-react'
 import { namesList } from '../../lib/approval-progress'
 import { useLiveFade } from '../../lib/live-screen'
-import { atClock } from '../../lib/send-status'
+import { atWhen } from '../../lib/send-status'
 import { serverNow } from '../../lib/server-clock'
 import { formatDateTime, formatRelative, humanHours } from '../../lib/utils'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
@@ -90,8 +90,8 @@ export function laneProgressText(
   const at = lane.finished_at ?? last?.entered_at ?? null
   const label = lane.current?.label?.trim() || 'Finished'
   const by = last?.by?.trim()
-  const when = at ? atClock(at, now) : ''
-  return `${label}${by ? ` by ${by}` : ''}${when ? ` at ${when}` : ''}`
+  const when = at ? atWhen(at, now) : ''
+  return `${label}${by ? ` by ${by}` : ''}${when ? ` ${when}` : ''}`
 }
 
 /**
@@ -167,8 +167,10 @@ export function BranchLanes({ data }: { data: BranchLanesData }) {
                   {lane.label}
                 </span>
                 <span className='flex min-w-0 items-center gap-1'>
-                  {lane.steps.map((step, i) => {
-                    const isCurrent = i === lane.steps.length - 1
+                  {/* A finished lane shows its one final check ("✓ – ✓" said done twice); the
+                      steps it took stay in the final node's tip. */}
+                  {(lane.terminal ? lane.steps.slice(-1) : lane.steps).map((step, i, shown) => {
+                    const isCurrent = i === shown.length - 1
                     return (
                       <span
                         key={`${step.state.id}-${step.entered_at}`}

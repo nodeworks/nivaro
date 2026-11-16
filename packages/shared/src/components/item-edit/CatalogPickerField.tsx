@@ -3401,8 +3401,8 @@ export function CatalogPickerField({
                       )}
                       {shortfall &&
                         (readOnly ? (
-                          <p className='mt-1 flex items-center gap-1 pl-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400'>
-                            <AlertTriangle className='h-3 w-3 shrink-0' />
+                          <p className='mt-1 flex items-start gap-1 pl-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400'>
+                            <AlertTriangle className='mt-px h-3 w-3 shrink-0' />
                             {qtyWarningLabel} is {fmtVal(shortfall.available, 'number')} —{' '}
                             {fmtVal(shortfall.qty, 'number')} requested
                           </p>
@@ -3410,9 +3410,9 @@ export function CatalogPickerField({
                           // rt4 #7 — what the line is short of, where.
                           <p
                             data-catalog-stock-short
-                            className='mt-1 flex items-center gap-1 pl-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400'
+                            className='mt-1 flex items-start gap-1 pl-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400'
                           >
-                            <AlertTriangle className='h-3 w-3 shrink-0' />
+                            <AlertTriangle className='mt-px h-3 w-3 shrink-0' />
                             {stockShortText(
                               shortfall.available,
                               shortfall.qty,
@@ -3425,28 +3425,27 @@ export function CatalogPickerField({
                         rowDbId != null &&
                         !isStagedDelete &&
                         linePriceNotes(e.row, e.key).map(({ field: pf, change }) => (
+                          // The icon leads the first line; "Use new price" travels with its
+                          // sentence (a phone wrapped it to a third line behind a lone dot).
                           <p
                             key={pf}
                             data-catalog-price-changed={pf}
-                            className='mt-1 flex flex-wrap items-center gap-x-1 pl-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300'
+                            className='mt-1 flex items-start gap-1 pl-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300'
                           >
-                            <AlertTriangle className='h-3 w-3 shrink-0' />
-                            <span>
+                            <AlertTriangle className='mt-px h-3 w-3 shrink-0' />
+                            <span className='min-w-0'>
                               {catalogPriceText(change, (n) => fmtVal(n, 'currency'))}
-                              {priceFields.length > 1 ? ` · ${titleCase(pf)}` : ''}
+                              {priceFields.length > 1 ? ` · ${titleCase(pf)}` : ''}{' '}
+                              {/* The person's own edit, through the price cell's path. */}
+                              <button
+                                type='button'
+                                data-catalog-use-new-price={pf}
+                                className='whitespace-nowrap rounded font-semibold text-[#0e7490] underline underline-offset-2 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-nvr-cyan'
+                                onClick={() => void commitField(e.key, pf, String(change.now))}
+                              >
+                                Use new price
+                              </button>
                             </span>
-                            <span aria-hidden className='text-amber-500/70'>
-                              ·
-                            </span>
-                            {/* The person's own edit, through the price cell's path. */}
-                            <button
-                              type='button'
-                              data-catalog-use-new-price={pf}
-                              className='rounded font-semibold text-nvr-cyan underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60'
-                              onClick={() => void commitField(e.key, pf, String(change.now))}
-                            >
-                              Use new price
-                            </button>
                           </p>
                         ))}
                       {!isStagedDelete &&
@@ -3467,9 +3466,9 @@ export function CatalogPickerField({
                         ) && (
                           <p
                             data-catalog-unpriced
-                            className='mt-1 flex items-center gap-1 pl-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400'
+                            className='mt-1 flex items-start gap-1 pl-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400'
                           >
-                            <AlertTriangle className='h-3 w-3 shrink-0' />
+                            <AlertTriangle className='mt-px h-3 w-3 shrink-0' />
                             No catalog price: check the price or hand-price it
                           </p>
                         )}
