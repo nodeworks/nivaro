@@ -394,6 +394,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_agent_triggers', // migration 510 — endpoints/secrets per environment (promote SKIP)
   'nivaro_agent_trigger_deliveries',
   'nivaro_agent_questions', // migration 511 — questions agents asked people
+  'nivaro_change_proposals', // migration 527 — record changes people proposed (their data, not config)
   'nivaro_activity_views', // migration 517 — saved audit views per person (promote SKIP)
   // Not a migration: a deployment's one-off data-move scratch table, staged by an extension
   // script and carried by database copies. Classified so it never reads as a new migration.

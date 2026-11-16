@@ -519,6 +519,14 @@ export interface ExtensionContext {
       >
     ): void
   }
+  /** Environment refresh (Environments → Runbooks → Refresh an environment). Optional: older
+   *  APIs do not offer it. */
+  environments?: {
+    /** Something every refresh TARGET keeps (put back after the source's copy lands). */
+    registerKeep(entry: import('./environments.js').EnvKeepEntryInput): void
+    /** The environments this extension refreshes, the allowed directions and its runbooks. */
+    registerRefresh(decl: import('./environments.js').EnvRefreshDecl): void
+  }
   /** Who holds what in the pipelines. Optional: older APIs do not offer it. */
   pipelines?: {
     /** Record ids of `collection` whose CURRENT step `userId` owns — the My

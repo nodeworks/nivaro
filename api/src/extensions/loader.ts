@@ -21,6 +21,8 @@ import { beginChainRoot } from '../services/chain-roots.js'
 import { registerConfigSeed } from '../services/config-seeds.js'
 import { registerDigestSection } from '../services/daily-digest.js'
 import { registerTuningObserver } from '../services/db-tuning/observers/registry.js'
+import { registerRefreshDecl } from '../services/env-refresh/directions.js'
+import { registerExtensionKeep } from '../services/env-refresh/registry.js'
 import {
   publishExtensionEvent,
   registerExtensionEventHandler
@@ -1058,6 +1060,19 @@ export function registrationMembers(
     },
     opsReport: {
       registerSection: (key, title, build) => registerOpsSection(key, title, build)
+    },
+    // Environment refresh: what a refresh target keeps + the environments this extension refreshes.
+    environments: {
+      registerKeep: (entry) => {
+        note('environments')
+        own('env_keeps', entry?.label ?? String(entry?.id))
+        registerExtensionKeep(extId, entry)
+      },
+      registerRefresh: (decl) => {
+        note('environments')
+        own('env_refresh', (decl?.directions ?? []).map((d) => `${d.from}→${d.to}`).join(', '))
+        registerRefreshDecl(extId, decl)
+      }
     },
     pipelines: {
       ownedItemIds: (userId, collection) =>

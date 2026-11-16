@@ -187,6 +187,11 @@ const REVIEWED: Record<string, Reviewed> = {
     role: 'not-media',
     calls: { child_process: 1 },
     why: 'A developer script (git grep).'
+  },
+  'scripts/env-refresh.ts': {
+    role: 'not-media',
+    calls: { child_process: 1 },
+    why: 'The environment-refresh runner: a host runbook (migrate.ts, keep-help-videos), never run in the image.'
   }
 }
 

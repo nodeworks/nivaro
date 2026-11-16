@@ -126,6 +126,7 @@ import { draftPublishRoutes } from './draft-publish.js'
 import { draftsRoutes } from './drafts.js'
 import { duplicateRoutes } from './duplicates.js'
 import { envPresenceRoutes } from './env-presence.js'
+import { envRefreshRoutes } from './env-refresh.js'
 import { environmentNoticeRoutes } from './environment-notice.js'
 import { environmentRoutes } from './environments.js'
 import { erpSubmissionsRoutes } from './erp-submissions.js'
@@ -470,6 +471,10 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(envPresenceRoutes, { prefix: '/environments' })
   await app.register(releaseRunsRoutes, { prefix: '/release' })
   await app.register(runbookRoutes, { prefix: '/runbooks' })
+  // Environment refresh copies whole databases between environments on one SQL Server — a
+  // self-hosted operator tool, never mounted in cloud mode.
+  if (!process.env.CLOUD_META_DB_URL)
+    await app.register(envRefreshRoutes, { prefix: '/env-refresh' })
   await app.register(qualityCheckRoutes, { prefix: '/quality-checks' })
   await app.register(integrationEventsRoutes, { prefix: '/integration-events' })
   await app.register(inboundMappingsRoutes, { prefix: '/inbound-mappings' })
