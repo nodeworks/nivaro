@@ -4,6 +4,7 @@ import {
   atRiskBreakdown,
   extraChoiceText,
   formulaColumnKeys,
+  queuePinKeepRank,
   worklistKeyTarget
 } from './worklist-helpers'
 
@@ -52,5 +53,17 @@ describe('formulaColumnKeys', () => {
       ])
     ).toEqual(['formula.left'])
     expect(formulaColumnKeys(null)).toEqual([])
+  })
+})
+
+describe('queuePinKeepRank (narrow desktop pins)', () => {
+  it('keeps Actions, then State, then data columns; Owners gives way first', () => {
+    const order = ['owners', 'aging_hours', 'state', '__actions__'].sort(
+      (a, b) => queuePinKeepRank(a) - queuePinKeepRank(b)
+    )
+    expect(order).toEqual(['owners', 'aging_hours', 'state', '__actions__'])
+    expect(queuePinKeepRank('owners')).toBeLessThan(queuePinKeepRank('label'))
+    expect(queuePinKeepRank('label')).toBeLessThan(queuePinKeepRank('state'))
+    expect(queuePinKeepRank('state')).toBeLessThan(queuePinKeepRank('__actions__'))
   })
 })

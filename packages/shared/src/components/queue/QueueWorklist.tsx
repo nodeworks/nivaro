@@ -24,6 +24,7 @@ import {
   FileDiff,
   Flame,
   GripVertical,
+  Group,
   Inbox,
   ListChecks,
   Loader2,
@@ -125,7 +126,6 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { copyIdText } from '../../lib/record-ref'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { userErrorMessage } from '../../lib/safe-error'
-import { listViewInput } from '../../lib/send-view'
 import {
   selectionSums,
   splitSelKey,
@@ -134,6 +134,7 @@ import {
   useSelectionLiveMarks,
   useSelectionPicks
 } from '../../lib/selection-watch'
+import { listViewInput } from '../../lib/send-view'
 import { useTableDensity } from '../../lib/table-density'
 import { matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
@@ -186,6 +187,7 @@ import { LiveRowMark } from '../LiveRowMark'
 import { CopyListLinkButton } from '../list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from '../list/InlineEdit'
 import { ListViewers } from '../list/ListViewers'
+import { OverflowRail } from '../OverflowRail'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
   PICKER_EXCLUDED_TITLE,
@@ -233,6 +235,7 @@ import {
   atRiskBreakdown,
   extraChoiceText,
   formulaColumnKeys as formulaKeysOf,
+  queuePinKeepRank,
   worklistKeyTarget
 } from './worklist-helpers'
 
@@ -4793,74 +4796,7 @@ export function QueueWorklist({
                 ))}
             </div>
           )}
-          <button
-            type='button'
-            aria-pressed={filterValues.unseen === 'yes'}
-            data-queue-unseen-filter
-            title='Only records someone else changed since you last opened them'
-            onClick={() =>
-              setFilterValues((prev) => {
-                const next = { ...prev }
-                if (next.unseen === 'yes') delete next.unseen
-                else next.unseen = 'yes'
-                return next
-              })
-            }
-            className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
-              filterValues.unseen === 'yes'
-                ? 'border-nvr-cyan/40 bg-[#f2fdff] text-nvr-navy dark:border-nvr-cyan/40 dark:bg-[#20303a] dark:text-nvr-cyan'
-                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
-            }`}
-          >
-            <span className='h-2 w-2 rounded-full bg-nvr-cyan' />
-            Unseen changes
-          </button>
-          {addendumsEnabled && (
-            <button
-              type='button'
-              aria-pressed={filterValues.addendums === 'active'}
-              title='Only records with an addendum still in review'
-              onClick={() =>
-                setFilterValues((prev) => {
-                  const next = { ...prev }
-                  if (next.addendums === 'active') delete next.addendums
-                  else next.addendums = 'active'
-                  return next
-                })
-              }
-              className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
-                filterValues.addendums === 'active'
-                  ? 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
-              }`}
-            >
-              <FileDiff className='h-3.5 w-3.5' />
-              Active addendums
-            </button>
-          )}
-          {integrationsEnabled && (
-            <IntegrationsFilterPill
-              label={aliasFor('integrations', 'Integrations')}
-              value={filterValues.integrations}
-              onChange={(v) =>
-                setFilterValues((prev) => {
-                  const next = { ...prev }
-                  if (v) next.integrations = v
-                  else delete next.integrations
-                  return next
-                })
-              }
-            />
-          )}
           <RealtimeStaleMark className='h-8' />
-          <FocusModeToggle />
-          {(ctxRealtime || realtime) && queueId && (
-            <LivePauseButton
-              paused={livePause.paused}
-              held={livePause.held}
-              onToggle={livePause.toggle}
-            />
-          )}
           {pendingUpdates > 0 && !liveBurst.label && (
             <button
               type='button'
@@ -4871,376 +4807,629 @@ export function QueueWorklist({
               {pendingUpdates} update{pendingUpdates === 1 ? '' : 's'} · Refresh
             </button>
           )}
-          <div className='ml-auto flex flex-wrap items-center gap-2'>
-            {/* The board view has no owners row: there the viewers lead the buttons, so the
-                kept-empty slot joins the free space instead of opening a gap. */}
-            {!viewersInHeader && view === 'workload' && <ListViewers kind='queue' id={queueId} />}
-            {view === 'table' && (
-              <Popover>
-                <PopoverTrigger asChild>
+          {/* Actions: one line at any width; creating stays at the right, the rest folds into
+              ⋯ as the toolbar narrows (measured, OverflowRail). */}
+          <OverflowRail
+            leadMinWidth='siblings'
+            moreLabel='More queue actions'
+            // The board view has no owners row: there the viewers lead the buttons (pinned,
+            // never folded into ⋯). Elsewhere they sit on the Owners row (QueueTeamStrip).
+            lead={
+              !viewersInHeader && view === 'workload' ? (
+                <ListViewers kind='queue' id={queueId} />
+              ) : undefined
+            }
+            items={[
+              {
+                key: 'unseen',
+                kind: 'filter' as const,
+                priority: filterValues.unseen === 'yes' ? 90 : 48,
+                active: filterValues.unseen === 'yes',
+                node: (
                   <button
                     type='button'
-                    className={cn(
-                      'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
-                      groupBy
-                        ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
-                    )}
+                    aria-pressed={filterValues.unseen === 'yes'}
+                    data-queue-unseen-filter
+                    title='Only records someone else changed since you last opened them'
+                    onClick={() =>
+                      setFilterValues((prev) => {
+                        const next = { ...prev }
+                        if (next.unseen === 'yes') delete next.unseen
+                        else next.unseen = 'yes'
+                        return next
+                      })
+                    }
+                    className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
+                      filterValues.unseen === 'yes'
+                        ? 'border-nvr-cyan/40 bg-[#f2fdff] text-nvr-navy dark:border-nvr-cyan/40 dark:bg-[#20303a] dark:text-nvr-cyan'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
+                    }`}
                   >
-                    <Rows3 className='h-3.5 w-3.5' />
-                    {groupBy
-                      ? `Group: ${groupOptions.find((o) => o.value === groupBy)?.label ?? groupBy}`
-                      : 'Group'}
+                    <span className='h-2 w-2 rounded-full bg-nvr-cyan' />
+                    Unseen changes
                   </button>
-                </PopoverTrigger>
-                <PopoverContent className='w-[200px] p-0' align='start'>
-                  <Command>
-                    <CommandInput placeholder='Group by…' className='h-8 text-[12px]' />
-                    <CommandList>
-                      <CommandEmpty>No attribute found.</CommandEmpty>
-                      <CommandItem value='__none__' onSelect={() => setGroupBy(null)}>
-                        None
-                      </CommandItem>
-                      {groupOptions.map((opt) => (
-                        <CommandItem
-                          key={opt.value}
-                          value={opt.label}
-                          onSelect={() => setGroupBy(opt.value)}
-                        >
-                          {opt.label}
-                        </CommandItem>
-                      ))}
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-            )}
-            {view === 'table' && (
-              <button
-                type='button'
-                onClick={() => {
-                  setSort(sort === '-priority' ? '' : '-priority')
-                  setPage(1)
-                }}
-                className={cn(
-                  'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
-                  sort === '-priority'
-                    ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
-                    : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
-                )}
-              >
-                <Flame className='h-3.5 w-3.5' />
-                Priority
-              </button>
-            )}
-            {view === 'table' && groupBy && groups && (
-              <button
-                type='button'
-                onClick={() =>
-                  setCollapsedGroups(
-                    collapsedGroups.size > 0 ? new Set() : new Set(groups.map((g) => g.key))
-                  )
-                }
-                className='flex h-8 items-center rounded-md px-2 text-[12px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
-              >
-                {collapsedGroups.size > 0 ? 'Expand all' : 'Collapse all'}
-              </button>
-            )}
-            {view === 'kanban' && (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button
-                    type='button'
-                    className={cn(
-                      'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
-                      swimlaneBy
-                        ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
-                    )}
-                  >
-                    <Rows3 className='h-3.5 w-3.5' />
-                    {swimlaneBy
-                      ? `Lanes: ${swimlaneBy === 'collection' ? 'Collection' : 'Owner'}`
-                      : 'Lanes'}
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className='w-[180px] p-0' align='start'>
-                  <Command>
-                    <CommandList>
-                      <CommandItem value='none' onSelect={() => setSwimlaneBy(null)}>
-                        None
-                      </CommandItem>
-                      <CommandItem value='collection' onSelect={() => setSwimlaneBy('collection')}>
-                        Collection
-                      </CommandItem>
-                      <CommandItem value='owner' onSelect={() => setSwimlaneBy('owners')}>
-                        Owner
-                      </CommandItem>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-            )}
-            {onAsk && queue && (
-              <button
-                type='button'
-                onClick={() => onAsk({ id: queue.id, name: queue.name })}
-                data-tip='Open Ask AI with a question about this queue'
-                className='flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
-                data-queue-ask
-              >
-                <Sparkles className='h-3.5 w-3.5 text-nvr-cyan' />
-                Ask about this queue
-              </button>
-            )}
-            <CopyListLinkButton listKey={`queue:${queueId}`} getState={listLinkState} />
-            <SendViewButton
-              getView={() =>
-                listViewInput(
-                  'queue',
-                  queueId,
-                  `queue:${queueId}`,
-                  listLinkState() as unknown as Record<string, unknown>,
-                  queueViewSummary()
                 )
-              }
-              describe={() => {
-                const s = queueViewSummary()
-                const name = queue?.name ?? 'This queue'
-                return s ? `${name} — ${s}` : name
-              }}
-            />
-            {view === 'table' && (
-              <button
-                type='button'
-                onClick={() => void exportCsv()}
-                disabled={csvBusy || !data || (data.total ?? 0) === 0}
-                data-tip='Download the rows on this tab, with these filters and columns, as a spreadsheet (CSV)'
-                aria-label='Export to CSV'
-                className='flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
-                data-queue-export
-              >
-                <Download className='h-3.5 w-3.5' />
-                {csvBusy ? 'Exporting…' : 'Export'}
-              </button>
-            )}
-            <button
-              type='button'
-              onClick={() => setInsightsOpen((o) => !o)}
-              aria-expanded={insightsOpen}
-              title='Trends, aging, pace and states'
-              className={cn(
-                'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
-                insightsOpen
-                  ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
-                  : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
-              )}
-              data-queue-insights-toggle
-            >
-              <BarChart3 className='h-3.5 w-3.5' />
-              Insights
-            </button>
-            {view === 'table' && (
-              <Popover>
-                <PopoverTrigger asChild>
+              },
+              ...(addendumsEnabled
+                ? [
+                    {
+                      key: 'addendums',
+                      kind: 'filter' as const,
+                      priority: filterValues.addendums === 'active' ? 90 : 40,
+                      active: filterValues.addendums === 'active',
+                      node: (
+                        <button
+                          type='button'
+                          aria-pressed={filterValues.addendums === 'active'}
+                          title='Only records with an addendum still in review'
+                          onClick={() =>
+                            setFilterValues((prev) => {
+                              const next = { ...prev }
+                              if (next.addendums === 'active') delete next.addendums
+                              else next.addendums = 'active'
+                              return next
+                            })
+                          }
+                          className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
+                            filterValues.addendums === 'active'
+                              ? 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300'
+                              : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
+                          }`}
+                        >
+                          <FileDiff className='h-3.5 w-3.5' />
+                          Active addendums
+                        </button>
+                      )
+                    }
+                  ]
+                : []),
+              ...(integrationsEnabled
+                ? [
+                    {
+                      key: 'integrations',
+                      kind: 'filter' as const,
+                      priority: filterValues.integrations ? 90 : 38,
+                      active: !!filterValues.integrations,
+                      node: (
+                        <IntegrationsFilterPill
+                          label={aliasFor('integrations', 'Integrations')}
+                          value={filterValues.integrations}
+                          onChange={(v) =>
+                            setFilterValues((prev) => {
+                              const next = { ...prev }
+                              if (v) next.integrations = v
+                              else delete next.integrations
+                              return next
+                            })
+                          }
+                        />
+                      )
+                    }
+                  ]
+                : []),
+              { key: 'focus', priority: 30, label: 'Focus mode', node: <FocusModeToggle /> },
+              ...((ctxRealtime || realtime) && queueId
+                ? [
+                    {
+                      key: 'live-pause',
+                      priority: livePause.paused ? 90 : 45,
+                      active: livePause.paused,
+                      node: (
+                        <LivePauseButton
+                          paused={livePause.paused}
+                          held={livePause.held}
+                          onToggle={livePause.toggle}
+                        />
+                      )
+                    }
+                  ]
+                : []),
+              ...(view === 'table'
+                ? [
+                    {
+                      key: 'group',
+                      priority: groupBy ? 80 : 52,
+                      active: !!groupBy,
+                      node: (
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button
+                              type='button'
+                              className={cn(
+                                'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
+                                groupBy
+                                  ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
+                                  : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                              )}
+                            >
+                              <Group className='h-3.5 w-3.5' />
+                              {groupBy
+                                ? `Group: ${groupOptions.find((o) => o.value === groupBy)?.label ?? groupBy}`
+                                : 'Group'}
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent className='w-[200px] p-0' align='start'>
+                            <Command>
+                              <CommandInput placeholder='Group by…' className='h-8 text-[12px]' />
+                              <CommandList>
+                                <CommandEmpty>No attribute found.</CommandEmpty>
+                                <CommandItem value='__none__' onSelect={() => setGroupBy(null)}>
+                                  <Check
+                                    aria-hidden
+                                    className={cn(
+                                      'h-3.5 w-3.5 shrink-0 text-[#007a99] dark:text-nvr-cyan',
+                                      groupBy && 'invisible'
+                                    )}
+                                  />
+                                  No grouping
+                                </CommandItem>
+                                {groupOptions.map((opt) => (
+                                  <CommandItem
+                                    key={opt.value}
+                                    value={opt.label}
+                                    onSelect={() => setGroupBy(opt.value)}
+                                  >
+                                    <Check
+                                      aria-hidden
+                                      className={cn(
+                                        'h-3.5 w-3.5 shrink-0 text-[#007a99] dark:text-nvr-cyan',
+                                        groupBy !== opt.value && 'invisible'
+                                      )}
+                                    />
+                                    {opt.label}
+                                  </CommandItem>
+                                ))}
+                              </CommandList>
+                            </Command>
+                          </PopoverContent>
+                        </Popover>
+                      )
+                    }
+                  ]
+                : []),
+              ...(view === 'table'
+                ? [
+                    {
+                      key: 'priority',
+                      priority: sort === '-priority' ? 80 : 50,
+                      active: sort === '-priority',
+                      node: (
+                        <button
+                          type='button'
+                          onClick={() => {
+                            setSort(sort === '-priority' ? '' : '-priority')
+                            setPage(1)
+                          }}
+                          aria-pressed={sort === '-priority'}
+                          className={cn(
+                            'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
+                            sort === '-priority'
+                              ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
+                              : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                          )}
+                        >
+                          <Flame className='h-3.5 w-3.5' />
+                          Priority
+                        </button>
+                      )
+                    }
+                  ]
+                : []),
+              ...(view === 'table' && groupBy && groups
+                ? [
+                    {
+                      key: 'expand',
+                      priority: 40,
+                      node: (
+                        <button
+                          type='button'
+                          onClick={() =>
+                            setCollapsedGroups(
+                              collapsedGroups.size > 0
+                                ? new Set()
+                                : new Set(groups.map((g) => g.key))
+                            )
+                          }
+                          className='flex h-8 items-center rounded-md px-2 text-[12px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                        >
+                          {collapsedGroups.size > 0 ? 'Expand all' : 'Collapse all'}
+                        </button>
+                      )
+                    }
+                  ]
+                : []),
+              ...(view === 'kanban'
+                ? [
+                    {
+                      key: 'lanes',
+                      priority: 60,
+                      node: (
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button
+                              type='button'
+                              className={cn(
+                                'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
+                                swimlaneBy
+                                  ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
+                                  : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                              )}
+                            >
+                              <Rows3 className='h-3.5 w-3.5' />
+                              {swimlaneBy
+                                ? `Lanes: ${swimlaneBy === 'collection' ? 'Collection' : 'Owner'}`
+                                : 'Lanes'}
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent className='w-[180px] p-0' align='start'>
+                            <Command>
+                              <CommandList>
+                                <CommandItem value='none' onSelect={() => setSwimlaneBy(null)}>
+                                  None
+                                </CommandItem>
+                                <CommandItem
+                                  value='collection'
+                                  onSelect={() => setSwimlaneBy('collection')}
+                                >
+                                  Collection
+                                </CommandItem>
+                                <CommandItem value='owner' onSelect={() => setSwimlaneBy('owners')}>
+                                  Owner
+                                </CommandItem>
+                              </CommandList>
+                            </Command>
+                          </PopoverContent>
+                        </Popover>
+                      )
+                    }
+                  ]
+                : []),
+              ...(onAsk && queue
+                ? [
+                    {
+                      key: 'ask',
+                      priority: 50,
+                      node: (
+                        <button
+                          type='button'
+                          onClick={() => onAsk({ id: queue.id, name: queue.name })}
+                          data-tip='Open Ask AI with a question about this queue'
+                          className='flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                          data-queue-ask
+                        >
+                          <Sparkles className='h-3.5 w-3.5 text-nvr-cyan' />
+                          Ask about this queue
+                        </button>
+                      )
+                    }
+                  ]
+                : []),
+              {
+                key: 'copy-link',
+                priority: 25,
+                label: 'Copy link',
+                node: <CopyListLinkButton listKey={`queue:${queueId}`} getState={listLinkState} />
+              },
+              {
+                key: 'send-view',
+                priority: 20,
+                label: 'Send this view',
+                node: (
+                  <SendViewButton
+                    getView={() =>
+                      listViewInput(
+                        'queue',
+                        queueId,
+                        `queue:${queueId}`,
+                        listLinkState() as unknown as Record<string, unknown>,
+                        queueViewSummary()
+                      )
+                    }
+                    describe={() => {
+                      const s = queueViewSummary()
+                      const name = queue?.name ?? 'This queue'
+                      return s ? `${name} — ${s}` : name
+                    }}
+                  />
+                )
+              },
+              ...(view === 'table'
+                ? [
+                    {
+                      key: 'export',
+                      priority: 65,
+                      active: csvBusy,
+                      node: (
+                        <button
+                          type='button'
+                          onClick={() => void exportCsv()}
+                          disabled={csvBusy || !data || (data.total ?? 0) === 0}
+                          data-tip='Download the rows on this tab, with these filters and columns, as a spreadsheet (CSV)'
+                          aria-label={csvBusy ? 'Exporting to CSV' : 'Export to CSV'}
+                          aria-busy={csvBusy || undefined}
+                          className='flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                          data-queue-export
+                        >
+                          {/* Same width while it runs: a spinner, not a longer label. */}
+                          {csvBusy ? (
+                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                          ) : (
+                            <Download className='h-3.5 w-3.5' />
+                          )}
+                          Export
+                        </button>
+                      )
+                    }
+                  ]
+                : []),
+              {
+                key: 'insights',
+                priority: insightsOpen ? 85 : 55,
+                active: insightsOpen,
+                node: (
                   <button
                     type='button'
-                    className='flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                    onClick={() => setInsightsOpen((o) => !o)}
+                    aria-expanded={insightsOpen}
+                    title='Trends, aging, pace and states'
+                    className={cn(
+                      'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
+                      insightsOpen
+                        ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                    )}
+                    data-queue-insights-toggle
                   >
-                    <SlidersHorizontal className='h-3.5 w-3.5' />
-                    Columns
+                    <BarChart3 className='h-3.5 w-3.5' />
+                    Insights
                   </button>
-                </PopoverTrigger>
-                <PopoverContent className='w-[220px] p-2' align='end'>
-                  <DndContext
-                    sensors={sensors}
-                    collisionDetection={closestCenter}
-                    onDragEnd={handleDragEnd}
-                  >
-                    <SortableContext items={chooserKeys} strategy={verticalListSortingStrategy}>
-                      <div className='space-y-1.5'>
-                        {chooserKeys.map((key) => {
-                          const col = allToggleable.find((c) => c.key === key)
-                          return (
-                            <SortableColumnToggle
-                              key={key}
-                              id={key}
-                              label={typeof col?.header === 'string' ? col.header : key}
-                              checked={effectiveVisible.has(key)}
-                              onCheckedChange={() => handleToggleColumn(key)}
-                            />
-                          )
-                        })}
-                      </div>
-                    </SortableContext>
-                  </DndContext>
-                </PopoverContent>
-              </Popover>
-            )}
-            {view === 'table' && bulkActionsEnabled && (
-              <button
-                type='button'
-                onClick={toggleBulkMode}
-                aria-pressed={bulkMode}
-                data-queue-bulk-mode={bulkMode ? 'on' : 'off'}
-                data-tip={
-                  bulkMode
-                    ? 'Leave bulk mode — clears the selection and turns row actions back on'
-                    : 'Select rows to act on several at once'
-                }
-                className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium shadow-sm ${
-                  bulkMode
-                    ? 'border-nvr-cyan bg-nvr-cyan/10 text-slate-800 dark:text-slate-100'
-                    : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:border-border dark:bg-card dark:text-slate-400 dark:hover:bg-muted'
-                }`}
-              >
-                <ListChecks className='h-3.5 w-3.5' />
-                {bulkMode ? 'Done' : 'Bulk select'}
-              </button>
-            )}
-            {view === 'table' && (
-              <button
-                type='button'
-                onClick={() => {
-                  setDensity(density === 'compact' ? 'comfortable' : 'compact')
-                }}
-                aria-label='Row density'
-                title={
-                  density === 'compact' ? 'Switch to comfortable rows' : 'Switch to compact rows'
-                }
-                className='flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-700 dark:border-border dark:bg-card dark:text-slate-400 dark:hover:bg-muted'
-              >
-                {density === 'compact' ? (
-                  <Rows4 className='h-3.5 w-3.5' />
-                ) : (
-                  <Rows2 className='h-3.5 w-3.5' />
-                )}
-              </button>
-            )}
-            {view === 'table' && workNextEnabled && visibleRows.length > 0 && (
-              <button
-                type='button'
-                onClick={() => startWorkNext()}
-                className='flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white hover:brightness-110'
-              >
-                <Play className='h-3 w-3 fill-current' />
-                Work Next
-              </button>
-            )}
-            {!createCoveredByHost &&
-              creatableCollections.length === 1 &&
-              (newItemLayouts ? (
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button
-                      type='button'
-                      className='flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
-                    >
-                      <Plus className='h-3.5 w-3.5' />
-                      New {titleCase(creatableCollections[0])}
-                      <ChevronDown className='h-3 w-3 opacity-60' />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent align='end' className='w-60 p-1'>
+                )
+              },
+              ...(view === 'table'
+                ? [
+                    {
+                      key: 'columns',
+                      priority: 62,
+                      node: (
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button
+                              type='button'
+                              className='flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                            >
+                              <SlidersHorizontal className='h-3.5 w-3.5' />
+                              Columns
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent className='w-[220px] p-2' align='end'>
+                            <DndContext
+                              sensors={sensors}
+                              collisionDetection={closestCenter}
+                              onDragEnd={handleDragEnd}
+                            >
+                              <SortableContext
+                                items={chooserKeys}
+                                strategy={verticalListSortingStrategy}
+                              >
+                                <div className='space-y-1.5'>
+                                  {chooserKeys.map((key) => {
+                                    const col = allToggleable.find((c) => c.key === key)
+                                    return (
+                                      <SortableColumnToggle
+                                        key={key}
+                                        id={key}
+                                        label={typeof col?.header === 'string' ? col.header : key}
+                                        checked={effectiveVisible.has(key)}
+                                        onCheckedChange={() => handleToggleColumn(key)}
+                                      />
+                                    )
+                                  })}
+                                </div>
+                              </SortableContext>
+                            </DndContext>
+                          </PopoverContent>
+                        </Popover>
+                      )
+                    }
+                  ]
+                : []),
+              ...(view === 'table' && bulkActionsEnabled
+                ? [
+                    {
+                      key: 'bulk',
+                      priority: bulkMode ? 95 : 58,
+                      active: bulkMode,
+                      node: (
+                        <button
+                          type='button'
+                          onClick={toggleBulkMode}
+                          aria-pressed={bulkMode}
+                          data-queue-bulk-mode={bulkMode ? 'on' : 'off'}
+                          data-tip={
+                            bulkMode
+                              ? 'Leave bulk mode — clears the selection and turns row actions back on'
+                              : 'Select rows to act on several at once'
+                          }
+                          className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium shadow-sm ${
+                            bulkMode
+                              ? 'border-nvr-cyan bg-nvr-cyan/10 text-slate-800 dark:text-slate-100'
+                              : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:border-border dark:bg-card dark:text-slate-400 dark:hover:bg-muted'
+                          }`}
+                        >
+                          <ListChecks className='h-3.5 w-3.5' />
+                          {bulkMode ? 'Done' : 'Bulk select'}
+                        </button>
+                      )
+                    }
+                  ]
+                : []),
+              ...(view === 'table'
+                ? [
+                    {
+                      key: 'density',
+                      priority: 22,
+                      label: density === 'compact' ? 'Comfortable rows' : 'Compact rows',
+                      node: (
+                        <button
+                          type='button'
+                          onClick={() => {
+                            setDensity(density === 'compact' ? 'comfortable' : 'compact')
+                          }}
+                          aria-label='Row density'
+                          title={
+                            density === 'compact'
+                              ? 'Switch to comfortable rows'
+                              : 'Switch to compact rows'
+                          }
+                          className='flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-700 dark:border-border dark:bg-card dark:text-slate-400 dark:hover:bg-muted'
+                        >
+                          {density === 'compact' ? (
+                            <Rows4 className='h-3.5 w-3.5' />
+                          ) : (
+                            <Rows2 className='h-3.5 w-3.5' />
+                          )}
+                        </button>
+                      )
+                    }
+                  ]
+                : []),
+              ...(view === 'table' && workNextEnabled && visibleRows.length > 0
+                ? [
+                    {
+                      key: 'work-next',
+                      priority: 70,
+                      node: (
+                        <button
+                          type='button'
+                          onClick={() => startWorkNext()}
+                          className='flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white hover:brightness-110'
+                        >
+                          <Play className='h-3 w-3 fill-current' />
+                          Work Next
+                        </button>
+                      )
+                    }
+                  ]
+                : [])
+            ]}
+            trail={
+              <>
+                {!createCoveredByHost &&
+                  creatableCollections.length === 1 &&
+                  (newItemLayouts ? (
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button
+                          type='button'
+                          className='flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
+                        >
+                          <Plus className='h-3.5 w-3.5' />
+                          New {titleCase(creatableCollections[0])}
+                          <ChevronDown className='h-3 w-3 opacity-60' />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent align='end' className='w-60 p-1'>
+                        <button
+                          type='button'
+                          onClick={() =>
+                            itemNav.open({
+                              collection: creatableCollections[0],
+                              itemId: 'new',
+                              // Same layout the queue opens existing records with.
+                              layoutSlug: displayConfig?.item_layout ?? null
+                            })
+                          }
+                          className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
+                        >
+                          {newItemLayouts.active?.create_label ??
+                            newItemLayouts.active?.name ??
+                            'Default layout'}
+                          <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>
+                            default
+                          </span>
+                        </button>
+                        {newItemLayouts.options.map((l) => (
+                          <button
+                            key={l.id}
+                            type='button'
+                            onClick={() =>
+                              itemNav.open({
+                                collection: creatableCollections[0],
+                                itemId: 'new',
+                                layoutSlug: l.slug
+                              })
+                            }
+                            className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
+                          >
+                            {l.create_label ?? l.name}
+                          </button>
+                        ))}
+                      </PopoverContent>
+                    </Popover>
+                  ) : (
                     <button
                       type='button'
                       onClick={() =>
                         itemNav.open({
                           collection: creatableCollections[0],
                           itemId: 'new',
-                          // Same layout the queue opens existing records with.
+                          // Open a new record on the same layout the queue opens
+                          // existing ones with, so creating and reviewing match.
                           layoutSlug: displayConfig?.item_layout ?? null
                         })
                       }
-                      className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
+                      className='flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
                     >
-                      {newItemLayouts.active?.create_label ??
-                        newItemLayouts.active?.name ??
-                        'Default layout'}
-                      <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>
-                        default
-                      </span>
-                    </button>
-                    {newItemLayouts.options.map((l) => (
-                      <button
-                        key={l.id}
-                        type='button'
-                        onClick={() =>
-                          itemNav.open({
-                            collection: creatableCollections[0],
-                            itemId: 'new',
-                            layoutSlug: l.slug
-                          })
-                        }
-                        className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
-                      >
-                        {l.create_label ?? l.name}
-                      </button>
-                    ))}
-                  </PopoverContent>
-                </Popover>
-              ) : (
-                <button
-                  type='button'
-                  onClick={() =>
-                    itemNav.open({
-                      collection: creatableCollections[0],
-                      itemId: 'new',
-                      // Open a new record on the same layout the queue opens
-                      // existing ones with, so creating and reviewing match.
-                      layoutSlug: displayConfig?.item_layout ?? null
-                    })
-                  }
-                  className='flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
-                >
-                  <Plus className='h-3.5 w-3.5' />
-                  New {titleCase(creatableCollections[0])}
-                </button>
-              ))}
-            {!createCoveredByHost && creatableCollections.length > 1 && (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button
-                    type='button'
-                    className='flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
-                  >
-                    <Plus className='h-3.5 w-3.5' />
-                    New
-                    <ChevronDown className='h-3 w-3 opacity-60' />
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent align='end' className='w-56 p-1'>
-                  {creatableCollections.map((c) => (
-                    <button
-                      key={c}
-                      type='button'
-                      onClick={() =>
-                        itemNav.open({
-                          collection: c,
-                          itemId: 'new',
-                          layoutSlug: displayConfig?.item_layout ?? null
-                        })
-                      }
-                      className='flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
-                    >
-                      <Plus className='h-3 w-3 opacity-60' />
-                      {titleCase(c)}
+                      <Plus className='h-3.5 w-3.5' />
+                      New {titleCase(creatableCollections[0])}
                     </button>
                   ))}
-                </PopoverContent>
-              </Popover>
-            )}
-            {!createCoveredByHost && importCollection && navigate && (
-              <ImportFromFileButton
-                collection={importCollection}
-                onParsed={(result, template) =>
-                  navigate(`/collections/${importCollection}/new`, {
-                    state: { importResult: result, importTemplateId: template.id }
-                  })
-                }
-              />
-            )}
-          </div>
+                {!createCoveredByHost && creatableCollections.length > 1 && (
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type='button'
+                        className='flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
+                      >
+                        <Plus className='h-3.5 w-3.5' />
+                        New
+                        <ChevronDown className='h-3 w-3 opacity-60' />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align='end' className='w-56 p-1'>
+                      {creatableCollections.map((c) => (
+                        <button
+                          key={c}
+                          type='button'
+                          onClick={() =>
+                            itemNav.open({
+                              collection: c,
+                              itemId: 'new',
+                              layoutSlug: displayConfig?.item_layout ?? null
+                            })
+                          }
+                          className='flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
+                        >
+                          <Plus className='h-3 w-3 opacity-60' />
+                          {titleCase(c)}
+                        </button>
+                      ))}
+                    </PopoverContent>
+                  </Popover>
+                )}
+                {!createCoveredByHost && importCollection && navigate && (
+                  <ImportFromFileButton
+                    collection={importCollection}
+                    onParsed={(result, template) =>
+                      navigate(`/collections/${importCollection}/new`, {
+                        state: { importResult: result, importTemplateId: template.id }
+                      })
+                    }
+                  />
+                )}
+              </>
+            }
+          />
         </div>
         {insightsOpen && (
           <div
@@ -5888,6 +6077,10 @@ export function QueueWorklist({
                   hideFilterRow
                   nowrapCells
                   columnPins={effectivePins}
+                  // Same give-way order as the record list on a narrow desktop: Owners
+                  // first, then data columns, then State; Actions last.
+                  pinKeepRank={queuePinKeepRank}
+                  pinRightShare={0.45}
                   onColumnPinChange={(key, pin) => {
                     setColumnPins((prev) => {
                       const next = { ...(prev ?? effectivePins) }

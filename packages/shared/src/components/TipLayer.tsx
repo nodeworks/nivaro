@@ -16,7 +16,7 @@ import { createPortal } from 'react-dom'
 const liveInstances: Array<(owns: boolean) => void> = []
 
 /** A menu whose rows carry tips: a tip drawn under a row would cover the row below it. */
-const MENU = '[data-nvr-header-menu-panel], [role="menu"]'
+const MENU = '[data-nvr-header-menu-panel], [role="menu"], [data-rail-menu]'
 /** Gap between a tip and what it explains. */
 const GAP = 6
 

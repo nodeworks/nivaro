@@ -28,17 +28,20 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
   LogOut,
+  Menu,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
   SlidersHorizontal,
   Star,
   Unplug,
-  UserRound
+  UserRound,
+  X
 } from 'lucide-react'
 import {
   Component,
   Fragment,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   Suspense,
   useCallback,
@@ -163,6 +166,33 @@ import { ViewAsBar } from './ViewAsBar'
 const announcementsClient = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 const SIDEBAR_KEY = 'nivaro-sidebar-collapsed'
+
+/** An open Radix popover/menu (anything but a tooltip) or another open dialog. */
+function otherLayerOpen(): boolean {
+  const layers = document.querySelectorAll('[data-radix-popper-content-wrapper]')
+  for (const w of layers) if (!w.querySelector('[role="tooltip"]')) return true
+  return !!document.querySelector('[role="dialog"][data-state="open"]:not(#app-nav-drawer)')
+}
+
+/** Below Tailwind's `md` (768 px) the sidebar is an off-canvas drawer (phone shell). */
+const PHONE_QUERY = '(max-width: 767px)'
+function useIsPhone(): boolean {
+  const [phone, setPhone] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia?.(PHONE_QUERY).matches
+  )
+  useEffect(() => {
+    const m = window.matchMedia?.(PHONE_QUERY)
+    if (!m) return
+    const on = () => setPhone(m.matches)
+    on()
+    m.addEventListener('change', on)
+    return () => m.removeEventListener('change', on)
+  }, [])
+  return phone
+}
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 const CATEGORY_KEY = 'nivaro-nav-category'
 
 export type { NavCategory, NavItem } from './nav-config'
@@ -378,7 +408,64 @@ export function AppLayout() {
     p.slots?.['nav-sidebar'] ? [p.slots['nav-sidebar'] as NavSidebarSlot] : []
   )
 
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(SIDEBAR_KEY) === 'true')
+  const [storedCollapsed, setCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_KEY) === 'true'
+  )
+  // Phone shell: the whole sidebar (rail + panel) is a drawer, closed by default; inside it
+  // the panel is always open. Desktop keeps the stored collapse exactly as before.
+  const isPhone = useIsPhone()
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const collapsed = isPhone ? false : storedCollapsed
+  const asideRef = useRef<HTMLElement>(null)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const drawerShown = isPhone && drawerOpen
+  useEffect(() => {
+    if (!isPhone) setDrawerOpen(false)
+  }, [isPhone])
+  // Open drawer: Esc closes, page behind does not scroll, focus moves in (and back out).
+  useEffect(() => {
+    if (!drawerShown) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      // Focus moving in opens the focused rail button's tooltip, which takes Esc first and
+      // marks it handled; that alone must not keep the drawer open. Any other open layer (a
+      // menu or popover inside the drawer) closes first and keeps the drawer.
+      if (e.defaultPrevented && otherLayerOpen()) return
+      setDrawerOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    // Focus the drawer itself, not its first button: a focused rail button opens its tooltip,
+    // which covered the panel's first links on phones. Tab then walks into the drawer.
+    asideRef.current?.focus({ preventScroll: true })
+    const menuBtn = menuButtonRef.current
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prevOverflow
+      menuBtn?.focus()
+    }
+  }, [drawerShown])
+  /** Tab stays inside the open drawer (focus trap). */
+  const trapDrawerFocus = (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (!drawerShown || e.key !== 'Tab' || !asideRef.current) return
+    const list = [...asideRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+      (el) => el.offsetParent !== null
+    )
+    if (list.length === 0) return
+    const first = list[0]
+    const last = list[list.length - 1]
+    if (e.shiftKey && document.activeElement === asideRef.current) {
+      e.preventDefault()
+      last.focus()
+    } else if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
   const [activeCategory, setActiveCategory] = useState<string>(() => {
     const saved = localStorage.getItem(CATEGORY_KEY)
     if (saved && navCategories.some((c) => c.id === saved)) return saved
@@ -485,12 +572,19 @@ export function AppLayout() {
       return findCategoryForPath(location.pathname) ?? current
     })
     setFindQuery('')
+    setDrawerOpen(false)
   }, [location.pathname])
 
   function handleCategoryClick(catId: string) {
     if (catId !== 'favorites') setOrganizing(false)
     if (catId !== activeCategory) setCustomizing(false)
     setFindQuery('')
+    if (isPhone) {
+      // In the drawer the panel never folds away: a category just switches.
+      setActiveCategory(catId)
+      localStorage.setItem(CATEGORY_KEY, catId)
+      return
+    }
     if (catId === activeCategory && !collapsed) {
       // clicking active category while panel is open → collapse
       setCollapsed(true)
@@ -508,6 +602,10 @@ export function AppLayout() {
   }
 
   function togglePanel() {
+    if (isPhone) {
+      setDrawerOpen(false)
+      return
+    }
     setCollapsed((prev) => {
       const next = !prev
       localStorage.setItem(SIDEBAR_KEY, String(next))
@@ -656,9 +754,29 @@ export function AppLayout() {
             </a>
 
             {/* ─── Sidebar ──────────────────────────────────────────────── */}
+            {/* Phone shell: a backdrop behind the open drawer; a tap on it closes the drawer. */}
+            {drawerShown && !popout && (
+              <div
+                aria-hidden
+                data-nav-drawer-backdrop
+                onClick={() => setDrawerOpen(false)}
+                className='fixed inset-0 z-40 bg-black/45 md:hidden'
+              />
+            )}
             <aside
+              ref={asideRef}
+              id='app-nav-drawer'
+              data-nav-drawer={isPhone ? (drawerOpen ? 'open' : 'closed') : undefined}
+              aria-label={isPhone ? 'Navigation' : undefined}
+              role={isPhone ? 'dialog' : undefined}
+              tabIndex={isPhone ? -1 : undefined}
+              inert={isPhone && !drawerOpen ? true : undefined}
+              onKeyDown={trapDrawerFocus}
               className={cn(
-                'flex h-screen shrink-0 overflow-hidden bg-nvr-navy dark:bg-[#090c10]',
+                'flex h-screen shrink-0 overflow-hidden bg-nvr-navy outline-none dark:bg-[#090c10]',
+                // Below md: off-canvas drawer over the page, closed unless opened.
+                'max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:h-[100dvh] max-md:max-w-[88vw] max-md:shadow-2xl max-md:transition-transform max-md:duration-200 max-md:ease-out motion-reduce:max-md:transition-none',
+                isPhone && !drawerOpen && 'max-md:invisible max-md:-translate-x-full',
                 popout && 'hidden'
               )}
             >
@@ -786,7 +904,13 @@ export function AppLayout() {
                       <button
                         type='button'
                         onClick={togglePanel}
-                        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                        aria-label={
+                          isPhone
+                            ? 'Close navigation'
+                            : collapsed
+                              ? 'Expand sidebar'
+                              : 'Collapse sidebar'
+                        }
                         className='flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-white'
                       >
                         {collapsed ? (
@@ -797,7 +921,11 @@ export function AppLayout() {
                       </button>
                     </TooltipTrigger>
                     <TooltipContent side='right' sideOffset={8}>
-                      {collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                      {isPhone
+                        ? 'Close navigation'
+                        : collapsed
+                          ? 'Expand sidebar'
+                          : 'Collapse sidebar'}
                     </TooltipContent>
                   </Tooltip>
                 </div>
@@ -984,8 +1112,42 @@ export function AppLayout() {
             <main
               id='main-content'
               ref={mainRef}
-              className='flex flex-1 flex-col overflow-hidden bg-secondary'
+              className='flex min-w-0 flex-1 flex-col overflow-hidden bg-secondary'
             >
+              {/* Phone shell: a slim top bar with the menu button that opens the drawer. */}
+              {!popout && (
+                <div
+                  data-phone-topbar
+                  className='flex h-12 shrink-0 items-center gap-2 border-b border-white/[0.07] bg-nvr-navy px-2 dark:bg-[#090c10] md:hidden'
+                >
+                  <button
+                    ref={menuButtonRef}
+                    type='button'
+                    onClick={() => setDrawerOpen((o) => !o)}
+                    aria-label={drawerOpen ? 'Close navigation' : 'Open navigation'}
+                    aria-expanded={drawerOpen}
+                    aria-controls='app-nav-drawer'
+                    data-phone-menu
+                    className='flex h-10 w-10 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60'
+                  >
+                    {drawerOpen ? <X className='h-5 w-5' /> : <Menu className='h-5 w-5' />}
+                  </button>
+                  {settings?.brand_logo ? (
+                    <img
+                      src={`/api/files/${settings.brand_logo}`}
+                      alt=''
+                      className='max-h-6 max-w-[32px] object-contain'
+                    />
+                  ) : (
+                    <div className='flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-nvr-cyan'>
+                      <NivaroMark size={14} color='#172940' />
+                    </div>
+                  )}
+                  <p className='min-w-0 truncate text-[14px] font-semibold tracking-[-0.01em] text-white'>
+                    {projectName}
+                  </p>
+                </div>
+              )}
               <HelpVideoHost>
                 {/* #18: the screen's best help video ("Watch: … (2:10)") when a
                     strong match is unwatched; renders nothing otherwise. */}

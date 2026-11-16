@@ -26,11 +26,14 @@ import {
   parseNumberFilter
 } from '../lib/number-filter'
 import type { CascadeSelection } from '../lib/quick-filter-cascade'
+import { ROW_SURFACE, ROW_SURFACE_HOVER, ROW_SURFACE_SELECTED } from '../lib/row-surface'
 import { fitPins } from '../lib/table-pins'
+import { useBelowMd } from '../lib/use-below-md'
 import { cn, formatNumber } from '../lib/utils'
 import { CellCopyLayer } from './CellCopyLayer'
 import { EmptyState } from './EmptyState'
 import { HScrollProxy } from './HScrollProxy'
+import { PhonePager } from './list/PhonePager'
 import { TableSkeletonRows } from './Skeletons'
 import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
@@ -151,6 +154,14 @@ export interface DataTableProps<T = Record<string, unknown>> {
    *  hover-revealed pin button cycling none → left → right → none. */
   columnPins?: Record<string, 'left' | 'right'>
   onColumnPinChange?: (key: string, pin: 'left' | 'right' | null) => void
+  /** On a narrow desktop table, which right pins give way first (lib/table-pins.ts
+   *  fitPins `rank`): lower ranks are released first. A pinned column whose cells on
+   *  this page are all empty ("—", blank, or text marked `data-cell-empty`) is released
+   *  before any other. Released columns scroll with the data columns; the view's
+   *  pins are untouched. */
+  pinKeepRank?: (key: string) => number
+  /** Cap on the right pins alone, as a share of the visible width (fitPins `rightShare`). */
+  pinRightShare?: number
   /** Render a compact per-column filter row under the headers — each column
    *  whose key matches a FilterDef gets that def's control inline (the
    *  CollectionBrowserView column-filter pattern). Independent of the
@@ -913,6 +924,8 @@ export function DataTable<T = Record<string, unknown>>({
   pinFirstColumn = false,
   columnPins,
   onColumnPinChange,
+  pinKeepRank,
+  pinRightShare,
   columnFilterRow = false,
   hScrollProxy = false,
   selectedIds,
@@ -946,13 +959,18 @@ export function DataTable<T = Record<string, unknown>>({
   // right pins last, offsets from live header-cell measurement (guarded — only
   // sets state when values actually change, so the every-render effect is safe).
   const pinsActive = columnPins !== undefined
+  // Right pins the width fit let go of (pinKeepRank): they join the scrolling columns so
+  // the kept right pins stay one block against the edge. Set by the measuring effect.
+  const [releasedRight, setReleasedRight] = useState<string[]>([])
   const orderedColumns = useMemo(() => {
     if (!pinsActive || !columnPins) return columns
+    const released = new Set(releasedRight)
+    const isRight = (k: string) => columnPins[k] === 'right' && !released.has(k)
     const left = columns.filter((c) => columnPins[c.key] === 'left')
-    const right = columns.filter((c) => columnPins[c.key] === 'right')
-    const mid = columns.filter((c) => !columnPins[c.key])
+    const right = columns.filter((c) => isRight(c.key))
+    const mid = columns.filter((c) => columnPins[c.key] !== 'left' && !isRight(c.key))
     return [...left, ...mid, ...right]
-  }, [columns, columnPins, pinsActive])
+  }, [columns, columnPins, pinsActive, releasedRight])
 
   const headCellRefs = useRef<Record<string, HTMLTableCellElement | null>>({})
   const hScrollRef = useRef<HTMLDivElement | null>(null)
@@ -980,6 +998,11 @@ export function DataTable<T = Record<string, unknown>>({
   // The pin budget depends on the visible width, which changes without a
   // render (window resize, a rail collapsing) — re-render on it.
   const [, setViewportWidth] = useState(0)
+  // Below md only the identifier (first left pin) stays pinned (lib/table-pins.ts).
+  const compactPins = useBelowMd()
+  // A bounded table on a phone gets whatever height its card has: a minimum body height
+  // there pushed the pager out of the card's bottom (clipped, under the corner button).
+  const bodyMinHeight = fillHeight && compactPins ? undefined : minBodyHeight
   // biome-ignore lint/correctness/useExhaustiveDependencies: isLoading swaps the skeleton for the scroll box — re-attach to the new element
   useEffect(() => {
     const el = hScrollRef.current
@@ -995,13 +1018,40 @@ export function DataTable<T = Record<string, unknown>>({
     const checkboxWidth = onSelectionChange
       ? (checkboxHeadRef.current?.getBoundingClientRect().width ?? 40)
       : 0
+    // A pinned column with nothing in it on this page ("—" in every row) gives way first.
+    let bodyCells: HTMLElement[] | null = null
+    const emptyOnPage = (key: string) => {
+      bodyCells ??= [
+        ...(hScrollRef.current?.querySelectorAll<HTMLElement>('tbody td[data-dt-col]') ?? [])
+      ]
+      const cells = bodyCells.filter((td) => td.dataset.dtCol === key)
+      if (cells.length === 0) return false
+      for (const td of cells) {
+        // A cell may say it is empty in words ("No owners") by marking that text.
+        if (td.querySelector('[data-cell-empty]')) continue
+        if (td.querySelector('img, svg, button, input, a')) return false
+        const text = (td.textContent ?? '').trim()
+        if (text !== '' && text !== '—' && text !== '-') return false
+      }
+      return true
+    }
+    const rightKeys = columns.filter((c) => columnPins[c.key] === 'right').map((c) => c.key)
     const { left, right } = fitPins(
       orderedColumns.filter((c) => columnPins[c.key] === 'left').map((c) => c.key),
-      orderedColumns.filter((c) => columnPins[c.key] === 'right').map((c) => c.key),
+      rightKeys,
       widthOf,
       checkboxWidth,
-      hScrollRef.current?.clientWidth ?? 0
+      hScrollRef.current?.clientWidth ?? 0,
+      {
+        compact: compactPins,
+        rightShare: pinRightShare,
+        rank: pinKeepRank ? (k) => (emptyOnPage(k) ? -1e6 : pinKeepRank(k)) : undefined
+      }
     )
+    // Only a ranked fit moves columns: unranked, a dropped right pin is always the inner
+    // end of the block and simply scrolls in place (phones drop them all).
+    const released = pinKeepRank && !compactPins ? rightKeys.filter((k) => !right.includes(k)) : []
+    setReleasedRight((prev) => (prev.join('|') === released.join('|') ? prev : released))
     const next: Record<string, { side: 'left' | 'right'; offset: number; seam: boolean }> = {}
     let acc = checkboxWidth
     // Floor so adjacent pinned cells overlap by a sub-pixel instead of meeting
@@ -1080,18 +1130,18 @@ export function DataTable<T = Record<string, unknown>>({
           'group/row nvr-row-enter border-slate-100 transition-colors duration-150',
           onRowFocus &&
             'focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-nvr-cyan',
-          (pinFirstColumn || pinsActive) && 'bg-white dark:bg-card',
+          // Pinned: opaque surface AND opaque hover (the base row's hover:bg-muted/50 is
+          // translucent, so the pinned cells would go see-through under the pointer).
+          (pinFirstColumn || pinsActive) && `${ROW_SURFACE} ${ROW_SURFACE_HOVER}`,
           onRowClick &&
             (pinFirstColumn || pinsActive
-              ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted'
+              ? 'cursor-pointer'
               : 'cursor-pointer hover:bg-slate-50/80'),
           rowClassName?.(row),
           // Pinned sticky cells use bg-inherit, so a selected row's bg must be
           // OPAQUE or horizontally-scrolled content bleeds through the pinned
-          // column. bg-nvr-cyan/5 is semi-transparent — use an opaque equivalent
-          // (5% nvr-cyan #00ceff over white / card) when pinning.
-          isSelected &&
-            (pinFirstColumn || pinsActive ? 'bg-[#f2fdff] dark:bg-[#20303a]' : 'bg-nvr-cyan/5')
+          // column (lib/row-surface.ts: the accent mixed over the card).
+          isSelected && (pinFirstColumn || pinsActive ? ROW_SURFACE_SELECTED : 'bg-nvr-cyan/5')
         )}
         style={{ animationDelay: `${Math.min(i, 14) * 16}ms` }}
         data-row-key={rowId}
@@ -1137,6 +1187,7 @@ export function DataTable<T = Record<string, unknown>>({
         {orderedColumns.map((col, colIdx) => (
           <TableCell
             key={col.key}
+            data-dt-col={col.key}
             style={pinStyle(col.key)}
             className={cn(
               'px-3',
@@ -1234,7 +1285,7 @@ export function DataTable<T = Record<string, unknown>>({
             data-skeleton='table'
             aria-busy='true'
             className={cn(fillHeight && 'min-h-0 flex-1 overflow-hidden')}
-            style={minBodyHeight ? { minHeight: minBodyHeight } : undefined}
+            style={bodyMinHeight ? { minHeight: bodyMinHeight } : undefined}
           >
             <Table className='border-separate border-spacing-0'>
               <TableHeader>
@@ -1282,7 +1333,7 @@ export function DataTable<T = Record<string, unknown>>({
                 fillHeight &&
                   'min-h-0 flex-1 overflow-y-auto [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-[5] [&_thead_th.left-0]:z-[6] [&_thead_th.dt-pinned]:z-[6]'
               )}
-              style={minBodyHeight ? { minHeight: minBodyHeight } : undefined}
+              style={bodyMinHeight ? { minHeight: bodyMinHeight } : undefined}
             >
               {/* Separate borders, drawn per cell: a collapsed row border is
                   painted by the table, and on fractional row heights a pinned
@@ -1502,7 +1553,7 @@ export function DataTable<T = Record<string, unknown>>({
                         colSpan={columns.length + (onSelectionChange ? 1 : 0)}
                         className='nvr-fade-in p-0 text-center align-middle text-[13px] text-slate-400'
                         style={
-                          minBodyHeight ? { height: Math.max(96, minBodyHeight - 56) } : undefined
+                          bodyMinHeight ? { height: Math.max(96, bodyMinHeight - 56) } : undefined
                         }
                       >
                         <div
@@ -1573,11 +1624,30 @@ export function DataTable<T = Record<string, unknown>>({
 
             {/* Pagination */}
             {!rowGroups && total > limit && (
-              <div className='flex items-center justify-between border-t border-slate-100 px-4 py-2.5'>
-                <p className='text-[12px] text-slate-400'>
+              <div
+                className='flex items-center justify-between border-t border-slate-100 py-1.5 pl-2 dark:border-border md:py-2.5 md:pl-4'
+                // A host's corner float (admin's bug button) would cover Next / Last.
+                style={{ paddingRight: 'calc(0.5rem + var(--nvr-corner-float, 0px))' }}
+              >
+                <PhonePager
+                  className='w-full'
+                  range={
+                    <>
+                      <span className='font-semibold text-slate-700 dark:text-slate-200'>
+                        {formatNumber(start)}–{formatNumber(end)}
+                      </span>{' '}
+                      of {formatNumber(total)}
+                    </>
+                  }
+                  prevDisabled={page <= 1}
+                  nextDisabled={page >= totalPages}
+                  onPrev={() => onPageChange(page - 1)}
+                  onNext={() => onPageChange(page + 1)}
+                />
+                <p className='hidden text-[12px] text-slate-400 md:block'>
                   {formatNumber(start)}–{formatNumber(end)} of {formatNumber(total)} records
                 </p>
-                <div className='flex items-center gap-1'>
+                <div className='hidden items-center gap-1 md:flex'>
                   <Button
                     variant='ghost'
                     size='sm'
