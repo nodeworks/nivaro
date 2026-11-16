@@ -1,21 +1,7 @@
 export type { ActivityEntryProps } from './components/ActivityEntry'
 export { ActivityEntry, ActivityFeed, useActivityLabels } from './components/ActivityEntry'
-export type { FeedSourceInput } from './components/activity/RecordActivityStream'
-export { RecordActivityStream } from './components/activity/RecordActivityStream'
 export { AgentBadge } from './components/AgentBadge'
 export { AgentPresenceChip } from './components/AgentPresenceChip'
-export {
-  type ConfigReachAnswer,
-  ConfigReachNote,
-  configReachText
-} from './components/ConfigReachNote'
-export {
-  type AgentMode,
-  agentSentence,
-  agentsFromPayload,
-  type RecordAgent,
-  useRecordAgents
-} from './lib/agent-presence'
 export * from './components/AnnouncementBanner'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export * from './components/AudienceConfirmPanel'
@@ -26,6 +12,8 @@ export {
   type PermissionSummaryData,
   usePermissionSummary
 } from './components/access/PermissionSummary'
+export type { FeedSourceInput } from './components/activity/RecordActivityStream'
+export { RecordActivityStream } from './components/activity/RecordActivityStream'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiHistorySwitch, useAiHistoryOff } from './components/ai/AiHistorySwitch'
@@ -115,6 +103,11 @@ export {
   useBuiltinGate
 } from './components/bulk/BulkActionButtons'
 export { BulkRowMark } from './components/bulk/BulkRowMark'
+export {
+  BulkSelectionNotices,
+  type OpenInput as BulkOpenInput,
+  SelectionFigures
+} from './components/bulk/BulkSelectionNotices'
 export type { PushItemAction, PushRunOutcome } from './components/bulk/PushBulkButtons'
 export { PushBulkButtons, PushResultList } from './components/bulk/PushBulkButtons'
 export type { CacheInfo, CustomQueryEnvelope } from './components/CacheStamp'
@@ -140,6 +133,11 @@ export {
   type ConfigHistoryEntry,
   configHistoryLine
 } from './components/ConfigHistory'
+export {
+  type ConfigReachAnswer,
+  ConfigReachNote,
+  configReachText
+} from './components/ConfigReachNote'
 export {
   ChangeImpactStrip,
   ConfigReadBack,
@@ -253,6 +251,7 @@ export {
   useCoveringQuery
 } from './components/DelegateCoverLine'
 export { DndMark, DoNotDisturbRow, useDndActive } from './components/DoNotDisturb'
+export { DragClashNotice } from './components/DragClashNotice'
 export type { DelegationConsoleViewProps } from './components/delegation/DelegationConsoleView'
 export { DelegationConsoleView } from './components/delegation/DelegationConsoleView'
 export { EmptyState } from './components/EmptyState'
@@ -282,9 +281,13 @@ export {
   FulfilmentPill,
   fulfilmentFigures
 } from './components/FulfilmentPill'
+// Who is editing on a budget / planning grid (realtime round 8, item 22).
+export { GridPresenceLine } from './components/GridPresenceLine'
 export { HScrollProxy } from './components/HScrollProxy'
 export * from './components/help-videos'
 export { IdleReloadWatcher } from './components/IdleReloadWatcher'
+// rt8 — time in step, and the bulk bar's selection watch.
+export { InStepCell, StepForLine } from './components/InStep'
 export type {
   HeaderWidgetInfo,
   ItemEditFormProps,
@@ -376,6 +379,7 @@ export {
   LAYOUT_PUSH_SETTLE_MS,
   useLayoutEditingQuiet
 } from './components/item-edit/layout-editing-quiet'
+export { PickerBadgeList, RecordPickerBadges } from './components/item-edit/PickerBadges'
 export {
   type PlanGridHost,
   PlanGridHostContext,
@@ -406,11 +410,6 @@ export {
   useRecordOutboxEntry
 } from './components/item-edit/RecordOutbox'
 export { RecordRecapStrip } from './components/item-edit/RecordRecapStrip'
-export {
-  type AlertBannerData,
-  AlertBanners,
-  alertBannersKey
-} from './components/panels/AlertBanners'
 export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeButton'
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
 export {
@@ -431,20 +430,12 @@ export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
 export { ListLoadError } from './components/ListLoadError'
-export { LiveBurstPill, LivePauseButton } from './components/LiveListControls'
 export { LiveAnnouncer } from './components/LiveAnnouncer'
 export { LiveCount, type LiveCountProps } from './components/LiveCount'
-// rt8 — time in step, and the bulk bar's selection watch.
-export { InStepCell, StepForLine } from './components/InStep'
-export {
-  BulkSelectionNotices,
-  type OpenInput as BulkOpenInput,
-  SelectionFigures
-} from './components/bulk/BulkSelectionNotices'
+export { LiveBurstPill, LivePauseButton } from './components/LiveListControls'
 export { LiveNewMatchesPill } from './components/LiveNewMatchesPill'
 export { LIVE_OFF_TIP, LiveOffNote } from './components/LiveOffNote'
 export { LivePreferenceHost } from './components/LivePreferenceHost'
-export { DragClashNotice } from './components/DragClashNotice'
 export { LiveRowMark, MovingRowChip } from './components/LiveRowMark'
 export { LoadErrorNote } from './components/LoadErrorNote'
 export * from './components/layout-editor'
@@ -472,6 +463,7 @@ export {
   type McpAdminTab,
   McpConnectionsAdminView
 } from './components/McpConnectionsAdminView'
+export { MyWorkView } from './components/MyWorkView'
 export {
   type MergeDoneInfo,
   MergeRecordsDialog
@@ -482,7 +474,6 @@ export {
   MergeWithFlow,
   useMergeAllowed
 } from './components/merge/MergeWithFlow'
-export { MyWorkView } from './components/MyWorkView'
 export {
   type ApiCaller,
   type ApiLogRow,
@@ -606,6 +597,11 @@ export {
   TimezoneCard
 } from './components/ProfileView'
 export * from './components/panels'
+export {
+  type AlertBannerData,
+  AlertBanners,
+  alertBannersKey
+} from './components/panels/AlertBanners'
 export { OwnerMatrix } from './components/pipeline/OwnerMatrix'
 export type { PipelineEditorSection } from './components/pipeline/PipelineEditorView'
 export {
@@ -713,7 +709,6 @@ export {
   ReportProblemButton,
   type ReportProblemPayload
 } from './components/support/ReportProblem'
-export { SupportRequestDialog } from './components/support/SupportRequestDialog'
 export {
   LiveScreenViewer,
   ScreenShareBar,
@@ -721,6 +716,7 @@ export {
   type ScreenShareHostProps,
   ScreenSharePanel
 } from './components/support/ScreenShare'
+export { SupportRequestDialog } from './components/support/SupportRequestDialog'
 export { SupportView } from './components/support/SupportView'
 export {
   StatusPill as SupportStatusPill,
@@ -806,6 +802,13 @@ export {
   withRoutineReads
 } from './lib/activity-sentence'
 export {
+  type AgentMode,
+  agentSentence,
+  agentsFromPayload,
+  type RecordAgent,
+  useRecordAgents
+} from './lib/agent-presence'
+export {
   type DrillSource,
   defaultQuestionFor,
   drillSourceFor,
@@ -861,6 +864,8 @@ export {
 } from './lib/batch-gets'
 export * from './lib/bulk-progress'
 export * from './lib/catalog-item-open'
+// rt6 — status badges in pickers + soft locks on list cells.
+export * from './lib/cell-locks'
 export * from './lib/client-chaos'
 export {
   buildClientCrashBody,
@@ -877,6 +882,18 @@ export {
   obeyedReloads,
   setClientBuild
 } from './lib/client-version'
+// Realtime round 7 — co-editing on a record page (section presence, pointing a co-viewer).
+export {
+  bindRecordCoEdit,
+  type CoEditSocket,
+  type CoViewer,
+  type FieldPointer,
+  pointCoViewer,
+  useCoViewers,
+  useFieldEditors,
+  useFieldPointer
+} from './lib/co-edit'
+export { coeditCovers, coeditLive } from './lib/coedit-registry'
 export * from './lib/commands'
 export * from './lib/comment-awareness'
 export {
@@ -911,6 +928,7 @@ export {
   valueTextOf
 } from './lib/config-sentences'
 export * from './lib/config-watch'
+export * from './lib/config-watch'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
 export {
   COPY_REASON_WORDS,
@@ -937,8 +955,6 @@ export {
   scrubCrashText
 } from './lib/crash-report'
 export * from './lib/deadline-ticker'
-export * from './lib/in-step'
-export * from './lib/selection-watch'
 export { useAfterIdle } from './lib/defer'
 export { deliveryAckFor } from './lib/delivery-ack'
 export {
@@ -1033,8 +1049,6 @@ export {
   cursorColor,
   markRemoteCell
 } from './lib/grid-cursors'
-// Who is editing on a budget / planning grid (realtime round 8, item 22).
-export { GridPresenceLine } from './components/GridPresenceLine'
 export {
   type GridEditor,
   type GridPresence,
@@ -1055,6 +1069,7 @@ export {
   type IdleResyncDecision,
   type IdleResyncInput
 } from './lib/idle-reload'
+export * from './lib/in-step'
 export type { ChipSubmission, IntegrationChipSummary } from './lib/integration-chip'
 export { integrationChipSummary } from './lib/integration-chip'
 export { dotsForRecord } from './lib/integration-dots'
@@ -1064,19 +1079,8 @@ export { currentViewport } from './lib/layout-resolve'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export { LineLockContext, lineLockView, useLineLocks } from './lib/line-locks'
-export { coeditCovers, coeditLive } from './lib/coedit-registry'
 export { linkedChangeSentence, useLinkedRecordWatch } from './lib/linked-changes'
 export * from './lib/list-inline-edit'
-// rt6 — status badges in pickers + soft locks on list cells.
-export * from './lib/cell-locks'
-export {
-  forgetPickerBadgeRules,
-  type PickerBadge,
-  type PickerBadgeTone,
-  useOptionBadges,
-  useRecordBadges
-} from './lib/picker-badges'
-export { PickerBadgeList, RecordPickerBadges } from './components/item-edit/PickerBadges'
 export * from './lib/list-link'
 export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
 export * from './lib/list-return'
@@ -1087,8 +1091,6 @@ export * from './lib/live-announcer'
 export * from './lib/live-counts'
 export * from './lib/live-data-changed'
 export * from './lib/live-deltas'
-export * from './lib/live-findings'
-export * from './lib/live-list'
 export {
   addDays as dragAddDays,
   applyDragMessage,
@@ -1114,17 +1116,18 @@ export {
   useLiveDrag,
   valueOnDay
 } from './lib/live-drag'
+export * from './lib/live-findings'
 export * from './lib/live-groups'
+export * from './lib/live-list'
 export * from './lib/live-list-flow'
-export * from './lib/urgent-chime'
 export * from './lib/live-moves'
 export * from './lib/live-ops'
-export * from './lib/config-watch'
 // Realtime round 3 #24 — Live updates: Normal / Calm / Off (Profile → Display, role defaults)
 export {
   __resetLivePreferenceForTests,
   LIVE_CALM_PAUSE_MS,
   LIVE_DATA_EVENTS,
+  LIVE_MODE_HINTS,
   LIVE_MODE_LABELS,
   LIVE_MODES,
   LIVE_PRESENCE_EVENTS,
@@ -1235,6 +1238,13 @@ export {
   pageContextHeaders,
   pagePattern
 } from './lib/page-context'
+export {
+  forgetPickerBadgeRules,
+  type PickerBadge,
+  type PickerBadgeTone,
+  useOptionBadges,
+  useRecordBadges
+} from './lib/picker-badges'
 export * from './lib/prefetch'
 export {
   type FieldFocus,
@@ -1250,17 +1260,6 @@ export {
   useRowPresence,
   useTyping
 } from './lib/presence-hooks'
-// Realtime round 7 — co-editing on a record page (section presence, pointing a co-viewer).
-export {
-  bindRecordCoEdit,
-  type CoEditSocket,
-  type CoViewer,
-  type FieldPointer,
-  pointCoViewer,
-  useCoViewers,
-  useFieldEditors,
-  useFieldPointer
-} from './lib/co-edit'
 export {
   PRESENCE_ONLINE_KEY,
   PRESENCE_POLL_BACKSTOP_MS,
@@ -1499,6 +1498,7 @@ export {
   searchRankWords,
   tokenize
 } from './lib/search-text'
+export * from './lib/selection-watch'
 export * from './lib/send-status'
 export * from './lib/send-view'
 export {
@@ -1561,6 +1561,7 @@ export {
 export * from './lib/socket-realtime'
 export { registerStagedRowLabel, stagedRowLabel } from './lib/staged-row-labels'
 export * from './lib/stale-chunk'
+export * from './lib/state-census'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
 export { configureTabSound, pickSoundTab, shouldPlayHere } from './lib/tab-sound'
@@ -1583,6 +1584,7 @@ export {
   unsavedWorkLabels,
   useUnsavedWork
 } from './lib/unsaved-work'
+export * from './lib/urgent-chime'
 export {
   type AiStreamHandle,
   type AiStreamHandlers,
@@ -1657,4 +1659,3 @@ export {
   type W2SSampler
 } from './lib/write-to-screen'
 export * from './types'
-export * from './lib/state-census'

@@ -29,7 +29,8 @@ export function LiveOffNote({
         aria-hidden
         data-live-off-note='dot'
         className={cn(
-          'absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-slate-400 ring-2 ring-[#0f172a]',
+          // Light enough to read on the always-dark rail (a slate-400 dot on navy was a speck).
+          'absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-slate-300 ring-2 ring-[#0f172a]',
           className
         )}
       />
@@ -43,7 +44,7 @@ export function LiveOffNote({
       className={cn(
         'inline-flex h-6 shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-full border px-2 text-[11px] font-medium leading-none',
         variant === 'header' &&
-          'border-slate-200 bg-white text-slate-500 dark:border-border dark:bg-card dark:text-muted-foreground',
+          'border-slate-200 bg-white text-slate-600 dark:border-border dark:bg-card dark:text-muted-foreground',
         variant === 'bar' && 'border-current opacity-70',
         className
       )}

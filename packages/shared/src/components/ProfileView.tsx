@@ -31,7 +31,12 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post, put } from '../lib/commands'
-import { LIVE_MODE_LABELS, parseLiveMode, useLivePreference } from '../lib/live-preference'
+import {
+  LIVE_MODE_HINTS,
+  LIVE_MODE_LABELS,
+  parseLiveMode,
+  useLivePreference
+} from '../lib/live-preference'
 import { playNotificationSound } from '../lib/notification-sound'
 import {
   cascadeFilter,
@@ -2344,11 +2349,7 @@ function LiveUpdatesPref({
   })
   const own = parseLiveMode(value)
   const roleLabel = LIVE_MODE_LABELS[roleMode ?? 'normal']
-  const hint = {
-    normal: 'Changes appear as they happen, with a short fade.',
-    calm: 'Changes appear without fades or marks; lists keep their order until you pause.',
-    off: 'Nothing updates by itself — press ↻ to see the latest.'
-  }[own ?? roleMode ?? 'normal']
+  const hint = LIVE_MODE_HINTS[own ?? roleMode ?? 'normal']
   return (
     <div className='flex items-center gap-1.5' data-pref='live-mode' data-tip={hint}>
       Live updates
@@ -2356,10 +2357,15 @@ function LiveUpdatesPref({
         value={own ?? 'auto'}
         onChange={(v) => onChange(v as 'auto' | 'normal' | 'calm' | 'off')}
         options={[
-          { value: 'auto', label: `Role default (${roleLabel})` },
-          { value: 'normal', label: 'Normal' },
-          { value: 'calm', label: 'Calm' },
-          { value: 'off', label: 'Off' }
+          // Each choice says what it does (the Roles card uses the same words).
+          {
+            value: 'auto',
+            label: `Role default (${roleLabel})`,
+            description: LIVE_MODE_HINTS[roleMode ?? 'normal']
+          },
+          { value: 'normal', label: 'Normal', description: LIVE_MODE_HINTS.normal },
+          { value: 'calm', label: 'Calm', description: LIVE_MODE_HINTS.calm },
+          { value: 'off', label: 'Off', description: LIVE_MODE_HINTS.off }
         ]}
       />
     </div>

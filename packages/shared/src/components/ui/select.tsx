@@ -74,8 +74,12 @@ function SelectLabel({
 function SelectItem({
   className,
   children,
+  description,
   ...props
-}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>) {
+}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item> & {
+  /** A muted second line in the open list only (the trigger shows the label alone). */
+  description?: string
+}) {
   return (
     <SelectPrimitive.Item
       className={cn(
@@ -89,7 +93,16 @@ function SelectItem({
           <Check className='h-4 w-4 text-nvr-cyan' />
         </SelectPrimitive.ItemIndicator>
       </span>
-      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      {description ? (
+        <span className='min-w-0'>
+          <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+          <span className='block max-w-[34ch] text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+            {description}
+          </span>
+        </span>
+      ) : (
+        <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      )}
     </SelectPrimitive.Item>
   )
 }

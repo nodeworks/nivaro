@@ -10,6 +10,8 @@ const EMPTY = '__empty__'
 export interface SimpleSelectOption {
   value: string
   label: string
+  /** A muted second line in the open list (what the choice does). */
+  description?: string
 }
 
 export function SimpleSelect({
@@ -42,7 +44,11 @@ export function SimpleSelect({
       </SelectTrigger>
       <SelectContent className={contentClassName}>
         {options.map((o) => (
-          <SelectItem key={o.value || EMPTY} value={o.value === '' ? EMPTY : o.value}>
+          <SelectItem
+            key={o.value || EMPTY}
+            value={o.value === '' ? EMPTY : o.value}
+            description={o.description}
+          >
             {o.label}
           </SelectItem>
         ))}
