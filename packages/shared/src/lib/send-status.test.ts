@@ -120,6 +120,17 @@ describe('sendStatusWords', () => {
     ).toBe(
       'Ledger refused it at 10:43 AM without giving a reason. Check the record, then send it again from Integrations at the top of the record.'
     )
+    // A plain-text answer is the partner's own words too.
+    expect(
+      words({
+        status: 'failed',
+        finished_at: '2026-11-14T15:43:00.000Z',
+        error_class: 'validation',
+        reason: 'Submission failed — HTTP 400: BEMO is not supported. Contact Support.'
+      }).text
+    ).toBe(
+      'Ledger refused it at 10:43 AM: \u201cBEMO is not supported.\u201d Change that on the record, then send it again from Integrations at the top of the record.'
+    )
     // A bare HTTP 400 with no words is our reading, not a reason: never "Change that".
     expect(
       words({
