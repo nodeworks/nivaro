@@ -1419,6 +1419,27 @@ export interface PersonSession {
   current?: boolean
 }
 
+/** "Sign out 288 other browsers and 2 phones?" — phones only when some would go. Pure. */
+export function signOutAllQuestion(self: boolean, browsers: number, phones: number): string {
+  const b = `${formatNumber(browsers)} ${self ? 'other ' : ''}browser${browsers === 1 ? '' : 's'}`
+  const p = phones > 0 ? ` and ${formatNumber(phones)} phone${phones === 1 ? '' : 's'}` : ''
+  return `Sign out ${self ? '' : 'all '}${b}${p}?`
+}
+
+/** "Nov 15, 7:59 AM" this year, "Nov 15, 2025, 7:59 AM" before it. */
+function signedInAt(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return formatDateTime(iso)
+  const thisYear = d.getFullYear() === new Date().getFullYear()
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(thisYear ? {} : { year: 'numeric' }),
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+}
+
 /** Rows shown before "Show all": the newest with details, this browser first. */
 const SESSIONS_SHOWN = 6
 
@@ -1514,6 +1535,16 @@ export function SessionsCard({ userId }: { userId: string }) {
     onError: (e) => toastError(e, 'Could not sign those out')
   })
   const allLabel = isSelf ? 'Sign out everywhere else' : 'Sign out everywhere'
+  // The confirm names phones only when some would go (the phones card's own list, shared cache).
+  const phones = useQuery<Array<{ current?: boolean }>>({
+    queryKey: ['nvr-signed-in-devices', userId],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ current?: boolean }> }>(get(`/users/${userId}/devices`))
+        .then((r) => r.data ?? []),
+    staleTime: 30_000
+  })
+  const phonesGoing = (phones.data ?? []).filter((d) => !(isSelf && d.current)).length
   return (
     <SectionCard
       icon={<MonitorSmartphone className='h-4 w-4' />}
@@ -1583,11 +1614,7 @@ export function SessionsCard({ userId }: { userId: string }) {
                   <ConfirmButton
                     title={allLabel}
                     onConfirm={() => signOutAll.mutate()}
-                    confirmLabel={
-                      isSelf
-                        ? `Sign out ${formatNumber(others.length)} browsers and other phones?`
-                        : `Sign out all ${formatNumber(others.length)} browsers and phones?`
-                    }
+                    confirmLabel={signOutAllQuestion(isSelf, others.length, phonesGoing)}
                     disabled={signOutAll.isPending}
                     className='inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 transition-colors hover:border-red-300 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:opacity-40 dark:border-border dark:text-slate-300 dark:hover:border-red-500/40 dark:hover:text-red-400'
                     armedClassName='border-red-300 font-semibold text-red-600 dark:border-red-500/40 dark:text-red-400'
@@ -1620,7 +1647,7 @@ function SessionRow({
   const meta = [
     sn.ip,
     sn.signed_in_at
-      ? `Signed in ${formatDateTime(sn.signed_in_at)}`
+      ? `Signed in ${signedInAt(sn.signed_in_at)}`
       : 'Signed in before this was recorded',
     sessionEndsIn(sn.ttl_seconds)
   ].filter((x): x is string => !!x)
@@ -1642,11 +1669,12 @@ function SessionRow({
         )}
       </span>
       <div className='min-w-0 flex-1'>
-        <p className='flex min-w-0 items-center gap-2'>
+        {/* The chip wraps under the name before the name truncates. */}
+        <p className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5'>
           <span
             ref={nameRef}
             data-session-device
-            className='truncate text-[12.5px] font-medium text-slate-800 dark:text-slate-100'
+            className='min-w-0 max-w-full truncate text-[12.5px] font-medium text-slate-800 dark:text-slate-100'
           >
             {name}
           </span>
@@ -1680,16 +1708,18 @@ function SessionRow({
       </div>
       <span data-session-sign-out className='contents'>
         <ConfirmButton
-          title={`Sign out ${name}`}
+          title={sn.current ? 'Sign out of this browser' : `Sign out ${name}`}
           onConfirm={onRevoke}
-          confirmLabel='Sign it out?'
+          confirmLabel={sn.current ? 'Sign out here?' : 'Sign it out?'}
           disabled={pending}
           className='inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 transition-colors hover:border-red-300 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:opacity-40 dark:border-border dark:text-slate-300 dark:hover:border-red-500/40 dark:hover:text-red-400'
           armedClassName='border-red-300 font-semibold text-red-600 dark:border-red-500/40 dark:text-red-400'
         >
           <LogOut className='h-3 w-3' aria-hidden />
           {/* A phone keeps the row's text its width: the button is the icon, named by title. */}
-          <span className='sr-only sm:not-sr-only'>{pending ? 'Signing out…' : 'Sign out'}</span>
+          <span className='sr-only sm:not-sr-only'>
+            {pending ? 'Signing out…' : sn.current ? 'Sign out here' : 'Sign out'}
+          </span>
         </ConfirmButton>
       </span>
     </li>
