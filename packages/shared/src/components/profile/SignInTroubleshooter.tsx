@@ -48,7 +48,14 @@ interface Attempt {
 
 interface Troubleshooter {
   window_days: number
-  checks: Array<{ key: string; ok: boolean | null; label: string; detail: string }>
+  checks: Array<{
+    key: string
+    ok: boolean | null
+    label: string
+    detail: string
+    /** Too old to count as a pass: amber. */
+    stale?: boolean
+  }>
   last_success: {
     at: string
     method: string
@@ -151,7 +158,8 @@ function Body({
   onAll: () => void
 }) {
   const failures = t.attempts.filter((a) => a.outcome === 'failed').length
-  const rows = all ? t.attempts : t.attempts.slice(0, SHOWN)
+  const folded = foldAttempts(t.attempts)
+  const rows = all ? folded : folded.slice(0, SHOWN)
   return (
     <div className='space-y-4' data-sign-in-troubleshooter>
       <Verdict t={t} first={first} />
@@ -159,7 +167,9 @@ function Body({
       <ul className='grid gap-x-4 gap-y-2 sm:grid-cols-2' data-sign-in-checks>
         {t.checks.map((c) => (
           <li key={c.key} className='flex min-w-0 items-start gap-2' data-sign-in-check={c.key}>
-            {c.ok === true ? (
+            {c.stale ? (
+              <CircleAlert className='mt-px h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400' />
+            ) : c.ok === true ? (
               <CircleCheck className='mt-px h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400' />
             ) : c.ok === false ? (
               <CircleX className='mt-px h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400' />
@@ -240,18 +250,18 @@ function Body({
           </EmptyLine>
         ) : (
           <ol className='divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-border/60 dark:border-border'>
-            {rows.map((a) => (
-              <AttemptRow key={a.id} a={a} />
+            {rows.map((r) => (
+              <AttemptRow key={r.a.id} a={r.a} times={r.times} first={r.first} />
             ))}
           </ol>
         )}
-        {!all && t.attempts.length > SHOWN && (
+        {!all && folded.length > SHOWN && (
           <button
             type='button'
             onClick={onAll}
-            className='mt-2 text-[11.5px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+            className='mt-2 rounded text-[11.5px] font-medium text-sky-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-nvr-cyan'
           >
-            Show all {t.attempts.length}
+            Show all {t.attempts.length} attempts
           </button>
         )}
       </div>
@@ -361,7 +371,32 @@ function Stat({
   )
 }
 
-function AttemptRow({ a }: { a: Attempt }) {
+/** Back-to-back successful sign-ins that look the same (same way in, app, browser and address)
+ *  fold into one row with a count, so failures and different sign-ins stay in view. */
+export function foldAttempts(
+  attempts: Attempt[]
+): Array<{ a: Attempt; times: number; first: string }> {
+  const out: Array<{ a: Attempt; times: number; first: string }> = []
+  const same = (x: Attempt, y: Attempt) =>
+    x.outcome === 'signed_in' &&
+    y.outcome === 'signed_in' &&
+    x.label === y.label &&
+    x.method === y.method &&
+    x.app === y.app &&
+    x.browser === y.browser &&
+    x.ip === y.ip &&
+    !y.new_ip
+  for (const a of attempts) {
+    const last = out[out.length - 1]
+    if (last && same(last.a, a)) {
+      last.times++
+      last.first = a.at
+    } else out.push({ a, times: 1, first: a.at })
+  }
+  return out
+}
+
+function AttemptRow({ a, times = 1, first }: { a: Attempt; times?: number; first?: string }) {
   const [open, setOpen] = useState(false)
   const failed = a.outcome === 'failed'
   const canOpen = !!(a.explain || a.todo)
@@ -414,6 +449,26 @@ function AttemptRow({ a }: { a: Attempt }) {
               New address
             </span>
           )}
+          {times > 1 && (
+            <span
+              className='text-[11px] font-medium tabular-nums text-slate-600 dark:text-slate-300'
+              data-sign-in-folded={times}
+            >
+              × {times}
+            </span>
+          )}
+          <span
+            className='ml-auto shrink-0 pl-2 text-[11px] tabular-nums text-slate-500 dark:text-slate-400'
+            data-tip={
+              times > 1 && first
+                ? `${formatDateTime(first)} – ${formatDateTime(a.at)}`
+                : formatDateTime(a.at)
+            }
+          >
+            {times > 1 && first && formatRelative(first) !== formatRelative(a.at)
+              ? `${formatRelative(first)} – ${formatRelative(a.at)}`
+              : formatRelative(a.at)}
+          </span>
         </div>
         <p className='truncate text-[11px] text-slate-500 dark:text-slate-400'>
           {[a.browser, a.ip].filter(Boolean).join(' · ') || ' '}
@@ -431,12 +486,6 @@ function AttemptRow({ a }: { a: Attempt }) {
           </div>
         )}
       </div>
-      <span
-        className='shrink-0 text-[11px] tabular-nums text-slate-500 dark:text-slate-400'
-        data-tip={formatDateTime(a.at)}
-      >
-        {formatRelative(a.at)}
-      </span>
       {canOpen && (
         <ChevronDown
           className={cn(
