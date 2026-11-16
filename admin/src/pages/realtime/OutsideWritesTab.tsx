@@ -1,4 +1,4 @@
-import { toastError } from '@nivaro/shared'
+import { queryKeys, toastError } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Search, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -8,7 +8,7 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
-import { cn, formatNumber, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative, titleCase } from '@/lib/utils'
 
 interface Settings {
   enabled: boolean
@@ -65,6 +65,18 @@ export function OutsideWritesTab() {
     onSuccess: (d) => qc.setQueryData(KEY, d),
     onError: (e) => toastError(e, 'Couldn’t save the setting')
   })
+  // Collections by their label (key in muted mono beside it), like every other admin list.
+  const { data: registry } = useQuery<Array<{ collection: string; display_name?: string | null }>>({
+    queryKey: queryKeys.collections(),
+    queryFn: () => api.get('/collections').then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const labelOf = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const c of registry ?? [])
+      if (c.display_name) m.set(c.collection.toLowerCase(), c.display_name)
+    return (key: string) => m.get(key.toLowerCase()) ?? titleCase(key)
+  }, [registry])
   const [draft, setDraft] = useState('')
   const [filter, setFilter] = useState<'relevant' | 'all'>('relevant')
   const [search, setSearch] = useState('')
@@ -74,7 +86,12 @@ export function OutsideWritesTab() {
     if (!d) return []
     const s = search.trim().toLowerCase()
     return d.collections
-      .filter((r) => (s ? r.collection.toLowerCase().includes(s) : true))
+      .filter((r) =>
+        s
+          ? r.collection.toLowerCase().includes(s) ||
+            labelOf(r.collection).toLowerCase().includes(s)
+          : true
+      )
       .filter(
         (r) =>
           filter === 'all' ||
@@ -89,9 +106,9 @@ export function OutsideWritesTab() {
           b.caught_24h - a.caught_24h ||
           Number(b.state != null) - Number(a.state != null) ||
           b.viewers - a.viewers ||
-          a.collection.localeCompare(b.collection)
+          labelOf(a.collection).localeCompare(labelOf(b.collection))
       )
-  }, [d, filter, search])
+  }, [d, filter, search, labelOf])
 
   if (q.isLoading)
     return (
@@ -114,7 +131,8 @@ export function OutsideWritesTab() {
   const chosen = new Set(s.collections.map((c) => c.toLowerCase()))
   const addable = d.collections
     .filter((r) => r.watchable && !chosen.has(r.collection.toLowerCase()))
-    .map((r) => ({ value: r.collection, label: r.collection }))
+    .map((r) => ({ value: r.collection, label: `${labelOf(r.collection)} (${r.collection})` }))
+    .sort((a, b) => a.label.localeCompare(b.label))
 
   return (
     <div className='space-y-5'>
@@ -201,10 +219,10 @@ export function OutsideWritesTab() {
                   key={c}
                   className='inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 py-0.5 pl-2 pr-1 text-[12px] dark:border-border dark:bg-muted/40'
                 >
-                  {c}
+                  {labelOf(c)}
                   <button
                     type='button'
-                    aria-label={`Stop watching ${c}`}
+                    aria-label={`Stop watching ${labelOf(c)}`}
                     disabled={locked || save.isPending}
                     onClick={() =>
                       save.mutate({ collections: s.collections.filter((x) => x !== c) })
@@ -292,13 +310,14 @@ export function OutsideWritesTab() {
               <tbody className='divide-y divide-slate-100 bg-white dark:divide-border/60 dark:bg-card'>
                 {rows.map((r) => (
                   <tr key={r.collection} className='align-top'>
-                    <td className='px-3 py-2 font-medium'>
-                      {r.collection}
+                    <td className='px-3 py-2'>
+                      <span className='font-medium'>{labelOf(r.collection)}</span>
                       {r.viewers > 0 && (
-                        <span className='ml-1.5 font-normal text-muted-foreground'>
-                          · {r.viewers} open
-                        </span>
+                        <span className='ml-1.5 text-muted-foreground'>· {r.viewers} open</span>
                       )}
+                      <span className='block font-mono text-[11px] text-muted-foreground'>
+                        {r.collection}
+                      </span>
                     </td>
                     <td className='px-3 py-2'>
                       {r.method === 'change-tracking' ? (
@@ -340,7 +359,9 @@ export function OutsideWritesTab() {
                       )}
                     </td>
                     <td className='px-3 py-2 text-muted-foreground'>
-                      {r.last_caught_at
+                      {/* Agrees with the 24 h count: a catch outside the window (or a look that
+                          only re-read already-announced rows) is not "just now" next to "—". */}
+                      {r.last_caught_at && (r.caught_24h > 0 || r.deduped_24h > 0)
                         ? formatRelative(new Date(r.last_caught_at).toISOString())
                         : '—'}
                     </td>
