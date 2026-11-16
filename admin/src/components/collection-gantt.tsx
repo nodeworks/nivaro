@@ -389,6 +389,13 @@ export function CollectionGantt({
   tick.setDate(1)
   tick.setHours(0, 0, 0, 0)
   if (tick.getTime() < windowStart) tick.setMonth(tick.getMonth() + 1)
+  // The month the window opens in is named at its left edge unless a month starts right there
+  // (a window inside one month showed no month at all).
+  if (tick.getTime() >= windowEnd || pct(tick.getTime()) > 12)
+    ticks.push({
+      pct: 0,
+      label: new Date(windowStart).toLocaleDateString(undefined, { month: 'short' })
+    })
   while (tick.getTime() < windowEnd) {
     ticks.push({
       pct: pct(tick.getTime()),
@@ -408,8 +415,9 @@ export function CollectionGantt({
     dayTicks.push({ pct: pct(wk.getTime()), label: String(wk.getDate()) })
     wk.setDate(wk.getDate() + weekStep)
   }
+  // A bar ends at its end day's start, so the end day is `b` itself.
   const spanText = (a: number, b: number) =>
-    dragSpanLabel(dragDayKey(new Date(a)), dragDayKey(new Date(Math.max(a, b - 1))))
+    dragSpanLabel(dragDayKey(new Date(a)), dragDayKey(new Date(Math.max(a, b))))
   // A label beside a bar goes on whichever side has room.
   const sideLabel = (endPct: number) => (endPct > 72 ? 'right-full mr-1.5' : 'left-full ml-1.5')
 
@@ -582,7 +590,8 @@ export function CollectionGantt({
                   >
                     {label(it)}
                   </button>
-                  <div className='relative flex-1 py-1.5'>
+                  {/* A clash draws two lanes: theirs (where it is now) above, yours below. */}
+                  <div className={cn('relative flex-1 py-1.5', clashHere && 'min-h-[54px]')}>
                     {ghost && gs != null && ge != null && (
                       <div
                         data-gantt-ghost={id}
@@ -608,7 +617,7 @@ export function CollectionGantt({
                     {clashHere && ms != null && me != null && (
                       <div
                         data-gantt-clash-mine={id}
-                        className='pointer-events-none absolute top-1/2 flex h-4 -translate-y-1/2 items-center rounded-full border border-dashed border-nvr-cyan bg-white/70 dark:bg-card/70'
+                        className='pointer-events-none absolute top-[38px] flex h-4 -translate-y-1/2 items-center rounded-full border border-dashed border-nvr-cyan bg-white/70 dark:bg-card/70'
                         style={{
                           left: `${pct(ms)}%`,
                           width: `${Math.max(0.6, pct(me) - pct(ms))}%`
@@ -643,7 +652,8 @@ export function CollectionGantt({
                         navigate(`/collections/${collection}/${id}`)
                       }}
                       className={cn(
-                        'absolute top-1/2 h-3 -translate-y-1/2 rounded-full focus-visible:outline-none focus-visible:ring-2',
+                        'absolute h-3 -translate-y-1/2 rounded-full focus-visible:outline-none focus-visible:ring-2',
+                        clashHere ? 'top-[16px]' : 'top-1/2',
                         clashHere
                           ? 'nvr-clash-pulse bg-violet-200 ring-2 ring-violet-500 dark:bg-violet-500/40 dark:ring-violet-400'
                           : 'bg-[#00ceff66] ring-1 ring-[#00ceff]',
