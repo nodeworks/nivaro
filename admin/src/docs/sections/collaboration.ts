@@ -1300,7 +1300,7 @@ export const collabSupportRequests: DocSection = {
       items: [
         '**Raise one** with Request help on a record (beside Save — the request types for that kind of record are offered) or from Get help (General Support). Files can be attached.',
         '**Follow it** on the Support page (`/support`) under My requests, in the "Tasks I\'ve requested" dashboard widget, and through notifications on every status change and reply.',
-        '**Work it** on the Desk tab (administrators, and members of a team a request type routes to): Pick it up assigns it to you and moves it to In progress; status, type and assignee can be changed; replies go to the requester.',
+        '**Work it** on the Desk tab (administrators, and members of a team a request type routes to): Pick it up assigns it to you and moves it to In progress; status, type and assignee can be changed; replies go to the requester. See Working the desk below for filters, sorting, who has what and bulk changes.',
         '**Analytics** (Analytics tab on the Desk, administrators and team members; a team member sees the tickets routed to their teams): tickets by request type and team, first response and resolution time (median and p75, with the share within the target: 4 hours to first reply and 3 days to resolution by default), the share of closed tickets that were reopened, tickets per kind of record, how many arrived with a replay clip or screenshot, and the busiest requesters, over 7, 30 or 90 days. Counts and timings only, no ticket text. `GET /api/support/analytics?days=&first_response_hours=&resolution_hours=`.',
         '**Status**: Open → In progress → Done, or Cancelled. The requester can withdraw an open request or reopen a finished one.',
         '**Request types** (`nivaro_task_categories`, administrators, Request types tab): a type tied to a collection is offered on those records only; with no team a request goes to every administrator; a default assignee skips the desk.',
@@ -1321,14 +1321,68 @@ POST  /api/support/report-problem       // Report a problem: issue + linked requ
   "screenshot": "data:image/jpeg;base64,…", "context": "…", "attachments": ["<file id>"],
   "replay": { "recording_id": "…", "offset_ms": 52000 } }
 
-GET   /api/support/tickets?scope=mine|desk&status=open|closed&assignee=me|unassigned&q=
+GET   /api/support/tickets?scope=mine|desk&status=open|closed|all|<status>
+        &assignee=me|unassigned|<user id>&category=&priority=&requester=<user id, desk>
+        &q=&sort=attention|newest|oldest|updated|priority&page=&limit=
 GET   /api/support/tickets/:id           // thread + history
 POST  /api/support/tickets/:id/comments  { "text": "…" }
 POST  /api/support/tickets/:id/claim
 PATCH /api/support/tickets/:id           { "status": "done" }
+POST  /api/support/tickets/bulk          { "ids": [12, 13], "status": "done" }
+GET   /api/support/workload              // desk: open requests per person + unassigned
 GET   /api/support/summary               // badge counts
 GET   /api/support/categories?collection=orders
 GET   /api/tasks/requested               // tasks I asked others to do`
+    },
+    { type: 'h3', id: 'support-desk', text: 'Working the desk' },
+    {
+      type: 'p',
+      text: 'The Desk and My requests share one list: search (words or a request number), Status, Type and Priority filters, an Assignee filter on the Desk (Anyone, Me, Unassigned or a person), Clear filters, and a sort. Each person’s filters are remembered per tab on their own browser.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '**Needs attention** (the Desk’s default sort): urgent first, then requests nobody has, then whoever has waited longest. Waiting counts from the last reply by anyone but the requester, else from when they asked. Other sorts: Newest, Oldest, Recently updated, Priority; the #, Priority and Waiting / Updated column headers sort too.',
+        '**Who has what**: a strip above the Desk list with each person’s open requests (and Unassigned); hover for urgent and the longest wait, click to filter to them.',
+        '**Bulk changes**: tick rows (or the header box for the whole page) and use the bar: Close, Cancel (each asks for a second press), Assign to (a person, Me, or back to the desk), Status, Priority. Each request goes through the same checks as changing it on its own — who may work it, its history line, its notifications. The bar says what happened: “Closed: 12 · 1 not allowed (You do not work this request)”. At most 200 at a time.',
+        'On a phone rows become cards, the filters fold into one Filters button and the bulk bar stays at the bottom.'
+      ]
+    },
+    { type: 'h3', id: 'support-assigned-email', text: 'Assigned to you' },
+    {
+      type: 'p',
+      text: 'When a request is newly given to someone else — by hand, in bulk, by its type’s default assignee or by an assignment rule — they get “Assigned to you: <summary>” in the app and, by email, according to their own email setting for workflow notifications (instant, daily summary or off). Taking a request yourself sends nothing. Every other request notice (replies, status changes) stays in the app and on push, as before.'
+    },
+    { type: 'h3', id: 'support-assign-rules', text: 'Assignment rules' },
+    {
+      type: 'p',
+      text: 'Administrators decide who new requests go to on the Assignment rules tab. Rules are a list in order: the first rule that fits a new request decides. If none fits, the request type’s default assignee takes it, else it waits on the desk. Each rule reads as a sentence — “When the type is Vendor change and the record’s Zone is East, share it among Beth, Sam and Kim — whoever has the fewest open requests, max 15 each.” Drag to reorder; switch a rule off without deleting it; duplicate; delete with a second press. Changes apply once saved.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '**Conditions** (all or any of them): request type; what it is about (a record of some kinds, or General Support); a field on that record (Zone, Region, Project type… picked with the field’s own picker; is / is one of / contains / is empty / more than…); the record’s pipeline step; who raised it, their role or team; priority; words in the title or description (any / all / none); where it was raised (Get help, a record’s Request help, an error’s Get help, Report a problem); inside or outside business hours (Eastern, days and times set above the list).',
+        '**Then**: give it to one person (their cover takes it while they are out); share it among people; give it to the record’s step owner (the first, or the one with the fewest open requests); or send it to a team’s desk unassigned.',
+        '**Sharing among people** picks by fewest open requests, least recently assigned (fair turns), fewest assigned today or this week, fewest urgent open, most experience with this kind (closed the most of this type or record), whoever last helped this requester, the record’s step owner if listed, or at random. Per person: at most N open requests, and any time / business hours only / only while online. Suspended people are always skipped; someone out of office is skipped or hands it to their cover. Ties go to fewest open, then least recently assigned, then list order.',
+        '**If nobody on it can take it**: leave it on the desk, or give it to a named person.',
+        '**Also when the type changes**: off by default — a type change then only assigns requests nobody has.',
+        '**Try a request** at the bottom of the tab: describe a request (type, record, requester, priority, words, where from, when) to see which rule wins, who gets it, the ranking with the number that decided it, who was skipped and why, and why each earlier rule did not fit. It uses unsaved changes and creates nothing.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'A record’s fields and step are read by the system only to decide; nothing shows their values. The requester’s history says only “Assigned to Beth”; the line naming the rule is visible only to the people who work the request. Rules are stored without a migration in `nivaro_extension_settings` (`nivaro-core` / `support_assign_rules`).'
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/support/assign-rules            // { data: { rules, hours }, labels }   (administrators)
+PUT  /api/support/assign-rules            { "rules": [ … ], "hours": { "start": "08:00", "end": "18:00", "days": [1,2,3,4,5] } }
+GET  /api/support/assign-rules/options    // types, teams, roles, collections, steps
+GET  /api/support/assign-rules/fields?collection=workflows
+POST /api/support/assign-rules/test       { "request": { "category_id": 3, "collection": "workflows", "item": "42",
+                                              "priority": "normal", "title": "…" }, "rules": [ … ] }
+// → { trace: [{ name, result, reasons }], outcome: { kind, user | team, via, rule, note },
+//     pick: { ranking: [{ name, measure }], skipped: [{ name, reason }], used } }`
     },
     { type: 'h3', id: 'support-ai-do', text: 'Let AI do this' },
     {
