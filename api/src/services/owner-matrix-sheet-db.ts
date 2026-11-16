@@ -224,7 +224,7 @@ export async function loadOwnerSheetContext(
     seen.add(field)
     fieldRows.push({
       field,
-      label: field,
+      label: null,
       collection: firstCollection,
       required: false,
       is_dimension: false

@@ -192,16 +192,18 @@ export function sheetHeaders(ctx: Pick<OwnerSheetContext, 'fields'>): string[] {
   ]
 }
 
-/** A field column's header: the dimension's label, made unique. */
+/** A field column's header: the dimension's label (or the path in words when it has none,
+ *  e.g. 'project_type.name' → 'Project Type'), made unique. Never the raw path. */
 export function fieldHeaders(
-  fields: Array<{ field: string; label: string | null }>
+  fields: Array<{ field: string; label: string | null; is_dimension?: boolean }>
 ): Map<string, string> {
   const taken = new Set(FIXED_HEADERS)
   const out = new Map<string, string>()
   for (const f of fields) {
-    let h = collapse(f.label || f.field)
-    if (taken.has(h.toLowerCase())) h = `${h} (${f.field})`
-    for (let n = 2; taken.has(h.toLowerCase()); n++) h = `${collapse(f.label || f.field)} ${n}`
+    const base = collapse(f.label && f.label !== f.field ? f.label : pathWords(f.field))
+    let h = base
+    if (taken.has(h.toLowerCase()) && f.is_dimension === false) h = `${base} (other filter)`
+    for (let n = 2; taken.has(h.toLowerCase()); n++) h = `${base} ${n}`
     taken.add(h.toLowerCase())
     out.set(f.field, h)
   }

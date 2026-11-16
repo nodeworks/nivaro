@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx'
 import { readSpreadsheet } from '../../../services/import-spreadsheet.js'
 import {
   buildOwnerSheetWorkbook,
+  fieldHeaders,
   H,
   type OwnerSheetContext,
   opsEmpty,
@@ -360,5 +361,25 @@ describe('pathWords', () => {
     expect(pathWords('divisions.short_name')).toBe('Division')
     expect(pathWords('region')).toBe('Region')
     expect(pathWords('project.project_type_id')).toBe('Project')
+  })
+})
+
+describe('fieldHeaders', () => {
+  it('heads a filter-only column in words, never the raw path', () => {
+    const h = fieldHeaders([
+      { field: 'zone', label: 'Zone', is_dimension: true },
+      { field: 'project_type.name', label: null, is_dimension: false }
+    ])
+    expect(h.get('zone')).toBe('Zone')
+    expect(h.get('project_type.name')).toBe('Project Type')
+  })
+
+  it('tells a filter-only column apart from a dimension with the same words', () => {
+    const h = fieldHeaders([
+      { field: 'project_type', label: 'Project Type', is_dimension: true },
+      { field: 'project_type.name', label: null, is_dimension: false }
+    ])
+    expect(h.get('project_type')).toBe('Project Type')
+    expect(h.get('project_type.name')).toBe('Project Type (other filter)')
   })
 })
