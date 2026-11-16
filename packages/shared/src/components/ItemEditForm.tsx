@@ -14563,12 +14563,11 @@ function ItemEditFormView({
                                                 const isTag = p.display_as === 'tag'
                                                 const sep = subtitleConfig?.separator ?? ' | '
                                                 return (
-                                                  <span
-                                                    key={i}
-                                                    className='inline-flex items-center gap-1 align-middle'
-                                                  >
+                                                  // Plain inline (not inline-flex): a cut subtitle ends in "…"
+                                                  // instead of being clipped mid-letter.
+                                                  <span key={i} className='align-middle'>
                                                     {i > 0 && !isPill && !isTag && (
-                                                      <span className='text-[11px] text-slate-300 dark:text-slate-600'>
+                                                      <span className='mx-1 text-[11px] text-slate-300 dark:text-slate-600'>
                                                         {sep}
                                                       </span>
                                                     )}
