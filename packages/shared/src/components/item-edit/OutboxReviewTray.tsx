@@ -254,6 +254,9 @@ export function OutboxClashRow({
   // Plain numbers read with their thousands separators (17,900).
   const shown = (v: unknown, max?: number) =>
     typeof v === 'number' && Number.isFinite(v) ? v.toLocaleString() : shownRaw(v, max)
+  // Two long values that share a start show from where they differ, or the cut hides the
+  // very difference the preview is for (rt8 review).
+  const views = clash.hidden ? ['', ''] : diffPreviews(shown(theirs, 400), shown(mine, 400))
   const [merging, setMerging] = useState(false)
   const [busy, setBusy] = useState(false)
   const rowRef = useRef<HTMLLIElement>(null)
@@ -286,8 +289,8 @@ export function OutboxClashRow({
     >
       <p className='text-[12px] leading-snug text-slate-700 dark:text-slate-200'>
         <span className='font-semibold text-slate-900 dark:text-slate-50'>{who}</span> changed{' '}
-        <span className='font-semibold text-slate-900 dark:text-slate-50'>{label}</span> while you
-        were offline
+        <span className='font-semibold text-slate-900 dark:text-slate-50'>{label}</span>{' '}
+        <span className='whitespace-nowrap'>while you were offline</span>
         {clash.at && (
           <span className='whitespace-nowrap text-slate-500 dark:text-slate-400'>
             {' '}
@@ -306,14 +309,14 @@ export function OutboxClashRow({
             className='min-w-0 truncate font-medium text-slate-900 tabular-nums dark:text-slate-50'
             data-tip={shown(theirs, 400)}
           >
-            {shown(theirs)}
+            {views[0]}
           </dd>
           <dt className='text-slate-500 dark:text-slate-400'>Yours</dt>
           <dd
             className='min-w-0 truncate font-medium text-slate-900 tabular-nums dark:text-slate-50'
             data-tip={shown(mine, 400)}
           >
-            {shown(mine)}
+            {views[1]}
           </dd>
         </dl>
       )}
@@ -325,7 +328,10 @@ export function OutboxClashRow({
           data-outbox-keep-mine
           className={cn(
             btn,
-            'border border-amber-300 bg-white text-amber-900 hover:bg-amber-50 dark:border-amber-400/30 dark:bg-transparent dark:text-amber-100 dark:hover:bg-amber-400/10'
+            // Quiet while a merge is open: only one choice looks chosen at a time.
+            merging
+              ? 'text-slate-700 hover:bg-amber-100/80 dark:text-slate-200 dark:hover:bg-amber-400/10'
+              : 'border border-amber-300 bg-white text-amber-900 hover:bg-amber-50 dark:border-amber-400/30 dark:bg-transparent dark:text-amber-100 dark:hover:bg-amber-400/10'
           )}
         >
           Keep mine
@@ -375,4 +381,21 @@ export function OutboxClashRow({
       )}
     </li>
   )
+}
+
+/**
+ * Previews of two values for one line each. When they share a long start (a note with a word
+ * changed at the end), both start one word before the first difference: "…crew on Friday." vs
+ * "…crew." Values that differ early show as they are. Exported for tests.
+ */
+export function diffPreviews(a: string, b: string): [string, string] {
+  if (a === b) return [a, b]
+  let i = 0
+  while (i < a.length && i < b.length && a[i] === b[i]) i++
+  if (i < 24) return [a, b]
+  const wordStart = a.lastIndexOf(' ', i - 1)
+  const before = wordStart > 0 ? a.lastIndexOf(' ', wordStart - 1) : -1
+  const from = before >= 0 ? before + 1 : wordStart >= 0 ? wordStart + 1 : i
+  if (from <= 0) return [a, b]
+  return [`…${a.slice(from)}`, `…${b.slice(from)}`]
 }

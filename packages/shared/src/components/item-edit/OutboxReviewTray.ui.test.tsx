@@ -123,3 +123,16 @@ describe('offline clash review', () => {
     expect(document.querySelector('[data-outbox-entry]')).toBeNull()
   })
 })
+
+describe('diffPreviews', () => {
+  it('starts both previews just before a late difference', async () => {
+    const { diffPreviews } = await import('./OutboxReviewTray')
+    expect(
+      diffPreviews(
+        'Splice the Dover hub feeders. Recheck the night shift crew on Friday.',
+        'Splice the Dover hub feeders. Recheck the night shift crew.'
+      )
+    ).toEqual(['…shift crew on Friday.', '…shift crew.'])
+    expect(diffPreviews('Open', 'Closed')).toEqual(['Open', 'Closed'])
+  })
+})
