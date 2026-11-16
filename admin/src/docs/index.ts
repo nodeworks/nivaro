@@ -36,6 +36,7 @@ export * from './sections/detail-sheets.js'
 export * from './sections/devex.js'
 export * from './sections/disaster-recovery.js'
 export * from './sections/duplicate-warnings.js'
+export * from './sections/env-refresh.js'
 export * from './sections/ext-assistant-tools.js'
 export * from './sections/extensions-system.js'
 export * from './sections/features.js'
@@ -247,6 +248,7 @@ import {
 } from './sections/devex.js'
 import { disasterRecoveryDocs } from './sections/disaster-recovery.js'
 import { duplicateWarningsDocs } from './sections/duplicate-warnings.js'
+import { envRefreshDocs } from './sections/env-refresh.js'
 import { extAssistantTools } from './sections/ext-assistant-tools.js'
 import {
   extContext,
@@ -337,7 +339,6 @@ import { collabLiveConflicts } from './sections/live-conflicts.js'
 import { liveEditingDocs } from './sections/live-editing.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { liveFormsDocs } from './sections/live-forms.js'
-import { liveSavesDocs } from './sections/live-saves.js'
 import { collabLiveGroupsDrags } from './sections/live-groups-drags.js'
 import { collabLiveConfig, collabLiveCounts, collabLiveLists } from './sections/live-lists.js'
 import {
@@ -357,6 +358,7 @@ import {
   collabLiveRecords,
   collabPresence
 } from './sections/live-records.js'
+import { liveSavesDocs } from './sections/live-saves.js'
 import { liveScreensDocs } from './sections/live-screens.js'
 import { liveSelectionDocs } from './sections/live-selection.js'
 import { collabLiveSetting } from './sections/live-setting.js'
@@ -761,7 +763,8 @@ export const navSections: NavGroup[] = [
       extPluginBuildGuide,
       extPluginIntegrationTypes,
       eventsAndFlags,
-      qualityChecksDocs
+      qualityChecksDocs,
+      envRefreshDocs
     ]
   },
   {

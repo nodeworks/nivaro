@@ -17,6 +17,7 @@ import {
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { EnvPresencePanel } from '@/components/env-presence-panel'
+import { EnvRefreshCard } from '@/components/env-refresh-card'
 import { HubToolbar } from '@/components/hub-page'
 import { QualityChecksCard } from '@/components/quality-checks-card'
 import { ReleaseCard } from '@/components/release-card'
@@ -127,6 +128,7 @@ export default function Environments() {
       />
       <ReleaseCard />
       <RunbooksCard />
+      <EnvRefreshCard />
       <QualityChecksCard />
       <StackDriftCard />
 
