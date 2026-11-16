@@ -852,7 +852,8 @@ export function NotificationCenterView({
                 )}
                 <span
                   className={cn(
-                    'truncate text-[13px]',
+                    // A phone wraps the headline (two lines) instead of cutting it to a word.
+                    'min-w-0 line-clamp-2 break-words text-[13px] sm:line-clamp-none sm:truncate',
                     b.unread > 0
                       ? cn('font-medium', tone.text)
                       : 'font-normal text-slate-600 dark:text-slate-400'
@@ -960,31 +961,44 @@ export function NotificationCenterView({
                 </button>
               )}
             </div>
-            <p className='mt-0.5 text-[13px] text-slate-400'>
+            <p className='mt-0.5 text-[13px] text-slate-500 dark:text-slate-400'>
+              {/* The lane badges count unread across the inbox; this line counts the view. */}
               {total} notification{total === 1 ? '' : 's'}
+              {lane !== 'all' || status !== 'all' || search || collectionFilter
+                ? ' in this view'
+                : ''}
               {counts?.attention != null && counts.attention > 0
                 ? ` · ${counts.attention} need${counts.attention === 1 ? 's' : ''} you`
                 : ''}
             </p>
           </div>
+          {/* Below sm the two actions are icon buttons (names in the tip and for screen readers)
+              so the title row never wraps them onto two lines each. */}
           <div className='flex shrink-0 items-center gap-2'>
             <button
               type='button'
               onClick={() => setCleanOpen((o) => !o)}
               data-notification-cleanup-toggle
-              className='inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
+              aria-label='Clean up'
+              aria-expanded={cleanOpen}
+              data-tip='Clean up'
+              className='inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 px-2 text-[12px] font-medium text-slate-700 hover:bg-slate-50 sm:px-3 dark:border-border dark:text-foreground dark:hover:bg-muted'
             >
-              <Archive className='h-3.5 w-3.5' />
-              Clean up
+              <Archive className='h-3.5 w-3.5' aria-hidden />
+              <span className='hidden sm:inline'>Clean up</span>
             </button>
             <button
               type='button'
               onClick={() => markAllMut.mutate()}
-              disabled={markAllMut.isPending}
-              className='inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
+              disabled={markAllMut.isPending || (counts != null && counts.unread === 0)}
+              aria-label='Mark all read'
+              data-tip={counts?.unread === 0 ? 'Nothing unread' : 'Mark all read'}
+              className='inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 px-2 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:px-3 dark:border-border dark:text-foreground dark:hover:bg-muted'
             >
-              <CheckCheck className='h-3.5 w-3.5' />
-              {markAllMut.isPending ? 'Marking…' : 'Mark all read'}
+              <CheckCheck className='h-3.5 w-3.5' aria-hidden />
+              <span className='hidden sm:inline'>
+                {markAllMut.isPending ? 'Marking…' : 'Mark all read'}
+              </span>
             </button>
           </div>
         </div>
@@ -1038,8 +1052,9 @@ export function NotificationCenterView({
           </div>
         )}
         {/* Lane strip — what the badge counts sits first */}
+        {/* Each tab group is one row; on a phone a group scrolls sideways instead of wrapping. */}
         <div className='mt-4 flex flex-wrap items-center gap-2'>
-          <div className='flex max-w-full flex-wrap items-center gap-1'>
+          <div className='-mx-1 flex max-w-full items-center gap-1 overflow-x-auto px-1 [scrollbar-width:none] sm:flex-wrap'>
             {LANE_TABS.map((t) => {
               const c = laneCount(t.key)
               return (
@@ -1062,7 +1077,10 @@ export function NotificationCenterView({
                 >
                   {t.label}
                   {c != null && c > 0 && (
-                    <span className='ml-1.5 rounded-full bg-slate-200 px-1.5 text-[10px] font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-300'>
+                    <span
+                      className='ml-1.5 rounded-full bg-slate-200 px-1.5 text-[10px] font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+                      data-tip={`${c} unread`}
+                    >
                       {c}
                     </span>
                   )}
@@ -1071,7 +1089,7 @@ export function NotificationCenterView({
             })}
           </div>
           <span className='mx-1 hidden h-5 w-px bg-slate-200 dark:bg-border sm:block' />
-          <div className='flex max-w-full flex-wrap items-center gap-1'>
+          <div className='-mx-1 flex max-w-full items-center gap-1 overflow-x-auto px-1 [scrollbar-width:none] sm:flex-wrap'>
             {STATUS_TABS.map((t) => (
               <button
                 key={t.key}

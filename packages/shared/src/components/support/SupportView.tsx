@@ -146,7 +146,11 @@ export function SupportView({
   return (
     <div className={className} data-support-view>
       <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div className='flex items-center gap-1' role='tablist'>
+        {/* One row that scrolls sideways on a phone: tab names never break onto two lines. */}
+        <div
+          className='-mx-1 flex min-w-0 max-w-full items-center gap-1 overflow-x-auto px-1 [scrollbar-width:none]'
+          role='tablist'
+        >
           {tabs.map((t) => (
             <button
               key={t.key}
@@ -157,8 +161,8 @@ export function SupportView({
               onClick={() => setTab(t.key)}
               className={
                 tab === t.key
-                  ? 'inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan/10 px-3 text-[12.5px] font-medium text-nvr-navy dark:text-nvr-cyan'
-                  : 'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12.5px] text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5'
+                  ? 'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-nvr-cyan/10 px-3 text-[12.5px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                  : 'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 text-[12.5px] text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5'
               }
             >
               {t.label}
@@ -221,14 +225,15 @@ export function SupportView({
                 </button>
               )
             })}
-            <label className='ml-auto flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 dark:border-border dark:bg-background'>
-              <Search className='h-3.5 w-3.5 text-slate-400' />
+            {/* Full width on its own line on a phone (same left edge as the chips and list). */}
+            <label className='flex h-8 w-full items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 sm:ml-auto sm:w-auto dark:border-border dark:bg-background'>
+              <Search className='h-3.5 w-3.5 shrink-0 text-slate-400' />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder='Search requests'
                 aria-label='Search requests'
-                className='w-48 bg-transparent text-[12.5px] text-slate-900 outline-none dark:text-slate-100'
+                className='min-w-0 flex-1 bg-transparent text-[12.5px] text-slate-900 outline-none sm:w-48 sm:flex-none dark:text-slate-100'
               />
             </label>
           </div>
