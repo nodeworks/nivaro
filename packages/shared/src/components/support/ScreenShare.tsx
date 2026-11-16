@@ -373,7 +373,17 @@ export function ScreenSharePanel({
       if (Number(p?.ticket) === ticketId && typeof p?.reason === 'string') setEndedWhy(p.reason)
       refetch(p)
     }
-    const offs = [rt.on('screenshare:state', refetch), rt.on('screenshare:ended', onEnded)]
+    // Someone starts or stops watching (the same event that turns the pill to "watching
+    // now"): the history's live row re-folds with them, so the two never disagree.
+    const onWatching = (p: { ticket?: unknown } | null) => {
+      if (Number(p?.ticket) !== ticketId) return
+      void qc.invalidateQueries({ queryKey: ['support-ticket', ticketId] })
+    }
+    const offs = [
+      rt.on('screenshare:state', refetch),
+      rt.on('screenshare:ended', onEnded),
+      rt.on('screenshare:watching', onWatching)
+    ]
     return () => {
       for (const off of offs) off()
     }

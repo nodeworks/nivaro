@@ -512,7 +512,8 @@ export function TicketDetailSheet({
                             <span className='text-slate-500 dark:text-slate-400'>
                               {' '}
                               · {line.showAuthor ? `${h.user_name ?? 'System'} · ` : ''}
-                              {when(h.at)}
+                              {/* A line breaks before the time, never inside it ("1:29 / AM"). */}
+                              <span className='whitespace-nowrap'>{when(h.at)}</span>
                             </span>
                           </li>
                         )
