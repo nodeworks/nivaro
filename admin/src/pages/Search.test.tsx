@@ -99,6 +99,21 @@ describe('search page', () => {
     expect(screen.getByRole('button', { name: /Ask AI instead/ })).toBeInTheDocument()
   })
 
+  it('an answer the time budget cut short is never "Nothing matched"', async () => {
+    answer({ partial: ['inventory_request', 'comments'] })
+    renderAt('/search?q=FDX24INV')
+    expect(await screen.findByText('Search for “FDX24INV” took too long')).toBeInTheDocument()
+    expect(screen.queryByText('Nothing matched “FDX24INV”')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Search again' })).toBeInTheDocument()
+  })
+
+  it('says which parts were not searched when some results finished', async () => {
+    answer({ records: [rec], partial: ['comments'] })
+    renderAt('/search?q=pump')
+    expect(await screen.findByText(/Showing what finished in time/)).toBeInTheDocument()
+    expect(document.body.textContent).toContain('Not searched yet: Comments')
+  })
+
   it('starts with how to search when empty', () => {
     answer({})
     renderAt('/search')

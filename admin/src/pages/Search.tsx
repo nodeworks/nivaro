@@ -15,6 +15,7 @@ import {
   BookmarkPlus,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Download,
   History,
   Lightbulb,
@@ -270,11 +271,23 @@ export function SearchPage() {
     fetchFresh: () =>
       api
         .get<{ data: GlobalSearchResponse }>('/global-search', { params: { q, fresh: '1' } })
-        .then((r) => withExactFirst(r.data.data.records ?? [], r.data.data.exact)),
+        .then((r) => {
+          // A re-ask the time budget cut short says nothing about the rows it never searched:
+          // keep the page as it is (nothing dims) rather than read "not searched" as "gone".
+          if (cutsShown(r.data.data, records)) throw new Error('search cut short')
+          return withExactFirst(r.data.data.records ?? [], r.data.data.exact)
+        }),
     onShow: () =>
       void api
         .get<{ data: GlobalSearchResponse }>('/global-search', { params: { q, fresh: '1' } })
         .then((r) => {
+          // Never swap shown results for an answer cut short on the same collections.
+          if (cutsShown(r.data.data, records)) {
+            toast.message('Search is slow right now', {
+              description: 'The new matches did not finish loading. Press Show again in a moment.'
+            })
+            return
+          }
           qc.setQueryData(['global-search', q], r.data.data)
           void qc.invalidateQueries({ queryKey: ['global-search-counts'] })
         })
@@ -421,7 +434,7 @@ export function SearchPage() {
     download(`${stem}.csv`, recordsCsv(sortRecords(records, sort)))
   }
 
-  const nothing =
+  const empty =
     live &&
     !!data &&
     !isFetching &&
@@ -429,6 +442,22 @@ export function SearchPage() {
     people.length === 0 &&
     extras.length === 0 &&
     (data.pages?.length ?? 0) === 0
+  // Parts the time budget cut: an empty answer with cut parts is "not searched", never
+  // "Nothing matched" (rt2 review: FDX24INV read as no match while 6,459 records match).
+  const cut = live ? (data?.partial ?? []) : []
+  const nothing = empty && cut.length === 0
+  const [retrying, setRetrying] = useState(false)
+  const retryFresh = () => {
+    setRetrying(true)
+    void api
+      .get<{ data: GlobalSearchResponse }>('/global-search', { params: { q, fresh: '1' } })
+      .then((r) => {
+        qc.setQueryData(['global-search', q], r.data.data)
+        void qc.invalidateQueries({ queryKey: ['global-search-counts'] })
+      })
+      .catch(() => void refetch())
+      .finally(() => setRetrying(false))
+  }
 
   const exportable = collectionTab
     ? tabRows.length > 0
@@ -668,6 +697,16 @@ export function SearchPage() {
 
           {live && !data && isFetching && <ResultsSkeleton />}
 
+          {live && data && cut.length > 0 && (
+            <SearchCutNote
+              parts={cut.map(cutLabel(scopeLabel))}
+              empty={empty}
+              q={q}
+              retrying={retrying}
+              onRetry={retryFresh}
+            />
+          )}
+
           {nothing && (
             <ZeroResults
               q={q}
@@ -740,6 +779,95 @@ export function SearchPage() {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/** The page's results come from a collection the re-ask's time budget cut: that answer cannot
+ *  say whether those rows still match. */
+function cutsShown(answer: GlobalSearchResponse, shown: SearchRecord[]): boolean {
+  const cut = new Set(answer.partial ?? [])
+  if (cut.size === 0) return false
+  return shown.some((r) => cut.has(r.collection))
+}
+
+const CUT_KINDS: Record<string, string> = {
+  people: 'People',
+  semantic: 'Meaning matches',
+  comments: 'Comments',
+  files: 'Files',
+  videos: 'Videos',
+  docs: 'Docs',
+  chat: 'Chat',
+  config: 'Settings'
+}
+const cutLabel = (scopeLabel: (s: string) => string) => (part: string) =>
+  CUT_KINDS[part] ?? scopeLabel(part)
+
+/** Parts the search's time budget cut, said plainly: what finished is shown, the rest was not
+ *  searched (never "no match"). With nothing finished it replaces the empty state. */
+function SearchCutNote({
+  parts,
+  empty,
+  q,
+  retrying,
+  onRetry
+}: {
+  parts: string[]
+  empty: boolean
+  q: string
+  retrying: boolean
+  onRetry: () => void
+}) {
+  const named = parts.slice(0, 3).join(', ')
+  const more = parts.length > 3 ? ` and ${parts.length - 3} more` : ''
+  const retry = (
+    <Button
+      variant='outline'
+      size='sm'
+      className='h-7 shrink-0 text-[12px]'
+      disabled={retrying}
+      onClick={onRetry}
+    >
+      {retrying ? 'Searching…' : 'Search again'}
+    </Button>
+  )
+  if (empty)
+    return (
+      <div
+        className='flex flex-wrap items-start justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 dark:border-amber-900/60 dark:bg-amber-950/30'
+        data-search-cut='empty'
+      >
+        <div className='min-w-0'>
+          <p className='flex items-center gap-1.5 text-[14px] font-semibold text-amber-900 dark:text-amber-100'>
+            <Clock className='h-4 w-4 shrink-0' aria-hidden />
+            Search for “{q}” took too long
+          </p>
+          <p className='mt-1 max-w-[68ch] text-[12.5px] leading-relaxed text-amber-900/80 dark:text-amber-100/80'>
+            Nothing finished in time, so this is not a “no match”. Still unsearched: {named}
+            {more}. Try again, or add a filter such as a record type to narrow it.
+          </p>
+        </div>
+        {retry}
+      </div>
+    )
+  return (
+    <div
+      className='flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-[12px] text-slate-700 dark:border-border dark:bg-card dark:text-slate-300'
+      data-search-cut='some'
+    >
+      <p className='flex min-w-0 items-center gap-1.5'>
+        <Clock className='h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400' aria-hidden />
+        <span>
+          Showing what finished in time. Not searched yet:{' '}
+          <span data-tip={parts.join(', ')}>
+            {named}
+            {more}
+          </span>
+          .
+        </span>
+      </p>
+      {retry}
     </div>
   )
 }
