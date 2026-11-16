@@ -560,7 +560,10 @@ export function McpConnectionsAdminView({
                   <th className='py-2 pr-3 font-medium'>Top tools</th>
                   <th className='py-2 pr-3 font-medium'>May use</th>
                   <th className='py-2 pr-3 font-medium'>Calls a minute</th>
-                  <th className='py-2 pr-4' />
+                  {/* Actions stay in view (pinned right, a soft edge over the scrolled
+                    cells) when the table is narrower than its columns — with the Watch list
+                    open "Roll back…" was cut at the table edge. */}
+                  <th className='sticky right-0 bg-white py-2 pr-4 dark:bg-card' />
                 </tr>
               </thead>
               <tbody>
@@ -645,7 +648,7 @@ export function McpConnectionsAdminView({
                         <td className='py-2.5 pr-3'>
                           <LimitCell c={c} onSaved={refresh} />
                         </td>
-                        <td className='py-2.5 pr-4 text-right'>
+                        <td className='sticky right-0 bg-white py-2.5 pl-3 pr-4 text-right shadow-[-10px_0_12px_-10px_rgba(15,23,42,0.18)] dark:bg-card dark:shadow-[-10px_0_12px_-10px_rgba(0,0,0,0.6)]'>
                           <span className='inline-flex items-center justify-end gap-1.5 whitespace-nowrap'>
                             <button
                               type='button'
