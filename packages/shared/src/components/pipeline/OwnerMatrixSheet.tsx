@@ -85,6 +85,18 @@ export interface OwnerSheetPreview {
 
 type FetchError = Error & { status?: number; code?: string; data?: OwnerSheetPreview }
 
+/** A readable file that is not the owner matrix workbook (no Step, People… columns). */
+function wrongFileDescription(fileName: string): ErrorDescription {
+  const ext = /\.([a-z0-9]+)$/i.exec(fileName)?.[1]?.toLowerCase()
+  return {
+    title:
+      ext && !['xlsx', 'xlsm', 'xls'].includes(ext)
+        ? `This ${ext.toUpperCase()} file is not the owner matrix`
+        : 'This file is not the owner matrix',
+    hint: 'Upload the .xlsx file you got from Download as Excel, after editing it. Its Owners sheet is what is read.'
+  }
+}
+
 /** The file itself could not be used (wrong file, no Owners sheet, too big): say so
  *  plainly instead of the generic "correct the highlighted values". */
 function readFailure(err: unknown, fileName?: string): ErrorDescription | undefined {
@@ -323,10 +335,23 @@ export function OwnerSheetDrawer({
 
   const blocked = !!preview && preview.errors > 0
   const canApply = !!preview && !blocked && !preview.nothing_to_do && !loading
-  const readFail = error != null ? readFailure(error, fileName) : undefined
+  // A file with no owner rows and only file-level problems (none of the owner matrix columns,
+  // a CSV export of something else) is the wrong file, not eight things to fix one by one.
+  const wrongFile =
+    !loading &&
+    !!preview &&
+    preview.rows === 0 &&
+    preview.errors > 0 &&
+    preview.problems.every((p) => p.row == null)
+  const readFail =
+    error != null
+      ? readFailure(error, fileName)
+      : wrongFile
+        ? wrongFileDescription(fileName)
+        : undefined
   // Nothing to apply at all: the file could not be used, or it matches the matrix. The footer
   // then offers only another file and Close.
-  const failed = !loading && error != null
+  const failed = !loading && (error != null || wrongFile)
   const nothing = !loading && !failed && !!preview && preview.nothing_to_do && !blocked
   // Rows with a problem that stops Apply: their changes are shown as blocked, not as changes.
   const blockedRows = new Set(
@@ -379,7 +404,7 @@ export function OwnerSheetDrawer({
             </div>
           )}
           {!loading &&
-            error != null &&
+            (error != null || wrongFile) &&
             (readFail ? (
               <div
                 role='alert'
@@ -405,7 +430,18 @@ export function OwnerSheetDrawer({
                 onRetry={onRetry}
               />
             ))}
-          {!loading && preview && (
+          {!loading && wrongFile && preview && (
+            <details className='group text-[12px]' data-owner-sheet-wrong-file-details>
+              <summary className='inline-flex cursor-pointer list-none items-center gap-1 rounded text-slate-600 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-muted-foreground dark:hover:text-foreground [&::-webkit-details-marker]:hidden'>
+                <ChevronDown className='h-3.5 w-3.5 -rotate-90 transition-transform group-open:rotate-0' />
+                What the file is missing
+              </summary>
+              <div className='mt-2'>
+                <Problems preview={preview} />
+              </div>
+            </details>
+          )}
+          {!loading && preview && !wrongFile && (
             <>
               {stale && (
                 <div className='flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 dark:border-amber-800/70 dark:bg-amber-950/40 dark:text-amber-200'>
@@ -718,13 +754,11 @@ function ChangeRow({ change: c, blocked = false }: { change: GroupChange; blocke
       {c.kind === 'changed' && c.filters_after.length + c.filters_before.length > 0 && (
         <ValueDiff before={c.filters_before} after={c.filters_after} />
       )}
-      {c.kind === 'added' &&
-        c.filters_after.length > 0 &&
-        c.filters_after.join(' · ') !== c.label && (
-          <div className='text-[12px] text-slate-600 dark:text-muted-foreground'>
-            {c.filters_after.join(' · ')}
-          </div>
-        )}
+      {c.kind === 'added' && c.filters_after.length > c.label.split(' · ').length && (
+        <div className='text-[12px] text-slate-600 dark:text-muted-foreground'>
+          {c.filters_after.join(' · ')}
+        </div>
+      )}
       {(c.people_added.length > 0 ||
         c.people_removed.length > 0 ||
         c.teams_added.length > 0 ||
