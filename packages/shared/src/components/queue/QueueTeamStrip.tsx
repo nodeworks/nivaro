@@ -8,6 +8,7 @@ import { useLivePreference } from '../../lib/live-preference'
 import { type PresenceState, usePresenceStates } from '../../lib/use-online-users'
 import { cn } from '../../lib/utils'
 import { UserAvatar } from '../UserAvatar'
+import { UserChip } from '../item-edit/UserChip'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
 /**
@@ -217,21 +218,27 @@ function Roster({ rows, more, note }: { rows: TeamRow[]; more: number; note: str
               {!folded && (
                 <ul>
                   {list.map((r) => (
-                    <li
-                      key={r.member.id}
-                      className='flex items-center gap-2.5 rounded-md px-2 py-1.5'
-                    >
-                      <Face row={r} size={26} surface='popover' />
-                      <span className='min-w-0 flex-1'>
-                        <span className='block truncate font-medium text-[13px] text-slate-800 dark:text-slate-100'>
-                          {r.member.name}
-                        </span>
-                        {r.status === 'out' && (
-                          <span className='block text-[11px] text-slate-500 dark:text-slate-400'>
-                            {outLine(r.member)}
+                    <li key={r.member.id}>
+                      {/* A person opens their user card, like every avatar elsewhere. */}
+                      <UserChip userId={r.member.id}>
+                        <button
+                          type='button'
+                          data-team-person={r.member.id}
+                          className='flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-slate-800'
+                        >
+                          <Face row={r} size={26} surface='popover' />
+                          <span className='min-w-0 flex-1'>
+                            <span className='block truncate font-medium text-[13px] text-slate-800 dark:text-slate-100'>
+                              {r.member.name}
+                            </span>
+                            {r.status === 'out' && (
+                              <span className='block text-[11px] text-slate-500 dark:text-slate-400'>
+                                {outLine(r.member)}
+                              </span>
+                            )}
                           </span>
-                        )}
-                      </span>
+                        </button>
+                      </UserChip>
                     </li>
                   ))}
                 </ul>

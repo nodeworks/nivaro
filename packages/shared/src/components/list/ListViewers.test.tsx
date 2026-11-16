@@ -2,7 +2,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+// The user card needs the app's client; these tests are about the faces and labels.
+vi.mock('../item-edit/UserChip', () => ({ UserChip: ({ children }: { children: unknown }) => children }))
 import { ItemEditAuthContext } from '../../context'
 import { listViewTopic, othersFrom, viewersSentence } from '../../lib/list-viewers'
 import { type RealtimeAdapter, RealtimeContext } from '../../lib/realtime'
