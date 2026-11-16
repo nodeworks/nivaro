@@ -248,13 +248,12 @@ export function PushReadinessChip({
   })
   if (!id || itemId === 'new') return null
   if (isLoading)
+    // On a button the badge waits until it knows: a grey pulsing disc half over the
+    // button's corner read as debris (design review rt2-record).
     return compact ? (
-      <span
-        data-push-readiness='loading'
-        role='status'
-        className={cn(BADGE_POS, 'h-2.5 w-2.5 animate-pulse bg-slate-300 dark:bg-slate-600')}
-        aria-label='Checking whether this can be sent'
-      />
+      <span data-push-readiness='loading' role='status' className='sr-only'>
+        Checking whether this can be sent
+      </span>
     ) : (
       <span
         data-push-readiness='loading'
