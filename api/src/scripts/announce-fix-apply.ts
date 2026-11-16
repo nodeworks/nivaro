@@ -2,7 +2,7 @@
  * Announce fix — APPLY on a development database (realtime item 1). Run from api/:
  *
  *   CRON_TICKS=off SKIP_BOOT_MIGRATIONS=1 npx tsx src/scripts/announce-fix-apply.ts \
- *     --database EFP_Development --log <file> [--name <proc>] [--limit N] [--execute]
+ *     --database EFP_Development --log <file> [--name <proc>] [--skip a,b] [--limit N] [--execute]
  *
  * Without --execute it plans and compiles only (nothing written). With --execute, per flagged
  * procedure, through the same one-writer paths the SQL checks page uses:
@@ -52,6 +52,8 @@ const BY = 'script:announce-fix'
 const execute = has('--execute')
 const logFile = arg('--log')
 const only = arg('--name')?.toLowerCase()
+// --skip a,b: procedures to leave alone (e.g. one no longer used).
+const skip = new Set((arg('--skip') ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean))
 const limit = Number(arg('--limit') ?? 0) || Number.POSITIVE_INFINITY
 
 const log = (line: string) => {
@@ -93,6 +95,10 @@ async function main(): Promise<number> {
   let done = 0
   for (const lower of names) {
     if (only && lower !== only) continue
+    if (skip.has(lower)) {
+      log(`SKIP  ${lower} — --skip`)
+      continue
+    }
     if (done >= limit) break
     const liveSql = live.get(lower) ?? ''
     const owner = owners.get(lower) ?? null
