@@ -8,7 +8,8 @@ import { formatDateTime } from '../lib/utils'
  * when the row / panel refetches with the new step.
  */
 
-/** The list cell: "Finance · 3 d 4 h" (step muted, span in figures). */
+/** The list cell: "3 d 4 h · Finance" — the span leads (it is what you scan a column for), the
+ *  step follows muted, so a STATE column beside it does not make the cell read as a repeat. */
 export function InStepCell({
   stepLabel,
   enteredAt,
@@ -27,15 +28,14 @@ export function InStepCell({
     <span
       data-in-step=''
       data-tip={`In ${label || 'this step'} since ${formatDateTime(enteredAt as string)}`}
-      className='inline-flex max-w-[220px] items-baseline gap-1 whitespace-nowrap'
+      className='inline-flex max-w-[240px] items-baseline gap-1.5 whitespace-nowrap'
     >
-      {label && <span className='truncate text-slate-500 dark:text-slate-400'>{label}</span>}
+      <span className='shrink-0 font-medium tabular-nums text-slate-800 dark:text-slate-100'>
+        {span}
+      </span>
       {label && (
-        <span aria-hidden className='text-slate-300 dark:text-slate-600'>
-          ·
-        </span>
+        <span className='truncate text-[0.92em] text-slate-500 dark:text-slate-400'>{label}</span>
       )}
-      <span className='tabular-nums text-slate-700 dark:text-slate-200'>{span}</span>
     </span>
   )
 }

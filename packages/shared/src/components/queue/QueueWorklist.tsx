@@ -125,7 +125,6 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { copyIdText } from '../../lib/record-ref'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { userErrorMessage } from '../../lib/safe-error'
-import { listViewInput } from '../../lib/send-view'
 import {
   selectionSums,
   splitSelKey,
@@ -134,6 +133,7 @@ import {
   useSelectionLiveMarks,
   useSelectionPicks
 } from '../../lib/selection-watch'
+import { listViewInput } from '../../lib/send-view'
 import { useTableDensity } from '../../lib/table-density'
 import { matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
@@ -5051,7 +5051,15 @@ export function QueueWorklist({
                     Columns
                   </button>
                 </PopoverTrigger>
-                <PopoverContent className='w-[220px] p-2' align='end'>
+                {/* Kept inside the screen on a phone: 16 px from every edge, scrolling inside
+                  itself when the list is taller than the room left (it opened off the left
+                  edge with every label cut, rt8 review). */}
+                <PopoverContent
+                  className='max-h-[var(--radix-popover-content-available-height)] w-[min(240px,calc(100vw-2rem))] overflow-y-auto overscroll-contain p-2'
+                  align='end'
+                  collisionPadding={16}
+                  data-queue-columns-chooser=''
+                >
                   <DndContext
                     sensors={sensors}
                     collisionDetection={closestCenter}

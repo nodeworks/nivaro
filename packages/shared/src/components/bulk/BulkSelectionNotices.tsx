@@ -15,13 +15,17 @@ import { LiveCount } from '../LiveCount'
 /**
  * What a bulk bar says before it acts on the selection (realtime round 8, items 5–7):
  *
- *   ● 2 of these are open by Beth right now                    Skip those · Continue
- *   ● 3 selected rows changed since you picked them             Review · Continue
+ *   ● 2 of these are open by Beth right now                               Skip those
+ *   ● 3 selected rows changed since you picked them                        Review
+ *                                                                     [Keep all 12]
  *
  * One quiet line each, inside the bar (never a toast or a dialog), only while there is
- * something to say. "Skip those" takes the rows out of the selection; "Continue" keeps them
- * and stops saying so until something new happens; "Review" lists who changed what (as the
- * viewer may read it) with a link to each record.
+ * something to say. Each line carries only its own scoped choice: "Skip those" takes the rows
+ * out of the selection; "Review" lists who changed what (as the viewer may read it) with a
+ * link to each record. ONE "Keep all N" closes the block — it keeps every selected row and
+ * stops these notes until something new happens; it runs nothing (the bar's own buttons do).
+ * Two notices once each carried a "Continue", and nobody could tell whether both had to be
+ * pressed or what either ran.
  */
 
 export type NoticeTone = 'dark' | 'light'
@@ -138,7 +142,7 @@ export function BulkSelectionNotices({
         .filter((o) => o.editing || o.names.length > 0 || o.unnamed > 0),
     [open, names]
   )
-  // "Continue" on the open-by line holds until the set of rows it speaks of changes.
+  // "Keep all" quiets the open-by line until the set of rows it speaks of changes.
   const openSig = openRows
     .map((o) => o.key)
     .sort()
@@ -148,6 +152,29 @@ export function BulkSelectionNotices({
   const openText = openSig && openSig !== openAck ? openNoticeText(openRows, total) : null
   const changedText = changedNoticeText(changed.length)
   if (!openText && !changedText) return null
+
+  const keepAll = () => {
+    if (openText) setOpenAck(openSig)
+    if (changedText) {
+      setReviewing(false)
+      onAcknowledgeChanged(changed.map((c) => c.key))
+    }
+  }
+  const keepButton = (
+    <button
+      type='button'
+      className={t.btnStrong}
+      onClick={keepAll}
+      data-bulk-keep-all=''
+      data-tip='Keep every selected row and stop these notes. Nothing runs until you pick an action.'
+    >
+      Keep all {total}
+    </button>
+  )
+  // One notice, list closed: the keep button ends that line. Otherwise it closes the block on
+  // its own row, so there is only ever one of it.
+  const keepInline = !(openText && changedText) && !reviewing
+  const LIST_CAP = 25
 
   return (
     <div
@@ -173,9 +200,7 @@ export function BulkSelectionNotices({
           >
             Skip {openRows.length === 1 ? 'it' : 'those'}
           </button>
-          <button type='button' className={t.btnStrong} onClick={() => setOpenAck(openSig)}>
-            Continue
-          </button>
+          {keepInline && keepButton}
         </NoticeLine>
       )}
       {changedText && (
@@ -193,24 +218,17 @@ export function BulkSelectionNotices({
           >
             {reviewing ? 'Hide' : 'Review'}
           </button>
-          <button
-            type='button'
-            className={t.btnStrong}
-            onClick={() => {
-              setReviewing(false)
-              onAcknowledgeChanged(changed.map((c) => c.key))
-            }}
-          >
-            Continue
-          </button>
+          {keepInline && keepButton}
         </NoticeLine>
       )}
       {changedText && reviewing && (
+        // Capped: the bar is pinned to the bottom of the screen, so the list scrolls inside
+        // itself (never past ~40% of the screen) instead of growing the bar off the top.
         <ul
           data-bulk-changed-list=''
-          className={`ml-[22px] max-h-40 overflow-y-auto border-l pl-3 text-[12px] ${t.list}`}
+          className={`ml-[22px] max-h-[min(40vh,15rem)] overflow-y-auto overscroll-contain border-l pl-3 text-[12px] ${t.list}`}
         >
-          {changed.map((c) => (
+          {changed.slice(0, LIST_CAP).map((c) => (
             <li key={c.key} className='flex min-w-0 items-baseline gap-2 py-0.5'>
               {/* Side by side on a wide bar; the record above what happened on a phone. */}
               <span className='flex min-w-0 flex-1 flex-col sm:flex-row sm:items-baseline sm:gap-2'>
@@ -233,7 +251,17 @@ export function BulkSelectionNotices({
               )}
             </li>
           ))}
+          {changed.length > LIST_CAP && (
+            <li className={`py-0.5 ${t.soft}`} data-bulk-changed-more=''>
+              +{changed.length - LIST_CAP} more changed
+            </li>
+          )}
         </ul>
+      )}
+      {!keepInline && (
+        <div className='flex justify-end pt-0.5' data-bulk-keep-row=''>
+          {keepButton}
+        </div>
       )}
     </div>
   )
