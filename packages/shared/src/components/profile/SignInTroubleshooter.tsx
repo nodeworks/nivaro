@@ -292,7 +292,7 @@ function Verdict({ t, first }: { t: Troubleshooter; first: string }) {
           <div className='min-w-0 space-y-1'>
             <p className='text-[13px] font-semibold text-amber-950 dark:text-amber-100'>
               {c.label}
-              <span className='ml-2 inline-block whitespace-nowrap text-[11.5px] font-normal text-amber-800 dark:text-amber-300'>
+              <span className='block whitespace-nowrap text-[11.5px] sm:ml-2 sm:inline-block font-normal text-amber-800 dark:text-amber-300'>
                 <span data-tip={formatDateTime(c.at)}>{formatRelative(c.at)}</span>
                 {c.match === 'browser' && ' · probably them'}
               </span>

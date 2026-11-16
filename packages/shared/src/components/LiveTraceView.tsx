@@ -437,16 +437,16 @@ export function LiveTraceView({
                         )}
                       >
                         <td className='px-3 py-1 tabular-nums text-slate-500'>{e.seq}</td>
-                        <td className='px-3 py-1 tabular-nums'>{clock(e.at)}</td>
+                        <td className='whitespace-nowrap px-3 py-1 tabular-nums'>{clock(e.at)}</td>
                         <td className='px-3 py-1'>
                           {e.action ?? e.event}
                           {e.item === '*' ? ` (${e.bulk ?? 'many'} records)` : ''}
                           {e.source ? ` · ${e.source}` : ''}
                         </td>
-                        <td className='max-w-[260px] truncate px-3 py-1' title={fields.join(', ')}>
+                        <td className='max-w-[200px] truncate px-3 py-1' title={fields.join(', ')}>
                           {fields.length ? fields.join(', ') : '—'}
                         </td>
-                        <td className='px-3 py-1'>
+                        <td className='whitespace-nowrap px-3 py-1'>
                           {acked ? (
                             <span className='font-medium text-emerald-800 dark:text-emerald-300'>
                               {e.acked_by.length} {e.acked_by.length === 1 ? 'person' : 'people'}
