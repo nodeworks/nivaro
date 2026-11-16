@@ -309,7 +309,6 @@ import {
 } from './item-edit/helpers'
 import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
-import { ListNeighborNav } from './item-edit/ListNeighborNav'
 import { LiveTraceSheet } from './item-edit/LiveTraceSheet'
 import { WatchPinButton } from './watch-list/WatchPinButton'
 import {
@@ -376,7 +375,6 @@ import {
   placementFieldText,
   usePlacementTextContext
 } from './item-edit/placement-behaviour'
-import { QueueReturnChip } from './item-edit/QueueReturnChip'
 import { endQuickCreateFollows } from './item-edit/QuickCreateButton'
 import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
@@ -14290,10 +14288,6 @@ function ItemEditFormView({
                                           />
                                         </button>
                                       )}
-                                      {/* Realtime #16: walk the list this record came from. */}
-                                      {!isNew && !designMode && (
-                                        <ListNeighborNav collection={collection} itemId={itemId} />
-                                      )}
                                       {/* min-width floor: without it flex crushes this block to
                                       zero width before the row ever overflows, so HeaderTools'
                                       scrollWidth check never fires and the toolbar squishes the
@@ -16791,7 +16785,6 @@ function ItemEditFormView({
                                       )}
                                       onScroll={summaryEnabled ? condenseOnScroll : undefined}
                                     >
-                                      {!isNew && <QueueReturnChip />}
                                       {extraTopContent}
                                       {showValidationSummary &&
                                         validationSummaryItems.length > 0 && (
