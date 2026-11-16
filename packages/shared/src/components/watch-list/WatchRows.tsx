@@ -399,11 +399,14 @@ export function WatchRow({
                       )}
                       <span className='flex min-w-0'>
                         {changeText && <span className='min-w-0 truncate'>{changeText}</span>}
-                        {changeBy && (
-                          <span className='min-w-0 max-w-[60%] shrink-0 truncate whitespace-pre'>
-                            {changeText ? ' · ' : ''}
-                            {changeBy}
+                        {changeBy && changeText && (
+                          // Its own span: a truncating name can never swallow the joiner's space.
+                          <span aria-hidden className='shrink-0 whitespace-pre'>
+                            {' · '}
                           </span>
+                        )}
+                        {changeBy && (
+                          <span className='min-w-0 max-w-[60%] shrink-0 truncate'>{changeBy}</span>
                         )}
                         <span className='shrink-0 whitespace-pre tabular-nums text-slate-500 dark:text-slate-400'>
                           {' · '}

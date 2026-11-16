@@ -990,6 +990,8 @@ function WatchingTab({
     return sortWatchRows(withCompleted(inOrder, prefs.pins), prefs.dock.sort)
   }, [answer, prefs.pins, prefs.dock.sort, seenLocal])
 
+  // The empty state only once the pins have answered: before that "nothing pinned" is a guess.
+  if (!actions.prefsReady) return <LoadingRows n={3} />
   if (prefs.pins.length === 0)
     return (
       <>
