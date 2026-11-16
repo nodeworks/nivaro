@@ -3003,9 +3003,14 @@ function ApprovalBriefStrip({
                   {f.auto ? <span> (updated automatically)</span> : null}:{' '}
                   {pair.old !== null && (
                     <>
-                      <span className='text-red-600 line-through dark:text-red-400'>
-                        {pair.old}
-                      </span>
+                      {pair.old === '(empty)' ? (
+                        // Nothing was there: said quietly, as in the resubmission diff.
+                        <span className='italic'>empty</span>
+                      ) : (
+                        <span className='text-red-600 line-through dark:text-red-400'>
+                          {pair.old}
+                        </span>
+                      )}
                       <span aria-hidden='true'> → </span>
                       <span className='sr-only'> changed to </span>
                     </>
