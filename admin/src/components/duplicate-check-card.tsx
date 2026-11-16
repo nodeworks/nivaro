@@ -420,7 +420,12 @@ export function DuplicateCheckCard({ tableName }: { tableName: string }) {
             </div>
 
             {!custom ? (
-              <DefaultCriteria plan={plan} name={name} legacy={value.fields} />
+              <DefaultCriteria
+                plan={plan}
+                name={name}
+                legacy={value.fields}
+                onAddRule={startCustom}
+              />
             ) : (
               <ol className='space-y-1.5' data-duplicate-rules>
                 {(value.rules ?? []).map((r, i) => (
@@ -580,16 +585,31 @@ const DEFAULT_WORDS = 'same text, ignoring case, spacing and punctuation, or a t
 function DefaultCriteria({
   plan,
   name,
-  legacy
+  legacy,
+  onAddRule
 }: {
   plan: Plan | undefined
   name: (f: string) => string
   legacy?: string[]
+  onAddRule: () => void
 }) {
   if (!plan)
     return <p className='h-4 w-40 animate-pulse rounded bg-[var(--nvr-skeleton,#e2e8f0)]' />
+  // The status line above already says why; the body only offers the way out.
   if (plan.groups.length === 0)
-    return <Note tone='quiet'>{plan.reason || 'The label has no text field to compare.'}</Note>
+    return (
+      <Button
+        type='button'
+        variant='outline'
+        size='sm'
+        className='h-7 gap-1 px-2 text-[12px] font-normal'
+        onClick={onAddRule}
+        data-duplicate-default-empty
+      >
+        <Plus className='h-3 w-3' aria-hidden />
+        Add a rule
+      </Button>
+    )
   return (
     <ul className='space-y-1' data-duplicate-default>
       {plan.groups.map((g) => {
@@ -618,13 +638,16 @@ function FieldPicker({
   fields,
   name,
   onChange,
-  label
+  label,
+  wide
 }: {
   value: string
   fields: Array<FieldMeta & { kind: RuleKind }>
   name: (f: string) => string
   onChange: (f: string) => void
   label: string
+  /** On a phone the picker takes its own row, so the field name shows in full. */
+  wide?: boolean
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -635,7 +658,10 @@ function FieldPicker({
           role='combobox'
           aria-expanded={open}
           aria-label={label}
-          className='flex h-7 min-w-0 max-w-[220px] flex-1 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-left text-[12px] text-slate-800 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-background dark:text-foreground dark:hover:bg-muted'
+          className={cn(
+            'flex h-7 min-w-0 max-w-[220px] flex-1 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-left text-[12px] text-slate-800 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-background dark:text-foreground dark:hover:bg-muted',
+            wide && 'max-sm:min-w-[calc(100%-2.75rem)] max-sm:max-w-none'
+          )}
         >
           <span className='min-w-0 truncate'>{value ? name(value) : 'Choose a field'}</span>
           <ChevronsUpDown className='ml-auto h-3 w-3 shrink-0 text-slate-400' aria-hidden />
@@ -740,7 +766,9 @@ function RuleRow({
       {suffix}
     </span>
   )
-  const note = invalid ?? planned?.note
+  // The server names a field by its column title; say it the way the picker does.
+  const note =
+    invalid ?? planned?.note?.replace(/^No index on .+? —/, `No index on ${name(rule.field)} —`)
   const tone: 'warn' | 'quiet' = invalid || planned?.status === 'skipped' ? 'warn' : 'quiet'
   return (
     <li
@@ -753,6 +781,7 @@ function RuleRow({
           {first ? 'when' : 'and'}
         </span>
         <FieldPicker
+          wide
           value={rule.field}
           fields={fields}
           name={name}
@@ -781,10 +810,10 @@ function RuleRow({
             }}
             options={MATCHES[kind]}
             ariaLabel='How it matches'
-            className='h-7 w-auto min-w-[150px] text-[12px]'
+            className='h-7 w-auto min-w-[150px] text-[12px] max-sm:ml-[2.625rem]'
           />
         ) : (
-          <span className='px-1 text-[12px] text-slate-600 dark:text-muted-foreground'>
+          <span className='px-1 text-[12px] text-slate-600 max-sm:ml-[2.625rem] dark:text-muted-foreground'>
             {MATCHES[kind][0].label}
           </span>
         )}
