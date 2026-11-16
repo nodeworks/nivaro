@@ -11,6 +11,7 @@ import {
   setOverride,
   shownTotals,
   totalsEligibleKey,
+  totalsBatchParams,
   totalsParams,
   totalsSupport,
   totalTip
@@ -210,5 +211,21 @@ describe('list totals row', () => {
     expect(totalTip('count', 'Amount', null)).toBe(
       'Records with Amount filled in, across all matching records'
     )
+  })
+})
+
+describe('totalsBatchParams', () => {
+  it('asks for every total in one aggregate read, grouped by function', () => {
+    expect(
+      totalsBatchParams(
+        [
+          { key: 'po_amount', fn: 'sum' },
+          { key: 'forecast_total', fn: 'sum' },
+          { key: 'po_amount', fn: 'sum' },
+          { key: 'amount', fn: 'avg' }
+        ],
+        { search: 'SE', conditions: '[]' }
+      )
+    ).toEqual({ sum: 'po_amount,forecast_total', avg: 'amount', search: 'SE', conditions: '[]' })
   })
 })

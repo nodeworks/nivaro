@@ -5549,13 +5549,18 @@ export async function readItems(
   // of this read, so the figures describe exactly the rows a list would hold.
   if (query.aggregate) {
     const spec = query.aggregate
+    // A total over a search the database gave up on answers like the list does (503 "took too
+    // long"), never a bare 500 — the list's totals row asks with the same search (prod 2026-11-16).
     const agg = await span('aggregate', async () =>
       runAggregate(countQ, collection, spec, {
         allowedFields,
         encrypted: await getEncryptedFields(collection),
         sensitive: sensitiveColumns(collection)
       })
-    )
+    ).catch((err) => {
+      if (isStatementTimeout(err)) throw new ListTimeoutError(Boolean(query.search))
+      throw err
+    })
     return {
       data: agg.data,
       total: agg.data.length,

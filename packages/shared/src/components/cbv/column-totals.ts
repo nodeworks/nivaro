@@ -40,6 +40,24 @@ export function totalsParams(
   }
 }
 
+/** One aggregate read for many totals: `sum=a,b&avg=c` plus the list's search and conditions. */
+export function totalsBatchParams(
+  reads: Array<{ key: string; fn: TotalFn }>,
+  list: { search?: string; conditions?: string }
+): Record<string, string> {
+  const byFn = new Map<TotalFn, string[]>()
+  for (const r of reads) {
+    const keys = byFn.get(r.fn) ?? []
+    if (!keys.includes(r.key)) keys.push(r.key)
+    byFn.set(r.fn, keys)
+  }
+  return {
+    ...Object.fromEntries([...byFn].map(([fn, keys]) => [fn, keys.join(',')])),
+    ...(list.search ? { search: list.search } : {}),
+    ...(list.conditions ? { conditions: list.conditions } : {})
+  }
+}
+
 type AggregateAnswer = {
   data?: Array<Partial<Record<TotalFn, Record<string, unknown> | undefined>>>
 }

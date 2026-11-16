@@ -276,7 +276,7 @@ import {
   type TotalOverrides,
   type TotalsSupport,
   totalsEligibleKey,
-  totalsParams,
+  totalsBatchParams,
   totalsSupport,
   totalTip
 } from './cbv/column-totals'
@@ -5718,25 +5718,42 @@ export function CollectionBrowserView({
     for (const n of needs)
       if (!totalReads.some((r) => r.key === n.key && r.fn === n.fn)) totalReads.push(n)
   }
-  const totalQueries = useQueries({
-    queries: totalReads.map(({ key, fn }) => {
-      return {
-        queryKey: ['cbv-col-total', collection, totalsSearch, totalsConditions, key, fn],
-        queryFn: () =>
-          client
-            .request<{ data?: Array<Record<string, Record<string, unknown>>> }>(
-              get(
-                `/items/${collection}/aggregate`,
-                totalsParams(key, fn, { search: totalsSearch, conditions: totalsConditions })
-              )
-            )
-            .then((r) => readTotal(r as never, key, fn)),
-        enabled: !!collection && scopeGateOpen && !aiResult && !groupBy,
-        staleTime: 30_000,
-        retry: false
-      }
-    })
+  // ONE aggregate read for every total on screen (prod 2026-11-16: one read per column meant
+  // four full scans of the filtered rows on each search keystroke, and all four timed out
+  // together). It waits for the list itself: a search the list cannot finish, the totals
+  // cannot either.
+  const totalsBatch = useQuery({
+    queryKey: [
+      'cbv-col-totals',
+      collection,
+      totalsSearch,
+      totalsConditions,
+      totalReads.map((r) => `${r.fn}.${r.key}`).join(',')
+    ],
+    queryFn: () =>
+      client.request<{ data?: Array<Record<string, Record<string, unknown>>> }>(
+        get(
+          `/items/${collection}/aggregate`,
+          totalsBatchParams(totalReads, { search: totalsSearch, conditions: totalsConditions })
+        )
+      ),
+    enabled:
+      !!collection &&
+      totalReads.length > 0 &&
+      scopeGateOpen &&
+      !aiResult &&
+      !groupBy &&
+      !!itemsRes &&
+      !isPlaceholderData &&
+      !error,
+    staleTime: 30_000,
+    retry: false
   })
+  const totalQueries = totalReads.map(({ key, fn }) => ({
+    data: totalsBatch.data ? readTotal(totalsBatch.data as never, key, fn) : undefined,
+    isLoading: totalsBatch.isLoading,
+    isError: totalsBatch.isError
+  }))
   const columnTotals: Record<string, { value: number | null; loading: boolean; failed: boolean }> =
     {}
   const readOf = (key: string, fn: TotalFn) =>
