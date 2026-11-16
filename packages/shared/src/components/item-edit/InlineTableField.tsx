@@ -264,6 +264,7 @@ import {
   cleanLineLabel,
   type LineRemovedBy,
   nextLineAfter,
+  removedLineName,
   restorableLine,
   unsavedLineChanges
 } from './removed-line'
@@ -8967,9 +8968,17 @@ export function InlineTableField({
           if (diff?.added.size) parts.push(`${diff.added.size} added`)
           if (diff?.changed.size) parts.push(`${diff.changed.size} changed`)
           if (diff?.removed.length) parts.push(`${diff.removed.length} removed`)
+          // Named like the removed-line note does ("Line 3 · 27\" monitor"), never a bare "Line":
+          // the number is the row's place when this person opened the grid.
+          const baseOrder = [...(baselineRef.current?.keys() ?? [])]
           const removedLabels = (diff?.removed ?? [])
             .slice(0, 5)
-            .map((id) => rowIdentityLabel(baselineRef.current?.get(id) ?? { id }))
+            .map((id) =>
+              removedLineName(
+                rowIdentityLabel(baselineRef.current?.get(id) ?? { id }),
+                baseOrder.indexOf(id) + 1 || null
+              )
+            )
           return (
             <div
               data-grid-since-opened=''

@@ -92,25 +92,19 @@ export function FieldSourceBadge({
       aria-hidden={!shown}
     >
       {shown && t && (
-        // One style for every source (a procedure is not a link); the dot says what kind of
-        // source it is and the tooltip says it in words. It never leaves its anchor — the space
-        // left on the label row: on a narrow row the sentence truncates (whole in the tooltip)
-        // instead of running over the label and its icons.
+        // Text only, right after the label's own icons: the field's one dot is the live-change
+        // mark beside it (its tip says who changed it). What kind of source this is — a person,
+        // a process, outside the app — is in this badge's tooltip. It never leaves its anchor
+        // (the label row's free space): on a narrow row the sentence truncates, whole in the tip.
         <span
           data-field-source={field}
           data-field-source-via={t.via}
           data-tip={`${text} · ${formatDateTime(t.at)} — ${SOURCE_KIND_WORDS[kind]}`}
-          className='nvr-fade-in pointer-events-auto absolute right-0 top-1/2 inline-flex max-w-full -translate-y-1/2 items-center gap-1 whitespace-nowrap rounded-full bg-white py-px pl-2 pr-0.5 text-[10.5px] leading-4 text-slate-600 dark:bg-card dark:text-slate-300'
+          className={cn(
+            'nvr-fade-in pointer-events-auto absolute top-1/2 left-0 inline-flex max-w-full -translate-y-1/2 items-center gap-1 whitespace-nowrap rounded-full py-px pr-1 pl-1 text-[10.5px] leading-4 text-slate-500 dark:text-slate-400',
+            showLive && 'text-slate-600 dark:text-slate-300'
+          )}
         >
-          <span
-            aria-hidden
-            className={cn(
-              'h-1.5 w-1.5 shrink-0 rounded-full',
-              SOURCE_KIND_DOT[kind],
-              // Just changed live: the dot pulses a few times (never in Calm / Off).
-              showLive && 'motion-safe:animate-[pulse_1s_ease-in-out_3]'
-            )}
-          />
           <span className='min-w-0 truncate'>{text}</span>
           <span className='shrink-0 text-slate-400 dark:text-slate-500'>
             · {formatRelative(t.at)}
@@ -129,15 +123,9 @@ function sourceKind(via: FieldTouch['via'] | undefined): SourceKind {
   return 'process'
 }
 
-const SOURCE_KIND_DOT: Record<SourceKind, string> = {
-  person: 'bg-slate-400 dark:bg-slate-500',
-  process: 'bg-amber-400',
-  outside: 'bg-rose-400'
-}
-
-/** The dot's meaning, in the tooltip. */
+/** What kind of source it is, in the tooltip. */
 const SOURCE_KIND_WORDS: Record<SourceKind, string> = {
-  person: 'grey dot: a person set it in the app',
-  process: 'amber dot: set by a process (sync, import, procedure or the system), not a person',
-  outside: 'red dot: changed directly in the database, outside the app'
+  person: 'a person set it in the app',
+  process: 'set by a process (sync, import, procedure or the system), not a person',
+  outside: 'changed directly in the database, outside the app'
 }
