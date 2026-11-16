@@ -66,7 +66,7 @@ export function WidgetImageMenu({
       copyPngOrSave(png, fileName)
         .then((r) => {
           if (r === 'copied') toast.success('Copied the picture. Paste it into an email or Teams.')
-          else toast.info('Your browser would not copy a picture, so it was saved as a file.')
+          else toast.info(`Your browser would not copy a picture, so it was saved as ${fileName}.`)
         })
         .catch((err) => toastError(err, 'Could not make the picture.'))
         .finally(done)
@@ -91,7 +91,7 @@ export function WidgetImageMenu({
           data-tip='Copy or save as a picture'
           disabled={busy}
           className={cn(
-            'inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-60 dark:text-slate-500 dark:hover:bg-white/[0.06] dark:hover:text-slate-200',
+            'inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-60 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-700 dark:text-slate-500 dark:hover:bg-white/[0.06] dark:hover:text-slate-200 dark:data-[state=open]:bg-white/[0.08] dark:data-[state=open]:text-slate-200',
             className
           )}
         >
