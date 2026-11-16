@@ -5,6 +5,7 @@
  * runner's dry run and the tests all produce the same plan.
  */
 import type { EnvRefreshEnvironment } from '@nivaro/extension-kit'
+import { isRedactedColumn, SECRET_NAME_RE } from '../secret-columns.js'
 import type { SavedEntry, SavedKeepSet } from './keep-set.js'
 import type { EnvKeepEntry } from './registry.js'
 import type { SafetyAction } from './safety.js'
@@ -191,8 +192,23 @@ export function showValue(v: unknown, secret: boolean): string {
   return s.length > SHOWN_VALUE ? `${s.slice(0, SHOWN_VALUE - 1)}…` : s
 }
 
+/**
+ * Whether the plan shows a column only as set / empty: the entry says so, the config-snapshot rule
+ * calls it a credential, or its name looks like one (the allow-list of that rule does not apply
+ * here — a plan never needs to show a token URL either).
+ */
+export function isSecretColumn(
+  table: string,
+  column: string,
+  declared: Iterable<string> = []
+): boolean {
+  for (const c of declared) if (c === column) return true
+  return isRedactedColumn(table, column) || SECRET_NAME_RE.test(column)
+}
+
 function sampleRows(e: SavedEntry, entry: EnvKeepEntry | undefined, max = 25): KeptValueRow[] {
-  const secret = new Set(entry?.secret_columns ?? [])
+  const declared = entry?.secret_columns ?? []
+  const secret = { has: (c: string) => isSecretColumn(e.table, c, declared) }
   const keyCols = e.key.length ? e.key : ['id']
   const cols =
     e.kind === 'columns'
@@ -201,7 +217,7 @@ function sampleRows(e: SavedEntry, entry: EnvKeepEntry | undefined, max = 25): K
           .filter((c) => !keyCols.includes(c))
           .slice(0, 8)
   return e.rows.slice(0, max).map((r) => ({
-    key: keyCols.map((k) => showValue(r[k], false)).join(' / '),
+    key: keyCols.map((k) => showValue(r[k], secret.has(k))).join(' / '),
     values: Object.fromEntries(cols.map((c) => [c, showValue(r[c], secret.has(c))]))
   }))
 }

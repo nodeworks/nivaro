@@ -27,6 +27,7 @@ import {
 } from '../../../services/env-refresh/keep-set.js'
 import {
   buildRefreshPlan,
+  isSecretColumn,
   judgePreflight,
   type PreflightFacts,
   planLines,
@@ -802,5 +803,241 @@ describe('routes — queue gates', () => {
     expect(
       rollbackUntil([run({ mode: 'go', started_at: at(1) })], 'development', 24, now)
     ).toBeNull()
+  })
+})
+
+describe('safety pass — agents, flows and copied credentials', () => {
+  function landed() {
+    return new FakeSqlServer()
+      .table('T', 'nivaro_agent_triggers', {
+        cols: ['id', 'name', 'enabled', 'url'],
+        rows: [
+          { id: 1, name: 'Ours', enabled: 1, url: 'https://agent.staging' },
+          { id: 2, name: 'Prod agent', enabled: 1, url: 'https://agent.prod' }
+        ]
+      })
+      .table('T', 'nivaro_agent_trigger_deliveries', {
+        cols: ['id', 'status', 'last_error', 'next_attempt_at'],
+        rows: [
+          { id: 1, status: 'retrying', next_attempt_at: new Date() },
+          { id: 2, status: 'sending' },
+          { id: 3, status: 'delivered' }
+        ]
+      })
+      .table('T', 'nivaro_flows', {
+        cols: ['id', 'name', 'status'],
+        rows: [
+          { id: 'f1', name: 'Kept flow', status: 'active' },
+          { id: 'f2', name: 'Prod webhook flow', status: 'active' },
+          { id: 'f3', name: 'Prod mail flow', status: 'active' }
+        ]
+      })
+      .table('T', 'nivaro_flow_operations', {
+        cols: ['id', 'flow', 'type'],
+        rows: [
+          { id: 'o1', flow: 'f1', type: 'webhook' },
+          { id: 'o2', flow: 'f2', type: 'webhook' },
+          { id: 'o3', flow: 'f3', type: 'mail' }
+        ]
+      })
+      .table('T', 'nivaro_users', {
+        cols: ['id', 'email', 'static_token', 'totp_secret', 'password_hash'],
+        rows: [
+          { id: 'U-KEPT', email: 'deploy@x.internal', static_token: 'staging-token' },
+          {
+            id: 'u-person',
+            email: 'a@corp.com',
+            static_token: 'prod-token',
+            totp_secret: 'T',
+            password_hash: 'P'
+          },
+          { id: 'u-none', email: 'b@corp.com', static_token: null }
+        ]
+      })
+      .table('T', 'nivaro_api_keys', {
+        cols: ['id', 'name', 'is_active'],
+        rows: [
+          { id: 46, name: 'Staging MCP', is_active: 1 },
+          { id: 77, name: 'A person’s production key', is_active: 1 }
+        ]
+      })
+      .table('T', 'nivaro_sessions', {
+        cols: ['id', 'user_id'],
+        rows: [{ id: 's1', user_id: 'u-person' }]
+      })
+  }
+  const saved = {
+    format: 1 as const,
+    captured_at: '',
+    direction: 'production-to-staging',
+    source_database: 'S',
+    target_database: 'T',
+    target_ledger: [],
+    entries: [
+      {
+        id: 'core:agent-triggers',
+        label: '',
+        table: 'nivaro_agent_triggers',
+        kind: 'columns' as const,
+        key: ['name'],
+        columns: [],
+        identity: null,
+        total: 1,
+        rows: [{ name: 'Ours' }]
+      },
+      {
+        id: 'core:flows',
+        label: '',
+        table: 'nivaro_flows',
+        kind: 'columns' as const,
+        key: ['name'],
+        columns: [],
+        identity: null,
+        total: 1,
+        rows: [{ name: 'Kept flow' }]
+      },
+      {
+        id: 'core:accounts',
+        label: '',
+        table: 'nivaro_users',
+        kind: 'rows' as const,
+        key: ['id'],
+        columns: [],
+        identity: null,
+        total: 1,
+        rows: [{ id: 'u-kept' }]
+      },
+      {
+        id: 'core:api-keys',
+        label: '',
+        table: 'nivaro_api_keys',
+        kind: 'rows' as const,
+        key: ['id'],
+        columns: [],
+        identity: 'id',
+        total: 1,
+        rows: [{ id: 46 }]
+      }
+    ]
+  }
+
+  it('switches off what calls out, holds deliveries and strips copied credentials — sign-in secrets stay', async () => {
+    const s = landed()
+    const actions = await runSafetyPass(s, {
+      readDb: 'S',
+      writeDb: 'T',
+      instanceKey: 'staging',
+      saved,
+      dry: false
+    })
+    const by = (id: string) => actions.find((a) => a.id === id)!
+    expect(actions.filter((a) => a.error)).toEqual([])
+    expect(s.get('T', 'nivaro_agent_triggers')!.rows.map((r) => r.enabled)).toEqual([1, 0])
+    expect(by('agent-triggers')).toMatchObject({ count: 1, names: ['Prod agent'] })
+    expect(s.get('T', 'nivaro_agent_trigger_deliveries')!.rows.map((r) => r.status)).toEqual([
+      'dead',
+      'dead',
+      'delivered'
+    ])
+    expect(s.get('T', 'nivaro_flows')!.rows.map((r) => r.status)).toEqual([
+      'active',
+      'inactive',
+      'active'
+    ])
+    expect(by('flows')).toMatchObject({ count: 1, names: ['Prod webhook flow'] })
+    const users = s.get('T', 'nivaro_users')!.rows
+    expect(users.find((u) => u.id === 'U-KEPT')!.static_token).toBe('staging-token')
+    expect(users.find((u) => u.id === 'u-person')).toMatchObject({
+      static_token: null,
+      totp_secret: 'T',
+      password_hash: 'P'
+    })
+    expect(by('static-tokens').count).toBe(1)
+    expect(s.get('T', 'nivaro_api_keys')!.rows.map((r) => r.is_active)).toEqual([1, 0])
+    expect(by('api-keys')).toMatchObject({ count: 1 })
+    expect(s.get('T', 'nivaro_sessions')!.rows).toEqual([])
+    expect(by('sessions').count).toBe(1)
+  })
+
+  it('the dry run counts the same things and writes nothing', async () => {
+    const s = new FakeSqlServer()
+    for (const [name, t] of landed().dbs.get('T')!) s.table('S', name, t)
+    const actions = await runSafetyPass(s, {
+      readDb: 'S',
+      writeDb: 'T',
+      instanceKey: 'staging',
+      saved,
+      dry: true
+    })
+    expect(s.writes).toEqual([])
+    const counts = Object.fromEntries(actions.map((a) => [a.id, a.count]))
+    expect(counts).toMatchObject({
+      'agent-triggers': 1,
+      'agent-trigger-deliveries': 2,
+      flows: 1,
+      'static-tokens': 1,
+      'api-keys': 1,
+      sessions: 1
+    })
+  })
+})
+
+describe('plan masking', () => {
+  it('masks declared secrets, the snapshot rule and secret-looking names', () => {
+    expect(isSecretColumn('nivaro_settings', 'teams_webhook_url', ['teams_webhook_url'])).toBe(true)
+    expect(isSecretColumn('nivaro_environment_components', 'api_token')).toBe(true)
+    expect(isSecretColumn('nivaro_x', 'partner_refresh_token')).toBe(true)
+    expect(isSecretColumn('nivaro_settings', 'ai_gateway_token_url')).toBe(true)
+    expect(isSecretColumn('nivaro_settings', 'smtp_host')).toBe(false)
+  })
+
+  it('a credential the entry forgot to declare is still shown only as set', () => {
+    const plan = buildRefreshPlan({
+      direction: 'production-to-staging',
+      source: DECL.environments[0],
+      target: DECL.environments[1],
+      entries: [
+        {
+          source: 'x',
+          id: 'x:t',
+          label: 'T',
+          reason: 'r',
+          table: 'partner_settings',
+          kind: 'table'
+        }
+      ],
+      captured: {
+        format: 1,
+        captured_at: '',
+        direction: 'production-to-staging',
+        source_database: 'EFP',
+        target_database: 'EFP_staging',
+        target_ledger: [],
+        entries: [
+          {
+            id: 'x:t',
+            label: 'T',
+            table: 'partner_settings',
+            kind: 'table',
+            key: [],
+            columns: [],
+            identity: null,
+            total: 1,
+            rows: [
+              { id: 1, client_secret: 'hunter2', webhook_secret: 'abc', endpoint: 'https://p' }
+            ]
+          }
+        ]
+      },
+      safety: [],
+      preflight: [],
+      sourceTables: { tables: 1, rows: 1, used_mb: 1 },
+      filesFallback: null,
+      rollbackHours: 24
+    })
+    const vals = plan.kept[0].sample[0].values
+    expect(vals.client_secret).toBe('set')
+    expect(vals.webhook_secret).toBe('set')
+    expect(JSON.stringify(plan)).not.toMatch(/hunter2|"abc"/)
   })
 })

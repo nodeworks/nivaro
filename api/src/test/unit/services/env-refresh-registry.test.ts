@@ -14,11 +14,14 @@ import {
   EnvKeepError,
   entryTables,
   keepsForTarget,
+  OUTBOUND_COLUMN_RE,
+  OUTBOUND_EXCEPTIONS,
   SETTINGS_FROM_SOURCE,
   SETTINGS_KEEP,
   SOURCE_CREDENTIAL_DECISIONS,
   validateKeepEntry
 } from '../../../services/env-refresh/registry.js'
+import { SAFETY_TABLES } from '../../../services/env-refresh/safety.js'
 
 /**
  * The environment-refresh guard: a refresh copies EVERYTHING from the source except what the
@@ -186,5 +189,50 @@ describe('environment refresh registry — every table and settings column has a
       validateKeepEntry({ ...ok, kind: 'delegate', commands: { save: ['rm', '-rf', '/'] } })
     ).toThrow(/npx, tsx, node or bash/)
     expect(() => validateKeepEntry({ ...ok, commands: { save: ['npx', 'x'] } })).toThrow(/delegate/)
+  })
+
+  it('every table with an outward address or a credential column is kept, made safe, or excused', () => {
+    const covered = new Set([...keptTables, ...SAFETY_TABLES])
+    const open: string[] = []
+    for (const [t, cols] of Object.entries(COLUMNS)) {
+      const hits = cols.filter((c) => OUTBOUND_COLUMN_RE.test(c))
+      if (hits.length && !covered.has(t) && !OUTBOUND_EXCEPTIONS[t])
+        open.push(`${t} (${hits.join(', ')})`)
+    }
+    expect(open).toEqual([])
+  })
+
+  it('outbound exceptions name real tables that nothing else covers', () => {
+    const covered = new Set([...keptTables, ...SAFETY_TABLES])
+    for (const t of Object.keys(OUTBOUND_EXCEPTIONS)) {
+      expect(COLUMNS[t], t).toBeDefined()
+      expect(covered.has(t), t).toBe(false)
+    }
+  })
+
+  it('agent triggers keep their target, secret and switch by name; flows keep on/off', () => {
+    const at = CORE_KEEPS.find((e) => e.id === 'core:agent-triggers')!
+    expect(at).toMatchObject({ table: 'nivaro_agent_triggers', kind: 'columns', key: ['name'] })
+    expect(at.columns).toEqual(['url', 'signing_secret', 'headers', 'enabled'])
+    expect(CORE_KEEPS.find((e) => e.id === 'core:flows')?.columns).toEqual(['status'])
+  })
+
+  it('settings secrets that are not named like secrets are still masked', () => {
+    const s = CORE_KEEPS.find((e) => e.id === 'core:settings')!
+    expect(s.secret_columns).toEqual(
+      expect.arrayContaining([
+        'teams_webhook_url',
+        'teams_test_webhook_url',
+        'storage_config',
+        'mcp_settings'
+      ])
+    )
+  })
+
+  it('the accounts note says what happens to copied credentials and that sign-in keeps working', () => {
+    const a = CORE_KEEPS.find((e) => e.id === 'core:accounts')!
+    expect(a.reason).toMatch(/static tokens/)
+    expect(a.reason).toMatch(/two-factor secrets stay/)
+    expect(a.reason).toMatch(/Redis/)
   })
 })

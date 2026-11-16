@@ -239,7 +239,13 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'storage_s3_secret',
       'provision_secret',
       'directory_password',
-      'directory_refresh_token'
+      'directory_refresh_token',
+      // Not named like secrets, but each carries one (a webhook URL is its own key; storage and
+      // MCP settings hold keys and tokens inside their JSON).
+      'teams_webhook_url',
+      'teams_test_webhook_url',
+      'storage_config',
+      'mcp_settings'
     ]
   },
   {
@@ -287,6 +293,29 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
   },
   {
     source: 'core',
+    id: 'core:agent-triggers',
+    label: 'Agent trigger targets and on/off',
+    reason:
+      'Agent triggers post record events to this environment’s agents, signed with its own secrets.',
+    table: 'nivaro_agent_triggers',
+    kind: 'columns',
+    key: ['name'],
+    columns: ['url', 'signing_secret', 'headers', 'enabled'],
+    secret_columns: ['url', 'signing_secret', 'headers']
+  },
+  {
+    source: 'core',
+    id: 'core:flows',
+    label: 'Flows on/off',
+    reason:
+      'Which automations run is this environment’s choice; flows the target never had and that call out (webhook steps) are switched off by the safety pass.',
+    table: 'nivaro_flows',
+    kind: 'columns',
+    key: ['name'],
+    columns: ['status']
+  },
+  {
+    source: 'core',
     id: 'core:sso',
     label: 'Sign-in providers (SSO / OIDC)',
     reason: 'Each environment signs in through its own app registration.',
@@ -321,7 +350,7 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
     id: 'core:accounts',
     label: 'Service, integration and test accounts',
     reason:
-      'Accounts tooling signs in with (deploy, MCP, partner keys) and test accounts on reserved test domains keep this environment’s tokens.',
+      'Accounts tooling signs in with (deploy, MCP, partner keys) and test accounts on reserved test domains keep this environment’s tokens. Every other account follows the source as personal data, but its copied credentials do not work here: the safety pass clears static tokens and switches off API keys. Passwords and two-factor secrets stay so people can still sign in. OAuth (nvo_), phone device (nvd_/nvdr_) and session tokens live in each environment’s own Redis and never arrive with the copy.',
     table: 'nivaro_users',
     kind: 'rows',
     key: ['id'],
@@ -413,7 +442,7 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
  */
 export const SOURCE_CREDENTIAL_DECISIONS: Readonly<Record<string, string>> = {
   nivaro_users:
-    'People’s own accounts follow the source as they are (no scrubbing); service and test accounts are kept.',
+    'People’s own accounts follow the source as they are (no scrubbing); service and test accounts are kept; the safety pass clears the copied static tokens of every other account (passwords and two-factor secrets stay so people can sign in).',
   nivaro_submission_forms:
     'A public form’s token and password belong to the form; the links people were handed point at the source.',
   nivaro_widget_feeds: 'Embed tokens belong to the feed definition.',
@@ -493,6 +522,37 @@ export function keepsForTarget(
 /** Every table an entry touches (delegates list several). */
 export function entryTables(e: EnvKeepEntryInput): string[] {
   return [e.table, ...(e.tables ?? [])]
+}
+
+// ─── Outbound guard ─────────────────────────────────────────────────────────
+
+/** Column names that point outward or carry a credential: a table with one needs a decision. */
+export const OUTBOUND_COLUMN_RE =
+  /(^|_)(url|urls|endpoint|webhook|secret|token|signing_secret|callback|hook)(_|$)/i
+
+/**
+ * Tables whose url/secret-named columns need neither a keep entry nor a safety step — with why.
+ * The guard test fails for any other table with such a column that the registry and the safety
+ * pass (safety.ts SAFETY_TABLES) do not cover.
+ */
+export const OUTBOUND_EXCEPTIONS: Readonly<Record<string, string>> = {
+  nivaro_collections: 'url_alias_fields names fields, not an address.',
+  nivaro_custom_queries: 'public_token lets people IN to a public query; it calls nothing.',
+  nivaro_dashboard_links: 'A public dashboard link token lets people in; it calls nothing.',
+  nivaro_share_links: 'A record share token lets people in; it calls nothing.',
+  nivaro_submission_forms: 'A public form token lets people in; it calls nothing.',
+  nivaro_widget_feeds: 'An embed feed token lets people in; it calls nothing.',
+  nivaro_replay_shares: 'A replay share token hash lets people in; it calls nothing.',
+  nivaro_external_api_logs: 'A log of calls already made.',
+  nivaro_external_api_schemas: 'endpoint_count is a number.',
+  nivaro_outbound_log: 'A log of calls already made.',
+  nivaro_outbound_side_log: 'A log of calls already made.',
+  nivaro_webhook_deliveries: 'A log of deliveries already made (webhook = the webhook id).',
+  nivaro_page_views: 'Analytics of pages people viewed.',
+  nivaro_queue_items: 'url is a link to a record shown in a worklist.',
+  nivaro_infra_drift_findings: 'secret flags a finding about a secret; it holds none.',
+  nivaro_payload_templates:
+    'endpoint_path is relative to its external API, whose base URL and credentials are kept.'
 }
 
 /** Test seam. */

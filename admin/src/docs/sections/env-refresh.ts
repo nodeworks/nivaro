@@ -42,6 +42,7 @@ export const envRefreshDocs: DocSection = {
           'Matched by name'
         ],
         ['Webhook targets, secrets and on/off', 'Matched by name'],
+        ['Agent trigger targets, signing secrets and on/off; flows on/off', 'Matched by name'],
         ['Sign-in providers (SSO / OIDC)', 'Matched by key'],
         ['Partner sync jobs and scheduled report emails on/off', 'Matched by name'],
         [
@@ -74,7 +75,10 @@ export const envRefreshDocs: DocSection = {
         "External APIs new from the source answer from a mock on the target's instance.",
         'Webhooks, partner sync jobs and scheduled report emails new from the source: off.',
         'Partner submissions waiting to be re-sent and pending event deliveries: held.',
-        "Push registrations and Teams conversations that are not the target's own: removed."
+        "Push registrations and Teams conversations that are not the target's own: removed.",
+        'Agent triggers the target never had: off; their deliveries waiting to be sent: held.',
+        'Flows the target never had that call out with a webhook step: off.',
+        "Copied credentials of accounts the target does not keep: static tokens cleared, API keys switched off, the legacy session table emptied. Passwords and two-factor secrets stay so people can still sign in; OAuth, phone and session tokens live in each environment's own Redis and never arrive with the copy."
       ]
     },
     { type: 'h2', id: 'env-refresh-steps', text: 'The steps of a real run' },

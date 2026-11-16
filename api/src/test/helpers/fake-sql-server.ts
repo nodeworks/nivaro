@@ -65,6 +65,21 @@ export class FakeSqlServer implements SqlRunner {
         )
       )
     }
+    if (
+      (m = q.match(
+        /^SELECT f\.\[id\], f\.\[name\] FROM \[(\w+)\]\.dbo\.\[nivaro_flows\] f WHERE f\.\[status\] = 'active' AND EXISTS .+ o\.\[type\] IN \((.+)\)\)$/
+      ))
+    ) {
+      const flows = this.get(m[1], 'nivaro_flows')
+      const ops = this.get(m[1], 'nivaro_flow_operations')
+      const types = m[2].split(', ').map((v) => v.replace(/'/g, ''))
+      return (flows?.rows ?? [])
+        .filter((f) => f.status === 'active')
+        .filter((f) =>
+          (ops?.rows ?? []).some((o) => o.flow === f.id && types.includes(String(o.type)))
+        )
+        .map((f) => ({ id: f.id, name: f.name }))
+    }
     if ((m = q.match(/^DELETE FROM \[(\w+)\]\.dbo\.\[(\w+)\]( WHERE \[id\] IN \((.+)\))?$/))) {
       this.writes.push(q)
       const t = this.need(m[1], m[2])
@@ -115,8 +130,12 @@ export class FakeSqlServer implements SqlRunner {
       const keyed = m[4]?.match(/^\[(\w+)\] = \?( AND \[(\w+)\] = \?)*$/)
       const keys = keyed ? [...m[4].matchAll(/\[(\w+)\] = \?/g)].map((x) => x[1]) : null
       const keyVals = keys ? b.slice(bi) : []
+      const inList = m[4]?.match(/^\[(\w+)\] IN \(\?(, \?)*\)$/)
+      const inVals = inList ? new Set(b.slice(bi).map((x) => String(x).toLowerCase())) : null
       for (const r of t.rows) {
-        if (keys) {
+        if (inList) {
+          if (!inVals!.has(String(r[inList[1]]).toLowerCase())) continue
+        } else if (keys) {
           const hit = keys.every(
             (k, i) => String(r[k]).toLowerCase() === String(keyVals[i]).toLowerCase()
           )
@@ -144,6 +163,10 @@ export class FakeSqlServer implements SqlRunner {
       return t.rows.filter((r) => r[m![1]] === 1 || r[m![1]] === true)
     if ((m = where.match(/^\[(\w+)\] IS NOT NULL$/))) return t.rows.filter((r) => r[m![1]] != null)
     if ((m = where.match(/^\[(\w+)\] = '(\w+)'$/))) return t.rows.filter((r) => r[m![1]] === m![2])
+    if ((m = where.match(/^\[(\w+)\] IN \(('\w+'(?:, '\w+')*)\)$/))) {
+      const vals = m[2].split(', ').map((v) => v.replace(/'/g, ''))
+      return t.rows.filter((r) => vals.includes(String(r[m![1]])))
+    }
     if (/ISNULL\(/.test(where)) {
       const cols = [...where.matchAll(/ISNULL\(\[(\w+)\], 0\) = 0/g)].map((x) => x[1])
       return t.rows.filter((r) => cols.some((c) => !r[c]))

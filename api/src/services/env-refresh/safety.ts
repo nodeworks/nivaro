@@ -9,11 +9,42 @@
  *     got its own endpoints and credentials back from the keep set,
  *   - webhooks, partner sync jobs and scheduled report emails the target never had: off,
  *   - partner submissions waiting to be re-sent and pending outbox deliveries: held,
- *   - browser/phone push registrations and Teams conversations that are not the target's: removed.
+ *   - browser/phone push registrations and Teams conversations that are not the target's: removed,
+ *   - agent triggers the target never had: off; their pending deliveries: dead,
+ *   - flows the target never had that call out (a webhook step): off,
+ *   - copied credentials of accounts the target does not keep: static tokens cleared, API keys
+ *     switched off, rows of the legacy session table removed (passwords and two-factor secrets
+ *     stay — people still sign in; OAuth, device and session tokens live in each environment's
+ *     own Redis and never arrive with the copy).
  *
  * In a dry run it reads the SOURCE (what will land) and writes nothing.
  */
 import { qcol, qtable, type SavedKeepSet, type SqlRunner, sqlError } from './keep-set.js'
+
+/**
+ * Every table the safety pass changes — the outbound guard test (env-refresh-registry.test.ts)
+ * counts these as covered.
+ */
+export const SAFETY_TABLES: readonly string[] = [
+  'nivaro_settings',
+  'nivaro_external_apis',
+  'nivaro_webhooks',
+  'nivaro_sync_jobs',
+  'nivaro_scheduled_reports',
+  'nivaro_erp_submissions',
+  'nivaro_outbox',
+  'nivaro_push_subscriptions',
+  'nivaro_teams_links',
+  'nivaro_agent_triggers',
+  'nivaro_agent_trigger_deliveries',
+  'nivaro_flows',
+  'nivaro_users',
+  'nivaro_api_keys',
+  'nivaro_sessions'
+]
+
+/** Flow step types that send something out of the instance by themselves. */
+export const OUTBOUND_FLOW_OPS = ['webhook'] as const
 
 export interface SafetyAction {
   id: string
@@ -275,5 +306,117 @@ export async function runSafetyPass(
       return { count: foreign.length }
     })
   }
+  // 6. agent triggers the target never had → off; their pending deliveries → dead
+  await step('agent-triggers', 'Agent triggers the target never had — switched off', async () => {
+    const have = await columnsOf(sql, db, 'nivaro_agent_triggers')
+    if (!have.includes('enabled') || !have.includes('name')) return none
+    const T = qtable(db, 'nivaro_agent_triggers')
+    const names = keptNames(o.saved, 'core:agent-triggers')
+    const off = (await sql.raw(`SELECT [id], [name] FROM ${T} WHERE [enabled] = 1`)).filter(
+      (r) =>
+        !names.has(
+          String(r.name ?? '')
+            .trim()
+            .toLowerCase()
+        )
+    )
+    if (!o.dry)
+      for (const r of off) await sql.raw(`UPDATE ${T} SET [enabled] = 0 WHERE [id] = ?`, [r.id])
+    return { count: off.length, names: off.map((r) => String(r.name)) }
+  })
+  await step(
+    'agent-trigger-deliveries',
+    'Agent trigger deliveries waiting to be sent — held',
+    async () => {
+      const have = await columnsOf(sql, db, 'nivaro_agent_trigger_deliveries')
+      if (!have.includes('status')) return none
+      const T = qtable(db, 'nivaro_agent_trigger_deliveries')
+      const pending = "[status] IN ('retrying', 'sending')"
+      const n = await count(`SELECT COUNT(*) AS n FROM ${T} WHERE ${pending}`)
+      if (!o.dry && n)
+        await sql.raw(
+          `UPDATE ${T} SET [status] = 'dead'${have.includes('last_error') ? ", [last_error] = 'held by an environment refresh'" : ''}${have.includes('next_attempt_at') ? ', [next_attempt_at] = NULL' : ''} WHERE ${pending}`
+        )
+      return { count: n }
+    }
+  )
+
+  // 7. flows the target never had that call out by themselves → off
+  await step(
+    'flows',
+    'Flows the target never had that call out (webhook steps) — switched off',
+    async () => {
+      const have = await columnsOf(sql, db, 'nivaro_flows')
+      const ops = await columnsOf(sql, db, 'nivaro_flow_operations')
+      if (!have.includes('status') || !ops.includes('type')) return none
+      const F = qtable(db, 'nivaro_flows')
+      const O = qtable(db, 'nivaro_flow_operations')
+      const rows = await sql.raw(
+        `SELECT f.[id], f.[name] FROM ${F} f WHERE f.[status] = 'active' AND EXISTS (SELECT 1 FROM ${O} o WHERE o.[flow] = f.[id] AND o.[type] IN (${OUTBOUND_FLOW_OPS.map((t) => `'${t}'`).join(', ')}))`
+      )
+      const names = keptNames(o.saved, 'core:flows')
+      const off = rows.filter(
+        (r) =>
+          !names.has(
+            String(r.name ?? '')
+              .trim()
+              .toLowerCase()
+          )
+      )
+      if (!o.dry)
+        for (const r of off)
+          await sql.raw(`UPDATE ${F} SET [status] = 'inactive' WHERE [id] = ?`, [r.id])
+      return { count: off.length, names: off.map((r) => String(r.name)) }
+    }
+  )
+
+  // 8. copied credentials of accounts the target does not keep
+  const keptUsers = keptIds(o.saved, 'core:accounts')
+  const keptKeys = keptIds(o.saved, 'core:api-keys')
+  await step(
+    'static-tokens',
+    'Static tokens of accounts the target does not keep — cleared',
+    async () => {
+      const have = await columnsOf(sql, db, 'nivaro_users')
+      if (!have.includes('static_token')) return none
+      const T = qtable(db, 'nivaro_users')
+      const ids = (await sql.raw(`SELECT [id] FROM ${T} WHERE [static_token] IS NOT NULL`))
+        .map((r) => r.id)
+        .filter((id) => !keptUsers.has(String(id).toLowerCase()))
+      if (!o.dry)
+        for (let i = 0; i < ids.length; i += 500) {
+          const chunk = ids.slice(i, i + 500)
+          await sql.raw(
+            `UPDATE ${T} SET [static_token] = NULL WHERE [id] IN (${chunk.map(() => '?').join(', ')})`,
+            chunk
+          )
+        }
+      return { count: ids.length }
+    }
+  )
+  await step('api-keys', 'API keys the target does not keep — switched off', async () => {
+    const have = await columnsOf(sql, db, 'nivaro_api_keys')
+    if (!have.includes('is_active')) return none
+    const T = qtable(db, 'nivaro_api_keys')
+    const rows = await sql.raw(`SELECT [id], [name] FROM ${T} WHERE [is_active] = 1`)
+    const off = rows.filter((r) => !keptKeys.has(String(r.id).toLowerCase()))
+    if (!o.dry)
+      for (let i = 0; i < off.length; i += 500) {
+        const chunk = off.slice(i, i + 500)
+        await sql.raw(
+          `UPDATE ${T} SET [is_active] = 0 WHERE [id] IN (${chunk.map(() => '?').join(', ')})`,
+          chunk.map((r) => r.id)
+        )
+      }
+    return { count: off.length, names: off.map((r) => String(r.name)) }
+  })
+  await step('sessions', 'Sign-in sessions copied from the source — removed', async () => {
+    const have = await columnsOf(sql, db, 'nivaro_sessions')
+    if (!have.length) return none
+    const T = qtable(db, 'nivaro_sessions')
+    const n = await count(`SELECT COUNT(*) AS n FROM ${T}`)
+    if (!o.dry && n) await sql.raw(`DELETE FROM ${T}`)
+    return { count: n }
+  })
   return actions
 }
