@@ -57,7 +57,7 @@ import { applyChangedFilter, CHANGED_FIELD, resolveChangedCondition } from './ch
 import { isPresencePageChange } from './collection-live-mode.js'
 import { getCollection, getFields, getRelations as getRegisteredRelations } from './collections.js'
 import { applyCrossRecordDefaults } from './cross-record-defaults.js'
-import { whereInList } from './db-batch.js'
+import { JSON_LIST_MIN, whereInList } from './db-batch.js'
 import { type DerivedNote, noteDerivedCauses } from './derived-causes.js'
 import { assertNotEditLocked } from './edit-lock.js'
 import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
@@ -4949,8 +4949,40 @@ function relationFarMatch(
     })
 }
 
-/** Related records a search word reaches before the search falls back to the EXISTS form. */
-export const RELATION_SEARCH_RESOLVE_MAX = 2000
+/**
+ * Related records a search word reaches before the search falls back to the EXISTS form.
+ * Below JSON_LIST_MIN on purpose: the ids are always bound as a plain `IN (?, …)`, never
+ * an OPENJSON list. An OPENJSON list OR'd with the search's LIKEs is re-parsed for every row
+ * once the list also carries a semi-join filter (`conditions` on funding years / divisions):
+ * prod 2026-11-16, workflows search "SE" = 363 location ids + 75 people ids, 5.7 s per
+ * statement (25 s for the list, aggregates past the 15 s timeout), 0.35 s as per-row EXISTS
+ * (a primary-key seek on the related row); a PO-number search with 1,572 root ids took 12 s
+ * (over 120 s without the filters) against 0.3 s for the junction EXISTS.
+ */
+export const RELATION_SEARCH_RESOLVE_MAX = JSON_LIST_MIN - 1
+/** Related ids one search statement may bind in all (every word × path); past it the next
+ *  paths take the EXISTS form, so a long search stays under SQL Server's ~2100 parameters. */
+export const RELATION_SEARCH_ID_BUDGET = 600
+/**
+ * Keeps one search statement's bound related ids within RELATION_SEARCH_ID_BUDGET: in lookup
+ * order, a resolved list whose ids × uses (a word can repeat across synonym readings) would
+ * pass the budget is set to null, which compiles to the EXISTS form. Exported for tests.
+ */
+export function fitRelationIdBudget(
+  resolved: Map<string, { column: string; ids: Array<string | number> } | null>,
+  order: Array<{ key: string; uses: number }>,
+  budget = RELATION_SEARCH_ID_BUDGET
+): void {
+  let bound = 0
+  for (const { key, uses } of order) {
+    const r = resolved.get(key)
+    if (!r) continue
+    const cost = r.ids.length * Math.max(1, uses)
+    if (bound + cost > budget) resolved.set(key, null)
+    else bound += cost
+  }
+}
+
 /** Up-front related reads one search runs at once: each takes a connection from the request
  *  pool, and several words over several relations would otherwise take a dozen together. */
 export const RELATION_SEARCH_PARALLEL = 6
@@ -4961,7 +4993,8 @@ export const RELATION_SEARCH_PARALLEL = 6
  * workflow search 1–3 s; the PO lookup alone takes ~0.1 s). The first hop's far side is read
  * with every gate (the same SQL the EXISTS carries), then mapped onto the root: an M2O hop is
  * `root.fk IN far`, an M2M hop reads the junction. More than RELATION_SEARCH_RESOLVE_MAX
- * matches at either step = null, and the caller keeps the EXISTS form.
+ * matches at either step = null, and the caller keeps the EXISTS form (a seek on the related
+ * row per root row — steady at any match count, where a long id list is not).
  */
 export async function resolveRelationSearch(
   group: SearchRelationPlan['groups'][number],
@@ -5445,12 +5478,19 @@ export async function readItems(
         else w.orWhere(db.raw('??', [ref]), 'like', pattern)
       }
       // Related-label matches are read up front per group × pattern (resolveRelationSearch):
-      // `id IN (…)` instead of a per-row EXISTS. A failed or too-wide read keeps the EXISTS.
+      // `id IN (?, …)` instead of a per-row EXISTS. A failed or too-wide read keeps the EXISTS,
+      // and so does every path past the statement's id budget (fitRelationIdBudget).
       const relResolved = new Map<string, Awaited<ReturnType<typeof resolveRelationSearch>>>()
       if (relPlan.groups.length) {
         const patterns = new Set<string>()
+        const uses = new Map<string, number>()
         for (const v of variants)
-          for (const slot of v) for (const alt of slot) patterns.add(`%${likeEscape(alt)}%`)
+          for (const slot of v)
+            for (const alt of slot) {
+              const p = `%${likeEscape(alt)}%`
+              patterns.add(p)
+              uses.set(p, (uses.get(p) ?? 0) + 1)
+            }
         const farCache = new Map<string, Promise<Array<string | number>>>()
         const lookups = relPlan.groups.flatMap((g, gi) => [...patterns].map((p) => ({ g, gi, p })))
         for (let i = 0; i < lookups.length; i += RELATION_SEARCH_PARALLEL) {
@@ -5463,6 +5503,10 @@ export async function readItems(
             })
           )
         }
+        fitRelationIdBudget(
+          relResolved,
+          lookups.map(({ gi, p }) => ({ key: `${gi}\u0000${p}`, uses: uses.get(p) ?? 1 }))
+        )
       }
       const slotWhere = (w: Knex.QueryBuilder, slot: string[]) => {
         for (const alt of slot) {

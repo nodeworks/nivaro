@@ -92,7 +92,7 @@ const state = vi.hoisted(() => ({
   allowed: {} as Record<string, string[] | null>,
   readable: new Set<string>(),
   scopeOn: true,
-  /** Rows the up-front related read answers (resolveRelationSearch); > 2000 = EXISTS fallback. */
+  /** Rows the up-front related read answers (resolveRelationSearch); > 49 = EXISTS fallback. */
   farRows: 1
 }))
 
@@ -105,6 +105,9 @@ vi.mock('../../../db/index.js', async (orig) => {
     run: async () => {
       const { sql, bindings } = builder.toSQL()
       ;(globalThis as { __searchSql?: string[] }).__searchSql?.push(sql)
+      ;(
+        globalThis as { __searchBindings?: Array<{ sql: string; n: number }> }
+      ).__searchBindings?.push({ sql, n: bindings.length })
       if (/information_schema\.columns/i.test(sql)) {
         const t = COLS[String(bindings[0])] ?? {}
         return Object.entries(t).map(([c, ty]) => ({
@@ -167,7 +170,12 @@ vi.mock('../../../services/permissions.js', async (orig) => ({
   getRowFilter: vi.fn(async () => null)
 }))
 
-import { readItems } from '../../../services/items.js'
+import {
+  fitRelationIdBudget,
+  RELATION_SEARCH_ID_BUDGET,
+  RELATION_SEARCH_RESOLVE_MAX,
+  readItems
+} from '../../../services/items.js'
 
 const USER = { id: 'U-1', role: 'R-PLANNER' } as never
 
@@ -355,6 +363,81 @@ describe('list search through search_relations', () => {
         /exists \(select 1 from \[programs\] where \[programs\]\.\[id\] = \[projects\]\.\[program\] and \(\[programs\]\.\[title\] LIKE CAST\(\? AS varchar\(4000\)\)\)\)/
       )
     }
+  })
+
+  // Prod 2026-11-16: workflows search "SE" bound 363 location ids + 75 people ids as OPENJSON
+  // lists OR'd with the LIKEs; with the list's own conditions SQL Server re-parsed every list
+  // per row (5.7 s a statement, 25 s for the list). Related ids are only ever plain params.
+  it('never binds related ids as an OPENJSON list: 50 matches take the EXISTS form', async () => {
+    expect(RELATION_SEARCH_RESOLVE_MAX).toBeLessThan(50)
+    state.config = { search_relations: ['program.title', 'owner.last_name'] }
+    state.farRows = RELATION_SEARCH_RESOLVE_MAX + 1
+    const reads = await searchSql('Central')
+    expect(reads.length).toBeGreaterThan(0)
+    for (const s of reads) {
+      expect(s).not.toMatch(/openjson/i)
+      expect(s).toMatch(
+        /exists \(select 1 from \[programs\] where \[programs\]\.\[id\] = \[projects\]\.\[program\]/i
+      )
+      expect(s).toMatch(/exists \(select 1 from \[nivaro_users\]/i)
+    }
+  })
+
+  it('up to the cap the ids ride as plain parameters', async () => {
+    state.config = { search_relations: ['program.title'] }
+    state.farRows = RELATION_SEARCH_RESOLVE_MAX
+    for (const s of await searchSql('Central')) {
+      expect(s).not.toMatch(/openjson|exists/i)
+      expect(s).toMatch(/\[projects\]\.\[program\] in \(\?(, \?)*\)/i)
+    }
+  })
+
+  it('a long search keeps its bound related ids within the statement budget', () => {
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => i + 1)
+    const m = new Map<string, { column: string; ids: Array<string | number> } | null>([
+      ['a', { column: 'program', ids: ids(40) }],
+      ['b', { column: 'owner', ids: ids(40) }],
+      ['c', null],
+      ['d', { column: 'sponsor', ids: ids(10) }]
+    ])
+    fitRelationIdBudget(
+      m,
+      [
+        { key: 'a', uses: 1 },
+        { key: 'b', uses: 2 },
+        { key: 'c', uses: 1 },
+        { key: 'd', uses: 1 }
+      ],
+      100
+    )
+    // a = 40, b = 80 would pass 100 → EXISTS, d = 10 still fits
+    expect(m.get('a')?.ids).toHaveLength(40)
+    expect(m.get('b')).toBeNull()
+    expect(m.get('c')).toBeNull()
+    expect(m.get('d')?.ids).toHaveLength(10)
+    expect(RELATION_SEARCH_ID_BUDGET).toBeLessThan(2100)
+  })
+
+  it('many words over many paths stay under SQL Server’s parameter cap', async () => {
+    state.config = {
+      search_relations: [
+        'program.title',
+        'owner.last_name',
+        'sponsor.last_name',
+        'divisions.short_name'
+      ]
+    }
+    state.farRows = RELATION_SEARCH_RESOLVE_MAX
+    const words =
+      'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi'
+    const seen: Array<{ sql: string; n: number }> = []
+    ;(globalThis as { __searchBindings?: typeof seen }).__searchBindings = seen
+    const reads = await searchSql(words)
+    delete (globalThis as { __searchBindings?: typeof seen }).__searchBindings
+    expect(reads.length).toBeGreaterThan(0)
+    const counts = seen.filter((x) => /from \[projects\]/i.test(x.sql) && /like/i.test(x.sql))
+    expect(counts.length).toBeGreaterThan(0)
+    for (const c of counts) expect(c.n).toBeLessThan(2100)
   })
 
   it('a request that narrows its own search_fields searches no relation', async () => {
