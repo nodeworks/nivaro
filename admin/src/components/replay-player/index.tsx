@@ -15,6 +15,7 @@ import { buildChapters, chapterIndexAt } from './chapters'
 import type { ReplayControls } from './controls'
 import { EventRail } from './EventRail'
 import { type InspectableReplayer, ReplayInspector } from './Inspector'
+import { createLiveIdle, liveIdleLabel, liveIdleMs, noteLiveEvents } from './idle'
 import { findInactiveGaps, type InactiveGap } from './inactivity'
 import { REPLAY_FRAME_STYLE_RULES, startLiveFollow } from './live'
 import { fetchRecordingEvents } from './load-events'
@@ -147,6 +148,9 @@ export function ReplayPlayer({
   const spanDoneRef = useRef(false)
   const prevTimeRef = useRef(0)
   const [following, setFollowing] = useState(!!live)
+  // Live follow: how long since the person last clicked, typed, scrolled or moved (./idle).
+  const idleRef = useRef(createLiveIdle())
+  const [idleNow, setIdleNow] = useState(() => Date.now())
   // #1366 / #1415 / #1362 range on the scrubber: raise an issue, save a clip, share it.
   const [range, setRange] = useState<ReplayRange | null>(null)
   // Replay context: route changes, the user's console lines and (#1357) the
@@ -281,6 +285,8 @@ export function ReplayPlayer({
         setFromStorage(false)
         const events = loaded.events
         lastSeqRef.current = loaded.last_seq ?? -1
+        idleRef.current = createLiveIdle()
+        noteLiveEvents(idleRef.current, events, Date.now())
         viewportRef.current = viewportBounds(events)
         deviceRef.current = replayDevice(events)
         setDevice(deviceRef.current)
@@ -412,6 +418,15 @@ export function ReplayPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recordingId, following, eventsUrl])
 
+  // The idle readout counts up once a second while following live.
+  useEffect(() => {
+    if (!following || !ready) return
+    setIdleNow(Date.now())
+    const t = setInterval(() => setIdleNow(Date.now()), 1_000)
+    return () => clearInterval(t)
+  }, [following, ready])
+  const idle = following ? liveIdleLabel(liveIdleMs(idleRef.current, idleNow)) : null
+
   // Live-follow poll: fetch only chunks newer than what the player holds and
   // feed them straight into the live Replayer. 3s matches the recorder's
   // flush cadence closely enough to feel continuous.
@@ -427,6 +442,7 @@ export function ReplayPlayer({
         if (stopped) return
         const fresh = r.data.data.events
         if (r.data.data.last_seq != null) lastSeqRef.current = r.data.data.last_seq
+        noteLiveEvents(idleRef.current, fresh, Date.now())
         const rep = replayerRef.current as unknown as {
           addEvent?: (e: unknown) => void
         } | null
@@ -667,9 +683,36 @@ export function ReplayPlayer({
             <span className='h-2 w-2 animate-pulse rounded-full bg-red-500' />
             LIVE — following in real time
           </span>
-          <span className='text-[11.5px] text-slate-400'>
-            New activity streams in as it happens.
-          </span>
+          {idle ? (
+            <span
+              data-replay-idle={idle.tone}
+              data-tip={idle.tip}
+              aria-live='off'
+              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11.5px] font-medium tabular-nums ${
+                idle.tone === 'active'
+                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                  : idle.tone === 'idle'
+                    ? 'bg-amber-500/10 text-amber-800 dark:text-amber-300'
+                    : 'bg-slate-500/10 text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <span
+                aria-hidden
+                className={`h-1.5 w-1.5 rounded-full ${
+                  idle.tone === 'active'
+                    ? 'bg-emerald-500'
+                    : idle.tone === 'idle'
+                      ? 'bg-amber-400'
+                      : 'bg-slate-400'
+                }`}
+              />
+              {idle.text}
+            </span>
+          ) : (
+            <span className='text-[11.5px] text-slate-400'>
+              New activity streams in as it happens.
+            </span>
+          )}
           <span className='flex-1' />
           <Button
             size='sm'
