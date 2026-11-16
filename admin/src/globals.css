@@ -656,6 +656,13 @@ html[data-nvr-recording-clean] body[data-nvr-chat-pinned] [data-sonner-toaster] 
   margin-right: 0 !important;
 }
 
+/* Sonner's rich warning text (hsl 31 92% 45%) is ~3.1:1 on its cream toast in light mode —
+   below AA for 13 px text. Same amber family, dark enough for >= 4.5:1 (~7:1). The dark
+   theme's own warning colours already pass (~11:1). */
+html [data-sonner-toaster][data-sonner-theme='light'] {
+  --warning-text: hsl(28, 85%, 27%);
+}
+
 /* Radix Select renders a visually hidden native <select aria-hidden
    tabindex="-1"> (position: absolute) beside a trigger inside a <form>. With
    no positioned ancestor its containing block is the page itself, so a select
