@@ -152,8 +152,10 @@ function FileThumb({
   const dim = size === 'sm' ? 'h-10 w-10' : size === 'lg' ? 'h-20 w-20' : 'h-14 w-14'
   // The small rendition the server prepares after upload; the original if that fails.
   const [thumbFailed, setThumbFailed] = useState(false)
+  // Neither rendition loads: the type tile, never an empty gap where the picture was.
+  const [broken, setBroken] = useState(false)
   if (isImage(type) && processing) return <FileProcessingTile className={dim} />
-  if (isImage(type)) {
+  if (isImage(type) && !broken) {
     return (
       <img
         src={thumbFailed ? url : chipThumbUrl(url)}
@@ -166,7 +168,7 @@ function FileThumb({
             setThumbFailed(true)
             return
           }
-          ;(e.target as HTMLImageElement).style.display = 'none'
+          setBroken(true)
         }}
       />
     )
@@ -1048,7 +1050,12 @@ export function FileM2MField({
                       data-file-name
                       className='min-w-0 truncate text-left text-[12px] font-medium text-slate-700 hover:underline dark:text-slate-100'
                     >
-                      {fileDisplayName(f) || id}
+                      {f ? (
+                        fileDisplayName(f) || 'Untitled file'
+                      ) : (
+                        // The name is still loading: never show the raw file id.
+                        <span className='text-slate-400 dark:text-slate-500'>Loading name…</span>
+                      )}
                     </a>
                     {processing.isProcessing(id) && <FileProcessingBadge />}
                   </div>
