@@ -22,6 +22,13 @@ export function LiveTraceSheet({
         side='right'
         className='w-full overflow-y-auto sm:max-w-2xl'
         data-live-trace-sheet
+        // Focus the sheet itself, not the first control: the window picker opened with a heavy
+        // ring that read as selected or in error (rt2 review). Keyboard users tab on from here.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          ;(e.currentTarget as HTMLElement | null)?.focus()
+        }}
+        tabIndex={-1}
       >
         <SheetHeader>
           <SheetTitle>Why didn't this page update?</SheetTitle>
