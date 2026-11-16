@@ -18,7 +18,8 @@ export function DerivedCauseNote({
   itemId,
   field,
   type,
-  currency
+  currency,
+  value
 }: {
   collection: string
   itemId: string
@@ -26,9 +27,12 @@ export function DerivedCauseNote({
   type?: string | null
   /** The field shows money in this currency (fieldCurrency): "Up $1,200". */
   currency?: string | null
+  /** The field's value on screen: an empty field never explains a move it no longer shows. */
+  value?: unknown
 }) {
   const cause = useDerivedCause(collection, itemId, field)
   if (!cause) return null
+  if (value === null || value === '' || (Array.isArray(value) && value.length === 0)) return null
   return <DerivedCauseLine cause={cause} type={type} currency={currency} />
 }
 
@@ -60,6 +64,10 @@ export function DerivedCauseLine({
   now?: number
 }) {
   const fresh = now - Date.parse(cause.at) < CAUSE_FRESH_MS && liveMotionAllowed()
+  const sentence = causeSentence(cause, type, currency)
+  const cut = sentence.lastIndexOf(' ')
+  const head = cut > 0 ? sentence.slice(0, cut + 1) : ''
+  const last = cut > 0 ? sentence.slice(cut + 1) : sentence
   return (
     <p
       data-derived-cause={cause.field}
@@ -74,10 +82,15 @@ export function DerivedCauseLine({
         aria-hidden
       />
       <span className='min-w-0'>
-        {causeSentence(cause, type, currency)}{' '}
-        {/* The time stays on the sentence's line end: "· just now" never wraps alone. */}
-        <span className='whitespace-nowrap text-slate-400 dark:text-slate-500'>
-          · {formatRelative(cause.at)}
+        {head}
+        {/* The sentence's last word and the time are one unit: a line never starts with
+            "· 26m ago". */}
+        <span className='whitespace-nowrap'>
+          {last}
+          <span className='text-slate-400 dark:text-slate-500'>
+            {'\u00a0·\u00a0'}
+            {formatRelative(cause.at)}
+          </span>
         </span>
       </span>
     </p>

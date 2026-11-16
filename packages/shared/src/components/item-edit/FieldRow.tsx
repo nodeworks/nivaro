@@ -1502,6 +1502,7 @@ export const FieldRow = memo(function FieldRow({
           field={field.field}
           type={field.type}
           currency={fieldCurrency(field as never)}
+          value={draft[field.field] ?? null}
         />
       )}
       {error && (
