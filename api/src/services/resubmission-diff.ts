@@ -82,6 +82,12 @@ export interface ResubFieldChange {
   by: string | null
   at: string
   auto?: boolean
+  /** How the client formats old/new (rt8 review r2): dates and date-times arrive as their
+   *  stored ISO text and numbers as plain figures, so the viewer's own formatters (time zone,
+   *  the field's currency + precision) render them like the form does. Absent = plain text. */
+  kind?: 'date' | 'datetime' | 'number'
+  format?: string | null
+  precision?: number | null
 }
 
 export interface ResubLineItem {
@@ -743,11 +749,43 @@ export async function buildResubmissionDiff(
   }
   files.sort((a, b) => ms(b.at) - ms(a.at))
 
+  const optionsOf = (k: string): Record<string, unknown> => {
+    const o = metaOf.get(k)?.options
+    if (o && typeof o === 'object') return o as Record<string, unknown>
+    if (typeof o === 'string') {
+      try {
+        const p = JSON.parse(o)
+        return p && typeof p === 'object' ? p : {}
+      } catch {
+        return {}
+      }
+    }
+    return {}
+  }
+  const kindOf = (k: string): ResubFieldChange['kind'] => {
+    if (fkTarget.get(k)) return undefined
+    const t = String(metaOf.get(k)?.type ?? '').toLowerCase()
+    if (t === 'date') return 'date'
+    if (t === 'datetime' || t === 'timestamp' || t === 'datetimeoffset') return 'datetime'
+    if (['integer', 'biginteger', 'bigint', 'decimal', 'float', 'double', 'number'].includes(t))
+      return 'number'
+    return undefined
+  }
   const show = (k: string, v: unknown) => {
     const t = fkTarget.get(k)
     if (t && v != null && v !== '' && typeof v !== 'object')
       return linkLabels[linkLabelKey(t, v)] ?? `#${String(v)}`
     if (String(metaOf.get(k)?.type ?? '').toLowerCase() === 'boolean') return bit(v) ? 'Yes' : 'No'
+    const kind = kindOf(k)
+    if (kind && v != null && v !== '' && typeof v !== 'object') {
+      if (kind === 'number') {
+        const n = Number(v)
+        if (Number.isFinite(n)) return String(n)
+      } else {
+        const iso = v instanceof Date ? v.toISOString() : String(v)
+        if (!Number.isNaN(Date.parse(iso))) return iso
+      }
+    }
     return shortValue(v)
   }
   const fields: ResubFieldChange[] = keys
@@ -761,7 +799,22 @@ export async function buildResubmissionDiff(
         new: show(k, c.value),
         by: who(c.by),
         at: c.at,
-        ...(isDerivedField(metaOf.get(k)) ? { auto: true } : {})
+        ...(isDerivedField(metaOf.get(k)) ? { auto: true } : {}),
+        ...(() => {
+          const kind = kindOf(k)
+          if (!kind) return {}
+          const o = optionsOf(k)
+          const p = Number(o.precision)
+          return {
+            kind,
+            ...(kind === 'number'
+              ? {
+                  format: typeof o.format === 'string' ? o.format : null,
+                  precision: Number.isFinite(p) ? p : null
+                }
+              : {})
+          }
+        })()
       }
     })
     // A field set back to what it was when the record was sent back changed nothing.

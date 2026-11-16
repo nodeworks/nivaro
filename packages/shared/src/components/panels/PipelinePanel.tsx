@@ -1338,13 +1338,20 @@ function StateDurationTimeline({
 
   return (
     <div data-state-timeline data-step-timing={split ? 'split' : undefined}>
+      {/* One line at every width: the label and the total never wrap, and on a phone the
+        Waiting/Working legend steps aside (the bar's own tips still say which is which). The
+        legend's wrapper carries no base display class, so a host stylesheet can't undo it. */}
       <div className='mb-1 flex items-center justify-between gap-3'>
-        <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+        <p className='shrink-0 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
           Time in step
         </p>
-        <div className='flex items-center gap-3 text-[10px] tabular-nums text-slate-400 dark:text-slate-500'>
-          {split && <TimingLegend />}
-          <span>
+        <div className='flex min-w-0 items-center gap-3 text-[10px] tabular-nums text-slate-400 dark:text-slate-500'>
+          {split && (
+            <span className='max-sm:hidden'>
+              <TimingLegend />
+            </span>
+          )}
+          <span className='whitespace-nowrap'>
             {fmtDur(total)} total{completedAt ? '' : ' · so far'}
           </span>
         </div>

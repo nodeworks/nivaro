@@ -3,8 +3,9 @@ import { ChevronDown, FileText, Minus, Pencil, Plus, Undo2 } from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { numericIntlOptions } from '../../lib/format-value'
 import { LIVE_ASPECTS, useLiveRecordQueries } from '../../lib/live'
-import { cn } from '../../lib/utils'
+import { cn, formatDateTime, toLocalDateString } from '../../lib/utils'
 import { RelativeTime } from '../RelativeTime'
 
 /**
@@ -28,6 +29,10 @@ export interface ResubFieldChange {
   by: string | null
   at: string
   auto?: boolean
+  /** Set by servers that send dates / numbers raw so the viewer formats them (rt8 r2). */
+  kind?: 'date' | 'datetime' | 'number'
+  format?: string | null
+  precision?: number | null
 }
 export interface ResubLineItem {
   id: string
@@ -148,6 +153,35 @@ export function useResubmissionDiff(
   return query
 }
 
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}(?:T00:00:00(?:\.0+)?Z)?$/
+
+/** One old/new value as the form would show it: a date as "Nov 23, 2026" (never the stored
+ *  "2026-11-23T00:00:00.000Z"), a date-time in the viewer's zone, a number with the field's
+ *  currency and precision. Values the server already worded (labels, "(empty)") pass through.
+ *  Exported for tests. */
+export function resubValueText(
+  value: string,
+  f: Pick<ResubFieldChange, 'kind' | 'format' | 'precision'>
+): string {
+  if (!value || value === '(empty)') return value
+  if (f.kind === 'number') {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return value
+    return new Intl.NumberFormat(
+      'en-US',
+      numericIntlOptions(
+        f.precision != null ? { precision: f.precision } : undefined,
+        f.format ?? undefined
+      )
+    ).format(n)
+  }
+  // Dates are recognised by shape too: an older server sends them as stored text.
+  if (f.kind === 'date' || DATE_ONLY_RE.test(value)) return toLocalDateString(value) || value
+  if (f.kind === 'datetime' || ISO_RE.test(value)) return formatDateTime(value) || value
+  return value
+}
+
 const MUTED = 'text-slate-500 dark:text-slate-400'
 const STRONG = 'font-medium text-slate-700 dark:text-slate-200'
 
@@ -193,7 +227,7 @@ function rowsOf(d: ResubmissionDiffData): Row[] {
               {f.old !== '' && (
                 <>
                   <span className='text-red-600 line-through decoration-red-300 dark:text-red-400 dark:decoration-red-500/50'>
-                    {f.old}
+                    {resubValueText(f.old, f)}
                   </span>
                   <span aria-hidden='true' className={MUTED}>
                     {' '}
@@ -202,7 +236,9 @@ function rowsOf(d: ResubmissionDiffData): Row[] {
                   <span className='sr-only'> changed to </span>
                 </>
               )}
-              <span className='text-emerald-700 dark:text-emerald-400'>{f.new}</span>
+              <span className='text-emerald-700 dark:text-emerald-400'>
+                {resubValueText(f.new, f)}
+              </span>
             </p>
             <Who by={f.by} at={f.at} />
           </div>
@@ -321,13 +357,16 @@ export function ResubmissionChanges({
   )
 }
 
+/** "You sent it back 6h ago · Sam Rivera resubmitted 1h ago" — who did each half, once
+ *  (it read "Sent back 6h ago to Started · back from Sam Rivera 6h ago"). */
 function SentBackLine({ data }: { data: ResubmissionDiffData }) {
   const s = data.sent_back
+  const sender = s.by_you ? 'You' : s.by || 'Someone'
   return (
     <p className={cn('text-[11.5px]', MUTED)}>
-      Sent back <RelativeTime value={s.at} />
-      {s.to_label ? ` to ${s.to_label}` : ''}
-      {data.returned.by ? ` · back from ${data.returned.by} ` : ' · back '}
+      {sender} sent it back <RelativeTime value={s.at} />
+      {' · '}
+      {data.returned.by ? `${data.returned.by} resubmitted ` : 'Resubmitted '}
       <RelativeTime value={data.returned.at} />
     </p>
   )
