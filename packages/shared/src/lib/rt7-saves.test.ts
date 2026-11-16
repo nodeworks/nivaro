@@ -103,6 +103,24 @@ describe('rollup recalc (rt7 #9)', () => {
     expect([...(feeds.get('lines') ?? [])].sort()).toEqual(['total', 'total_tax'])
     expect(feeds.has('note')).toBe(false)
   })
+  it('marks expression readers of a recalculating total, and their readers', () => {
+    const feeds = recalcFeeds([
+      ...fields,
+      { field: 'left', computed_type: 'read', computed_formula: 'item.total - item.spent' },
+      {
+        field: 'left_label',
+        computed_type: 'read',
+        computed_formula: "concat('Left ', item.left)"
+      },
+      { field: 'totals_note', computed_type: 'read', computed_formula: 'item.totality' }
+    ])
+    expect([...(feeds.get('lines') ?? [])].sort()).toEqual([
+      'left',
+      'left_label',
+      'total',
+      'total_tax'
+    ])
+  })
   it('reads a child write that names its parent', () => {
     expect(childWriteOf('/items/lines?parent_collection=requests&parent_id=7')).toEqual({
       collection: 'lines',

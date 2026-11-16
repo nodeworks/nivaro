@@ -149,9 +149,8 @@ import { isRecordPopout, openRecordPopout } from '../lib/record-popout'
 import { announceRecordTabs } from '../lib/record-tabs'
 import { invalidateRecordTasks } from '../lib/record-tasks'
 import { reimportAllowed } from '../lib/reimport-visibility'
-import { useRollupRecalc } from '../lib/rollup-recalc'
+import { recalcFeeds, useRollupRecalc } from '../lib/rollup-recalc'
 import { reportCodeError, userErrorMessage } from '../lib/safe-error'
-import { currentRecordTab } from '../lib/send-view'
 import {
   newSaveId,
   SAVE_PROGRESS_MIN_ROWS,
@@ -159,6 +158,7 @@ import {
   saveProgressText,
   withSaveId
 } from '../lib/save-progress'
+import { currentRecordTab } from '../lib/send-view'
 import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
 import { stagedRowLabel } from '../lib/staged-row-labels'
 import {
@@ -311,7 +311,6 @@ import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
 import { ListNeighborNav } from './item-edit/ListNeighborNav'
 import { LiveTraceSheet } from './item-edit/LiveTraceSheet'
-import { WatchPinButton } from './watch-list/WatchPinButton'
 import {
   fieldStatus,
   formUpdatedText,
@@ -381,11 +380,10 @@ import { QueueReturnChip } from './item-edit/QueueReturnChip'
 import { endQuickCreateFollows } from './item-edit/QuickCreateButton'
 import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
-import { RecordChatActions } from './item-edit/RecordChatActions'
 import { RecalcValue } from './item-edit/RecalcValue'
+import { RecordChatActions } from './item-edit/RecordChatActions'
 import { RecordChatMentionsChip } from './item-edit/RecordChatMentionsChip'
 import { PickerExclusionToggle, ScheduleChangeButton } from './item-edit/RecordGrantTools'
-import { ScheduledChangeChip } from './item-edit/ScheduledChangeChip'
 import {
   RecordHeaderActionButtons,
   RecordHeaderActionDialog,
@@ -407,6 +405,7 @@ import { isNarrowRecordWidth } from './item-edit/rail-width'
 import { recordLookupsFor, rememberRecordLookups } from './item-edit/record-lookups'
 import { useStableFieldAffordances } from './item-edit/render-stability'
 import { groupHasReadableField, ruleHiddenGroups } from './item-edit/rule-hidden'
+import { ScheduledChangeChip } from './item-edit/ScheduledChangeChip'
 import {
   SAVE_OUTCOME_TOAST_ID,
   type SaveNotice,
@@ -428,6 +427,8 @@ import {
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
 import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
 import { choiceLabelsFrom } from './layout-editor/overview/describe-conditions'
+import { MergeRecordsDialog } from './merge/MergeRecordsDialog'
+import { MergeRecordMenuItems, MergeWithFlow, useMergeAllowed } from './merge/MergeWithFlow'
 import { AlertBanners } from './panels/AlertBanners'
 import { LegalHoldBanner } from './panels/LegalHoldBanner'
 import { RecordIntegrityBanner, useRecordIntegrity } from './panels/RecordIntegrityBanner'
@@ -439,8 +440,7 @@ import { ScreenRefreshButton } from './ScreenRefreshButton'
 import { SendViewButton } from './send-view/SendViewButton'
 import { SuggestFormChange } from './support/SuggestFormChange'
 import { SupportRequestDialog } from './support/SupportRequestDialog'
-import { MergeRecordsDialog } from './merge/MergeRecordsDialog'
-import { MergeRecordMenuItems, MergeWithFlow, useMergeAllowed } from './merge/MergeWithFlow'
+import { WatchPinButton } from './watch-list/WatchPinButton'
 
 let formulaCtxHydrated = false
 
@@ -649,7 +649,16 @@ export function SaveProgressDialog({
   const canClose = allSettled || hasError
   const doneCount = steps.filter((s) => s.status === 'done').length
   const totalCount = steps.length
-  const overallPct = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0
+  // The overall bar moves with the lines of a running step too (a lone "0/1" bar sat empty
+  // beside "26 of 41 lines" for the whole save), and only shows when there are several steps:
+  // with one, that step's own bar says it all.
+  const overallUnits = steps.reduce((n, s) => {
+    if (s.status === 'done') return n + 1
+    if (s.status === 'running' && s.progress && s.progress.total > 0)
+      return n + Math.min(1, s.progress.done / s.progress.total)
+    return n
+  }, 0)
+  const overallPct = totalCount > 0 ? Math.round((overallUnits / totalCount) * 100) : 0
 
   return (
     <Dialog
@@ -664,11 +673,14 @@ export function SaveProgressDialog({
         onInteractOutside={(e) => {
           if (!canClose) e.preventDefault()
         }}
-        className='max-w-md'
+        // Phones: a 16 px gutter each side, never edge to edge.
+        className='w-[calc(100%-2rem)] max-w-md'
+        // Nothing to close while the save runs (there is no cancel): no corner × until it ends.
+        hideClose={!canClose}
       >
         <DialogHeader>
+          {/* One spinner per job: the running step carries it, the title only says the outcome. */}
           <DialogTitle className='flex items-center gap-2 text-[15px]'>
-            {!allSettled && <Loader2 className='h-4 w-4 animate-spin text-nvr-cyan' />}
             {allSettled && hasError && <AlertCircle className='h-4 w-4 text-red-500' />}
             {allSettled && !hasError && <Check className='h-4 w-4 text-green-500' />}
             {hasError
@@ -679,17 +691,26 @@ export function SaveProgressDialog({
                 ? 'All changes saved'
                 : 'Saving changes…'}
           </DialogTitle>
-          <div className='flex items-center gap-3 pt-1'>
-            <div className='flex-1 h-1.5 rounded-full bg-slate-100 dark:bg-muted overflow-hidden'>
+          {totalCount > 1 && (
+            <div className='flex items-center gap-3 pt-1'>
               <div
-                className='h-full rounded-full bg-nvr-cyan transition-all duration-500'
-                style={{ width: `${overallPct}%` }}
-              />
+                className='flex-1 h-1.5 rounded-full bg-slate-200 dark:bg-white/15 overflow-hidden'
+                role='progressbar'
+                aria-label='Save progress'
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={overallPct}
+              >
+                <div
+                  className='h-full rounded-full bg-nvr-cyan transition-all duration-500'
+                  style={{ width: `${overallPct}%` }}
+                />
+              </div>
+              <span className='text-[11px] text-slate-500 dark:text-slate-400 tabular-nums shrink-0'>
+                {doneCount} of {totalCount} steps
+              </span>
             </div>
-            <span className='text-[11px] text-slate-400 tabular-nums shrink-0'>
-              {doneCount}/{totalCount}
-            </span>
-          </div>
+          )}
         </DialogHeader>
         <DialogBody>
           <div className='space-y-2'>
@@ -732,14 +753,17 @@ export function SaveProgressDialog({
                         {hasError && step.status === 'pending' && (
                           <span className='shrink-0 text-[10px] text-slate-400'>not run</span>
                         )}
-                        {step.progress && (
-                          <span className='text-[11px] text-slate-400 shrink-0 tabular-nums font-mono'>
-                            {step.progress.done}/{step.progress.total}
+                        {/* Only while it runs: a create is one write, so "12 / 41" beside
+                            "Nothing was saved" would claim lines that never landed. */}
+                        {step.progress && step.status === 'running' && (
+                          <span className='text-[11px] text-slate-500 dark:text-slate-400 shrink-0 tabular-nums'>
+                            {step.progress.done.toLocaleString()} /{' '}
+                            {step.progress.total.toLocaleString()}
                           </span>
                         )}
                       </div>
                       {step.detail && !step.error && (
-                        <p className='text-[11px] text-slate-400 mt-0.5 leading-snug'>
+                        <p className='text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-snug tabular-nums'>
                           {step.detail}
                         </p>
                       )}
@@ -781,7 +805,14 @@ export function SaveProgressDialog({
                         </button>
                       )}
                       {step.status === 'running' && rowPct !== null && (
-                        <div className='mt-1.5 h-1 rounded-full bg-slate-200 dark:bg-muted overflow-hidden'>
+                        <div
+                          className='mt-1.5 h-1 rounded-full bg-slate-200 dark:bg-white/15 overflow-hidden'
+                          role='progressbar'
+                          aria-label={step.label}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={rowPct}
+                        >
                           <div
                             className='h-full rounded-full bg-nvr-cyan transition-all duration-200'
                             style={{ width: `${rowPct}%` }}
@@ -800,7 +831,7 @@ export function SaveProgressDialog({
             <button
               type='button'
               onClick={onClose}
-              className='text-sm px-4 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors'
+              className='text-sm px-4 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-muted dark:text-foreground dark:hover:bg-muted/70 transition-colors'
             >
               {hasError ? 'Close' : 'Done'}
             </button>
@@ -7052,6 +7083,14 @@ function ItemEditFormView({
   })
   const recalcOf = (field: string): 'pending' | 'landed' | null =>
     recalc.pending.has(field) ? 'pending' : recalc.landed.has(field) ? 'landed' : null
+  // A header summary over a child collection ("Unallocated … across 7 lines") re-derives with
+  // the rollups that read the same rows: it is recalculating while any of them is.
+  const recalcFeedMap = useMemo(() => recalcFeeds(fieldConfig), [fieldConfig])
+  const recalcFeedsInto = (childCollection: string): boolean => {
+    if (recalc.pending.size === 0) return false
+    const fed = recalcFeedMap.get(childCollection)
+    return !!fed && [...fed].some((f) => recalc.pending.has(f))
+  }
 
   const effectiveDraft = useMemo(
     () => (addendumViewData ? { ...draft, ...addendumViewData } : draft),
@@ -7638,17 +7677,23 @@ function ItemEditFormView({
     const el = document.querySelector<HTMLElement>(`[data-field="${key}"]`)
     if (!el) return
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    el.style.transition = 'box-shadow 0.15s ease'
+    // "You are here": a ring plus a faint tint that holds well past the smooth scroll (≈0.5 s)
+    // — at 1.2 s from the click it had mostly faded before the field arrived — then eases out.
+    const prev = { bg: el.style.backgroundColor, radius: el.style.borderRadius }
+    el.style.transition = 'box-shadow 0.2s ease, background-color 0.2s ease'
     el.style.boxShadow =
-      '0 0 0 2px rgb(var(--nvr-cyan-rgb, 0 206 255)), 0 0 0 5px rgb(var(--nvr-cyan-rgb, 0 206 255) / 0.25)'
+      '0 0 0 2px rgb(var(--nvr-cyan-rgb, 0 206 255)), 0 0 0 6px rgb(var(--nvr-cyan-rgb, 0 206 255) / 0.22)'
+    el.style.backgroundColor = 'rgb(var(--nvr-cyan-rgb, 0 206 255) / 0.06)'
     el.style.borderRadius = '12px'
     setTimeout(() => {
+      el.style.transition = 'box-shadow 0.6s ease, background-color 0.6s ease'
       el.style.boxShadow = 'none'
+      el.style.backgroundColor = prev.bg
       setTimeout(() => {
         el.style.transition = ''
-        el.style.borderRadius = ''
-      }, 300)
-    }, 1200)
+        el.style.borderRadius = prev.radius
+      }, 650)
+    }, 2000)
   }
   // Find-in-record (#82): searchable field list from the deduped config +
   // current draft values; jump = the same flash, reporting a miss when the
@@ -16281,6 +16326,7 @@ function ItemEditFormView({
                                                         itemId={itemId}
                                                         field={h.field}
                                                         config={h.config}
+                                                        recalculating={recalcFeedsInto}
                                                         onOpen={(t) => {
                                                           jumpToField(h.field)
                                                           // The grid may only mount after the tab
@@ -16542,7 +16588,13 @@ function ItemEditFormView({
                                                       className={HEADER_TILE}
                                                     >
                                                       <span
-                                                        className={HEADER_LABEL}
+                                                        // Room for the "changed by" icon pinned top-right of the
+                                                        // tile (absolute), so it never sits on the label's
+                                                        // letters ("PROJECT ⓘ ID") — stacked tiles only.
+                                                        className={cn(
+                                                          HEADER_LABEL,
+                                                          '[[data-header-field]:has(>[data-header-freshness]>*)>&]:pr-6 [[data-header-dense]_[data-header-field]:has(>[data-header-freshness]>*)>&]:pr-0'
+                                                        )}
                                                         data-header-label
                                                       >
                                                         {f.label}
@@ -16675,13 +16727,17 @@ function ItemEditFormView({
                                                         !f.cmsField.computed_type &&
                                                         !isNew &&
                                                         !viewingAddendum && (
-                                                          <HeaderFreshness
-                                                            collection={collection}
-                                                            itemId={itemId}
-                                                            field={f.cmsField.field}
-                                                            fields={headerTouchFields}
-                                                            className='absolute top-2 right-6'
-                                                          />
+                                                          <span
+                                                            data-header-freshness
+                                                            className='absolute top-2 right-6 flex'
+                                                          >
+                                                            <HeaderFreshness
+                                                              collection={collection}
+                                                              itemId={itemId}
+                                                              field={f.cmsField.field}
+                                                              fields={headerTouchFields}
+                                                            />
+                                                          </span>
                                                         )}
                                                       {copiedHeaderField === f.field ? (
                                                         <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />

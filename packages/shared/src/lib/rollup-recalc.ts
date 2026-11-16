@@ -52,14 +52,26 @@ export function recalcFeeds(fields: readonly RecalcFieldLike[] | null | undefine
       out.set(src.related_collection, set)
     }
   }
+  // Computed fields read a rollup either as a Liquid token (`{{total}}`) or in an expression
+  // (`item.requisition_amount - item.forecast_total`). Follow readers of readers too (Forecast
+  // Summary reads Left to Forecast's inputs) until nothing new joins — a figure derived from a
+  // recalculating total is stale too and must never look final.
+  const reads = (formula: string, name: string) =>
+    formula.includes(`{{${name}}}`) || new RegExp(`\\bitem\\.${name}\\b`).test(formula)
   for (const set of out.values()) {
-    for (const f of list) {
-      if (f.computed_type === 'rollup' || set.has(f.field) || !f.computed_formula) continue
-      const formula =
-        typeof f.computed_formula === 'string'
-          ? f.computed_formula
-          : JSON.stringify(f.computed_formula)
-      if ([...set].some((r) => formula.includes(`{{${r}}}`))) set.add(f.field)
+    for (let grew = true; grew; ) {
+      grew = false
+      for (const f of list) {
+        if (f.computed_type === 'rollup' || set.has(f.field) || !f.computed_formula) continue
+        const formula =
+          typeof f.computed_formula === 'string'
+            ? f.computed_formula
+            : JSON.stringify(f.computed_formula)
+        if ([...set].some((r) => reads(formula, r))) {
+          set.add(f.field)
+          grew = true
+        }
+      }
     }
   }
   return out
