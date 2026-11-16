@@ -1175,7 +1175,12 @@ export const FieldRow = memo(function FieldRow({
             />
           )}
           {partnerNeedShown && partnerNeed && (
-            <PartnerNeedBadge field={field.field} mark={partnerNeed} />
+            // Takes the rest of the label line and truncates there (basis 0, min-width 0): it
+            // never wraps onto a line of its own, which pushed this input below its row
+            // neighbours (idea-43 review).
+            <span className='order-last flex min-w-0 flex-[1_1_0%] justify-end'>
+              <PartnerNeedBadge field={field.field} mark={partnerNeed} />
+            </span>
           )}
           {shownText.note && (
             <TooltipProvider delayDuration={100}>

@@ -41,6 +41,8 @@ describe('partner needs (client helpers)', () => {
   it('names the partner and the step', () => {
     const m = { partners: ['Acme ERP', 'Depot'], steps: ['Send to warehouse'] }
     expect(needLabel(m)).toBe('Needed by Acme ERP + 1')
-    expect(needTip(m)).toContain('Acme ERP, Depot needs this at Send to warehouse')
+    expect(needTip(m)).toContain(
+      'sent to Acme ERP, Depot at Send to warehouse, which needs this field'
+    )
   })
 })

@@ -110,9 +110,11 @@ export function needLabel(mark: PartnerNeedMark): string {
 
 /** The badge's tip: who needs it and on which move. */
 export function needTip(mark: PartnerNeedMark): string {
-  const who = mark.partners.join(', ') || 'A partner system'
+  // Name the partner as the system the record is SENT to: beside a picked warehouse
+  // ("CTDI") a bare "Acme Warehouse needs this" read as a mismatch (idea-43 review).
+  const who = mark.partners.join(', ') || 'a partner system'
   const when = mark.steps.length ? ` at ${mark.steps.join(' / ')}` : ' at a later step'
-  return `${who} needs this${when}. Fill it in now so the step does not stop on it later.`
+  return `This record is sent to ${who}${when}, which needs this field. Fill it in now so the step does not stop on it later.`
 }
 
 const NO_FIELDS: Record<string, PartnerNeedMark> = {}
