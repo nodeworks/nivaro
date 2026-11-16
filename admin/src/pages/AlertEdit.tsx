@@ -98,6 +98,13 @@ const UNITS = [
   { value: 'days', label: 'Days' }
 ]
 
+/** Radix Select reports '' when a saved value lands before its options mount (the hidden
+ *  native select has no matching option yet): a saved rule then showed a blank operator, unit
+ *  and category. Only a real pick changes the value. */
+const keepPicked = (set: (v: string) => void) => (v: string) => {
+  if (v) set(v)
+}
+
 /** Older rules hold the unit's symbol ('%', '$'); the picker lists names. */
 function normalizeUnit(u: string | null | undefined): string {
   const v = (u ?? '').trim()
@@ -489,7 +496,7 @@ export function AlertEditPage() {
         {/* Category */}
         <div className='space-y-1.5'>
           <Label htmlFor='alert-category'>Category</Label>
-          <Select value={category} onValueChange={setCategory}>
+          <Select value={category} onValueChange={keepPicked(setCategory)}>
             <SelectTrigger id='alert-category'>
               <SelectValue />
             </SelectTrigger>
@@ -660,7 +667,7 @@ export function AlertEditPage() {
           <div className='grid grid-cols-3 gap-4'>
             <div className='space-y-1.5'>
               <Label htmlFor='alert-operator'>Operator</Label>
-              <Select value={operator} onValueChange={setOperator}>
+              <Select value={operator} onValueChange={keepPicked(setOperator)}>
                 <SelectTrigger id='alert-operator'>
                   <SelectValue />
                 </SelectTrigger>
@@ -685,7 +692,7 @@ export function AlertEditPage() {
             </div>
             <div className='space-y-1.5'>
               <Label htmlFor='alert-unit'>Unit</Label>
-              <Select value={unit} onValueChange={setUnit}>
+              <Select value={unit} onValueChange={keepPicked(setUnit)}>
                 <SelectTrigger id='alert-unit'>
                   <SelectValue />
                 </SelectTrigger>
