@@ -962,7 +962,8 @@ function RecordRelationLabel({
     : renderDisplayTemplate(meta?.display_template ?? null, item)
   // rt3 #16 — hover shows the linked record's current step, owners and amounts.
   return (
-    <RecordHoverCard collection={relatedCollection} id={id} disabled={userCol}>
+    // To the right of the cell: below it, the card covered the same column on the next rows.
+    <RecordHoverCard collection={relatedCollection} id={id} disabled={userCol} side='right'>
       <span className='text-[12px] text-slate-700 dark:text-slate-200'>{label}</span>
     </RecordHoverCard>
   )
