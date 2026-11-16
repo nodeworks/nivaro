@@ -56,7 +56,7 @@ export function ListNeighborNav({
   const countTip =
     n.listTotal != null
       ? `Record ${n.position.toLocaleString()} of ${of} in ${listName}`
-      : `Record ${n.index} of the ${n.total} ${listName} showed`
+      : `Record ${n.index} of the ${n.total} shown from ${listName}`
   // At the edge of what the list showed, the button stays focusable and says why it stops
   // (a disabled button shows no tooltip).
   // Without the list's total, the end of the rows shown is not known to be the list's end.
