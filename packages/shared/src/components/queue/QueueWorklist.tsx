@@ -2638,8 +2638,16 @@ export function QueueWorklist({
 
   function applyView(v: QueueView) {
     const s = v.state ?? {}
-    setScope(s.scope ?? 'all')
-    setFilterValues({ ...seededFiltersRef.current, ...(s.filters ?? {}) })
+    // The queue default is layout only (CBV parity): its stored filters and scope tab
+    // never land on anyone — the queue's own default scope and the person's seeded
+    // filters do. A named view still brings its filters.
+    if (v.is_default) {
+      setScope(queue?.display_config?.default_scope ?? 'all')
+      setFilterValues({ ...seededFiltersRef.current })
+    } else {
+      setScope(s.scope ?? 'all')
+      setFilterValues({ ...seededFiltersRef.current, ...(s.filters ?? {}) })
+    }
     setSort(s.sort ?? '')
     setGroupBy(s.group_by ?? null)
     // Full snapshot: a view without saved columns resets to the queue default.
@@ -2949,8 +2957,8 @@ export function QueueWorklist({
       client.request(
         patch(`/queues/views/${v.id}`, {
           state: {
-            scope,
-            filters: filterValues,
+            // The queue default stores layout only (the server drops these too).
+            ...(v.is_default ? {} : { scope, filters: filterValues }),
             sort,
             group_by: groupBy,
             view,
@@ -2965,7 +2973,11 @@ export function QueueWorklist({
       qc.invalidateQueries({ queryKey: ['queue-views', queueId] })
       setViewJustSaved(v.id)
       setTimeout(() => setViewJustSaved((cur) => (cur === v.id ? null : cur)), 2000)
-      toast.success(`Saved "${v.name}" with the current filters, scope and sort`)
+      toast.success(
+        v.is_default
+          ? `Saved "${v.name}" with the current columns, sort and totals. Filters stay each person's own.`
+          : `Saved "${v.name}" with the current filters, scope and sort`
+      )
     },
     onError: () => toast.error('Failed to update view')
   })
@@ -5904,6 +5916,11 @@ export function QueueWorklist({
                   />
                   Set as queue default (everyone starts here)
                 </label>
+              )}
+              {canManageQueueDefault && saveAsDefault && (
+                <p className='-mt-1 mb-2 pl-6 text-[11px] text-slate-500 dark:text-slate-400'>
+                  Saves columns, sort and totals. Filters stay each person's own.
+                </p>
               )}
               <button
                 type='button'

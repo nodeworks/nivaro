@@ -72,6 +72,18 @@ export function mayShareQueueView(
 }
 
 /**
+ * The queue-wide default view is layout only (CBV parity, 2026-11-16): columns, pins,
+ * totals, sort, group and view type. Filters and the scope tab stay each person's own,
+ * so saving or updating the default never pushes the saver's filters onto everyone.
+ * Named views keep their filters; the client ignores a default view's stored filters.
+ */
+export function queueDefaultViewState(state: unknown): unknown {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return state
+  const { filters: _filters, scope: _scope, ...layout } = state as Record<string, unknown>
+  return layout
+}
+
+/**
  * May a queue claim make the caller an owner of the record's current step?
  * Admins and the step's existing owners only — the Owners panel's rule. A
  * finished pipeline has no step to own.
@@ -1181,7 +1193,7 @@ export async function queuesRoutes(app: FastifyInstance) {
         is_shared: wantsDefault || !!body.is_shared,
         role: body.role ?? null,
         is_default: wantsDefault,
-        state: toJsonStr(body.state),
+        state: toJsonStr(wantsDefault ? queueDefaultViewState(body.state) : body.state),
         created_at: new Date()
       })
       .returning('*')) as unknown as [Record<string, unknown>]
@@ -1211,7 +1223,9 @@ export async function queuesRoutes(app: FastifyInstance) {
     const { viewId } = req.params as { viewId: string }
     const view = (await db('nivaro_queue_views')
       .where({ id: Number(viewId) })
-      .first()) as { id: number; user: string; queue_id: string } | undefined
+      .first()) as
+      | { id: number; user: string; queue_id: string; is_default?: boolean | number }
+      | undefined
     if (!view) return reply.code(404).send({ error: 'Not found' })
 
     const body = req.body as {
@@ -1259,7 +1273,10 @@ export async function queuesRoutes(app: FastifyInstance) {
     }
     if (body.state !== undefined) {
       if (!canEditView) return reply.code(403).send({ error: 'Forbidden' })
-      patch.state = toJsonStr(body.state)
+      // Writing the state of the queue default (or making it the default in the same
+      // call) stores layout only — never the saver's filters or scope tab.
+      const isDefault = body.is_default ?? !!view.is_default
+      patch.state = toJsonStr(isDefault ? queueDefaultViewState(body.state) : body.state)
     }
     if (body.is_default !== undefined) {
       patch.is_default = !!body.is_default
