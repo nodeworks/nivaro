@@ -207,10 +207,10 @@ describe('"Updated just now by someone else" (own saves)', () => {
   }
 
   it('stays quiet when the write was the viewer’s own (their save’s late after-effects)', async () => {
-    expect(await arrive('ME-1')).not.toContain('someone else')
+    expect(await arrive('ME-1')).not.toContain('Updated just now')
   })
 
-  it('still says so for another person’s write', async () => {
-    expect(await arrive('other-user')).toContain('Updated just now by someone else')
+  it('still says so for another person’s write, naming them', async () => {
+    expect(await arrive('other-user')).toContain('Updated just now by X')
   })
 })
