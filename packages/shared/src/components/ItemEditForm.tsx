@@ -14356,8 +14356,12 @@ function ItemEditFormView({
                                             : 'flex min-w-[180px] flex-col md:min-w-[260px]'
                                         }
                                       >
-                                        <div className='group/title flex items-center gap-1.5'>
-                                          <h1 className='truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
+                                        {/* Phones: the chips (Changed after approval, Help requested)
+                                        wrap to their own line under the title instead of squeezing
+                                        it to "Pump …" — a flex line breaks on the title's full
+                                        width, so it truncates only when it alone is too long. */}
+                                        <div className='group/title flex items-center gap-1.5 max-md:flex-wrap max-md:gap-y-1'>
+                                          <h1 className='min-w-0 max-w-full truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
                                             {isNew ? (
                                               `New ${singularTitle}`
                                             ) : (
