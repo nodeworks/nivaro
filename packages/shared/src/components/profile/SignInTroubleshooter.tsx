@@ -85,6 +85,14 @@ const OWNER_TEXT: Record<Owner, string> = {
   wait: 'Usually clears by itself'
 }
 
+/** The quiet "Who can fix it:" label under the verdict. */
+const OWNER_WHO: Record<Owner, string> = {
+  person: 'them',
+  admin: 'an administrator here',
+  it: 'their IT team',
+  wait: 'nobody, it usually clears by itself'
+}
+
 const METHOD_TEXT: Record<string, string> = {
   oidc: 'Single sign-on',
   saml: 'SAML',
@@ -284,7 +292,7 @@ function Verdict({ t, first }: { t: Troubleshooter; first: string }) {
           <div className='min-w-0 space-y-1'>
             <p className='text-[13px] font-semibold text-amber-950 dark:text-amber-100'>
               {c.label}
-              <span className='ml-2 text-[11.5px] font-normal text-amber-800 dark:text-amber-300'>
+              <span className='ml-2 inline-block whitespace-nowrap text-[11.5px] font-normal text-amber-800 dark:text-amber-300'>
                 <span data-tip={formatDateTime(c.at)}>{formatRelative(c.at)}</span>
                 {c.match === 'browser' && ' · probably them'}
               </span>
@@ -301,8 +309,8 @@ function Verdict({ t, first }: { t: Troubleshooter; first: string }) {
               </p>
             )}
             {c.owner && (
-              <p className='text-[11.5px] text-amber-800 dark:text-amber-300'>
-                {OWNER_TEXT[c.owner]}
+              <p className='text-[11.5px] text-amber-800/80 dark:text-amber-300/80'>
+                Who can fix it: {OWNER_WHO[c.owner]}
                 {c.code && <> · code {c.code}</>}
               </p>
             )}
@@ -371,15 +379,20 @@ function Stat({
   )
 }
 
-/** Back-to-back successful sign-ins that look the same (same way in, app, browser and address)
- *  fold into one row with a count, so failures and different sign-ins stay in view. */
+/** Back-to-back attempts that look the same fold into one row with a count, so different
+ *  sign-ins stay in view: successes with the same way in, app, browser and address; failures
+ *  with the same reason and code as well. A success and a failure never fold together. */
 export function foldAttempts(
   attempts: Attempt[]
 ): Array<{ a: Attempt; times: number; first: string }> {
   const out: Array<{ a: Attempt; times: number; first: string }> = []
   const same = (x: Attempt, y: Attempt) =>
-    x.outcome === 'signed_in' &&
-    y.outcome === 'signed_in' &&
+    x.outcome === y.outcome &&
+    (x.outcome === 'signed_in' ||
+      (x.outcome === 'failed' &&
+        x.reason === y.reason &&
+        x.code === y.code &&
+        x.match === y.match)) &&
     x.label === y.label &&
     x.method === y.method &&
     x.app === y.app &&
@@ -405,6 +418,8 @@ function AttemptRow({ a, times = 1, first }: { a: Attempt; times?: number; first
     a.method ? (METHOD_TEXT[a.method] ?? a.method) : null,
     a.code
   ].filter(Boolean) as string[]
+  const when =
+    times > 1 && first ? `${formatDateTime(first)} – ${formatDateTime(a.at)}` : formatDateTime(a.at)
   const Icon = a.outcome === 'signed_in' ? LogIn : a.outcome === 'ended' ? Smartphone : CircleX
   const main = (
     <>
@@ -458,18 +473,19 @@ function AttemptRow({ a, times = 1, first }: { a: Attempt; times?: number; first
             </span>
           )}
           <span
-            className='ml-auto shrink-0 pl-2 text-[11px] tabular-nums text-slate-500 dark:text-slate-400'
-            data-tip={
-              times > 1 && first
-                ? `${formatDateTime(first)} – ${formatDateTime(a.at)}`
-                : formatDateTime(a.at)
-            }
+            className='ml-auto hidden shrink-0 whitespace-nowrap pl-2 text-[11px] tabular-nums text-slate-500 sm:inline dark:text-slate-400'
+            data-tip={when}
           >
             {formatRelative(a.at)}
           </span>
         </div>
+        {/* On a phone the time rides the meta line, so it never wraps onto a line of its own. */}
         <p className='truncate text-[11px] text-slate-500 dark:text-slate-400'>
           {[a.browser, a.ip].filter(Boolean).join(' · ') || ' '}
+          <span className='tabular-nums sm:hidden' data-tip={when}>
+            {a.browser || a.ip ? ' · ' : ''}
+            {formatRelative(a.at)}
+          </span>
         </p>
         {open && canOpen && (
           <div className='mt-1.5 space-y-1 text-[11.5px] leading-snug' data-sign-in-detail>
