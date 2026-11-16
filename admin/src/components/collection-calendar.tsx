@@ -607,9 +607,11 @@ export function CollectionCalendar({
                         data-tip='Where you dropped it'
                         className='flex items-center gap-1 truncate rounded border border-dashed border-nvr-cyan bg-white px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy dark:bg-card dark:text-[#7fe6ff]'
                       >
-                        <span className='min-w-0 flex-1 truncate'>{clash?.label}</span>
+                        <span className='min-w-0 flex-1 truncate max-sm:hidden'>
+                          {clash?.label}
+                        </span>
                         <span className='min-w-0 truncate font-semibold text-[#007a99] dark:text-nvr-cyan'>
-                          · Yours
+                          <span className='max-sm:hidden'>· </span>Yours
                         </span>
                       </div>
                     )}
@@ -624,9 +626,12 @@ export function CollectionCalendar({
                           data-tip={`${who} is moving this here`}
                           className='nvr-fade-in flex items-center gap-1 truncate rounded border border-dashed border-violet-400 bg-violet-50/70 px-1.5 py-0.5 text-[10px] font-medium text-violet-900 dark:border-violet-400/60 dark:bg-violet-500/10 dark:text-violet-100'
                         >
-                          <span className='min-w-0 flex-1 truncate'>{label(row)}</span>
+                          <span className='min-w-0 flex-1 truncate max-sm:hidden'>
+                            {label(row)}
+                          </span>
                           <span className='min-w-0 truncate font-semibold text-violet-700 dark:text-violet-300'>
-                            · {who.split(' ')[0]}
+                            <span className='max-sm:hidden'>· </span>
+                            {who.split(' ')[0]}
                           </span>
                         </div>
                       )
@@ -676,12 +681,20 @@ export function CollectionCalendar({
                           )}
                           title={ghostWho ? `${ghostWho} is moving this` : label(it)}
                         >
-                          {/* The name marker keeps its width and the label gives way; on a
-                              phone cell both truncate inside the cell, never past its border. */}
-                          <span className='min-w-0 flex-1 truncate'>{label(it)}</span>
+                          {/* The name marker keeps its width and the label gives way. A phone
+                              cell has room for one word: the name alone, never past the border. */}
+                          <span
+                            className={cn(
+                              'min-w-0 flex-1 truncate',
+                              clashTheirs && 'max-sm:hidden'
+                            )}
+                          >
+                            {label(it)}
+                          </span>
                           {clashTheirs && (
                             <span className='min-w-0 truncate font-semibold text-violet-700 dark:text-violet-300'>
-                              · {theirFirst}
+                              <span className='max-sm:hidden'>· </span>
+                              {theirFirst}
                             </span>
                           )}
                         </button>
