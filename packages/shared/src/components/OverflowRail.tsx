@@ -1,5 +1,15 @@
-import { MoreHorizontal } from 'lucide-react'
-import { type ReactNode, useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { Check, MoreHorizontal } from 'lucide-react'
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
+import { RailMenuContext, type RailMenuContextValue } from '../lib/rail-menu-context'
+import { useBelowMd } from '../lib/use-below-md'
 import { cn } from '../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 
@@ -8,7 +18,106 @@ export interface RailItem {
   key: string
   priority: number
   node: ReactNode
+  /** The words for an icon-only control in the ⋯ menu ("Copy link"). Without it the menu
+   *  uses the control's aria-label / tip. Controls with visible text never need it. */
+  label?: string
+  /** 'filter': narrows the rows (Sent back, Changed by others…). In ⋯ the filters are grouped
+   *  above a divider, the actions below. Default 'action'. */
+  kind?: 'filter' | 'action'
+  /** On / running (a filter applied, an export in progress): when folded into ⋯ the ⋯
+   *  button carries a dot, so nothing switched on is out of sight unannounced. */
+  active?: boolean
 }
+
+/** The ⋯ menu's sections: filters first, then actions, each in rail order. */
+export function railMenuGroups<T extends { kind?: 'filter' | 'action' }>(
+  hidden: T[]
+): { filters: T[]; actions: T[] } {
+  return {
+    filters: hidden.filter((i) => i.kind === 'filter'),
+    actions: hidden.filter((i) => i.kind !== 'filter')
+  }
+}
+
+/** Text a person can see inside `el` (screen-reader-only and hidden text left out). */
+function visibleText(el: Element): string {
+  let out = ''
+  const walk = (n: Node) => {
+    if (n.nodeType === 3) {
+      out += n.textContent ?? ''
+      return
+    }
+    if (n.nodeType !== 1) return
+    const e = n as Element
+    if (e.classList.contains('sr-only') || e.hasAttribute('hidden')) return
+    if (e.getAttribute('aria-hidden') === 'true') return
+    for (const c of Array.from(e.childNodes)) walk(c)
+  }
+  walk(el)
+  return out.trim()
+}
+
+const FOCUSABLE = 'button, a[href], [role="button"], input, select, textarea'
+
+/**
+ * Marks each ⋯ menu row's main control (`data-rail-primary`), the wrapper around it when it
+ * has one (`data-rail-wrap`), and gives an icon-only control its words (`data-rail-label`,
+ * drawn by CSS after the icon; its accessible name stays its aria-label). Exported for tests.
+ */
+export function markRailMenu(menu: HTMLElement, labels: ReadonlyMap<string, string>): void {
+  for (const row of Array.from(menu.querySelectorAll<HTMLElement>('[data-rail-row]'))) {
+    const primary = Array.from(row.querySelectorAll<HTMLElement>(FOCUSABLE)).find(
+      (el) => !el.closest('[hidden]')
+    )
+    if (!primary) continue
+    if (!primary.hasAttribute('data-rail-primary')) primary.setAttribute('data-rail-primary', '')
+    const wrap = primary.parentElement
+    if (wrap && wrap !== row && wrap.parentElement === row) wrap.setAttribute('data-rail-wrap', '')
+    const key = row.getAttribute('data-rail-item') ?? ''
+    const label =
+      visibleText(primary) === ''
+        ? (labels.get(key) ??
+          primary.getAttribute('aria-label') ??
+          primary.getAttribute('data-tip') ??
+          primary.getAttribute('title') ??
+          '')
+        : ''
+    if (label) {
+      if (primary.getAttribute('data-rail-label') !== label)
+        primary.setAttribute('data-rail-label', label)
+    } else if (primary.hasAttribute('data-rail-label')) primary.removeAttribute('data-rail-label')
+  }
+}
+
+/** The menu's controls in order, for arrow keys (disabled ones skipped). */
+function menuStops(menu: HTMLElement): HTMLElement[] {
+  return Array.from(menu.querySelectorAll<HTMLElement>('[data-rail-primary]')).filter(
+    (el) => !(el as HTMLButtonElement).disabled
+  )
+}
+
+/**
+ * The ⋯ menu's look: every row's main control is a full-width, left-aligned row with its icon
+ * and words; a pressed filter keeps its tint; extra controls in a row (a clear ×, a minutes
+ * chip) stay at its end.
+ */
+const MENU_ROWS = cn(
+  '[&_[data-rail-wrap]]:flex [&_[data-rail-wrap]]:w-full [&_[data-rail-wrap]]:max-w-none [&_[data-rail-wrap]]:items-center [&_[data-rail-wrap]]:gap-1',
+  '[&_[data-rail-primary]]:flex [&_[data-rail-primary]]:h-9 [&_[data-rail-primary]]:w-full [&_[data-rail-primary]]:min-w-0 [&_[data-rail-primary]]:flex-1 [&_[data-rail-primary]]:items-center [&_[data-rail-primary]]:justify-start [&_[data-rail-primary]]:gap-2 [&_[data-rail-primary]]:whitespace-nowrap [&_[data-rail-primary]]:rounded-md [&_[data-rail-primary]]:!border-transparent [&_[data-rail-primary]]:px-2.5 [&_[data-rail-primary]]:text-left [&_[data-rail-primary]]:text-[12.5px] [&_[data-rail-primary]]:font-medium [&_[data-rail-primary]]:!shadow-none',
+  // `!`: the hosts' dark sheet re-points bg-white / border-slate-200 with !important.
+  '[&_[data-rail-primary]:not([aria-pressed=true]):not([aria-expanded=true])]:!bg-transparent [&_[data-rail-primary]:not([aria-pressed=true])]:!text-slate-700 dark:[&_[data-rail-primary]:not([aria-pressed=true])]:!text-slate-200',
+  '[&_[data-rail-primary]:not([aria-pressed=true]):not(:disabled):hover]:!bg-slate-100 dark:[&_[data-rail-primary]:not([aria-pressed=true]):not(:disabled):hover]:!bg-muted [&_[data-rail-primary][aria-expanded=true]]:!bg-slate-100 dark:[&_[data-rail-primary][aria-expanded=true]]:!bg-muted',
+  '[&_[data-rail-primary]:focus-visible]:outline-none [&_[data-rail-primary]:focus-visible]:ring-2 [&_[data-rail-primary]:focus-visible]:ring-inset [&_[data-rail-primary]:focus-visible]:ring-nvr-cyan/60',
+  '[&_[data-rail-primary]_svg]:h-3.5 [&_[data-rail-primary]_svg]:w-3.5 [&_[data-rail-primary]_svg]:shrink-0 [&_[data-rail-primary]:not([aria-pressed=true])_svg]:text-slate-500 dark:[&_[data-rail-primary]:not([aria-pressed=true])_svg]:text-slate-400',
+  '[&_[data-rail-label]]:after:content-[attr(data-rail-label)]',
+  // A colour dot (8 px) leading a row takes an icon's 14 px, so every label starts in line.
+  '[&_[data-rail-primary]>span:first-child:empty]:mx-[3px]',
+  // A control with a wrapper (an active chip with its ×, Focus mode with its minutes): the
+  // wrapper is the row, the control fills it.
+  '[&_[data-rail-wrap]]:h-9 [&_[data-rail-wrap]]:rounded-md [&_[data-rail-wrap]]:pl-0 [&_[data-rail-wrap]_[data-rail-primary]]:h-full',
+  // A toggle that is on says so with a check at the row's end, not only a tint.
+  '[&_[data-rail-row]:has([data-rail-primary][aria-pressed=true])_[data-rail-check]]:block'
+)
 
 /** Width assumed for an item that has never been on the line (it is measured once it is). */
 const UNMEASURED_WIDTH = 96
@@ -85,8 +194,46 @@ export function OverflowRail({
   const nodes = useRef(new Map<string, HTMLElement>())
   const [overflow, setOverflow] = useState<Set<string>>(() => new Set())
   const [menuOpen, setMenuOpen] = useState(false)
+  // On a line of its own (phones) the rail spans it: actions start at the left edge like the
+  // rows below, the primary action keeps the right.
+  const [ownLine, setOwnLine] = useState(false)
   const itemsRef = useRef(items)
   itemsRef.current = items
+  const compact = useBelowMd()
+  // Popovers open from the menu right now (Group, Columns…). On a phone the menu steps aside
+  // while one is open: there is no room beside it, and the two would sit on top of each other.
+  const [nestedOpen, setNestedOpen] = useState(0)
+  const nested = useCallback((d: 1 | -1) => setNestedOpen((n) => Math.max(0, n + d)), [])
+  const railMenu = useMemo<RailMenuContextValue>(
+    () => ({
+      nested,
+      compact,
+      // Popovers from the menu stay inside the page's own area, clear of the app sidebar.
+      boundary: () => railRef.current?.closest('main') ?? null
+    }),
+    [nested, compact]
+  )
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  // The menu mounts a render after it opens (Radix's portal): keeping the element in state
+  // re-renders the rail then, so the effect below marks its rows and measures it.
+  const [menuEl, setMenuEl] = useState<HTMLDivElement | null>(null)
+  const setMenuNode = useCallback((el: HTMLDivElement | null) => {
+    menuRef.current = el
+    setMenuEl(el)
+  }, [])
+  // More rows below the menu's fold (a phone, a long menu): a fade at its foot says so.
+  const [moreBelow, setMoreBelow] = useState(false)
+  const checkMoreBelow = useCallback(() => {
+    const el = menuRef.current
+    const next = !!el && el.scrollHeight - el.scrollTop - el.clientHeight > 4
+    setMoreBelow((prev) => (prev === next ? prev : next))
+  }, [])
+  const labelsKey = items.map((i) => `${i.key}=${i.label ?? ''}`).join('\u0001')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: labelsKey stands for items' labels
+  const labels = useMemo(
+    () => new Map(items.filter((i) => i.label).map((i) => [i.key, i.label as string])),
+    [labelsKey]
+  )
 
   const recompute = useCallback(() => {
     const rail = railRef.current
@@ -126,6 +273,7 @@ export function OverflowRail({
     setOverflow((prev) =>
       prev.size === next.size && [...next].every((k) => prev.has(k)) ? prev : next
     )
+    setOwnLine(lineOfOwn)
   }, [leadMinWidth])
 
   // Re-measure on every render (an item's label can change: "Group" → "Group: State").
@@ -143,6 +291,57 @@ export function OverflowRail({
     return () => ro.disconnect()
   }, [recompute])
 
+  // Mark the menu's rows every time it renders and whenever a control inside re-renders
+  // itself (a chip turning on swaps its markup). No deps: every render while open.
+  useLayoutEffect(() => {
+    const menu = menuEl
+    if (!menuOpen || !menu) return
+    markRailMenu(menu, labels)
+    checkMoreBelow()
+    // The menu's height cap lands after it is placed: check again when its size settles.
+    const ro =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(() => requestAnimationFrame(checkMoreBelow))
+    ro?.observe(menu)
+    const settled = setTimeout(checkMoreBelow, 250)
+    const mo =
+      typeof MutationObserver === 'undefined'
+        ? null
+        : new MutationObserver(() => markRailMenu(menu, labels))
+    mo?.observe(menu, { childList: true, subtree: true })
+    return () => {
+      clearTimeout(settled)
+      mo?.disconnect()
+      ro?.disconnect()
+    }
+  })
+  useLayoutEffect(() => {
+    if (!menuOpen) setNestedOpen(0)
+  }, [menuOpen])
+
+  const onMenuKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const menu = menuRef.current
+    // Keys typed in a popover opened from the menu bubble here through React's tree: not ours.
+    if (!menu?.contains(e.target as Node)) return
+    if ((e.target as HTMLElement).closest('input, textarea, select, [contenteditable="true"]'))
+      return
+    const stops = menuStops(menu)
+    if (stops.length === 0) return
+    const at = stops.findIndex(
+      (el) => el === document.activeElement || el.contains(document.activeElement)
+    )
+    let next = -1
+    if (e.key === 'ArrowDown') next = at < 0 ? 0 : (at + 1) % stops.length
+    else if (e.key === 'ArrowUp')
+      next = at < 0 ? stops.length - 1 : (at - 1 + stops.length) % stops.length
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = stops.length - 1
+    if (next < 0) return
+    e.preventDefault()
+    stops[next].focus()
+  }
+
   const measure = (key: string) => (el: HTMLDivElement | null) => {
     if (el) nodes.current.set(key, el)
     else nodes.current.delete(key)
@@ -150,12 +349,18 @@ export function OverflowRail({
 
   const inline = items.filter((i) => !overflow.has(i.key))
   const hidden = items.filter((i) => overflow.has(i.key))
+  const hiddenActive = hidden.some((i) => i.active)
 
   return (
     <div
       ref={railRef}
       data-overflow-rail=''
-      className={cn('ml-auto flex shrink-0 flex-nowrap items-center gap-2', className)}
+      data-rail-own-line={ownLine ? '' : undefined}
+      className={cn(
+        'ml-auto flex shrink-0 flex-nowrap items-center gap-2',
+        ownLine && 'w-full',
+        className
+      )}
     >
       {lead != null && (
         <div
@@ -181,36 +386,96 @@ export function OverflowRail({
           <PopoverTrigger asChild>
             <button
               type='button'
-              aria-label={moreLabel}
-              data-tip={moreLabel}
+              aria-label={hiddenActive ? `${moreLabel} (some are on)` : moreLabel}
+              data-tip={hiddenActive ? `${moreLabel} — some are on` : moreLabel}
               data-rail-more={hidden.length}
-              className='flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'
+              data-rail-more-active={hiddenActive ? '' : undefined}
+              className='relative flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'
             >
               <MoreHorizontal className='h-4 w-4' />
+              {hiddenActive && (
+                <span
+                  aria-hidden
+                  className='absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-nvr-cyan ring-2 ring-white dark:ring-background'
+                />
+              )}
             </button>
           </PopoverTrigger>
           <PopoverContent
+            ref={setMenuNode}
             align='end'
-            className='w-auto max-w-[min(22rem,calc(100vw-2rem))] overflow-visible p-2'
+            collisionPadding={16}
+            aria-label={moreLabel}
+            onOpenAutoFocus={(e) => {
+              // Land on the first control (the menu's own box is not a stop).
+              e.preventDefault()
+              const menu = menuRef.current
+              if (!menu) return
+              markRailMenu(menu, labels)
+              menuStops(menu)[0]?.focus()
+            }}
+            onKeyDown={onMenuKey}
+            onScroll={checkMoreBelow}
+            className={cn(
+              'flex w-64 max-w-[calc(100vw-2rem)] flex-col gap-px overflow-y-auto overscroll-contain p-1',
+              'max-h-[var(--radix-popover-content-available-height)]',
+              MENU_ROWS,
+              compact && nestedOpen > 0 && 'pointer-events-none opacity-0'
+            )}
             data-rail-menu=''
           >
-            {/* The same controls as on the line (their own menus open from here). */}
-            <div className='flex flex-wrap items-center justify-end gap-2'>
-              {hidden.map((i) => (
-                <div
-                  key={i.key}
-                  data-rail-item={i.key}
-                  className='flex shrink-0 items-center gap-2 empty:hidden'
-                >
-                  {i.node}
-                </div>
-              ))}
-            </div>
+            {/* The same controls as on the line, one per row (their own menus open beside). */}
+            <RailMenuContext.Provider value={railMenu}>
+              {(() => {
+                const { filters, actions } = railMenuGroups(hidden)
+                const row = (i: RailItem) => (
+                  <div
+                    key={i.key}
+                    data-rail-item={i.key}
+                    data-rail-row=''
+                    data-rail-kind={i.kind ?? 'action'}
+                    className='relative flex min-w-0 items-center gap-1 empty:hidden'
+                  >
+                    {i.node}
+                    {/* Over the row's end, so a pressed row's tint runs under it. */}
+                    <Check
+                      aria-hidden
+                      data-rail-check=''
+                      className='pointer-events-none absolute right-2.5 top-1/2 hidden h-3.5 w-3.5 -translate-y-1/2 text-[#007a99] dark:text-nvr-cyan'
+                    />
+                  </div>
+                )
+                return (
+                  <>
+                    {filters.length > 0 && (
+                      <p className='px-2.5 pb-1 pt-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+                        Show only
+                      </p>
+                    )}
+                    {filters.map(row)}
+                    {filters.length > 0 && actions.length > 0 && (
+                      <hr
+                        data-rail-divider=''
+                        className='mx-1 my-1 h-px shrink-0 border-0 bg-slate-100 dark:bg-border'
+                      />
+                    )}
+                    {actions.map(row)}
+                    {moreBelow && (
+                      <div
+                        aria-hidden
+                        data-rail-more-below=''
+                        className='pointer-events-none sticky -bottom-1 -mt-8 h-8 shrink-0 bg-gradient-to-t from-popover to-transparent'
+                      />
+                    )}
+                  </>
+                )
+              })()}
+            </RailMenuContext.Provider>
           </PopoverContent>
         </Popover>
       )}
       {trail != null && (
-        <div ref={trailRef} className='flex shrink-0 items-center gap-2 empty:hidden'>
+        <div ref={trailRef} className='ml-auto flex shrink-0 items-center gap-2 empty:hidden'>
           {trail}
         </div>
       )}

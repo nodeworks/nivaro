@@ -24,6 +24,7 @@ import {
   FileDiff,
   Flame,
   GripVertical,
+  Group,
   Inbox,
   ListChecks,
   Loader2,
@@ -4820,7 +4821,9 @@ export function QueueWorklist({
             items={[
               {
                 key: 'unseen',
+                kind: 'filter' as const,
                 priority: filterValues.unseen === 'yes' ? 90 : 48,
+                active: filterValues.unseen === 'yes',
                 node: (
                   <button
                     type='button'
@@ -4850,7 +4853,9 @@ export function QueueWorklist({
                 ? [
                     {
                       key: 'addendums',
+                      kind: 'filter' as const,
                       priority: filterValues.addendums === 'active' ? 90 : 40,
+                      active: filterValues.addendums === 'active',
                       node: (
                         <button
                           type='button'
@@ -4881,7 +4886,9 @@ export function QueueWorklist({
                 ? [
                     {
                       key: 'integrations',
+                      kind: 'filter' as const,
                       priority: filterValues.integrations ? 90 : 38,
+                      active: !!filterValues.integrations,
                       node: (
                         <IntegrationsFilterPill
                           label={aliasFor('integrations', 'Integrations')}
@@ -4899,12 +4906,13 @@ export function QueueWorklist({
                     }
                   ]
                 : []),
-              { key: 'focus', priority: 30, node: <FocusModeToggle /> },
+              { key: 'focus', priority: 30, label: 'Focus mode', node: <FocusModeToggle /> },
               ...((ctxRealtime || realtime) && queueId
                 ? [
                     {
                       key: 'live-pause',
                       priority: livePause.paused ? 90 : 45,
+                      active: livePause.paused,
                       node: (
                         <LivePauseButton
                           paused={livePause.paused}
@@ -4920,6 +4928,7 @@ export function QueueWorklist({
                     {
                       key: 'group',
                       priority: groupBy ? 80 : 52,
+                      active: !!groupBy,
                       node: (
                         <Popover>
                           <PopoverTrigger asChild>
@@ -4932,7 +4941,7 @@ export function QueueWorklist({
                                   : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
                               )}
                             >
-                              <Rows3 className='h-3.5 w-3.5' />
+                              <Group className='h-3.5 w-3.5' />
                               {groupBy
                                 ? `Group: ${groupOptions.find((o) => o.value === groupBy)?.label ?? groupBy}`
                                 : 'Group'}
@@ -4944,7 +4953,14 @@ export function QueueWorklist({
                               <CommandList>
                                 <CommandEmpty>No attribute found.</CommandEmpty>
                                 <CommandItem value='__none__' onSelect={() => setGroupBy(null)}>
-                                  None
+                                  <Check
+                                    aria-hidden
+                                    className={cn(
+                                      'h-3.5 w-3.5 shrink-0 text-[#007a99] dark:text-nvr-cyan',
+                                      groupBy && 'invisible'
+                                    )}
+                                  />
+                                  No grouping
                                 </CommandItem>
                                 {groupOptions.map((opt) => (
                                   <CommandItem
@@ -4952,6 +4968,13 @@ export function QueueWorklist({
                                     value={opt.label}
                                     onSelect={() => setGroupBy(opt.value)}
                                   >
+                                    <Check
+                                      aria-hidden
+                                      className={cn(
+                                        'h-3.5 w-3.5 shrink-0 text-[#007a99] dark:text-nvr-cyan',
+                                        groupBy !== opt.value && 'invisible'
+                                      )}
+                                    />
                                     {opt.label}
                                   </CommandItem>
                                 ))}
@@ -4968,6 +4991,7 @@ export function QueueWorklist({
                     {
                       key: 'priority',
                       priority: sort === '-priority' ? 80 : 50,
+                      active: sort === '-priority',
                       node: (
                         <button
                           type='button'
@@ -4975,6 +4999,7 @@ export function QueueWorklist({
                             setSort(sort === '-priority' ? '' : '-priority')
                             setPage(1)
                           }}
+                          aria-pressed={sort === '-priority'}
                           className={cn(
                             'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
                             sort === '-priority'
@@ -5081,11 +5106,13 @@ export function QueueWorklist({
               {
                 key: 'copy-link',
                 priority: 25,
+                label: 'Copy link',
                 node: <CopyListLinkButton listKey={`queue:${queueId}`} getState={listLinkState} />
               },
               {
                 key: 'send-view',
                 priority: 20,
+                label: 'Send this view',
                 node: (
                   <SendViewButton
                     getView={() =>
@@ -5109,19 +5136,26 @@ export function QueueWorklist({
                 ? [
                     {
                       key: 'export',
-                      priority: csvBusy ? 95 : 65,
+                      priority: 65,
+                      active: csvBusy,
                       node: (
                         <button
                           type='button'
                           onClick={() => void exportCsv()}
                           disabled={csvBusy || !data || (data.total ?? 0) === 0}
                           data-tip='Download the rows on this tab, with these filters and columns, as a spreadsheet (CSV)'
-                          aria-label='Export to CSV'
+                          aria-label={csvBusy ? 'Exporting to CSV' : 'Export to CSV'}
+                          aria-busy={csvBusy || undefined}
                           className='flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
                           data-queue-export
                         >
-                          <Download className='h-3.5 w-3.5' />
-                          {csvBusy ? 'Exporting…' : 'Export'}
+                          {/* Same width while it runs: a spinner, not a longer label. */}
+                          {csvBusy ? (
+                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                          ) : (
+                            <Download className='h-3.5 w-3.5' />
+                          )}
+                          Export
                         </button>
                       )
                     }
@@ -5130,6 +5164,7 @@ export function QueueWorklist({
               {
                 key: 'insights',
                 priority: insightsOpen ? 85 : 55,
+                active: insightsOpen,
                 node: (
                   <button
                     type='button'
@@ -5202,6 +5237,7 @@ export function QueueWorklist({
                     {
                       key: 'bulk',
                       priority: bulkMode ? 95 : 58,
+                      active: bulkMode,
                       node: (
                         <button
                           type='button'
@@ -5231,6 +5267,7 @@ export function QueueWorklist({
                     {
                       key: 'density',
                       priority: 22,
+                      label: density === 'compact' ? 'Comfortable rows' : 'Compact rows',
                       node: (
                         <button
                           type='button'

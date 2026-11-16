@@ -118,7 +118,7 @@ export function QueueDetailPage() {
                   <button
                     type='button'
                     onClick={() => subscribeMut.mutate('instant')}
-                    className='rounded-md px-2.5 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
+                    className='rounded-md px-2.5 py-1.5 text-[12px] font-medium text-[#007a99] hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
                     data-tip='Notify me the moment an item enters this queue (checked every 5 min)'
                   >
                     Notify on arrival
@@ -126,7 +126,7 @@ export function QueueDetailPage() {
                   <button
                     type='button'
                     onClick={() => subscribeMut.mutate('daily')}
-                    className='rounded-md px-2.5 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
+                    className='rounded-md px-2.5 py-1.5 text-[12px] font-medium text-[#007a99] hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
                   >
                     Get daily digest
                   </button>

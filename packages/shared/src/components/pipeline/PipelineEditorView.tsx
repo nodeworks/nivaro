@@ -2278,6 +2278,18 @@ function ownerGroupLine(g: PipelineOwnerGroup): string {
   return `${g.name?.trim() || when || 'Owner group'}${g.name?.trim() && when ? ` (${when})` : ''} · ${who}`
 }
 
+/**
+ * The value-specific owner groups in a few words. After the avatars: "+1,679 by Zone" /
+ * "+1,679 more groups"; on its own (no one owns every record): "1,679 owner groups by Zone" /
+ * "1,679 owner groups" — "+" and "more" only make sense when something sits before them.
+ */
+export function ownerGroupsLabel(count: number, splitField: string | null, afterAvatars: boolean) {
+  const n = count.toLocaleString('en-US')
+  const groups = count === 1 ? 'group' : 'groups'
+  if (afterAvatars) return splitField ? `+${n} by ${splitField}` : `+${n} more ${groups}`
+  return splitField ? `${n} owner ${groups} by ${splitField}` : `${n} owner ${groups}`
+}
+
 function OwnerAvatarStack({
   users,
   valueGroups
@@ -2292,10 +2304,11 @@ function OwnerAvatarStack({
   const splitFields = new Set(
     valueGroups.flatMap((g) => (g.filters ?? []).map((f) => f.field.split('.').pop() ?? f.field))
   )
-  const valueLabel =
-    splitFields.size === 1
-      ? `+${filteredCount} by ${titleCase([...splitFields][0])}`
-      : `+${filteredCount} more ${filteredCount === 1 ? 'group' : 'groups'}`
+  const valueLabel = ownerGroupsLabel(
+    filteredCount,
+    splitFields.size === 1 ? titleCase([...splitFields][0]) : null,
+    users.length > 0
+  )
   const visible = users.slice(0, 4)
   const rest = users.length - visible.length
   return (
@@ -2458,16 +2471,19 @@ function SortableStateRow({
               </Badge>
             )}
           </div>
-          {census && (
-            <div className='mt-1.5'>
-              <StateCensusChips s={s} census={census} onOpen={(path) => nav.navigate(path)} />
+          {/* Who owns the step sits beside its record count, not adrift mid-row. */}
+          {(census || groups.length > 0) && (
+            <div className='mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 empty:hidden'>
+              {census && (
+                <StateCensusChips s={s} census={census} onOpen={(path) => nav.navigate(path)} />
+              )}
+              <OwnerAvatarStack
+                users={getBaseOwners(groups)}
+                valueGroups={groups.filter((g) => g.filters && g.filters.length > 0)}
+              />
             </div>
           )}
         </div>
-        <OwnerAvatarStack
-          users={getBaseOwners(groups)}
-          valueGroups={groups.filter((g) => g.filters && g.filters.length > 0)}
-        />
         <div className='flex items-center gap-1 opacity-0 group-hover:opacity-100 [&:has([data-armed])]:opacity-100 transition-opacity shrink-0'>
           <button
             type='button'

@@ -12,8 +12,10 @@ import {
   ChevronDown,
   ChevronsLeft,
   ChevronsRight,
+  Download,
   FileDiff,
   FileText,
+  Group,
   ListChecks,
   Loader2,
   Map as MapIcon,
@@ -23,6 +25,7 @@ import {
   Rows2,
   Rows3,
   Search,
+  SlidersHorizontal,
   Sparkles,
   Wand2,
   X
@@ -211,7 +214,9 @@ import { nextSortValue } from '../lib/sort-cycle'
 import { approvalBadgeStates, normalizeSummaryModeRules } from '../lib/summary-mode'
 import { isFileCollection } from '../lib/system-collections'
 import { useTableDensity } from '../lib/table-density'
+import { fitPins } from '../lib/table-pins'
 import { templateRelationPaths } from '../lib/template-paths'
+import { useBelowMd } from '../lib/use-below-md'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
@@ -318,6 +323,7 @@ import { LiveRowMark } from './LiveRowMark'
 import { CopyListLinkButton } from './list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from './list/InlineEdit'
 import { ListViewers } from './list/ListViewers'
+import { PhonePager } from './list/PhonePager'
 import { MapView } from './MapView'
 import { MergeRecordsDialog } from './merge/MergeRecordsDialog'
 import { useMergeAllowed } from './merge/MergeWithFlow'
@@ -350,6 +356,7 @@ import { SlowNoticeView } from './SlowNotice'
 import { SendViewButton } from './send-view/SendViewButton'
 import { TipLayer } from './TipLayer'
 import { UnseenDot } from './UnseenDot'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
 import { Skeleton } from './ui/skeleton'
 
@@ -4716,7 +4723,6 @@ export function CollectionBrowserView({
     }
   })
   const [groupOpen, setGroupOpen] = useState(false)
-  const groupRef = useRef<HTMLDivElement>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const pickGroupBy = (k: string | null) => {
     setGroupBy(k)
@@ -4820,16 +4826,6 @@ export function CollectionBrowserView({
   const [exporting, setExporting] = useState(false)
   const [copiedTable, setCopiedTable] = useState(false)
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
-  const exportMenuRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!exportMenuOpen) return
-    const onDown = (e: MouseEvent) => {
-      if (!exportMenuRef.current?.contains(e.target as Node)) setExportMenuOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [exportMenuOpen])
-  const colsRef = useRef<HTMLDivElement>(null)
   const tableScrollRef = useRef<HTMLDivElement>(null)
   // The <tbody> re-keys on every refresh: a live update that removes another row must not
   // throw a keyboard user off the row checkbox they were on.
@@ -4874,23 +4870,6 @@ export function CollectionBrowserView({
     setAuditId(null)
     defaultAppliedRef.current = false
   }, [collection])
-
-  useEffect(() => {
-    if (!colsOpen) return
-    const onDown = (e: MouseEvent) => {
-      if (!colsRef.current?.contains(e.target as Node)) setColsOpen(false)
-    }
-    window.addEventListener('mousedown', onDown)
-    return () => window.removeEventListener('mousedown', onDown)
-  }, [colsOpen])
-  useEffect(() => {
-    if (!groupOpen) return
-    const onDown = (e: MouseEvent) => {
-      if (!groupRef.current?.contains(e.target as Node)) setGroupOpen(false)
-    }
-    window.addEventListener('mousedown', onDown)
-    return () => window.removeEventListener('mousedown', onDown)
-  }, [groupOpen])
 
   // ── Collection metadata (fields + relations + display info) ───────────────
   const { data: meta } = useQuery({
@@ -5238,7 +5217,22 @@ export function CollectionBrowserView({
     () => columnPins ?? (effectiveColumns[0] ? { [effectiveColumns[0]]: 'left' } : {}),
     [columnPins, effectiveColumns]
   )
-  const pinOf = (k: string): 'left' | 'right' | undefined => effectivePins[k]
+  // Below md the table pins only the record's identifier (the first column), whatever the
+  // view says: pinned State / Owners / Actions blocks filled a 390 px phone and no row said
+  // which record it was. The saved pins are untouched and come back on a wider screen.
+  const compactPins = useBelowMd()
+  const layoutPins = useMemo<Record<string, 'left' | 'right'>>(
+    () =>
+      compactPins ? (effectiveColumns[0] ? { [effectiveColumns[0]]: 'left' } : {}) : effectivePins,
+    [compactPins, effectiveColumns, effectivePins]
+  )
+  // On a desktop the pins also fit the table's visible width (lib/table-pins.ts fitPins):
+  // filled in below once the columns are known; until then the view's pins.
+  let fittedPins: Record<string, 'left' | 'right'> = layoutPins
+  const rightKeepRank = (k: string) =>
+    k === '__actions__' ? 3 : k === '__state__' ? 2 : k === '__owners__' ? 0 : 1
+  /** Where a column sits in the table now (layout); the view's own pin is `effectivePins`. */
+  const pinOf = (k: string): 'left' | 'right' | undefined => fittedPins[k]
   const cyclePin = (k: string) => {
     const next = { ...effectivePins }
     const cur = next[k]
@@ -8123,6 +8117,68 @@ export function CollectionBrowserView({
     ...(tasksUsed ? [{ key: '__tasks__', kind: 'tasks' as const }] : []),
     ...(enableActions ? [{ key: '__actions__', kind: 'actions' as const }] : [])
   ]
+  const pinCellRefs = useRef(new Map<string, HTMLTableCellElement>())
+  const [pinWidths, setPinWidths] = useState<Record<string, number>>({})
+  // Measure every render, set state only on real change — offsets stay correct
+  // as data/labels change column widths.
+  useLayoutEffect(() => {
+    const next: Record<string, number> = {}
+    for (const [k, el] of pinCellRefs.current) {
+      // getBoundingClientRect, not offsetWidth: the latter rounds to an integer,
+      // and table cells lay out at fractional widths. Summing rounded widths
+      // drifts the pin offset a fraction of a pixel off the real edge, which
+      // opens a hairline between two adjacent pinned columns for the scrolled
+      // content to show through.
+      if (el?.isConnected) next[k] = el.getBoundingClientRect().width
+    }
+    const keys = new Set([...Object.keys(next), ...Object.keys(pinWidths)])
+    for (const k of keys) {
+      if (Math.abs((next[k] ?? -1) - (pinWidths[k] ?? -1)) > 0.5) {
+        setPinWidths(next)
+        return
+      }
+    }
+  })
+  // The table's visible width, for fitting the pins (re-measured on resize).
+  const [tableViewport, setTableViewport] = useState(0)
+  const viewportRo = useRef<{ el: Element | null; ro: ResizeObserver | null }>({
+    el: null,
+    ro: null
+  })
+  useLayoutEffect(() => {
+    const el = tableScrollRef.current
+    const w = el?.clientWidth ?? 0
+    if (Math.abs(w - tableViewport) > 1) setTableViewport(w)
+    if (viewportRo.current.el === el || typeof ResizeObserver === 'undefined') return
+    viewportRo.current.ro?.disconnect()
+    const ro = el ? new ResizeObserver(() => setTableViewport(el.clientWidth)) : null
+    if (el && ro) ro.observe(el)
+    viewportRo.current = { el: el ?? null, ro }
+  })
+  useEffect(() => () => viewportRo.current.ro?.disconnect(), [])
+  // Pins that cover too much of a narrow desktop table leave Name out of sight (1280 px):
+  // right-hand pins keep at most 45% of the visible width (Owners gives way first, then
+  // data columns, then State), all pins at most 60% (lib/table-pins.ts). Phones pin only the
+  // identifier (layoutPins). Dropped columns keep their place and scroll.
+  if (!compactPins && tableViewport > 0) {
+    const fit = fitPins(
+      baseColDescs.filter((c) => layoutPins[c.key] === 'left').map((c) => c.key),
+      // Kept from the end of this list inward: Actions, then State (what a row is waiting
+      // on), then data columns; Owners gives way first (often "—" on a whole page).
+      baseColDescs
+        .filter((c) => layoutPins[c.key] === 'right')
+        .map((c) => c.key)
+        .sort((a, b) => rightKeepRank(a) - rightKeepRank(b)),
+      (k) => pinWidths[k] ?? 120,
+      enableCheckboxes ? (pinWidths.__checkbox__ ?? 52) : 0,
+      tableViewport,
+      { rightShare: 0.45 }
+    )
+    fittedPins = Object.fromEntries([
+      ...fit.left.map((k) => [k, 'left' as const]),
+      ...fit.right.map((k) => [k, 'right' as const])
+    ])
+  }
   const orderedCols: CbvColDesc[] = [
     ...baseColDescs.filter((c) => pinOf(c.key) === 'left'),
     ...baseColDescs.filter((c) => !pinOf(c.key)),
@@ -8214,28 +8270,6 @@ export function CollectionBrowserView({
   const leftPinnedKeys = orderedCols.filter((c) => pinOf(c.key) === 'left').map((c) => c.key)
   const rightPinnedKeys = orderedCols.filter((c) => pinOf(c.key) === 'right').map((c) => c.key)
 
-  const pinCellRefs = useRef(new Map<string, HTMLTableCellElement>())
-  const [pinWidths, setPinWidths] = useState<Record<string, number>>({})
-  // Measure every render, set state only on real change — offsets stay correct
-  // as data/labels change column widths.
-  useLayoutEffect(() => {
-    const next: Record<string, number> = {}
-    for (const [k, el] of pinCellRefs.current) {
-      // getBoundingClientRect, not offsetWidth: the latter rounds to an integer,
-      // and table cells lay out at fractional widths. Summing rounded widths
-      // drifts the pin offset a fraction of a pixel off the real edge, which
-      // opens a hairline between two adjacent pinned columns for the scrolled
-      // content to show through.
-      if (el?.isConnected) next[k] = el.getBoundingClientRect().width
-    }
-    const keys = new Set([...Object.keys(next), ...Object.keys(pinWidths)])
-    for (const k of keys) {
-      if (Math.abs((next[k] ?? -1) - (pinWidths[k] ?? -1)) > 0.5) {
-        setPinWidths(next)
-        return
-      }
-    }
-  })
   const CHECKBOX_W = 52
   /**
    * Offsets FLOOR on both sides so adjacent pinned cells overlap by a sub-pixel
@@ -8345,7 +8379,7 @@ export function CollectionBrowserView({
       : undefined
 
   const pinButton = (key: string) => {
-    const pin = pinOf(key)
+    const pin = effectivePins[key]
     return (
       <button
         type='button'
@@ -8910,7 +8944,9 @@ export function CollectionBrowserView({
           items={[
             {
               key: 'changed',
+              kind: 'filter' as const,
               priority: filters.some(isChangedFilter) ? 90 : 48,
+              active: filters.some(isChangedFilter),
               node: (
                 <>
                   {/* Changed by others (realtime 2026-11-14): a pill with a period picker, kept in the
@@ -8930,7 +8966,9 @@ export function CollectionBrowserView({
               ? [
                   {
                     key: 'approval',
+                    kind: 'filter' as const,
                     priority: filters.some(isApprovalChangedFilter) ? 90 : 40,
+                    active: filters.some(isApprovalChangedFilter),
                     node: (() => {
                       const active = filters.find(isApprovalChangedFilter)
                       return (
@@ -8968,7 +9006,9 @@ export function CollectionBrowserView({
               ? [
                   {
                     key: 'addendums',
+                    kind: 'filter' as const,
                     priority: addendumsOnly ? 90 : 40,
+                    active: addendumsOnly,
                     node: (
                       <button
                         type='button'
@@ -8992,7 +9032,9 @@ export function CollectionBrowserView({
               const on = riskFilter.includes(rule.id)
               return {
                 key: `risk-${rule.id}`,
+                kind: 'filter' as const,
                 priority: on ? 90 : 35,
+                active: on,
                 node: (
                   <button
                     key={rule.id}
@@ -9028,6 +9070,7 @@ export function CollectionBrowserView({
             {
               key: 'focus',
               priority: 30,
+              label: 'Focus mode',
               node: <FocusModeToggle />
             },
             ...(realtime && collection
@@ -9035,6 +9078,7 @@ export function CollectionBrowserView({
                   {
                     key: 'live-pause',
                     priority: livePause.paused ? 90 : 45,
+                    active: livePause.paused,
                     node: (
                       <LivePauseButton
                         paused={livePause.paused}
@@ -9065,6 +9109,7 @@ export function CollectionBrowserView({
             {
               key: 'refresh',
               priority: 60,
+              label: 'Refresh',
               node: (
                 <button
                   type='button'
@@ -9080,11 +9125,13 @@ export function CollectionBrowserView({
             {
               key: 'copy-link',
               priority: 25,
+              label: 'Copy link',
               node: <CopyListLinkButton listKey={`cbv:${collection}`} getState={listLinkState} />
             },
             {
               key: 'send-view',
               priority: 20,
+              label: 'Send this view',
               node: (
                 <SendViewButton
                   getView={() =>
@@ -9109,6 +9156,7 @@ export function CollectionBrowserView({
                   {
                     key: 'copy-as',
                     priority: 15,
+                    label: 'Copy as code',
                     node: (
                       <CopyAsButton
                         collection={collection}
@@ -9129,6 +9177,7 @@ export function CollectionBrowserView({
               ? [
                   {
                     key: 'hierarchy',
+                    kind: 'filter' as const,
                     priority: 75,
                     node: (
                       <HierarchyScopePicker
@@ -9151,6 +9200,7 @@ export function CollectionBrowserView({
             ].map((v) => ({
               key: `view-${v.key}`,
               priority: altView === v.key ? 85 : 55,
+              active: altView === v.key,
               node: (
                 <button
                   key={v.key}
@@ -9180,6 +9230,7 @@ export function CollectionBrowserView({
                   {
                     key: 'map',
                     priority: mapMode ? 85 : 55,
+                    active: mapMode,
                     node: (
                       <button
                         type='button'
@@ -9187,6 +9238,7 @@ export function CollectionBrowserView({
                           setAltView(null)
                           setMapMode((v) => !v)
                         }}
+                        aria-pressed={mapMode}
                         title={mapMode ? 'Back to the table' : 'Show these records on a map'}
                         className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
                           mapMode
@@ -9205,6 +9257,7 @@ export function CollectionBrowserView({
             {
               key: 'ask',
               priority: aiOpen || aiResult ? 85 : 50,
+              active: !!(aiOpen || aiResult),
               node: (
                 <button
                   type='button'
@@ -9224,52 +9277,73 @@ export function CollectionBrowserView({
             {
               key: 'group',
               priority: groupBy ? 80 : 52,
+              active: !!groupBy,
               node: (
-                <div className='relative' ref={groupRef}>
-                  <button
-                    type='button'
-                    onClick={() => setGroupOpen((o) => !o)}
-                    className={`flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium ${
-                      groupBy
-                        ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
-                        : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
-                    }`}
+                <Popover open={groupOpen} onOpenChange={setGroupOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type='button'
+                      className={`flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium ${
+                        groupBy
+                          ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
+                          : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+                      }`}
+                    >
+                      <Group className='h-3.5 w-3.5' />
+                      {groupBy
+                        ? `Group: ${groupBy === '__state__' ? 'State' : columnLabel(groupBy)}`
+                        : 'Group'}
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align='end'
+                    collisionPadding={16}
+                    className='max-h-[min(360px,var(--radix-popover-content-available-height))] w-56 overflow-y-auto rounded-xl border-slate-200 p-1.5 shadow-lg dark:border-slate-700'
+                    data-cbv-group-menu=''
                   >
-                    <Rows3 className='h-3.5 w-3.5' />
-                    {groupBy
-                      ? `Group: ${groupBy === '__state__' ? 'State' : columnLabel(groupBy)}`
-                      : 'Group'}
-                  </button>
-                  {groupOpen && (
-                    <div className='nvr-pop-in absolute right-0 top-full z-50 mt-1 max-h-[360px] w-56 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg dark:border-slate-700 dark:bg-slate-900'>
+                    <button
+                      type='button'
+                      onClick={() => pickGroupBy(null)}
+                      aria-pressed={groupBy === null}
+                      className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] ${
+                        groupBy === null
+                          ? 'bg-nvr-cyan/[0.08] font-semibold text-slate-800 dark:text-slate-100'
+                          : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      <Check
+                        aria-hidden
+                        className={cn(
+                          'h-3.5 w-3.5 shrink-0 text-[#007a99] dark:text-nvr-cyan',
+                          groupBy !== null && 'invisible'
+                        )}
+                      />
+                      No grouping
+                    </button>
+                    {groupableCols.map((c) => (
                       <button
+                        key={c.key}
                         type='button'
-                        onClick={() => pickGroupBy(null)}
-                        className={`block w-full rounded px-2 py-1.5 text-left text-[12px] ${
-                          groupBy === null
+                        onClick={() => pickGroupBy(c.key)}
+                        aria-pressed={groupBy === c.key}
+                        className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] ${
+                          groupBy === c.key
                             ? 'bg-nvr-cyan/[0.08] font-semibold text-slate-800 dark:text-slate-100'
                             : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
                         }`}
                       >
-                        No grouping
+                        <Check
+                          aria-hidden
+                          className={cn(
+                            'h-3.5 w-3.5 shrink-0 text-[#007a99] dark:text-nvr-cyan',
+                            groupBy !== c.key && 'invisible'
+                          )}
+                        />
+                        <span className='min-w-0 truncate'>{c.label}</span>
                       </button>
-                      {groupableCols.map((c) => (
-                        <button
-                          key={c.key}
-                          type='button'
-                          onClick={() => pickGroupBy(c.key)}
-                          className={`block w-full truncate rounded px-2 py-1.5 text-left text-[12px] ${
-                            groupBy === c.key
-                              ? 'bg-nvr-cyan/[0.08] font-semibold text-slate-800 dark:text-slate-100'
-                              : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
-                          }`}
-                        >
-                          {c.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                    ))}
+                  </PopoverContent>
+                </Popover>
               )
             },
             ...(enableCheckboxes
@@ -9277,6 +9351,7 @@ export function CollectionBrowserView({
                   {
                     key: 'bulk',
                     priority: bulkMode ? 95 : 58,
+                    active: bulkMode,
                     node: (
                       <button
                         type='button'
@@ -9304,6 +9379,7 @@ export function CollectionBrowserView({
             {
               key: 'density',
               priority: 22,
+              label: density === 'compact' ? 'Comfortable rows' : 'Compact rows',
               node: (
                 <button
                   type='button'
@@ -9326,530 +9402,542 @@ export function CollectionBrowserView({
               key: 'columns',
               priority: 62,
               node: (
-                <div className='relative' ref={colsRef}>
-                  <button
-                    type='button'
-                    onClick={() => setColsOpen((o) => !o)}
-                    className='h-8 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+                <Popover open={colsOpen} onOpenChange={setColsOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type='button'
+                      className='flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+                    >
+                      <SlidersHorizontal className='h-3.5 w-3.5' />
+                      Columns
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align='end'
+                    collisionPadding={16}
+                    className='flex max-h-[min(440px,var(--radix-popover-content-available-height))] w-72 flex-col overflow-hidden rounded-xl border-slate-200 p-0 shadow-lg dark:border-slate-700'
+                    data-cbv-columns-menu=''
                   >
-                    Columns
-                  </button>
-                  {colsOpen && (
-                    <div className='nvr-pop-in absolute right-0 top-full z-50 mt-1 flex max-h-[440px] w-72 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900'>
-                      <div className='flex-1 overflow-y-auto p-1.5'>
-                        <p className='px-1.5 pb-1 pt-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                          Visible columns
-                        </p>
-                        {effectiveColumns.map((k, idx) => (
-                          <div key={k}>
-                            <div
-                              draggable={renamingCol !== k}
-                              onDragStart={() => {
-                                dragIdxRef.current = idx
-                              }}
-                              onDragOver={(e) => e.preventDefault()}
-                              onDrop={(e) => {
-                                e.preventDefault()
-                                const from = dragIdxRef.current
-                                dragIdxRef.current = null
-                                if (from == null || from === idx) return
-                                const next = [...effectiveColumns]
-                                const [moved] = next.splice(from, 1)
-                                next.splice(idx, 0, moved)
-                                setDisplayColumns(next)
-                              }}
-                              className='group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    <div className='min-h-0 flex-1 overflow-y-auto p-1.5'>
+                      <p className='px-1.5 pb-1 pt-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                        Visible columns
+                      </p>
+                      {effectiveColumns.map((k, idx) => (
+                        <div key={k}>
+                          <div
+                            draggable={renamingCol !== k}
+                            onDragStart={() => {
+                              dragIdxRef.current = idx
+                            }}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                              e.preventDefault()
+                              const from = dragIdxRef.current
+                              dragIdxRef.current = null
+                              if (from == null || from === idx) return
+                              const next = [...effectiveColumns]
+                              const [moved] = next.splice(from, 1)
+                              next.splice(idx, 0, moved)
+                              setDisplayColumns(next)
+                            }}
+                            className='group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          >
+                            <span
+                              aria-hidden
+                              className='cursor-grab text-[10px] leading-none text-slate-300 group-hover:text-slate-400'
                             >
-                              <span
-                                aria-hidden
-                                className='cursor-grab text-[10px] leading-none text-slate-300 group-hover:text-slate-400'
-                              >
-                                ⠿
+                              ⠿
+                            </span>
+                            {renamingCol === k ? (
+                              <input
+                                autoFocus
+                                value={columnLabels[k] ?? ''}
+                                placeholder={
+                                  k.includes('.')
+                                    ? k.split('.').map(titleCase).join(' › ')
+                                    : titleCase(k)
+                                }
+                                onChange={(e) =>
+                                  setColumnLabels((l) => {
+                                    const next = { ...l }
+                                    if (e.target.value) next[k] = e.target.value
+                                    else delete next[k]
+                                    return next
+                                  })
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === 'Escape') setRenamingCol(null)
+                                }}
+                                onBlur={() => setRenamingCol(null)}
+                                className='h-5 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1 text-[11.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                              />
+                            ) : (
+                              <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-slate-200'>
+                                {columnLabel(k)}
                               </span>
-                              {renamingCol === k ? (
-                                <input
-                                  autoFocus
-                                  value={columnLabels[k] ?? ''}
-                                  placeholder={
-                                    k.includes('.')
-                                      ? k.split('.').map(titleCase).join(' › ')
-                                      : titleCase(k)
-                                  }
-                                  onChange={(e) =>
-                                    setColumnLabels((l) => {
-                                      const next = { ...l }
-                                      if (e.target.value) next[k] = e.target.value
-                                      else delete next[k]
-                                      return next
-                                    })
-                                  }
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter' || e.key === 'Escape')
-                                      setRenamingCol(null)
-                                  }}
-                                  onBlur={() => setRenamingCol(null)}
-                                  className='h-5 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1 text-[11.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
-                                />
-                              ) : (
-                                <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-slate-200'>
-                                  {columnLabel(k)}
-                                </span>
-                              )}
-                              {renamingCol !== k && (
-                                <button
-                                  type='button'
-                                  onClick={() => setRenamingCol(k)}
-                                  title='Rename column'
-                                  aria-label={`Rename ${k}`}
-                                  className='text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
-                                >
-                                  ✎
-                                </button>
-                              )}
+                            )}
+                            {renamingCol !== k && (
                               <button
                                 type='button'
-                                onClick={() => setFormattingCol(formattingCol === k ? null : k)}
-                                title='Format column'
-                                aria-label={`Format ${k}`}
+                                onClick={() => setRenamingCol(k)}
+                                title='Rename column'
+                                aria-label={`Rename ${k}`}
+                                className='text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
+                              >
+                                ✎
+                              </button>
+                            )}
+                            <button
+                              type='button'
+                              onClick={() => setFormattingCol(formattingCol === k ? null : k)}
+                              title='Format column'
+                              aria-label={`Format ${k}`}
+                              className={
+                                columnFormats[k]
+                                  ? 'text-[11px] font-bold text-[#00a5cc]'
+                                  : 'text-[11px] text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
+                              }
+                            >
+                              $
+                            </button>
+                            {(() => {
+                              // Only where the list can show the figure (2026-11-14): a number
+                              // column it totals on the server, or a calculated sum of them.
+                              const s = isNumericCol(k) ? totalsSupportOf(k) : null
+                              return s?.kind === 'server' || s?.kind === 'derived'
+                            })() && (
+                              <button
+                                type='button'
+                                onClick={() => setColumnTotal(k, columnAggs[k] ? null : 'sum')}
+                                title='Sum this column in a footer row (across all matching records)'
+                                aria-label={`Toggle sum for ${k}`}
                                 className={
-                                  columnFormats[k]
+                                  columnAggs[k]
                                     ? 'text-[11px] font-bold text-[#00a5cc]'
                                     : 'text-[11px] text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
                                 }
                               >
-                                $
+                                Σ
                               </button>
-                              {(() => {
-                                // Only where the list can show the figure (2026-11-14): a number
-                                // column it totals on the server, or a calculated sum of them.
-                                const s = isNumericCol(k) ? totalsSupportOf(k) : null
-                                return s?.kind === 'server' || s?.kind === 'derived'
-                              })() && (
-                                <button
-                                  type='button'
-                                  onClick={() => setColumnTotal(k, columnAggs[k] ? null : 'sum')}
-                                  title='Sum this column in a footer row (across all matching records)'
-                                  aria-label={`Toggle sum for ${k}`}
-                                  className={
-                                    columnAggs[k]
-                                      ? 'text-[11px] font-bold text-[#00a5cc]'
-                                      : 'text-[11px] text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
-                                  }
-                                >
-                                  Σ
-                                </button>
-                              )}
-                              <button
-                                type='button'
-                                onClick={() =>
-                                  setDisplayColumns(effectiveColumns.filter((x) => x !== k))
-                                }
-                                title='Remove column'
-                                aria-label={`Remove ${k}`}
-                                className='text-slate-300 hover:text-slate-500'
-                              >
-                                ✕
-                              </button>
-                            </div>
-                            {formattingCol === k && (
-                              <div className='mb-1 ml-5 mr-1 rounded-md border border-slate-100 bg-slate-50 p-1.5 dark:border-slate-800 dark:bg-slate-800/60'>
-                                <div className='flex flex-wrap gap-1'>
-                                  {FORMAT_PRESETS.map((pz) => {
-                                    const active =
-                                      JSON.stringify(columnFormats[k] ?? null) ===
-                                      JSON.stringify(pz.cfg)
-                                    return (
-                                      <button
-                                        key={pz.label}
-                                        type='button'
-                                        onClick={() => {
-                                          setColumnFormats((f) => {
-                                            const next = { ...f }
-                                            if (pz.cfg) next[k] = pz.cfg
-                                            else delete next[k]
-                                            return next
-                                          })
-                                          setFormattingCol(null)
-                                        }}
-                                        className={`rounded border px-1.5 py-0.5 text-[10.5px] ${
-                                          active
-                                            ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-slate-800 dark:text-slate-100'
-                                            : 'border-slate-200 bg-white text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
-                                        }`}
-                                      >
-                                        {pz.label}
-                                      </button>
-                                    )
-                                  })}
-                                </div>
-                                <input
-                                  placeholder='Custom date… e.g. DD MMM YY hh:mm A — Enter'
-                                  defaultValue={
-                                    columnFormats[k]?.type === 'datetime'
-                                      ? (columnFormats[k] as { template: string }).template
-                                      : ''
-                                  }
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      const t = (e.target as HTMLInputElement).value.trim()
-                                      if (t)
-                                        setColumnFormats((f) => ({
-                                          ...f,
-                                          [k]: { type: 'datetime', template: t }
-                                        }))
-                                      setFormattingCol(null)
-                                    }
-                                    if (e.key === 'Escape') setFormattingCol(null)
-                                  }}
-                                  className='mt-1 h-5 w-full rounded border border-slate-200 bg-white px-1 text-[10.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
-                                />
-                                {/* Conditional tint (#84): first matching rule colors the cell. */}
-                                <div className='mt-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
-                                  <p className='mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-                                    Conditional color
-                                  </p>
-                                  {(columnTints[k] ?? []).map((r, ri) => (
-                                    <div
-                                      // biome-ignore lint/suspicious/noArrayIndexKey: positional rule list
-                                      key={ri}
-                                      className='mb-1 flex items-center gap-1'
+                            )}
+                            <button
+                              type='button'
+                              onClick={() =>
+                                setDisplayColumns(effectiveColumns.filter((x) => x !== k))
+                              }
+                              title='Remove column'
+                              aria-label={`Remove ${k}`}
+                              className='text-slate-300 hover:text-slate-500'
+                            >
+                              ✕
+                            </button>
+                          </div>
+                          {formattingCol === k && (
+                            <div className='mb-1 ml-5 mr-1 rounded-md border border-slate-100 bg-slate-50 p-1.5 dark:border-slate-800 dark:bg-slate-800/60'>
+                              <div className='flex flex-wrap gap-1'>
+                                {FORMAT_PRESETS.map((pz) => {
+                                  const active =
+                                    JSON.stringify(columnFormats[k] ?? null) ===
+                                    JSON.stringify(pz.cfg)
+                                  return (
+                                    <button
+                                      key={pz.label}
+                                      type='button'
+                                      onClick={() => {
+                                        setColumnFormats((f) => {
+                                          const next = { ...f }
+                                          if (pz.cfg) next[k] = pz.cfg
+                                          else delete next[k]
+                                          return next
+                                        })
+                                        setFormattingCol(null)
+                                      }}
+                                      className={`rounded border px-1.5 py-0.5 text-[10.5px] ${
+                                        active
+                                          ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-slate-800 dark:text-slate-100'
+                                          : 'border-slate-200 bg-white text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
+                                      }`}
                                     >
-                                      <SimpleSelectXs
-                                        ariaLabel='Rule operator'
-                                        value={r.op}
-                                        onChange={(v) =>
+                                      {pz.label}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                              <input
+                                placeholder='Custom date… e.g. DD MMM YY hh:mm A — Enter'
+                                defaultValue={
+                                  columnFormats[k]?.type === 'datetime'
+                                    ? (columnFormats[k] as { template: string }).template
+                                    : ''
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    const t = (e.target as HTMLInputElement).value.trim()
+                                    if (t)
+                                      setColumnFormats((f) => ({
+                                        ...f,
+                                        [k]: { type: 'datetime', template: t }
+                                      }))
+                                    setFormattingCol(null)
+                                  }
+                                  if (e.key === 'Escape') setFormattingCol(null)
+                                }}
+                                className='mt-1 h-5 w-full rounded border border-slate-200 bg-white px-1 text-[10.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+                              />
+                              {/* Conditional tint (#84): first matching rule colors the cell. */}
+                              <div className='mt-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
+                                <p className='mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                                  Conditional color
+                                </p>
+                                {(columnTints[k] ?? []).map((r, ri) => (
+                                  <div
+                                    // biome-ignore lint/suspicious/noArrayIndexKey: positional rule list
+                                    key={ri}
+                                    className='mb-1 flex items-center gap-1'
+                                  >
+                                    <SimpleSelectXs
+                                      ariaLabel='Rule operator'
+                                      value={r.op}
+                                      onChange={(v) =>
+                                        setColumnTints((t) => ({
+                                          ...t,
+                                          [k]: (t[k] ?? []).map((x, i) =>
+                                            i === ri ? { ...x, op: v as TintRule['op'] } : x
+                                          )
+                                        }))
+                                      }
+                                      options={[
+                                        { value: 'gt', label: '>' },
+                                        { value: 'lt', label: '<' },
+                                        { value: 'eq', label: '=' },
+                                        { value: 'neq', label: '≠' },
+                                        { value: 'contains', label: 'contains' },
+                                        { value: 'empty', label: 'is empty' },
+                                        { value: 'nempty', label: 'is set' }
+                                      ]}
+                                    />
+                                    {!['empty', 'nempty'].includes(r.op) && (
+                                      <input
+                                        value={r.value ?? ''}
+                                        onChange={(e) =>
                                           setColumnTints((t) => ({
                                             ...t,
                                             [k]: (t[k] ?? []).map((x, i) =>
-                                              i === ri ? { ...x, op: v as TintRule['op'] } : x
+                                              i === ri ? { ...x, value: e.target.value } : x
                                             )
                                           }))
                                         }
-                                        options={[
-                                          { value: 'gt', label: '>' },
-                                          { value: 'lt', label: '<' },
-                                          { value: 'eq', label: '=' },
-                                          { value: 'neq', label: '≠' },
-                                          { value: 'contains', label: 'contains' },
-                                          { value: 'empty', label: 'is empty' },
-                                          { value: 'nempty', label: 'is set' }
-                                        ]}
+                                        placeholder='value'
+                                        className='h-5 w-16 rounded border border-slate-200 bg-white px-1 text-[10.5px] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
                                       />
-                                      {!['empty', 'nempty'].includes(r.op) && (
-                                        <input
-                                          value={r.value ?? ''}
-                                          onChange={(e) =>
-                                            setColumnTints((t) => ({
-                                              ...t,
-                                              [k]: (t[k] ?? []).map((x, i) =>
-                                                i === ri ? { ...x, value: e.target.value } : x
-                                              )
-                                            }))
-                                          }
-                                          placeholder='value'
-                                          className='h-5 w-16 rounded border border-slate-200 bg-white px-1 text-[10.5px] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
-                                        />
-                                      )}
-                                      {(['red', 'amber', 'green', 'blue'] as const).map((c) => (
-                                        <button
-                                          key={c}
-                                          type='button'
-                                          aria-label={c}
-                                          onClick={() =>
-                                            setColumnTints((t) => ({
-                                              ...t,
-                                              [k]: (t[k] ?? []).map((x, i) =>
-                                                i === ri ? { ...x, color: c } : x
-                                              )
-                                            }))
-                                          }
-                                          className={cn(
-                                            'h-3.5 w-3.5 rounded-full border',
-                                            c === 'red' && 'bg-red-500',
-                                            c === 'amber' && 'bg-amber-400',
-                                            c === 'green' && 'bg-emerald-500',
-                                            c === 'blue' && 'bg-sky-500',
-                                            r.color === c
-                                              ? 'border-slate-700 ring-1 ring-slate-400 dark:border-white'
-                                              : 'border-transparent opacity-50'
-                                          )}
-                                        />
-                                      ))}
+                                    )}
+                                    {(['red', 'amber', 'green', 'blue'] as const).map((c) => (
                                       <button
+                                        key={c}
                                         type='button'
-                                        aria-label='Remove rule'
+                                        aria-label={c}
                                         onClick={() =>
                                           setColumnTints((t) => ({
                                             ...t,
-                                            [k]: (t[k] ?? []).filter((_, i) => i !== ri)
+                                            [k]: (t[k] ?? []).map((x, i) =>
+                                              i === ri ? { ...x, color: c } : x
+                                            )
                                           }))
                                         }
-                                        className='ml-auto text-slate-300 hover:text-slate-500'
-                                      >
-                                        ✕
-                                      </button>
-                                    </div>
-                                  ))}
-                                  <button
-                                    type='button'
-                                    onClick={() =>
-                                      setColumnTints((t) => ({
-                                        ...t,
-                                        [k]: [
-                                          ...(t[k] ?? []),
-                                          { op: 'gt', value: '', color: 'red' }
-                                        ]
-                                      }))
-                                    }
-                                    className='text-[10.5px] text-slate-400 hover:text-slate-600'
-                                  >
-                                    ＋ Add color rule
-                                  </button>
-                                </div>
+                                        className={cn(
+                                          'h-3.5 w-3.5 rounded-full border',
+                                          c === 'red' && 'bg-red-500',
+                                          c === 'amber' && 'bg-amber-400',
+                                          c === 'green' && 'bg-emerald-500',
+                                          c === 'blue' && 'bg-sky-500',
+                                          r.color === c
+                                            ? 'border-slate-700 ring-1 ring-slate-400 dark:border-white'
+                                            : 'border-transparent opacity-50'
+                                        )}
+                                      />
+                                    ))}
+                                    <button
+                                      type='button'
+                                      aria-label='Remove rule'
+                                      onClick={() =>
+                                        setColumnTints((t) => ({
+                                          ...t,
+                                          [k]: (t[k] ?? []).filter((_, i) => i !== ri)
+                                        }))
+                                      }
+                                      className='ml-auto text-slate-300 hover:text-slate-500'
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                ))}
+                                <button
+                                  type='button'
+                                  onClick={() =>
+                                    setColumnTints((t) => ({
+                                      ...t,
+                                      [k]: [...(t[k] ?? []), { op: 'gt', value: '', color: 'red' }]
+                                    }))
+                                  }
+                                  className='text-[10.5px] text-slate-400 hover:text-slate-600'
+                                >
+                                  ＋ Add color rule
+                                </button>
                               </div>
-                            )}
-                          </div>
-                        ))}
-                        <p className='mt-2 border-t border-slate-100 px-1.5 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:border-slate-800'>
-                          Add column
-                        </p>
-                        {hasPipeline && !effectiveColumns.includes(IN_STEP_COLUMN) && (
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      <p className='mt-2 border-t border-slate-100 px-1.5 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:border-slate-800'>
+                        Add column
+                      </p>
+                      {hasPipeline && !effectiveColumns.includes(IN_STEP_COLUMN) && (
+                        <button
+                          type='button'
+                          data-cbv-add-in-step=''
+                          onClick={() => setDisplayColumns([...effectiveColumns, IN_STEP_COLUMN])}
+                          className='flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                        >
+                          <span aria-hidden className='text-slate-400'>
+                            ＋
+                          </span>
+                          <span className='truncate'>In step</span>
+                          <span className='ml-auto shrink-0 text-[10.5px] text-slate-400'>
+                            step · time there
+                          </span>
+                        </button>
+                      )}
+                      {nonHidden
+                        .filter((f) => !effectiveColumns.includes(f.field))
+                        .map((f) => (
                           <button
+                            key={f.field}
                             type='button'
-                            data-cbv-add-in-step=''
-                            onClick={() => setDisplayColumns([...effectiveColumns, IN_STEP_COLUMN])}
+                            onClick={() => setDisplayColumns([...effectiveColumns, f.field])}
                             className='flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
                           >
                             <span aria-hidden className='text-slate-400'>
                               ＋
                             </span>
-                            <span className='truncate'>In step</span>
-                            <span className='ml-auto shrink-0 text-[10.5px] text-slate-400'>
-                              step · time there
-                            </span>
+                            <span className='truncate'>{titleCase(f.field)}</span>
                           </button>
-                        )}
-                        {nonHidden
-                          .filter((f) => !effectiveColumns.includes(f.field))
-                          .map((f) => (
-                            <button
-                              key={f.field}
-                              type='button'
-                              onClick={() => setDisplayColumns([...effectiveColumns, f.field])}
-                              className='flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
-                            >
-                              <span aria-hidden className='text-slate-400'>
-                                ＋
-                              </span>
-                              <span className='truncate'>{titleCase(f.field)}</span>
-                            </button>
-                          ))}
-                        {meta && (
-                          <div className='mt-1 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
-                            <p className='px-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                              ＋ Related column
-                            </p>
-                            <RelatedColumnRoot
-                              collection={collection}
-                              meta={meta}
-                              onPick={(path) => {
-                                const key = path.join('.')
-                                if (!effectiveColumns.includes(key)) {
-                                  setDisplayColumns([...effectiveColumns, key])
-                                }
-                                setColsOpen(false)
-                              }}
-                            />
-                          </div>
-                        )}
+                        ))}
+                      {meta && (
                         <div className='mt-1 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
                           <p className='px-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                            ＋ Formula column
+                            ＋ Related column
                           </p>
-                          <FormulaColumnAdder
-                            fields={nonHidden.map((f) => f.field)}
-                            onAdd={(label, formula) => {
-                              let n = 1
-                              while (columnFormulas[`__f:${n}`]) n++
-                              const key = `__f:${n}`
-                              setColumnFormulas((m) => ({ ...m, [key]: formula }))
-                              setColumnLabels((l) => ({ ...l, [key]: label }))
-                              setDisplayColumns([...effectiveColumns, key])
+                          <RelatedColumnRoot
+                            collection={collection}
+                            meta={meta}
+                            onPick={(path) => {
+                              const key = path.join('.')
+                              if (!effectiveColumns.includes(key)) {
+                                setDisplayColumns([...effectiveColumns, key])
+                              }
+                              setColsOpen(false)
                             }}
                           />
                         </div>
-                      </div>
-                      {/* Presets footer — save current layout, or write it as the collection default */}
-                      <div className='shrink-0 border-t border-slate-100 p-1.5 dark:border-slate-800'>
+                      )}
+                      <div className='mt-1 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
                         <p className='px-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                          Presets
+                          ＋ Formula column
                         </p>
-                        {presetOpen ? (
-                          <div className='flex items-center gap-1.5 px-1.5 pb-0.5'>
-                            <input
-                              autoFocus
-                              value={saveName}
-                              placeholder='Preset name…'
-                              onChange={(e) => setSaveName(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' && saveName.trim()) {
-                                  saveView.mutate()
-                                  setPresetOpen(false)
-                                }
-                                if (e.key === 'Escape') setPresetOpen(false)
-                              }}
-                              className='h-6 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 text-[11.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
-                            />
-                            <button
-                              type='button'
-                              disabled={!saveName.trim() || saveView.isPending}
-                              onClick={() => {
-                                saveView.mutate()
-                                setPresetOpen(false)
-                              }}
-                              className='text-[11.5px] font-medium text-[#00a5cc] disabled:opacity-40'
-                            >
-                              Save
-                            </button>
-                          </div>
-                        ) : (
-                          <div className='flex items-center justify-between px-1.5 pb-0.5'>
-                            <button
-                              type='button'
-                              onClick={() => setPresetOpen(true)}
-                              className='inline-flex items-center gap-1 text-[11.5px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
-                            >
-                              <span aria-hidden>🖫</span> Save as preset…
-                            </button>
-                            {isAdmin && (
-                              <button
-                                type='button'
-                                onClick={() => upsertDefault.mutate()}
-                                disabled={upsertDefault.isPending}
-                                title='Save the current columns/filters/sort as the collection default view'
-                                className='inline-flex items-center gap-1 text-[11.5px] text-slate-500 hover:text-[#00a5cc] disabled:opacity-40 dark:text-slate-400'
-                              >
-                                <span aria-hidden>☆</span> Set default
-                              </button>
-                            )}
-                          </div>
-                        )}
+                        <FormulaColumnAdder
+                          fields={nonHidden.map((f) => f.field)}
+                          onAdd={(label, formula) => {
+                            let n = 1
+                            while (columnFormulas[`__f:${n}`]) n++
+                            const key = `__f:${n}`
+                            setColumnFormulas((m) => ({ ...m, [key]: formula }))
+                            setColumnLabels((l) => ({ ...l, [key]: label }))
+                            setDisplayColumns([...effectiveColumns, key])
+                          }}
+                        />
                       </div>
                     </div>
-                  )}
-                </div>
+                    {/* Presets footer — save current layout, or write it as the collection default */}
+                    <div className='shrink-0 border-t border-slate-100 p-1.5 dark:border-slate-800'>
+                      <p className='px-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                        Presets
+                      </p>
+                      {presetOpen ? (
+                        <div className='flex items-center gap-1.5 px-1.5 pb-0.5'>
+                          <input
+                            autoFocus
+                            value={saveName}
+                            placeholder='Preset name…'
+                            onChange={(e) => setSaveName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && saveName.trim()) {
+                                saveView.mutate()
+                                setPresetOpen(false)
+                              }
+                              if (e.key === 'Escape') setPresetOpen(false)
+                            }}
+                            className='h-6 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 text-[11.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                          />
+                          <button
+                            type='button'
+                            disabled={!saveName.trim() || saveView.isPending}
+                            onClick={() => {
+                              saveView.mutate()
+                              setPresetOpen(false)
+                            }}
+                            className='text-[11.5px] font-medium text-[#00a5cc] disabled:opacity-40'
+                          >
+                            Save
+                          </button>
+                        </div>
+                      ) : (
+                        <div className='flex items-center justify-between px-1.5 pb-0.5'>
+                          <button
+                            type='button'
+                            onClick={() => setPresetOpen(true)}
+                            className='inline-flex items-center gap-1 text-[11.5px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                          >
+                            <span aria-hidden>🖫</span> Save as preset…
+                          </button>
+                          {isAdmin && (
+                            <button
+                              type='button'
+                              onClick={() => upsertDefault.mutate()}
+                              disabled={upsertDefault.isPending}
+                              title='Save the current columns/filters/sort as the collection default view'
+                              className='inline-flex items-center gap-1 text-[11.5px] text-slate-500 hover:text-[#00a5cc] disabled:opacity-40 dark:text-slate-400'
+                            >
+                              <span aria-hidden>☆</span> Set default
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
               )
             },
             {
               key: 'export',
-              priority: exporting ? 95 : 65,
+              priority: 65,
+              active: exporting,
               node: (
-                <div className='relative' ref={exportMenuRef}>
-                  <button
-                    type='button'
-                    onClick={() => setExportMenuOpen((v) => !v)}
-                    disabled={exporting}
-                    className='h-8 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400'
-                  >
-                    {exporting ? 'Exporting…' : 'Export'}
-                  </button>
-                  {exportMenuOpen && (
-                    <div className='nvr-pop-in absolute right-0 top-full z-[60] mt-1 w-[240px] rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-border dark:bg-card'>
-                      <button
-                        type='button'
-                        onClick={() => {
-                          setExportMenuOpen(false)
-                          void exportCsv()
-                        }}
-                        className='block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
-                      >
-                        CSV — visible columns
-                      </button>
-                      <button
-                        type='button'
-                        onClick={() => {
-                          setExportMenuOpen(false)
-                          // Copy to clipboard (#202): current page, visible columns,
-                          // TSV — pastes straight into Excel/Sheets as cells.
-                          const cols = effectiveColumns
-                          const header = cols.map((c) => columnLabel(c)).join('\t')
-                          const body = rows
-                            .map((r) =>
-                              cols
-                                .map((c) => {
-                                  const v = isResolvedCol(c)
-                                    ? fmtCell(resolvedFor(r.id, c) ?? '', c, r.id)
-                                    : fmtCell(String(r[c] ?? ''), c, r.id)
-                                  return String(v ?? '').replace(/[\t\n]/g, ' ')
-                                })
-                                .join('\t')
-                            )
-                            .join('\n')
-                          void navigator.clipboard?.writeText(`${header}\n${body}`).then(() => {
-                            setCopiedTable(true)
-                            setTimeout(() => setCopiedTable(false), 2000)
-                          })
-                        }}
-                        className='block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
-                      >
-                        {copiedTable ? 'Copied ✓' : 'Copy table to clipboard'}
-                      </button>
-                      {exportPresets.length > 0 && (
-                        <p className='border-t border-slate-100 px-2.5 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:border-border/60'>
-                          Presets (server, current filters apply)
-                        </p>
+                <Popover open={exportMenuOpen} onOpenChange={setExportMenuOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type='button'
+                      disabled={exporting}
+                      className='flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400'
+                    >
+                      {/* Same width while it runs: a spinner, not a longer label. */}
+                      {exporting ? (
+                        <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                      ) : (
+                        <Download className='h-3.5 w-3.5' />
                       )}
-                      {exportPresets.map((pr) => (
-                        <div key={pr.id} className='flex items-center'>
-                          <button
-                            type='button'
-                            onClick={() => {
-                              setExportMenuOpen(false)
-                              runExportPreset(pr.id, pr.name)
-                            }}
-                            className='block min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
-                          >
-                            {pr.name}
-                            <span className='ml-1.5 text-[10px] uppercase text-slate-400'>
-                              {pr.config?.format ?? 'xlsx'}
-                            </span>
-                          </button>
-                          <button
-                            type='button'
-                            data-export-background={pr.id}
-                            data-tip='Run in the background — a download appears in the Jobs tray'
-                            onClick={() => {
-                              setExportMenuOpen(false)
-                              runExportPreset(pr.id, pr.name, 'always')
-                            }}
-                            className='mr-1 shrink-0 rounded px-1.5 py-1 text-[10.5px] font-medium text-slate-500 hover:bg-muted hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
-                          >
-                            Background
-                          </button>
-                        </div>
-                      ))}
-                      <div className='mt-0.5 flex items-center gap-1 border-t border-slate-100 px-1.5 pb-1 pt-1.5 dark:border-border/60'>
-                        <input
-                          value={presetName}
-                          onChange={(e) => setPresetName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') void saveExportPreset()
-                          }}
-                          placeholder='Save columns as preset…'
-                          className='h-6 min-w-0 flex-1 rounded border border-slate-200 bg-background px-1.5 text-[11.5px] dark:border-border'
-                        />
+                      Export
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align='end'
+                    collisionPadding={16}
+                    className='w-[240px] rounded-lg border-slate-200 p-1 shadow-xl dark:border-border'
+                    data-cbv-export-menu=''
+                  >
+                    <button
+                      type='button'
+                      onClick={() => {
+                        setExportMenuOpen(false)
+                        void exportCsv()
+                      }}
+                      className='block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                    >
+                      CSV — visible columns
+                    </button>
+                    <button
+                      type='button'
+                      onClick={() => {
+                        setExportMenuOpen(false)
+                        // Copy to clipboard (#202): current page, visible columns,
+                        // TSV — pastes straight into Excel/Sheets as cells.
+                        const cols = effectiveColumns
+                        const header = cols.map((c) => columnLabel(c)).join('\t')
+                        const body = rows
+                          .map((r) =>
+                            cols
+                              .map((c) => {
+                                const v = isResolvedCol(c)
+                                  ? fmtCell(resolvedFor(r.id, c) ?? '', c, r.id)
+                                  : fmtCell(String(r[c] ?? ''), c, r.id)
+                                return String(v ?? '').replace(/[\t\n]/g, ' ')
+                              })
+                              .join('\t')
+                          )
+                          .join('\n')
+                        void navigator.clipboard?.writeText(`${header}\n${body}`).then(() => {
+                          setCopiedTable(true)
+                          setTimeout(() => setCopiedTable(false), 2000)
+                        })
+                      }}
+                      className='block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                    >
+                      {copiedTable ? 'Copied ✓' : 'Copy table to clipboard'}
+                    </button>
+                    {exportPresets.length > 0 && (
+                      <p className='border-t border-slate-100 px-2.5 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:border-border/60'>
+                        Presets (server, current filters apply)
+                      </p>
+                    )}
+                    {exportPresets.map((pr) => (
+                      <div key={pr.id} className='flex items-center'>
                         <button
                           type='button'
-                          disabled={!presetName.trim()}
-                          onClick={() => void saveExportPreset()}
-                          className='h-6 shrink-0 rounded bg-nvr-cyan px-2 text-[11px] font-semibold text-white disabled:opacity-40'
+                          onClick={() => {
+                            setExportMenuOpen(false)
+                            runExportPreset(pr.id, pr.name)
+                          }}
+                          className='block min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
                         >
-                          Save
+                          {pr.name}
+                          <span className='ml-1.5 text-[10px] uppercase text-slate-400'>
+                            {pr.config?.format ?? 'xlsx'}
+                          </span>
+                        </button>
+                        <button
+                          type='button'
+                          data-export-background={pr.id}
+                          data-tip='Run in the background — a download appears in the Jobs tray'
+                          onClick={() => {
+                            setExportMenuOpen(false)
+                            runExportPreset(pr.id, pr.name, 'always')
+                          }}
+                          className='mr-1 shrink-0 rounded px-1.5 py-1 text-[10.5px] font-medium text-slate-500 hover:bg-muted hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
+                        >
+                          Background
                         </button>
                       </div>
+                    ))}
+                    <div className='mt-0.5 flex items-center gap-1 border-t border-slate-100 px-1.5 pb-1 pt-1.5 dark:border-border/60'>
+                      <input
+                        value={presetName}
+                        onChange={(e) => setPresetName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void saveExportPreset()
+                        }}
+                        placeholder='Save columns as preset…'
+                        className='h-6 min-w-0 flex-1 rounded border border-slate-200 bg-background px-1.5 text-[11.5px] dark:border-border'
+                      />
+                      <button
+                        type='button'
+                        disabled={!presetName.trim()}
+                        onClick={() => void saveExportPreset()}
+                        className='h-6 shrink-0 rounded bg-nvr-cyan px-2 text-[11px] font-semibold text-white disabled:opacity-40'
+                      >
+                        Save
+                      </button>
                     </div>
-                  )}
-                </div>
+                  </PopoverContent>
+                </Popover>
               )
             }
           ]}
@@ -10575,7 +10663,7 @@ export function CollectionBrowserView({
                         return (
                           <th
                             key={key}
-                            ref={pinned ? pinRef(key) : undefined}
+                            ref={pinned || layoutPins[key] ? pinRef(key) : undefined}
                             style={{ ...widthStyle(key), ...pinStyle(key) }}
                             onClick={() => nextSort(IN_STEP_SORT)}
                             aria-sort={active ? (desc ? 'descending' : 'ascending') : 'none'}
@@ -10629,7 +10717,7 @@ export function CollectionBrowserView({
                         return (
                           <th
                             key={key}
-                            ref={pinned ? pinRef(key) : undefined}
+                            ref={pinned || layoutPins[key] ? pinRef(key) : undefined}
                             style={pinStyle(key)}
                             className={`${baseTh} text-left ${col.kind === 'actions' ? 'w-20 px-2' : ''} ${pinPart}`}
                           >
@@ -10656,7 +10744,7 @@ export function CollectionBrowserView({
                       return (
                         <th
                           key={key}
-                          ref={pinned ? pinRef(key) : undefined}
+                          ref={pinned || layoutPins[key] ? pinRef(key) : undefined}
                           style={{ ...widthStyle(key), ...pinStyle(key) }}
                           onClick={() => {
                             if (!resolved) nextSort(key)
@@ -11692,11 +11780,27 @@ export function CollectionBrowserView({
             !aiResult &&
             (totalUnknown ? page > 1 || rows.length >= effPageSize : total > effPageSize) && (
               <div
-                className='flex shrink-0 items-center justify-between border-t border-slate-100 bg-white py-2 pl-3 dark:border-slate-800 dark:bg-slate-900'
+                className='flex shrink-0 items-center justify-between border-t border-slate-100 bg-white py-1.5 pl-2 dark:border-slate-800 dark:bg-slate-900 md:py-2 md:pl-3'
                 // A host's corner float (admin's bug button) would cover Last.
-                style={{ paddingRight: 'calc(0.75rem + var(--nvr-corner-float, 0px))' }}
+                style={{ paddingRight: 'calc(0.5rem + var(--nvr-corner-float, 0px))' }}
               >
-                <p className='text-[12px] tabular-nums text-slate-500 dark:text-slate-400'>
+                <PhonePager
+                  className='w-full'
+                  range={
+                    <>
+                      <span className='font-semibold text-slate-700 dark:text-slate-200'>
+                        {fmtNum(start)}–{fmtNum(end)}
+                      </span>{' '}
+                      of {totalApprox ? 'about ' : ''}
+                      {totalUnknown ? 'many' : fmtNum(total)}
+                    </>
+                  }
+                  prevDisabled={page <= 1}
+                  nextDisabled={page >= totalPages}
+                  onPrev={() => setPage((p) => Math.max(1, p - 1))}
+                  onNext={() => setPage((p) => p + 1)}
+                />
+                <p className='hidden text-[12px] tabular-nums text-slate-500 dark:text-slate-400 md:block'>
                   <span className='font-semibold text-slate-700 dark:text-slate-200'>
                     {fmtNum(start)}–{fmtNum(end)}
                   </span>{' '}
@@ -11722,7 +11826,7 @@ export function CollectionBrowserView({
                   )}{' '}
                   records
                 </p>
-                <span className='flex items-center gap-0.5'>
+                <span className='hidden items-center gap-0.5 md:flex'>
                   <button
                     type='button'
                     disabled={page <= 1}

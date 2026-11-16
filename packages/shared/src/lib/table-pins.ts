@@ -18,8 +18,17 @@ export function fitPins(
   right: string[],
   widthOf: (key: string) => number,
   leadWidth: number,
-  viewport: number
+  viewport: number,
+  opts: {
+    compact?: boolean
+    /** Cap on the right-hand pins alone, as a share of the visible width (the record list:
+     *  State / Owners / Actions there squeezed Name out of sight at 1280 px). */
+    rightShare?: number
+  } = {}
 ): { left: string[]; right: string[] } {
+  // Phone width: only the record's identifier stays pinned, everything else scrolls.
+  // Pinned blocks on a 390 px screen leave the scrolling part a strip a few letters wide.
+  if (opts.compact) return { left: left.slice(0, 1), right: [] }
   // Not measured yet (hidden, first paint): pin as configured.
   if (viewport <= 0) return { left, right }
   const budget = viewport * PIN_BUDGET
@@ -31,12 +40,16 @@ export function fitPins(
     keptLeft.push(key)
     used += w
   }
+  const rightBudget =
+    opts.rightShare != null ? viewport * opts.rightShare : Number.POSITIVE_INFINITY
   const keptRight: string[] = []
+  let rightUsed = 0
   for (let i = right.length - 1; i >= 0; i--) {
     const w = widthOf(right[i])
-    if (used + w > budget) break
+    if (used + w > budget || rightUsed + w > rightBudget) break
     keptRight.unshift(right[i])
     used += w
+    rightUsed += w
   }
   return { left: keptLeft, right: keptRight }
 }

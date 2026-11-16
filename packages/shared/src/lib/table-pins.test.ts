@@ -41,4 +41,23 @@ describe('fitPins', () => {
       right: ['actions']
     })
   })
+
+  it('below md pins only the identifier, even when the rest would fit (phone)', () => {
+    expect(
+      fitPins(['request', 'state'], ['owners', 'actions'], widthOf, 40, 1000, { compact: true })
+    ).toEqual({ left: ['request'], right: [] })
+    // Nothing pinned on the left: nothing stays pinned at all.
+    expect(fitPins([], ['actions'], widthOf, 40, 390, { compact: true })).toEqual({
+      left: [],
+      right: []
+    })
+  })
+
+  it('caps the right-hand pins at a share of the width, dropping the inner ones first', () => {
+    // 900 px: total budget 540 would keep all three; the 40% right cap (360) keeps
+    // Actions + Owners (225) and drops State (the innermost).
+    expect(
+      fitPins(['request'], ['state', 'owners', 'actions'], widthOf, 40, 900, { rightShare: 0.4 })
+    ).toEqual({ left: ['request'], right: ['owners', 'actions'] })
+  })
 })
