@@ -14,6 +14,7 @@ import {
 } from '../../lib/field-merge'
 import { liveMotionAllowed } from '../../lib/live-preference'
 import { htmlToText } from '../../lib/sanitize-html'
+import { diffWindow } from '../../lib/text-diff-window'
 import { choiceLabel, cn, formatDate, formatDateTime, formatRelative } from '../../lib/utils'
 import { RelativeTime } from '../RelativeTime'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -192,11 +193,12 @@ export function RemoteConflictNotice({
       data-remote-conflict
       className='nvr-expand-in rounded-md border border-amber-200/80 bg-amber-50/60 px-2 py-1.5 text-[11.5px] text-slate-700 dark:border-amber-400/25 dark:bg-amber-400/[0.06] dark:text-slate-200'
     >
-      {/* The sentence keeps a readable width (16rem basis): in a narrow field column the
-          buttons drop to their own row instead of squeezing it to three words a line. */}
-      <div className='flex flex-wrap items-center gap-x-2 gap-y-1.5'>
+      {/* Always stacked: the sentence takes the full width, the buttons sit on their own row
+          under it (rt2-conflict r-1116b — side by side, a field column squeezed the sentence
+          to ~150 px over five lines). */}
+      <div className='flex flex-col items-start gap-1.5'>
         {/* The dot travels with its sentence: never alone on a line of its own. */}
-        <span className='flex min-w-0 flex-1 basis-[14rem] items-start gap-2'>
+        <span className='flex w-full min-w-0 items-start gap-2'>
           <span className='mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-400' />
           <span className='min-w-0'>
             <span className='font-medium'>{change.by ?? 'Someone'}</span> saved{' '}
@@ -212,7 +214,7 @@ export function RemoteConflictNotice({
             </span>
           </span>
         </span>
-        <span className='flex shrink-0 flex-wrap items-center gap-1.5'>
+        <span className='flex flex-wrap items-center gap-1.5 pl-3.5'>
           {!locked && (
             <button
               type='button'
@@ -548,6 +550,48 @@ function ChangeValue({
   return <>{shown(value, 60)}</>
 }
 
+/**
+ * Old → new in "See changes". Long text shows the part that differs (lib/text-diff-window):
+ * a head cut made both sides read the same whenever the edit was past it (rt2-conflict).
+ */
+function ChangeDiff({
+  was,
+  now,
+  field,
+  relatedCollection
+}: {
+  was: unknown
+  now: unknown
+  field: CMSField | null
+  relatedCollection: string | null
+}) {
+  const shown = useShown(field, relatedCollection, [was, now])
+  const plain =
+    (typeof was === 'string' || was == null) &&
+    (typeof now === 'string' || now == null) &&
+    !(field && (DATE_ONLY.has(field.type) || DATE_TIME.has(field.type)))
+  const win = plain ? diffWindow(shown(was, 100000), shown(now, 100000)) : null
+  return (
+    <p className='mt-0.5 break-words text-slate-500 dark:text-slate-400'>
+      <span className='line-through decoration-slate-300 dark:decoration-slate-600'>
+        {win ? (
+          win.before
+        ) : (
+          <ChangeValue value={was} field={field} relatedCollection={relatedCollection} />
+        )}
+      </span>{' '}
+      →{' '}
+      <span className='text-slate-700 dark:text-slate-200'>
+        {win ? (
+          win.after
+        ) : (
+          <ChangeValue value={now} field={field} relatedCollection={relatedCollection} />
+        )}
+      </span>
+    </p>
+  )
+}
+
 export interface RemoteChangeLogEntry {
   field: string
   by: string | null
@@ -611,6 +655,7 @@ export function RemoteChangesButton({
       </PopoverTrigger>
       <PopoverContent
         align='end'
+        collisionPadding={16}
         className='w-[360px] max-w-[calc(100vw-32px)] p-0'
         data-remote-changes-panel
       >
@@ -650,23 +695,12 @@ export function RemoteChangesButton({
                     {e.by ?? 'Someone'} · <RelativeTime value={e.at} />
                   </span>
                 </div>
-                <p className='mt-0.5 break-words text-slate-500 dark:text-slate-400'>
-                  <span className='line-through decoration-slate-300 dark:decoration-slate-600'>
-                    <ChangeValue
-                      value={e.was}
-                      field={fieldOf?.(e.field) ?? null}
-                      relatedCollection={relatedOf?.(e.field) ?? null}
-                    />
-                  </span>{' '}
-                  →{' '}
-                  <span className='text-slate-700 dark:text-slate-200'>
-                    <ChangeValue
-                      value={e.now}
-                      field={fieldOf?.(e.field) ?? null}
-                      relatedCollection={relatedOf?.(e.field) ?? null}
-                    />
-                  </span>
-                </p>
+                <ChangeDiff
+                  was={e.was}
+                  now={e.now}
+                  field={fieldOf?.(e.field) ?? null}
+                  relatedCollection={relatedOf?.(e.field) ?? null}
+                />
                 {c?.conflict && i === newest.findIndex((x) => x.field === e.field) && (
                   <div className='mt-1.5 flex flex-wrap items-center gap-1.5'>
                     <span className='mr-auto text-[11px] text-amber-700 dark:text-amber-300'>

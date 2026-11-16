@@ -2,6 +2,7 @@ import { ExternalLink, History, RotateCcw, Trash2 } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { useItemNavigation } from '../../context'
 import { draftFilledBack, draftIsFromOtherDevice, type StoredDraft } from '../../lib/draft-store'
+import { diffWindow } from '../../lib/text-diff-window'
 import { titleCase } from '../../lib/utils'
 import { RelativeTime } from '../RelativeTime'
 
@@ -38,6 +39,18 @@ const fmt = (v: unknown): string => {
   if (typeof v === 'boolean') return v ? 'Yes' : 'No'
   const str = typeof v === 'object' ? JSON.stringify(v) : String(v)
   return str.length > 60 ? `${str.slice(0, 60)}…` : str
+}
+
+/** Two plain text values, at least one past the head cut: their differing part (never ids,
+ *  choices or objects — those go through renderValue / fmt). */
+function longTextPair(was: unknown, now: unknown) {
+  const text = (v: unknown) => typeof v === 'string' || v == null
+  if (!text(was) || !text(now)) return null
+  const a = was == null ? '' : String(was)
+  const b = now == null ? '' : String(now)
+  if (a.length <= 60 && b.length <= 60) return null
+  const w = diffWindow(a.replace(/\s+/g, ' '), b.replace(/\s+/g, ' '))
+  return { before: w.before || 'empty', after: w.after || 'empty' }
 }
 
 export function DraftRecoveryBanner({
@@ -179,19 +192,26 @@ export function DraftRecoveryBanner({
       </div>
       {open && (
         <div className='mt-2 max-h-[240px] space-y-1 overflow-y-auto border-t border-amber-200/70 pt-2 dark:border-amber-500/30'>
-          {fields.map(([k, v]) => (
-            <div key={k} className='text-[11.5px]'>
-              <span className='font-medium'>{labelFor(k) || titleCase(k.replace(/_/g, ' '))}</span>
-              <p className='break-words text-amber-800/80 dark:text-amber-200/80'>
-                <span className='line-through opacity-70'>
-                  {renderValue ? renderValue(k, current[k]) : fmt(current[k])}
-                </span>{' '}
-                <span className='font-medium text-amber-900 dark:text-amber-100'>
-                  {renderValue ? renderValue(k, v) : fmt(v)}
+          {fields.map(([k, v]) => {
+            // Long text shows the part that differs: a 60-character head cut made the old and
+            // new text read the same whenever the edit was past it (rt4-sync r-1116b).
+            const win = longTextPair(current[k], v)
+            return (
+              <div key={k} className='text-[11.5px]'>
+                <span className='font-medium'>
+                  {labelFor(k) || titleCase(k.replace(/_/g, ' '))}
                 </span>
-              </p>
-            </div>
-          ))}
+                <p className='break-words text-amber-800/80 dark:text-amber-200/80'>
+                  <span className='line-through opacity-70'>
+                    {win ? win.before : renderValue ? renderValue(k, current[k]) : fmt(current[k])}
+                  </span>{' '}
+                  <span className='font-medium text-amber-900 dark:text-amber-100'>
+                    {win ? win.after : renderValue ? renderValue(k, v) : fmt(v)}
+                  </span>
+                </p>
+              </div>
+            )
+          })}
           {Object.entries(draft.pending_rows ?? {})
             .filter(([, r]) => r.length > 0)
             .map(([k, r]) => (
