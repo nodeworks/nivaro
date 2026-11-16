@@ -6,7 +6,7 @@ import { useItemNavigation, useNivaroClient } from '../../context'
 import { type ActivityEntryInput, groupActivity, recordPhrase } from '../../lib/activity-sentence'
 import { post } from '../../lib/commands'
 import { useLiveCollection } from '../../lib/live'
-import { slideIn, stickyTopOffset, useTopInserts } from '../../lib/live-screen'
+import { scrollParentOf, slideIn, stickyTopOffset, useTopInserts } from '../../lib/live-screen'
 import { cn, titleCase } from '../../lib/utils'
 import { ActivityEntry, useActivityLabels } from '../ActivityEntry'
 import { ErrorNotice } from '../ErrorNotice'
@@ -214,7 +214,14 @@ export function RecordActivityStream({
       const header = headerRef.current
       const card = cardRef.current
       if (!header || !card) return
-      const off = stickyTopOffset(card)
+      // Below the host's sticky bars, or the top of the page's own scroll area when the page
+      // scrolls inside a container under a fixed header (the EFP phone shell).
+      const sc = scrollParentOf(card)
+      const scTop =
+        sc && sc !== document.scrollingElement && sc !== document.documentElement
+          ? sc.getBoundingClientRect().top
+          : 0
+      const off = Math.max(stickyTopOffset(card), scTop)
       const gone = header.getBoundingClientRect().bottom < off + 2
       const cardLeft = card.getBoundingClientRect().bottom > off + 48
       setFloatTop(gone && cardLeft ? off : null)
