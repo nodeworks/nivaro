@@ -79,7 +79,8 @@ export function JobsTray() {
       data-jobs-tray-tone={head.tone}
       data-nvr-dock-aware
       data-nvr-recording-hide
-      className='fixed bottom-4 left-1/2 z-[110] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-700 shadow-xl dark:border-[#334155] dark:bg-[#1e293b] dark:text-slate-200'
+      // A phone drawer fills the screen: the tray steps aside instead of sitting on its grid.
+      className='fixed bottom-4 left-1/2 z-[110] max-sm:[body:has([data-page-drawer])_&]:hidden w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-700 shadow-xl dark:border-[#334155] dark:bg-[#1e293b] dark:text-slate-200'
     >
       <div className='flex items-center gap-2 px-3 py-2'>
         {head.tone === 'running' ? (
