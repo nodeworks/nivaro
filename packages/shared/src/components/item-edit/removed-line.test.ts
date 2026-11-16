@@ -3,6 +3,7 @@ import { sourceSentence } from './FieldSourceBadge'
 import {
   cleanLineLabel,
   nextLineAfter,
+  removedLineName,
   removedLineText,
   restorableLine,
   unsavedLineChanges,
@@ -37,21 +38,33 @@ describe('a line removed under you (rt7 #6)', () => {
       'Beth Ames removed this line'
     )
     expect(removedLineText({ at: '', who: 'procedure reforecast', via: 'procedure' })).toBe(
-      'Procedure reforecast removed this line'
+      'Removed by procedure reforecast'
     )
-    expect(removedLineText({ at: '', who: 'x', via: 'outside' })).toBe(
-      'This line was removed outside the app'
+    expect(removedLineText({ at: '', who: 'reforecast', via: 'procedure' })).toBe(
+      'Removed by procedure reforecast'
     )
+    expect(removedLineText({ at: '', who: '', via: 'procedure' })).toBe('Removed by a procedure')
+    expect(removedLineText({ at: '', who: 'x', via: 'outside' })).toBe('Removed outside the app')
     expect(removedLineText({ at: '', who: 'Rob', via: 'user', user_id: 'me' }, 'ME')).toBe(
       'You removed this line in another tab'
     )
-    expect(removedLineText(null)).toBe('This line was removed')
+    expect(removedLineText(null)).toBe('Removed by someone else')
   })
 
   it('drops the separators an empty display template leaves', () => {
     expect(cleanLineLabel('· Line')).toBe('Line')
     expect(cleanLineLabel(' · Line 2 ·  · Dock')).toBe('Line 2 · Dock')
     expect(cleanLineLabel(null)).toBe('')
+    expect(cleanLineLabel('· · Line')).toBe('Line')
+    expect(cleanLineLabel('\u00a0·\u00a0 · Line')).toBe('Line')
+  })
+
+  it('names the removed line by its number, never a bare "Line"', () => {
+    expect(removedLineName('· · Line', 3)).toBe('Line 3')
+    expect(removedLineName('27" monitor', 2)).toBe('Line 2 · 27" monitor')
+    expect(removedLineName('Line 2 · 27" monitor', 2)).toBe('Line 2 · 27" monitor')
+    expect(removedLineName('#371234', 4)).toBe('Line 4')
+    expect(removedLineName('', null)).toBe('A line')
   })
 
   it('restores as a flat new line and copies as text', () => {

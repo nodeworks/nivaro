@@ -465,6 +465,22 @@ export function ItemEditPage() {
     staleTime: 10 * 60 * 1000
   })
 
+  // "Beth editing Description" — the field's label as the form shows it (read from the form's
+  // own field-config cache, never fetched again here), not its key.
+  const editingFieldLabel = (key: string): string => {
+    if (key.startsWith('row:') || key.startsWith('cell:')) return 'a line'
+    for (const [, d] of queryClient.getQueriesData<unknown>({
+      queryKey: ['field-config', collection]
+    })) {
+      if (!Array.isArray(d)) continue
+      const hit = (d as Array<{ field?: string; label?: string | null }>).find(
+        (x) => x?.field === key
+      )
+      if (hit?.label) return hit.label
+    }
+    return titleCase(key.replace(/_/g, ' '))
+  }
+
   const { data: itemData } = useQuery({
     queryKey: ['item', collection, id],
     queryFn: () => api.get(`/items/${collection}/${id}`).then((r) => r.data.data),
@@ -1185,7 +1201,7 @@ export function ItemEditPage() {
                                 className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
                               >
                                 <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400' />
-                                {v.name} editing {field.replace(/_/g, ' ')}
+                                {v.name} editing {editingFieldLabel(field)}
                               </span>
                             )
                           )}

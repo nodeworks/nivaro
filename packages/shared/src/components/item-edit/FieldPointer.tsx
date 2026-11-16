@@ -18,6 +18,17 @@ const CHIP_MS = 60_000
 /** …and this long when the page already scrolled to the field. */
 const SCROLLED_CHIP_MS = 6_000
 
+/** Room the floating chip needs under the page's content (its height + the bottom inset). */
+const CHIP_CLEARANCE_PX = 72
+
+function scrollParentOf(el: HTMLElement | null): HTMLElement | null {
+  for (let n = el?.parentElement ?? null; n; n = n.parentElement) {
+    const o = getComputedStyle(n).overflowY
+    if ((o === 'auto' || o === 'scroll') && n.scrollHeight > n.clientHeight) return n
+  }
+  return null
+}
+
 let lastInputAt = 0
 let inputHooked = false
 function hookInput(): void {
@@ -107,6 +118,20 @@ export function FieldPointerHost({
     else toast.info(pointRefusalText(result.reason, name ?? 'That person'))
   }, [result?.seq])
 
+  // While the chip floats at the bottom, the page's scroller gets room below its content, so
+  // the last fields can always scroll clear of it instead of sitting underneath.
+  useEffect(() => {
+    if (!chip) return
+    const scroller = scrollParentOf(anchorRef.current)
+    if (!scroller) return
+    const before = scroller.style.paddingBottom
+    const base = Number.parseFloat(getComputedStyle(scroller).paddingBottom) || 0
+    scroller.style.paddingBottom = `${base + CHIP_CLEARANCE_PX}px`
+    return () => {
+      scroller.style.paddingBottom = before
+    }
+  }, [chip])
+
   const container =
     (anchorRef.current?.closest('[role="dialog"]') as HTMLElement | null) ??
     (typeof document !== 'undefined' ? document.body : null)
@@ -152,7 +177,7 @@ function PointerChip({
       role='status'
       aria-live='polite'
       data-field-pointer={pointer.field}
-      className='nvr-slide-up-centered fixed bottom-5 left-1/2 z-[60] flex max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-2 rounded-full border border-slate-200 bg-white py-1 pl-1.5 pr-1 text-[12.5px] text-slate-700 shadow-lg shadow-slate-900/5 dark:border-border dark:bg-card dark:text-slate-200 dark:shadow-black/30'
+      className='nvr-slide-up-centered fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] left-1/2 z-[60] flex max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-2 rounded-full border border-slate-200 bg-white py-1 pl-1.5 pr-1 text-[12.5px] text-slate-700 shadow-lg shadow-slate-900/5 dark:border-border dark:bg-card dark:text-slate-200 dark:shadow-black/30'
     >
       <CoViewerAvatar person={who} size={22} />
       <span className='min-w-0 truncate'>
@@ -165,7 +190,8 @@ function PointerChip({
           type='button'
           onClick={onGo}
           data-field-pointer-go=''
-          className='inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[12px] font-semibold text-[#0e7490] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-nvr-cyan'
+          // One treatment for Go everywhere: a small bordered pill, cyan-tinted.
+          className='inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-cyan-600/30 bg-cyan-50 px-2.5 text-[12px] font-semibold text-[#0e7490] transition-colors hover:bg-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:border-nvr-cyan/40 dark:bg-nvr-cyan/10 dark:text-nvr-cyan dark:hover:bg-nvr-cyan/20'
         >
           <Crosshair className='h-3 w-3' aria-hidden />
           Go

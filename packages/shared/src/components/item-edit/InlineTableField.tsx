@@ -4720,6 +4720,7 @@ export function InlineTableField({
       setRemovedLine({
         rowId: id,
         label: rowIdentityLabel(stored),
+        lineNumber: prevOrder.indexOf(id) + 1,
         row: restorableLine(stored, changes),
         changes,
         by: null,
