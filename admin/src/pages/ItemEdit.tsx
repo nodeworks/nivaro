@@ -1160,7 +1160,8 @@ export function ItemEditPage() {
                     )}
                     {presence.viewers.length > 0 && (
                       <div
-                        className='ml-2 flex items-center'
+                        // mr-2: "viewing now" never runs into the button after it (the AI button).
+                        className='mx-2 flex shrink-0 items-center'
                         title={presence.viewers.map((v) => v.name).join(', ')}
                       >
                         {presence.viewers.slice(0, 4).map((v, i) => (
@@ -1225,7 +1226,14 @@ export function ItemEditPage() {
                         size='sm'
                         onClick={handleSummarize}
                         disabled={summarizing}
-                        className='rounded-none -ml-px first:ml-0'
+                        // After the presence strip it stands apart (its own corners); straight
+                        // after the tool buttons it joins their group as before.
+                        className={
+                          presence.viewers.length > 0 || Object.keys(presence.editing).length > 0
+                            ? 'ml-2'
+                            : 'rounded-none -ml-px first:ml-0'
+                        }
+                        aria-label='Summarize this record with AI'
                       >
                         {summarizing ? (
                           <Loader2 className='h-3.5 w-3.5 animate-spin' />
