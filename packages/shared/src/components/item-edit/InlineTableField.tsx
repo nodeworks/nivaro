@@ -9072,7 +9072,8 @@ export function InlineTableField({
         className={
           isPrefilling
             ? 'hidden'
-            : `relative rounded-lg border border-slate-200 text-[12px]${freezeFirstColumn ? ' overflow-x-auto' : ''}`
+            : // A phone scrolls the grid sideways instead of squeezing every column to a sliver.
+              `relative rounded-lg border border-slate-200 text-[12px]${freezeFirstColumn ? ' overflow-x-auto' : ' max-sm:overflow-x-auto'}`
         }
       >
         {reordering && (
@@ -9085,7 +9086,15 @@ export function InlineTableField({
         )}
         {frozenCss && <style>{frozenCss}</style>}
         <table
-          className={freezeFirstColumn ? `w-full min-w-max ${frozenClass}` : 'w-full table-fixed'}
+          className={
+            freezeFirstColumn
+              ? `w-full min-w-max ${frozenClass}`
+              : 'w-full table-fixed max-sm:min-w-[var(--nvr-grid-min)]'
+          }
+          // Phone floor: ~6.5rem per data column plus the fixed ones (select, #, status, actions).
+          style={
+            { '--nvr-grid-min': `${effectiveCols.length * 104 + 200}px` } as React.CSSProperties
+          }
         >
           <thead className='bg-slate-50 border-b border-slate-200 [&>tr>th:first-child]:rounded-tl-lg [&>tr>th:last-child]:rounded-tr-lg'>
             <tr>
@@ -9116,7 +9125,8 @@ export function InlineTableField({
               {effectiveCols.map((c) => (
                 <th
                   key={c.field}
-                  className='px-3 py-2 text-left font-medium text-slate-500 text-[11px]'
+                  data-tip={c.label ?? titleCase(c.field)}
+                  className='truncate px-3 py-2 text-left font-medium text-slate-500 text-[11px]'
                 >
                   {c.label ?? titleCase(c.field)}
                 </th>
