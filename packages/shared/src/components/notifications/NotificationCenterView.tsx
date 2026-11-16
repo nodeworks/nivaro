@@ -721,7 +721,7 @@ export function NotificationCenterView({
             <button
               type='button'
               onClick={() => setSnoozeMenuId(snoozeMenuId === n.id ? null : n.id)}
-              className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-amber-50 hover:text-amber-500 group-hover:opacity-100 dark:hover:bg-amber-400/10'
+              className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-amber-50 hover:text-amber-500 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 dark:hover:bg-amber-400/10 [@media(hover:none)]:opacity-100'
               aria-label='Snooze notification'
             >
               <AlarmClock className='h-3.5 w-3.5' />
@@ -777,7 +777,7 @@ export function NotificationCenterView({
             <button
               type='button'
               onClick={() => setConfirmDeleteId(n.id)}
-              className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-400 group-hover:opacity-100'
+              className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-400 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100'
               aria-label='Delete notification'
             >
               <Trash2 className='h-3.5 w-3.5' />
@@ -1281,7 +1281,7 @@ export function NotificationCenterView({
 
       <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         {status === 'sent' ? (
-          <div className='mx-8 my-6 space-y-3' data-nvr-sent>
+          <div className='mx-4 my-6 space-y-3 sm:mx-8' data-nvr-sent>
             <div className='flex flex-wrap items-center gap-3 text-[12px] text-slate-500'>
               <span>
                 What you sent, with who has read it. A send is one subject to its recipients; a
@@ -1405,7 +1405,7 @@ export function NotificationCenterView({
           <>
             <div
               ref={setListEl}
-              className='mx-8 my-6 divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'
+              className='mx-4 my-6 divide-y sm:mx-8 divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'
             >
               {pinned.length > 0 && (
                 <div data-notification-pinned>

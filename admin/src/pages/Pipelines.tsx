@@ -42,21 +42,21 @@ function PipelineRow({
           </span>
         </div>
         <div className='flex items-center gap-2 pl-3.5'>
-          <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+          <span className='shrink-0 whitespace-nowrap text-[11px] text-slate-400 dark:text-muted-foreground'>
             {template.state_count ?? 0} states
           </span>
           {collections.length > 0 && (
-            <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+            <span className='shrink-0 whitespace-nowrap text-[11px] text-slate-400 dark:text-muted-foreground'>
               · {collections.length} collection{collections.length !== 1 ? 's' : ''}
             </span>
           )}
           {template.description && (
-            <span className='truncate text-[11px] text-slate-400 dark:text-muted-foreground'>
+            <span className='min-w-0 truncate text-[11px] text-slate-400 dark:text-muted-foreground'>
               · {template.description}
             </span>
           )}
           {template.updated_at && (
-            <span className='ml-auto shrink-0 pr-24 text-[11px] text-slate-400 dark:text-muted-foreground'>
+            <span className='ml-auto shrink-0 whitespace-nowrap text-[11px] [@media(hover:hover)]:pr-24 text-slate-400 dark:text-muted-foreground'>
               {formatRelative(template.updated_at)}
             </span>
           )}
