@@ -2368,7 +2368,10 @@ function StateCensusChips({
   }
   const many = census.byCollection.filter((c) => c.count > 0)
   const chip =
-    'rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11.5px] tabular-nums text-slate-600'
+    // Admin's dark theme repaints bg-white / border-slate-200 / text-slate-600 with !important: the
+    // noun uses the literal slate-600 so its dark step (slate-300) applies, and the dark hover
+    // below carries ! (a hover selector then outranks the repaint).
+    'rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11.5px] tabular-nums text-[#475569] dark:text-slate-300'
   return (
     <div data-state-census={census.count} className='flex flex-wrap items-center gap-1'>
       {many.map((c) => {
@@ -2396,7 +2399,7 @@ function StateCensusChips({
             onClick={() => onOpen(stateListPath(c.collection, s.key))}
             data-tip={`Open the ${name} sitting in ${s.label}`}
             data-tip-side='right'
-            className={`${chip} transition-colors hover:border-nvr-cyan/50 hover:bg-nvr-cyan/5 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:hover:border-nvr-cyan/50 dark:hover:bg-nvr-cyan/10 dark:hover:text-slate-100`}
+            className={`${chip} transition-colors hover:border-nvr-cyan/50 hover:bg-nvr-cyan/5 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:hover:!border-nvr-cyan/50 dark:hover:!bg-nvr-cyan/10 dark:hover:!text-slate-100`}
           >
             {body}
           </button>
