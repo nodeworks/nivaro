@@ -19,6 +19,9 @@ describe('days', () => {
   it('date-only values are their own day (never shifted by the time zone)', () => {
     expect(dayOf('2026-12-04')).toBe('2026-12-04')
     expect(dayOf('2026-12-04 00:00:00')).toBe('2026-12-04')
+    // A date column as the API sends it: UTC midnight is the day itself.
+    expect(dayOf('2026-12-04T00:00:00.000Z')).toBe('2026-12-04')
+    expect(dayOf('2026-12-04T00:00:00+00:00')).toBe('2026-12-04')
     expect(dayOf(null)).toBeNull()
     expect(dayOf('nope')).toBeNull()
   })

@@ -123,6 +123,13 @@ export function CollectionGantt({
   }, [items, pending, startField])
 
   const { rows, windowStart, windowEnd } = useMemo(() => {
+    // A date column arrives as UTC midnight: draw it on its own day (local midnight), never the
+    // evening before west of UTC; a datetime keeps its instant.
+    const when = (v: unknown, f: string): number => {
+      const isDate = dateFields.find((d) => d.field === f)?.type === 'date'
+      const day = isDate ? dragDayOf(v) : null
+      return day ? new Date(`${day}T00:00:00`).getTime() : new Date(String(v ?? '')).getTime()
+    }
     const now = Date.now()
     let min = now - WINDOW_BACK
     let max = now + WINDOW_FWD
@@ -130,8 +137,8 @@ export function CollectionGantt({
       .map((raw) => {
         const p = pending.get(String(raw.id))
         const it = p ? { ...raw, ...p.values } : raw
-        const s = new Date(String(it[startField] ?? '')).getTime()
-        const rawEnd = it[endField] ? new Date(String(it[endField])).getTime() : s + DAY
+        const s = when(it[startField], startField)
+        const rawEnd = it[endField] ? when(it[endField], endField) : s + DAY
         if (Number.isNaN(s)) return null
         const e = Number.isNaN(rawEnd) || rawEnd <= s ? s + DAY : rawEnd
         return { it, s, e }
@@ -145,7 +152,7 @@ export function CollectionGantt({
       max = Math.min(Math.max(...parsed.map((r) => r.e)) + 2 * DAY, now + 365 * DAY)
     }
     return { rows: parsed, windowStart: min, windowEnd: max }
-  }, [items, startField, endField, pending])
+  }, [items, startField, endField, pending, dateFields])
 
   const span = windowEnd - windowStart
   const pct = (t: number) => Math.max(0, Math.min(100, ((t - windowStart) / span) * 100))
