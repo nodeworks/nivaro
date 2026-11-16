@@ -15,8 +15,10 @@ const state = vi.hoisted(() => ({
   notified: 0,
   touched: vi.fn(),
   forget: vi.fn(),
-  touchListener: null as ((c: string) => void) | null
+  touchListener: null as ((c: string) => void) | null,
+  poke: vi.fn()
 }))
+vi.mock('../../../services/ops-live.js', () => ({ pokeOps: state.poke }))
 
 vi.mock('../../../middleware/authenticate.js', () => {
   const authenticate = async (req: { user?: unknown; isAdmin?: boolean }) => {
@@ -102,9 +104,18 @@ beforeEach(() => {
   state.notified = 0
   state.touched.mockClear()
   state.forget.mockClear()
+  state.poke.mockClear()
 })
 
 describe('POST /me/access-request', () => {
+  it('realtime pages 2026-11-16: a stored request pokes the admin list; a resend does not', async () => {
+    await submit(body)
+    expect(state.poke).toHaveBeenCalledWith('access-requests')
+    state.poke.mockClear()
+    await submit(body)
+    expect(state.poke).not.toHaveBeenCalled()
+  })
+
   it('army 8 b10: a written request tells the other replicas to drop the kept identity row', async () => {
     await submit(body)
     expect(state.touched).toHaveBeenCalledWith('nivaro_users')

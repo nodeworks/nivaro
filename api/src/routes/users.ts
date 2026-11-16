@@ -17,6 +17,7 @@ import { noteUsersDeactivated } from '../services/inactive-people-notice.js'
 import { onCollectionTouched, publishCollectionTouched } from '../services/item-events.js'
 import { ACCOUNT_KINDS, isAccountKind } from '../services/machine-accounts.js'
 import { NOTIFY_CATEGORIES } from '../services/notification-channels.js'
+import { pokeOps } from '../services/ops-live.js'
 import {
   applyAccessCopy,
   type BulkUserAction,
@@ -451,6 +452,9 @@ export async function usersRoutes(app: FastifyInstance) {
         delta
       })
     }
+    // The admin "Not yet authorized" list follows a status / role change (a deny, an undo, a
+    // role picked by hand) — a poke to the admin topic, never who or what.
+    if (req.isAdmin && ('status' in filtered || 'role' in filtered)) pokeOps('access-requests')
     if (!isSelf) {
       const { stripAiMemory } = await import('../services/ai-memory.js')
       return reply.send({ data: stripAiMemory(user) })
@@ -817,6 +821,7 @@ export async function usersRoutes(app: FastifyInstance) {
       })
       bustUserScopeCache(id)
       void joinDefaultChannelsSoon([id], 'authorized')
+      pokeOps('access-requests')
 
       const user = safeUser(await getUser(id))
       const activityId = await logActivity({
@@ -1009,6 +1014,8 @@ export async function usersRoutes(app: FastifyInstance) {
         access_request
       ).catch(() => 0)
     }
+    // Admins with the "Not yet authorized" list open see the new request arrive (behind a pill).
+    pokeOps('access-requests')
     return reply.send({ data: { access_request, role_changed: roleChanged, notified } })
   })
 
