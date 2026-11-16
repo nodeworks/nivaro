@@ -28,28 +28,22 @@ export function useLabelFlash(id: unknown, label: string | null | undefined): nu
   return flash
 }
 
-/** Ref callback for the flashed name: a cyan wash plus a 1px ring, stronger on a dark field
- *  (the shared `nvr-value-pulse-bg` wash all but vanished there). Runs once per mount — the
- *  element is keyed on the flash counter. */
-export function flashLabelRef(el: HTMLElement | null): void {
+/** The renamed link's FIELD BOX flashes (border + ring, ~1.2 s, light and dark) — a wash on
+ *  the text alone read as a text selection on a dark field. */
+export function flashFieldBox(el: HTMLElement | null): void {
   if (!el || typeof el.animate !== 'function') return
   const dark =
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
-  const a = dark ? 0.4 : 0.2
-  const r = dark ? 0.9 : 0.45
-  el.animate(
-    [
-      {
-        backgroundColor: `rgba(34, 211, 238, ${a})`,
-        boxShadow: `0 0 0 1px rgba(34, 211, 238, ${r})`
-      },
-      {
-        backgroundColor: `rgba(34, 211, 238, ${a})`,
-        boxShadow: `0 0 0 1px rgba(34, 211, 238, ${r})`,
-        offset: 0.35
-      },
-      { backgroundColor: 'rgba(34, 211, 238, 0)', boxShadow: '0 0 0 1px rgba(34, 211, 238, 0)' }
-    ],
-    { duration: 1600, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' }
-  )
+  const on = {
+    borderColor: dark ? 'rgb(34, 211, 238)' : 'rgb(8, 145, 178)',
+    boxShadow: `0 0 0 3px rgba(34, 211, 238, ${dark ? 0.35 : 0.28})`
+  }
+  const off = {
+    borderColor: getComputedStyle(el).borderColor,
+    boxShadow: '0 0 0 3px rgba(34, 211, 238, 0)'
+  }
+  el.animate([on, { ...on, offset: 0.4 }, off], {
+    duration: 1200,
+    easing: 'cubic-bezier(0.16, 1, 0.3, 1)'
+  })
 }
