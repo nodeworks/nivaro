@@ -3689,6 +3689,8 @@ export async function resolveOwnedBySource(
       item_id: inst.item,
       label: labels[`${inst.collection}:${inst.item}`] || missingRecordLabel(inst.collection),
       state: inst.state_key,
+      // My Work names the step by its label (waiting-on-me.ts reads it by this id).
+      state_id: inst.current_state,
       state_color: inst.state_color,
       owners: owners.map((o) => ({ id: o.id, name: userDisplayName(o) })),
       sla_status: null,
