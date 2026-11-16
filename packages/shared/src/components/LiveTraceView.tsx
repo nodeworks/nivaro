@@ -10,6 +10,29 @@ import { SimpleSelectXs } from './ui/SimpleSelect'
 /** Stamps an event carries for bookkeeping, not fields a person changed. */
 const BOOKKEEPING_FIELDS = new Set(['changed', 'updated_at', 'date_updated', 'user_updated'])
 
+/** Parts of a record an event names with a `$` token: said in words, never the token. */
+const ASPECT_WORDS: Record<string, string> = {
+  $state: 'step',
+  $related: 'linked records',
+  $comments: 'comments',
+  $tasks: 'tasks',
+  $files: 'files'
+}
+
+/** An event's fields split into real field names and the record parts it touched. Pure. */
+export function traceFields(fields: readonly string[]): { names: string[]; aspects: string[] } {
+  const names: string[] = []
+  const aspects: string[] = []
+  for (const f of fields) {
+    if (BOOKKEEPING_FIELDS.has(f)) continue
+    if (f.startsWith('$')) {
+      const word = ASPECT_WORDS[f] ?? f.slice(1).replace(/_/g, ' ')
+      if (!aspects.includes(word)) aspects.push(word)
+    } else names.push(f)
+  }
+  return { names, aspects }
+}
+
 /**
  * "Why didn't my page update?" — the admin-only trace (GET /api/realtime/trace). For one
  * record, or for one person, and a time window: the live events the server sent, the writes
@@ -99,7 +122,7 @@ function clock(iso: string): string {
 
 function Th({ children }: { children: React.ReactNode }) {
   return (
-    <th className='px-3 py-1 text-left text-[10.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+    <th className='whitespace-nowrap px-3 py-1 text-left text-[10.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
       {children}
     </th>
   )
@@ -426,7 +449,8 @@ export function LiveTraceView({
                 </thead>
                 <tbody>
                   {events.slice(0, 100).map((e) => {
-                    const fields = e.fields.filter((f) => !BOOKKEEPING_FIELDS.has(f))
+                    const { names, aspects } = traceFields(e.fields)
+                    const fieldsText = [...names, ...aspects].join(', ')
                     const acked = e.acked_by.length > 0
                     return (
                       <tr
@@ -443,8 +467,15 @@ export function LiveTraceView({
                           {e.item === '*' ? ` (${e.bulk ?? 'many'} records)` : ''}
                           {e.source ? ` · ${e.source}` : ''}
                         </td>
-                        <td className='max-w-[200px] truncate px-3 py-1' title={fields.join(', ')}>
-                          {fields.length ? fields.join(', ') : '—'}
+                        <td className='max-w-[200px] truncate px-3 py-1' title={fieldsText}>
+                          {names.join(', ')}
+                          {aspects.length > 0 && (
+                            <span className='italic text-slate-500 dark:text-slate-400'>
+                              {names.length ? ', ' : ''}
+                              {aspects.join(', ')}
+                            </span>
+                          )}
+                          {!fieldsText && '—'}
                         </td>
                         <td className='whitespace-nowrap px-3 py-1'>
                           {acked ? (
