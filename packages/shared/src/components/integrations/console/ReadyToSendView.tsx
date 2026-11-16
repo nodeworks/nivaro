@@ -238,7 +238,8 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
         </div>
       ) : (
         <div className='grid items-start gap-5 lg:grid-cols-[260px_minmax(0,1fr)]'>
-          <aside className='space-y-5' aria-label='Group the board'>
+          {/* On a phone the records come first; the partner and problem groups follow them. */}
+          <aside className='order-2 space-y-5 lg:order-none' aria-label='Group the board'>
             <RailSection title='Partner'>
               <RailButton
                 on={!partner}
@@ -288,7 +289,7 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
             </RailSection>
           </aside>
 
-          <section className='min-w-0 space-y-3' aria-label='Records'>
+          <section className='order-1 min-w-0 space-y-3 lg:order-none' aria-label='Records'>
             <div className='flex flex-wrap items-center gap-2'>
               <Segment<SeverityFilter>
                 label='Show'
