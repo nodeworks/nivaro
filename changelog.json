@@ -1,10 +1,77 @@
 {
-  "generated_at": "2026-11-16T20:39:02.626Z",
+  "generated_at": "2026-11-16T22:18:30.867Z",
   "releases": [
+    {
+      "version": "0.3.165",
+      "tag": "v0.3.165",
+      "date": "2026-11-16T17:18:09-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "env-refresh",
+              "text": "wait for the target to take logins after a restore",
+              "hash": "3dfdaaddc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "header reacts when late moves or chips squeeze the title",
+              "hash": "044b14a18"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "owner matrix workbook heads filter-only columns in words",
+              "hash": "6489f03aa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "back arrow on the id's line; tools fold when they squeeze the title",
+              "hash": "5ec2b6506"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "header ⋯ closes over drawers, id never squeezed, deleted addendum view resets",
+              "hash": "ccb6a0c27"
+            },
+            {
+              "section": "Fixed",
+              "scope": "image",
+              "text": "Railway can build Dockerfile.release (no secret mount)",
+              "hash": "7c0ce8d7e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "page header id chip never breaks mid-id; title row wraps",
+              "hash": "25aabc9ae"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payload-templates",
+              "text": "field picker reads in dark and on a phone; header actions wrap",
+              "hash": "7aceee2a4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "field comment icon always shows where comments are on",
+              "hash": "463b3023b"
+            }
+          ]
+        }
+      ],
+      "count": 9
+    },
     {
       "version": "0.3.164",
       "tag": "v0.3.164",
-      "date": "2026-11-16T15:38:46-05:00",
+      "date": "2026-11-16T15:39:02-05:00",
       "sections": [
         {
           "label": "Added",
