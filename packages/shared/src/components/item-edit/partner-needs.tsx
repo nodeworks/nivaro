@@ -206,7 +206,7 @@ export function usePartnerNeedsForm(args: {
 const BADGE =
   'inline-flex max-w-full items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-px text-[10px] font-medium leading-4 text-indigo-700 dark:border-indigo-400/25 dark:bg-indigo-400/10 dark:text-indigo-200'
 
-/** Beside a field's label while it is empty: "Needed by Acme ERP". */
+/** Under an empty field's input: "Needed by Acme ERP". */
 export function PartnerNeedBadge({ field, mark }: { field: string; mark: PartnerNeedMark }) {
   return (
     <span

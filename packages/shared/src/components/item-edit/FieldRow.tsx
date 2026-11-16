@@ -1174,14 +1174,6 @@ export const FieldRow = memo(function FieldRow({
               onDismiss={() => affordances?.dismissRemoteChange(field.field)}
             />
           )}
-          {partnerNeedShown && partnerNeed && (
-            // Takes the rest of the label line and truncates there (basis 0, min-width 0): it
-            // never wraps onto a line of its own, which pushed this input below its row
-            // neighbours (idea-43 review).
-            <span className='order-last flex min-w-0 flex-[1_1_0%] justify-end'>
-              <PartnerNeedBadge field={field.field} mark={partnerNeed} />
-            </span>
-          )}
           {shownText.note && (
             <TooltipProvider delayDuration={100}>
               <Tooltip>
@@ -1545,6 +1537,14 @@ export const FieldRow = memo(function FieldRow({
       )}
       {partnerHintShown && (
         <PartnerNeedHint field={field.field} label={label || titleCase(field.field)} />
+      )}
+      {partnerNeedShown && partnerNeed && (
+        // Under the input, where the partner hint sits — never in the label line, where it
+        // wrapped onto a line of its own (or truncated to "Needed by M…") and pushed this
+        // input below its row neighbours (idea-43 review).
+        <div className='flex min-w-0'>
+          <PartnerNeedBadge field={field.field} mark={partnerNeed} />
+        </div>
       )}
       {personalDefaultHint && !personalDefaultApplied && (
         <PersonalDefaultHint field={field.field} text={personalDefaultHint} />
