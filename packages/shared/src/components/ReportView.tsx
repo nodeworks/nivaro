@@ -26,13 +26,7 @@ import {
   saveReportFilterPreset,
   toggleReportAlert
 } from '@nivaro/sdk'
-import {
-  isCancelledError,
-  skipToken,
-  useMutation,
-  useQuery,
-  useQueryClient
-} from '@tanstack/react-query'
+import { isCancelledError, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Bell,
   Camera,
@@ -110,12 +104,7 @@ const catAxisProps = (count: number) => ({
   minTickGap: 4,
   ...(count > 5 && count <= 12 ? { angle: -35, textAnchor: 'end' as const, height: 56 } : {})
 })
-// Horizontal bars: names stay on one line (truncated, full text in the tooltip)
-// instead of wrapping into a column that loses its spaces.
-const compactYTick = (v: unknown): string => {
-  const raw = String(v ?? '')
-  return raw.length > 22 ? `${raw.slice(0, 21)}…` : raw
-}
+// Horizontal bars: charts/category-axis.tsx (one line, sized to the longest label).
 
 import { type DrilldownTarget, useDrilldown, useNivaroClient, useOverlayState } from '../context'
 import { del, get, post, put } from '../lib/commands'
@@ -123,6 +112,7 @@ import { changedWidgetIds, useConfigWatch } from '../lib/config-watch'
 import { type RunEnvelope, useAutoRefreshPref, useLiveStamp } from '../lib/live-data-changed'
 import { liveWidgetInterval, useLiveWidget } from '../lib/live-widgets'
 import { loadErrorText, serverErrorText } from '../lib/load-error'
+import { useQueryEntryState } from '../lib/use-query-entry'
 import {
   cascadeFilter,
   fetchCascadeRelations,
@@ -138,6 +128,7 @@ import {
 } from '../lib/use-my-scopes'
 import { cn, toLocalDateString } from '../lib/utils'
 import { BackgroundRunOffer } from './BackgroundRunOffer'
+import { CategoryAxisBox } from './charts/category-axis'
 import { RechartsGate } from './charts/RechartsGate'
 import { LoadErrorNote } from './LoadErrorNote'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
@@ -821,8 +812,9 @@ function QueryDataChangedChip({
   const qc = useQueryClient()
   const auto = useContext(ReportAutoRefreshContext)
   const key = ['nivaro-report-query', slug, params]
-  // Observe the rows' entry (no fetch of its own): a new run re-renders this chip.
-  const { dataUpdatedAt } = useQuery({ queryKey: key, queryFn: skipToken })
+  // Watch the rows' entry (never an observer of it: a skipToken observer left the Query's
+  // queryFn as skipToken and Reset cache failed every widget): a new run re-renders this chip.
+  const dataUpdatedAt = useQueryEntryState(key)?.dataUpdatedAt ?? 0
   const [busy, setBusy] = useState(false)
   const keyJson = JSON.stringify(key)
   // biome-ignore lint/correctness/useExhaustiveDependencies: dataUpdatedAt marks a new run
@@ -1306,7 +1298,7 @@ export function QueryWidgetBody({
                   itemStyle={{ color: '#e2e8f0' }}
                   formatter={(v) => tipFmt(v as number)}
                 />
-                {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
+                {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />}
                 {series.map((s, i) => (
                   <Area
                     key={s.field}
@@ -1332,87 +1324,97 @@ export function QueryWidgetBody({
   // bar | hbar | stacked_bar
   const stacked = cfg.display === 'stacked_bar'
   return (
-    <div className='min-h-[110px] min-w-0 flex-1'>
-      <RechartsGate fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>
-        {({ Bar, BarChart, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis }) => (
-          <ResponsiveContainer width='100%' height='100%'>
-            <BarChart
-              data={chartRows}
-              layout={horizontal ? 'vertical' : 'horizontal'}
-              margin={{ top: 6, right: 8, left: horizontal ? 30 : -6, bottom: 0 }}
-            >
-              {horizontal ? (
-                <>
-                  <XAxis
-                    type='number'
-                    tick={{ fontSize: 10 }}
-                    stroke='#94a3b8'
-                    tickFormatter={vFmt}
-                  />
-                  {/* Every category gets its label (army 6 L22: Budget
-                      Utilization labelled every other type); long names are
-                      shortened, the tooltip keeps the full one. */}
-                  <YAxis
-                    type='category'
-                    dataKey={xField}
-                    tick={{ fontSize: 10 }}
-                    stroke='#94a3b8'
-                    width={140}
-                    interval={0}
-                    tickFormatter={shortCategoryLabel}
-                  />
-                </>
-              ) : (
-                <>
-                  <XAxis
-                    dataKey={xField}
-                    tick={{ fontSize: 10 }}
-                    stroke='#94a3b8'
-                    {...catAxisProps(chartRows.length)}
-                  />
-                  <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={vFmt} width={48} />
-                </>
-              )}
-              <Tooltip
-                contentStyle={{
-                  fontSize: 12,
-                  backgroundColor: '#0f172a',
-                  border: '1px solid #334155',
-                  borderRadius: 8,
-                  color: '#f1f5f9'
-                }}
-                labelStyle={{ color: '#f1f5f9' }}
-                itemStyle={{ color: '#e2e8f0' }}
-                formatter={(v) => tipFmt(v as number)}
-              />
-              {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
-              {series.map((s, i) => (
-                <Bar
-                  className={onDrill ? 'cursor-pointer' : undefined}
-                  onClick={(entry: { payload?: Record<string, unknown> } | undefined) => {
-                    const d = entry?.payload?.[xField]
-                    if (d != null) openSegment(String(d))
-                  }}
-                  key={s.field}
-                  dataKey={s.field}
-                  name={s.label ?? s.field}
-                  stackId={stacked ? 'stack' : undefined}
-                  fill={s.color ?? CHART_COLORS[i % CHART_COLORS.length]}
-                  radius={stacked ? 0 : horizontal ? [0, 3, 3, 0] : [3, 3, 0, 0]}
+    <CategoryAxisBox
+      labels={horizontal ? chartRows.map((r) => r[xField]) : []}
+      className='min-h-[110px] min-w-0 flex-1 text-slate-500 dark:text-slate-400'
+    >
+      {(categoryAxis) => (
+        <>
+          <RechartsGate fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>
+            {({ Bar, BarChart, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis }) => (
+              <ResponsiveContainer width='100%' height='100%'>
+                <BarChart
+                  data={chartRows}
+                  layout={horizontal ? 'vertical' : 'horizontal'}
+                  margin={{ top: 6, right: 8, left: horizontal ? 0 : -6, bottom: 0 }}
                 >
-                  {series.length === 1 &&
-                    !s.color &&
-                    chartRows.map((_, ci) => (
-                      <Cell key={ci} fill={CHART_COLORS[ci % CHART_COLORS.length]} />
-                    ))}
-                </Bar>
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </RechartsGate>
-      {segModal}
-    </div>
+                  {horizontal ? (
+                    <>
+                      <XAxis
+                        type='number'
+                        tick={{ fontSize: 10 }}
+                        stroke='#94a3b8'
+                        tickFormatter={vFmt}
+                      />
+                      {/* Every category gets its label (army 6 L22: Budget
+                      Utilization labelled every other type), on ONE line: the
+                      column is as wide as the longest label (≤ 40% of the
+                      chart); only a label that still does not fit is cut, and
+                      it carries its full text in a tooltip. */}
+                      <YAxis type='category' dataKey={xField} stroke='#94a3b8' {...categoryAxis} />
+                    </>
+                  ) : (
+                    <>
+                      <XAxis
+                        dataKey={xField}
+                        tick={{ fontSize: 10 }}
+                        stroke='#94a3b8'
+                        {...catAxisProps(chartRows.length)}
+                      />
+                      <YAxis
+                        tick={{ fontSize: 10 }}
+                        stroke='#94a3b8'
+                        tickFormatter={vFmt}
+                        width={48}
+                      />
+                    </>
+                  )}
+                  <Tooltip
+                    contentStyle={{
+                      fontSize: 12,
+                      backgroundColor: '#0f172a',
+                      border: '1px solid #334155',
+                      borderRadius: 8,
+                      color: '#f1f5f9'
+                    }}
+                    labelStyle={{ color: '#f1f5f9' }}
+                    itemStyle={{ color: '#e2e8f0' }}
+                    formatter={(v) => tipFmt(v as number)}
+                  />
+                  {/* The series' own order (< 7 · 7–30 · > 30 days), never recharts'
+                  default alphabetical sort by name. */}
+                  {series.length > 1 && (
+                    <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
+                  )}
+                  {series.map((s, i) => (
+                    <Bar
+                      className={onDrill ? 'cursor-pointer' : undefined}
+                      onClick={(entry: { payload?: Record<string, unknown> } | undefined) => {
+                        const d = entry?.payload?.[xField]
+                        if (d != null) openSegment(String(d))
+                      }}
+                      key={s.field}
+                      dataKey={s.field}
+                      name={s.label ?? s.field}
+                      stackId={stacked ? 'stack' : undefined}
+                      fill={s.color ?? CHART_COLORS[i % CHART_COLORS.length]}
+                      radius={stacked ? 0 : horizontal ? [0, 3, 3, 0] : [3, 3, 0, 0]}
+                    >
+                      {series.length === 1 &&
+                        !s.color &&
+                        chartRows.map((_, ci) => (
+                          <Cell key={ci} fill={CHART_COLORS[ci % CHART_COLORS.length]} />
+                        ))}
+                    </Bar>
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </RechartsGate>
+          {segModal}
+        </>
+      )}
+    </CategoryAxisBox>
   )
 }
 
@@ -3420,138 +3422,135 @@ const WidgetCard = memo(function WidgetCard({
       } else {
         const horizontal = widget.config?.orientation === 'horizontal'
         body = (
-          <div className='min-h-[110px] flex-1'>
-            <RechartsGate fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>
-              {({
-                Bar,
-                Cell,
-                ComposedChart,
-                Line,
-                ReferenceLine,
-                ResponsiveContainer,
-                Tooltip,
-                XAxis,
-                YAxis
-              }) => (
-                <ResponsiveContainer width='100%' height='100%'>
-                  <ComposedChart
-                    data={series}
-                    layout={horizontal ? 'vertical' : 'horizontal'}
-                    margin={{ top: 6, right: 8, left: horizontal ? 10 : -10, bottom: 0 }}
-                  >
-                    {horizontal ? (
-                      <>
-                        <XAxis type='number' tick={{ fontSize: 10 }} stroke='#94a3b8' />
-                        <YAxis
-                          type='category'
-                          dataKey='dim'
-                          tick={{ fontSize: 10 }}
-                          stroke='#94a3b8'
-                          tickFormatter={compactYTick}
-                          interval={0}
-                          width={140}
-                        />
-                      </>
-                    ) : (
-                      <>
-                        <XAxis
-                          dataKey='dim'
-                          tick={{ fontSize: 10 }}
-                          stroke='#94a3b8'
-                          {...catAxisProps(series.length)}
-                        />
-                        <YAxis
-                          tick={{ fontSize: 10 }}
-                          stroke='#94a3b8'
-                          tickFormatter={compactTick}
-                          width={44}
-                        />
-                        {hasValue2 && (
+          <CategoryAxisBox
+            labels={horizontal ? series.map((r) => r.dim) : []}
+            className='min-h-[110px] flex-1 text-slate-500 dark:text-slate-400'
+          >
+            {(categoryAxis) => (
+              <RechartsGate fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>
+                {({
+                  Bar,
+                  Cell,
+                  ComposedChart,
+                  Line,
+                  ReferenceLine,
+                  ResponsiveContainer,
+                  Tooltip,
+                  XAxis,
+                  YAxis
+                }) => (
+                  <ResponsiveContainer width='100%' height='100%'>
+                    <ComposedChart
+                      data={series}
+                      layout={horizontal ? 'vertical' : 'horizontal'}
+                      margin={{ top: 6, right: 8, left: horizontal ? 0 : -10, bottom: 0 }}
+                    >
+                      {horizontal ? (
+                        <>
+                          <XAxis type='number' tick={{ fontSize: 10 }} stroke='#94a3b8' />
+                          <YAxis type='category' dataKey='dim' stroke='#94a3b8' {...categoryAxis} />
+                        </>
+                      ) : (
+                        <>
+                          <XAxis
+                            dataKey='dim'
+                            tick={{ fontSize: 10 }}
+                            stroke='#94a3b8'
+                            {...catAxisProps(series.length)}
+                          />
                           <YAxis
-                            yAxisId='right'
-                            orientation='right'
                             tick={{ fontSize: 10 }}
                             stroke='#94a3b8'
                             tickFormatter={compactTick}
                             width={44}
                           />
-                        )}
-                      </>
-                    )}
-                    {!horizontal &&
-                      anchorNotes.map((a) => (
-                        <ReferenceLine
-                          key={a.id}
-                          x={a.anchor_date as string}
-                          stroke='#f59e0b'
-                          strokeDasharray='4 3'
-                          label={{ value: '✎', position: 'top', fontSize: 11, fill: '#f59e0b' }}
-                        />
-                      ))}
-                    <Tooltip
-                      contentStyle={{
-                        fontSize: 12,
-                        backgroundColor: '#0f172a',
-                        border: '1px solid #334155',
-                        borderRadius: 8,
-                        color: '#f1f5f9'
-                      }}
-                      labelStyle={{ color: '#f1f5f9' }}
-                      itemStyle={{ color: '#e2e8f0' }}
-                    />
-                    {widget.config?.compare && (
-                      <Bar dataKey='prev' fill='#cbd5e1' radius={[3, 3, 0, 0]} name='previous' />
-                    )}
-                    <Bar
-                      dataKey='value'
-                      fill={BRAND}
-                      radius={[3, 3, 0, 0]}
-                      className={widget.collection ? 'cursor-pointer' : undefined}
-                      onClick={(
-                        entry:
-                          | { payload?: { dim?: string; raw?: unknown; other?: boolean } }
-                          | undefined
-                      ) => {
-                        if (!widget.collection) return
-                        const seg = entry?.payload
-                        if (seg?.other) return
-                        const dimField = widget.config?.dimension as
-                          | { field?: string; bucket?: string }
-                          | undefined
-                        setRecordsFor({
-                          conditions: widgetDrillConditions(
-                            widget,
-                            entityFilters,
-                            dateRange,
-                            seg?.raw ?? seg?.dim
-                          ),
-                          title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`,
-                          dimField: dimField?.bucket ? undefined : dimField?.field,
-                          dimRaw: seg?.raw ?? seg?.dim,
-                          dimLabel: seg?.dim
-                        })
-                      }}
-                    >
-                      {series.map((sv) => (
-                        <Cell key={sv.dim} fill={sv.other ? '#94a3b8' : BRAND} />
-                      ))}
-                    </Bar>
-                    {hasValue2 && (
-                      <Line
-                        yAxisId={horizontal ? undefined : 'right'}
-                        type='monotone'
-                        dataKey='value2'
-                        stroke='#8b5cf6'
-                        strokeWidth={1.5}
-                        dot={false}
-                        name={metric2Label}
+                          {hasValue2 && (
+                            <YAxis
+                              yAxisId='right'
+                              orientation='right'
+                              tick={{ fontSize: 10 }}
+                              stroke='#94a3b8'
+                              tickFormatter={compactTick}
+                              width={44}
+                            />
+                          )}
+                        </>
+                      )}
+                      {!horizontal &&
+                        anchorNotes.map((a) => (
+                          <ReferenceLine
+                            key={a.id}
+                            x={a.anchor_date as string}
+                            stroke='#f59e0b'
+                            strokeDasharray='4 3'
+                            label={{ value: '✎', position: 'top', fontSize: 11, fill: '#f59e0b' }}
+                          />
+                        ))}
+                      <Tooltip
+                        contentStyle={{
+                          fontSize: 12,
+                          backgroundColor: '#0f172a',
+                          border: '1px solid #334155',
+                          borderRadius: 8,
+                          color: '#f1f5f9'
+                        }}
+                        labelStyle={{ color: '#f1f5f9' }}
+                        itemStyle={{ color: '#e2e8f0' }}
                       />
-                    )}
-                  </ComposedChart>
-                </ResponsiveContainer>
-              )}
-            </RechartsGate>
-          </div>
+                      {widget.config?.compare && (
+                        <Bar dataKey='prev' fill='#cbd5e1' radius={[3, 3, 0, 0]} name='previous' />
+                      )}
+                      <Bar
+                        dataKey='value'
+                        fill={BRAND}
+                        radius={[3, 3, 0, 0]}
+                        className={widget.collection ? 'cursor-pointer' : undefined}
+                        onClick={(
+                          entry:
+                            | { payload?: { dim?: string; raw?: unknown; other?: boolean } }
+                            | undefined
+                        ) => {
+                          if (!widget.collection) return
+                          const seg = entry?.payload
+                          if (seg?.other) return
+                          const dimField = widget.config?.dimension as
+                            | { field?: string; bucket?: string }
+                            | undefined
+                          setRecordsFor({
+                            conditions: widgetDrillConditions(
+                              widget,
+                              entityFilters,
+                              dateRange,
+                              seg?.raw ?? seg?.dim
+                            ),
+                            title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`,
+                            dimField: dimField?.bucket ? undefined : dimField?.field,
+                            dimRaw: seg?.raw ?? seg?.dim,
+                            dimLabel: seg?.dim
+                          })
+                        }}
+                      >
+                        {series.map((sv) => (
+                          <Cell key={sv.dim} fill={sv.other ? '#94a3b8' : BRAND} />
+                        ))}
+                      </Bar>
+                      {hasValue2 && (
+                        <Line
+                          yAxisId={horizontal ? undefined : 'right'}
+                          type='monotone'
+                          dataKey='value2'
+                          stroke='#8b5cf6'
+                          strokeWidth={1.5}
+                          dot={false}
+                          name={metric2Label}
+                        />
+                      )}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                )}
+              </RechartsGate>
+            )}
+          </CategoryAxisBox>
         )
       }
     }

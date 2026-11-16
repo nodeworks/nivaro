@@ -2,9 +2,9 @@ import {
   type LayoutEditorHost,
   LayoutEditorHostContext,
   type OverviewResponse,
-  overviewKeys
+  overviewKeys,
+  useQueryEntryState
 } from '@nivaro/shared'
-import { skipToken, useQuery } from '@tanstack/react-query'
 import { type ReactNode, useMemo } from 'react'
 import { useNavigate } from 'react-router'
 import { LayoutAssistSection } from '@/components/ai-layout-assist'
@@ -44,11 +44,10 @@ export function AdminLayoutEditorHost({
   const navigate = useNavigate()
   const isAdmin = !!user?.is_admin
   // The warning rides on the overview answer the editor and overview already
-  // fetch: read that cache entry, never fetch it a second time.
-  const { data: overview } = useQuery<OverviewResponse>({
-    queryKey: overviewKeys.overview(collection),
-    queryFn: skipToken
-  })
+  // fetch: read that cache entry, never fetch it a second time. Watched, never observed: a
+  // skipToken observer leaves the Query's queryFn as skipToken and the next invalidate of the
+  // overview fails it with "Missing queryFn" (lib/use-query-entry.ts).
+  const overview = useQueryEntryState<OverviewResponse>(overviewKeys.overview(collection))?.data
   const warning = overview?.warning ?? null
   const host = useMemo<LayoutEditorHost>(
     () => ({
