@@ -193,9 +193,21 @@ export function HeaderTools({ children }: { children: ReactNode }) {
       // Second stage: still too wide with the tools folded (a narrow pane beside the sidebar),
       // so the row may wrap — the actions drop under the title instead of running off the edge.
       // Unwraps once the folded row fits again, with the same margin against flapping.
+      // The squeeze counts here too (2026-11-16 r2: the pipeline moves landed after the tools
+      // had folded; the row still fit, so nothing reacted and the title ran to five lines).
+      // It waits for a foldable control still inline (the moves, useHeaderFold) to fold first:
+      // that alone usually gives the title its line back, and wrapping now would race it.
       const wrapped = header.hasAttribute('data-nvr-header-wrap')
-      if (!wrapped && header.scrollWidth > header.clientWidth + 2) {
-        wrapNeededRef.current = header.scrollWidth
+      const overflow = header.scrollWidth > header.clientWidth + 2
+      const deficit =
+        wrapped || header.querySelector('[data-nvr-header-fold="inline"]')
+          ? 0
+          : titleChipDeficit(header, wrapRef.current?.parentElement ?? null)
+      if (!wrapped && (overflow || deficit > 0)) {
+        wrapNeededRef.current = Math.max(
+          overflow ? header.scrollWidth : 0,
+          header.clientWidth + deficit
+        )
         header.setAttribute('data-nvr-header-wrap', '')
       } else if (wrapped && header.clientWidth > wrapNeededRef.current + 32) {
         header.removeAttribute('data-nvr-header-wrap')
@@ -383,9 +395,11 @@ export function useHeaderFold(ref: RefObject<HTMLElement | null>, enabled: boole
       if (!enabled && foldedRef.current) setFolded(false)
       return
     }
+    // HeaderTools' wrap stage waits while a foldable control is still inline.
+    el.setAttribute('data-nvr-header-fold', foldedRef.current ? 'folded' : 'inline')
     const check = () => {
       if (!foldedRef.current) {
-        if (header.scrollWidth <= header.clientWidth + 2) return
+        const overflow = header.scrollWidth > header.clientWidth + 2
         // The tool strip folds first; wait while it still has tools inline.
         const tools = header.querySelector('[data-nvr-header-tools]')
         if (
@@ -393,7 +407,10 @@ export function useHeaderFold(ref: RefObject<HTMLElement | null>, enabled: boole
           tools.childElementCount > 0
         )
           return
-        neededRef.current = header.scrollWidth
+        // The row fits only by squeezing the title until its chips wrap: fold too.
+        const deficit = overflow ? 0 : titleChipDeficit(header, el.parentElement)
+        if (!overflow && deficit <= 0) return
+        neededRef.current = overflow ? header.scrollWidth : header.clientWidth + deficit
         setFolded(true)
       } else if (neededRef.current > 0 && header.clientWidth > neededRef.current + 32) {
         setFolded(false)
@@ -403,8 +420,29 @@ export function useHeaderFold(ref: RefObject<HTMLElement | null>, enabled: boole
     const ro = new ResizeObserver(check)
     ro.observe(header)
     if (el.parentElement && el.parentElement !== header) ro.observe(el.parentElement)
-    return () => ro.disconnect()
+    // The moves and the title chips land after their own queries without resizing the row
+    // (the title block absorbs them): re-check when anything in the row changes, once a frame.
+    let raf = 0
+    const mo =
+      typeof MutationObserver === 'undefined'
+        ? null
+        : new MutationObserver(() => {
+            if (raf) return
+            raf = requestAnimationFrame(() => {
+              raf = 0
+              check()
+            })
+          })
+    mo?.observe(header, { childList: true, subtree: true })
+    return () => {
+      ro.disconnect()
+      mo?.disconnect()
+      if (raf) cancelAnimationFrame(raf)
+    }
   })
+  useEffect(() => {
+    if (!enabled) ref.current?.removeAttribute('data-nvr-header-fold')
+  }, [enabled, ref])
   return folded
 }
 

@@ -14364,14 +14364,18 @@ function ItemEditFormView({
                                       already folded) the title block grows from its floor instead of
                                       claiming its one-line width: it stays on the back arrow's line
                                       and its chips wrap inside it, rather than the arrow sitting
-                                      alone above an orphaned title. */}
+                                      alone above an orphaned title. In the wrapped stage on wider
+                                      rows it takes the rest of that line (row less the 32 px arrow
+                                      and its 12 px gap), so the actions always drop under it: the
+                                      stage also runs when the actions only squeezed the title
+                                      (r2 1548 px), and a title left beside them stayed squeezed. */}
                                       <div
                                         data-nvr-header-title
                                         className={cn(
                                           designMode
                                             ? 'flex min-w-[200px] flex-col'
                                             : 'flex min-w-[180px] flex-col md:min-w-[260px] max-md:flex-1',
-                                          '[[data-nvr-header-wrap]>&]:flex-1'
+                                          '[[data-nvr-header-wrap]>&]:flex-[1_1_calc(100%-2.75rem)]'
                                         )}
                                       >
                                         {/* The chips (Changed after approval, Help requested) wrap to

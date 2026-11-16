@@ -11,7 +11,7 @@ const classOf = (code: string, marker: string) => {
   const at = code.indexOf(marker)
   expect(at, `${marker} present`).toBeGreaterThan(-1)
   // The element's attributes: up to the tag's end (`)}\n>` or `'\n>`), a few lines on.
-  return code.slice(at, at + 400)
+  return code.slice(at, at + 600)
 }
 
 describe('record header title', () => {
@@ -32,7 +32,8 @@ describe('record header title', () => {
 
   it('the title block grows from its floor once the row wraps', () => {
     const block = classOf(form, 'data-nvr-header-title')
-    expect(block).toContain('[[data-nvr-header-wrap]>&]:flex-1')
+    // Wrapped stage: the rest of the arrow's line, so the actions always drop under the title.
+    expect(block).toContain('[[data-nvr-header-wrap]>&]:flex-[1_1_calc(100%-2.75rem)]')
     expect(block).toContain('max-md:flex-1')
   })
 
