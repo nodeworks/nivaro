@@ -118,11 +118,13 @@ const client = {
         total: 5
       }
     if (p === '/items/wf/aggregate') {
-      const field = String(cmd._params?.sum ?? '')
+      // one read for every total on screen: sum=a,b (2026-11-16)
+      const fields = String(cmd._params?.sum ?? '').split(',').filter(Boolean)
       const sums: Record<string, number> = { req: 50, ft: 20 }
       // the server totals stored columns only (a calculated field has no column)
-      if (!(field in sums)) throw Object.assign(new Error('no stored field'), { status: 400 })
-      return { data: [{ group: {}, sum: { [field]: sums[field] } }] }
+      if (!fields.length || fields.some((f) => !(f in sums)))
+        throw Object.assign(new Error('no stored field'), { status: 400 })
+      return { data: [{ group: {}, sum: Object.fromEntries(fields.map((f) => [f, sums[f]])) }] }
     }
     return { data: null }
   })
