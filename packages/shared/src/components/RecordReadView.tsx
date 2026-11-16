@@ -318,7 +318,7 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
       <button
         type='button'
         onClick={() => drill.open({ collection, itemId: String(id) })}
-        className='text-left underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#007a99] hover:decoration-[#007a99] dark:decoration-slate-600 dark:hover:text-nvr-cyan dark:hover:decoration-nvr-cyan'
+        className='inline-block max-w-full truncate text-left align-bottom underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#007a99] hover:decoration-[#007a99] dark:decoration-slate-600 dark:hover:text-nvr-cyan dark:hover:decoration-nvr-cyan'
       >
         {label}
       </button>
@@ -744,7 +744,7 @@ function ChildTable({
                 e.stopPropagation()
                 drill.open({ collection: target, itemId: String(id) })
               }}
-              className='text-left underline decoration-slate-300 underline-offset-2 hover:text-[#007a99] dark:decoration-slate-600 dark:hover:text-nvr-cyan'
+              className='inline-block max-w-full truncate text-left align-bottom underline decoration-slate-300 underline-offset-2 hover:text-[#007a99] dark:decoration-slate-600 dark:hover:text-nvr-cyan'
             >
               {pv.value}
             </button>

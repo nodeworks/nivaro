@@ -51,6 +51,16 @@ export interface ListReturnStash {
   path: string
   /** The rows the list showed, in order. */
   rows: ListRef[]
+  /**
+   * How many records the WHOLE list holds (all pages), when the list knows it; null/absent =
+   * unknown, and the header counts only the rows shown ("3 of 25 shown"), never passing a page
+   * size off as the list's total (rt-nav review: "3 of 25" under "1–25 of about 49").
+   */
+  total?: number | null
+  /** The list's total is an estimate (`count=approx`): said as "about 49". */
+  totalApprox?: boolean
+  /** Where `rows[0]` sits in the whole list, 0-based (page 2 of 25 → 25). */
+  offset?: number
   /** The record the person is on now (moves with Previous / Next). */
   current: ListRef
   /** The record the list opened (stays put). */
@@ -93,6 +103,11 @@ export function noteListOpen(s: {
   rows: ListRef[]
   opened: ListRef
   entry?: string | null
+  /** The whole list's record count (all pages), when known. */
+  total?: number | null
+  totalApprox?: boolean
+  /** 0-based position of the first row shown in the whole list. */
+  offset?: number
 }): void {
   const store = storage()
   if (!store) return
@@ -114,6 +129,12 @@ export function noteListOpen(s: {
       s.path ??
       (typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : ''),
     rows,
+    ...(typeof s.total === 'number' && Number.isFinite(s.total) && s.total >= 0
+      ? { total: Math.round(s.total), ...(s.totalApprox ? { totalApprox: true } : {}) }
+      : {}),
+    ...(typeof s.offset === 'number' && Number.isFinite(s.offset) && s.offset > 0
+      ? { offset: Math.floor(s.offset) }
+      : {}),
     current: { collection: s.opened.collection, id: String(s.opened.id) },
     opened: { collection: s.opened.collection, id: String(s.opened.id) },
     idx: here == null ? null : here + 1,
@@ -150,19 +171,50 @@ function writeStash(s: ListReturnStash): void {
   }
 }
 
-/** Where `at` sits in the stashed list: its 1-based position, the total and its neighbours. */
-export function listNeighbors(
-  stash: ListReturnStash | null,
-  at: ListRef
-): { index: number; total: number; prev: ListRef | null; next: ListRef | null } | null {
+/** Where `at` sits in the stashed list. */
+export interface ListNeighbors {
+  /** 1-based position among the rows the list showed (what Previous / Next walk). */
+  index: number
+  /** Rows the list showed (Previous / Next never leave them). */
+  total: number
+  prev: ListRef | null
+  next: ListRef | null
+  /** 1-based position in the WHOLE list (index + the page's offset). */
+  position: number
+  /** The whole list's record count; null = unknown (only the rows shown are counted). */
+  listTotal: number | null
+  /** listTotal is an estimate ("about 49"). */
+  approx: boolean
+  /** The list goes on past the last row shown (a later page): Next stops here. */
+  moreAfter: boolean
+  /** The list starts before the first row shown (an earlier page): Previous stops here. */
+  moreBefore: boolean
+}
+
+/** Where `at` sits in the stashed list: its position, the list's total and its neighbours. */
+export function listNeighbors(stash: ListReturnStash | null, at: ListRef): ListNeighbors | null {
   if (!stash) return null
   const i = stash.rows.findIndex((r) => sameRef(r, at))
   if (i < 0) return null
+  const shown = stash.rows.length
+  const offset =
+    typeof stash.offset === 'number' && Number.isFinite(stash.offset) && stash.offset > 0
+      ? Math.floor(stash.offset)
+      : 0
+  const known = typeof stash.total === 'number' && Number.isFinite(stash.total)
+  // A total smaller than what the list showed is stale (rows added since the count): never
+  // print "30 of 25".
+  const listTotal = known ? Math.max(Number(stash.total), offset + shown) : null
   return {
     index: i + 1,
-    total: stash.rows.length,
+    total: shown,
     prev: i > 0 ? stash.rows[i - 1] : null,
-    next: i < stash.rows.length - 1 ? stash.rows[i + 1] : null
+    next: i < shown - 1 ? stash.rows[i + 1] : null,
+    position: offset + i + 1,
+    listTotal,
+    approx: listTotal != null && !!stash.totalApprox,
+    moreAfter: listTotal != null && offset + shown < listTotal,
+    moreBefore: offset > 0
   }
 }
 

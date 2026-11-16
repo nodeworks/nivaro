@@ -223,7 +223,7 @@ export function RecordDrilldownSheet({
             if (onOpenRecord) onOpenRecord(target)
             else openItemPage(target)
           }}
-          className='flex shrink-0 items-center gap-1 text-[11px] font-normal text-nvr-navy hover:underline dark:text-nvr-cyan'
+          className='flex shrink-0 items-center gap-1 rounded text-[11px] font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-slate-300 dark:hover:text-white'
         >
           Open record <ExternalLink className='h-3 w-3' />
         </a>
@@ -313,7 +313,9 @@ export function RecordDrilldownSheet({
   return (
     <Sheet open onOpenChange={(open) => !open && onClose()}>
       <SheetContent
-        className='flex flex-col gap-0 overflow-hidden p-0'
+        // A phone gets the whole width (rt-nav review: the rail stayed beside an 85% sheet,
+        // leaving content three quarters of a 390 pt screen).
+        className='flex flex-col gap-0 overflow-hidden p-0 max-sm:!w-screen max-sm:!max-w-none'
         style={{
           width: customView?.width ?? current.width ?? sheetWidth ?? width ?? 640,
           maxWidth: '96vw'
