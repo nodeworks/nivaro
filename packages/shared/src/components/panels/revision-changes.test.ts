@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   buildSaveRows,
   type ChangeSourceRevision,
+  csvCell,
+  deriveOf,
   matrixColumns,
   matrixCsv,
+  recalcReason,
   rowsChanging,
   signedAmount,
   viaText
@@ -115,5 +118,79 @@ describe('the revision grid', () => {
     expect(first).toContain('Richard Peart,Changed,Fuse repair,7,2060')
     expect(first).toContain('Requisition Amount: Recalculated after Richard Peart · Line 1 +2,059')
     expect(signedAmount(-50)).toBe('−50')
+  })
+})
+
+describe('a partial first save (an integration create)', () => {
+  it('a field the save before never recorded is not a change, let alone a recalculation', () => {
+    const rows = buildSaveRows([
+      rev({
+        id: '2',
+        action: 'update',
+        timestamp: '2026-08-19T17:00:05Z',
+        data: { id: 1, name: 'X', p2: false, is_send_back: false },
+        delta: { name: 'X' }
+      }),
+      rev({
+        id: '1',
+        action: 'create',
+        timestamp: '2026-08-19T17:00:00Z',
+        data: { id: 1, name: 'W' }
+      })
+    ])
+    expect([...rows[0].recalculated]).toEqual([])
+    expect(rows[0].changed.has('name')).toBe(true)
+  })
+})
+
+describe('csvCell', () => {
+  it('defuses formulas, keeps plain negative numbers', () => {
+    expect(csvCell('=HYPERLINK("x")')).toBe(`"'=HYPERLINK(""x"")"`)
+    expect(csvCell('@SUM(A1)')).toBe("'@SUM(A1)")
+    expect(csvCell('-2,059.50')).toBe('"-2,059.50"')
+    expect(csvCell('-50')).toBe('-50')
+    expect(csvCell('Fuse repair')).toBe('Fuse repair')
+  })
+})
+
+describe('why a value was recalculated', () => {
+  const rows = buildSaveRows(history)
+  const label = (c: string | null, f?: string) =>
+    c == null ? (LABELS[f ?? ''] ?? String(f)) : f ? `«${f}»` : `«${c}»`
+
+  it('a rollup names its rows and who moved it', () => {
+    const d = deriveOf(
+      'rollup',
+      JSON.stringify({
+        sources: [
+          {
+            related_collection: 'workflow_line_items',
+            fk_field: 'workflow',
+            aggregate: 'sum',
+            value_field: 'amount',
+            filter: { line_type: { _eq: 'Capital' } }
+          }
+        ]
+      })
+    )
+    expect(recalcReason('requisition_amount', rows[0], d, label)).toEqual({
+      why: 'Sum of «workflow_line_items» · «amount» (filtered)',
+      because: 'Richard Peart changed Line 1 (+2,059)'
+    })
+  })
+
+  it('a formula names its inputs and the ones that moved', () => {
+    const d = deriveOf('write', '{{name}} - {{vendor}}')
+    expect(d).toEqual({ kind: 'formula', inputs: ['name', 'vendor'] })
+    expect(recalcReason('label', rows[0], d, label)).toEqual({
+      why: 'Worked out from Name and Vendor',
+      because: 'Name changed'
+    })
+  })
+
+  it('a plain field moved by something else says so', () => {
+    expect(recalcReason('p2', rows[0], deriveOf(null, null), label).why).toBe(
+      'Set automatically (rule, job or integration)'
+    )
   })
 })

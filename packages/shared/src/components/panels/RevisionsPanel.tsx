@@ -22,7 +22,7 @@ import {
   Table2,
   X
 } from 'lucide-react'
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import {
@@ -46,6 +46,7 @@ import { RelatedItemLabel } from '../item-edit/RelationCombobox'
 import { UserChip } from '../item-edit/UserChip'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
+import { Checkbox } from '../ui/checkbox'
 import {
   Command,
   CommandEmpty,
@@ -61,14 +62,18 @@ import { IntegrationActivitySection } from './IntegrationActivitySection'
 import {
   buildSaveRows,
   type ChangeSourceRevision,
+  type DeriveInfo,
+  deriveOf,
   type MatrixColumn,
+  type MatrixRow,
   matrixColumns,
   matrixCsv,
+  type RecalcReason,
+  recalcReason,
   rowsChanging,
   type SaveAction,
   saveActionLabel,
-  signedAmount,
-  viaText
+  signedAmount
 } from './revision-changes'
 
 export interface O2MFieldInfo {
@@ -155,6 +160,8 @@ interface FieldMeta {
   order?: number
   /** Type + options for display formatting (currency, choices, numbers). */
   cmp?: CompareFieldMeta
+  /** How the field is worked out (rollup / formula / lookup); null = a plain field. */
+  derive?: DeriveInfo | null
 }
 
 const AUDIT_FIELDS = new Set([
@@ -184,6 +191,8 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
       interface?: string | null
       options?: unknown
       display_options?: unknown
+      computed_type?: string | null
+      computed_formula?: unknown
     }>
     relations: Array<{
       many_collection: string | null
@@ -208,6 +217,8 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
               interface?: string | null
               options?: unknown
               display_options?: unknown
+              computed_type?: string | null
+              computed_formula?: unknown
             }>
           }>(get(`/field-config/${collection}`))
           .then((r) => r.data ?? [])
@@ -238,6 +249,7 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
       if (f.field.startsWith('__')) continue
       map.set(f.field, {
         order: i,
+        derive: deriveOf(f.computed_type, f.computed_formula),
         cmp: {
           field: f.field,
           type: f.type ?? null,
@@ -1328,10 +1340,13 @@ function RevisionRow({
 
 function TimeTravelTools({
   data,
+  history,
   meta,
   labels
 }: {
   data: Revision[]
+  /** Every history row, events included. */
+  history: Revision[]
   meta: FieldMetaMap
   labels?: ActivityLabels
 }) {
@@ -1414,7 +1429,9 @@ function TimeTravelTools({
         </button>
       </div>
 
-      {openTool === 'replay' && <HistoryReplay snapshots={data} meta={meta} labels={labels} />}
+      {openTool === 'replay' && (
+        <HistoryReplay snapshots={data} history={history} meta={meta} labels={labels} />
+      )}
 
       {openTool === 'compare' && (
         <div className='rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 dark:border-border dark:bg-muted/20'>
@@ -1609,7 +1626,7 @@ function RevisionsList({
   return (
     <RevisionLabelsContext.Provider value={actorLabels}>
       <div className='space-y-3 pt-3'>
-        <TimeTravelTools data={snapshots} meta={meta} labels={actorLabels} />
+        <TimeTravelTools data={snapshots} history={data ?? []} meta={meta} labels={actorLabels} />
         <div>
           {groups.map((g) => (
             <div key={g.day}>
@@ -2048,6 +2065,39 @@ function cellText(value: unknown, m: FieldMeta): string {
   return displayValue(value, m.dateOnly)
 }
 
+/** Why a field moved on a save without that save writing it (config-derived + who moved it). */
+function reasonFor(field: string, row: MatrixRow, meta: FieldMetaMap): RecalcReason {
+  const m = metaFor(meta, field)
+  return recalcReason(
+    field,
+    row,
+    m.derive ?? null,
+    (collection, f) =>
+      collection == null
+        ? metaFor(meta, f ?? '').label
+        : f
+          ? titleCase(f.replace(/_/g, ' '))
+          : titleCase(collection.replace(/_/g, ' ')),
+    (d) => signedCell(d, m)
+  )
+}
+
+function ReasonLines({ reason }: { reason: RecalcReason }) {
+  return (
+    // What moved it first (the audit question), then what the value is worked out from.
+    <span className='mt-0.5 block text-[10.5px] font-normal leading-snug' data-recalc-reason>
+      {reason.because && (
+        <span className='block text-amber-800/90 dark:text-amber-200/80'>{reason.because}</span>
+      )}
+      <span className='block text-slate-500 dark:text-slate-400'>{reason.why}</span>
+    </span>
+  )
+}
+
+const isBlank = (v: unknown) => v === null || v === undefined || v === ''
+/** Rich text or a long string: shown as a word diff, not two struck paragraphs. */
+const isLongText = (v: unknown) => isRichText(v) || (typeof v === 'string' && v.length > 60)
+
 /** A total's move in the field's own format: "+$2,059.00" for a currency field. */
 function signedCell(delta: number, m: FieldMeta): string {
   if (!m.cmp) return signedAmount(delta)
@@ -2190,6 +2240,7 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
     [columns, shownFields]
   )
   const [onlyMoving, setOnlyMoving] = useState(true)
+  const onlyMovingId = useId()
   const shownRows = useMemo(
     () =>
       onlyMoving
@@ -2202,7 +2253,12 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
   )
 
   const download = () => {
-    const csv = matrixCsv(shownRows, shownColumns, (f, v) => cellText(v, metaFor(meta, f)))
+    const csv = matrixCsv(
+      shownRows,
+      shownColumns,
+      (f, v) => cellText(v, metaFor(meta, f)),
+      (f, row) => reasonFor(f, row, meta)
+    )
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -2227,15 +2283,20 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
     <div className='pt-4' data-revision-table-view>
       <div className='mb-3 flex flex-wrap items-center gap-2'>
         <ColumnPicker columns={columns} shown={shownFields} onChange={setPicked} />
-        <label className='inline-flex cursor-pointer select-none items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'>
-          <input
-            type='checkbox'
+        <span className='inline-flex items-center gap-1.5'>
+          <Checkbox
+            id={onlyMovingId}
             checked={onlyMoving}
-            onChange={(e) => setOnlyMoving(e.target.checked)}
-            className='h-3.5 w-3.5 accent-nvr-cyan'
+            onCheckedChange={(v) => setOnlyMoving(v === true)}
+            className='h-3.5 w-3.5'
           />
-          Only saves that changed these fields
-        </label>
+          <label
+            htmlFor={onlyMovingId}
+            className='cursor-pointer select-none text-[12px] text-slate-600 dark:text-slate-300'
+          >
+            Only saves that changed these fields
+          </label>
+        </span>
         <span className='ml-auto inline-flex items-center gap-3 text-[11.5px] text-slate-500 dark:text-slate-400'>
           <span className='inline-flex items-center gap-1.5'>
             <span className='h-2.5 w-2.5 rounded-sm bg-amber-200 dark:bg-amber-500/40' />
@@ -2328,14 +2389,16 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
                           <span className='block truncate text-slate-700 dark:text-slate-200'>
                             {r.who}
                           </span>
-                          <span
-                            className={cn(
-                              'mt-0.5 inline-block rounded px-1.5 py-px text-[10.5px] font-medium',
-                              ACTION_CHIP[r.action]
-                            )}
-                          >
-                            {saveActionLabel(r.action)}
-                          </span>
+                          {r.action !== 'changed' && (
+                            <span
+                              className={cn(
+                                'mt-0.5 inline-block rounded px-1.5 py-px text-[10.5px] font-medium',
+                                ACTION_CHIP[r.action]
+                              )}
+                            >
+                              {saveActionLabel(r.action)}
+                            </span>
+                          )}
                         </span>
                       </span>
                     </td>
@@ -2345,7 +2408,10 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
                       const own = r.changed.has(c.field)
                       const recalc = r.recalculated.has(c.field)
                       const moved = own || recalc
-                      const tip = recalc ? viaText(r.via.get(c.field)) : undefined
+                      const reason = recalc ? reasonFor(c.field, r, meta) : null
+                      const tip = reason
+                        ? `${reason.why}${reason.because ? ` — ${reason.because}` : ''}`
+                        : undefined
                       const empty = v === null || v === undefined || v === ''
                       return (
                         <td
@@ -2388,12 +2454,9 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
                               )}
                             </span>
                           </span>
-                          {recalc && r.via.get(c.field)?.length ? (
-                            <span className='mt-0.5 block text-[10.5px] font-normal text-amber-800/80 dark:text-amber-200/70'>
-                              {r.via
-                                .get(c.field)
-                                ?.map((x) => `${x.name} · ${x.row} ${signedCell(x.delta, m)}`)
-                                .join(', ')}
+                          {reason ? (
+                            <span className='line-clamp-4' data-tip={tip}>
+                              <ReasonLines reason={reason} />
                             </span>
                           ) : null}
                         </td>
@@ -2406,6 +2469,11 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
           </div>
         </div>
       )}
+      {rows.length > 0 && (
+        <p className='mt-2 text-[11.5px] text-slate-500 dark:text-slate-400'>
+          Pipeline step moves and line edits that changed no field on this record are in Timeline.
+        </p>
+      )}
     </div>
   )
 }
@@ -2414,14 +2482,24 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
 
 function HistoryReplay({
   snapshots,
+  history,
   meta,
   labels
 }: {
   snapshots: Revision[]
+  /** Every history row (line writes included) — names who moved a recalculated total. */
+  history: Revision[]
   meta: FieldMetaMap
   labels?: ActivityLabels
 }) {
   const ordered = useMemo(() => [...snapshots].reverse(), [snapshots]) // oldest → newest
+  const saveRows = useMemo(
+    () =>
+      buildSaveRows(history as ChangeSourceRevision[], {
+        name: (r) => revisionUserName(r as Revision, labels)
+      }),
+    [history, labels]
+  )
   const [idx, setIdx] = useState(Math.max(0, ordered.length - 1))
   const [playing, setPlaying] = useState(false)
   const [showAll, setShowAll] = useState(false)
@@ -2449,12 +2527,17 @@ function HistoryReplay({
     )
     if (!prev) return []
     const mine = new Set(Object.keys(cur.delta ?? {}))
+    const before = prev.data ?? {}
+    // A field the save before never recorded (a partial create) has no "before" — not a change.
     // What the person wrote first, then what was recalculated around it.
-    return rows.sort((a, b) => Number(!mine.has(a.field)) - Number(!mine.has(b.field)))
+    return rows
+      .filter((r) => mine.has(r.field) || r.field in before)
+      .sort((a, b) => Number(!mine.has(a.field)) - Number(!mine.has(b.field)))
   }, [cur, prev, meta])
   const own = new Set(Object.keys(cur?.delta ?? {}))
   const ownCount = changed.filter((r) => own.has(r.field)).length
   const recalcCount = changed.length - ownCount
+  const curRow = saveRows.find((r) => r.key === `${cur?.id}|${cur?.timestamp ?? ''}`)
   const record = useMemo(
     () =>
       Object.entries(cur?.data ?? {})
@@ -2564,8 +2647,14 @@ function HistoryReplay({
           })}
         </div>
         <div className='mt-1 flex justify-between text-[10.5px] tabular-nums text-slate-400'>
-          <span>{ordered[0]?.timestamp ? toLocalDateString(ordered[0].timestamp) : ''}</span>
-          <span>{ordered[last]?.timestamp ? toLocalDateString(ordered[last].timestamp) : ''}</span>
+          {/* The stops are saves, evenly spaced — the labels say so, so gaps never read as time. */}
+          <span>
+            Save 1{ordered[0]?.timestamp ? ` · ${toLocalDateString(ordered[0].timestamp)}` : ''}
+          </span>
+          <span>
+            Save {ordered.length}
+            {ordered[last]?.timestamp ? ` · ${toLocalDateString(ordered[last].timestamp)}` : ''}
+          </span>
         </div>
       </div>
 
@@ -2649,20 +2738,42 @@ function HistoryReplay({
                 <span className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>
                   {metaFor(meta, r.field).label}
                   {!own.has(r.field) && cur.action === 'update' && (
-                    <span className='ml-1.5 inline-flex items-center gap-0.5 text-[10.5px] font-normal text-slate-500 dark:text-slate-400'>
-                      <Sigma className='h-3 w-3' />
+                    <span className='mt-0.5 flex items-center gap-0.5 text-[10.5px] font-normal text-slate-500 dark:text-slate-400'>
+                      <Sigma className='h-3 w-3 text-amber-700 dark:text-amber-300' />
                       recalculated
                     </span>
                   )}
                 </span>
-                <span className='flex flex-wrap items-baseline gap-x-2 text-[12px]'>
-                  <span className='text-slate-400 line-through decoration-slate-300 dark:decoration-slate-600'>
-                    <RevValue value={r.before} meta={metaFor(meta, r.field)} tone='before' />
-                  </span>
-                  <ArrowRight className='h-3 w-3 shrink-0 self-center text-slate-400' />
-                  <span className='font-medium text-slate-900 dark:text-slate-100'>
-                    <RevValue value={r.after} meta={metaFor(meta, r.field)} tone='after' />
-                  </span>
+                <span className='min-w-0 text-[12px]'>
+                  {isLongText(r.before) || isLongText(r.after) ? (
+                    // A paragraph that gained a sentence reads as the words that moved.
+                    <span className='block break-words leading-relaxed text-slate-700 dark:text-slate-200'>
+                      <WordDiff before={r.before} after={r.after} />
+                    </span>
+                  ) : (
+                    <span className='flex flex-wrap items-baseline gap-x-2'>
+                      <span
+                        className={cn(
+                          'text-slate-400',
+                          !isBlank(r.before) &&
+                            'line-through decoration-slate-300 dark:decoration-slate-600'
+                        )}
+                      >
+                        {isBlank(r.before) ? (
+                          '—'
+                        ) : (
+                          <RevValue value={r.before} meta={metaFor(meta, r.field)} tone='before' />
+                        )}
+                      </span>
+                      <ArrowRight className='h-3 w-3 shrink-0 self-center text-slate-400' />
+                      <span className='font-medium text-slate-900 dark:text-slate-100'>
+                        <RevValue value={r.after} meta={metaFor(meta, r.field)} tone='after' />
+                      </span>
+                    </span>
+                  )}
+                  {curRow && !own.has(r.field) && cur.action === 'update' ? (
+                    <ReasonLines reason={reasonFor(r.field, curRow, meta)} />
+                  ) : null}
                 </span>
               </div>
             ))}

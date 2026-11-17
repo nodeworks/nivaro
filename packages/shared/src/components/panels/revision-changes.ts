@@ -65,7 +65,8 @@ const isSnapshot = (r: ChangeSourceRevision) =>
     r.action === 'delete' ||
     r.action === 'restore')
 
-const time = (r: { timestamp: string | null }) => (r.timestamp ? new Date(r.timestamp).getTime() : 0)
+const time = (r: { timestamp: string | null }) =>
+  r.timestamp ? new Date(r.timestamp).getTime() : 0
 
 export const sameValue = (a: unknown, b: unknown) => {
   const s = (v: unknown) =>
@@ -113,6 +114,10 @@ export function buildSaveRows(
       const own = new Set(Object.keys(r.delta ?? {}))
       for (const f of new Set([...Object.keys(before), ...Object.keys(values)])) {
         if (f === 'id' || sameValue(before[f], values[f])) continue
+        // A field the save before never recorded (an integration's create stores only what it
+        // sent) has no "before": its first appearance is not a change, and above all not a
+        // recalculation — P2, Is Send Back… all read "Σ No" on LinX-created workflows.
+        if (!(f in before) && !own.has(f)) continue
         if (own.has(f)) {
           changed.add(f)
           continue
@@ -200,13 +205,25 @@ const ACTION_LABEL: Record<SaveAction, string> = {
 }
 export const saveActionLabel = (a: SaveAction) => ACTION_LABEL[a]
 
+/**
+ * One CSV cell. A value a spreadsheet would run as a formula (=, +, -, @, tab, CR first) gets a
+ * leading apostrophe — record values are typed by other people (formula injection); a plain
+ * negative number stays a number. Exported for tests.
+ */
+export function csvCell(raw: string): string {
+  let v = raw
+  if (/^[=+\-@\t\r]/.test(v) && !/^-?\d[\d,]*(\.\d+)?$/.test(v)) v = `'${v}`
+  return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
+}
+
 /** The grid as CSV, values as the reader sees them (`text`), for auditors who keep a copy. */
 export function matrixCsv(
   rows: MatrixRow[],
   columns: MatrixColumn[],
-  text: (field: string, value: unknown) => string
+  text: (field: string, value: unknown) => string,
+  reason?: (field: string, row: MatrixRow) => RecalcReason
 ): string {
-  const esc = (v: string) => (/[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)
+  const esc = csvCell
   const head = ['When', 'Changed by', 'Action', ...columns.map((c) => c.label), 'Recalculated']
   const lines = [head.map(esc).join(',')]
   for (const r of rows) {
@@ -214,7 +231,9 @@ export function matrixCsv(
       .filter((f) => columns.some((c) => c.field === f))
       .map((f) => {
         const label = columns.find((c) => c.field === f)?.label ?? f
-        return `${label}: ${viaText(r.via.get(f))}`
+        if (!reason) return `${label}: ${viaText(r.via.get(f))}`
+        const why = reason(f, r)
+        return `${label}: ${why.why}${why.because ? ` — ${why.because}` : ''}`
       })
       .join('; ')
     lines.push(
@@ -230,4 +249,131 @@ export function matrixCsv(
     )
   }
   return `${lines.join('\r\n')}\r\n`
+}
+
+// ─── Why a value was recalculated ───────────────────────────────────────────
+
+/** How a field is worked out, read from its config (computed_type + computed_formula). */
+export type DeriveInfo =
+  | {
+      kind: 'rollup'
+      sources: Array<{ collection: string; field: string; aggregate: string; filtered: boolean }>
+    }
+  | { kind: 'formula'; inputs: string[] }
+  | { kind: 'lookup'; fk: string; source: string }
+
+const parseObj = (v: unknown): Record<string, unknown> | null => {
+  if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>
+  if (typeof v !== 'string' || !v.trim()) return null
+  try {
+    const p = JSON.parse(v) as unknown
+    return p && typeof p === 'object' && !Array.isArray(p) ? (p as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
+/** The field's derivation, or null for a plain field (set by people, rules, jobs, integrations). */
+export function deriveOf(computedType: unknown, computedFormula: unknown): DeriveInfo | null {
+  const type = String(computedType ?? '')
+  if (type === 'rollup') {
+    const cfg = parseObj(computedFormula)
+    const list = Array.isArray(cfg?.sources) ? (cfg?.sources as Array<Record<string, unknown>>) : []
+    const sources = list
+      .filter((s) => typeof s.related_collection === 'string')
+      .map((s) => ({
+        collection: String(s.related_collection),
+        field: String(s.value_field ?? ''),
+        aggregate: String(s.aggregate ?? 'sum'),
+        filtered: !!s.filter && Object.keys(s.filter as object).length > 0
+      }))
+    return sources.length ? { kind: 'rollup', sources } : null
+  }
+  if (type === 'lookup') {
+    const cfg = parseObj(computedFormula)
+    if (!cfg?.fk_field || !cfg?.source_field) return null
+    return { kind: 'lookup', fk: String(cfg.fk_field), source: String(cfg.source_field) }
+  }
+  if (type === 'write' || type === 'read') {
+    const inputs = [
+      ...new Set(
+        [...String(computedFormula ?? '').matchAll(/\{\{\s*([A-Za-z_][\w]*)/g)].map((m) => m[1])
+      )
+    ]
+    return { kind: 'formula', inputs }
+  }
+  return null
+}
+
+const AGG_WORD: Record<string, string> = {
+  sum: 'Sum',
+  count: 'Count',
+  avg: 'Average',
+  min: 'Lowest',
+  max: 'Highest',
+  median: 'Median',
+  distinct_count: 'Distinct count',
+  weighted_avg: 'Weighted average'
+}
+
+const listWords = (xs: string[]) =>
+  xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`
+
+export interface RecalcReason {
+  /** What the value is worked out from: "Sum of Workflow Line Items · Amount (filtered)". */
+  why: string
+  /** What moved it at this save, when the history knows: "Richard Peart changed Line 1 (+$2,059.00)". */
+  because?: string
+}
+
+/**
+ * Why `field` moved on `row` without that save writing it. `label(collection, field?)` names a
+ * collection or one of its fields; `money(delta)` formats a total's move in the field's format.
+ */
+export function recalcReason(
+  field: string,
+  row: MatrixRow,
+  derive: DeriveInfo | null,
+  label: (collection: string | null, field?: string) => string,
+  money: (delta: number) => string = signedAmount
+): RecalcReason {
+  const via = row.via.get(field)
+  const movedBy = via?.length
+    ? via.map((v) => `${v.name} changed ${v.row} (${money(v.delta)})`).join('; ')
+    : undefined
+  if (derive?.kind === 'rollup') {
+    const parts = derive.sources.map((s) => {
+      const agg = AGG_WORD[s.aggregate] ?? 'Total'
+      const what =
+        s.aggregate === 'count'
+          ? label(s.collection)
+          : `${label(s.collection)} · ${label(s.collection, s.field)}`
+      return `${agg} of ${what}${s.filtered ? ' (filtered)' : ''}`
+    })
+    return {
+      why: parts.join(' + '),
+      because: movedBy ?? 'Its rows changed between these two saves'
+    }
+  }
+  if (derive?.kind === 'formula') {
+    const moved = derive.inputs.filter((f) => row.changed.has(f) || row.recalculated.has(f))
+    return {
+      why: derive.inputs.length
+        ? `Worked out from ${listWords(derive.inputs.map((f) => label(null, f)))}`
+        : 'Worked out by a formula',
+      because: moved.length
+        ? `${listWords(moved.map((f) => label(null, f)))} changed`
+        : (movedBy ?? undefined)
+    }
+  }
+  if (derive?.kind === 'lookup') {
+    return {
+      why: `Copied from ${label(null, derive.fk)} (${derive.source.replace(/_/g, ' ')})`,
+      because: row.changed.has(derive.fk) ? `${label(null, derive.fk)} changed` : undefined
+    }
+  }
+  return {
+    why: 'Set automatically (rule, job or integration)',
+    because: movedBy
+  }
 }
