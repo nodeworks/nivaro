@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  adoptOwnSaveRefetch,
   appendUniqueM2MId,
   applyLayoutDefaults,
   computeM2MEffectiveIds,
@@ -428,6 +429,29 @@ describe('ownEditFields', () => {
       { considerations: '<p>old</p>', overview: '<p>base</p>', notes: 'n' }
     )
     expect([...own]).toEqual(['overview'])
+  })
+})
+
+describe('adoptOwnSaveRefetch (R3: typing after a save survives the refetch)', () => {
+  it('keeps fields touched since the save that differ, adopts everything else', () => {
+    const { merged, kept } = adoptOwnSaveRefetch(
+      { title: 'Saved', notes: 'server', status: 'open' },
+      { title: 'Saved', notes: 'typed after save', status: 'draft' },
+      new Set(['notes'])
+    )
+    expect(kept).toEqual(['notes'])
+    expect(merged).toEqual({ title: 'Saved', notes: 'typed after save', status: 'open' })
+  })
+
+  it('nothing typed since the save: the record is adopted whole', () => {
+    const { merged, kept } = adoptOwnSaveRefetch({ a: 1 }, { a: 2 }, new Set())
+    expect(kept).toEqual([])
+    expect(merged).toEqual({ a: 1 })
+  })
+
+  it('a touched field equal to the incoming value is not kept', () => {
+    const { kept } = adoptOwnSaveRefetch({ a: 'x' }, { a: 'x' }, new Set(['a']))
+    expect(kept).toEqual([])
   })
 })
 

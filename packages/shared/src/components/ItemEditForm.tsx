@@ -1338,6 +1338,28 @@ export function ownEditFields(
   return new Set(changed.filter((k) => touched.has(k) && !valuesEqual(draft[k], baseline[k])))
 }
 
+/** R3 (realtime gaps 2026-11-17): a refetch inside the window after the
+ *  person's own save (their echo, someone else's write, an outbox replay)
+ *  adopts the record — except the fields they touched SINCE that save and
+ *  that still differ from it. The save cleared the touched set, so whatever
+ *  is in it now was typed after the save; replacing the whole draft lost it.
+ *  `kept` = the fields whose typed value stays (the form stays dirty). */
+export function adoptOwnSaveRefetch(
+  record: Record<string, unknown>,
+  draft: Record<string, unknown>,
+  touched: Set<string>
+): { merged: Record<string, unknown>; kept: string[] } {
+  const kept: string[] = []
+  const merged = { ...record }
+  for (const k of touched) {
+    if (k.startsWith('__') || !Object.hasOwn(draft, k)) continue
+    if (valuesEqual(draft[k], record[k])) continue
+    merged[k] = draft[k]
+    kept.push(k)
+  }
+  return { merged, kept }
+}
+
 /** Interfaces that show a record's own lines (line locks keep these open under a record lock). */
 const LINE_GRID_IFACES = new Set(['inline-table', 'inline-grid', 'list-o2m', 'relation-list'])
 
@@ -2820,6 +2842,8 @@ function ItemEditFormView({
   // lands settles them even when a merge kept "theirs" and sent nothing.
   const outboxFieldsRef = useRef<Set<string>>(new Set())
   const lastSavePayloadRef = useRef<Record<string, unknown>>({})
+  /** The edit sequence when the last save was sent: a field stamped later was typed during it (R3). */
+  const saveSentSeqRef = useRef(0)
   const releaseOutboxClaim = useCallback(() => {
     outboxReleaseRef.current?.()
     outboxReleaseRef.current = null
@@ -4219,6 +4243,17 @@ function ItemEditFormView({
           setDraft(merged)
           return
         }
+      }
+    }
+    if (!firstLoad && ownSave) {
+      // Inside the own-save window: what was typed after that save stays (R3).
+      const { merged, kept } = adoptOwnSaveRefetch(record, draftRef.current, userTouchedRef.current)
+      if (kept.length > 0) {
+        initialDataRef.current = record
+        draftRef.current = merged
+        setDraft(merged)
+        setIsDirty(true)
+        return
       }
     }
     initialDataRef.current = record
@@ -10332,6 +10367,7 @@ function ItemEditFormView({
         if (base != null) payload._base_revision = base
       }
       lastSavePayloadRef.current = payload
+      saveSentSeqRef.current = ruleSeqRef.current
       let savedId: string
       // Many lines in this create: name the save so its progress can be shown.
       const nestedRows = isNew
@@ -11219,7 +11255,20 @@ function ItemEditFormView({
       if (!childFailed) setIsDirty(false)
       // What was touched is saved now: a linked parent reloading after this
       // save must not read as the person changing it (CR27-55150).
-      if (!isNew) settleTouchedAfterSave(userTouchedRef.current, { leftWorkStaged: childFailed })
+      if (!isNew) {
+        // R3: a field typed while the save was in flight is not in it — it stays touched
+        // (and the form dirty) so the refetch that follows keeps it.
+        const typedDuringSave = [...userTouchedRef.current].filter(
+          (k) =>
+            (fieldEditSeqRef.current.get(k) ?? -1) > saveSentSeqRef.current &&
+            !valuesEqual(draftRef.current[k], lastSavePayloadRef.current[k])
+        )
+        settleTouchedAfterSave(userTouchedRef.current, {
+          leftWorkStaged: childFailed,
+          typedDuringSave
+        })
+        if (!childFailed && typedDuringSave.length > 0) setIsDirty(true)
+      }
       // The persisted recovery draft is spent — remove it now rather than on
       // the debounce, since a created record navigates away immediately.
       if (!isNew && !childFailed) void deleteDraft(recoveryKey)

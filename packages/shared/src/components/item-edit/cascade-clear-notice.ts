@@ -133,10 +133,15 @@ export function notePersonLinkEdit(
  */
 export function settleTouchedAfterSave(
   touched: Set<string>,
-  opts: { leftWorkStaged: boolean }
+  opts: {
+    leftWorkStaged: boolean
+    /** R3: fields typed AFTER the save was sent — not part of it, still unsaved. */
+    typedDuringSave?: Iterable<string>
+  }
 ): void {
   if (opts.leftWorkStaged) return
-  touched.clear()
+  const keep = new Set(opts.typedDuringSave ?? [])
+  for (const k of [...touched]) if (!keep.has(k)) touched.delete(k)
 }
 
 /**
