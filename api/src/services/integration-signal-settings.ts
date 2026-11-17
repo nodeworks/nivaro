@@ -7,7 +7,9 @@
  */
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { type BusinessSchedule, businessHoursElapsed, getSlaSchedule } from './business-hours.js'
 import type { IntegrationSignal, SignalRow } from './integration-signals.js'
+import { majorUsHolidaySet } from './major-holidays.js'
 
 export interface ResolvedSettings {
   enabled: boolean
@@ -147,14 +149,83 @@ export function importCadence(
   return { hours: thresholds.default_hours ?? 48, source: 'default' }
 }
 
+/**
+ * The days an import's cadence counts (2026-11-16, Rob): an import that runs on
+ * working days is not "stale" for skipping a weekend or a holiday. A whole day is
+ * counted or not (all 24 hours), judged on the SLA schedule's working days and
+ * timezone; holidays = the SLA holiday list plus the major US holidays
+ * (major-holidays.ts), since most installs never fill that list in. `null` =
+ * every day counts (threshold `business_days` = 0).
+ */
+export type StaleCalendar = BusinessSchedule | null
+
+export function staleCalendar(
+  schedule: BusinessSchedule,
+  thresholds: Record<string, number>,
+  now: Date = new Date()
+): StaleCalendar {
+  if ((thresholds.business_days ?? 1) === 0) return null
+  const year = now.getUTCFullYear()
+  // A cadence is at most 90 days (the threshold's max): two years back covers it.
+  const holidays = majorUsHolidaySet(year - 2, year + 1)
+  for (const d of schedule.holidays) holidays.add(d)
+  return { ...schedule, startHour: 0, endHour: 24, holidays }
+}
+
+/** The calendar from the stored SLA schedule (60 s cache). */
+export async function loadStaleCalendar(
+  thresholds: Record<string, number>,
+  now: Date = new Date()
+): Promise<StaleCalendar> {
+  if ((thresholds.business_days ?? 1) === 0) return null
+  return staleCalendar(await getSlaSchedule(), thresholds, now)
+}
+
+/** Hours since `from` that count toward a cadence: all of them, or only those
+ *  on working, non-holiday days. */
+export function cadenceHoursElapsed(
+  from: Date | string,
+  now: Date,
+  calendar: StaleCalendar
+): number {
+  const start = new Date(from)
+  if (!calendar) return (now.getTime() - start.getTime()) / 3600_000
+  return businessHoursElapsed(start, now, calendar)
+}
+
+/** When `hours` of counted time after `from` run out — the moment an import
+ *  falls behind. Steps whole hours over non-counted days. */
+export function cadenceDeadline(from: Date | string, hours: number, calendar: StaleCalendar): Date {
+  const start = new Date(from)
+  if (!calendar) return new Date(start.getTime() + hours * 3600_000)
+  // Walk one day at a time (a cadence is ≤ 90 days, so ≤ ~200 steps with
+  // weekends and holidays), then finish inside the day that crosses it.
+  let t = start.getTime()
+  let left = hours
+  for (let guard = 0; guard < 2000 && left > 0; guard++) {
+    const day = businessHoursElapsed(new Date(t), new Date(t + 24 * 3600_000), calendar)
+    if (day >= left) {
+      for (let h = 0; h < 24 && left > 0; h++) {
+        left -= businessHoursElapsed(new Date(t), new Date(t + 3600_000), calendar)
+        t += 3600_000
+      }
+      break
+    }
+    left -= day
+    t += 24 * 3600_000
+  }
+  return new Date(t)
+}
+
 /** Only an import that has succeeded before, and is monitored, can go stale. */
 export function isImportStale(
   lastOk: Date | string | null,
   cadence: ImportCadence,
-  now: Date = new Date()
+  now: Date = new Date(),
+  calendar: StaleCalendar = null
 ): boolean {
   if (!lastOk || cadence.source === 'excluded' || cadence.hours <= 0) return false
-  return now.getTime() - new Date(lastOk).getTime() > cadence.hours * 3600_000
+  return cadenceHoursElapsed(lastOk, now, calendar) > cadence.hours
 }
 
 /** `row_key` / `group_key` are 300-character columns (migration 348) — a

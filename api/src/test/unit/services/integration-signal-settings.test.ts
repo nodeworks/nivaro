@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  cadenceDeadline,
+  cadenceHoursElapsed,
   importCadence,
   isImportStale,
   isSnoozed,
@@ -9,6 +11,7 @@ import {
   type SnoozeRow,
   splitSettingValues,
   stableRowHash,
+  staleCalendar,
   validateSettingPatch
 } from '../../../services/integration-signal-settings.js'
 import type { IntegrationSignal, SignalRow } from '../../../services/integration-signals.js'
@@ -424,5 +427,61 @@ describe('planChangedSnoozePrune', () => {
         [{ signal: 'core:x', row: changed }]
       )
     ).toEqual([9])
+  })
+})
+
+describe('isImportStale — weekends and holidays (2026-11-16)', () => {
+  const sla = {
+    startHour: 9,
+    endHour: 17,
+    days: new Set([1, 2, 3, 4, 5]),
+    holidays: new Set<string>(),
+    timeZone: 'America/New_York'
+  }
+  const cadence = { hours: 48, source: 'default' as const }
+
+  it('a weekend does not count toward the cadence', () => {
+    const lastOk = new Date('2026-11-13T23:00:00Z') // Fri 6 PM ET
+    const now = new Date('2026-11-16T17:00:00Z') // Mon noon ET
+    const calendar = staleCalendar(sla, { default_hours: 48 }, now)
+    expect(cadenceHoursElapsed(lastOk, now, calendar)).toBe(18) // Fri 6 h + Mon 12 h
+    expect(isImportStale(lastOk, cadence, now, calendar)).toBe(false)
+    // Every day counted: 66 h, stale.
+    expect(isImportStale(lastOk, cadence, now, null)).toBe(true)
+  })
+
+  it('Thanksgiving and the day after do not count either', () => {
+    const lastOk = new Date('2026-11-25T17:00:00Z') // Wed noon ET
+    const now = new Date('2026-11-30T17:00:00Z') // Mon noon ET
+    const calendar = staleCalendar(sla, { default_hours: 48 }, now)
+    expect(cadenceHoursElapsed(lastOk, now, calendar)).toBe(24)
+    expect(isImportStale(lastOk, cadence, now, calendar)).toBe(false)
+  })
+
+  it('still goes stale once enough working days pass', () => {
+    const lastOk = new Date('2026-11-12T01:00:00Z') // Wed 8 PM ET
+    const now = new Date('2026-11-16T17:00:00Z') // Mon noon ET: Wed 4 + Thu 24 + Fri 24 + Mon 12
+    const calendar = staleCalendar(sla, { default_hours: 48 }, now)
+    expect(isImportStale(lastOk, cadence, now, calendar)).toBe(true)
+  })
+
+  it('adds the SLA holiday list to the major holidays', () => {
+    const calendar = staleCalendar({ ...sla, holidays: new Set(['2026-11-16']) }, {})
+    expect(calendar?.holidays.has('2026-11-16')).toBe(true)
+    expect(calendar?.holidays.has('2026-12-25')).toBe(true)
+    expect(calendar?.startHour).toBe(0)
+    expect(calendar?.endHour).toBe(24)
+  })
+
+  it('business_days = 0 counts every day', () => {
+    expect(staleCalendar(sla, { business_days: 0 })).toBeNull()
+  })
+
+  it('the deadline skips the weekend', () => {
+    const lastOk = new Date('2026-11-13T23:00:00Z') // Fri 6 PM ET
+    const calendar = staleCalendar(sla, {}, lastOk)
+    // Fri 6 h + Mon 24 h + Tue 18 h = 48 → Tue 6 PM ET.
+    expect(cadenceDeadline(lastOk, 48, calendar).toISOString()).toBe('2026-11-17T23:00:00.000Z')
+    expect(cadenceDeadline(lastOk, 48, null).toISOString()).toBe('2026-11-15T23:00:00.000Z')
   })
 })

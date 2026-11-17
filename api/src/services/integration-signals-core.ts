@@ -7,7 +7,12 @@ import { AUTO_FAILURE_TABLE, memoryAvailable } from './auto-transition-memory.js
 import { selectInChunks } from './db-batch.js'
 import { staleUnansweredSends } from './erp-unanswered.js'
 import { getObligationKind } from './integration-obligations.js'
-import { importCadence, isImportStale } from './integration-signal-settings.js'
+import {
+  cadenceDeadline,
+  importCadence,
+  isImportStale,
+  loadStaleCalendar
+} from './integration-signal-settings.js'
 import { registerIntegrationSignal, type SignalRow } from './integration-signals.js'
 import { plainObligationReason } from './obligation-reason-text.js'
 
@@ -680,7 +685,7 @@ export function registerCoreIntegrationSignals(): void {
     id: 'core:import-stale',
     label: 'Import stale',
     description:
-      'A staged import whose newest successful run is older than its expected cadence (default 48 h; per-import override "cadence_hours:<key>", 0 = not monitored). An import with no run attempt at all in a long while is dormant instead — not raised here.',
+      'A staged import whose newest successful run is older than its expected cadence (default 48 h; per-import override "cadence_hours:<key>", 0 = not monitored). Weekends and holidays (the SLA holiday list plus major US holidays) do not count toward the cadence unless "Count weekends and holidays" is 1. An import with no run attempt at all in a long while is dormant instead — not raised here.',
     tab: 'inbound',
     severity: 'warn',
     thresholds: [
@@ -699,9 +704,20 @@ export function registerCoreIntegrationSignals(): void {
         unit: 'days',
         min: 7,
         max: 3650
+      },
+      {
+        // 1 (default) = weekends and holidays do not count toward the cadence.
+        key: 'business_days',
+        label: 'Skip weekends and holidays (1 = yes, 0 = count every day)',
+        default: 1,
+        unit: '',
+        min: 0,
+        max: 1
       }
     ],
     evaluate: async ({ thresholds }) => {
+      const now = new Date()
+      const calendar = await loadStaleCalendar(thresholds, now)
       const rows = (await db.raw(
         `SELECT d.[key] AS import_key, d.label, MAX(q.finished_at) AS last_ok,
                 (SELECT MAX(COALESCE(q2.finished_at, q2.started_at, q2.created_at))
@@ -723,14 +739,16 @@ export function registerCoreIntegrationSignals(): void {
         if (!r.last_ok) continue
         const cadence = importCadence(r.import_key, thresholds, r.last_attempt)
         // Excluded (cadence 0) and dormant imports are never stale.
-        if (!isImportStale(r.last_ok, cadence)) continue
+        if (!isImportStale(r.last_ok, cadence, now, calendar)) continue
         const hours = cadence.hours
-        const age = (Date.now() - new Date(r.last_ok).getTime()) / 3600_000
+        const age = (now.getTime() - new Date(r.last_ok).getTime()) / 3600_000
         out.push({
           key: `import:${r.import_key}`,
           title: `${r.label}: no successful run in ${ageWords(age)}`,
-          detail: `Expected every ${ageWords(hours)}`,
-          since: new Date(new Date(r.last_ok).getTime() + hours * 3600_000).toISOString(),
+          detail: calendar
+            ? `Expected every ${ageWords(hours)}, not counting weekends and holidays`
+            : `Expected every ${ageWords(hours)}`,
+          since: cadenceDeadline(r.last_ok, hours, calendar).toISOString(),
           // The last SUCCESSFUL run this staleness is measured from. Once a
           // fresh success lands and it later goes stale again, that is a
           // genuinely new instance of "stale" worth raising again.

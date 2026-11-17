@@ -326,7 +326,7 @@ DELETE /api/integration-signals/snoozes/:id   // Undo / Unsnooze`
     { type: 'h3', text: 'Import staleness' },
     {
       type: 'p',
-      text: "Backed by `core:import-stale`'s own settings, keyed dynamically per import: `cadence_hours:<import key>`. `null` follows the signal's own default (48 h); `0` means \"not monitored\" — the import is excluded from the signal entirely; a positive number pins that one import's expected cadence. An import whose last successful run predates the signal's `dormant_days` threshold (default 90) with no override reads Dormant rather than Stale, so years-old one-off imports don't become permanent noise."
+      text: "Backed by `core:import-stale`'s own settings, keyed dynamically per import: `cadence_hours:<import key>`. `null` follows the signal's own default (48 h); `0` means \"not monitored\" — the import is excluded from the signal entirely; a positive number pins that one import's expected cadence. An import whose last successful run predates the signal's `dormant_days` threshold (default 90) with no override reads Dormant rather than Stale, so years-old one-off imports don't become permanent noise. Weekends and holidays don't count toward a cadence: only working days on the SLA schedule (Settings → SLA business days, in its timezone) count, and the holidays are the SLA holiday list plus the major US holidays on their observed dates (New Year's Day, Memorial Day, Independence Day, Labor Day, Thanksgiving and the day after, Christmas). A 48 h import that last ran Friday evening is not stale on Monday. Set the signal's `business_days` threshold to `0` to count every day again."
     },
     {
       type: 'p',

@@ -573,7 +573,7 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
   // Every definition (inactive ones too — the Import Console's definitions
   // list shows their staleness setting); only active ones can go stale.
   app.get('/integration-partners/imports', { preHandler: requireAdmin }, async () => {
-    const { importCadence, isImportStale, resolveThresholds } = await import(
+    const { importCadence, isImportStale, loadStaleCalendar, resolveThresholds } = await import(
       '../services/integration-signal-settings.js'
     )
     const { getIntegrationSignal } = await import('../services/integration-signals.js')
@@ -596,6 +596,7 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
       failures7d: number
     }>
     const now = new Date()
+    const calendar = await loadStaleCalendar(th, now)
     return {
       data: rows.map((r) => {
         // `last_run_at` is any status (never status-filtered) — the last
@@ -608,7 +609,7 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
           failures7d: Number(r.failures7d),
           cadence_hours: cadence.hours,
           cadence_source: cadence.source,
-          stale: active && isImportStale(r.last_ok_at, cadence, now)
+          stale: active && isImportStale(r.last_ok_at, cadence, now, calendar)
         }
       }),
       default_hours: th.default_hours ?? 48
