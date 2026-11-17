@@ -1,4 +1,5 @@
 import { validatorRegistry } from '../extensions/validators.js'
+import { safeConfigRegexTest } from '../lib/safe-regex.js'
 import { getFields } from './collections.js'
 import { daysFromToday } from './liquid-dates.js'
 
@@ -179,13 +180,13 @@ export function applyValidationRule(
       return null
     }
     case 'regex': {
-      try {
-        const re = new RegExp(String(rule.value))
-        return re.test(String(value)) ? null : (rule.message ?? `${label} is invalid`)
-      } catch {
-        // A broken pattern is admin config error, not caller error — pass.
-        return null
-      }
+      // L-1: run the admin-authored pattern through the safe compiler (which refuses catastrophic
+      // backtracking that would stall the event loop) and bound the input length. A broken OR
+      // unsafe pattern is an admin config error, not a caller error — pass, as a broken pattern
+      // always did.
+      const ok = safeConfigRegexTest(String(rule.value), String(value))
+      if (ok === null) return null
+      return ok ? null : (rule.message ?? `${label} is invalid`)
     }
     case 'email': {
       const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
