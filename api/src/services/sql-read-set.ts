@@ -129,9 +129,17 @@ export function tokenize(sql: string): Token[] {
     // T-SQL identifiers follow the Unicode letter rules, not ASCII.
     if (/[\p{L}_]/u.test(c)) {
       let j = i + 1
-      // `@` and `#` always start a new token, so `EXEC@proc` is EXEC + a variable.
-      while (j < n && /[\p{L}\p{N}\p{Mn}\p{Mc}_$]/u.test(sql[j])) j++
-      out.push({ kind: 'ident', text: sql.slice(i, j) })
+      // SQL Server lets `@`, `#` and `$` continue a name, so keep them: splitting
+      // there would hide a real object named `a#b`. `EXEC@proc` is the one case
+      // split (EXEC + a variable); readSetOf treats any other name with an inner
+      // `@` or `#` as one it cannot judge.
+      while (j < n && /[\p{L}\p{N}\p{Mn}\p{Mc}_@#$]/u.test(sql[j])) j++
+      const word = sql.slice(i, j)
+      const exec = /^(exec(?:ute)?)([@#].*)$/i.exec(word)
+      if (exec) {
+        out.push({ kind: 'ident', text: exec[1] })
+        out.push({ kind: 'other', text: exec[2] })
+      } else out.push({ kind: 'ident', text: word })
       i = j
       continue
     }
@@ -337,11 +345,15 @@ export async function readSetOf(sql: string): Promise<ReadSet> {
         t.kind === 'ident'
           ? [t.text]
           : t.kind === 'literal'
-            ? tokenize(t.text).flatMap((x) => (x.kind === 'ident' ? [x.text] : []))
+            ? // Data, not code: an inner @ or # here is an email or a label.
+              tokenize(t.text).flatMap((x) =>
+                x.kind === 'ident' && !/[@#]/.test(x.text) ? [x.text] : []
+              )
             : []
       )
       for (const name of names) {
         if (!name) continue
+        if (/[@#]/.test(name)) opaque.add(`a name the read set cannot judge (${name})`)
         const key = name.toLowerCase()
         if (seen.has(key)) continue
         seen.add(key)

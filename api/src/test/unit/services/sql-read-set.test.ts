@@ -195,6 +195,12 @@ describe('readSetOf — security review rounds 2 + 3 (2026-11-16)', () => {
     expect((await readSetOf('EXECUTE@rc=@p')).opaque).toContain('a procedure named by a variable')
   })
 
+  it('a name with an inner @ or # is not split, it is opaque (review round 5)', async () => {
+    expect((await readSetOf('SELECT * FROM rows#2026')).opaque).toEqual([
+      'a name the read set cannot judge (rows#2026)'
+    ])
+  })
+
   it('EXEC of a variable, also after a return-code assignment', async () => {
     expect((await readSetOf('DECLARE @rc int, @p sysname; EXEC @rc = @p')).opaque).toContain(
       'a procedure named by a variable'
