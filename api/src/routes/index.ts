@@ -339,7 +339,7 @@ import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
 import { traceRoutes } from './traces.js'
-import { trackerRoutes } from './trackers.js'
+import { trackerFeaturePublicRoutes, trackerRoutes } from './trackers.js'
 import { trafficMapRoutes } from './traffic-map.js'
 import { trashRoutes } from './trash.js'
 import { treeRoutes } from './tree.js'
@@ -730,7 +730,10 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(atRiskRoutes, { prefix: '/at-risk' })
   await app.register(retentionRoutes, { prefix: '/retention' })
   // Issue tracker sync is a self-hosted feature — never mounted in cloud mode.
-  if (!process.env.CLOUD_META_DB_URL) await app.register(trackerRoutes, { prefix: '/trackers' })
+  if (!process.env.CLOUD_META_DB_URL) {
+    await app.register(trackerFeaturePublicRoutes, { prefix: '/trackers' })
+    await app.register(trackerRoutes, { prefix: '/trackers' })
+  }
   await app.register(backupsRoutes, { prefix: '/backups' })
   await app.register(promotionRoutes, { prefix: '/promotion' })
   await app.register(scheduledReportsRoutes, { prefix: '/scheduled-reports' })

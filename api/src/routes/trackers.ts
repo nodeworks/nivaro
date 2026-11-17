@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
-import { authenticate, requireAdmin } from '../middleware/authenticate.js'
+import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import {
   ConnectionInputError,
   getConnection,
@@ -12,6 +12,13 @@ import {
   rotateWebhookSecret,
   saveConnection
 } from '../services/trackers/connections.js'
+import {
+  FeatureLockedError,
+  requireFeatureOn,
+  setTrackersEnabled,
+  trackersEnabled,
+  trackersFeature
+} from '../services/trackers/feature.js'
 import {
   BULK_MAX,
   bulkCreate,
@@ -70,9 +77,32 @@ function hostOf(url: string): string {
   }
 }
 
+/** Sign-in only: lets any screen hide GitLab bits when the feature is off. */
+export async function trackerFeaturePublicRoutes(app: FastifyInstance) {
+  app.addHook('preHandler', authenticate)
+  app.addHook('preHandler', requireAuth)
+  app.get('/feature/public', async () => ({ data: { enabled: await trackersEnabled() } }))
+}
+
 export async function trackerRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
   app.addHook('preHandler', requireAdmin)
+  app.addHook('preHandler', requireFeatureOn)
+
+  app.get('/feature', async () => ({ data: await trackersFeature() }))
+
+  app.put('/feature', async (req, reply) => {
+    const enabled = (req.body as { enabled?: unknown } | null)?.enabled
+    if (typeof enabled !== 'boolean')
+      return reply.code(400).send({ error: 'enabled must be true or false', code: 'INVALID_BODY' })
+    try {
+      return { data: await setTrackersEnabled(enabled, req.user?.id ?? '') }
+    } catch (err) {
+      if (err instanceof FeatureLockedError)
+        return reply.code(409).send({ error: err.message, code: err.code })
+      throw err
+    }
+  })
 
   const idOf = (req: { params: unknown }) => Number((req.params as { id: string }).id)
 

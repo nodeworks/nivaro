@@ -119,6 +119,8 @@ vi.mock('../../db/index.js', () => {
   }
   return { db }
 })
+const feature = vi.hoisted(() => ({ on: true }))
+vi.mock('./feature.js', () => ({ trackersEnabled: async () => feature.on }))
 vi.mock('../../db/dialect.js', () => ({ isMssql: () => true }))
 
 const provider = {
@@ -187,6 +189,7 @@ beforeEach(() => {
   for (const k of Object.keys(ids)) delete ids[k]
   vi.resetAllMocks()
   setAutoSend(false)
+  feature.on = true
   t('nivaro_issues').push({
     id: 5,
     title: 'Boom',
@@ -498,5 +501,25 @@ describe('tracker outbox', () => {
     })
     await vi.waitFor(() => expect(outbox()[0].status).toBe('done'))
     expect(pool).toBe('background')
+  })
+})
+
+describe('master switch', () => {
+  it('processOutbox does nothing when off', async () => {
+    outbox().push({
+      id: 1,
+      connection: 1,
+      source_kind: 'issue',
+      source_id: '5',
+      op: 'comment',
+      payload: '{}',
+      idempotency_key: 'k',
+      status: 'pending',
+      attempts: 0,
+      next_attempt_at: past()
+    })
+    feature.on = false
+    expect(await processOutbox()).toEqual({ sent: 0, failed: 0, dead: 0 })
+    expect(outbox()[0].status).toBe('pending')
   })
 })

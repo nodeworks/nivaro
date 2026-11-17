@@ -3,6 +3,7 @@ import { db } from '../../db/index.js'
 import { runInBackgroundPool } from '../../db/pool-context.js'
 import { noteIssueWrite } from '../issue-raise.js'
 import { getConnection, markBroken, markOk, providerFor } from './connections.js'
+import { trackersEnabled } from './feature.js'
 import { decodeDataUri, insertBeforeMarker, issueMarker } from './issue-body.js'
 import { addMember, LINKS, projectPathFrom, upsertLinkFromRemote } from './link-store.js'
 import {
@@ -124,8 +125,12 @@ export async function enqueue(
 /** Attempt one row now, in the background; never throws to the caller. */
 export function kick(id: number): void {
   if (!autoSend) return
+  // Off: the row stays pending; turning the feature on lets the worker drain it.
   // Started from a request (bulk fires up to 50): run on the background pool, not the request one.
-  void runInBackgroundPool(() => sendOne(id)).catch(() => {})
+  void runInBackgroundPool(async () => {
+    if (!(await trackersEnabled())) return 'skipped'
+    return sendOne(id)
+  }).catch(() => {})
 }
 
 /** Claim one pending row by id and send it. */
@@ -186,6 +191,7 @@ async function claim(limit: number, now: Date): Promise<Row[]> {
 export async function processOutbox(
   limit = DEFAULT_BATCH
 ): Promise<{ sent: number; failed: number; dead: number }> {
+  if (!(await trackersEnabled())) return { sent: 0, failed: 0, dead: 0 }
   const now = new Date()
   await recoverStale(now)
   const rows = await claim(limit, now)
