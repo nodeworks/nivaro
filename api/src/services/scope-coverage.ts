@@ -21,7 +21,7 @@
 import { db } from '../db/index.js'
 import { customQueryDependentsIndex, type Dependent } from './custom-query-dependents.js'
 import { NOT_SCOPED_KEY } from './custom-query-scope.js'
-import { tablesReadBy } from './query-freshness.js'
+import { readSetOf } from './sql-read-set.js'
 import { listScopeDimensions, scopeHopsFor } from './user-scopes.js'
 
 export interface QueryCoverage {
@@ -132,11 +132,15 @@ async function compute(): Promise<ScopeCoverageReport> {
   for (const q of rows) {
     // Registered collections only: the inference also catches STRING_SPLIT,
     // table variables and prose after FROM, none of which can be scoped.
-    const tables = (await tablesReadBy(q.sql_text ?? '')).filter((t) => collections.has(t))
+    const read = await readSetOf(q.sql_text ?? '')
+    const tables = read.tables.filter((t) => collections.has(t))
     const reaching: QueryCoverage['reaching'] = []
     for (const d of dims) {
       const hit: string[] = []
       for (const t of tables) if (await reaches(d.name, t)) hit.push(t)
+      // Pentest M-4: a read set that could not be worked out reaches every
+      // dimension, exactly as the execute gate treats it.
+      if (read.opaque.length) hit.push(`(can't tell: ${read.opaque.join('; ')})`)
       if (hit.length) reaching.push({ dimension: d.name, label: d.label ?? d.name, tables: hit })
     }
     const covered = parseScopeParams(q.scope_params)

@@ -15,9 +15,21 @@ vi.mock('../../../db/index.js', () => ({
       }
     }),
     {
-      raw: async () => {
-        counts.procText++
-        return [{ definition: 'SELECT * FROM projects p JOIN zz_scratch z ON 1=1' }]
+      // sys.objects lookups (services/sql-read-set.ts): rpt_spend is a procedure,
+      // every other name a table. Only a lookup that reaches the procedure's
+      // text counts as reading it.
+      raw: async (sql: string, binds: string[] = []) => {
+        if (/DB_NAME\(\)/.test(sql)) return [{ d: 'efp' }]
+        if (binds.includes('rpt_spend')) counts.procText++
+        return binds.map((name) =>
+          name === 'rpt_spend'
+            ? {
+                name,
+                type: 'P',
+                definition: 'SELECT * FROM projects p JOIN zz_scratch z ON 1=1'
+              }
+            : { name, type: 'U', definition: null }
+        )
       }
     }
   )

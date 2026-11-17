@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
-import { tablesReadBy } from './query-freshness.js'
+import { readSetOf } from './sql-read-set.js'
 import { currentTenantKey } from './tenant-rooms.js'
 import {
   getUserScopes,
@@ -66,12 +66,16 @@ function dimensionReaches(dim: ScopeDimension, sql: string): Promise<boolean> {
   const hit = reachMemo.get(key)
   if (hit && Date.now() - hit.at < REACH_TTL) return hit.value
   const value = (async () => {
-    const [tables, registered] = await Promise.all([
-      tablesReadBy(sql),
+    const [read, registered] = await Promise.all([
+      readSetOf(sql),
       db('nivaro_collections').pluck('collection') as Promise<string[]>
     ])
+    // Pentest M-4: what the SQL reads could not all be worked out (dynamic SQL,
+    // another database, an unreadable module …) — it may reach anything, so it
+    // reaches every dimension and needs scope_params like a scoped read.
+    if (read.opaque.length) return true
     const known = new Set(registered.map((c) => c.toLowerCase()))
-    for (const t of tables) {
+    for (const t of read.tables) {
       if (!known.has(t)) continue
       if ((await scopeHopsFor(dim, t)) !== null) return true
     }

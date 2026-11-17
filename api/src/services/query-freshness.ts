@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { readSetOf } from './sql-read-set.js'
 
 function parseJson<T>(raw: string | null): T | null {
   if (raw == null) return null
@@ -134,18 +135,14 @@ export async function procedureText(name: string): Promise<string | null> {
 }
 
 /**
- * Every table a query reads — its own SQL plus one level into procedures it
- * EXECs — minus system / staging / scratch tables. Shared with the raw-SQL
- * scope coverage report (#770), which needs the tables, not their clocks.
+ * Every table a query reads — through views, functions and procedures, several
+ * levels deep (services/sql-read-set.ts) — minus system / staging / scratch
+ * tables. Shared with the raw-SQL scope coverage report (#770), which needs the
+ * tables, not their clocks. What could not be followed is dropped here; the
+ * scope gate reads `readSetOf` itself so it can refuse on it.
  */
 export async function tablesReadBy(sql: string): Promise<string[]> {
-  const tables = tablesIn(sql)
-  const procs = [...sql.matchAll(EXEC_REF)].map((m) => m[1]).slice(0, 4)
-  for (const p of procs) {
-    const text = await procedureText(p)
-    if (text) for (const t of tablesIn(text)) tables.add(t)
-  }
-  return [...tables].filter((t) => !SKIP.test(t))
+  return (await readSetOf(sql)).tables
 }
 
 const inferred = new Map<string, { at: number; value: Promise<FreshnessSource[]> }>()

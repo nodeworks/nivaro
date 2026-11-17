@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({
   scopes: [] as Array<{ mode: string; dimension: string; values: unknown[] }>,
   tables: ['workflows'] as string[],
+  opaque: [] as string[],
   reach: new Set<string>(['zone|workflows', 'zone|divisions'])
 }))
 
@@ -21,8 +22,8 @@ vi.mock('../../../db/index.js', () => ({
     return c
   })
 }))
-vi.mock('../../../services/query-freshness.js', () => ({
-  tablesReadBy: vi.fn(async () => state.tables)
+vi.mock('../../../services/sql-read-set.js', () => ({
+  readSetOf: vi.fn(async () => ({ tables: state.tables, opaque: state.opaque }))
 }))
 vi.mock('../../../services/user-scopes.js', () => ({
   getUserScopes: vi.fn(async () => state.scopes),
@@ -46,6 +47,7 @@ describe('custom-query scope gate', () => {
   beforeEach(() => {
     state.scopes = [{ mode: 'restrict', dimension: 'zone', values: [1] }]
     state.tables = ['workflows']
+    state.opaque = []
   })
 
   it('refuses a restricted person when the SQL reads a zone-scoped table without zone scope_params', async () => {
@@ -106,11 +108,40 @@ describe('custom-query scope gate', () => {
   })
 
   it('fails closed when the tables cannot be worked out', async () => {
-    const qf = await import('../../../services/query-freshness.js')
-    vi.mocked(qf.tablesReadBy).mockRejectedValueOnce(new Error('boom'))
+    const rs = await import('../../../services/sql-read-set.js')
+    vi.mocked(rs.readSetOf).mockRejectedValueOnce(new Error('boom'))
     await expect(
       applyScopeParams(null, {}, 'u1', false, { sqlText: sql('EXEC dbo.anything') })
     ).rejects.toBeInstanceOf(QueryNotScopedError)
+  })
+
+  // Pentest M-4 (2026-11-16): SQL whose reads cannot all be worked out (dynamic
+  // SQL, another database, an unreadable module) reaches every dimension.
+  it('refuses a restricted person when part of what the SQL reads cannot be worked out', async () => {
+    state.tables = ['vendors']
+    state.opaque = ['dynamic SQL (sp_executesql)']
+    await expect(
+      applyScopeParams(null, {}, 'u1', false, {
+        slug: 'dyn',
+        sqlText: sql("EXEC sp_executesql N'SELECT * FROM workflows'")
+      })
+    ).rejects.toMatchObject({ code: 'QUERY_NOT_SCOPED', dimensions: ['Zone'] })
+  })
+
+  it('runs opaque SQL that declares scope_params or $not_scoped', async () => {
+    state.opaque = ['dynamic SQL (sp_executesql)']
+    await applyScopeParams(
+      JSON.stringify({ divisions: { dimension: 'zone', translate: 'display' } }),
+      {},
+      'u1',
+      false,
+      { sqlText: sql('EXEC dbo.dyn') }
+    )
+    await applyScopeParams(JSON.stringify({ $not_scoped: { reason: 'lookup' } }), {}, 'u1', false, {
+      sqlText: sql('EXEC dbo.dyn')
+    })
+    state.scopes = []
+    await applyScopeParams(null, {}, 'u2', false, { sqlText: sql('EXEC dbo.dyn') })
   })
 
   it('keeps the old behaviour for callers that pass no SQL', async () => {
