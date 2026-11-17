@@ -129,7 +129,8 @@ export function tokenize(sql: string): Token[] {
     // T-SQL identifiers follow the Unicode letter rules, not ASCII.
     if (/[\p{L}_]/u.test(c)) {
       let j = i + 1
-      while (j < n && /[\p{L}\p{N}\p{Mn}\p{Mc}_@#$]/u.test(sql[j])) j++
+      // `@` and `#` always start a new token, so `EXEC@proc` is EXEC + a variable.
+      while (j < n && /[\p{L}\p{N}\p{Mn}\p{Mc}_$]/u.test(sql[j])) j++
       out.push({ kind: 'ident', text: sql.slice(i, j) })
       i = j
       continue
@@ -181,7 +182,7 @@ const DYNAMIC: Array<[RegExp, string]> = [
     /\bsp_(?:prepexec|prepexecrpc|prepare|execute|cursoropen|cursorprepexec|cursorprepare|cursorexecute|execute_external_script)\b/i,
     'dynamic SQL (a system procedure that runs a string)'
   ],
-  [/\bexec(?:ute)?\s+@\w+\b(?!\s*=)/i, 'a procedure named by a variable'],
+  [/\bexec(?:ute)?\s*@\w+\b(?!\s*=)/i, 'a procedure named by a variable'],
   [
     /\bopen(?:query|rowset|datasource|xml)\s*\(/i,
     'a remote or document read (OPENQUERY / OPENROWSET)'

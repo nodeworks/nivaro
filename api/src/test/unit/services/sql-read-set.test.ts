@@ -190,6 +190,11 @@ describe('readSetOf — security review rounds 2 + 3 (2026-11-16)', () => {
     expect((await readSetOf('EXEC p_plain')).opaque).toEqual([])
   })
 
+  it('EXEC of a variable with no space before it (review round 4)', async () => {
+    expect((await readSetOf('EXEC@proc')).opaque).toContain('a procedure named by a variable')
+    expect((await readSetOf('EXECUTE@rc=@p')).opaque).toContain('a procedure named by a variable')
+  })
+
   it('EXEC of a variable, also after a return-code assignment', async () => {
     expect((await readSetOf('DECLARE @rc int, @p sysname; EXEC @rc = @p')).opaque).toContain(
       'a procedure named by a variable'
