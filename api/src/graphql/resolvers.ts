@@ -1369,6 +1369,18 @@ export const domainSubscriptionFields: GraphQLFieldConfigMap<unknown, GQLContext
           extensions: { code: 'FORBIDDEN' }
         })
       }
+      // L-8: when watching ONE record, gate on that record too (row filter / User Scope),
+      // matching workflowStateChanged / pipelineStateChanged. Collection-read alone would leak a
+      // hidden record's change actions, changed-field names and timestamps to a subscriber who
+      // cannot see the record at row level.
+      if (
+        args.item != null &&
+        !(await maySeeRecordForSubscription(ctx, user, collection, String(args.item)))
+      ) {
+        throw new GraphQLError('You do not have permission to read this record', {
+          extensions: { code: 'FORBIDDEN' }
+        })
+      }
       const tenant = subscriptionTenant(ctx)
       const topic = args.item
         ? topics.itemMutated(collection, String(args.item), tenant)

@@ -10,7 +10,8 @@ import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { cacheSetting } from '../services/cache-config.js'
 import { registerCache } from '../services/cache-registry.js'
 import { markConfigRead, nameConfigCollection } from '../services/config-live.js'
-import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
+import { assertNotEditLocked } from '../services/edit-lock.js'
+import { canUpdateItem, ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { type AbApplied, abFor, liveVariants } from '../services/layout-ab.js'
 import { activateLayout, lockLayout, whereLayoutType } from '../services/layout-activation.js'
 import { stripEditorNotes } from '../services/layout-editor-notes.js'
@@ -2119,6 +2120,18 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       if (err instanceof ItemNotFoundError) return reply.code(404).send({ error: 'Item not found' })
       throw err
     }
+
+    // L-5: attaching a generated PDF writes onto the record, so it must clear the same gates as
+    // any update — the per-record update row-rule / User Scope (canUpdateItem) and the approval /
+    // person-held edit lock (assertNotEditLocked). can(update, collection) + readOne (read RLS)
+    // alone let a user who may read but not update this record still attach to it.
+    if (
+      !req.isAdmin &&
+      !(await canUpdateItem(req.user!, collection, String(item_id), req.workspaceId ?? undefined))
+    ) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    await assertNotEditLocked(req.user!, collection, { ids: [String(item_id)] }, req)
 
     let childRowsOverride: Record<string, Record<string, unknown>[]> | undefined
     let addendumTitle: string | null = null
