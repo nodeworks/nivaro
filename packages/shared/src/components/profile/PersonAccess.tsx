@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   BookUser,
   Check,
-  Copy,
   Eye,
   EyeOff,
   KeyRound,
@@ -26,6 +25,7 @@ import { toastError } from '../../lib/error-toast'
 import { useFreshIds, useLiveOps } from '../../lib/live-ops'
 import { useLivePreference } from '../../lib/live-preference'
 import { cn, formatDateTime, formatNumber, formatRelative } from '../../lib/utils'
+import { CopyValueButton } from '../CopyValueButton'
 import { ErrorNotice } from '../ErrorNotice'
 import { useOverflowTip } from '../TipLayer'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -1347,17 +1347,7 @@ export function ApiTokenCard({ profile: p }: { profile: PersonProfile }) {
               >
                 {shown ? <EyeOff className='h-4 w-4' /> : <Eye className='h-4 w-4' />}
               </button>
-              <button
-                type='button'
-                onClick={() => {
-                  void navigator.clipboard.writeText(token)
-                  toast.success('Copied')
-                }}
-                aria-label='Copy token'
-                className='rounded-md border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 dark:border-border dark:hover:bg-muted'
-              >
-                <Copy className='h-4 w-4' />
-              </button>
+              <CopyValueButton value={token} label='Copy token' testId='copy-api-token' />
             </div>
           ) : (
             <p className='text-[12.5px] text-slate-600 dark:text-slate-300'>

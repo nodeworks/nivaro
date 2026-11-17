@@ -67,6 +67,7 @@ import { TeamsConnect } from './profile/TeamsConnect'
 
 export { DelegationCard }
 
+import { CopyValueButton } from './CopyValueButton'
 import { NotificationSourcesCard } from './NotificationSourcesCard'
 import { MyDefaultsCard } from './profile/MyDefaultsCard'
 import { UserScopesCard } from './profile/PersonAccess'
@@ -1278,9 +1279,12 @@ function SecurityCard() {
             replaces the old.
           </p>
           {newApiToken && (
-            <code className='mt-2 block select-all break-all rounded-md bg-slate-50 px-2.5 py-2 font-mono text-[11.5px] text-nvr-navy dark:bg-muted dark:text-nvr-cyan'>
-              {newApiToken}
-            </code>
+            <div className='mt-2 flex items-center gap-2'>
+              <code className='min-w-0 flex-1 select-all break-all rounded-md bg-slate-50 px-2.5 py-2 font-mono text-[11.5px] text-nvr-navy dark:bg-muted dark:text-nvr-cyan'>
+                {newApiToken}
+              </code>
+              <CopyValueButton value={newApiToken} label='Copy token' testId='copy-own-api-token' />
+            </div>
           )}
           <div className='mt-2 flex gap-1.5'>
             <button
