@@ -15,20 +15,29 @@ vi.mock('../../../db/index.js', () => ({
       }
     }),
     {
-      // sys.objects lookups (services/sql-read-set.ts): rpt_spend is a procedure,
-      // every other name a table. Only a lookup that reaches the procedure's
+      // sys.objects lookups (services/sql-read-set.ts, names as one OPENJSON
+      // parameter): rpt_spend is a procedure, the named tables are tables, any
+      // other word is no object. Only a lookup that reaches the procedure's
       // text counts as reading it.
       raw: async (sql: string, binds: string[] = []) => {
         if (/DB_NAME\(\)/.test(sql)) return [{ d: 'efp' }]
-        if (binds.includes('rpt_spend')) counts.procText++
-        return binds.map((name) =>
-          name === 'rpt_spend'
-            ? {
-                name,
-                type: 'P',
-                definition: 'SELECT * FROM projects p JOIN zz_scratch z ON 1=1'
-              }
-            : { name, type: 'U', definition: null }
+        if (/sys\.schemas/.test(sql)) return [{ name: 'dbo' }]
+        const names = JSON.parse(binds[0] ?? '[]') as string[]
+        if (names.includes('rpt_spend')) counts.procText++
+        const tables = new Set(['invoices', 'projects', 'zz_scratch', 'not_a_collection'])
+        return names.flatMap(
+          (name): Array<{ name: string; type: string; definition: string | null }> =>
+            name === 'rpt_spend'
+              ? [
+                  {
+                    name,
+                    type: 'P',
+                    definition: 'SELECT * FROM projects p JOIN zz_scratch z ON 1=1'
+                  }
+                ]
+              : tables.has(name.toLowerCase())
+                ? [{ name, type: 'U', definition: null }]
+                : []
         )
       }
     }

@@ -1,9 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 // Pentest M-4 (2026-11-16): the User-Scope backstop missed scoped rows read
 // THROUGH a view or a table-valued function, so a zone-restricted person got
 // every zone's rows from `SELECT * FROM v_workflow_state`. The read set now
-// follows views / functions / procedures and names what it cannot follow.
+// resolves every identifier against sys.objects, follows views / functions /
+// procedures and names what it cannot follow. The security review of the first
+// cut (regex FROM/JOIN parsing) found comma joins, "quoted" names, bare
+// procedure calls, `db..name`, literals hiding comment markers and CLR objects
+// slipping through — each has a case below.
 
 const objects = vi.hoisted(
   () =>
@@ -32,6 +36,14 @@ const objects = vi.hoisted(
         }
       ],
       [
+        'fn_zone',
+        {
+          type: 'FN',
+          definition:
+            'CREATE FUNCTION fn_zone(@id int) RETURNS int AS BEGIN RETURN (SELECT TOP 1 1 FROM workflows_divisions) END'
+        }
+      ],
+      [
         'p_dyn',
         {
           type: 'P',
@@ -41,6 +53,8 @@ const objects = vi.hoisted(
       ['p_plain', { type: 'P', definition: 'CREATE PROC p_plain AS SELECT * FROM v_outer' }],
       ['secret_view', { type: 'V', definition: null }],
       ['syn_wf', { type: 'SN', definition: null }],
+      ['clr_rows', { type: 'FT', definition: null }],
+      ['pk_workflows', { type: 'PK', definition: null }],
       ['nivaro_users', { type: 'U', definition: null }]
     ])
 )
@@ -49,7 +63,9 @@ vi.mock('../../../db/index.js', () => ({
   db: {
     raw: vi.fn(async (sql: string, binds?: string[]) => {
       if (/DB_NAME\(\)/.test(sql)) return [{ d: 'EFP' }]
-      return (binds ?? [])
+      if (/sys\.schemas/.test(sql)) return [{ name: 'dbo' }, { name: 'sys' }]
+      const names = JSON.parse(binds?.[0] ?? '[]') as string[]
+      return names
         .map((n) => [n, objects.get(n.toLowerCase())] as const)
         .filter(([, o]) => o)
         .map(([n, o]) => ({ name: n, type: o!.type, definition: o!.definition }))
@@ -57,22 +73,45 @@ vi.mock('../../../db/index.js', () => ({
   }
 }))
 
-const { readSetOf, namesIn } = await import('../../../services/sql-read-set.js')
+const { readSetOf, dottedNames, tokenize } = await import('../../../services/sql-read-set.js')
+const sorted = (r: { tables: string[]; opaque: string[] }) => ({
+  ...r,
+  tables: [...r.tables].sort()
+})
 
 describe('readSetOf', () => {
-  beforeEach(() => vi.clearAllMocks())
-
   it('follows a view to the tables behind it', async () => {
-    expect(await readSetOf('SELECT * FROM v_workflow_state')).toEqual({
+    expect(sorted(await readSetOf('SELECT * FROM v_workflow_state'))).toEqual({
       tables: ['workflows', 'workflows_divisions'],
       opaque: []
     })
   })
 
-  it('follows nested views, table-valued functions and procedures', async () => {
-    const r = await readSetOf('SELECT * FROM v_outer CROSS APPLY dbo.fn_rows() f; EXEC p_plain')
-    expect(r.tables.sort()).toEqual(['vendors', 'workflows', 'workflows_divisions'])
-    expect(r.opaque).toEqual([])
+  it('follows nested views, table-valued and scalar functions and procedures', async () => {
+    const r = await readSetOf(
+      'SELECT dbo.fn_zone(1) FROM v_outer CROSS APPLY dbo.fn_rows() f; EXEC p_plain'
+    )
+    expect(sorted(r)).toEqual({
+      tables: ['vendors', 'workflows', 'workflows_divisions'],
+      opaque: []
+    })
+  })
+
+  it('catches comma joins, quoted names and a bare procedure call (review findings 2 + 5)', async () => {
+    expect((await readSetOf('SELECT * FROM vendors v, workflows w')).tables.sort()).toEqual([
+      'vendors',
+      'workflows'
+    ])
+    expect((await readSetOf('SELECT * FROM "v_workflow_state"')).tables.sort()).toEqual([
+      'workflows',
+      'workflows_divisions'
+    ])
+    expect((await readSetOf('p_plain')).tables.sort()).toEqual(['workflows', 'workflows_divisions'])
+  })
+
+  it('a comment marker inside a string literal hides nothing (review finding 1)', async () => {
+    const r = await readSetOf("SELECT '--' AS a, * FROM vendors JOIN workflows w ON 1 = 1 /* '*/")
+    expect(r.tables.sort()).toEqual(['vendors', 'workflows'])
   })
 
   it('names dynamic SQL, even inside a procedure it executes', async () => {
@@ -81,33 +120,45 @@ describe('readSetOf', () => {
       'dynamic SQL (EXEC of a string)'
     ])
     expect((await readSetOf('EXEC @proc')).opaque).toEqual(['a procedure named by a variable'])
+    // A return-code assignment is not a procedure named by a variable.
+    expect((await readSetOf('DECLARE @rc int; EXEC @rc = p_plain')).opaque).toEqual([])
+    // The words inside a literal are data, not code.
+    expect((await readSetOf("SELECT 'call sp_executesql later' AS note")).opaque).toEqual([])
   })
 
-  it('names another database, a linked server, a synonym and an unreadable module', async () => {
+  it('names another database, db..name, a linked server, a synonym, CLR and unreadable modules (findings 3 + 4)', async () => {
     expect((await readSetOf('SELECT * FROM OtherDb.dbo.workflows')).opaque).toEqual([
-      'another database (OtherDb.workflows)'
+      'another database (OtherDb.dbo.workflows)'
+    ])
+    expect((await readSetOf('SELECT * FROM OtherDb..workflows')).opaque).toEqual([
+      'another database (OtherDb..workflows)'
     ])
     expect((await readSetOf('SELECT * FROM EFP.dbo.workflows')).opaque).toEqual([])
+    expect((await readSetOf('SELECT dbo.workflows.id FROM dbo.workflows')).opaque).toEqual([])
     expect((await readSetOf('SELECT * FROM srv.db.dbo.workflows')).opaque).toEqual([
-      'a linked-server name (workflows)'
+      'a linked-server name (srv.db.dbo.workflows)'
     ])
     expect((await readSetOf('SELECT * FROM syn_wf')).opaque).toEqual(['a synonym (syn_wf)'])
+    expect((await readSetOf('SELECT * FROM clr_rows()')).opaque).toEqual([
+      'an object that cannot be followed (clr_rows, FT)'
+    ])
     expect((await readSetOf('SELECT * FROM secret_view')).opaque).toEqual([
       'an encrypted or unreadable module (secret_view)'
     ])
     expect((await readSetOf("SELECT * FROM OPENQUERY(x, 'select 1')")).opaque).toEqual([
-      'a remote read (OPENQUERY / OPENROWSET)'
+      'a remote or document read (OPENQUERY / OPENROWSET)'
     ])
   })
 
-  it('ignores names that hold no rows here: built-ins, CTEs, table variables, temp tables, comments', async () => {
+  it('ignores names that hold no rows: built-ins, CTEs, variables, temp tables, constraints, comments', async () => {
     const r = await readSetOf(`
       -- pulled from the old report; EXEC(@x) once lived here
-      /* select * from somewhere_else */
+      /* select * from somewhere_else /* nested */ still a comment */
       WITH recent AS (SELECT id FROM workflows)
       SELECT * FROM recent r JOIN STRING_SPLIT(@zones, ',') s ON 1 = 1
-      JOIN @ids i ON i.id = r.id JOIN #tmp t ON t.id = r.id`)
+      JOIN @ids i ON i.id = r.id JOIN #tmp t ON t.id = r.id -- pk_workflows`)
     expect(r).toEqual({ tables: ['workflows'], opaque: [] })
+    expect((await readSetOf('SELECT pk_workflows = 1')).opaque).toEqual([])
   })
 
   it('leaves system tables out of the table list', async () => {
@@ -117,11 +168,14 @@ describe('readSetOf', () => {
   })
 })
 
-describe('namesIn', () => {
-  it('reads bracketed and dotted names', () => {
-    expect(namesIn('SELECT * FROM [dbo].[v_x] JOIN EFP.dbo.y ON 1=1')).toEqual([
-      { name: 'v_x' },
-      { name: 'y', database: 'EFP' }
+describe('tokenize / dottedNames', () => {
+  it('reads bracketed, quoted and empty-part names', () => {
+    expect(
+      dottedNames(tokenize('SELECT * FROM [dbo].[v x] JOIN "a".b ON 1=1 JOIN c..d w'))
+    ).toEqual([
+      ['dbo', 'v x'],
+      ['a', 'b'],
+      ['c', '', 'd']
     ])
   })
 })
