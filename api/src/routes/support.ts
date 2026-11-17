@@ -8,6 +8,7 @@ import { logActivity, logActivityThrottled } from '../services/activity.js'
 import { getCollection } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
+import { noteIssueWrite } from '../services/issue-raise.js'
 import { readOne } from '../services/items.js'
 import { cleanAppLabel } from '../services/page-at.js'
 import { announceRecordHelp, loadRecordHelp } from '../services/record-help.js'
@@ -1300,6 +1301,9 @@ export async function supportRoutes(app: FastifyInstance) {
       })
       .returning('id')) as Array<{ id: number } | number>
     const issueId = Number(typeof irow === 'object' ? irow.id : irow)
+    noteIssueWrite(Number.isFinite(issueId) ? issueId : null, 'raised', {
+      hits: [{ userId: req.user!.id, at: now }]
+    })
     await logActivity({
       action: 'create',
       user: req.user!.id,

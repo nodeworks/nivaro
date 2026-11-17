@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { fetchGuardedInCloud } from '../lib/ssrf.js'
 import { NIVARO_VERSION } from '../version.js'
 import { noteAlertFired } from './alert-fired.js'
+import { noteIssueWrite } from './issue-raise.js'
 import { startJobRun } from './job-runs.js'
 import { notifyUser } from './notification-channels.js'
 import type { StallCauses } from './stall-cause-words.js'
@@ -171,7 +172,10 @@ async function evalSynthetic(cfg: {
   const warnMs = Number(cfg.latency_warn_ms) || 5000
   const began = Date.now()
   try {
-    const res = await fetchGuardedInCloud(target, { signal: AbortSignal.timeout(15_000), redirect: 'manual' })
+    const res = await fetchGuardedInCloud(target, {
+      signal: AbortSignal.timeout(15_000),
+      redirect: 'manual'
+    })
     const ms = Date.now() - began
     if (res.status !== expect) {
       return {
@@ -428,6 +432,7 @@ async function raiseIssue(
           last_seen_at: new Date(),
           updated_at: new Date()
         })
+      noteIssueWrite(Number(existing.id), 'recurred', { fingerprint: fingerprint })
     } else {
       await db('nivaro_issues').insert({
         title: `Monitor failing: ${monitor.name}`,
@@ -446,6 +451,7 @@ async function raiseIssue(
         created_at: new Date(),
         updated_at: new Date()
       })
+      noteIssueWrite(null, 'raised', { fingerprint: fingerprint })
     }
     if (app) {
       // #2847 — during a chaos drill the alert is tagged (never silenced) and its people told too.

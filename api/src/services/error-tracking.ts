@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
+import { noteIssueWrite } from './issue-raise.js'
 import { emitOps } from './ops-live.js'
 
 /**
@@ -140,6 +141,10 @@ export async function trackError(opts: {
               }
             : {})
         })
+      noteIssueWrite(Number(existing.id), 'recurred', {
+        fingerprint,
+        hits: [{ userId: opts.userId ?? null, at: new Date() }]
+      })
       const recorded = announce(Number(existing.id), Number(existing.occurrence_count ?? 0) + 1)
       if (opts.awaitOccurrence) await recorded
       return Number(existing.id)
@@ -175,6 +180,10 @@ export async function trackError(opts: {
     const first = (inserted as unknown[])[0] as { id?: unknown } | number | undefined
     const id = typeof first === 'object' && first ? Number(first.id) : Number(first)
     if (Number.isFinite(id)) {
+      noteIssueWrite(id, 'raised', {
+        fingerprint,
+        hits: [{ userId: opts.userId ?? null, at: new Date() }]
+      })
       const recorded = announce(id, 1)
       if (opts.awaitOccurrence) await recorded
     }
@@ -239,6 +248,7 @@ export async function trackGroupedIssue(opts: {
       >
 
     let issue = await findOpen()
+    const opened = !issue
     if (!issue) {
       await openGroupedIssue({
         title: `[server] ${opts.route}: ${message}`.slice(0, 500),
@@ -263,6 +273,12 @@ export async function trackGroupedIssue(opts: {
           GROUPED_DETAILS_MAX
         ])
       })
+
+    noteIssueWrite(id, opened ? 'raised' : 'recurred', {
+      fingerprint,
+      count,
+      hits: opts.hits.map((h) => ({ userId: h.userId ?? null, at: h.at }))
+    })
 
     try {
       const hits = opts.hits.slice(-OCCURRENCE_KEEP)

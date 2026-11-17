@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { noteIssueWrite } from '../services/issue-raise.js'
 import {
   clipIssueDetails,
   parseRange,
@@ -125,6 +126,9 @@ export async function sessionReplayClipRoutes(app: FastifyInstance) {
     // `.returning('id')` yields an object on this stack, a bare id elsewhere.
     const first = inserted[0] as { id?: unknown } | number | undefined
     const issueId = Number(typeof first === 'object' && first ? first.id : first)
+    noteIssueWrite(Number.isFinite(issueId) ? issueId : null, 'raised', {
+      hits: [{ userId: req.user!.id, at: now }]
+    })
 
     await logActivity({
       action: 'session-replay-clip-issue',

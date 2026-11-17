@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { noteIssueWrite } from './issue-raise.js'
 
 /**
  * Inbound payload contract enforcement. Runs inside createOne/updateOne on
@@ -177,6 +178,7 @@ async function flagViolation(c: ContractRow, action: string, violations: string[
           last_seen_at: new Date(),
           updated_at: new Date()
         })
+      noteIssueWrite(Number(existing.id), 'recurred', { fingerprint: fingerprint })
     } else {
       await db('nivaro_issues').insert({
         title: `Integration contract drift: ${c.name}`,
@@ -190,6 +192,7 @@ async function flagViolation(c: ContractRow, action: string, violations: string[
         created_at: new Date(),
         updated_at: new Date()
       })
+      noteIssueWrite(null, 'raised', { fingerprint: fingerprint })
     }
   } catch {
     // flagging must never break the write

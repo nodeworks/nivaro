@@ -7,6 +7,7 @@ import { logActivity } from '../services/activity.js'
 import { CLIENT_HEADER, parseClientHeader } from '../services/client-version.js'
 import { crashKind, fromBrowserExtension } from '../services/crash-signature.js'
 import { listCrashes, recordCrash } from '../services/crash-tracking.js'
+import { noteIssueWrite } from '../services/issue-raise.js'
 import { readOne } from '../services/items.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
@@ -570,6 +571,9 @@ export async function issuesRoutes(app: FastifyInstance) {
       .returning('id')
 
     const insertedId = typeof row === 'object' ? row.id : row
+    noteIssueWrite(Number(insertedId), 'raised', {
+      hits: [{ userId: req.user!.id, at: now }]
+    })
     const created = await db<Issue>('nivaro_issues').where({ id: insertedId }).first()
 
     await logActivity({
@@ -609,6 +613,7 @@ export async function issuesRoutes(app: FastifyInstance) {
       status,
       updated_at: new Date()
     })
+    for (const id of ids) noteIssueWrite(id, 'changed')
     await logActivity({
       action: 'issue-bulk-status',
       user: req.user?.id,
@@ -651,6 +656,7 @@ export async function issuesRoutes(app: FastifyInstance) {
       'item'
     )) as Array<Issue & { source?: string }>
     const updated = await scope().update({ assigned_to: target, updated_at: new Date() })
+    for (const id of ids) noteIssueWrite(id, 'changed')
     await logActivity({
       action: 'issue-bulk-assign',
       user: me,
@@ -715,6 +721,7 @@ export async function issuesRoutes(app: FastifyInstance) {
     const updated = await db<Issue>('nivaro_issues')
       .where({ id: Number(id) })
       .first()
+    noteIssueWrite(Number(id), 'changed')
 
     await logActivity({
       action: 'update',
