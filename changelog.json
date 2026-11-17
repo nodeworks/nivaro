@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-17T21:34:23.960Z",
+  "generated_at": "2026-11-17T23:44:22.392Z",
   "releases": [
+    {
+      "version": "0.3.174",
+      "tag": "v0.3.174",
+      "date": "2026-11-17T18:44:02-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "reimport",
+              "text": "to-many header fields follow the template's header policy",
+              "hash": "7b4d2b0c5"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.173",
       "tag": "v0.3.173",
-      "date": "2026-11-17T16:34:07-05:00",
+      "date": "2026-11-17T16:34:24-05:00",
       "sections": [
         {
           "label": "Fixed",
