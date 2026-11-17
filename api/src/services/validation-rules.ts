@@ -1,4 +1,5 @@
 import { validatorRegistry } from '../extensions/validators.js'
+import { isUnsafeRegex, MAX_CONFIG_REGEX_INPUT } from '../lib/safe-regex.js'
 import { getFields } from './collections.js'
 import { daysFromToday } from './liquid-dates.js'
 
@@ -179,11 +180,19 @@ export function applyValidationRule(
       return null
     }
     case 'regex': {
+      const patternStr = String(rule.value)
+      const str = String(value)
+      // L-1: a catastrophic-backtracking (or over-long) pattern would stall the event loop, so it
+      // is never run. Fail CLOSED — reject the value — since such a pattern is a misconfiguration
+      // (also refused when the rule is saved); passing silently would disable the rule.
+      if (isUnsafeRegex(patternStr)) return rule.message ?? `${label} is invalid`
+      // Never test a prefix of an over-long value — the untested tail could bypass the rule.
+      if (str.length > MAX_CONFIG_REGEX_INPUT) return rule.message ?? `${label} is invalid`
       try {
-        const re = new RegExp(String(rule.value))
-        return re.test(String(value)) ? null : (rule.message ?? `${label} is invalid`)
+        return new RegExp(patternStr).test(str) ? null : (rule.message ?? `${label} is invalid`)
       } catch {
-        // A broken pattern is admin config error, not caller error — pass.
+        // A broken pattern is an admin config error (a typo), not a caller error — pass, as it
+        // always has.
         return null
       }
     }
