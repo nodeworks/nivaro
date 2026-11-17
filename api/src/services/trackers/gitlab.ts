@@ -9,6 +9,7 @@ import {
 
 const TIMEOUT_MS = 10000
 const MAX_UPDATED = 500
+const MAX_LABELS = 500
 
 function kindFor(status: number): TrackerError['kind'] {
   if (status === 401 || status === 403) return 'auth'
@@ -238,6 +239,48 @@ export function gitlabProvider(
           json: { state_event: state }
         })
       )
+    },
+
+    async setLabels(projectId, iid, add, remove) {
+      const body: Record<string, string> = {}
+      if (add.length) body.add_labels = add.join(',')
+      if (remove.length) body.remove_labels = remove.join(',')
+      if (!Object.keys(body).length)
+        return issue(await json(`/projects/${projectId}/issues/${iid}`))
+      return issue(
+        await json(`/projects/${projectId}/issues/${iid}`, { method: 'PUT', json: body })
+      )
+    },
+
+    async listLabels(projectId) {
+      const out: Array<{ name: string; color: string; description: string | null }> = []
+      let page: string | number = 1
+      while (page && out.length < MAX_LABELS) {
+        const res = await call(`/projects/${projectId}/labels?${q({ per_page: 100, page })}`)
+        let rows: any[]
+        try {
+          rows = (await res.json()) as any[]
+        } catch {
+          throw new TrackerError('GitLab answered with invalid JSON', res.status, 'server')
+        }
+        if (!Array.isArray(rows) || !rows.length) break
+        for (const l of rows)
+          if (typeof l?.name === 'string')
+            out.push({
+              name: l.name,
+              color: typeof l.color === 'string' ? l.color : '',
+              description: typeof l.description === 'string' ? l.description : null
+            })
+        page = res.headers.get('x-next-page') || ''
+      }
+      return out.slice(0, MAX_LABELS)
+    },
+
+    async searchOpenIssues(projectId, search) {
+      const rows = await json<any[]>(
+        `/projects/${projectId}/issues?${q({ state: 'opened', search, in: 'title', per_page: 20 })}`
+      )
+      return (Array.isArray(rows) ? rows : []).slice(0, 20).map(issue)
     },
 
     async addNote(projectId, iid, body) {

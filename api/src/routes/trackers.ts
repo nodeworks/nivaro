@@ -24,11 +24,14 @@ import {
   bulkCreate,
   LinkError,
   linkExisting,
+  linkForIssue,
+  moveToNew,
   requestCreate,
   resyncLink,
   unlink
 } from '../services/trackers/links.js'
 import { discardOutbox, listOutbox, retryOutbox } from '../services/trackers/outbox.js'
+import { findSimilar, joinAsExample } from '../services/trackers/similar.js'
 import { type CreateIssueInput, TrackerError } from '../services/trackers/types.js'
 
 const webhookUrl = (id: number) => `${adminBaseUrl() ?? ''}/api/tracker-hooks/gitlab/${id}`
@@ -221,6 +224,17 @@ export async function trackerRoutes(app: FastifyInstance) {
     return upstream(reply, async () => (await providerFor(id)).searchUsers(search ?? '', projectId))
   })
 
+  app.get('/:id/labels', async (req, reply) => {
+    const id = idOf(req)
+    const conn = await getConnection(id)
+    if (!conn) return reply.code(404).send({ error: 'Connection not found' })
+    const { project } = req.query as { project?: string }
+    const projectId = posInt(project) ?? conn.default_project_id ?? undefined
+    if (!projectId)
+      return reply.code(400).send({ error: 'project is required', code: 'INVALID_QUERY' })
+    return upstream(reply, async () => (await providerFor(id)).listLabels(projectId))
+  })
+
   app.get('/:id/health', async (req, reply) => {
     const id = idOf(req)
     const conn = await getConnection(id)
@@ -319,6 +333,81 @@ export async function trackerRoutes(app: FastifyInstance) {
         dry_run: b.dry_run === true
       })
       return { data }
+    } catch (err) {
+      return linkFailure(reply, err)
+    }
+  })
+
+  // Before a manual create: GitLab issues that look like this one ("Add as example" instead).
+  app.post('/links/similar', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const issue = posInt(b.issue)
+    const connection = posInt(b.connection)
+    if (!issue || !connection)
+      return reply
+        .code(400)
+        .send({ error: 'issue and connection are required', code: 'INVALID_BODY' })
+    const conn = await getConnection(connection)
+    if (!conn)
+      return reply.code(404).send({ error: 'Connection not found', code: 'CONNECTION_NOT_FOUND' })
+    const projectId = posInt(b.project_id) ?? conn.default_project_id ?? 0
+    return { data: await findSimilar(issue, connection, projectId) }
+  })
+
+  // Add the issue as an example on an existing link or on a GitLab issue (project + iid).
+  app.post('/links/join', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const issue = posInt(b.issue)
+    const connection = posInt(b.connection)
+    if (!issue || !connection)
+      return reply
+        .code(400)
+        .send({ error: 'issue and connection are required', code: 'INVALID_BODY' })
+    const link = posInt(b.link)
+    let target: { link_id: number } | { project_id: number; iid: number }
+    if (link) target = { link_id: link }
+    else {
+      const iid = posInt(b.iid)
+      const projectId =
+        posInt(b.project_id) ?? (await getConnection(connection))?.default_project_id ?? undefined
+      if (!iid || !projectId)
+        return reply.code(400).send({
+          error: 'Name a link, or a GitLab project and issue number',
+          code: 'INVALID_BODY'
+        })
+      target = { project_id: projectId, iid }
+    }
+    // A score from the similar list shows on the example note ("91% similar").
+    const score = typeof b.score === 'number' && b.score >= 0 && b.score <= 1 ? b.score : undefined
+    try {
+      const linkId = await joinAsExample(
+        issue,
+        connection,
+        target,
+        score === undefined ? 'manual' : 'similar',
+        score
+      )
+      return { data: { link_id: linkId } }
+    } catch (err) {
+      return linkFailure(reply, err)
+    }
+  })
+
+  // Unlink + open a NEW GitLab issue (never the one it is moved away from).
+  app.post('/links/move-to-new', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const issue = posInt(b.issue)
+    if (!issue) return reply.code(400).send({ error: 'issue is required', code: 'INVALID_BODY' })
+    const connection = posInt(b.connection) ?? (await linkForIssue(issue))?.connection
+    if (!connection)
+      return reply
+        .code(400)
+        .send({ error: 'This issue has no GitLab issue to move from', code: 'NOT_LINKED' })
+    try {
+      const data = await moveToNew(issue, connection, req.user?.id ?? '')
+      return reply
+        .code(202)
+        .send({ data: { outbox_id: data.outboxId, generation: data.generation } })
     } catch (err) {
       return linkFailure(reply, err)
     }

@@ -89,7 +89,13 @@ describe('tracker connections', () => {
       recur_when_closed: 'reopen',
       comments: true,
       seen_note: true,
-      seen_note_min_minutes: 60
+      seen_note_min_minutes: 60,
+      labels: { always: [], by_severity: {}, by_source: {}, on_example: [] },
+      similar: { enabled: true, join_at: 0.88, suggest_at: 0.78 },
+      priority_map: {},
+      lane_map: {},
+      priority_two_way: true,
+      lanes_two_way: true
     })
     const n = normalizeSync({ comments: false, bogus: 1, recur_when_closed: 'new' })
     expect(n).not.toHaveProperty('bogus')

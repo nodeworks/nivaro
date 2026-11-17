@@ -2,10 +2,27 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { db } from '../../db/index.js'
 import { decryptValue, encryptValue, isEncrypted } from '../encryption.js'
 import { gitlabProvider } from './gitlab.js'
+import { LANE_KEYS, mergeLabels, safeLabel, safeLabels } from './labels.js'
+import { normalizeSeverity, SEVERITIES, type SeverityName } from './rules.js'
 import { TrackerError, type TrackerProvider } from './types.js'
 
 const TABLE = 'nivaro_tracker_connections'
 export const TOKEN_MASK = '••••••••'
+
+/** Labels every create gets, plus the ones added when a new example joins a GitLab issue. */
+export interface LabelOptions {
+  always: string[]
+  by_severity: Record<string, string[]>
+  by_source: Record<string, string[]>
+  on_example: string[]
+}
+
+/** Similar-ticket matching: join at/above `join_at`, suggest at/above `suggest_at`. */
+export interface SimilarOptions {
+  enabled: boolean
+  join_at: number
+  suggest_at: number
+}
 
 export interface SyncOptions {
   status_map: { closed: 'resolved' | 'closed' }
@@ -15,6 +32,14 @@ export interface SyncOptions {
   comments: boolean
   seen_note: boolean
   seen_note_min_minutes: number
+  labels: LabelOptions
+  similar: SimilarOptions
+  /** One GitLab label per issue-log priority (severity). */
+  priority_map: Partial<Record<SeverityName, string>>
+  /** One GitLab lane label per Nivaro status. */
+  lane_map: Partial<Record<'open' | 'in_progress' | 'resolved' | 'closed', string>>
+  priority_two_way: boolean
+  lanes_two_way: boolean
 }
 
 export interface TrackerConnection {
@@ -38,6 +63,67 @@ type Row = Record<string, unknown>
 
 const bool = (v: unknown, d: boolean) => (v === undefined || v === null ? d : v === true || v === 1)
 
+const obj = (v: unknown): Record<string, unknown> =>
+  v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+
+const labelList = (v: unknown): string[] =>
+  Array.isArray(v) ? safeLabels(v.filter((x) => typeof x === 'string')) : []
+
+const MAX_SOURCE_KEYS = 50
+
+function normalizeLabelOptions(raw: unknown): LabelOptions {
+  const src = obj(raw)
+  const by_severity: Record<string, string[]> = {}
+  for (const [k, v] of Object.entries(obj(src.by_severity))) {
+    const key = k.trim().toLowerCase()
+    // real severities and the legacy aliases (info / warning / error) only
+    if (!(SEVERITIES as string[]).includes(key) && !['info', 'warning', 'error'].includes(key))
+      continue
+    const sev = normalizeSeverity(key)
+    const list = labelList(v)
+    if (list.length) by_severity[sev] = mergeLabels(by_severity[sev], list)
+  }
+  const by_source: Record<string, string[]> = {}
+  for (const [k, v] of Object.entries(obj(src.by_source))) {
+    const key = k.trim().toLowerCase().slice(0, 100)
+    const list = labelList(v)
+    if (!key || !list.length) continue
+    if (!Object.hasOwn(by_source, key) && Object.keys(by_source).length >= MAX_SOURCE_KEYS) continue
+    by_source[key] = mergeLabels(Object.hasOwn(by_source, key) ? by_source[key] : [], list)
+  }
+  return {
+    always: labelList(src.always),
+    by_severity,
+    by_source,
+    on_example: labelList(src.on_example)
+  }
+}
+
+const clamp = (v: unknown, d: number): number => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : Number.NaN
+  if (!Number.isFinite(n)) return d
+  return Math.min(0.99, Math.max(0.5, n))
+}
+
+function normalizeSimilar(raw: unknown): SimilarOptions {
+  const src = obj(raw)
+  const join_at = clamp(src.join_at, 0.88)
+  const suggest_at = Math.min(clamp(src.suggest_at, 0.78), join_at)
+  return { enabled: bool(src.enabled, true), join_at, suggest_at }
+}
+
+/** Known keys only, one label-safe non-empty label each. */
+function labelMap<K extends string>(raw: unknown, keys: readonly K[]): Partial<Record<K, string>> {
+  const out: Partial<Record<K, string>> = {}
+  const src = obj(raw)
+  for (const k of keys) {
+    if (!Object.hasOwn(src, k) || typeof src[k] !== 'string') continue
+    const label = safeLabel(src[k])
+    if (label) out[k] = label
+  }
+  return out
+}
+
 /** Fill defaults, drop unknown keys, coerce bad values back to the default. */
 export function normalizeSync(raw: unknown): SyncOptions {
   let src: Record<string, unknown> = {}
@@ -60,7 +146,13 @@ export function normalizeSync(raw: unknown): SyncOptions {
     recur_when_closed: src.recur_when_closed === 'new' ? 'new' : 'reopen',
     comments: bool(src.comments, true),
     seen_note: bool(src.seen_note, true),
-    seen_note_min_minutes: Number.isFinite(mins) && mins >= 0 ? Math.floor(mins) : 60
+    seen_note_min_minutes: Number.isFinite(mins) && mins >= 0 ? Math.floor(mins) : 60,
+    labels: normalizeLabelOptions(src.labels),
+    similar: normalizeSimilar(src.similar),
+    priority_map: labelMap(src.priority_map, SEVERITIES),
+    lane_map: labelMap(src.lane_map, LANE_KEYS),
+    priority_two_way: bool(src.priority_two_way, true),
+    lanes_two_way: bool(src.lanes_two_way, true)
   }
 }
 

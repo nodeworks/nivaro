@@ -26,7 +26,7 @@ import {
  */
 
 export const OUTBOX = 'nivaro_tracker_outbox'
-export type OutboxOp = 'create' | 'comment' | 'state' | 'note_seen' | 'upload'
+export type OutboxOp = 'create' | 'comment' | 'state' | 'note_seen' | 'upload' | 'labels'
 export type OutboxStatus = 'pending' | 'sending' | 'done' | 'dead'
 
 export const MAX_ATTEMPTS = 10
@@ -48,6 +48,16 @@ export interface CreatePayload {
   created_via: 'manual' | 'rule'
   rule_id?: number | null
   created_by?: string | null
+  /** 2, 3, … after "Move to a new GitLab issue" — part of the create marker. */
+  generation?: number
+}
+
+/** Labels payload: add and remove in one call. Labels are cleaned when the row is queued. */
+export interface LabelsPayload {
+  project_id?: number
+  iid?: number
+  add_labels: string[]
+  remove_labels: string[]
 }
 
 type Row = Record<string, unknown>
@@ -229,6 +239,22 @@ async function sendRow(row: Row): Promise<'sent' | 'failed' | 'dead'> {
         await db(LINKS)
           .where({ id: link })
           .update({ remote_state: remote.state, last_synced_at: new Date() })
+    } else if (op === 'labels') {
+      const { project_id, iid } = await target(payload, link)
+      const list = (v: unknown) => (Array.isArray(v) ? v.map(String).filter(Boolean) : [])
+      const remote = await provider.setLabels(
+        project_id,
+        iid,
+        list(payload.add_labels),
+        list(payload.remove_labels)
+      )
+      if (link != null)
+        await db(LINKS)
+          .where({ id: link })
+          .update({
+            remote_labels: JSON.stringify(remote.labels ?? []),
+            last_synced_at: new Date()
+          })
     } else {
       throw new TrackerError(`Nivaro does not send "${op}" changes`, null, 'invalid')
     }
@@ -274,7 +300,10 @@ async function sendCreate(
   if (!projectId || !payload.input?.title)
     throw new TrackerError('The queued create has no project or title', null, 'invalid')
 
-  let remote: RemoteIssue | null = await provider.findIssueByMarker(projectId, issueMarker(issueId))
+  let remote: RemoteIssue | null = await provider.findIssueByMarker(
+    projectId,
+    issueMarker(issueId, Number(payload.generation) || 1)
+  )
   if (!remote) {
     const prepared = await prepareInput(row, payload, provider, issueId)
     remote = await provider.createIssue(projectId, prepared)

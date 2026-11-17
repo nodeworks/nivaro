@@ -1,6 +1,7 @@
 import { db } from '../../db/index.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import { getConnection, providerFor } from './connections.js'
+import { queueExample } from './examples.js'
 import { parseIssueUrl } from './gitlab.js'
 import { buildIssueInput, loadIssue } from './issue-body.js'
 import {
@@ -73,6 +74,11 @@ async function connectionOrThrow(connection: number) {
   return conn
 }
 
+const createKey = (connection: number, issueId: number, generation: number) =>
+  generation > 1
+    ? `create:${connection}:${issueId}:${generation}`
+    : `create:${connection}:${issueId}`
+
 /** Queue a GitLab issue for this Nivaro issue. The outbox sends it (at once, then retries). */
 export async function requestCreate(
   issueId: number,
@@ -83,6 +89,8 @@ export async function requestCreate(
     rule?: TrackerRule
     via: 'manual' | 'rule'
     userId?: string
+    /** Set by moveToNew: 2, 3, … — a new idempotency key and a new create marker. */
+    generation?: number
   }
 ): Promise<{ outboxId: number }> {
   const issue = await loadIssue(issueId)
@@ -103,7 +111,11 @@ export async function requestCreate(
       'NO_PROJECT'
     )
 
-  const input = await buildIssueInput(issueId, action, opts.overrides)
+  const generation = Math.max(1, Math.floor(Number(opts.generation) || 1))
+  const input = await buildIssueInput(issueId, action, opts.overrides, {
+    sync: conn.sync,
+    generation
+  })
   let mapEmail: string | null = null
   if (action?.map_assignee_by_email && !input.assignee_ids?.length && issue.assigned_to) {
     const u = (await db('nivaro_users').where({ id: issue.assigned_to }).first('email')) as
@@ -122,7 +134,8 @@ export async function requestCreate(
     rule_id: opts.rule?.id ?? null,
     created_by: opts.userId ?? null
   }
-  const key = `create:${opts.connection}:${issueId}`
+  if (generation > 1) payload.generation = generation
+  const key = createKey(opts.connection, issueId, generation)
 
   // A create that finished (then was unlinked) or died is asked for again: reuse its row.
   const old = (await db(OUTBOX).where({ idempotency_key: key }).first('id', 'status')) as
@@ -237,16 +250,19 @@ export async function joinLink(
       409,
       'ALREADY_LINKED'
     )
+  // A new member is a new example: one note (+ on_example labels). A repeat adds nothing.
+  if (res === 'added') await queueExample(linkId, issueId)
 }
 
 /**
- * Remove an issue from its link(s). A link left with no members is removed too, along with
- * changes still queued for it; a create still queued for this issue is dropped.
+ * Remove an issue from its link(s) — on one connection, or on all when none is named. A link left
+ * with no members is removed too, along with changes still queued for it; a create still queued
+ * for this issue (on that connection) is dropped.
  */
-export async function unlink(issueId: number): Promise<void> {
-  const members = (await db(MEMBERS)
-    .where({ source_kind: SOURCE_ISSUE, source_id: String(issueId) })
-    .select('id', 'link')) as Row[]
+export async function unlink(issueId: number, connection?: number): Promise<void> {
+  const scope: Row = { source_kind: SOURCE_ISSUE, source_id: String(issueId) }
+  if (connection !== undefined) scope.connection = connection
+  const members = (await db(MEMBERS).where(scope).select('id', 'link')) as Row[]
   for (const m of members) await db(MEMBERS).where({ id: m.id }).delete()
   for (const linkId of [...new Set(members.map((m) => Number(m.link)))]) {
     const left = await db(MEMBERS).where({ link: linkId }).first('id')
@@ -254,10 +270,57 @@ export async function unlink(issueId: number): Promise<void> {
     await db(OUTBOX).where({ link: linkId, status: 'pending' }).delete()
     await db(LINKS).where({ id: linkId }).delete()
   }
-  await db(OUTBOX)
-    .where({ op: 'create', source_kind: SOURCE_ISSUE, source_id: String(issueId) })
-    .where({ status: 'pending' })
-    .delete()
+  const queued: Row = { op: 'create', source_kind: SOURCE_ISSUE, source_id: String(issueId) }
+  if (connection !== undefined) queued.connection = connection
+  await db(OUTBOX).where(queued).where({ status: 'pending' }).delete()
+}
+
+/**
+ * "Move to a new GitLab issue": take the issue off its link on this connection and open a NEW
+ * GitLab issue for it (same project as before). The create is generation n (n = earlier create
+ * rows for this issue + 1, at least 2): its own idempotency key `create:<conn>:<issue>:<n>` and
+ * its own marker, so the marker search never finds the GitLab issue it was moved away from.
+ */
+export async function moveToNew(
+  issueId: number,
+  connection: number,
+  userId: string
+): Promise<{ outboxId: number; generation: number }> {
+  const issue = await loadIssue(issueId)
+  if (!issue) throw new LinkError('Issue not found', 404, 'NOT_FOUND')
+  await connectionOrThrow(connection)
+  const member = await memberFor(connection, issueId)
+  let projectId: number | undefined
+  if (member) {
+    const l = (await db(LINKS).where({ id: member.link }).first('project_id')) as Row | undefined
+    if (l?.project_id != null) projectId = Number(l.project_id)
+  }
+  await unlink(issueId, connection)
+  const prior = (await db(OUTBOX)
+    .where({
+      connection,
+      op: 'create',
+      source_kind: SOURCE_ISSUE,
+      source_id: String(issueId)
+    })
+    .count({ n: '*' })
+    .first()) as { n?: number | string } | undefined
+  let generation = Math.max(2, (Number(prior?.n ?? 0) || 0) + 1)
+  // A discarded row lowers the count: never reuse a key that is still there.
+  while (
+    await db(OUTBOX)
+      .where({ idempotency_key: createKey(connection, issueId, generation) })
+      .first('id')
+  )
+    generation++
+  const { outboxId } = await requestCreate(issueId, {
+    connection,
+    project_id: projectId,
+    via: 'manual',
+    userId,
+    generation
+  })
+  return { outboxId, generation }
 }
 
 /** Re-read the GitLab issue and refresh the mirror. GitLab errors are kept on the link. */

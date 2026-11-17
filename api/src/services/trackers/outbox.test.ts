@@ -131,8 +131,10 @@ const provider = {
   upload: vi.fn<(...args: any[]) => any>(),
   addNote: vi.fn<(...args: any[]) => any>(),
   setState: vi.fn<(...args: any[]) => any>(),
+  setLabels: vi.fn<(...args: any[]) => any>(),
   searchUsers: vi.fn<(...args: any[]) => any>()
 }
+const connSync = vi.hoisted(() => ({ value: undefined as unknown }))
 const markBroken = vi.fn<(...args: any[]) => any>(async () => {})
 const markOk = vi.fn<(...args: any[]) => any>(async () => {})
 vi.mock('./connections.js', () => ({
@@ -145,7 +147,8 @@ vi.mock('./connections.js', () => ({
           base_url: 'https://git.x',
           default_project_id: 7,
           default_project_path: 'g/p',
-          status: 'ok'
+          status: 'ok',
+          sync: connSync.value
         }
       : null,
   markBroken: (...a: any[]) => markBroken(...a),
@@ -163,7 +166,7 @@ vi.mock('../app-links.js', () => ({
 
 import { requestedPool } from '../../db/pool-context.js'
 import { markerIsLastLine } from './gitlab.js'
-import { bulkCreate, LinkError, linkExisting, requestCreate } from './links.js'
+import { bulkCreate, LinkError, linkExisting, moveToNew, requestCreate, unlink } from './links.js'
 import { backoffMs, enqueue, processOutbox, setAutoSend } from './outbox.js'
 import { TrackerError } from './types.js'
 
@@ -190,6 +193,7 @@ beforeEach(() => {
   vi.resetAllMocks()
   setAutoSend(false)
   feature.on = true
+  connSync.value = undefined
   t('nivaro_issues').push({
     id: 5,
     title: 'Boom',
@@ -483,6 +487,137 @@ describe('tracker outbox', () => {
     expect(input.title).not.toMatch(/^\//)
     expect(input.title).not.toMatch(/[\r\n]/)
     expect(input.title).not.toContain('@ann')
+  })
+
+  it('create labels = connection, severity, source, priority, lane, rule and manual labels', async () => {
+    connSync.value = {
+      labels: {
+        always: ['nivaro'],
+        by_severity: { high: ['sev::high'] },
+        by_source: { server: ['backend'] },
+        on_example: []
+      },
+      priority_map: { high: 'priority::2' },
+      lane_map: { open: 'workflow::to do' }
+    }
+    const rule: any = {
+      id: 3,
+      action: {
+        connection: 1,
+        issue_type: 'issue',
+        labels: ['Backend', 'rule-{{ source }}'],
+        assignee_ids: [],
+        map_assignee_by_email: false,
+        confidential: false,
+        title_template: '{{ title }}',
+        body_template: 'b',
+        attach_screenshot: false,
+        attach_replay_link: false,
+        include_details: true
+      }
+    }
+    await requestCreate(5, {
+      connection: 1,
+      via: 'rule',
+      rule,
+      overrides: { labels: ['manual', 'NIVARO'] }
+    })
+    expect(JSON.parse(outbox()[0].payload).input.labels).toEqual([
+      'nivaro',
+      'sev::high',
+      'backend',
+      'priority::2',
+      'workflow::to do',
+      'rule-server',
+      'manual'
+    ])
+  })
+
+  it('move to new opens a new GitLab issue, not the old one', async () => {
+    // GitLab holds the old issue (gen 1 marker) and whatever new ones get created.
+    const store: any[] = []
+    provider.findIssueByMarker.mockImplementation(async (_p: number, marker: string) => {
+      return store.find((r) => markerIsLastLine(r.description, marker)) ?? null
+    })
+    provider.createIssue.mockImplementation(async (_p: number, input: any) => {
+      const r = { ...remote(20 + store.length), description: input.description }
+      store.push(r)
+      return r
+    })
+    await requestCreate(5, { connection: 1, via: 'manual', userId: 'u1' })
+    expect(await processOutbox()).toEqual({ sent: 1, failed: 0, dead: 0 })
+    const [oldLink] = t('nivaro_tracker_links')
+    expect(oldLink.external_iid).toBe(20)
+
+    const moved = await moveToNew(5, 1, 'u1')
+    expect(moved.generation).toBe(2)
+    const row = outbox().find((r) => r.id === moved.outboxId)
+    expect(row?.idempotency_key).toBe('create:1:5:2')
+    expect(await processOutbox()).toEqual({ sent: 1, failed: 0, dead: 0 })
+    expect(provider.createIssue).toHaveBeenCalledTimes(2)
+    expect(provider.findIssueByMarker).toHaveBeenLastCalledWith(7, '<!-- nivaro:issue:5:2 -->')
+    expect(store[1].description.trim().endsWith('<!-- nivaro:issue:5:2 -->')).toBe(true)
+    // the old link (no members left) is gone; the issue sits on the new GitLab issue
+    const links = t('nivaro_tracker_links')
+    expect(links.map((l) => l.external_iid)).toEqual([21])
+    expect(t('nivaro_tracker_link_members')).toEqual([
+      expect.objectContaining({ link: links[0].id, source_id: '5', joined_via: 'lead' })
+    ])
+
+    // a third generation after another move
+    const again = await moveToNew(5, 1, 'u1')
+    expect(again.generation).toBe(3)
+    expect(await processOutbox()).toEqual({ sent: 1, failed: 0, dead: 0 })
+    expect(t('nivaro_tracker_links').map((l) => l.external_iid)).toEqual([22])
+  })
+
+  it('unlink on one connection leaves the other connections alone', async () => {
+    for (const [id, c] of [
+      [1, 1],
+      [2, 2]
+    ]) {
+      t('nivaro_tracker_links').push({ id, connection: c, project_id: 7, external_iid: id })
+      t('nivaro_tracker_link_members').push({
+        id,
+        link: id,
+        connection: c,
+        source_kind: 'issue',
+        source_id: '5',
+        joined_via: 'lead'
+      })
+    }
+    await unlink(5, 1)
+    expect(t('nivaro_tracker_links').map((l) => l.id)).toEqual([2])
+    expect(t('nivaro_tracker_link_members').map((m) => m.link)).toEqual([2])
+  })
+
+  it('a labels change is sent with setLabels and mirrored on the link', async () => {
+    t('nivaro_tracker_links').push({ id: 9, connection: 1, project_id: 7, external_iid: 3 })
+    await enqueue({
+      connection: 1,
+      link: 9,
+      source_id: '5',
+      op: 'labels',
+      payload: { add_labels: ['workflow::doing'], remove_labels: ['workflow::to do'] },
+      key: 'labels:1:9:x'
+    })
+    provider.setLabels.mockResolvedValueOnce({ ...remote(3), labels: ['bug', 'workflow::doing'] })
+    expect(await processOutbox()).toEqual({ sent: 1, failed: 0, dead: 0 })
+    expect(provider.setLabels).toHaveBeenCalledWith(7, 3, ['workflow::doing'], ['workflow::to do'])
+    expect(JSON.parse(t('nivaro_tracker_links')[0].remote_labels)).toEqual([
+      'bug',
+      'workflow::doing'
+    ])
+  })
+
+  it('joining an existing link through a pasted URL queues one example note', async () => {
+    provider.project.mockResolvedValue({ id: 7, path_with_namespace: 'g/p', access_level: 30 })
+    provider.getIssue.mockResolvedValue(remote(12))
+    await linkExisting(5, 1, 'https://git.x/g/p/-/issues/12', 'u1')
+    expect(outbox()).toHaveLength(0) // the first issue on a link is its lead, not an example
+    t('nivaro_issues').push({ id: 6, title: 'Boom again', fingerprint: 'fp5' })
+    const view = await linkExisting(6, 1, 'https://git.x/g/p/-/issues/12', 'u1')
+    expect(outbox().map((r) => r.idempotency_key)).toEqual([`example:${view.id}:6`])
   })
 
   it('the immediate send after enqueue runs on the background pool', async () => {

@@ -58,6 +58,14 @@ export interface TrackerProvider {
   findIssueByMarker(projectId: number, marker: string): Promise<RemoteIssue | null>
   updatedIssues(projectId: number, since: Date): Promise<RemoteIssue[]>
   setState(projectId: number, iid: number, state: 'close' | 'reopen'): Promise<RemoteIssue>
+  /** Add and remove labels in one call (GitLab creates unknown added labels). */
+  setLabels(projectId: number, iid: number, add: string[], remove: string[]): Promise<RemoteIssue>
+  /** The project's labels (group labels included), at most 500. */
+  listLabels(
+    projectId: number
+  ): Promise<Array<{ name: string; color: string; description: string | null }>>
+  /** Open issues whose title matches `q`, at most 20. */
+  searchOpenIssues(projectId: number, q: string): Promise<RemoteIssue[]>
   addNote(projectId: number, iid: number, body: string): Promise<RemoteNote>
   notes(projectId: number, iid: number, since?: Date): Promise<RemoteNote[]>
   upload(

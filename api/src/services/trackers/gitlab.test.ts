@@ -160,6 +160,58 @@ describe('gitlabProvider', () => {
     expect(Buffer.isBuffer(init.body)).toBe(true)
   })
 
+  it('listLabels follows x-next-page and stops at 500', async () => {
+    const page = (n: number) =>
+      Array.from({ length: 100 }, (_, i) => ({
+        id: n * 100 + i,
+        name: `l${n * 100 + i}`,
+        color: '#fff',
+        description: i === 0 ? 'first' : null
+      }))
+    const f = vi.fn<(...args: any[]) => any>().mockImplementation(async (url: string) => {
+      const n = Number(new URL(url).searchParams.get('page'))
+      return reply(page(n), 200, { 'x-next-page': String(n + 1) })
+    })
+    const out = await mk(f).listLabels(7)
+    expect(out).toHaveLength(500)
+    expect(f).toHaveBeenCalledTimes(5)
+    expect(out[0]).toEqual({ name: 'l100', color: '#fff', description: 'first' })
+    const url = new URL(f.mock.calls[0][0])
+    expect(url.pathname).toBe('/api/v4/projects/7/labels')
+    expect(url.searchParams.get('per_page')).toBe('100')
+  })
+
+  it('searchOpenIssues asks for open issues by title, 20 at most', async () => {
+    const f = vi.fn<(...args: any[]) => any>().mockResolvedValue(reply([issueRow(5)]))
+    const out = await mk(f).searchOpenIssues(7, 'checkout payment')
+    expect(out.map((r) => r.iid)).toEqual([5])
+    const url = new URL(f.mock.calls[0][0])
+    expect(url.pathname).toBe('/api/v4/projects/7/issues')
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      state: 'opened',
+      search: 'checkout payment',
+      in: 'title',
+      per_page: '20'
+    })
+  })
+
+  it('setLabels PUTs add_labels and remove_labels comma-joined', async () => {
+    const f = vi
+      .fn<(...args: any[]) => any>()
+      .mockImplementation(async () => reply(issueRow(3, { labels: ['workflow::doing'] })))
+    const r = await mk(f).setLabels(7, 3, ['workflow::doing'], ['workflow::to do', 'x'])
+    expect(r.labels).toEqual(['workflow::doing'])
+    const [url, init] = f.mock.calls[0]
+    expect(url).toBe('https://git.x/api/v4/projects/7/issues/3')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual({
+      add_labels: 'workflow::doing',
+      remove_labels: 'workflow::to do,x'
+    })
+    await mk(f).setLabels(7, 3, ['recurring'], [])
+    expect(JSON.parse(f.mock.calls[1][1].body)).toEqual({ add_labels: 'recurring' })
+  })
+
   it('encodes a path project id', async () => {
     const f = vi
       .fn<(...args: any[]) => any>()

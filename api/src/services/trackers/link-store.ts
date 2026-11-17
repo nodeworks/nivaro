@@ -28,7 +28,7 @@ export interface LinkView {
   members: number[]
 }
 
-export type JoinVia = 'lead' | 'fingerprint' | 'group' | 'manual'
+export type JoinVia = 'lead' | 'fingerprint' | 'group' | 'similar' | 'manual'
 
 type Row = Record<string, unknown>
 
