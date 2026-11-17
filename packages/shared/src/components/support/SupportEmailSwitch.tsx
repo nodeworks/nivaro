@@ -46,7 +46,8 @@ export function SupportEmailSwitch({ compact }: { compact?: boolean }) {
   return (
     <div
       data-support-email-switch={!isSuccess ? 'loading' : on ? 'on' : 'off'}
-      className='flex items-start gap-2.5 text-[12.5px] text-slate-600 dark:text-muted-foreground'
+      // gap-2 like the profile rows beside it (urgent sound), so the labels line up.
+      className='flex items-start gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'
     >
       <span className='pt-px'>
         <Toggle

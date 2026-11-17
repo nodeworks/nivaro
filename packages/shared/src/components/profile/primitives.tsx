@@ -136,7 +136,8 @@ export function Toggle({
       onClick={onChange}
       className={cn(
         'relative h-[18px] w-8 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40',
-        on ? (tone === 'amber' ? 'bg-amber-400' : 'bg-nvr-cyan') : 'bg-slate-200 dark:bg-muted'
+        // Off in dark: slate-600, not bg-muted (it all but vanished on a dark card).
+        on ? (tone === 'amber' ? 'bg-amber-400' : 'bg-nvr-cyan') : 'bg-slate-200 dark:bg-slate-600'
       )}
     >
       <span
