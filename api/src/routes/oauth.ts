@@ -280,7 +280,7 @@ const page = (title: string, body: string) => `<!doctype html>
 <title>${escapeHtml(title)}</title>
 <style>
 :root{--bg:#f8fafc;--card:#fff;--fg:#0f172a;--muted:#475569;--line:#e2e8f0;--accent:#00ceff;--accent-fg:#fff;--btn:#fff}
-@media (prefers-color-scheme:dark){:root{--bg:#0a1220;--card:#0f172a;--fg:#e2e8f0;--muted:#94a3b8;--line:#1e293b;--btn:#0f172a}}
+@media (prefers-color-scheme:dark){:root{--bg:#0a1220;--card:#0f172a;--fg:#e2e8f0;--muted:#94a3b8;--line:#1e293b;--btn:#0f172a}.warn{background:#2a1708;border-color:#7c4a12;color:#fde0b8}.warn strong{color:#fde68a}}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:16px}
 main{width:100%;max-width:440px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:24px}
 h1{font-size:18px;margin:0 0 12px}p{margin:0 0 12px;color:var(--muted)}strong{color:var(--fg)}
@@ -288,6 +288,7 @@ ul{margin:0 0 16px;padding-left:18px;color:var(--muted)}.who{font-size:12.5px;bo
 .row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
 fieldset{border:0;margin:0 0 4px;padding:0;min-width:0}legend{padding:0;margin:0 0 8px;font-weight:600;color:var(--fg)}fieldset .opt{margin:0 0 10px}
 .opt{display:flex;gap:8px;align-items:flex-start;margin:0 0 16px;color:var(--fg);cursor:pointer}.opt input{margin:3px 0 0;accent-color:var(--accent)}.opt span span{display:block;color:var(--muted);font-size:12.5px}
+.warn{background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:6px;padding:10px 12px;margin:0 0 14px;font-size:13px}.warn strong{color:#9a3412}
 button{font:inherit;border-radius:6px;padding:8px 14px;cursor:pointer;border:1px solid var(--line);background:var(--btn);color:var(--fg)}
 button.allow{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
 </style></head><body><main>${body}</main></body></html>`
@@ -372,6 +373,7 @@ function consentPage(
   return page(
     `Connect ${cleanClientName(client.client_name)} to Nivaro`,
     `<h1>Connect <strong>${name}</strong> to Nivaro?</h1>
+<p class="warn">This is a third-party app. Anyone can register an app and choose the name shown here, and Nivaro has <strong>not verified</strong> it. Only continue if you recognize this app and trust the address it returns to.</p>
 <p>It will return to <strong>${escapeHtml(host)}</strong> when you allow it.</p>
 <ul><li>It can read and change what <strong>you</strong> can in Nivaro — your role and access rules still apply.</li>
 <li>Its actions are recorded as yours.</li>
