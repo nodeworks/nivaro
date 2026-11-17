@@ -124,6 +124,9 @@ export interface O2mLabelDeps {
    *  ("{{inventory_request.inventory_request_id}} - {{cifa.cifa_number}}" →
    *  inventory_request, cifa). Optional: absent = none. */
   templateRelations?(collection: string): Promise<string[]>
+  /** Of `ids` in `collection`, those the reader may see (row filters, User Scopes) — compared
+   *  lower-cased. Optional: absent = an off-page child write is never shown. */
+  visibleIds?(user: User, collection: string, ids: string[]): Promise<Set<string>>
   /** The stored rollups on `parent` fed by `child` rows (services/rollup-moves.ts).
    *  Optional: absent = no totals. */
   rollupSources?(
@@ -185,6 +188,10 @@ const defaultDeps: O2mLabelDeps = {
   async snapshotLabel(collection, row) {
     const { labelFromSnapshot } = await import('./record-headline.js')
     return labelFromSnapshot(collection, row)
+  },
+  async visibleIds(user, collection, ids) {
+    const { readableIds } = await import('./form-field-gate.js')
+    return readableIds(user, collection, ids)
   },
   async rollupSources(parent, child) {
     const { rollupSourcesFrom } = await import('./rollup-moves.js')
@@ -258,13 +265,41 @@ export async function revisionsForReader<T extends RevisionLike>(
     }
     out.push(next)
   }
+  // A child write made away from this record's page (services/revisions.ts) is shown only when
+  // the reader may see that child row: the record being visible says nothing about its lines.
+  const drop = new Set<number>()
+  const elsewhere = pending.filter((p) => p.payload.elsewhere === true)
+  if (elsewhere.length > 0) {
+    const byChild = new Map<string, Set<string>>()
+    for (const p of elsewhere) {
+      const child = String(p.payload.child_collection ?? '')
+      const id = p.payload.child_id == null ? '' : String(p.payload.child_id)
+      if (!child || !id) continue
+      byChild.set(child, (byChild.get(child) ?? new Set()).add(id))
+    }
+    const seen = new Map<string, Set<string>>()
+    for (const [child, ids] of byChild) {
+      const fields = await childFields(child)
+      seen.set(
+        child,
+        fields === false || !deps.visibleIds
+          ? new Set()
+          : await deps.visibleIds(user, child, [...ids]).catch(() => new Set<string>())
+      )
+    }
+    for (const p of elsewhere) {
+      const id = String(p.payload.child_id ?? '').toLowerCase()
+      const ok = seen.get(String(p.payload.child_collection ?? ''))
+      if (!id || !ok?.has(id)) drop.add(p.index)
+    }
+  }
   if (pending.length > 0) {
     const summaries = await o2mSummaries(user, pending, childFields, deps, collection, own).catch(
       () => null
     )
     if (summaries) for (const [i, s] of summaries) out[i].o2m = s
   }
-  return out
+  return drop.size > 0 ? out.filter((_, i) => !drop.has(i)) : out
 }
 
 /** The relation heads a display template reads through, in order, once each. */
@@ -357,7 +392,14 @@ async function o2mSummaries(
     // figure already tells them as much).
     let totals: Array<{ field: string; delta: number }> = []
     if (parentCollection && deps.rollupSources) {
-      const sources = await deps.rollupSources(parentCollection, child).catch(() => [])
+      // Only totals worked out from child columns the reader may read (the value and any
+      // filter column): a move is the difference of those values, so it would disclose them.
+      const sources = (await deps.rollupSources(parentCollection, child).catch(() => [])).filter(
+        (src) =>
+          !fields ||
+          ((src.source.aggregate === 'count' || fields.has(src.source.value_field)) &&
+            Object.keys(src.source.filter ?? {}).every((c) => fields.has(c)))
+      )
       if (sources.length > 0) {
         const full =
           r.payload.snapshot &&

@@ -295,6 +295,7 @@ describe('revisionsForReader — totals a child write moved (audit 2026-11-17)',
     recordLabels: vi.fn(async () => ({})),
     snapshotLabel: vi.fn(async () => 'Line 1'),
     userNames: vi.fn(async () => new Map<string, string>()),
+    visibleIds: vi.fn(async (_u: unknown, _c: string, ids: string[]) => new Set(ids)),
     rollupSources: vi.fn(async () => [
       {
         rollupField: 'requisition_amount',
@@ -327,6 +328,18 @@ describe('revisionsForReader — totals a child write moved (audit 2026-11-17)',
     ])
     expect(out.o2m?.elsewhere).toBe(true)
     expect(out.o2m?.changes[0]).toMatchObject({ label: 'Amount', from: '1', to: '2060' })
+  })
+
+  it('drops a line written elsewhere that the reader cannot see', async () => {
+    const hidden = { ...deps, visibleIds: vi.fn(async () => new Set<string>()) }
+    const out = await revisionsForReader(user, 'orders', [row], hidden as never)
+    expect(out).toHaveLength(0)
+  })
+
+  it('never works a total out of a line column the reader may not read', async () => {
+    perms.fields.order_lines = ['qty']
+    const [out] = await revisionsForReader(user, 'orders', [row], deps as never)
+    expect(out.o2m?.totals).toBeUndefined()
   })
 
   it('never names a total the reader may not read on the parent', async () => {
