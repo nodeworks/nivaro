@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-11-17T20:13:29.079Z",
+  "generated_at": "2026-11-17T20:35:14.605Z",
   "releases": [
+    {
+      "version": "0.3.172",
+      "tag": "v0.3.172",
+      "date": "2026-11-17T15:34:58-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "history",
+              "text": "an automatic move set off by a save is folded into that save's row",
+              "hash": "995619f5c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "history",
+              "text": "an automatic move sits above the save that set it off, linked to it",
+              "hash": "9c6e60b68"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.171",
       "tag": "v0.3.171",
-      "date": "2026-11-17T15:13:12-05:00",
+      "date": "2026-11-17T15:13:29-05:00",
       "sections": [
         {
           "label": "Added",
