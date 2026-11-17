@@ -111,9 +111,20 @@ export async function providerFor(id: number): Promise<TrackerProvider> {
 }
 
 export class ConnectionInputError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly code: string = 'INVALID_CONNECTION'
+  ) {
     super(message)
     this.name = 'ConnectionInputError'
+  }
+}
+
+const originOf = (u: unknown): string => {
+  try {
+    return new URL(String(u)).origin.toLowerCase()
+  } catch {
+    return ''
   }
 }
 
@@ -190,8 +201,18 @@ export async function saveConnection(
     id = Number(typeof first === 'object' && first !== null ? (first as { id: unknown }).id : first)
   } else {
     id = Number(input.id)
-    const exists = await db(TABLE).where({ id }).first('id')
+    const exists = (await db(TABLE).where({ id }).first('id', 'base_url')) as Row | undefined
     if (!exists) throw new ConnectionInputError('Connection not found')
+    // The saved token must never be sent to a different origin than the one it was saved for.
+    if (
+      typeof patch.base_url === 'string' &&
+      originOf(patch.base_url) !== originOf(exists.base_url) &&
+      patch.token === undefined
+    )
+      throw new ConnectionInputError(
+        'Enter the token again when you change the GitLab address — the saved token is never sent to a new address.',
+        'TOKEN_REQUIRED_FOR_NEW_URL'
+      )
     await db(TABLE).where({ id }).update(patch)
   }
   const view = await getConnection(id)

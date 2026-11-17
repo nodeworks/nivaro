@@ -72,7 +72,7 @@ export async function trackerRoutes(app: FastifyInstance) {
       if (err instanceof ConnectionInputError)
         return reply
           .code(err.message === 'Connection not found' ? 404 : 400)
-          .send({ error: err.message, code: 'INVALID_CONNECTION' })
+          .send({ error: err.message, code: err.code })
       throw err
     }
   })

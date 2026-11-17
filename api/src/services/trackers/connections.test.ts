@@ -97,6 +97,37 @@ describe('tracker connections', () => {
     expect(n.recur_when_closed).toBe('new')
   })
 
+  it('origin change without a new token is refused', async () => {
+    const saved = await saveConnection(base, 'u1')
+    await expect(
+      saveConnection({ id: saved.id, base_url: 'https://evil.example.net' }, 'u2')
+    ).rejects.toMatchObject({ code: 'TOKEN_REQUIRED_FOR_NEW_URL' })
+    await expect(
+      saveConnection(
+        { id: saved.id, base_url: 'https://other.example.net', token: TOKEN_MASK },
+        'u2'
+      )
+    ).rejects.toMatchObject({ code: 'TOKEN_REQUIRED_FOR_NEW_URL' })
+    expect(rows[0].base_url).toBe('https://gitlab.example.com')
+  })
+
+  it('origin change with a new token saves both', async () => {
+    const saved = await saveConnection(base, 'u1')
+    await saveConnection(
+      { id: saved.id, base_url: 'https://other.example.net', token: 'glpat-new' },
+      'u2'
+    )
+    expect(rows[0].base_url).toBe('https://other.example.net')
+    expect(rows[0].token).toBe('glpat-new')
+  })
+
+  it('path-only change keeps the token', async () => {
+    const saved = await saveConnection(base, 'u1')
+    await saveConnection({ id: saved.id, base_url: 'https://GitLab.example.com/sub' }, 'u2')
+    expect(rows[0].base_url).toBe('https://GitLab.example.com/sub')
+    expect(rows[0].token).toBe('glpat-secret')
+  })
+
   it('rejects bad input', async () => {
     await expect(saveConnection({ ...base, base_url: 'ftp://x' }, 'u')).rejects.toThrow()
     await expect(saveConnection({ ...base, name: '' }, 'u')).rejects.toThrow()
