@@ -1,10 +1,63 @@
 {
-  "generated_at": "2026-11-17T14:31:47.526Z",
+  "generated_at": "2026-11-17T16:20:37.891Z",
   "releases": [
+    {
+      "version": "0.3.169",
+      "tag": "v0.3.169",
+      "date": "2026-11-17T11:20:20-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "issues",
+              "text": "Issue log redesign and a shared collection picker",
+              "hash": "591c8e7e1"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "edit-lock",
+              "text": "attaching a generated PDF passes the post-approval lock",
+              "hash": "26ec50661"
+            },
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "a re-picked link is kept; updates cannot empty a required field or leave your access",
+              "hash": "65e295f6e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security-alerts",
+              "text": "a person waiting for access never trips the 403 alert",
+              "hash": "3858c0b18"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "transitions",
+              "text": "marked automatic moves after a person's move run in the background",
+              "hash": "d581ed269"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.3.168",
       "tag": "v0.3.168",
-      "date": "2026-11-17T09:31:30-05:00",
+      "date": "2026-11-17T09:31:47-05:00",
       "sections": [
         {
           "label": "Added",
