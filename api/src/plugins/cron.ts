@@ -129,6 +129,18 @@ export function previewCronRuns(expression: string, count = 5, timezone?: string
 // fine" while its work silently stops happening. Overlap skips (croner's
 // protect) were silent for the same reason; they raise the same way.
 const WATCHDOG_DEFAULT_MS = 15 * 60 * 1000
+/** A tick skipped because the previous one is still in flight raises an issue only once
+ *  that one has been running this long (or the job's whole watchdog budget, if shorter). */
+export const SKIP_ISSUE_MS = 5 * 60 * 1000
+
+export function skipWorthAnIssue(
+  startedMs: number | null | undefined,
+  nowMs: number,
+  budgetMs = WATCHDOG_DEFAULT_MS
+): boolean {
+  if (startedMs == null) return false
+  return nowMs - startedMs >= Math.min(SKIP_ISSUE_MS, budgetMs)
+}
 
 function raiseCronIssue(message: string, severity: 'medium' | 'high'): void {
   void import('../services/error-tracking.js')
@@ -870,8 +882,13 @@ export class CronManager {
         timezone: zone.tz,
         // protect blocks the tick when the previous one is still running —
         // the callback form makes the skip VISIBLE instead of silent.
-        protect: () => {
-          const since = this.runningSince.get(id)
+        protect: (busy) => {
+          // Only a tick held for minutes is worth an issue: a frequent job (every
+          // 5-10 s) skips a beat whenever one tick waits out a short lock — prod's
+          // daily replication snapshot holds tables 16-30 s at ~4:37 AM ET and
+          // filed "running for 0 minute(s)" issues every morning (2026-11-17).
+          const since = busy.currentRun()?.getTime() ?? this.runningSince.get(id)
+          if (!skipWorthAnIssue(since, Date.now(), budget)) return
           const mins = since ? Math.round((Date.now() - since) / 60_000) : 0
           this.issue(
             `Cron "${id}" tick skipped — the previous tick has been running for ${mins} minute(s)`,

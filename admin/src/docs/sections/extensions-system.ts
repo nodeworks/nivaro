@@ -378,6 +378,11 @@ export const extContext: DocSection = {
           'sql',
           '{ runLong, announceWrites, triggerSafeReturning? }',
           '`runLong(sql, { timeoutMs })` runs one long statement on its own timeout; `announceWrites(collection, ids)` tells open pages a raw write changed records. `triggerSafeReturning: true` says every core write that reads ids back (`.returning()`) works on a table that carries a trigger — SQL Server refuses a plain OUTPUT there (error 334). Never put a trigger on a table the core writes while it is missing (older APIs).'
+        ],
+        [
+          'rollups',
+          '{ recalc(collection, ids) } (optional)',
+          'A raw write (`database(...).update`, a procedure) runs no hooks, so stored rollups on the parent records stay stale until the next app write there — the nightly rollup drift check then reports them. After writing child rows raw, call `recalc(parentCollection, parentIds)`: every stored rollup ON that collection is recomputed for those records, exactly as the hook would, chained rollups included. Answers how many records it recomputed. Older APIs do not offer it — `ctx.rollups?.recalc`.'
         ]
       ]
     },

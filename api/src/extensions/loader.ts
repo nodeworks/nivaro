@@ -1266,6 +1266,17 @@ export function registrationMembers(
         return readLiveUsage(() => measureUsage(db), { maxAgeMs: o?.maxAgeMs })
       }
     },
+    // A raw write (knex update, procedure) runs no hooks, so the stored rollups on the parent
+    // go stale until the next app write there (rollup drift, prod 2026-11-17: MDSi shipment
+    // quantities left inventory_request.mdsi_units_* empty on 226 of 500 requests).
+    rollups: {
+      recalc: async (collection, ids) => {
+        const { recalcStoredRollupsForRecords } = await import('../services/rollups.js')
+        const list = (ids ?? []).filter((i) => i != null && String(i) !== '')
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection) || list.length === 0) return 0
+        return (await recalcStoredRollupsForRecords(collection, list)).records
+      }
+    },
     chatBot: {
       registerTool: (def) => {
         note('chat-bot')

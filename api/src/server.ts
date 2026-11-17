@@ -1952,17 +1952,51 @@ export async function buildServer() {
             checked.set(key, ok)
             return ok
           }
+          // A deleted record waits in the trash and can be restored with its links, so an end
+          // in the trash is not dead (prod 2026-11-17: two CAR → project links whose projects
+          // were deleted the same day were reported every night). An end gone for good (never
+          // trashed, or purged) leaves a link that can never point anywhere: it is removed.
+          const trashed = async (col: string, id: string) =>
+            !!(await db('nivaro_trash')
+              .where({ collection: col, item_id: id })
+              .first('id')
+              .catch(() => true))
+          const gone: number[] = []
           for (const l of links) {
-            const a = await exists(String(l.from_collection), String(l.from_item))
-            const b = await exists(String(l.to_collection), String(l.to_item))
-            if (!a || !b) dead.push(Number(l.id))
+            const ends: Array<[string, string]> = [
+              [String(l.from_collection), String(l.from_item)],
+              [String(l.to_collection), String(l.to_item)]
+            ]
+            let missing = false
+            let restorable = false
+            for (const [col, id] of ends) {
+              if (await exists(col, id)) continue
+              missing = true
+              if (await trashed(col, id)) restorable = true
+            }
+            if (!missing || restorable) continue
+            gone.push(Number(l.id))
+          }
+          if (gone.length > 0) {
+            try {
+              await db('nivaro_record_links').whereIn('id', gone).del()
+              const { logActivity } = await import('./services/activity.js')
+              await logActivity({
+                action: 'dead-link-cleanup',
+                user: null,
+                collection: 'nivaro_record_links',
+                comment: `Removed ${gone.length} link(s) to records deleted for good (ids: ${gone.slice(0, 20).join(', ')}${gone.length > 20 ? '…' : ''})`
+              }).catch(() => {})
+            } catch {
+              dead.push(...gone)
+            }
           }
           if (dead.length > 0) {
             const { trackError } = await import('./services/error-tracking.js')
             await trackError({
               source: 'server',
               route: 'dead-link-sweep',
-              message: `${dead.length} record link(s) point at deleted records (ids: ${dead.slice(0, 20).join(', ')}${dead.length > 20 ? '…' : ''})`,
+              message: `${dead.length} record link(s) point at deleted records and could not be removed (ids: ${dead.slice(0, 20).join(', ')}${dead.length > 20 ? '…' : ''})`,
               severity: 'low'
             }).catch(() => {})
           }

@@ -694,6 +694,11 @@ export interface ExtensionContext {
    *  `maxAgeMs` accepts a cached answer up to that old even after writes (default: the
    *  route's own few-second freshness). Optional — an older API does not provide it. */
   usage?: { read(opts?: { maxAgeMs?: number }): Promise<ExtensionLiveUsage> }
+  /** Stored rollups after a raw write (`database(...).update`, a procedure): recompute every
+   *  stored rollup ON `collection` for these record ids — what the items service's hooks
+   *  would have done. Answers how many records were recomputed. Optional — an older API
+   *  does not provide it. */
+  rollups?: { recalc(collection: string, ids: Array<string | number>): Promise<number> }
   /** Auth middleware — use as Fastify `onRequest` / `preHandler` handlers. */
   auth: {
     authenticate: (req: FastifyRequest, reply: FastifyReply) => Promise<void>

@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
+import { withDeadlockRetry } from './deadlock-retry.js'
 import { noteDerivedWrite } from './request-trace.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -989,9 +990,16 @@ export async function recalcRollupsForParent(
 
     if (currentNum === total) return
 
-    await db(entry.parentCollection)
-      .where({ id: parentId })
-      .update({ [entry.rollupField]: total })
+    // Two recalcs of neighbouring parents (same page) can deadlock on the plain UPDATE (prod
+    // 2026-11-13: units.total_unit_cost, twice in 5 s). Setting the recomputed total again is
+    // idempotent, so the loser retries instead of leaving the parent stale.
+    await withDeadlockRetry(
+      () =>
+        db(entry.parentCollection)
+          .where({ id: parentId })
+          .update({ [entry.rollupField]: total }),
+      { retries: 2 }
+    )
     noteDerivedWrite('rollup')
     void import('./derived-causes.js')
       .then(({ noteDerivedCauses }) =>
