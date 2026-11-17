@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Security — Nivaro</title>
+  <meta name="description" content="How Nivaro protects your data: sign-in and access controls, audit trails, encryption, how we build and release, cloud subprocessors, and how to report a vulnerability.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Onest:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/favicon.svg">
+  <style>
+    .prose-page {
+      padding: calc(var(--nav-h) + 3rem) 1.5rem 6rem;
+    }
+    .prose-wrap {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    .prose-header {
+      margin-bottom: 3rem;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid var(--border, #e2e8f0);
+    }
+    .prose-header h1 {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-size: clamp(2rem, 4vw, 2.75rem);
+      font-weight: 700;
+      color: var(--ink, #0f172a);
+      line-height: 1.15;
+      margin: 0 0 0.5rem;
+    }
+    .prose-header .prose-subtitle {
+      font-family: 'Onest', sans-serif;
+      font-size: 0.9375rem;
+      color: var(--ink-faint, #64748b);
+      margin: 0;
+    }
+    .prose-wrap h2 {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--ink, #0f172a);
+      margin: 2.5rem 0 0.75rem;
+    }
+    .prose-wrap p {
+      font-family: 'Onest', sans-serif;
+      font-size: 0.9375rem;
+      line-height: 1.75;
+      color: var(--ink-body, #334155);
+      margin: 0 0 1rem;
+    }
+    .prose-wrap ul {
+      font-family: 'Onest', sans-serif;
+      font-size: 0.9375rem;
+      line-height: 1.75;
+      color: var(--ink-body, #334155);
+      margin: 0 0 1rem;
+      padding-left: 1.5rem;
+    }
+    .prose-wrap ul li {
+      margin-bottom: 0.375rem;
+    }
+    .prose-wrap a {
+      color: #00ceff;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .prose-wrap a:hover {
+      color: #00b8e0;
+    }
+    .prose-wrap h3 {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--ink, #0f172a);
+      margin: 1.75rem 0 0.5rem;
+    }
+    .prose-wrap code {
+      font-family: var(--font-mono);
+      font-size: 0.85em;
+    }
+    .sec-status {
+      display: grid;
+      gap: 0.75rem;
+      margin: 0 0 1.5rem;
+    }
+    .sec-status-row {
+      display: grid;
+      grid-template-columns: 6.5rem 1fr;
+      gap: 1rem;
+      align-items: baseline;
+      padding: 0.875rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+    .sec-status-row p { margin: 0; }
+    /* Status chips reuse the site's badge palette (style.css .badge-live / .badge-review). */
+    .sec-chip {
+      justify-self: start;
+      font-family: var(--font-body);
+      font-size: 0.75rem;
+      font-weight: 600;
+      line-height: 1.4;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      white-space: nowrap;
+      background: oklch(0.92 0.08 145);
+      color: oklch(0.30 0.10 145);
+    }
+    .sec-chip-work {
+      background: oklch(0.94 0.07 55);
+      color: oklch(0.42 0.10 55);
+    }
+    .sec-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: 'Onest', sans-serif;
+      font-size: 0.875rem;
+      color: var(--ink-body, #334155);
+      margin: 0 0 1.25rem;
+    }
+    .sec-table th, .sec-table td {
+      text-align: left;
+      vertical-align: top;
+      padding: 0.6rem 0.75rem 0.6rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .sec-table th {
+      font-weight: 600;
+      color: var(--ink);
+      font-size: 0.8125rem;
+    }
+    @media (max-width: 560px) {
+      .sec-status-row { grid-template-columns: 1fr; gap: 0.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Navigation ── -->
+<nav class="nav nav-dark" id="nav" role="navigation" aria-label="Primary">
+  <div class="nav-inner">
+    <a href="/" class="nav-logo" aria-label="Nivaro home">
+      <svg class="nav-logo-svg" width="24" height="24" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#172940"/><polyline points="7,26 7,6 23,26 23,6" fill="none" stroke="#00ceff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="miter"/></svg>
+      nivaro
+    </a>
+    <ul class="nav-links" role="list">
+      <li><a href="/#features">Features</a></li>
+      <li><a href="/#sdk">SDK</a></li>
+      <li><a href="/#architecture">Architecture</a></li>
+      <li><a href="/#enterprise">Enterprise</a></li>
+      <li><a href="/pricing">Pricing</a></li>
+    </ul>
+    <div class="nav-cta">
+      <a href="/docs" class="btn btn-outline-dark">Documentation</a>
+      <a href="https://github.com/nodeworks/nivaro" class="btn btn-primary">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Content ── -->
+<main class="prose-page">
+  <div class="prose-wrap">
+    <header class="prose-header">
+      <h1>Security</h1>
+      <p class="prose-subtitle">Last updated: November 2026</p>
+    </header>
+
+    <p>
+      Nivaro holds the records your teams approve, pay and audit, so it is built to keep each person to the data they may see and to leave a record of every change. This page explains how, for both ways of running it.
+    </p>
+
+    <h2>Two ways to run Nivaro</h2>
+    <ul>
+      <li><strong>Self-hosted.</strong> Nivaro runs in your own infrastructure against your own database. Your data never leaves your environment and Nodeworks has no access to it. You control the network, backups and hosting security.</li>
+      <li><strong>Nivaro Cloud.</strong> We host it for you. Every customer gets their own database and their own application instance; customers never share a database.</li>
+    </ul>
+
+    <h2>Compliance status</h2>
+    <div class="sec-status">
+      <div class="sec-status-row">
+        <span class="sec-chip sec-chip-work">In progress</span>
+        <p><strong>SOC 2.</strong> We do not have a SOC 2 report yet. We are working toward one for Nivaro Cloud, covering security, availability and confidentiality.</p>
+      </div>
+      <div class="sec-status-row">
+        <span class="sec-chip">Done</span>
+        <p><strong>Penetration test.</strong> November 2026, covering the application and the cloud platform. Every critical and high finding was fixed. A summary is available on request.</p>
+      </div>
+      <div class="sec-status-row">
+        <span class="sec-chip">Available</span>
+        <p><strong>Security questionnaires.</strong> We complete them. Email us and tell us which one you use.</p>
+      </div>
+    </div>
+
+    <h2>Sign-in and access</h2>
+    <ul>
+      <li><strong>Single sign-on</strong> with Microsoft Entra ID (OpenID Connect) or any SAML identity provider.</li>
+      <li><strong>Two-factor authentication</strong> for password sign-ins. Passwords are stored with scrypt and are never returned by the API.</li>
+      <li><strong>Brute-force protection:</strong> sign-in attempts are throttled and anonymous traffic is rate-limited.</li>
+      <li><strong>Sessions</strong> can be ended one by one or all at once; ending a session also closes its live connections.</li>
+      <li><strong>Roles and policies</strong> decide what each person may read, create, change or delete, down to individual fields.</li>
+      <li><strong>Row-level scopes</strong> limit people to their own region, zone or team. The limit also applies to reports, dashboards, search, exports and the AI assistant, and a raw-SQL report that cannot prove it applies the limit is refused rather than run.</li>
+      <li><strong>API keys</strong> carry their own scopes, expiry date, IP allowlist and rate limit. AI assistants connect with OAuth 2.1 and act only as the person who connected them.</li>
+    </ul>
+
+    <h2>Audit trail</h2>
+    <ul>
+      <li>Every create, change and delete is recorded with who, when and what changed, with full revision history per record.</li>
+      <li>File downloads are logged.</li>
+      <li>When an administrator views the app as another person to troubleshoot, everything they do is recorded against them.</li>
+    </ul>
+
+    <h2>Protecting data</h2>
+    <ul>
+      <li><strong>In transit:</strong> HTTPS everywhere, with HSTS, and encrypted connections to the database.</li>
+      <li><strong>At rest:</strong> Nivaro Cloud stores data with providers that encrypt disks and file storage. Sensitive fields can also be encrypted by Nivaro itself with AES-256-GCM.</li>
+      <li><strong>Secrets</strong> such as API credentials are masked when read back and never written to logs.</li>
+      <li><strong>Uploaded files</strong> are served so they cannot run script in the browser, and links to outside addresses are checked before Nivaro fetches them.</li>
+      <li><strong>Browser protections:</strong> the app cannot be framed by other sites, and strict security headers are sent on every response.</li>
+    </ul>
+
+    <h2>How we build and release</h2>
+    <ul>
+      <li>Every release passes type checks and automated checks, goes to a staging environment first, and is promoted to production only after health, readiness and smoke checks pass.</li>
+      <li>Database changes are numbered, additive and applied automatically; configuration is snapshotted before each one.</li>
+      <li>We test recovery: backups are restored on a schedule to prove they work, and we run controlled failure drills.</li>
+    </ul>
+
+    <h2>Cloud subprocessors</h2>
+    <p>Nivaro Cloud uses these providers. Self-hosted deployments use none of them.</p>
+    <table class="sec-table">
+      <thead>
+        <tr><th scope="col">Provider</th><th scope="col">Used for</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Railway</td><td>Application instances and the control plane</td></tr>
+        <tr><td>Cloudflare</td><td>Request routing and file storage</td></tr>
+        <tr><td>Neon</td><td>Managed databases (serverless tier)</td></tr>
+        <tr><td>Stripe</td><td>Billing; we never see full card numbers</td></tr>
+        <tr><td>Inngest</td><td>Background jobs for account setup and changes</td></tr>
+        <tr><td>Anthropic</td><td>AI features, only when your administrator turns them on</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Data retention and deletion</h2>
+    <p>
+      Administrators can set retention policies that remove personal data from people who have left. When a Nivaro Cloud account is cancelled, its database and files are deleted. To ask for deletion sooner, email us.
+    </p>
+
+    <h2>Reporting a vulnerability</h2>
+    <p>
+      If you believe you have found a security problem in Nivaro, email <a href="mailto:support@nivaro.dev?subject=Security">support@nivaro.dev</a> with "Security" in the subject. Include what you found, how to reproduce it and what it could affect. Please do not access other people's data, degrade the service or make the problem public until we have fixed it. We will not take legal action against research done in good faith under these rules.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      For security questions, questionnaires or the penetration test summary, email <a href="mailto:support@nivaro.dev?subject=Security">support@nivaro.dev</a>.
+    </p>
+  </div>
+</main>
+
+<!-- ── Footer ── -->
+<footer class="footer" aria-label="Site footer">
+  <div class="container">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <div class="footer-brand-logo">
+          <div class="nav-logo-mark" aria-hidden="true">N</div>
+          nivaro
+        </div>
+        <p class="footer-brand-desc">
+          Headless CMS for teams that own their MSSQL database.
+        </p>
+      </div>
+      <nav class="footer-col" aria-label="Product links">
+        <span class="footer-col-title">Product</span>
+        <a href="/#features">Features</a>
+        <a href="/#sdk">SDK</a>
+        <a href="/#architecture">Architecture</a>
+        <a href="/#enterprise">Enterprise</a>
+        <a href="/docs#roadmap">Roadmap</a>
+      </nav>
+      <nav class="footer-col" aria-label="Developer links">
+        <span class="footer-col-title">Developers</span>
+        <a href="/docs">Documentation</a>
+        <a href="/docs#sdk">SDK Reference</a>
+        <a href="/docs#graphql">GraphQL API</a>
+        <a href="/docs#extensions">Extensions</a>
+        <a href="https://github.com/nodeworks/nivaro">Source</a>
+      </nav>
+      <nav class="footer-col" aria-label="Other links">
+        <span class="footer-col-title">More</span>
+        <a href="/docs#deployment">Self-hosting</a>
+        <a href="/docs#migrations">Migrations</a>
+        <a href="/docs#auth">Auth</a>
+        <a href="/docs#workflows">Workflows</a>
+        <a href="/docs#changelog">Changelog</a>
+      </nav>
+    </div>
+    <div class="footer-bottom">
+      <p class="footer-copy">© 2026 Nodeworks. Nivaro is open source.</p>
+      <div class="footer-legal">
+        <a href="/license">License</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/security">Security</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@studio-freight/lenis@1.0.42/dist/lenis.min.js" integrity="sha384-li4UtcFCH6QeUqR4JyV58/VgTprMuz9aauj+oWtew7V4Y7ZVjnvz5px9Y3UCG0Ea" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js" integrity="sha384-g4NTh/Iv5PPU4xPyhEWqPcwtNXOvdaDI8LLnyYfyNZOjKJeYQyjzQ9X5275eBjpt" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js" integrity="sha384-Z3REaz79l2IaAZqJsSABtTbhjgOUYyV3p90XNnAPCSHg3EMTz1fouunq9WZRtj3d" crossorigin="anonymous"></script>
+<script src="app.js"></script>
+</body>
+</html>
