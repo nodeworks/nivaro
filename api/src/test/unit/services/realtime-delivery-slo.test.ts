@@ -15,6 +15,7 @@ import {
   figuresOf,
   judgeAckSilence,
   judgeDeliveryByNode,
+  lateSamples,
   noteDeliverySample,
   setDeliveryRedis,
   takeAckToken
@@ -323,6 +324,25 @@ describe('realtime delivery SLO (#2477)', () => {
       15
     )
     expect(fine.status).toBe('ok')
+  })
+
+  it('two late acks (one sleeping tab) do not fail a node; three do (prod 2026-11-17)', () => {
+    const row = (late: number) => ({
+      node: 'production · b1d445ee4153',
+      source: 'client' as const,
+      samples: 36,
+      good: 36 - late,
+      good_pct: Math.round(((36 - late) / 36) * 100000) / 1000,
+      p95_ms: 15000,
+      missed: 0
+    })
+    const cfg = { target_ms: 2000, good_pct: 95, min_samples: 20 }
+    expect(lateSamples(row(2))).toBe(2)
+    expect(judgeDeliveryByNode([row(2)] as never, cfg, 15).status).toBe('ok')
+    expect(judgeDeliveryByNode([row(3)] as never, cfg, 15).status).toBe('failing')
+    expect(judgeDeliveryByNode([row(2)] as never, { ...cfg, min_late: 1 }, 15).status).toBe(
+      'failing'
+    )
   })
 
   it('per-node delivery is off in cloud mode', async () => {

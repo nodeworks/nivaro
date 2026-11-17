@@ -554,6 +554,16 @@ export interface NodeDeliveryJudgeConfig {
   good_pct: number
   /** A node needs at least this many samples in the window before it is judged. */
   min_samples: number
+  /** …and at least this many LATE samples to fail (default 3): with ~36 samples one sleeping or
+   *  frozen browser tab acking 2 events 10–15 s late put a node at 94.4% and raised "Live
+   *  updates late" on production while the server was healthy (2026-11-17, issue 1099). */
+  min_late?: number
+}
+
+/** How many of a node's samples missed the target (from its share within it). */
+export function lateSamples(r: Pick<NodeDeliveryRow, 'samples' | 'good_pct'>): number {
+  if (r.good_pct == null) return 0
+  return Math.round((r.samples * (100 - r.good_pct)) / 100)
 }
 
 /**
@@ -579,7 +589,10 @@ export function judgeDeliveryByNode(
     `${r.node} (${r.source}): ${r.good_pct}% within ${cfg.target_ms} ms, p95 ${
       r.p95_ms == null ? 'n/a' : `${r.p95_ms} ms`
     }, ${r.samples} samples${r.missed ? `, ${r.missed} missed` : ''}`
-  const under = judged.filter((r) => (r.good_pct as number) < cfg.good_pct)
+  const minLate = Math.max(1, cfg.min_late ?? 3)
+  const under = judged.filter(
+    (r) => (r.good_pct as number) < cfg.good_pct && lateSamples(r) >= minLate
+  )
   const worst = Math.min(...judged.map((r) => r.good_pct as number))
   if (under.length) {
     const fine = judged.filter((r) => !under.includes(r))
