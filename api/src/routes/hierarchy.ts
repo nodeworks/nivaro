@@ -173,6 +173,20 @@ async function seesHierarchyNode(
   return (await visibleRecordIds(req.user!, collection, [String(id)])).has(String(id))
 }
 
+/** May the caller follow the link from `collection`'s level up to its parent (the parent_fk
+ *  field, or the junction table for M2M)? Admins always may. One shared rule so the ancestor walk
+ *  and the children listing gate the same relation the same way (audit H-1 sibling-path parity). */
+async function levelLinkFollowable(
+  req: FastifyRequest,
+  config: HierarchyConfig,
+  collection: string
+): Promise<boolean> {
+  if (await seesAllRecords(req.isAdmin, req.user)) return true
+  const level = config.levels.find((l) => l.collection === collection)
+  const allowed = await getAllowedFields(req.user!, 'read', collection)
+  return canFollowParentLink(req.user!, level, allowed)
+}
+
 export async function hierarchyRoutes(app: FastifyInstance) {
   // ── Config CRUD ────────────────────────────────────────────────────────────
 
@@ -335,6 +349,12 @@ export async function hierarchyRoutes(app: FastifyInstance) {
 
       if (!(await seesHierarchyNode(req, req.params.collection, req.params.nodeId)))
         return reply.code(404).send({ error: 'Not found' })
+      // Listing children reveals the parent→child link; require that child level's link readable.
+      const childIdx =
+        config.levels.findIndex((l) => l.collection === req.params.collection) + 1
+      const childLevel = childIdx > 0 ? config.levels[childIdx] : undefined
+      if (childLevel && !(await levelLinkFollowable(req, config, childLevel.collection)))
+        return reply.send({ data: [] })
       const children = await asHierarchyViewer(
         req,
         config,
@@ -355,18 +375,17 @@ export async function hierarchyRoutes(app: FastifyInstance) {
       if (!(await seesHierarchyNode(req, req.params.collection, req.params.nodeId)))
         return reply.code(404).send({ error: 'Not found' })
       const chain = await getNodeAncestors(config, req.params.collection, req.params.nodeId)
-      const viewed = await asHierarchyViewer(req, config, chain)
-      const visKey = new Set(viewed.map((v) => `${v.collection}:${v.id}`))
-      // Keep the contiguous visible run nearest the node; stop at the first hidden ancestor going
-      // up, so a hidden ancestor is never skipped over (which would leak that it exists).
-      const ancestors: FlatHierarchyNode[] = []
+      // Walk up from the node; stop at the first ancestor whose link from its child is not
+      // followable (field/junction policy) or that is itself hidden — never skip over one.
+      const kept: FlatHierarchyNode[] = []
+      let childCollection = req.params.collection
       for (let i = chain.length - 1; i >= 0; i--) {
-        const key = `${chain[i].collection}:${chain[i].id}`
-        if (!visKey.has(key)) break
-        const v = viewed.find((x) => `${x.collection}:${x.id}` === key)
-        if (v) ancestors.unshift(v)
+        if (!(await levelLinkFollowable(req, config, childCollection))) break
+        if (!(await seesHierarchyNode(req, chain[i].collection, chain[i].id))) break
+        kept.unshift(chain[i])
+        childCollection = chain[i].collection
       }
-      return reply.send({ data: ancestors })
+      return reply.send({ data: await asHierarchyViewer(req, config, kept) })
     }
   )
 }
