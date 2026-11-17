@@ -1,10 +1,94 @@
 {
-  "generated_at": "2026-11-17T17:49:02.194Z",
+  "generated_at": "2026-11-17T20:13:29.079Z",
   "releases": [
+    {
+      "version": "0.3.171",
+      "tag": "v0.3.171",
+      "date": "2026-11-17T15:13:12-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "history",
+              "text": "table filters, compare, Replay links, trends, column sets, line columns, Excel",
+              "hash": "e8b2c2afe"
+            },
+            {
+              "section": "Added",
+              "scope": "history",
+              "text": "Pipeline step column; collection-list scrollbars in the table",
+              "hash": "5ef5404fe"
+            },
+            {
+              "section": "Added",
+              "scope": "history",
+              "text": "saved, reorderable table columns; view remembered; WYSIWYG as text",
+              "hash": "5b1569113"
+            },
+            {
+              "section": "Added",
+              "scope": "history",
+              "text": "table view, Replay, person cards in Revision history",
+              "hash": "ebef53175"
+            },
+            {
+              "section": "Added",
+              "scope": "history",
+              "text": "line writes and the totals they moved in the record's history",
+              "hash": "e2024b0e7"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "record header",
+              "text": "\"Where this number comes from\" names fields by their labels",
+              "hash": "6125caffc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "history",
+              "text": "the table note offers Pipeline step only while it is not shown",
+              "hash": "2d7c5d5da"
+            },
+            {
+              "section": "Fixed",
+              "scope": "history",
+              "text": "why a value was recalculated; no false \"recalculated\" on partial creates",
+              "hash": "4ccd238c5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "monitors",
+              "text": "a node fails \"Live updates late\" only with 3+ late acks",
+              "hash": "edb4eb127"
+            },
+            {
+              "section": "Fixed",
+              "scope": "history",
+              "text": "line entries and totals follow the reader's row and field access",
+              "hash": "e4e34f994"
+            },
+            {
+              "section": "Fixed",
+              "scope": "a11y",
+              "text": "accessibility scan fixes that leave the look unchanged",
+              "hash": "174810a69"
+            }
+          ]
+        }
+      ],
+      "count": 11
+    },
     {
       "version": "0.3.170",
       "tag": "v0.3.170",
-      "date": "2026-11-17T12:48:44-05:00",
+      "date": "2026-11-17T12:49:02-05:00",
       "sections": [
         {
           "label": "Fixed",
