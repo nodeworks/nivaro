@@ -1,0 +1,1324 @@
+import { db } from '../../db/index.js'
+import { NIVARO_VERSION } from '../../version.js'
+import { appEnvironment } from '../app-info-environment.js'
+import { selectInChunks, whereInList } from '../db-batch.js'
+import { groupSimilarIssues } from '../issue-groups.js'
+import { hitCounts, hitKey } from '../issue-raise.js'
+import { getConnection, type TrackerConnection } from './connections.js'
+import { trackersEnabled } from './feature.js'
+import { LINKS, MEMBERS, SOURCE_ISSUE } from './link-store.js'
+import { CONNECTION_CAP_PER_HOUR, requestCreate } from './links.js'
+import { enqueue } from './outbox.js'
+import {
+  type Counts,
+  evaluateRule,
+  type GuardState,
+  type IssueFacts,
+  nextQuietEnd,
+  type Outcome
+} from './rule-eval.js'
+import { type TrackerRule, type ValidateResult, validateRule } from './rules.js'
+import { findHome, joinAsExample } from './similar.js'
+import { defaultBodyTemplate } from './templates.js'
+
+/**
+ * The rule engine runner: reads the facts of one issue, walks the enabled rules in `sort` order
+ * (rule-eval.ts decides each one), and acts — a fire first looks for a home (findHome: same
+ * fingerprint, same group, a similar GitLab issue) and joins it as an example, else queues a
+ * GitLab create; a suggest marks the issue (`nivaro_issues.tracker_suggested_rule`). Every outcome
+ * but `no_match` is kept in `nivaro_tracker_decisions` (last 200 per rule) so "why didn't it
+ * fire?" always has an answer. Quiet hours are stored with the window's end and re-tried by the
+ * sweep once it passes.
+ */
+
+export const RULES = 'nivaro_tracker_rules'
+export const DECISIONS = 'nivaro_tracker_decisions'
+/** Decision rows kept per rule. */
+export const KEEP_DECISIONS = 200
+const HOUR_MS = 3_600_000
+const DAY_MS = 86_400_000
+const DETAIL_MAX = 500
+const SKIP_STATUSES = ['resolved', 'closed']
+
+type Row = Record<string, unknown>
+
+const parseObj = (v: unknown): Row => {
+  if (v && typeof v === 'object' && !Array.isArray(v)) return v as Row
+  if (typeof v !== 'string' || !v) return {}
+  try {
+    const p = JSON.parse(v)
+    return p && typeof p === 'object' && !Array.isArray(p) ? (p as Row) : {}
+  } catch {
+    return {}
+  }
+}
+const truthy = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true'
+const toDate = (v: unknown): Date | null => {
+  if (v == null || v === '') return null
+  const d = v instanceof Date ? v : new Date(String(v))
+  return Number.isNaN(d.getTime()) ? null : d
+}
+const iso = (v: unknown): string => toDate(v)?.toISOString() ?? ''
+const errText = (err: unknown) => (err instanceof Error ? err.message : String(err))
+
+// ── Stored rules ──────────────────────────────────────────────────────────────
+
+/** The rule as validateRule sees it: the stored row's columns + JSON parts. */
+function rawRule(row: Row): Row {
+  const action = parseObj(row.action)
+  if (action.connection == null && row.connection != null)
+    action.connection = Number(row.connection)
+  return {
+    name: row.name,
+    enabled: truthy(row.enabled),
+    mode: row.mode,
+    sort: Number(row.sort ?? 0),
+    continue_after: truthy(row.continue_after),
+    match: parseObj(row.match),
+    threshold: parseObj(row.threshold),
+    guards: parseObj(row.guards),
+    action
+  }
+}
+
+/** A stored rule row as a TrackerRule (defaults filled), or null when it no longer validates. */
+export function ruleFromRow(row: Row): TrackerRule | null {
+  const res = validateRule(rawRule(row))
+  return res.ok ? { id: Number(row.id), ...res.rule } : null
+}
+
+export interface RuleView {
+  id: number
+  name: string
+  description: string | null
+  enabled: boolean
+  mode: string
+  sort: number
+  continue_after: boolean
+  connection: number
+  match: Row
+  threshold: Row
+  guards: Row
+  action: Row
+  last_fired_at: string | null
+  fired_count: number
+  suppressed_count: number
+  paused_reason: string | null
+  created_at: string | null
+  updated_at: string | null
+  /** False when the stored rule no longer passes validation (it never runs then). */
+  valid: boolean
+  errors?: Array<{ path: string; message: string }>
+}
+
+export function ruleView(row: Row): RuleView {
+  const res = validateRule(rawRule(row))
+  const base = res.ok ? res.rule : (rawRule(row) as unknown as Omit<TrackerRule, 'id'>)
+  return {
+    id: Number(row.id),
+    name: String(row.name ?? ''),
+    description: row.description == null ? null : String(row.description),
+    enabled: truthy(row.enabled),
+    mode: String(base.mode ?? row.mode ?? 'suggest'),
+    sort: Number(row.sort ?? 0),
+    continue_after: truthy(row.continue_after),
+    connection: Number(row.connection),
+    match: base.match as unknown as Row,
+    threshold: base.threshold as unknown as Row,
+    guards: base.guards as unknown as Row,
+    action: base.action as unknown as Row,
+    last_fired_at: iso(row.last_fired_at) || null,
+    fired_count: Number(row.fired_count ?? 0) || 0,
+    suppressed_count: Number(row.suppressed_count ?? 0) || 0,
+    paused_reason: row.paused_reason == null ? null : String(row.paused_reason),
+    created_at: iso(row.created_at) || null,
+    updated_at: iso(row.updated_at) || null,
+    valid: res.ok,
+    ...(res.ok ? {} : { errors: res.errors })
+  }
+}
+
+/** Enabled, valid, not paused rules in the order they run. */
+export async function enabledRules(): Promise<TrackerRule[]> {
+  const rows = (await db(RULES)
+    .where({ enabled: true })
+    .orderBy('sort', 'asc')
+    .orderBy('id', 'asc')) as Row[]
+  return rows
+    .filter((r) => r.paused_reason == null || r.paused_reason === '')
+    .map(ruleFromRow)
+    .filter((r): r is TrackerRule => r !== null)
+}
+
+// ── Facts ─────────────────────────────────────────────────────────────────────
+
+const HAS_SCREENSHOT = 'CASE WHEN screenshot IS NULL THEN 0 ELSE 1 END AS has_screenshot'
+const ISSUE_COLS = [
+  'id',
+  'title',
+  'details',
+  'severity',
+  'status',
+  'source',
+  'collection',
+  'item',
+  'fingerprint',
+  'raised_by',
+  'assigned_to',
+  'created_at',
+  'updated_at',
+  'last_seen_at',
+  'occurrence_count',
+  'recording_id',
+  'tracker_suggested_rule'
+]
+
+interface IssueContext {
+  row: Row
+  facts: IssueFacts
+  /** Connections this issue is already a member of a link on. */
+  linkedOn: Set<number>
+}
+
+/** The cluster lead of the issue's current group (issue-groups, cached 10 min in-process). */
+async function groupLeadOf(issueId: number): Promise<number | null> {
+  try {
+    const groups = await groupSimilarIssues()
+    const g = groups.find((x) => x.lead.id === issueId || x.variants.some((v) => v.id === issueId))
+    return g ? g.lead.id : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Where each IssueFacts field comes from:
+ * - id, title, details, severity, status, source, collection, item, fingerprint, raised_by,
+ *   assigned_to, created_at: the `nivaro_issues` row itself.
+ * - route, build: the NEWEST `nivaro_issue_occurrences` row (the table keeps the last 50 hits /
+ *   30 days per issue); null when the issue has none (manual reports).
+ * - first_build: the OLDEST occurrence row that names a build (oldest still kept, so "new in the
+ *   current release" is judged over the last 50 hits / 30 days).
+ * - environment: this instance's environment (appEnvironment()) — occurrence rows carry no
+ *   environment, and one instance serves one environment.
+ * - current_build: this API's version (NIVARO_VERSION); the release image ships API + admin
+ *   together, so client builds of the current release carry the same version.
+ * - raised_by_role: the role id of the person who raised it (`nivaro_users.role`).
+ * - has_screenshot: `screenshot IS NOT NULL`; has_replay: `recording_id` is set.
+ * - linked: a member row on ANY connection (evaluateIssue narrows it to the rule's connection).
+ * - recurrences: earlier `nivaro_issues` rows (lower id) with the same fingerprint that are
+ *   resolved or closed.
+ * - total_hits: `occurrence_count`.
+ * - group_lead_id: the lead of the issue's group from issue-groups clustering
+ *   (groupSimilarIssues, cached 10 min in-process) — read only when asked for (`groupLead`),
+ *   which evaluateIssue does only when an enabled rule matches on group leads; else null.
+ */
+async function loadContext(
+  issueId: number,
+  opts: { groupLead?: boolean } = {}
+): Promise<IssueContext | null> {
+  if (!Number.isFinite(issueId)) return null
+  const row = (await db('nivaro_issues')
+    .where({ id: issueId })
+    .select([...ISSUE_COLS, db.raw(HAS_SCREENSHOT)])
+    .first()) as Row | undefined
+  if (!row) return null
+
+  const newest = (await db('nivaro_issue_occurrences')
+    .where({ issue: issueId })
+    .orderBy('occurred_at', 'desc')
+    .orderBy('id', 'desc')
+    .first('route', 'build')) as Row | undefined
+  const oldest = (await db('nivaro_issue_occurrences')
+    .where({ issue: issueId })
+    .whereNotNull('build')
+    .orderBy('occurred_at', 'asc')
+    .orderBy('id', 'asc')
+    .first('build')) as Row | undefined
+
+  let recurrences = 0
+  if (row.fingerprint) {
+    const r = (await db('nivaro_issues')
+      .where({ fingerprint: row.fingerprint })
+      .where('id', '<', issueId)
+      .whereIn('status', SKIP_STATUSES)
+      .count({ n: '*' })
+      .first()) as { n?: number | string } | undefined
+    recurrences = Number(r?.n ?? 0) || 0
+  }
+
+  let role: string | null = null
+  if (row.raised_by) {
+    const u = (await db('nivaro_users').where({ id: row.raised_by }).first('role')) as
+      | Row
+      | undefined
+    role = u?.role == null ? null : String(u.role)
+  }
+
+  const members = (await db(MEMBERS)
+    .where({ source_kind: SOURCE_ISSUE, source_id: String(issueId) })
+    .select('connection')) as Row[]
+  const linkedOn = new Set(members.map((m) => Number(m.connection)))
+
+  const facts: IssueFacts = {
+    id: issueId,
+    title: String(row.title ?? ''),
+    details: row.details == null ? null : String(row.details),
+    severity: String(row.severity ?? ''),
+    status: String(row.status ?? 'open'),
+    source: String(row.source ?? 'manual'),
+    route: newest?.route ? String(newest.route) : null,
+    collection: row.collection == null ? null : String(row.collection),
+    item: row.item == null ? null : String(row.item),
+    environment: appEnvironment(),
+    build: newest?.build ? String(newest.build) : null,
+    current_build: NIVARO_VERSION,
+    first_build: oldest?.build ? String(oldest.build) : null,
+    fingerprint: row.fingerprint ? String(row.fingerprint) : null,
+    group_lead_id: opts.groupLead ? await groupLeadOf(issueId) : null,
+    raised_by: row.raised_by == null ? null : String(row.raised_by),
+    raised_by_role: role,
+    assigned_to: row.assigned_to == null ? null : String(row.assigned_to),
+    has_screenshot: Number(row.has_screenshot) === 1,
+    has_replay: !!row.recording_id,
+    created_at: toDate(row.created_at) ?? new Date(),
+    linked: linkedOn.size > 0,
+    recurrences,
+    total_hits: Number(row.occurrence_count ?? 1) || 1
+  }
+  return { row, facts, linkedOn }
+}
+
+/** The facts a rule is judged on (see loadContext for where each field comes from). */
+export async function loadFacts(
+  issueId: number,
+  opts: { groupLead?: boolean } = {}
+): Promise<IssueFacts | null> {
+  return (await loadContext(issueId, opts))?.facts ?? null
+}
+
+// ── Counts + guards ───────────────────────────────────────────────────────────
+
+const ZERO_COUNTS: Counts = { hits: () => 0, people: () => 0 }
+const ZERO_GUARDS: GuardState = {
+  firedLastHour: 0,
+  firedLastDay: 0,
+  connectionLastHour: 0,
+  connectionCap: CONNECTION_CAP_PER_HOUR
+}
+
+/** hitCounts per window, read once per window per evaluation. */
+class CountCache {
+  private byWindow = new Map<number, { hits: number; people: number }>()
+  constructor(
+    private key: string,
+    private now: Date
+  ) {}
+  async load(rule: TrackerRule): Promise<void> {
+    const windows = [rule.threshold.hits?.window_minutes, rule.threshold.people?.window_minutes]
+    for (const w of windows) {
+      if (w === undefined || this.byWindow.has(w)) continue
+      try {
+        this.byWindow.set(w, await hitCounts(this.key, new Date(this.now.getTime() - w * 60_000)))
+      } catch {
+        this.byWindow.set(w, { hits: 0, people: 0 })
+      }
+    }
+  }
+  counts(): Counts {
+    return {
+      hits: (w) => this.byWindow.get(w)?.hits ?? 0,
+      people: (w) => this.byWindow.get(w)?.people ?? 0
+    }
+  }
+}
+
+async function guardState(rule: TrackerRule, now: Date): Promise<GuardState> {
+  const hourAgo = now.getTime() - HOUR_MS
+  const fired = (await db(DECISIONS)
+    .where({ rule: rule.id, outcome: 'fired' })
+    .where('at', '>=', new Date(now.getTime() - DAY_MS))
+    .select('at')) as Row[]
+  const links = (await db(LINKS)
+    .where({ connection: rule.action.connection, created_via: 'rule' })
+    .where('created_at', '>=', new Date(hourAgo))
+    .count({ n: '*' })
+    .first()) as { n?: number | string } | undefined
+  return {
+    firedLastHour: fired.filter((r) => (toDate(r.at)?.getTime() ?? 0) >= hourAgo).length,
+    firedLastDay: fired.length,
+    connectionLastHour: Number(links?.n ?? 0) || 0,
+    connectionCap: CONNECTION_CAP_PER_HOUR
+  }
+}
+
+/**
+ * One rule against one issue. Counts and guards are read only when the cheaper checks pass:
+ * match/status/linked need neither; thresholds need counts; caps need the guard state.
+ */
+async function assess(
+  rule: TrackerRule,
+  ctx: IssueContext,
+  counts: CountCache,
+  now: Date
+): Promise<Outcome> {
+  const facts: IssueFacts = { ...ctx.facts, linked: ctx.linkedOn.has(rule.action.connection) }
+  let out = evaluateRule(rule, facts, ZERO_COUNTS, ZERO_GUARDS, now)
+  if (out.act === 'skip' && ['no_match', 'status', 'linked'].includes(out.outcome)) return out
+  await counts.load(rule)
+  out = evaluateRule(rule, facts, counts.counts(), ZERO_GUARDS, now)
+  if (out.act === 'skip') return out
+  return evaluateRule(rule, facts, counts.counts(), await guardState(rule, now), now)
+}
+
+// ── Decisions ─────────────────────────────────────────────────────────────────
+
+type Latest = Map<number, { outcome: string; detail: string }>
+
+async function latestDecisions(issueId: number): Promise<Latest> {
+  const rows = (await db(DECISIONS)
+    .where({ issue: issueId })
+    .orderBy('id', 'desc')
+    .limit(500)
+    .select('rule', 'outcome', 'detail')) as Row[]
+  const out: Latest = new Map()
+  for (const r of rows) {
+    const rule = Number(r.rule)
+    if (!out.has(rule))
+      out.set(rule, { outcome: String(r.outcome), detail: String(r.detail ?? '') })
+  }
+  return out
+}
+
+/** Keep the newest KEEP_DECISIONS rows of one rule. */
+export async function trimDecisions(ruleId: number): Promise<void> {
+  const cut = (await db(DECISIONS)
+    .where({ rule: ruleId })
+    .orderBy('id', 'desc')
+    .offset(KEEP_DECISIONS)
+    .limit(1)
+    .select('id')) as Row[]
+  if (cut[0])
+    await db(DECISIONS).where({ rule: ruleId }).where('id', '<=', Number(cut[0].id)).delete()
+}
+
+/**
+ * Store one decision (a repeat of the issue's latest decision for the rule — same outcome and
+ * detail — is not stored again, so a noisy issue does not wash out the log), bump the rule's
+ * counters and trim the rule's log to 200.
+ */
+async function record(
+  ruleId: number,
+  issueId: number,
+  outcome: string,
+  detail: string,
+  latest: Latest,
+  now: Date
+): Promise<void> {
+  const text = detail.slice(0, DETAIL_MAX)
+  const prev = latest.get(ruleId)
+  if (outcome !== 'fired' && prev && prev.outcome === outcome && prev.detail === text) return
+  await db(DECISIONS).insert({ rule: ruleId, issue: issueId, at: now, outcome, detail: text })
+  latest.set(ruleId, { outcome, detail: text })
+  if (outcome === 'fired' || outcome === 'suggested')
+    await db(RULES)
+      .where({ id: ruleId })
+      .update({ fired_count: db.raw('fired_count + 1'), last_fired_at: now })
+  else if (outcome !== 'error')
+    await db(RULES)
+      .where({ id: ruleId })
+      .update({ suppressed_count: db.raw('suppressed_count + 1') })
+  await trimDecisions(ruleId)
+}
+
+// ── Acting ────────────────────────────────────────────────────────────────────
+
+/** Only a plain http(s) URL rides into a template (no Liquid, no markdown breakers). */
+function safeWebUrl(v: unknown): string | null {
+  const s = String(v ?? '').trim()
+  return /^https?:\/\/[^\s<>()[\]{}"'`\\|^%]+$/.test(s) && s.length <= 800 ? s : null
+}
+
+/** The rule with one line about the closed GitLab issue this recurrence came back from. */
+function withEarlierIssue(rule: TrackerRule, link: Row): TrackerRule {
+  const url = safeWebUrl(link.web_url)
+  const iid = Number(link.external_iid)
+  const ref = url ? `[#${iid}](${url})` : `#${iid}`
+  const body = rule.action.body_template || defaultBodyTemplate()
+  return {
+    ...rule,
+    action: {
+      ...rule.action,
+      body_template: `${body}\n\nThis came back after the earlier GitLab issue ${ref} was closed.`
+    }
+  }
+}
+
+/**
+ * Act on a firing rule: a home first (fingerprint always; group only when the rule's group
+ * guard is on; similar only when the connection's similar matching is on), else a new GitLab
+ * issue. A home that is CLOSED on GitLab follows the connection's `recur_when_closed`: 'new'
+ * opens a new GitLab issue naming the old one; 'reopen' joins it and (when `reopen_on_recur` is
+ * on) queues a reopen. Returns the decision detail. Throws when nothing could be queued.
+ */
+async function fire(rule: TrackerRule, issueId: number, conn: TrackerConnection): Promise<string> {
+  const projectId = rule.action.project_id ?? conn.default_project_id ?? 0
+  let home = await findHome(issueId, conn.id, projectId)
+  if (home?.via === 'group' && !rule.guards.group) home = null
+  if (home?.via === 'similar' && !conn.sync.similar.enabled) home = null
+  if (home && home.link_id == null && !home.candidate) home = null
+
+  if (home) {
+    const link =
+      home.link_id != null
+        ? ((await db(LINKS)
+            .where({ id: home.link_id })
+            .first('id', 'project_id', 'external_iid', 'web_url', 'remote_state')) as
+            | Row
+            | undefined)
+        : undefined
+    const closed = link?.remote_state === 'closed'
+    if (link && closed && conn.sync.recur_when_closed === 'new') {
+      await requestCreate(issueId, {
+        connection: conn.id,
+        rule: withEarlierIssue(rule, link),
+        via: 'rule'
+      })
+      return `queued a new GitLab issue (#${Number(link.external_iid)} is closed)`
+    }
+    const target =
+      home.link_id != null
+        ? { link_id: home.link_id }
+        : {
+            project_id: (home.candidate as { project_id: number }).project_id,
+            iid: (home.candidate as { iid: number }).iid
+          }
+    const score = home.candidate?.score
+    const linkId = await joinAsExample(issueId, conn.id, target, home.via, score)
+    const iid = link ? Number(link.external_iid) : Number(home.candidate?.iid)
+    let detail = `joined #${iid} via ${home.via}${
+      typeof score === 'number' && Number.isFinite(score) ? ` (${score.toFixed(2)})` : ''
+    }`
+    if (link && closed && conn.sync.reopen_on_recur) {
+      await enqueue({
+        connection: conn.id,
+        link: linkId,
+        source_id: String(issueId),
+        op: 'state',
+        payload: {
+          project_id: Number(link.project_id),
+          iid: Number(link.external_iid),
+          state: 'reopen'
+        },
+        key: `rule-reopen:${linkId}:${issueId}`
+      })
+      detail += ', reopening it'
+    }
+    return detail
+  }
+
+  await requestCreate(issueId, { connection: conn.id, rule, via: 'rule' })
+  return 'queued a new GitLab issue'
+}
+
+// ── Evaluate ──────────────────────────────────────────────────────────────────
+
+export type EvalResult = { rule: number; outcome: string }
+
+/**
+ * Run the enabled rules against one issue and act. Returns each rule's outcome (`no_match` is
+ * returned but never stored). Off, a missing issue, or an issue GitLab sync raised itself
+ * (`source = 'tracker'`) → [].
+ */
+export async function evaluateIssue(issueId: number, now = new Date()): Promise<EvalResult[]> {
+  if (!(await trackersEnabled())) return []
+  const rules = await enabledRules()
+  if (!rules.length) return []
+  const ctx = await loadContext(issueId, {
+    groupLead: rules.some((r) => (r.match.group_lead_ids?.length ?? 0) > 0)
+  })
+  if (!ctx || ctx.facts.source === 'tracker') return []
+
+  const counts = new CountCache(hitKey({ id: issueId, fingerprint: ctx.facts.fingerprint }), now)
+  const latest = await latestDecisions(issueId)
+  const out: EvalResult[] = []
+
+  for (const rule of rules) {
+    const res = await assess(rule, ctx, counts, now)
+    if (res.act === 'skip') {
+      out.push({ rule: rule.id, outcome: res.outcome })
+      if (res.outcome === 'no_match') continue
+      let detail = res.detail
+      if (res.outcome === 'quiet' && rule.guards.quiet)
+        detail = (nextQuietEnd(rule.guards.quiet, now) ?? now).toISOString()
+      await record(rule.id, issueId, res.outcome, detail, latest, now)
+      continue
+    }
+
+    if (res.act === 'suggest') {
+      if (Number(ctx.row.tracker_suggested_rule) !== rule.id) {
+        await db('nivaro_issues').where({ id: issueId }).update({ tracker_suggested_rule: rule.id })
+        ctx.row.tracker_suggested_rule = rule.id
+        await record(rule.id, issueId, 'suggested', 'Suggested for GitLab', latest, now)
+      }
+      out.push({ rule: rule.id, outcome: 'suggested' })
+      if (!rule.continue_after) break
+      continue
+    }
+
+    // fire
+    try {
+      const conn = await getConnection(rule.action.connection)
+      if (!conn) throw new Error('The GitLab connection of this rule no longer exists')
+      if (!conn.is_active) throw new Error('The GitLab connection of this rule is turned off')
+      const detail = await fire(rule, issueId, conn)
+      ctx.linkedOn.add(rule.action.connection)
+      await record(rule.id, issueId, 'fired', detail, latest, now)
+      out.push({ rule: rule.id, outcome: 'fired' })
+    } catch (err) {
+      await record(rule.id, issueId, 'error', `Could not act: ${errText(err)}`, latest, now)
+      out.push({ rule: rule.id, outcome: 'error' })
+      continue
+    }
+    if (!rule.continue_after) break
+  }
+  return out
+}
+
+const inFlight = new Set<number>()
+const again = new Set<number>()
+let loggedFailure = false
+
+/**
+ * evaluateIssue with a per-issue in-flight guard: a burst of writes for one issue runs one
+ * evaluation at a time (a write that arrives meanwhile runs once more afterwards), so a burst
+ * never fires a rule twice. Never throws.
+ */
+export async function evaluateQueued(issueId: number): Promise<void> {
+  if (inFlight.has(issueId)) {
+    again.add(issueId)
+    return
+  }
+  inFlight.add(issueId)
+  try {
+    do {
+      again.delete(issueId)
+      try {
+        await evaluateIssue(issueId)
+      } catch (err) {
+        if (!loggedFailure) {
+          loggedFailure = true
+          // biome-ignore lint/suspicious/noConsole: a broken rule engine must show in the log
+          console.warn(`[trackers] rule evaluation failed: ${errText(err)}`.slice(0, 500))
+        }
+      }
+    } while (again.has(issueId))
+  } finally {
+    inFlight.delete(issueId)
+    again.delete(issueId)
+  }
+}
+
+// ── Sweep ─────────────────────────────────────────────────────────────────────
+
+export const SWEEP_EXT = 'nivaro-core'
+export const SWEEP_KEY = 'tracker_sweep_mark'
+export const SWEEP_CAP = 500
+/** First sweep ever (no mark): look back this far, never over the whole history. */
+const FIRST_SWEEP_LOOKBACK_MS = 10 * 60_000
+const QUIET_LOOKBACK_MS = 2 * DAY_MS
+const TOUCHED_SQL =
+  'CASE WHEN updated_at IS NULL OR (last_seen_at IS NOT NULL AND last_seen_at > updated_at) THEN last_seen_at ELSE updated_at END'
+
+async function readMark(): Promise<Date | null> {
+  const row = (await db('nivaro_extension_settings')
+    .where({ extension_id: SWEEP_EXT, key: SWEEP_KEY })
+    .first('value')) as Row | undefined
+  return toDate(row?.value)
+}
+
+async function writeMark(mark: Date): Promise<void> {
+  const value = mark.toISOString()
+  const existing = (await db('nivaro_extension_settings')
+    .where({ extension_id: SWEEP_EXT, key: SWEEP_KEY })
+    .first('id')) as Row | undefined
+  if (existing)
+    await db('nivaro_extension_settings')
+      .where({ id: existing.id })
+      .update({ value, updated_at: new Date() })
+  else
+    await db('nivaro_extension_settings').insert({
+      extension_id: SWEEP_EXT,
+      key: SWEEP_KEY,
+      value,
+      updated_at: new Date()
+    })
+}
+
+/** Issues whose latest decision for some rule is 'quiet' and whose quiet end is in (mark, now]. */
+async function quietDue(mark: Date, now: Date): Promise<number[]> {
+  const since = new Date(now.getTime() - QUIET_LOOKBACK_MS)
+  const rows = (await db(DECISIONS)
+    .where({ outcome: 'quiet' })
+    .where('at', '>=', since)
+    .select('id', 'rule', 'issue', 'detail')) as Row[]
+  const due = rows.filter((r) => {
+    const end = toDate(r.detail)
+    return end !== null && end > mark && end <= now
+  })
+  if (!due.length) return []
+  const issues = [...new Set(due.map((r) => Number(r.issue)))]
+  const recent = await selectInChunks(
+    issues,
+    500,
+    async (chunk) =>
+      (await whereInList(db(DECISIONS), 'issue', chunk)
+        .where('at', '>=', since)
+        .select('id', 'rule', 'issue')) as Row[]
+  )
+  const newest = new Map<string, number>()
+  for (const r of recent) {
+    const k = `${r.rule}:${r.issue}`
+    newest.set(k, Math.max(newest.get(k) ?? -1, Number(r.id)))
+  }
+  return [
+    ...new Set(
+      due
+        .filter((r) => newest.get(`${r.rule}:${r.issue}`) === Number(r.id))
+        .map((r) => Number(r.issue))
+    )
+  ]
+}
+
+/**
+ * Re-evaluate what changed since the stored mark (`updated_at` or `last_seen_at` later than it,
+ * oldest first, at most 500 per run) plus issues held by quiet hours whose window has ended. A
+ * missed event or a restart never loses an evaluation. The mark moves to this run's start, or —
+ * when the 500 cap was hit — to the last issue evaluated, so the next run continues from there.
+ */
+export async function sweep(now = new Date()): Promise<{ evaluated: number }> {
+  if (!(await trackersEnabled())) return { evaluated: 0 }
+  const mark = (await readMark()) ?? new Date(now.getTime() - FIRST_SWEEP_LOOKBACK_MS)
+  const rows = (await db('nivaro_issues')
+    .where((q) => q.where('updated_at', '>', mark).orWhere('last_seen_at', '>', mark))
+    .orderByRaw(TOUCHED_SQL)
+    .orderBy('id', 'asc')
+    .limit(SWEEP_CAP)
+    .select('id', 'updated_at', 'last_seen_at')) as Row[]
+  const ids = rows.map((r) => Number(r.id))
+  for (const id of await quietDue(mark, now)) if (!ids.includes(id)) ids.push(id)
+
+  for (const id of ids) await evaluateQueued(id)
+
+  let next = now
+  if (rows.length >= SWEEP_CAP) {
+    const last = rows[rows.length - 1]
+    const a = toDate(last.updated_at)
+    const b = toDate(last.last_seen_at)
+    const touched = a && b ? (a > b ? a : b) : (a ?? b)
+    if (touched && touched > mark) next = touched
+  }
+  await writeMark(next)
+  return { evaluated: ids.length }
+}
+
+// ── Explain ───────────────────────────────────────────────────────────────────
+
+export interface Explanation {
+  rule: number
+  name: string
+  outcome: string
+  detail: string
+  at: string
+  /** True for the dry run of the rules as they stand now (nothing stored, nothing sent). */
+  live?: boolean
+}
+
+function describe(outcome: string, detail: string): string {
+  if (outcome === 'quiet') {
+    const end = toDate(detail)
+    return end ? `Held for quiet hours until ${end.toISOString()}` : detail
+  }
+  return detail
+}
+
+/**
+ * Why a rule did or did not act on an issue: a dry run of every enabled rule now (`live`,
+ * `no_match` reasons included, nothing stored or sent) followed by the stored decisions,
+ * newest first.
+ */
+export async function explainIssue(issueId: number, now = new Date()): Promise<Explanation[]> {
+  const out: Explanation[] = []
+  const rules = await enabledRules()
+  const ctx = await loadContext(issueId, {
+    groupLead: rules.some((r) => (r.match.group_lead_ids?.length ?? 0) > 0)
+  })
+  if (!ctx) return []
+  if (ctx.facts.source === 'tracker') {
+    out.push({
+      rule: 0,
+      name: '',
+      outcome: 'ignored',
+      detail: 'Issues raised by GitLab sync itself are never sent to GitLab',
+      at: now.toISOString(),
+      live: true
+    })
+  } else {
+    const counts = new CountCache(hitKey({ id: issueId, fingerprint: ctx.facts.fingerprint }), now)
+    for (const rule of rules) {
+      const res = await assess(rule, ctx, counts, now)
+      let outcome: string
+      let detail: string
+      if (res.act === 'skip') {
+        outcome = res.outcome
+        detail =
+          res.outcome === 'quiet' && rule.guards.quiet
+            ? describe('quiet', (nextQuietEnd(rule.guards.quiet, now) ?? now).toISOString())
+            : res.detail
+      } else if (res.act === 'fire') {
+        outcome = 'would_fire'
+        detail = 'Would act now'
+      } else {
+        outcome = 'would_suggest'
+        detail = 'Would suggest it for GitLab now'
+      }
+      out.push({
+        rule: rule.id,
+        name: rule.name,
+        outcome,
+        detail,
+        at: now.toISOString(),
+        live: true
+      })
+    }
+  }
+
+  const rows = (await db(DECISIONS)
+    .where({ issue: issueId })
+    .orderBy('id', 'desc')
+    .limit(KEEP_DECISIONS)
+    .select('rule', 'outcome', 'detail', 'at')) as Row[]
+  const ruleIds = [...new Set(rows.map((r) => Number(r.rule)))]
+  const names = new Map<number, string>()
+  if (ruleIds.length) {
+    const named = (await whereInList(db(RULES), 'id', ruleIds).select('id', 'name')) as Row[]
+    for (const r of named) names.set(Number(r.id), String(r.name ?? ''))
+  }
+  for (const r of rows) {
+    const rule = Number(r.rule)
+    out.push({
+      rule,
+      name: names.get(rule) ?? '(deleted rule)',
+      outcome: String(r.outcome),
+      detail: describe(String(r.outcome), String(r.detail ?? '')),
+      at: iso(r.at)
+    })
+  }
+  return out
+}
+
+// ── Preview ───────────────────────────────────────────────────────────────────
+
+export const PREVIEW_MAX_ISSUES = 2000
+const PREVIEW_MAX_EVALS = 100_000
+
+export interface PreviewResult {
+  would_open: Array<{ issue: number; at: string; title: string }>
+  held: Array<{ issue: number; reason: string }>
+  /** Issues read from the log (at most 2000). */
+  considered: number
+  /** True when the replay stopped at its evaluation budget. */
+  truncated: boolean
+}
+
+const hourFloor = (t: number) => Math.floor(t / HOUR_MS) * HOUR_MS
+const dayString = (t: number) => new Date(t).toISOString().slice(0, 10)
+
+/**
+ * "Would have opened N GitLab issues in the last 7/30 days". Read-only replay over the issue log
+ * + hit counters, in time order: each issue is judged when it was written (created, each hour it
+ * had hits, last seen) with the hit / people counts as of that moment; the rule's per-hour,
+ * per-day and connection caps are applied to the replayed fires in time order (a capped issue is
+ * tried again at its next write); quiet hours move a fire to the window's end.
+ *
+ * Approximations (the log keeps no history of these): status is today's, except a resolved /
+ * closed issue counts as open before its last update; linked = a member row on the rule's
+ * connection that joined before that moment; route / build / first build are today's; homes
+ * (joining an existing GitLab issue instead of opening one) are not modelled. At most 2000
+ * issues are read; nothing is written.
+ */
+export async function previewRule(
+  rule: Omit<TrackerRule, 'id'>,
+  days: 7 | 30,
+  now = new Date()
+): Promise<PreviewResult> {
+  const r: TrackerRule = { ...rule, id: 0 }
+  const nowMs = now.getTime()
+  const startMs = nowMs - (days === 30 ? 30 : 7) * DAY_MS
+  const start = new Date(startMs)
+
+  const issues = (await db('nivaro_issues')
+    .where((q) => q.where('created_at', '>=', start).orWhere('last_seen_at', '>=', start))
+    .whereNot({ source: 'tracker' })
+    .orderBy('id', 'desc')
+    .limit(PREVIEW_MAX_ISSUES)
+    .select([...ISSUE_COLS, db.raw(HAS_SCREENSHOT)])) as Row[]
+  const result: PreviewResult = {
+    would_open: [],
+    held: [],
+    considered: issues.length,
+    truncated: false
+  }
+  if (!issues.length) return result
+
+  const m = r.match
+  const leads = new Map<number, number>()
+  if (m.group_lead_ids?.length) {
+    try {
+      for (const g of await groupSimilarIssues()) {
+        leads.set(g.lead.id, g.lead.id)
+        for (const v of g.variants) leads.set(v.id, g.lead.id)
+      }
+    } catch {
+      // no groups: nothing matches a group condition
+    }
+  }
+  const roles = new Map<string, string>()
+  if (m.raised_by_roles?.length) {
+    const people = [
+      ...new Set(
+        issues
+          .map((i) => i.raised_by)
+          .filter(Boolean)
+          .map(String)
+      )
+    ]
+    const users = await selectInChunks(
+      people,
+      500,
+      async (chunk) =>
+        (await whereInList(db('nivaro_users'), 'id', chunk).select('id', 'role')) as Row[]
+    )
+    for (const u of users) if (u.role != null) roles.set(String(u.id).toLowerCase(), String(u.role))
+  }
+
+  const baseFacts = (i: Row): IssueFacts => ({
+    id: Number(i.id),
+    title: String(i.title ?? ''),
+    details: i.details == null ? null : String(i.details),
+    severity: String(i.severity ?? ''),
+    status: String(i.status ?? 'open'),
+    source: String(i.source ?? 'manual'),
+    route: null,
+    collection: i.collection == null ? null : String(i.collection),
+    item: i.item == null ? null : String(i.item),
+    environment: appEnvironment(),
+    build: null,
+    current_build: NIVARO_VERSION,
+    first_build: null,
+    fingerprint: i.fingerprint ? String(i.fingerprint) : null,
+    group_lead_id: leads.get(Number(i.id)) ?? null,
+    raised_by: i.raised_by == null ? null : String(i.raised_by),
+    raised_by_role: i.raised_by ? (roles.get(String(i.raised_by).toLowerCase()) ?? null) : null,
+    assigned_to: i.assigned_to == null ? null : String(i.assigned_to),
+    has_screenshot: Number(i.has_screenshot) === 1,
+    has_replay: !!i.recording_id,
+    created_at: toDate(i.created_at) ?? start,
+    linked: false,
+    recurrences: 0,
+    total_hits: Number(i.occurrence_count ?? 1) || 1
+  })
+
+  // Phase 1: drop issues that cannot match whatever the moment (conditions that do not change
+  // over time), before reading occurrences and hit counters for the rest.
+  const loose: TrackerRule = {
+    ...r,
+    match: {
+      ...m,
+      routes: undefined,
+      release: undefined,
+      statuses: undefined,
+      min_age_minutes: undefined,
+      max_age_minutes: undefined
+    },
+    threshold: {},
+    guards: { ...r.guards, quiet: undefined, skip_statuses: [] }
+  }
+  const facts = new Map<number, IssueFacts>()
+  const rowOf = new Map<number, Row>()
+  for (const i of issues) {
+    const f = baseFacts(i)
+    const out = evaluateRule(loose, f, ZERO_COUNTS, ZERO_GUARDS, now)
+    if (out.act === 'skip' && out.outcome === 'no_match') continue
+    facts.set(f.id, f)
+    rowOf.set(f.id, i)
+  }
+  if (!facts.size) return result
+  const ids = [...facts.keys()]
+
+  if (m.routes?.length || m.release) {
+    const occ = await selectInChunks(
+      ids,
+      500,
+      async (chunk) =>
+        (await whereInList(db('nivaro_issue_occurrences'), 'issue', chunk).select(
+          'issue',
+          'route',
+          'build',
+          'occurred_at'
+        )) as Row[]
+    )
+    const newest = new Map<number, Row>()
+    const oldestBuild = new Map<number, Row>()
+    for (const o of occ) {
+      const id = Number(o.issue)
+      const t = toDate(o.occurred_at)?.getTime() ?? 0
+      const n = newest.get(id)
+      if (!n || t > (toDate(n.occurred_at)?.getTime() ?? 0)) newest.set(id, o)
+      if (o.build) {
+        const b = oldestBuild.get(id)
+        if (!b || t < (toDate(b.occurred_at)?.getTime() ?? 0)) oldestBuild.set(id, o)
+      }
+    }
+    for (const [id, f] of facts) {
+      const n = newest.get(id)
+      f.route = n?.route ? String(n.route) : null
+      f.build = n?.build ? String(n.build) : null
+      const b = oldestBuild.get(id)
+      f.first_build = b?.build ? String(b.build) : null
+    }
+  }
+
+  if (r.threshold.recurrences !== undefined) {
+    const fps = [...new Set([...facts.values()].map((f) => f.fingerprint).filter(Boolean))]
+    const closed = await selectInChunks(
+      fps as string[],
+      500,
+      async (chunk) =>
+        (await whereInList(db('nivaro_issues'), 'fingerprint', chunk)
+          .whereIn('status', SKIP_STATUSES)
+          .select('id', 'fingerprint')) as Row[]
+    )
+    for (const f of facts.values()) {
+      if (!f.fingerprint) continue
+      f.recurrences = closed.filter(
+        (c) => String(c.fingerprint) === f.fingerprint && Number(c.id) < f.id
+      ).length
+    }
+  }
+
+  // Joined-at of each issue's member row on the rule's connection.
+  const joined = new Map<number, number>()
+  const members = await selectInChunks(
+    ids.map(String),
+    500,
+    async (chunk) =>
+      (await whereInList(db(MEMBERS), 'source_id', chunk)
+        .where({ connection: r.action.connection, source_kind: SOURCE_ISSUE })
+        .select('source_id', 'joined_at')) as Row[]
+  )
+  for (const mm of members)
+    joined.set(Number(mm.source_id), toDate(mm.joined_at)?.getTime() ?? Number.NEGATIVE_INFINITY)
+
+  // Hit buckets (also the moments each issue was written) and distinct people per day.
+  const windowMs =
+    Math.max(r.threshold.hits?.window_minutes ?? 0, r.threshold.people?.window_minutes ?? 0) *
+    60_000
+  const keyOf = new Map<number, string>()
+  for (const f of facts.values()) keyOf.set(f.id, hitKey({ id: f.id, fingerprint: f.fingerprint }))
+  const keys = [...new Set(keyOf.values())]
+  const hitsByKey = new Map<string, Array<{ hour: number; hits: number }>>()
+  const hitRows = await selectInChunks(
+    keys,
+    500,
+    async (chunk) =>
+      (await whereInList(db('nivaro_issue_hits'), 'key', chunk)
+        .where('hour', '>=', new Date(hourFloor(startMs - windowMs)))
+        .select('key', 'hour', 'hits')) as Row[]
+  )
+  for (const h of hitRows) {
+    const list = hitsByKey.get(String(h.key)) ?? []
+    list.push({ hour: toDate(h.hour)?.getTime() ?? 0, hits: Number(h.hits) || 0 })
+    hitsByKey.set(String(h.key), list)
+  }
+  const peopleByKey = new Map<string, Array<{ day: string; user: string }>>()
+  if (r.threshold.people) {
+    const pRows = await selectInChunks(
+      keys,
+      500,
+      async (chunk) =>
+        (await whereInList(db('nivaro_issue_hit_people'), 'key', chunk)
+          .where('day', '>=', dayString(startMs - windowMs))
+          .select('key', 'day', 'user_id')) as Row[]
+    )
+    for (const p of pRows) {
+      const list = peopleByKey.get(String(p.key)) ?? []
+      const day =
+        p.day instanceof Date ? p.day.toISOString().slice(0, 10) : String(p.day).slice(0, 10)
+      list.push({ day, user: String(p.user_id).toLowerCase() })
+      peopleByKey.set(String(p.key), list)
+    }
+  }
+
+  const countsAt = (key: string, t: number): Counts => ({
+    hits: (w) => {
+      const from = hourFloor(t - w * 60_000)
+      let n = 0
+      for (const b of hitsByKey.get(key) ?? []) if (b.hour >= from && b.hour <= t) n += b.hits
+      return n
+    },
+    people: (w) => {
+      const from = dayString(t - w * 60_000)
+      const to = dayString(t)
+      const seen = new Set<string>()
+      for (const p of peopleByKey.get(key) ?? []) if (p.day >= from && p.day <= to) seen.add(p.user)
+      return seen.size
+    }
+  })
+
+  // The moments each issue was written inside the window, in time order.
+  const events: Array<{ t: number; issue: number }> = []
+  for (const f of facts.values()) {
+    const row = rowOf.get(f.id) as Row
+    const created = f.created_at.getTime()
+    const times = new Set<number>()
+    if (created >= startMs && created <= nowMs) times.add(created)
+    for (const b of hitsByKey.get(keyOf.get(f.id) as string) ?? []) {
+      const t = Math.min(b.hour + HOUR_MS - 1, nowMs)
+      if (t >= startMs && t >= created) times.add(t)
+    }
+    const seen = toDate(row.last_seen_at)?.getTime()
+    if (seen !== undefined && seen >= startMs && seen <= nowMs) times.add(seen)
+    for (const t of times) events.push({ t, issue: f.id })
+  }
+  const byTime = (a: { t: number; issue: number }, b: { t: number; issue: number }) =>
+    a.t - b.t || a.issue - b.issue
+  events.sort(byTime)
+  const insert = (ev: { t: number; issue: number }) => {
+    let lo = 0
+    let hi = events.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (byTime(events[mid], ev) <= 0) lo = mid + 1
+      else hi = mid
+    }
+    events.splice(lo, 0, ev)
+  }
+
+  const fired = new Set<number>()
+  const firedAt: number[] = []
+  const heldReason = new Map<number, string>()
+  const quietScheduled = new Set<string>()
+  let evals = 0
+  for (let i = 0; i < events.length; i++) {
+    const { t, issue } = events[i]
+    if (fired.has(issue)) continue
+    if (++evals > PREVIEW_MAX_EVALS) {
+      result.truncated = true
+      break
+    }
+    const f = facts.get(issue) as IssueFacts
+    const row = rowOf.get(issue) as Row
+    const updated = toDate(row.updated_at)?.getTime() ?? 0
+    const status = SKIP_STATUSES.includes(f.status.toLowerCase()) && updated > t ? 'open' : f.status
+    const total = Math.max(
+      1,
+      f.total_hits -
+        (hitsByKey.get(keyOf.get(issue) as string) ?? [])
+          .filter((b) => b.hour > t)
+          .reduce((s, b) => s + b.hits, 0)
+    )
+    const at: IssueFacts = {
+      ...f,
+      status,
+      total_hits: total,
+      linked: (joined.get(issue) ?? Number.POSITIVE_INFINITY) <= t
+    }
+    const hour = firedAt.filter((x) => x > t - HOUR_MS).length
+    const guards: GuardState = {
+      firedLastHour: hour,
+      firedLastDay: firedAt.filter((x) => x > t - DAY_MS).length,
+      connectionLastHour: hour,
+      connectionCap: CONNECTION_CAP_PER_HOUR
+    }
+    const out = evaluateRule(r, at, countsAt(keyOf.get(issue) as string, t), guards, new Date(t))
+    if (out.act !== 'skip') {
+      fired.add(issue)
+      firedAt.push(t)
+      heldReason.delete(issue)
+      result.would_open.push({ issue, at: new Date(t).toISOString(), title: f.title })
+      continue
+    }
+    if (out.outcome === 'quiet' && r.guards.quiet) {
+      const end = nextQuietEnd(r.guards.quiet, new Date(t))?.getTime()
+      if (end !== undefined && end <= nowMs) {
+        const k = `${issue}:${end}`
+        if (!quietScheduled.has(k)) {
+          quietScheduled.add(k)
+          insert({ t: end, issue })
+        }
+        heldReason.set(issue, out.detail)
+      } else heldReason.set(issue, `${out.detail} (still quiet now)`)
+    } else if (out.outcome === 'cap' || out.outcome === 'linked' || out.outcome === 'status')
+      heldReason.set(issue, out.detail)
+  }
+  for (const [issue, reason] of heldReason)
+    if (!fired.has(issue)) result.held.push({ issue, reason })
+  return result
+}
+
+// ── Rule CRUD (routes/trackers.ts) ────────────────────────────────────────────
+
+export async function listRules(): Promise<RuleView[]> {
+  const rows = (await db(RULES).orderBy('sort', 'asc').orderBy('id', 'asc')) as Row[]
+  return rows.map(ruleView)
+}
+
+export async function getRule(id: number): Promise<RuleView | null> {
+  const row = (await db(RULES).where({ id }).first()) as Row | undefined
+  return row ? ruleView(row) : null
+}
+
+const ruleColumns = (rule: Omit<TrackerRule, 'id'>): Row => ({
+  name: rule.name,
+  enabled: rule.enabled,
+  mode: rule.mode,
+  sort: rule.sort,
+  continue_after: rule.continue_after,
+  connection: rule.action.connection,
+  match: JSON.stringify(rule.match),
+  threshold: JSON.stringify(rule.threshold),
+  guards: JSON.stringify(rule.guards),
+  action: JSON.stringify(rule.action)
+})
+
+const description = (v: unknown): string | null | undefined => {
+  if (v === undefined) return undefined
+  if (v === null) return null
+  return typeof v === 'string' ? v.trim().slice(0, 1000) || null : undefined
+}
+
+export class RuleInputError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string,
+    readonly errors?: Array<{ path: string; message: string }>
+  ) {
+    super(message)
+    this.name = 'RuleInputError'
+  }
+}
+
+async function assertConnection(id: number): Promise<void> {
+  if (!(await getConnection(id)))
+    throw new RuleInputError('Choose a GitLab connection that exists', 400, 'INVALID_RULE', [
+      { path: 'action.connection', message: 'This connection does not exist.' }
+    ])
+}
+
+function invalid(res: Extract<ValidateResult, { ok: false }>): RuleInputError {
+  return new RuleInputError('The rule is not valid', 400, 'INVALID_RULE', res.errors)
+}
+
+export async function createRule(body: unknown, userId: string | null): Promise<RuleView> {
+  const res = validateRule(body)
+  if (!res.ok) throw invalid(res)
+  await assertConnection(res.rule.action.connection)
+  const now = new Date()
+  const b = (body && typeof body === 'object' ? body : {}) as Row
+  const inserted = (await db(RULES)
+    .insert({
+      ...ruleColumns(res.rule),
+      description: description(b.description) ?? null,
+      created_by: userId,
+      updated_by: userId,
+      created_at: now,
+      updated_at: now
+    })
+    .returning('id')) as unknown[]
+  const first = inserted[0]
+  const id = Number(typeof first === 'object' && first !== null ? (first as Row).id : first)
+  return (await getRule(id)) as RuleView
+}
+
+const PLAIN_KEYS = new Set(['enabled', 'sort', 'name', 'description'])
+
+/**
+ * Change a rule: the body's top-level keys replace the stored ones and the result is validated
+ * again. A stored rule that no longer validates can still be switched off, renamed or moved.
+ */
+export async function updateRule(
+  id: number,
+  body: unknown,
+  userId: string | null
+): Promise<RuleView> {
+  const row = (await db(RULES).where({ id }).first()) as Row | undefined
+  if (!row) throw new RuleInputError('Rule not found', 404, 'NOT_FOUND')
+  const patch = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as Row
+  const merged = { ...rawRule(row), ...patch }
+  delete (merged as Row).description
+  delete (merged as Row).id
+  const res = validateRule(merged)
+  const now = new Date()
+  const desc = description(patch.description)
+  if (res.ok) {
+    if (res.rule.action.connection !== Number(row.connection))
+      await assertConnection(res.rule.action.connection)
+    await db(RULES)
+      .where({ id })
+      .update({
+        ...ruleColumns(res.rule),
+        ...(desc !== undefined ? { description: desc } : {}),
+        updated_by: userId,
+        updated_at: now
+      })
+  } else {
+    const plain = Object.keys(patch).every((k) => PLAIN_KEYS.has(k))
+    if (!plain || patch.enabled === true) throw invalid(res)
+    const upd: Row = { updated_by: userId, updated_at: now }
+    if (typeof patch.enabled === 'boolean') upd.enabled = patch.enabled
+    if (typeof patch.sort === 'number' && Number.isFinite(patch.sort))
+      upd.sort = Math.trunc(patch.sort)
+    if (typeof patch.name === 'string' && patch.name.trim())
+      upd.name = patch.name.trim().slice(0, 200)
+    if (desc !== undefined) upd.description = desc
+    await db(RULES).where({ id }).update(upd)
+  }
+  return (await getRule(id)) as RuleView
+}
+
+/** Delete a rule, its decision log and the "suggested by" marks it left on issues. */
+export async function deleteRule(id: number): Promise<boolean> {
+  const row = (await db(RULES).where({ id }).first('id')) as Row | undefined
+  if (!row) return false
+  await db(DECISIONS).where({ rule: id }).delete()
+  await db('nivaro_issues')
+    .where({ tracker_suggested_rule: id })
+    .update({ tracker_suggested_rule: null })
+  await db(RULES).where({ id }).delete()
+  return true
+}
+
+/** Put the named rules in this order (sort 10, 20, …). */
+export async function reorderRules(ids: number[], userId: string | null): Promise<void> {
+  const now = new Date()
+  for (let i = 0; i < ids.length; i++)
+    await db(RULES)
+      .where({ id: ids[i] })
+      .update({ sort: (i + 1) * 10, updated_by: userId, updated_at: now })
+}
+
+/** Trim every rule's log to 200 and drop the log of rules that no longer exist. */
+export async function trimAllDecisions(): Promise<void> {
+  const rows = (await db(DECISIONS).distinct('rule')) as Row[]
+  const ruleIds = [...new Set(rows.map((r) => Number(r.rule)))].filter(Number.isFinite)
+  if (!ruleIds.length) return
+  const existing = new Set(
+    ((await whereInList(db(RULES), 'id', ruleIds).select('id')) as Row[]).map((r) => Number(r.id))
+  )
+  for (const id of ruleIds) {
+    if (!existing.has(id)) await db(DECISIONS).where({ rule: id }).delete()
+    else await trimDecisions(id)
+  }
+}

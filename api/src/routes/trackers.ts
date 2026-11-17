@@ -13,6 +13,16 @@ import {
   saveConnection
 } from '../services/trackers/connections.js'
 import {
+  createRule,
+  deleteRule,
+  explainIssue,
+  listRules,
+  previewRule,
+  RuleInputError,
+  reorderRules,
+  updateRule
+} from '../services/trackers/engine.js'
+import {
   FeatureLockedError,
   requireFeatureOn,
   setTrackersEnabled,
@@ -31,7 +41,9 @@ import {
   unlink
 } from '../services/trackers/links.js'
 import { discardOutbox, listOutbox, retryOutbox } from '../services/trackers/outbox.js'
+import { validateRule } from '../services/trackers/rules.js'
 import { findSimilar, joinAsExample } from '../services/trackers/similar.js'
+import { TEMPLATE_VARS } from '../services/trackers/templates.js'
 import { type CreateIssueInput, TrackerError } from '../services/trackers/types.js'
 
 const webhookUrl = (id: number) => `${adminBaseUrl() ?? ''}/api/tracker-hooks/gitlab/${id}`
@@ -455,4 +467,79 @@ export async function trackerRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: 'This change is being sent right now', code: 'SENDING' })
     return reply.code(204).send()
   })
+  // ── Rules ───────────────────────────────────────────────────────────────────
+  const ruleFailure = (reply: Reply, err: unknown) => {
+    if (err instanceof RuleInputError)
+      return reply
+        .code(err.status)
+        .send({ error: err.message, code: err.code, ...(err.errors ? { errors: err.errors } : {}) })
+    throw err
+  }
+
+  app.get('/rules', async () => ({ data: await listRules() }))
+
+  app.post('/rules', async (req, reply) => {
+    try {
+      return reply.code(201).send({ data: await createRule(req.body, req.user?.id ?? null) })
+    } catch (err) {
+      return ruleFailure(reply, err)
+    }
+  })
+
+  app.patch('/rules/:id', async (req, reply) => {
+    const id = posInt((req.params as { id: string }).id)
+    if (!id) return reply.code(400).send({ error: 'Bad rule id', code: 'INVALID_PARAMS' })
+    try {
+      return { data: await updateRule(id, req.body, req.user?.id ?? null) }
+    } catch (err) {
+      return ruleFailure(reply, err)
+    }
+  })
+
+  app.delete('/rules/:id', async (req, reply) => {
+    const id = posInt((req.params as { id: string }).id)
+    if (!id) return reply.code(400).send({ error: 'Bad rule id', code: 'INVALID_PARAMS' })
+    if (!(await deleteRule(id)))
+      return reply.code(404).send({ error: 'Rule not found', code: 'NOT_FOUND' })
+    return reply.code(204).send()
+  })
+
+  app.post('/rules/reorder', async (req, reply) => {
+    const ids = (req.body as { ids?: unknown } | null)?.ids
+    if (
+      !Array.isArray(ids) ||
+      ids.length > 1000 ||
+      !ids.every((n) => Number.isInteger(n) && (n as number) > 0) ||
+      new Set(ids).size !== ids.length
+    )
+      return reply
+        .code(400)
+        .send({ error: 'ids must be a list of distinct rule ids', code: 'INVALID_BODY' })
+    await reorderRules(ids as number[], req.user?.id ?? null)
+    return { data: await listRules() }
+  })
+
+  // Read-only: what a draft rule would have opened in the last 7 or 30 days.
+  app.post('/rules/preview', async (req, reply) => {
+    const b = (req.body ?? {}) as { rule?: unknown; days?: unknown }
+    const days = b.days === undefined || b.days === null ? 7 : b.days
+    if (days !== 7 && days !== 30)
+      return reply.code(400).send({ error: 'days must be 7 or 30', code: 'INVALID_BODY' })
+    const res = validateRule(b.rule)
+    if (!res.ok)
+      return reply
+        .code(400)
+        .send({ error: 'The rule is not valid', code: 'INVALID_RULE', errors: res.errors })
+    return { data: await previewRule(res.rule, days) }
+  })
+
+  app.get('/rules/explain', async (req, reply) => {
+    const issue = posInt((req.query as { issue?: string }).issue)
+    if (!issue) return reply.code(400).send({ error: 'issue is required', code: 'INVALID_QUERY' })
+    if (!(await db('nivaro_issues').where({ id: issue }).first('id')))
+      return reply.code(404).send({ error: 'Issue not found', code: 'NOT_FOUND' })
+    return { data: await explainIssue(issue) }
+  })
+
+  app.get('/rules/template-vars', async () => ({ data: TEMPLATE_VARS }))
 }
