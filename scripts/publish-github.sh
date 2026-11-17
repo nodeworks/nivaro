@@ -27,6 +27,8 @@ STRIP_PATHS=(
   CLAUDE.md
   docs/claude
   docs/superpowers
+  # Internal security planning (SOC 2 readiness gaps) — never public.
+  docs/security
   tests/e2e/reports
   test-results
   scripts/demo-seeds/seed-wh-demo.mts
