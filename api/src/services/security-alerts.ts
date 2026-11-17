@@ -491,11 +491,34 @@ export async function flushSecurityGroup(group: string): Promise<SecurityNotice 
   let recipients = admins.filter((a) => !exclude.has(a.toUpperCase()))
   // The only administrator still hears about their own change: someone with their sign-in would.
   if (recipients.length === 0) recipients = admins
-  const withinCap = await d
-    .counters()
-    .hit('hourly', 3600)
-    .then((n) => n <= HOURLY_CAP)
-    .catch(() => true)
+  // Only access-denied bursts (a runaway script) count against the hourly cap. Changes to
+  // roles, permissions, API keys and admin sign-ins are always delivered: dropping them is
+  // exactly what someone hiding a change would want (security review 2026-11-16).
+  const cappable = evs.every((e) => e.kind === 'access_denied')
+  let withinCap = true
+  let justCapped = false
+  if (cappable) {
+    const n = await d
+      .counters()
+      .hit('hourly', 3600)
+      .catch(() => 0)
+    withinCap = n <= HOURLY_CAP
+    justCapped = n === HOURLY_CAP + 1
+  }
+  if (justCapped) {
+    // Say once that more refusal alerts are being held back, instead of going quiet.
+    const held: SecurityNotice = {
+      kind: 'access_denied',
+      subject: 'More access-denied alerts this hour',
+      message: `More than ${HOURLY_CAP} access-denied alerts were raised in the last hour. Further ones are recorded under Security alerts but not sent until the hour is up.`,
+      path: '/security-center',
+      collection: null,
+      item: null,
+      exclude: []
+    }
+    const heldUrl = `${d.linkBase().replace(/\/$/, '')}${held.path}`
+    for (const admin of admins) await d.notify(admin, held, heldUrl).catch(() => {})
+  }
   let delivered = 0
   if (withinCap) {
     const url = `${d.linkBase().replace(/\/$/, '')}${notice.path}`

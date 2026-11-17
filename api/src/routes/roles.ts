@@ -499,7 +499,7 @@ export async function rolesRoutes(app: FastifyInstance) {
           .code(400)
           .send({ error: `template must be one of: ${Object.keys(ACTIONS).join(', ')}` })
       }
-      const role = await db('nivaro_roles').where({ id }).first('id')
+      const role = await db('nivaro_roles').where({ id }).first('id', 'name')
       if (!role) return reply.code(404).send({ error: 'Role not found' })
 
       const collections = (await db('nivaro_collections')
@@ -526,6 +526,13 @@ export async function rolesRoutes(app: FastifyInstance) {
       for (let i = 0; i < rows.length; i += 100) {
         await db('nivaro_policies').insert(rows.slice(i, i + 100))
       }
+      if (rows.length > 0)
+        noteRolePermissionChange({
+          actor: req.user?.id ?? null,
+          roleId: id,
+          roleName: role.name,
+          change: `Applied the ${String(template).replace(/_/g, ' ')} template: ${rows.length} permissions added.`
+        })
       await logActivity({
         action: 'role-apply-template',
         user: req.user?.id,

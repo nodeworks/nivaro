@@ -380,6 +380,17 @@ describe('raiseSecurityEvent → one notice per burst', () => {
     expect(h.scheduled).toHaveLength(0)
   })
 
+  // Security review 2026-11-16: a capped hour must never swallow a role/admin change.
+  it('delivers role changes even past the hourly cap', async () => {
+    const h = harness({
+      counters: () =>
+        ({ hit: async () => 9999 }) as unknown as ReturnType<SecurityAlertDeps['counters']>
+    })
+    await raiseSecurityEvent(roleEv(ANN))
+    await flushSecurityGroup(coalesceGroup(roleEv(ANN)))
+    expect(h.sent.map((s) => s.to)).toEqual([BOB])
+  })
+
   it('still tells the only administrator about their own change', async () => {
     const h = harness({ admins: async () => [ACTOR] })
     await raiseSecurityEvent(roleEv(ANN))

@@ -64,6 +64,7 @@ import {
 } from '../services/ai-design/visual-critique.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { loadLayoutBundle } from '../services/layout-ops.js'
+import { noteRolePermissionChange } from '../services/security-alerts.js'
 import { meaningPass, registerLayoutAssistRoutes } from './ai-design-assist.js'
 import { aiDesignFormRoutes } from './ai-design-forms.js'
 import { registerLayoutChatRoutes } from './ai-design-layouts.js'
@@ -506,6 +507,12 @@ export async function aiDesignRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'The proposal grants nothing' })
       try {
         const result = await applyRoleProposal(proposal, req.workspaceId ?? null)
+        noteRolePermissionChange({
+          actor: req.user?.id ?? null,
+          roleId: result.id,
+          roleName: proposal.name,
+          change: `Created the role with AI design: ${result.policies} permissions.`
+        })
         await logActivity({
           action: 'create',
           user: req.user?.id,

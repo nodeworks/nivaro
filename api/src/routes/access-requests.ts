@@ -12,6 +12,7 @@ import { logActivity } from '../services/activity.js'
 import { type DigestSection, registerDigestSection } from '../services/daily-digest.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { ACCESS_REQUEST_NOTIFY_CATEGORY } from '../services/portal-access-request.js'
+import { noteRolePermissionChange } from '../services/security-alerts.js'
 import { bustUserScopeCache, listScopeDimensions } from '../services/user-scopes.js'
 import { resolveFriendlyId } from '../services/workflow-transitions.js'
 
@@ -333,6 +334,12 @@ export async function accessRequestRoutes(app: FastifyInstance) {
                 role: requester.role,
                 collection,
                 action: 'read'
+              })
+              // Everyone in the role gains this read, not only the requester.
+              noteRolePermissionChange({
+                actor: req.user?.id ?? null,
+                roleId: String(requester.role),
+                change: `Gave the role read access to ${collection} while approving an access request.`
               })
               policyAdded = true
               done.push(action.label)
