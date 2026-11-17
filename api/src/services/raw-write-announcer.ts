@@ -156,6 +156,8 @@ const stats = {
   broadcasts: 0,
   drained: 0,
   persisted: 0,
+  /** Drains that left the inbox to the next tick because another session held its lock. */
+  lockSkips: 0,
   lastDrainAt: null as string | null
 }
 
@@ -306,15 +308,44 @@ export async function announceRawWrites(
   }
 }
 
+/** How long one drain waits for a lock on the inbox before leaving it to the next tick. */
+export const DRAIN_LOCK_TIMEOUT_MS = 3000
+
+/** The drain statement: one batch, a bounded lock wait, the session's lock timeout restored
+ *  whether the delete ran or gave up (a pooled connection must not keep it). */
+export function drainBatchSql(batch = DRAIN_BATCH, lockTimeoutMs = DRAIN_LOCK_TIMEOUT_MS): string {
+  return `SET LOCK_TIMEOUT ${Math.max(1, Math.floor(lockTimeoutMs))};
+BEGIN TRY
+  DELETE TOP (${batch}) FROM ${TABLE} WITH (READPAST)
+  OUTPUT DELETED.collection, DELETED.item, DELETED.action, DELETED.changed_fields, DELETED.source;
+END TRY
+BEGIN CATCH
+  SET LOCK_TIMEOUT -1;
+  THROW;
+END CATCH
+SET LOCK_TIMEOUT -1;`
+}
+
+/** SQL Server's "Lock request time out period exceeded". */
+export function isLockTimeout(err: unknown): boolean {
+  const e = err as { number?: number; originalError?: { info?: { number?: number } } } | null
+  const n = e?.number ?? e?.originalError?.info?.number
+  return (
+    n === 1222 || /lock request time ?out period exceeded/i.test(String((err as Error)?.message))
+  )
+}
+
 /** Read and delete one batch from the inbox. Rows are claimed by the delete itself. */
 async function claimBatch(): Promise<Record<string, unknown>[]> {
   if (isMssql(db)) {
     // READPAST: rows a procedure announced inside a transaction that is still open are left for
     // a later drain (they may yet roll back) instead of holding the drain until it commits.
-    const res = (await db.raw(
-      `DELETE TOP (${DRAIN_BATCH}) FROM ${TABLE} WITH (READPAST)
-       OUTPUT DELETED.collection, DELETED.item, DELETED.action, DELETED.changed_fields, DELETED.source`
-    )) as unknown
+    // READPAST does not pass a TABLE lock, though: production's daily replication snapshot
+    // (EFP, ~09:30 UTC: `select * from syncobj_0x…` for 16-30 s) held the inbox, and the
+    // drain sat in a lock wait until the 15 s statement timeout and failed — three days
+    // running, on an empty table. Past DRAIN_LOCK_TIMEOUT_MS the drain gives up and the next
+    // tick (5 s later) takes the rows; nothing is lost, the rows stay in the inbox.
+    const res = (await db.raw(drainBatchSql())) as unknown
     return Array.isArray(res) ? (res as Record<string, unknown>[]) : []
   }
   const rows = (await db(TABLE)
@@ -356,7 +387,15 @@ export async function drainRawWrites(): Promise<{ rows: number; broadcasts: numb
   let rows = 0
   let broadcasts = 0
   for (let i = 0; i < 10; i++) {
-    const batch = await claimBatch()
+    let batch: Record<string, unknown>[]
+    try {
+      batch = await claimBatch()
+    } catch (err) {
+      // The inbox is locked by someone else: what is there waits for the next tick.
+      if (!isLockTimeout(err)) throw err
+      stats.lockSkips++
+      break
+    }
     if (!batch.length) break
     rows += batch.length
     broadcasts += broadcastPlanned(rowsToAnnouncements(batch), true)

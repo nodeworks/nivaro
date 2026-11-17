@@ -8,6 +8,9 @@
  *             streams (/api/events/stream, /api/events/views/:id/stream, /api/graphql/stream).
  *             No REST routes beyond health and stream tickets, no crons, no media work, no
  *             migrations (realtime-server.ts)
+ *   importer  runs staged imports only (services/import-handoff.ts): drains the import hand-off
+ *             list, ticks no crons (cron-ticks.ts), runs no migrations, answers only
+ *             /api/version, /api/ready, /api/health and /api/metrics
  *   canary    a deploy canary that serves nobody (render-peer.ts canaryLenient)
  *
  * A web process with SOCKETS=off serves no /socket.io; what it emits reaches the clients on the

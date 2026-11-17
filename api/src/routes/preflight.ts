@@ -304,6 +304,20 @@ async function checkMediaWorker(app: FastifyInstance): Promise<Check> {
   return { id: 'media-worker', status: v.status, summary: v.summary, detail: { variant, local } }
 }
 
+/** Queued imports need an importer, the fallback worker, or this process to run them. */
+async function checkImportWorker(app: FastifyInstance): Promise<Check> {
+  const { importWorkerJudgement } = await import('../services/staged-import-worker.js')
+  const { importDrainMode } = await import('../services/import-handoff.js')
+  const v = await importWorkerJudgement((app as unknown as { redis?: unknown }).redis)
+  const c = canaryLenient(v)
+  return {
+    id: 'import-worker',
+    status: c.status,
+    summary: c.summary,
+    detail: { mode: importDrainMode() }
+  }
+}
+
 /** Post-mortem 3.3 — SOCKETS=off needs a realtime process (NIVARO_ROLE=realtime) alive. */
 async function checkRealtime(app: FastifyInstance): Promise<Check> {
   const served = socketsServed()
@@ -389,12 +403,13 @@ export async function preflightRoutes(app: FastifyInstance) {
     return { data: await deployQuietState() }
   })
   app.get('/preflight', { preHandler: requireAdmin }, async (_req, reply) => {
-    const [migrations, connectivity, render, media, realtime] = await Promise.all([
+    const [migrations, connectivity, render, media, realtime, imports] = await Promise.all([
       checkMigrations(),
       checkConnectivity(app),
       checkRender(),
       checkMediaWorker(app),
-      checkRealtime(app)
+      checkRealtime(app),
+      checkImportWorker(app)
     ])
 
     const checks: Check[] = [
@@ -405,7 +420,8 @@ export async function preflightRoutes(app: FastifyInstance) {
       checkRunAsRoot(),
       render,
       media,
-      realtime
+      realtime,
+      imports
     ]
     const status = worst(checks)
 

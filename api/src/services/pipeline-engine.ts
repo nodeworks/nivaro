@@ -1,5 +1,6 @@
 import { gunzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
 import { getPhysicalColumns } from './collections.js'
 import { selectInChunks, whereInList } from './db-batch.js'
 import {
@@ -322,10 +323,14 @@ export interface PreparedOwnerGroups {
 // ── State→owner-groups cache ────────────────────────────────────────────────
 // The workflows template carries ~3,900 owner groups; fetching and re-parsing
 // them was ~700ms of EVERY owner resolution at this server's RTT, for data
-// that changes only when an admin edits the matrix. 60s TTL; the owner-group
-// CRUD routes and template restore bust it explicitly, so edits are visible
-// immediately rather than a minute later.
-const OWNER_GROUP_CACHE_TTL = 60_000
+// that changes only when an admin edits the matrix. The owner-group CRUD
+// routes and template restore bust it explicitly, and every other process
+// clears it within seconds when the configuration epoch moves (the owner
+// group tables are watched: db/config-epoch.ts), so the TTL is only a
+// backstop for writes made outside the app. At 60 s, seven production
+// processes re-read the matrix ~1,500 times in four hours (EFP 2026-11-16:
+// 1.0-1.3 s and ~10k reads each, up to 5.3 s, beside /api/my-work's bursts).
+export const OWNER_GROUP_CACHE_TTL = 10 * 60_000
 const ownerGroupCache = new Map<
   string,
   { groups: OwnerGroup[]; prepared: PreparedOwnerGroups; at: number }
@@ -399,10 +404,15 @@ async function fetchOwnerGroupRows(states: string[], database: typeof db): Promi
 
 let refreshing: Promise<void> | null = null
 const refreshQueue = new Set<string>()
+/**
+ * Refresh expired states behind the request that found them. Background work: it runs on the
+ * background pool, never holding one of the connections requests wait on (the refresh started
+ * inside a request's async context and inherited its pool).
+ */
 function refreshOwnerGroupsBehind(stateIds: string[]): void {
   for (const id of stateIds) refreshQueue.add(id)
   if (refreshing) return
-  refreshing = (async () => {
+  refreshing = runInBackgroundPool(async () => {
     try {
       while (refreshQueue.size > 0) {
         const batch = [...refreshQueue]
@@ -420,7 +430,12 @@ function refreshOwnerGroupsBehind(stateIds: string[]): void {
     } finally {
       refreshing = null
     }
-  })()
+  })
+}
+
+/** Test seam: the refresh in flight, if any. */
+export function ownerGroupRefreshInFlight(): Promise<void> | null {
+  return refreshing
 }
 
 /**

@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { unlink, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { Worker } from 'node:worker_threads'
 import * as XLSX from 'xlsx'
 import { db } from '../db/index.js'
 import { getImportProcessor, runImportProcessor } from './import-processors.js'
@@ -169,6 +171,97 @@ export function parseImportFile(buffer: Buffer): Array<Record<string, string>> {
     .map(cleanRow)
 }
 
+/** From this size a file is read off the event loop (parseImportFileAsync). */
+export const OFF_THREAD_PARSE_MIN_BYTES = 256 * 1024
+/** Rows per message from the reader thread, and per cleaning slice on the event loop. */
+const PARSE_SLICE = 5000
+
+// The reader thread: plain CommonJS (an eval worker loads no TypeScript), the same XLSX.read
+// options as parseImportFile, rows handed back in slices so no single message is big.
+const PARSE_WORKER_SOURCE = `
+const { parentPort, workerData } = require('node:worker_threads')
+try {
+  const XLSX = require(workerData.xlsx)
+  const wb = XLSX.read(workerData.buf, { type: 'buffer', raw: false, cellDates: false })
+  const sheet = wb.Sheets[wb.SheetNames[0]]
+  const rows = sheet ? XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false }) : []
+  for (let i = 0; i < rows.length; i += workerData.slice)
+    parentPort.postMessage({ rows: rows.slice(i, i + workerData.slice) })
+  parentPort.postMessage({ done: rows.length })
+} catch (err) {
+  parentPort.postMessage({ error: String((err && err.message) || err) })
+}
+`
+
+let xlsxEntry: string | null | undefined
+function xlsxPath(): string | null {
+  if (xlsxEntry === undefined) {
+    try {
+      xlsxEntry = createRequire(import.meta.url).resolve('xlsx')
+    } catch {
+      xlsxEntry = null
+    }
+  }
+  return xlsxEntry
+}
+
+/** Let timers and sockets run between slices of CPU work on the event loop. */
+export const yieldToLoop = () => new Promise<void>((r) => setImmediate(r))
+
+/**
+ * parseImportFile without freezing the process (EFP prod 2026-11-16: a 30 MB invoices CSV
+ * parsed inline on a web process stalled its event loop for up to 13.4 s). XLSX.read is one
+ * synchronous call, so a file from OFF_THREAD_PARSE_MIN_BYTES is read on a worker thread and
+ * its rows cleaned here in slices with a yield between them. Same rows, same errors. When a
+ * thread cannot start, it reads inline as before.
+ */
+export async function parseImportFileAsync(
+  buffer: Buffer,
+  opts: { minBytes?: number } = {}
+): Promise<Array<Record<string, string>>> {
+  const entry = xlsxPath()
+  if (buffer.length < (opts.minBytes ?? OFF_THREAD_PARSE_MIN_BYTES) || !entry) {
+    return parseImportFile(buffer)
+  }
+  let worker: Worker
+  try {
+    worker = new Worker(PARSE_WORKER_SOURCE, {
+      eval: true,
+      workerData: { buf: buffer, xlsx: entry, slice: PARSE_SLICE }
+    })
+  } catch {
+    return parseImportFile(buffer)
+  }
+  const out: Array<Record<string, string>> = []
+  // Slices arrive in order; each is cleaned after the previous one, with a yield between.
+  let cleaning: Promise<void> = Promise.resolve()
+  try {
+    await new Promise<void>((resolve, reject) => {
+      worker.on(
+        'message',
+        (m: { rows?: Record<string, unknown>[]; done?: number; error?: string }) => {
+          if (m.rows) {
+            const slice = m.rows
+            cleaning = cleaning.then(async () => {
+              for (const r of slice) out.push(cleanRow(r))
+              await yieldToLoop()
+            })
+          } else if (m.error != null) reject(new Error(m.error))
+          else if (m.done != null) resolve()
+        }
+      )
+      worker.once('error', reject)
+      worker.once('exit', (code) => {
+        if (code !== 0) reject(new Error(`The file reader stopped (exit ${code})`))
+      })
+    })
+    await cleaning
+  } finally {
+    void worker.terminate().catch(() => {})
+  }
+  return out
+}
+
 /**
  * TSV in the dialect BULK INSERT expects below: `||` between fields, LF
  * terminated, header skipped via FIRSTROW=2.
@@ -187,16 +280,55 @@ export function parseImportFile(buffer: Buffer): Array<Record<string, string>> {
  * `a|||b`, which BULK INSERT splits after `a` — shifting the text into the next
  * column (security audit 2026-10-27, Low). A single pipe inside a value stays.
  */
+const tsvCell = (v: string) =>
+  String(v ?? '')
+    .replace(/\r\n|\r|\n/g, ' ')
+    .replace(/\|{2,}/g, ' ')
+    .replace(/^\|/, ' ')
+    .replace(/\|$/, ' ')
+
 export function toTsv(rows: Array<Record<string, string>>, columns: string[]): string {
-  const cell = (v: string) =>
-    String(v ?? '')
-      .replace(/\r\n|\r|\n/g, ' ')
-      .replace(/\|{2,}/g, ' ')
-      .replace(/^\|/, ' ')
-      .replace(/\|$/, ' ')
-  const lines = [columns.map(cell).join('||')]
-  for (const r of rows) lines.push(columns.map((c) => cell(r[c] ?? '')).join('||'))
+  const lines = [columns.map(tsvCell).join('||')]
+  for (const r of rows) lines.push(columns.map((c) => tsvCell(r[c] ?? '')).join('||'))
   return `${lines.join('\n')}\n`
+}
+
+/** toTsv for a run: the same text, built in slices with a yield between them (200k rows
+ *  took ~0.9 s of event loop in one piece). */
+export async function toTsvAsync(
+  rows: Array<Record<string, string>>,
+  columns: string[]
+): Promise<string> {
+  const parts = [`${columns.map(tsvCell).join('||')}\n`]
+  for (let i = 0; i < rows.length; i += PARSE_SLICE) {
+    const lines: string[] = []
+    for (const r of rows.slice(i, i + PARSE_SLICE))
+      lines.push(columns.map((c) => tsvCell(r[c] ?? '')).join('||'))
+    parts.push(`${lines.join('\n')}\n`)
+    await yieldToLoop()
+  }
+  return parts.join('')
+}
+
+/** The distinct keys of every row, read in slices (a 200k-row file: ~0.2 s in one piece). */
+export async function rowKeysAsync(rows: Array<Record<string, string>>): Promise<string[]> {
+  const keys = new Set<string>()
+  for (let i = 0; i < rows.length; i += PARSE_SLICE) {
+    for (const r of rows.slice(i, i + PARSE_SLICE)) for (const k of Object.keys(r)) keys.add(k)
+    await yieldToLoop()
+  }
+  return [...keys]
+}
+
+/** rows.map(fn) in slices with a yield between them. */
+export async function mapRowsAsync<T, U>(rows: T[], fn: (row: T) => U): Promise<U[]> {
+  const out: U[] = new Array(rows.length)
+  for (let i = 0; i < rows.length; i += PARSE_SLICE) {
+    const end = Math.min(rows.length, i + PARSE_SLICE)
+    for (let j = i; j < end; j++) out[j] = fn(rows[j])
+    await yieldToLoop()
+  }
+  return out
 }
 
 /** Redact secrets from text about to be persisted or shown. A failed
@@ -527,7 +659,7 @@ async function loadViaShare(
 
   const remoteName = `nivaro_${table}_${randomUUID().slice(0, 8)}.txt`
   const localPath = join(tmpdir(), remoteName)
-  await writeFile(localPath, toTsv(rows, fileColumns), 'utf8')
+  await writeFile(localPath, await toTsvAsync(rows, fileColumns), 'utf8')
   try {
     await pushToShare(localPath, remoteName)
   } finally {
@@ -605,6 +737,8 @@ export interface RunImportOptions {
   /** The nivaro_import_queue row — service-mode writes carry it as their
    *  change reason so a record's Notes thread names the run (#60). */
   runId?: number | null
+  /** The file's rows when the caller already read them (the worker validates first). */
+  rows?: Array<Record<string, string>>
 }
 
 /** What a run reports, whichever importer produced it. */
@@ -668,7 +802,8 @@ export async function runStagedImport({
   buffer,
   createdBy,
   onProgress,
-  runId = null
+  runId = null,
+  rows: preparsed
 }: RunImportOptions): Promise<{
   rowCount: number
   durationSeconds: number
@@ -691,14 +826,14 @@ export async function runStagedImport({
     throw new Error(`Unsafe procedure name: ${definition.procedure}`)
   }
 
-  let rows = parseImportFile(buffer)
+  let rows = preparsed ?? (await parseImportFileAsync(buffer))
   if (rows.length === 0) throw new Error('File contained no rows')
   const parseMs = Date.now() - began
   await onProgress?.('row_count', { row_count: rows.length })
 
   // Derived from ALL rows: keying the schema off row 1 (as the legacy importer
   // did) silently drops columns that only appear later in the file.
-  let columns = [...new Set(rows.flatMap((r) => Object.keys(r)))].filter((c) => c !== 'id')
+  let columns = (await rowKeysAsync(rows)).filter((c) => c !== 'id')
 
   // Declared schema: file headers map onto the declared columns (same
   // punctuation-tolerant matching the validator uses) and ONLY declared
@@ -708,7 +843,7 @@ export async function runStagedImport({
   let declaredNames: string[] | null = null
   if (declared) {
     const { headerFor } = resolveHeaderMap(columns, declared)
-    rows = rows.map((r) => {
+    rows = await mapRowsAsync(rows, (r) => {
       const o: Record<string, string> = {}
       for (const col of declared) {
         const h = headerFor.get(col.name)
