@@ -963,6 +963,13 @@ export function M2MSingleSelectCombobox({
         ? m2aToken(committedCollection, committedRelatedId)
         : String(committedRelatedId)
   const currentKey = stagedRelatedId != null ? String(stagedRelatedId) : committedKey
+  /** A stored link's selection key (lower-cased): its id, or a token for another table. */
+  const singleRowKey = (row: Record<string, unknown>) => {
+    const coll = m2aRowCollection(row, disc, relatedCollection)
+    return m2mIdKey(
+      coll && coll !== relatedCollection ? m2aToken(coll, row[junctionField]) : row[junctionField]
+    )
+  }
   const currentForeign = currentCollection !== relatedCollection
   const { data: ownMeta } = useQuery({
     queryKey: ['col-meta', currentCollection],
@@ -1035,13 +1042,22 @@ export function M2MSingleSelectCombobox({
   }
 
   function handleSelect(optId: unknown) {
-    for (const id of stagedLinks) staging?.unstageLink(stagingKey, id)
-    if (committedItem && !stagedUnlinks.has(committedItem.id))
-      staging?.stageUnlink(stagingKey, committedItem.id)
-    if (String(optId) === committedKey && committedItem) {
-      staging?.unstageUnlink(stagingKey, committedItem.id)
-    } else if (String(optId) !== currentKey) {
-      staging?.stageLink(stagingKey, optId)
+    // The stored link for this pick, even when an earlier pick in this edit
+    // staged it for removal (Zone 2 → Zone 3 → Zone 2): picking it again takes
+    // the removal back. Staging a NEW link to the same record instead sent
+    // `{create: [2], delete: [2]}` and the save took Zone 2 off (prod
+    // 2026-11-17, workflow 372787).
+    const pickedRow = junctionItems.find((r) => singleRowKey(r) === m2mIdKey(optId)) ?? null
+    const alreadyStaged =
+      !pickedRow && stagedLinks.length === 1 && m2mIdKey(stagedLinks[0]) === m2mIdKey(optId)
+    if (!alreadyStaged) {
+      for (const id of stagedLinks) staging?.unstageLink(stagingKey, id)
+      for (const row of junctionItems)
+        if (row !== pickedRow && !stagedUnlinks.has(row.id))
+          staging?.stageUnlink(stagingKey, row.id)
+      if (pickedRow) {
+        if (stagedUnlinks.has(pickedRow.id)) staging?.unstageUnlink(stagingKey, pickedRow.id)
+      } else staging?.stageLink(stagingKey, optId)
     }
     setOpen(false)
     setSearch('')

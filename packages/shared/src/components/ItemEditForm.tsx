@@ -232,6 +232,8 @@ import { type ChangeItem, ChangesTray } from './item-edit/ChangesTray'
 import { CloneDialog } from './item-edit/CloneDialog'
 import {
   CascadeClearNoticeContext,
+  cascadePickMessage,
+  isCascadePickMessage,
   notePersonLinkEdit,
   settleTouchedAfterSave,
   useCascadeClearNotices
@@ -1313,7 +1315,7 @@ export function dropSatisfiedRequired(
 ): Record<string, string> {
   let next: Record<string, string> | null = null
   for (const [f, msg] of Object.entries(errors)) {
-    if (msg !== 'This field is required') continue
+    if (msg !== 'This field is required' && !isCascadePickMessage(msg)) continue
     const v = draft[f]
     if (v === null || v === undefined || v === '') continue
     next ??= { ...errors }
@@ -5781,6 +5783,8 @@ function ItemEditFormView({
       setValidationErrors((prev) => {
         const next = { ...prev }
         const fieldMeta = (fieldConfig ?? []).find((f) => f.field === field)
+        // A cascade that emptied a required field said "Pick a Zone": kept while empty.
+        if (isEmpty && isCascadePickMessage(prev[field])) return prev
         if (fieldMeta?.required && isEmpty && touchedFields.current.has(field)) {
           next[field] = 'This field is required'
         } else {
@@ -6194,13 +6198,20 @@ function ItemEditFormView({
       if (count > 0) touchedFields.current.add(field)
       setValidationErrors((prev) => {
         const fieldMeta = (fieldConfig ?? []).find((f) => f.field === field)
-        if (!fieldMeta?.required) return prev
+        if (!fieldMeta?.required) {
+          // A form-required field a cascade emptied ("Pick a Zone") clears once picked.
+          if (count === 0 || !isCascadePickMessage(prev[field])) return prev
+          const { [field]: _gone, ...rest } = prev
+          return rest
+        }
         const next = { ...prev }
         if (count === 0) {
           // Untouched + empty: don't INTRODUCE an error (no nagging before the
           // user has been near the field), but keep one a save attempt set —
           // clearing it here made the 'Can't save yet' summary under-count.
-          if (touchedFields.current.has(field)) next[field] = 'This field is required'
+          // A cascade's "Pick a Zone" keeps its words.
+          if (touchedFields.current.has(field) && !isCascadePickMessage(prev[field]))
+            next[field] = 'This field is required'
         } else {
           delete next[field]
         }
@@ -9387,15 +9398,19 @@ function ItemEditFormView({
       // flags must not block its save (same gate the completeness pill uses).
       if ((f as { layout_assigned?: boolean }).layout_assigned === false) continue
       if (f.required) {
+        // A required field a cascade emptied keeps its "Pick a Zone" words.
+        const missing = isCascadePickMessage(validationErrors[f.field])
+          ? validationErrors[f.field]
+          : 'This field is required'
         if (f.field in fieldCounts) {
-          if (fieldCounts[f.field] === 0) errs[f.field] = 'This field is required'
+          if (fieldCounts[f.field] === 0) errs[f.field] = missing
         } else if (f.field in m2mAliasFieldStates) {
           // Alias (M2M/M2A) fields have no column in draft — judge by the
           // committed junction state. Unsettled (query in flight) never blocks:
           // a false "required" here froze transitions on steps layouts where the
           // field's combobox hadn't mounted to report a count.
           const st = m2mAliasFieldStates[f.field]
-          if (st.known && st.ids.length === 0) errs[f.field] = 'This field is required'
+          if (st.known && st.ids.length === 0) errs[f.field] = missing
         } else if (o2mAliasFields.has(f.field)) {
           // Required O2M = at least one row, pending or existing. An
           // unsettled count (query in flight) never blocks.
@@ -12206,13 +12221,32 @@ function ItemEditFormView({
   // object here re-rendered every (memoized) field row on every form render.
   const fieldAffordances = useStableFieldAffordances(fieldAffordancesRaw)
   // Cascade auto-clear (Rob 2026-11-08): one notice per chain of cleared children.
-  const cascadeClearNotify = useCascadeClearNotices({
+  const cascadeClearNotice = useCascadeClearNotices({
     labelOf: (f) => {
       const fc = (fieldConfig ?? []).find((x) => x.field === f)
       return (fc && placementFieldText(fc, placementTextCtx).label) || fc?.label || titleCase(f)
     },
     editSeq: (f) => fieldEditSeqRef.current.get(f) ?? (userTouchedRef.current.has(f) ? 0 : -1)
   })
+  // A REQUIRED field a cascade emptied says "Pick a Zone" on the field at once,
+  // and Save stays blocked until it is filled (validateAll keeps the words) —
+  // never a save that sends the record out without it (prod 2026-11-17).
+  const requiredFieldsRef = useRef(allFields)
+  requiredFieldsRef.current = allFields
+  const cascadeClearNotify = useCallback(
+    (note: Parameters<typeof cascadeClearNotice>[0]) => {
+      cascadeClearNotice(note)
+      const f = requiredFieldsRef.current.find((x) => x.field === note.field)
+      if (!f?.required) return
+      touchedFields.current.add(note.field)
+      setValidationErrors((prev) =>
+        prev[note.field] === cascadePickMessage(note.label)
+          ? prev
+          : { ...prev, [note.field]: cascadePickMessage(note.label) }
+      )
+    },
+    [cascadeClearNotice]
+  )
   // One object per draft / label / filter change: an inline literal re-rendered
   // every consumer (each field row and picker) on every form render.
   // dirtyFields is the live Set; its writes always come with a draft change.

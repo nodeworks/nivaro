@@ -138,3 +138,17 @@ export function settleTouchedAfterSave(
   if (opts.leftWorkStaged) return
   touched.clear()
 }
+
+/**
+ * The error a REQUIRED field shows once a cascade emptied it ("Pick a Zone"):
+ * it blocks Save like any missing required value, and names what to do. A
+ * Zone-scoped person whose Zone was cleared and saved anyway lost the record
+ * (prod 2026-11-17) — the form now says so on the field before any request.
+ */
+export function cascadePickMessage(label: string): string {
+  return `Pick a ${label}`
+}
+
+export function isCascadePickMessage(msg: unknown): msg is string {
+  return typeof msg === 'string' && msg.startsWith('Pick a ')
+}

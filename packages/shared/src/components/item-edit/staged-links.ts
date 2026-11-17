@@ -150,7 +150,12 @@ export function foldStagedLinks(input: FoldInput): Set<string> {
       })
       // Unknown kind: leave it to the follow-up step (deletes the junction row by id).
       if (mapped.some((v) => v == null)) continue
-      removals = mapped
+      // A link removed and picked again in the same edit stays: the committed
+      // row is the pick. Sent as both, the server skipped the add (the link
+      // existed) and then ran the removal — Zone 2 on workflow 372787 was taken
+      // off twice that way on 2026-11-17 (Zone 3 picked, then Zone 2 again).
+      const readded = new Set(add.map((id) => entryKey(entry(id))))
+      removals = mapped.filter((v) => !readded.has(entryKey(v)))
     }
     // The links that stay ride along too (the server skips pairs that exist),
     // so rules and validation on the server read the record's whole resulting

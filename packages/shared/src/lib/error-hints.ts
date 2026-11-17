@@ -49,7 +49,7 @@ export const ERROR_HINTS: Readonly<Record<string, string>> = {
 
   // ── Records and forms ──────────────────────────────────────────────────────
   OUT_OF_SCOPE:
-    'Pick a value inside your own scope, or ask someone who covers that one to create the record.',
+    'Pick a value inside your own scope, or ask someone who covers that one to make the change.',
   EDIT_LOCKED:
     'This record is locked at its current stage. Ask its owner or an administrator to change it.',
   RECORD_LOCKED: 'Someone else is editing this record. Wait until they finish, then reload.',

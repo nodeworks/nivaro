@@ -35,3 +35,17 @@ export function dedupeAliasLinks(links: AliasLink[]): AliasLink[] {
   }
   return out
 }
+
+/**
+ * Removals the same write also adds back are no removal: the link stays.
+ *
+ * A form that clears a Zone (the committed link staged for removal) and then
+ * gets that same Zone back (picked again, or filled from the Region by an
+ * upstream cascade) sends `divisions: {create: [3], delete: [3]}`. Adds skip a
+ * link that already exists and removals ran after them, so the write took the
+ * Zone off and put nothing back — the workflow left its writer's Zone scope
+ * (EFP prod 2026-11-17, workflow 372787: Zone and Region both lost this way).
+ */
+export function withoutReAddedRemovals(links: AliasLink[], removals: AliasLink[]): AliasLink[] {
+  return removals.filter((r) => !links.some((l) => sameAliasLink(l, r)))
+}

@@ -59,6 +59,38 @@ const RELS: CMSRelation[] = [
 ]
 
 describe('foldStagedLinks', () => {
+  // Prod 2026-11-17, workflow 372787: Zone 2 (junction row 482894) picked → Zone 3 →
+  // Zone 2 again on a max-one Zone field. The row stayed staged for removal and the
+  // re-pick was staged as a new link: `{create: [3], delete: [3]}`, which the server
+  // ran as "link exists, skip; then remove" — the save took Zone 2 off.
+  it('update: a link removed and picked again in the same edit is kept, not removed', () => {
+    const payload: Record<string, unknown> = {}
+    foldStagedLinks({
+      collection: 'workflows',
+      relations: RELS,
+      links: new Map<string, unknown[]>([['divisions', ['3']]]),
+      unlinks: new Map([['divisions', new Set<unknown>([482894])]]),
+      payload,
+      isNew: false,
+      committed: () => [{ id: 482894, workflows_id: 372787, divisions_id: 3 }]
+    })
+    expect(payload.divisions).toEqual({ create: ['3'] })
+  })
+
+  it('update: a real replace still removes the old link', () => {
+    const payload: Record<string, unknown> = {}
+    foldStagedLinks({
+      collection: 'workflows',
+      relations: RELS,
+      links: new Map<string, unknown[]>([['divisions', ['2']]]),
+      unlinks: new Map([['divisions', new Set<unknown>([482894])]]),
+      payload,
+      isNew: false,
+      committed: () => [{ id: 482894, workflows_id: 372787, divisions_id: 3 }]
+    })
+    expect(payload.divisions).toEqual({ create: ['2'], delete: [3] })
+  })
+
   it('create: an external-email pick (M2A token) keeps its own collection', () => {
     const payload: Record<string, unknown> = {}
     foldStagedLinks({

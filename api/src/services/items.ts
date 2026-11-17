@@ -37,7 +37,12 @@ import {
 import { fetchDefaultWorkspaceId } from '../middleware/workspace.js'
 import { deferEffect, withUnitOfWork } from '../services/unit-of-work.js'
 import type { CMSField, CMSRelation, ItemsQuery, User } from '../types.js'
-import { type AliasLink, dedupeAliasLinks, sameAliasLink } from './alias-links.js'
+import {
+  type AliasLink,
+  dedupeAliasLinks,
+  sameAliasLink,
+  withoutReAddedRemovals
+} from './alias-links.js'
 import {
   APPROVAL_CHANGED_FIELD,
   approvalChangedWanted,
@@ -76,6 +81,7 @@ import {
 import { enforceContracts } from './integration-contracts.js'
 import { type AggregateRow, type AggregateSpec, runAggregate } from './item-aggregates.js'
 import { keysetSecret } from './keyset-secret.js'
+import { dropsRowGoal, withoutRowGoal } from './list-row-goal.js'
 import { rankColumns, searchRankOrder } from './list-search-rank.js'
 import {
   aliasReadable,
@@ -5715,6 +5721,15 @@ export async function readItems(
             })()
     if (cachedTotal != null) totalApprox = true
     const matched = probe?.ids
+    // A long `_in` id list on an fk, ordered by id: the page runs without the row goal, or a
+    // cached plan may scan the whole table in id order (services/list-row-goal.ts).
+    const noRowGoal =
+      dropsRowGoal({ sort, pkOrder, filter: fittedFilter, search, keyset: !!keyset }) && isMssql()
+        ? (() => {
+            const compiled = q.toSQL()
+            return withoutRowGoal(compiled.sql, compiled.bindings)
+          })()
+        : null
     const pageQ: Promise<unknown> | QB = matched
       ? matched.length
         ? (async () => {
@@ -5728,7 +5743,9 @@ export async function readItems(
             }
           })()
         : Promise.resolve([])
-      : q
+      : noRowGoal
+        ? dbRead.raw(noRowGoal.sql, noRowGoal.bindings as Knex.RawBinding[]).then(rawRows)
+        : q
     let settled: [unknown, number | null, unknown]
     try {
       settled = await span('query+count', () =>
@@ -6415,9 +6432,12 @@ async function extractAliasM2MWrites(
     const links = dedupeAliasLinks(
       adds.map((e) => linkOf(e, jf, m2a)).filter((l): l is AliasLink => !!l && l.id !== '')
     )
-    const removals = removes
-      .map((e) => linkOf(e, jf, m2a))
-      .filter((l): l is AliasLink => !!l && l.id !== '')
+    // A link the same write removes AND adds back stays (alias-links.ts):
+    // without this the add was skipped as existing and the removal ran after.
+    const removals = withoutReAddedRemovals(
+      links,
+      removes.map((e) => linkOf(e, jf, m2a)).filter((l): l is AliasLink => !!l && l.id !== '')
+    )
 
     // Normalized draft value — auto-id `{regions[0].short_code}` tokens and
     // rule contexts read this; filterToActualColumns strips it before write.
@@ -8156,6 +8176,23 @@ export async function updateOne(
     previousData
   )
   const columnPayload = filterToActualColumns(securedPayload, actualCols)
+  // Update guards (services/update-guards.ts, EFP prod 2026-11-17): the caller's
+  // own write may not empty a required field (an M2M alias included) nor take a
+  // record they can see out of their own User Scope. Judged on the record as it
+  // will be stored, BEFORE the UPDATE and the junction writes — a refusal
+  // leaves it untouched. UPDATE_REQUIRED_GUARD / UPDATE_SCOPE_GUARD=off.
+  if (opts?.callerPayload === true) {
+    await (await import('./update-guards.js')).assertUpdateKeepsRecord({
+      user,
+      isAdmin: !!req?.isAdmin,
+      collection,
+      id,
+      callerFields,
+      columnPayload,
+      previous: previousData ?? null,
+      linkWrites: aliasWrites
+    })
+  }
   if (dry) {
     const report = await reportUpdateRehearsal({
       user,

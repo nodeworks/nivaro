@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { dedupeAliasLinks, sameAliasLink } from '../../../services/alias-links.js'
+import {
+  dedupeAliasLinks,
+  sameAliasLink,
+  withoutReAddedRemovals
+} from '../../../services/alias-links.js'
 
 // army 10 item 3: IR 37827's Ship-To Contact read "Peter Moniz, Peter Moniz".
 // The BOM header prefill and the person's own pick both named him — once
@@ -47,5 +51,22 @@ describe('dedupeAliasLinks', () => {
   it('keeps distinct links in order', () => {
     const links = [{ id: 3 }, { id: 1 }, { id: 2 }]
     expect(dedupeAliasLinks(links)).toEqual(links)
+  })
+})
+
+// Prod 2026-11-17, workflow 372787: `divisions: {create: [3], delete: [3]}` (Zone 2
+// removed and picked again) ran as "link exists, skip; then remove" — the save took
+// the Zone off and the Zone-scoped writer lost the record.
+describe('withoutReAddedRemovals', () => {
+  it('a removal the same write adds back is dropped (the link stays)', () => {
+    expect(withoutReAddedRemovals([{ id: 3 }], [{ id: '3' }])).toEqual([])
+    expect(
+      withoutReAddedRemovals([{ id: 'abc', collection: 'x' }], [{ id: 'ABC', collection: 'X' }])
+    ).toEqual([])
+  })
+
+  it('other removals stay', () => {
+    expect(withoutReAddedRemovals([{ id: 2 }], [{ id: 3 }])).toEqual([{ id: 3 }])
+    expect(withoutReAddedRemovals([], [{ id: 3 }])).toEqual([{ id: 3 }])
   })
 })
