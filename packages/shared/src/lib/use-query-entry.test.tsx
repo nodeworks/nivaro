@@ -69,11 +69,14 @@ describe('watching a query entry without fetching it', () => {
     await act(async () => {
       await qc.invalidateQueries({ queryKey: ['nivaro-report-query'] }).catch(() => {})
     })
-    await flush()
+    // Wait for the error to render (a fixed number of ticks is not enough on a busy runner).
+    await vi.waitFor(async () => {
+      await flush()
+      expect(String((seen.error as Error)?.message)).toContain('Missing queryFn')
+    })
     err.mockRestore()
     // No request went out, and the widget shows an error.
     expect(fn).toHaveBeenCalledTimes(1)
-    expect(String((seen.error as Error)?.message)).toContain('Missing queryFn')
   })
 
   it('useQueryEntryState watches the entry and invalidate refetches with the real queryFn', async () => {
