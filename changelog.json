@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-17T16:20:37.891Z",
+  "generated_at": "2026-11-17T17:49:02.194Z",
   "releases": [
+    {
+      "version": "0.3.170",
+      "tag": "v0.3.170",
+      "date": "2026-11-17T12:48:44-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "ops",
+              "text": "quiet cron skips, raw-write rollups, rollup deadlocks, trashed links",
+              "hash": "afdd9e21c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.169",
       "tag": "v0.3.169",
-      "date": "2026-11-17T11:20:20-05:00",
+      "date": "2026-11-17T11:20:37-05:00",
       "sections": [
         {
           "label": "Added",
