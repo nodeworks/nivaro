@@ -67,7 +67,7 @@ export interface O2mSummary {
   changes: O2mChange[]
   /** What this row's write moved on the parent's stored totals ("Requisition Amount +2,059"),
    *  only totals the reader may read on the parent. Absent when nothing moved. */
-  totals?: Array<{ field: string; label: string; delta: number }>
+  totals?: Array<{ field: string; label: string; delta: number; source_field?: string }>
   /** Written on the row itself (its own page, an import, a sync), not from the parent's page. */
   elsewhere?: boolean
 }
@@ -328,7 +328,7 @@ async function o2mSummaries(
     childId: string | null
     snapshot: Record<string, unknown> | null
     pairs: Array<[string, unknown, unknown]>
-    totals: Array<{ field: string; delta: number }>
+    totals: Array<{ field: string; delta: number; source_field?: string }>
     elsewhere: boolean
   }
   const work: Work[] = []
@@ -390,7 +390,7 @@ async function o2mSummaries(
     // The totals this write moved, worked out from the FULL stored row (a total the reader may
     // read is shown even when the column behind it is not theirs to read: the parent's own
     // figure already tells them as much).
-    let totals: Array<{ field: string; delta: number }> = []
+    let totals: Array<{ field: string; delta: number; source_field?: string }> = []
     if (parentCollection && deps.rollupSources) {
       // Only totals worked out from child columns the reader may read (the value and any
       // filter column): a move is the difference of those values, so it would disclose them.
@@ -529,7 +529,8 @@ async function o2mSummaries(
       totals = w.totals.map((m) => ({
         field: m.field,
         label: parentLabels.get(m.field) ?? titleCase(m.field),
-        delta: m.delta
+        delta: m.delta,
+        ...(m.source_field ? { source_field: m.source_field } : {})
       }))
     }
     out.set(w.index, {

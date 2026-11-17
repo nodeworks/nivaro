@@ -296,109 +296,115 @@ export async function childWritesElsewhere(
     user: String(r.user_id ?? '').toLowerCase()
   }))
   const out: Record<string, unknown>[] = []
-  for (const { child, fk } of children) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(child) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(fk)) continue
-    const ids = (
-      (await db(child)
-        .where(fk, item)
-        .select('id')
-        .limit(CHILD_ROWS_MAX)
-        .catch(() => [])) as Array<{ id: unknown }>
-    ).map((r) => String(r.id))
-    if (ids.length === 0) continue
-    const revs = (await db('nivaro_revisions as r')
-      .join('nivaro_activity as a', 'r.activity', 'a.id')
-      .leftJoin('nivaro_users as u', 'a.user', 'u.id')
-      .select(
-        'r.id as rev_id',
-        'r.item as child_id',
-        'r.data',
-        'r.delta',
-        'a.id as activity',
-        'a.timestamp',
-        'a.action as child_action',
-        'a.user as user_id',
-        'u.first_name',
-        'u.last_name',
-        'u.email as user_email'
-      )
-      .modify((q) => withActorInputs(q, actCols))
-      .where('r.collection', child)
-      .modify((q) => whereInList(q, 'r.item', ids))
-      .whereIn('a.action', ['create', 'update'])
-      .orderBy('r.id', 'desc')
-      .limit(CHILD_REVISIONS_MAX)) as Record<string, unknown>[]
-    if (revs.length === 0) continue
-    revs.reverse()
-    // The row as it stood before the oldest write read here, so its change says "from".
-    const before = new Map<string, Record<string, unknown> | null>()
-    const firstUpdate = new Map<string, number>()
-    for (const r of revs) {
-      const cid = String(r.child_id)
-      if (before.has(cid) || firstUpdate.has(cid)) continue
-      if (r.child_action === 'create') before.set(cid, null)
-      else firstUpdate.set(cid, Number(r.rev_id))
-    }
-    if (firstUpdate.size > 0) {
-      // One read for every row's previous revision (one seek each) instead of a read per row:
-      // a workflow with 142 lines took 0.76 s the other way.
-      const pairs = [...firstUpdate].map(([i, r]) => ({ i, r }))
-      const prevRows = (await db
-        .raw(
-          `SELECT j.i AS item, p.data FROM OPENJSON(?) WITH (i nvarchar(255) '$.i', r int '$.r') AS j
+  // Child tables are read side by side: one after another cost a round trip each.
+  const perChild = await Promise.all(
+    children.map(async ({ child, fk }) => {
+      const rows: Record<string, unknown>[] = []
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(child) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(fk)) return []
+      const ids = (
+        (await db(child)
+          .where(fk, item)
+          .select('id')
+          .limit(CHILD_ROWS_MAX)
+          .catch(() => [])) as Array<{ id: unknown }>
+      ).map((r) => String(r.id))
+      if (ids.length === 0) return []
+      const revs = (await db('nivaro_revisions as r')
+        .join('nivaro_activity as a', 'r.activity', 'a.id')
+        .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+        .select(
+          'r.id as rev_id',
+          'r.item as child_id',
+          'r.data',
+          'r.delta',
+          'a.id as activity',
+          'a.timestamp',
+          'a.action as child_action',
+          'a.user as user_id',
+          'u.first_name',
+          'u.last_name',
+          'u.email as user_email'
+        )
+        .modify((q) => withActorInputs(q, actCols))
+        .where('r.collection', child)
+        .modify((q) => whereInList(q, 'r.item', ids))
+        .whereIn('a.action', ['create', 'update'])
+        .orderBy('r.id', 'desc')
+        .limit(CHILD_REVISIONS_MAX)) as Record<string, unknown>[]
+      if (revs.length === 0) return []
+      revs.reverse()
+      // The row as it stood before the oldest write read here, so its change says "from".
+      const before = new Map<string, Record<string, unknown> | null>()
+      const firstUpdate = new Map<string, number>()
+      for (const r of revs) {
+        const cid = String(r.child_id)
+        if (before.has(cid) || firstUpdate.has(cid)) continue
+        if (r.child_action === 'create') before.set(cid, null)
+        else firstUpdate.set(cid, Number(r.rev_id))
+      }
+      if (firstUpdate.size > 0) {
+        // One read for every row's previous revision (one seek each) instead of a read per row:
+        // a workflow with 142 lines took 0.76 s the other way.
+        const pairs = [...firstUpdate].map(([i, r]) => ({ i, r }))
+        const prevRows = (await db
+          .raw(
+            `SELECT j.i AS item, p.data FROM OPENJSON(?) WITH (i nvarchar(255) '$.i', r int '$.r') AS j
            OUTER APPLY (SELECT TOP 1 r.data FROM nivaro_revisions AS r
                         WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC) AS p`,
-          [JSON.stringify(pairs), child]
-        )
-        .catch(() => [])) as Array<{ item: unknown; data: unknown }>
-      for (const p of prevRows) before.set(String(p.item), parseRow(p.data))
-    }
-    for (const r of revs) {
-      const cid = String(r.child_id)
-      const data = parseRow(r.data)
-      const was = before.get(cid) ?? null
-      before.set(cid, data ?? was)
-      const t = r.timestamp ? new Date(r.timestamp as string).getTime() : 0
-      if ((onPage.get(`${child}:${cid}`) ?? []).some((pt) => Math.abs(pt - t) <= SAME_SAVE_MS))
-        continue
-      const isCreate = r.child_action === 'create'
-      const writer = String(r.user_id ?? '').toLowerCase()
-      const withOwnSave = ownSaveTimes.some(
-        (o) => o.user === writer && Math.abs(o.t - t) <= SAME_SAVE_MS
-      )
-      const changes: Record<string, [unknown, unknown]> = {}
-      if (!isCreate) {
-        const delta = parseRow(r.delta) ?? {}
-        for (const k of Object.keys(delta)) {
-          if (CHILD_NOISE.has(k)) continue
-          const from = was ? (was[k] ?? null) : null
-          const to = data ? (data[k] ?? null) : (delta[k] ?? null)
-          if (from !== null && typeof from === 'object') continue
-          if (to !== null && typeof to === 'object') continue
-          if (JSON.stringify(from) !== JSON.stringify(to)) changes[k] = [from, to]
-        }
-        if (Object.keys(changes).length === 0) continue
+            [JSON.stringify(pairs), child]
+          )
+          .catch(() => [])) as Array<{ item: unknown; data: unknown }>
+        for (const p of prevRows) before.set(String(p.item), parseRow(p.data))
       }
-      const { rev_id: _r, child_id: _c, child_action: _a, data: _d, delta: _dl, ...rest } = r
-      out.push({
-        ...rest,
-        id: null,
-        collection,
-        item,
-        data: null,
-        delta: null,
-        parent: null,
-        action: isCreate ? 'o2m-create' : 'o2m-update',
-        comment: JSON.stringify({
-          child_collection: child,
-          child_id: cid,
-          snapshot: data,
-          ...(isCreate ? {} : { changes }),
-          ...(withOwnSave ? {} : { elsewhere: true })
+      for (const r of revs) {
+        const cid = String(r.child_id)
+        const data = parseRow(r.data)
+        const was = before.get(cid) ?? null
+        before.set(cid, data ?? was)
+        const t = r.timestamp ? new Date(r.timestamp as string).getTime() : 0
+        if ((onPage.get(`${child}:${cid}`) ?? []).some((pt) => Math.abs(pt - t) <= SAME_SAVE_MS))
+          continue
+        const isCreate = r.child_action === 'create'
+        const writer = String(r.user_id ?? '').toLowerCase()
+        const withOwnSave = ownSaveTimes.some(
+          (o) => o.user === writer && Math.abs(o.t - t) <= SAME_SAVE_MS
+        )
+        const changes: Record<string, [unknown, unknown]> = {}
+        if (!isCreate) {
+          const delta = parseRow(r.delta) ?? {}
+          for (const k of Object.keys(delta)) {
+            if (CHILD_NOISE.has(k)) continue
+            const from = was ? (was[k] ?? null) : null
+            const to = data ? (data[k] ?? null) : (delta[k] ?? null)
+            if (from !== null && typeof from === 'object') continue
+            if (to !== null && typeof to === 'object') continue
+            if (JSON.stringify(from) !== JSON.stringify(to)) changes[k] = [from, to]
+          }
+          if (Object.keys(changes).length === 0) continue
+        }
+        const { rev_id: _r, child_id: _c, child_action: _a, data: _d, delta: _dl, ...rest } = r
+        rows.push({
+          ...rest,
+          id: null,
+          collection,
+          item,
+          data: null,
+          delta: null,
+          parent: null,
+          action: isCreate ? 'o2m-create' : 'o2m-update',
+          comment: JSON.stringify({
+            child_collection: child,
+            child_id: cid,
+            snapshot: data,
+            ...(isCreate ? {} : { changes }),
+            ...(withOwnSave ? {} : { elsewhere: true })
+          })
         })
-      })
-    }
-  }
+      }
+      return rows
+    })
+  )
+  for (const rows of perChild) out.push(...rows)
   return out
 }
 

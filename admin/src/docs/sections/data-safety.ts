@@ -36,7 +36,11 @@ export const timeTravelDocs: DocSection = {
     { type: 'h1', id: 'time-travel', text: 'Time-Travel Restore' },
     {
       type: 'p',
-      text: 'The revision history panel has a Time travel mode: scrub a slider through every snapshot of a record, watch fields change (differences from the current state highlight amber), and restore to any point with one confirm-gated click.'
+      text: 'The revision history panel has two views, switched at the top and remembered per browser. Timeline lists every save, pipeline move and related-row change with who did it; expand an entry to see the exact values, revert one field or restore the whole version. Table is the audit grid: each save is a row (Created, Changed, Deleted, Restored) and each field a column in form order, computed totals included, so you read down a column to follow a field over time. Changed cells are tinted, a recalculated value carries Σ and names the related-row change that moved it, currency fields show as money, the Fields menu picks the columns and CSV downloads what is shown.'
+    },
+    {
+      type: 'p',
+      text: 'Replay the record steps through the saves on a rail (Previous, Play, Next, or jump to a date): each stop shows what that save changed, the person\'s own fields first and recalculated ones marked, and the whole record as it stood then. Any person\'s avatar in the history opens their card.'
     },
     {
       type: 'note',

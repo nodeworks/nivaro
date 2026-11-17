@@ -324,7 +324,12 @@ describe('revisionsForReader — totals a child write moved (audit 2026-11-17)',
   it('names the total and how far it moved, and that the line was written elsewhere', async () => {
     const [out] = await revisionsForReader(user, 'orders', [row], deps as never)
     expect(out.o2m?.totals).toEqual([
-      { field: 'requisition_amount', label: 'Requisition Amount', delta: 2059 }
+      {
+        field: 'requisition_amount',
+        label: 'Requisition Amount',
+        delta: 2059,
+        source_field: 'amount'
+      }
     ])
     expect(out.o2m?.elsewhere).toBe(true)
     expect(out.o2m?.changes[0]).toMatchObject({ label: 'Amount', from: '1', to: '2060' })

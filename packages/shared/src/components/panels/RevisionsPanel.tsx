@@ -2,13 +2,24 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
   CalendarClock,
+  Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  ChevronsUpDown,
   Clock,
+  Columns3,
+  Download,
   GitCompareArrows,
+  History,
+  List,
   MessageSquare,
+  Pause,
+  Play,
   RotateCcw,
   Search,
+  Sigma,
+  Table2,
   X
 } from 'lucide-react'
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
@@ -25,17 +36,40 @@ import {
   o2mTotalsText
 } from '../../lib/activity-sentence'
 import { get, post } from '../../lib/commands'
+import { type CompareFieldMeta, compareValueText } from '../../lib/compare-value'
 import { useLiveRecordQueries } from '../../lib/live'
 import { restoreSkippedNote } from '../../lib/restore-skipped'
-import { cn, formatDateTime, formatRelative, titleCase, toLocalDateString } from '../../lib/utils'
+import { cn, formatDateTime, titleCase, toLocalDateString } from '../../lib/utils'
 import { useActivityLabels } from '../ActivityEntry'
 import { AgentBadge } from '../AgentBadge'
 import { RelatedItemLabel } from '../item-edit/RelationCombobox'
+import { UserChip } from '../item-edit/UserChip'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '../ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
 import { IntegrationActivitySection } from './IntegrationActivitySection'
+import {
+  buildSaveRows,
+  type ChangeSourceRevision,
+  type MatrixColumn,
+  matrixColumns,
+  matrixCsv,
+  rowsChanging,
+  type SaveAction,
+  saveActionLabel,
+  signedAmount,
+  viaText
+} from './revision-changes'
 
 export interface O2MFieldInfo {
   field: string
@@ -117,6 +151,10 @@ interface FieldMeta {
   relatedCollection?: string | null
   /** A calendar date (no time): renders as its stored day, never shifted to local time. */
   dateOnly?: boolean
+  /** Position in the field config (form order). */
+  order?: number
+  /** Type + options for display formatting (currency, choices, numbers). */
+  cmp?: CompareFieldMeta
 }
 
 const AUDIT_FIELDS = new Set([
@@ -143,6 +181,9 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
       hidden?: boolean
       layout_assigned?: boolean
       type?: string | null
+      interface?: string | null
+      options?: unknown
+      display_options?: unknown
     }>
     relations: Array<{
       many_collection: string | null
@@ -164,6 +205,9 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
               hidden?: boolean
               layout_assigned?: boolean
               type?: string | null
+              interface?: string | null
+              options?: unknown
+              display_options?: unknown
             }>
           }>(get(`/field-config/${collection}`))
           .then((r) => r.data ?? [])
@@ -190,9 +234,17 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
       // space, resolved through the live users collection.
       return rel.one_collection === 'directus_users' ? 'nivaro_users' : rel.one_collection
     }
-    for (const f of data?.fields ?? []) {
+    for (const [i, f] of (data?.fields ?? []).entries()) {
       if (f.field.startsWith('__')) continue
       map.set(f.field, {
+        order: i,
+        cmp: {
+          field: f.field,
+          type: f.type ?? null,
+          interface: f.interface ?? null,
+          options: f.options,
+          display_options: f.display_options
+        },
         label: f.label || titleCase(f.field.replace(/_/g, ' ')),
         // Hidden fields are machine columns (e.g. the retired "workflow_state
         // (legacy)" a save still writes) — folded with the system fields, not
@@ -598,6 +650,9 @@ function RevValue({
       </span>
     )
   if (isRichText(value)) return <ValueCell value={richTextToText(value)} tone={tone} />
+  // Currency, choices and numbers as the field is configured to show them ($2,060.00, not 2060).
+  if (meta.cmp && typeof value !== 'object' && !meta.dateOnly)
+    return <ValueCell value={compareValueText(value, meta.cmp)} tone={tone} />
   return <ValueCell value={value} tone={tone} dateOnly={meta.dateOnly} />
 }
 
@@ -958,21 +1013,7 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
             ⚡
           </span>
         ) : (
-          <UserAvatar
-            userId={revision.user_id}
-            className='h-6 w-6'
-            fallback={
-              <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
-                {who
-                  .split(' ')
-                  .map((p) => p[0])
-                  .filter(Boolean)
-                  .slice(0, 2)
-                  .join('')
-                  .toUpperCase()}
-              </span>
-            }
-          />
+          <RevisionAvatar userId={revision.user_id} name={who} />
         )}
         <span className='min-w-0 flex-1 text-[12.5px] text-slate-700 dark:text-slate-200'>
           <span className='font-medium'>{who}</span>{' '}
@@ -1128,54 +1169,45 @@ function RevisionRow({
         />
       )}
 
-      <button
-        type='button'
-        onClick={() => setExpanded((e) => !e)}
-        className='flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted/40'
-      >
-        <UserAvatar
-          userId={revision.user_id}
-          className='h-6 w-6'
-          fallback={
-            <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
-              {revisionUserName(revision, labels)
-                .split(' ')
-                .map((p) => p[0])
-                .filter(Boolean)
-                .slice(0, 2)
-                .join('')
-                .toUpperCase()}
-            </span>
-          }
-        />
-        <span className='min-w-0 flex-1 truncate text-[12.5px] text-slate-700 dark:text-slate-200'>
-          <span className='font-medium'>{revisionUserName(revision, labels)}</span>{' '}
-          <span className='text-slate-500 dark:text-slate-400'>
-            {revisionSentence(revision, humanDelta, systemDelta)}
-          </span>
-          {reason && (
-            <span
-              className='mt-0.5 block truncate text-[11.5px] text-slate-500 dark:text-slate-400'
-              data-revision-reason
-              data-tip={reason}
-            >
-              Reason: {reason}
-            </span>
-          )}
-        </span>
-        <AgentBadge label={revision.via_agent} />
-        <span
-          className='shrink-0 text-[11px] tabular-nums text-slate-400'
-          title={revision.timestamp ? formatDateTime(revision.timestamp) : undefined}
+      {/* The avatar opens the person's card; the rest of the row opens the entry — two
+          controls side by side, never one inside the other. */}
+      <div className='flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 transition-colors hover:bg-slate-50 dark:hover:bg-muted/40'>
+        <RevisionAvatar userId={revision.user_id} name={revisionUserName(revision, labels)} />
+        <button
+          type='button'
+          onClick={() => setExpanded((e) => !e)}
+          aria-expanded={expanded}
+          className='flex min-w-0 flex-1 items-center gap-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan rounded'
         >
-          {exactTime}
-        </span>
-        {expanded ? (
-          <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-        ) : (
-          <ChevronRight className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-        )}
-      </button>
+          <span className='min-w-0 flex-1 truncate text-[12.5px] text-slate-700 dark:text-slate-200'>
+            <span className='font-medium'>{revisionUserName(revision, labels)}</span>{' '}
+            <span className='text-slate-500 dark:text-slate-400'>
+              {revisionSentence(revision, humanDelta, systemDelta)}
+            </span>
+            {reason && (
+              <span
+                className='mt-0.5 block truncate text-[11.5px] text-slate-500 dark:text-slate-400'
+                data-revision-reason
+                data-tip={reason}
+              >
+                Reason: {reason}
+              </span>
+            )}
+          </span>
+          <AgentBadge label={revision.via_agent} />
+          <span
+            className='shrink-0 text-[11px] tabular-nums text-slate-400'
+            title={revision.timestamp ? formatDateTime(revision.timestamp) : undefined}
+          >
+            {exactTime}
+          </span>
+          {expanded ? (
+            <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+          ) : (
+            <ChevronRight className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+          )}
+        </button>
+      </div>
 
       {expanded && (
         <div className='space-y-2.5 px-2 pb-4 pt-1'>
@@ -1294,17 +1326,18 @@ function RevisionRow({
 
 // ─── Time-travel tools (as-of + between-dates), one collapsible strip ───────
 
-function TimeTravelTools({ data, meta }: { data: Revision[]; meta: FieldMetaMap }) {
-  const [openTool, setOpenTool] = useState<'asof' | 'compare' | null>(null)
-  const [asOf, setAsOf] = useState('')
+function TimeTravelTools({
+  data,
+  meta,
+  labels
+}: {
+  data: Revision[]
+  meta: FieldMetaMap
+  labels?: ActivityLabels
+}) {
+  const [openTool, setOpenTool] = useState<'replay' | 'compare' | null>(null)
   const [diffFrom, setDiffFrom] = useState('')
   const [diffTo, setDiffTo] = useState('')
-
-  const asOfRevision = useMemo(() => {
-    if (!asOf || !data) return null
-    const cutoff = new Date(`${asOf}T23:59:59`).getTime()
-    return data.find((r) => r.timestamp && new Date(r.timestamp).getTime() <= cutoff) ?? null
-  }, [asOf, data])
 
   const betweenDiff = useMemo<
     | { error: string; fields?: undefined }
@@ -1352,16 +1385,19 @@ function TimeTravelTools({ data, meta }: { data: Revision[]; meta: FieldMetaMap 
       <div className='flex items-center gap-1.5'>
         <button
           type='button'
-          onClick={() => setOpenTool(openTool === 'asof' ? null : 'asof')}
+          onClick={() => setOpenTool(openTool === 'replay' ? null : 'replay')}
+          disabled={data.length === 0}
+          aria-expanded={openTool === 'replay'}
+          data-history-replay-toggle
           className={cn(
-            'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] transition-colors',
-            openTool === 'asof' || asOf
+            'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] transition-colors disabled:opacity-50',
+            openTool === 'replay'
               ? 'border-nvr-cyan/40 bg-nvr-cyan/5 font-medium text-nvr-navy dark:text-nvr-cyan'
               : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400 dark:hover:text-slate-200'
           )}
         >
-          <CalendarClock className='h-3.5 w-3.5' />
-          View as of a date
+          <History className='h-3.5 w-3.5' />
+          Replay the record
         </button>
         <button
           type='button'
@@ -1378,68 +1414,7 @@ function TimeTravelTools({ data, meta }: { data: Revision[]; meta: FieldMetaMap 
         </button>
       </div>
 
-      {openTool === 'asof' && (
-        <div className='rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 dark:border-border dark:bg-muted/20'>
-          <div className='flex items-center gap-2'>
-            <span className='text-[11.5px] text-slate-500 dark:text-slate-400'>
-              Show the record exactly as it was on
-            </span>
-            <input
-              type='date'
-              value={asOf}
-              onChange={(e) => setAsOf(e.target.value)}
-              className={dateInputCls}
-              aria-label='View record as of date'
-              data-as-of
-            />
-            {asOf && (
-              <button
-                type='button'
-                onClick={() => setAsOf('')}
-                className='text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
-              >
-                Clear
-              </button>
-            )}
-          </div>
-          {asOf && !asOfRevision && (
-            <p className='mt-2 text-[12px] text-slate-400'>
-              No snapshot exists at or before that date — the record is newer.
-            </p>
-          )}
-          {asOfRevision && (
-            <div className='mt-2 overflow-hidden rounded-lg border border-nvr-cyan/40 bg-white dark:bg-card'>
-              <div className='border-b border-slate-200 bg-[#f0fbff] px-2.5 py-1.5 dark:border-border dark:bg-nvr-cyan/10'>
-                <span className='text-[11.5px] font-semibold text-slate-700 dark:text-slate-200'>
-                  Record as of{' '}
-                  {asOfRevision.timestamp ? formatDateTime(asOfRevision.timestamp) : asOf}
-                </span>
-              </div>
-              <div className='max-h-80 overflow-y-auto'>
-                {Object.entries(asOfRevision.data ?? {})
-                  .filter(([, v]) => v !== null && v !== undefined && v !== '')
-                  .sort(([a], [b]) => metaFor(meta, a).label.localeCompare(metaFor(meta, b).label))
-                  .map(([k, v]) => (
-                    <div
-                      key={k}
-                      className='flex items-start gap-3 border-b border-slate-100 px-2.5 py-1.5 last:border-0 dark:border-border/60'
-                    >
-                      <span
-                        className='w-[200px] shrink-0 text-[11.5px] font-medium text-slate-600 dark:text-slate-300'
-                        title={k}
-                      >
-                        {metaFor(meta, k).label}
-                      </span>
-                      <span className='break-words text-[11.5px] text-slate-700 dark:text-slate-300'>
-                        <RevValue value={v} meta={metaFor(meta, k)} tone='after' />
-                      </span>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      {openTool === 'replay' && <HistoryReplay snapshots={data} meta={meta} labels={labels} />}
 
       {openTool === 'compare' && (
         <div className='rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 dark:border-border dark:bg-muted/20'>
@@ -1634,10 +1609,7 @@ function RevisionsList({
   return (
     <RevisionLabelsContext.Provider value={actorLabels}>
       <div className='space-y-3 pt-3'>
-        <TimeTravelTools data={snapshots} meta={meta} />
-        {snapshots.length >= 3 && (
-          <TimeLapseBar revisions={snapshots as Array<Revision & { id: string }>} meta={meta} />
-        )}
+        <TimeTravelTools data={snapshots} meta={meta} labels={actorLabels} />
         <div>
           {groups.map((g) => (
             <div key={g.day}>
@@ -1732,6 +1704,15 @@ export function RevisionsPanel({
   onOpenChange?: (open: boolean) => void
 }) {
   const controlled = open !== undefined
+  const [view, setView] = useState<HistoryView>(readHistoryView)
+  const changeView = (v: HistoryView) => {
+    setView(v)
+    try {
+      localStorage.setItem(VIEW_KEY, v)
+    } catch {
+      /* private window: the choice lasts this visit */
+    }
+  }
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       {!controlled && (
@@ -1748,29 +1729,45 @@ export function RevisionsPanel({
           </Button>
         </SheetTrigger>
       )}
-      <SheetContent className='w-[720px] overflow-y-auto p-0 sm:max-w-[92vw]'>
+      <SheetContent
+        className={cn(
+          'overflow-y-auto p-0 transition-[width] duration-200 ease-out sm:max-w-[92vw]',
+          // The table lays the fields out as columns: it gets the room for them.
+          view === 'table' ? 'w-[1320px]' : 'w-[720px]'
+        )}
+      >
         {/* Padding lives on this wrapper, NOT the scroll container — sticky
             day headers pin at the scroller's padding edge, so padding on the
             scroller left a see-through band above the pinned header. */}
         <div className='p-6'>
           <SheetHeader>
-            <SheetTitle className='flex items-center gap-2 text-base'>
-              <Clock className='h-4 w-4 text-slate-400' />
-              Revision history
-            </SheetTitle>
-            <p className='text-[12px] text-slate-400'>
-              Who changed what, when — expand any entry to see the exact values, revert a single
-              field, or restore the whole version.
+            <div className='flex flex-wrap items-center gap-x-4 gap-y-2 pr-8'>
+              <SheetTitle className='flex items-center gap-2 text-base'>
+                <Clock className='h-4 w-4 text-slate-400' />
+                Revision history
+              </SheetTitle>
+              <HistoryViewSwitch view={view} onChange={changeView} />
+            </div>
+            <p className='text-[12px] text-slate-500 dark:text-slate-400'>
+              {view === 'table'
+                ? 'Each save is a row and each field a column — read down a column to follow it over time, totals included.'
+                : 'Who changed what, when — expand any entry to see the exact values, revert a single field, or restore the whole version.'}
             </p>
           </SheetHeader>
-          <RevisionValueSearch collection={collection} item={item} />
-          <IntegrationActivitySection collection={collection} item={String(item)} />
-          <RevisionsList
-            collection={collection}
-            item={item}
-            onRollback={onRollback}
-            inlineTableFields={inlineTableFields}
-          />
+          {view === 'table' ? (
+            <RevisionChangesView collection={collection} item={item} />
+          ) : (
+            <>
+              <RevisionValueSearch collection={collection} item={item} />
+              <IntegrationActivitySection collection={collection} item={String(item)} />
+              <RevisionsList
+                collection={collection}
+                item={item}
+                onRollback={onRollback}
+                inlineTableFields={inlineTableFields}
+              />
+            </>
+          )}
         </div>
       </SheetContent>
     </Sheet>
@@ -1933,79 +1930,777 @@ function RevisionAnnotations({ revisionId }: { revisionId: number | string }) {
   )
 }
 
-// ─── Record time-lapse (#373) ───────────────────────────────────────────────
-function TimeLapseBar({
-  revisions,
-  meta
+// ─── People: an avatar opens the person's card ─────────────────────────────
+
+/** The person behind a history entry: their avatar opens the same user card as a user chip
+ *  (profile, message, presence). No person (an automatic move, a sync with no user) = a mark. */
+function RevisionAvatar({
+  userId,
+  name,
+  size = 'md'
 }: {
-  revisions: Array<{
-    id: number | string
-    action: string | null
-    timestamp: string | null
-    user_name?: string | null
-    delta?: Record<string, unknown> | null
-  }>
-  meta: FieldMetaMap
+  userId: string | null
+  name: string
+  size?: 'sm' | 'md'
 }) {
-  const ordered = [...revisions].reverse() // oldest → newest
+  const box = size === 'sm' ? 'h-5 w-5 text-[9px]' : 'h-6 w-6 text-[10px]'
+  const initials =
+    name
+      .split(' ')
+      .map((p) => p[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() || '·'
+  const face = (
+    <UserAvatar
+      userId={userId}
+      className={box}
+      fallback={
+        <span
+          className={cn(
+            'flex shrink-0 items-center justify-center rounded-full bg-nvr-cyan/10 font-semibold text-nvr-navy dark:text-nvr-cyan',
+            box
+          )}
+        >
+          {initials}
+        </span>
+      }
+    />
+  )
+  if (!userId) return <span className='shrink-0'>{face}</span>
+  return (
+    <UserChip userId={userId}>
+      <button
+        type='button'
+        aria-label={`${name} — open profile card`}
+        data-revision-avatar
+        onClick={(e) => e.stopPropagation()}
+        className='shrink-0 rounded-full transition-shadow hover:ring-2 hover:ring-nvr-cyan/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+      >
+        {face}
+      </button>
+    </UserChip>
+  )
+}
+
+// ─── Timeline | Table ───────────────────────────────────────────────────────
+
+type HistoryView = 'timeline' | 'table'
+const VIEW_KEY = 'nvr:revisions-view'
+
+function readHistoryView(): HistoryView {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'table' ? 'table' : 'timeline'
+  } catch {
+    return 'timeline'
+  }
+}
+
+function HistoryViewSwitch({
+  view,
+  onChange
+}: {
+  view: HistoryView
+  onChange: (v: HistoryView) => void
+}) {
+  const opts: Array<{ v: HistoryView; label: string; icon: typeof List }> = [
+    { v: 'timeline', label: 'Timeline', icon: List },
+    { v: 'table', label: 'Table', icon: Table2 }
+  ]
+  return (
+    <fieldset
+      aria-label='How to show the history'
+      data-revision-view-switch
+      className='m-0 inline-flex min-w-0 shrink-0 rounded-lg border border-slate-200 bg-slate-100 p-0.5 dark:border-border dark:bg-muted'
+    >
+      {opts.map(({ v, label, icon: Icon }) => {
+        const on = view === v
+        return (
+          <button
+            key={v}
+            type='button'
+            aria-pressed={on}
+            onClick={() => onChange(v)}
+            className={cn(
+              'inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+              on
+                ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.08)] dark:bg-card dark:text-slate-100'
+                : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+            )}
+          >
+            <Icon className='h-3.5 w-3.5' />
+            {label}
+          </button>
+        )
+      })}
+    </fieldset>
+  )
+}
+
+// ─── Table: rows are saves, columns are fields ─────────────────────────────
+
+/** A cell's value as plain text (CSV, tooltips), formatted the way the field shows it. */
+function cellText(value: unknown, m: FieldMeta): string {
+  if (value === null || value === undefined || value === '') return ''
+  if (isRichText(value)) return richTextToText(value)
+  if (m.cmp && typeof value !== 'object' && !m.dateOnly) return compareValueText(value, m.cmp)
+  return displayValue(value, m.dateOnly)
+}
+
+/** A total's move in the field's own format: "+$2,059.00" for a currency field. */
+function signedCell(delta: number, m: FieldMeta): string {
+  if (!m.cmp) return signedAmount(delta)
+  const text = compareValueText(Math.abs(delta), m.cmp)
+  return `${delta > 0 ? '+' : delta < 0 ? '−' : ''}${text}`
+}
+
+function ColumnPicker({
+  columns,
+  shown,
+  onChange
+}: {
+  columns: MatrixColumn[]
+  shown: Set<string>
+  onChange: (next: Set<string>) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const changedOnly = columns.filter((c) => c.changes > 0).map((c) => c.field)
+  const toggle = (f: string) => {
+    const next = new Set(shown)
+    if (next.has(f)) next.delete(f)
+    else next.add(f)
+    onChange(next)
+  }
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          data-revision-columns
+          className='inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-700 transition-colors hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-slate-200'
+        >
+          <Columns3 className='h-3.5 w-3.5 text-slate-400' />
+          <span>
+            Fields <span className='tabular-nums text-slate-400'>{shown.size}</span>
+            <span className='text-slate-400'> of {columns.length}</span>
+          </span>
+          <ChevronsUpDown className='h-3.5 w-3.5 text-slate-400' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='w-[300px] p-0'>
+        <Command>
+          <CommandInput placeholder='Find a field…' className='text-[12px]' />
+          <div className='flex items-center gap-1 border-b border-slate-100 px-2 py-1.5 dark:border-border/60'>
+            {(
+              [
+                ['Changed', changedOnly],
+                ['All', columns.map((c) => c.field)],
+                ['None', []]
+              ] as const
+            ).map(([label, list]) => (
+              <button
+                key={label}
+                type='button'
+                onClick={() => onChange(new Set(list))}
+                className='rounded px-2 py-0.5 text-[11.5px] text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted'
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <CommandList className='max-h-[340px]'>
+            <CommandEmpty>No field by that name.</CommandEmpty>
+            <CommandGroup>
+              {columns.map((c) => (
+                <CommandItem
+                  key={c.field}
+                  value={`${c.label} ${c.field}`}
+                  onSelect={() => toggle(c.field)}
+                  className='text-[12px]'
+                >
+                  <span
+                    className={cn(
+                      'flex h-3.5 w-3.5 items-center justify-center rounded-sm border',
+                      shown.has(c.field)
+                        ? 'border-nvr-cyan bg-nvr-cyan text-white'
+                        : 'border-slate-300 dark:border-slate-600'
+                    )}
+                  >
+                    {shown.has(c.field) && <Check className='h-3 w-3' />}
+                  </span>
+                  <span className='flex-1 truncate'>{c.label}</span>
+                  {c.changes > 0 && (
+                    <span className='tabular-nums text-[11px] text-slate-400'>{c.changes}×</span>
+                  )}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+const ACTION_CHIP: Record<SaveAction, string> = {
+  created: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300',
+  changed: 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-slate-300',
+  deleted: 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300',
+  restored: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+}
+
+function RevisionChangesView({ collection, item }: { collection: string; item: string }) {
+  const client = useNivaroClient()
+  const meta = useFieldMeta(collection, true)
+  const { data, isLoading } = useQuery({
+    queryKey: ['revisions', collection, item],
+    queryFn: () =>
+      client
+        .request<{ data: Revision[] }>(get('/revisions', { collection, item }))
+        .then((r) => r.data ?? []),
+    staleTime: 30_000
+  })
+  const qc = useQueryClient()
+  useLiveRecordQueries(collection, item, [['revisions', collection, item]], { client: qc })
+  const actorRows = useMemo(
+    () =>
+      (data ?? [])
+        .filter((r) => r.actor && r.actor.kind !== 'person')
+        .map((r) => ({ action: r.action, user: r.user_id, actor: r.actor })),
+    [data]
+  )
+  const labels = useActivityLabels(actorRows, { enabled: actorRows.length > 0 })
+  const rows = useMemo(
+    () =>
+      buildSaveRows((data ?? []) as ChangeSourceRevision[], {
+        name: (r) => revisionUserName(r as Revision, labels)
+      }),
+    [data, labels]
+  )
+  const columns = useMemo(() => matrixColumns(rows, (f) => metaFor(meta, f)), [rows, meta])
+  // Default: every field that ever changed (written or recalculated). The person's own picks win.
+  const [picked, setPicked] = useState<Set<string> | null>(null)
+  const shownFields = useMemo(
+    () => picked ?? new Set(columns.filter((c) => c.changes > 0).map((c) => c.field)),
+    [picked, columns]
+  )
+  const shownColumns = useMemo(
+    () => columns.filter((c) => shownFields.has(c.field)),
+    [columns, shownFields]
+  )
+  const [onlyMoving, setOnlyMoving] = useState(true)
+  const shownRows = useMemo(
+    () =>
+      onlyMoving
+        ? rowsChanging(
+            rows,
+            shownColumns.map((c) => c.field)
+          )
+        : rows,
+    [rows, shownColumns, onlyMoving]
+  )
+
+  const download = () => {
+    const csv = matrixCsv(shownRows, shownColumns, (f, v) => cellText(v, metaFor(meta, f)))
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `history-${collection}-${item}.csv`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  if (isLoading)
+    return (
+      <div className='space-y-2 pt-4'>
+        {[1, 2, 3, 4, 5].map((i) => (
+          <Skeleton key={i} className='h-9 rounded-md' />
+        ))}
+      </div>
+    )
+
+  return (
+    <div className='pt-4' data-revision-table-view>
+      <div className='mb-3 flex flex-wrap items-center gap-2'>
+        <ColumnPicker columns={columns} shown={shownFields} onChange={setPicked} />
+        <label className='inline-flex cursor-pointer select-none items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'>
+          <input
+            type='checkbox'
+            checked={onlyMoving}
+            onChange={(e) => setOnlyMoving(e.target.checked)}
+            className='h-3.5 w-3.5 accent-nvr-cyan'
+          />
+          Only saves that changed these fields
+        </label>
+        <span className='ml-auto inline-flex items-center gap-3 text-[11.5px] text-slate-500 dark:text-slate-400'>
+          <span className='inline-flex items-center gap-1.5'>
+            <span className='h-2.5 w-2.5 rounded-sm bg-amber-200 dark:bg-amber-500/40' />
+            Changed
+          </span>
+          <span className='inline-flex items-center gap-1'>
+            <Sigma className='h-3 w-3' />
+            Recalculated
+          </span>
+          <span className='tabular-nums'>
+            {shownRows.length} save{shownRows.length === 1 ? '' : 's'}
+          </span>
+        </span>
+        <Button
+          variant='outline'
+          size='sm'
+          className='h-8 gap-1.5 text-[12px]'
+          onClick={download}
+          disabled={shownRows.length === 0 || shownColumns.length === 0}
+        >
+          <Download className='h-3.5 w-3.5' />
+          CSV
+        </Button>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className='rounded-lg border border-dashed border-slate-200 py-12 text-center dark:border-border'>
+          <p className='text-[13px] font-medium text-slate-600 dark:text-slate-300'>No saves yet</p>
+          <p className='mx-auto mt-1 max-w-[42ch] text-[12px] text-slate-400'>
+            Every save records the whole record — each one will be a row here.
+          </p>
+        </div>
+      ) : shownColumns.length === 0 ? (
+        <div className='rounded-lg border border-dashed border-slate-200 py-12 text-center dark:border-border'>
+          <p className='text-[13px] font-medium text-slate-600 dark:text-slate-300'>
+            No fields picked
+          </p>
+          <p className='mx-auto mt-1 max-w-[42ch] text-[12px] text-slate-400'>
+            Choose the fields to show as columns from the Fields menu.
+          </p>
+        </div>
+      ) : (
+        <div className='overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
+          <div className='max-h-[calc(100vh-230px)] overflow-auto'>
+            <table className='border-separate border-spacing-0 text-left text-[12px]'>
+              <thead>
+                <tr className='text-[11px] text-slate-500 dark:text-slate-400'>
+                  <th className='sticky left-0 top-0 z-[3] w-[112px] min-w-[112px] border-b border-r border-slate-200 bg-slate-50 px-3 py-2 font-medium dark:border-border dark:bg-muted'>
+                    When
+                  </th>
+                  <th className='sticky left-[112px] top-0 z-[3] w-[176px] min-w-[176px] border-b border-r border-slate-200 bg-slate-50 px-3 py-2 font-medium dark:border-border dark:bg-muted'>
+                    Changed by
+                  </th>
+                  {shownColumns.map((c) => (
+                    <th
+                      key={c.field}
+                      title={c.field}
+                      className='sticky top-0 z-[2] min-w-[132px] max-w-[260px] border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium dark:border-border dark:bg-muted'
+                    >
+                      {c.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {shownRows.map((r) => (
+                  <tr key={r.key} className='group align-top' data-save-action={r.action}>
+                    <td className='sticky left-0 z-[1] border-b border-r border-slate-100 bg-white px-3 py-2 group-hover:bg-slate-50 dark:border-border/50 dark:bg-card dark:group-hover:bg-muted'>
+                      {r.timestamp && (
+                        <span
+                          className='block tabular-nums leading-tight'
+                          title={formatDateTime(r.timestamp)}
+                        >
+                          <span className='block text-slate-700 dark:text-slate-200'>
+                            {toLocalDateString(r.timestamp)}
+                          </span>
+                          <span className='block text-[11px] text-slate-400'>
+                            {new Date(r.timestamp).toLocaleTimeString([], {
+                              hour: 'numeric',
+                              minute: '2-digit'
+                            })}
+                          </span>
+                        </span>
+                      )}
+                    </td>
+                    <td className='sticky left-[112px] z-[1] border-b border-r border-slate-100 bg-white px-3 py-2 group-hover:bg-slate-50 dark:border-border/50 dark:bg-card dark:group-hover:bg-muted'>
+                      <span className='flex items-center gap-2'>
+                        <RevisionAvatar userId={r.userId} name={r.who} size='sm' />
+                        <span className='min-w-0'>
+                          <span className='block truncate text-slate-700 dark:text-slate-200'>
+                            {r.who}
+                          </span>
+                          <span
+                            className={cn(
+                              'mt-0.5 inline-block rounded px-1.5 py-px text-[10.5px] font-medium',
+                              ACTION_CHIP[r.action]
+                            )}
+                          >
+                            {saveActionLabel(r.action)}
+                          </span>
+                        </span>
+                      </span>
+                    </td>
+                    {shownColumns.map((c) => {
+                      const m = metaFor(meta, c.field)
+                      const v = r.values[c.field]
+                      const own = r.changed.has(c.field)
+                      const recalc = r.recalculated.has(c.field)
+                      const moved = own || recalc
+                      const tip = recalc ? viaText(r.via.get(c.field)) : undefined
+                      const empty = v === null || v === undefined || v === ''
+                      return (
+                        <td
+                          key={c.field}
+                          data-cell-changed={moved || undefined}
+                          className={cn(
+                            'max-w-[260px] border-b border-slate-100 px-3 py-2 dark:border-border/50',
+                            moved
+                              ? 'bg-amber-50 group-hover:bg-amber-100/70 dark:bg-amber-500/10 dark:group-hover:bg-amber-500/15'
+                              : 'group-hover:bg-slate-50 dark:group-hover:bg-muted/40'
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              'flex items-start gap-1',
+                              moved
+                                ? 'font-medium text-slate-900 dark:text-slate-50'
+                                : 'text-slate-500 dark:text-slate-400'
+                            )}
+                          >
+                            {recalc && (
+                              <Sigma
+                                className='mt-[3px] h-3 w-3 shrink-0 text-amber-700 dark:text-amber-300'
+                                aria-label='Recalculated'
+                              />
+                            )}
+                            <span
+                              className='line-clamp-3 break-words'
+                              data-tip={tip ?? (empty ? undefined : cellText(v, m))}
+                            >
+                              {empty ? (
+                                <span className='font-normal italic text-slate-300 dark:text-slate-600'>
+                                  {moved ? 'cleared' : '—'}
+                                </span>
+                              ) : m.relatedCollection &&
+                                (typeof v === 'string' || typeof v === 'number') ? (
+                                <RelationValue collection={m.relatedCollection} id={v} />
+                              ) : (
+                                cellText(v, m)
+                              )}
+                            </span>
+                          </span>
+                          {recalc && r.via.get(c.field)?.length ? (
+                            <span className='mt-0.5 block text-[10.5px] font-normal text-amber-800/80 dark:text-amber-200/70'>
+                              {r.via
+                                .get(c.field)
+                                ?.map((x) => `${x.name} · ${x.row} ${signedCell(x.delta, m)}`)
+                                .join(', ')}
+                            </span>
+                          ) : null}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Replay: the record at any save, step by step ───────────────────────────
+
+function HistoryReplay({
+  snapshots,
+  meta,
+  labels
+}: {
+  snapshots: Revision[]
+  meta: FieldMetaMap
+  labels?: ActivityLabels
+}) {
+  const ordered = useMemo(() => [...snapshots].reverse(), [snapshots]) // oldest → newest
+  const [idx, setIdx] = useState(Math.max(0, ordered.length - 1))
   const [playing, setPlaying] = useState(false)
-  const [idx, setIdx] = useState(0)
+  const [showAll, setShowAll] = useState(false)
+  const [jump, setJump] = useState('')
+  const last = ordered.length - 1
+  useEffect(() => {
+    if (idx > last) setIdx(Math.max(0, last))
+  }, [idx, last])
   useEffect(() => {
     if (!playing) return
-    if (idx >= ordered.length - 1) {
+    if (idx >= last) {
       setPlaying(false)
       return
     }
-    const t = setTimeout(() => setIdx((i) => i + 1), 1600)
+    const t = setTimeout(() => setIdx((i) => i + 1), 1800)
     return () => clearTimeout(t)
-  }, [playing, idx, ordered.length])
+  }, [playing, idx, last])
+
   const cur = ordered[idx]
-  const deltaLabels = cur?.delta
-    ? Object.keys(cur.delta)
-        .slice(0, 5)
-        .map((f) => metaFor(meta, f).label)
-    : []
+  const prev = idx > 0 ? ordered[idx - 1] : null
+  const changed = useMemo(() => {
+    if (!cur) return []
+    const rows = computeFieldRows(prev?.data ?? {}, cur.data ?? {}, meta).filter(
+      (r) => r.status !== 'unchanged' && !r.system && r.field !== 'id'
+    )
+    if (!prev) return []
+    const mine = new Set(Object.keys(cur.delta ?? {}))
+    // What the person wrote first, then what was recalculated around it.
+    return rows.sort((a, b) => Number(!mine.has(a.field)) - Number(!mine.has(b.field)))
+  }, [cur, prev, meta])
+  const own = new Set(Object.keys(cur?.delta ?? {}))
+  const ownCount = changed.filter((r) => own.has(r.field)).length
+  const recalcCount = changed.length - ownCount
+  const record = useMemo(
+    () =>
+      Object.entries(cur?.data ?? {})
+        .filter(
+          ([k, v]) =>
+            k !== 'id' && v !== null && v !== undefined && v !== '' && !metaFor(meta, k).system
+        )
+        .sort(([a], [b]) => metaFor(meta, a).label.localeCompare(metaFor(meta, b).label)),
+    [cur, meta]
+  )
+
+  const go = (i: number) => {
+    setPlaying(false)
+    setIdx(Math.min(last, Math.max(0, i)))
+  }
+  const onJump = (v: string) => {
+    setJump(v)
+    if (!v) return
+    const cut = new Date(`${v}T23:59:59`).getTime()
+    let at = -1
+    ordered.forEach((r, i) => {
+      if (r.timestamp && new Date(r.timestamp).getTime() <= cut) at = i
+    })
+    if (at >= 0) go(at)
+  }
+  if (!cur) return null
+  const who = revisionUserName(cur, labels)
+  const what =
+    cur.action === 'create'
+      ? 'created the record'
+      : cur.action === 'delete'
+        ? 'deleted the record'
+        : cur.action === 'restore'
+          ? 'restored the record'
+          : ownCount
+            ? `changed ${ownCount} field${ownCount === 1 ? '' : 's'}${recalcCount ? ` · ${recalcCount} recalculated` : ''}`
+            : recalcCount
+              ? `saved the record · ${recalcCount} recalculated`
+              : 'saved the record'
+  const jumpTooEarly =
+    jump !== '' &&
+    ordered[0]?.timestamp != null &&
+    new Date(`${jump}T23:59:59`).getTime() < new Date(ordered[0].timestamp as string).getTime()
+
   return (
-    <div className='rounded-md border border-slate-200 bg-slate-50/70 p-2 dark:border-border dark:bg-muted/30'>
-      <div className='flex items-center gap-2'>
-        <button
-          type='button'
+    <div
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      data-history-replay
+    >
+      {/* The rail: one stop per save, oldest on the left. Arrow keys step. */}
+      <div className='border-b border-slate-100 px-3 pb-2 pt-3 dark:border-border/60'>
+        <div
+          role='slider'
+          tabIndex={0}
+          aria-label='Save shown'
+          aria-valuemin={1}
+          aria-valuemax={ordered.length}
+          aria-valuenow={idx + 1}
+          aria-valuetext={`${idx + 1} of ${ordered.length}${cur.timestamp ? `, ${formatDateTime(cur.timestamp)}` : ''}, ${who}`}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowLeft') go(idx - 1)
+            else if (e.key === 'ArrowRight') go(idx + 1)
+            else if (e.key === 'Home') go(0)
+            else if (e.key === 'End') go(last)
+            else return
+            e.preventDefault()
+          }}
+          className='relative h-6 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+        >
+          <span
+            className='absolute left-2 right-2 top-1/2 h-px -translate-y-1/2 bg-slate-200 dark:bg-border'
+            aria-hidden
+          />
+          <span
+            className='absolute left-2 top-1/2 h-0.5 -translate-y-1/2 bg-nvr-cyan transition-[width] duration-300 ease-out motion-reduce:transition-none'
+            style={{ width: last > 0 ? `calc((100% - 1rem) * ${idx / last})` : '0' }}
+            aria-hidden
+          />
+          {ordered.map((r, i) => {
+            const pos = last > 0 ? i / last : 0.5
+            const on = i === idx
+            return (
+              <button
+                key={rowKey(r)}
+                type='button'
+                tabIndex={-1}
+                onClick={() => go(i)}
+                aria-label={`${r.timestamp ? formatDateTime(r.timestamp) : 'Save'} — ${revisionUserName(r, labels)}`}
+                data-tip={`${r.timestamp ? formatDateTime(r.timestamp) : ''} · ${revisionUserName(r, labels)}`}
+                className='absolute top-1/2 -translate-x-1/2 -translate-y-1/2 p-1'
+                style={{ left: `calc(0.5rem + (100% - 1rem) * ${pos})` }}
+              >
+                <span
+                  className={cn(
+                    'block rounded-full transition-all',
+                    on
+                      ? 'h-3 w-3 bg-nvr-cyan ring-4 ring-nvr-cyan/20'
+                      : cn(
+                          'h-2 w-2 hover:scale-125',
+                          i < idx ? 'bg-nvr-cyan/70' : 'bg-slate-300 dark:bg-slate-600',
+                          r.action === 'create' && 'bg-emerald-500'
+                        )
+                  )}
+                />
+              </button>
+            )
+          })}
+        </div>
+        <div className='mt-1 flex justify-between text-[10.5px] tabular-nums text-slate-400'>
+          <span>{ordered[0]?.timestamp ? toLocalDateString(ordered[0].timestamp) : ''}</span>
+          <span>{ordered[last]?.timestamp ? toLocalDateString(ordered[last].timestamp) : ''}</span>
+        </div>
+      </div>
+
+      <div className='flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-3 py-2 dark:border-border/60'>
+        <Button
+          variant='outline'
+          size='sm'
+          className='h-7 w-7 p-0'
+          onClick={() => go(idx - 1)}
+          disabled={idx === 0}
+          aria-label='Previous save'
+        >
+          <ChevronLeft className='h-3.5 w-3.5' />
+        </Button>
+        <Button
+          size='sm'
+          className='h-7 gap-1.5 bg-nvr-cyan px-3 text-[12px] text-white hover:bg-nvr-cyan/90'
           onClick={() => {
-            if (!playing && idx >= ordered.length - 1) setIdx(0)
+            if (!playing && idx >= last) setIdx(0)
             setPlaying((v) => !v)
           }}
-          className='rounded-md bg-nvr-cyan px-2.5 py-1 text-[11.5px] font-semibold text-white'
+          disabled={ordered.length < 2}
+          data-replay-play
         >
-          {playing ? 'Pause' : '▶ Time-lapse'}
-        </button>
-        <input
-          type='range'
-          min={0}
-          max={Math.max(0, ordered.length - 1)}
-          value={idx}
-          onChange={(e) => {
-            setPlaying(false)
-            setIdx(Number(e.target.value))
-          }}
-          className='flex-1 accent-nvr-cyan'
-          aria-label='History position'
-        />
-        <span className='shrink-0 tabular-nums text-[11px] text-slate-400'>
-          {idx + 1}/{ordered.length}
+          {playing ? <Pause className='h-3.5 w-3.5' /> : <Play className='h-3.5 w-3.5' />}
+          {playing ? 'Pause' : idx >= last ? 'Replay from the start' : 'Play'}
+        </Button>
+        <Button
+          variant='outline'
+          size='sm'
+          className='h-7 w-7 p-0'
+          onClick={() => go(idx + 1)}
+          disabled={idx >= last}
+          aria-label='Next save'
+        >
+          <ChevronRight className='h-3.5 w-3.5' />
+        </Button>
+        <span className='ml-1 tabular-nums text-[11.5px] text-slate-500 dark:text-slate-400'>
+          Save {idx + 1} of {ordered.length}
+          {idx === last ? ' · current' : ''}
         </span>
+        <label className='ml-auto inline-flex items-center gap-1.5 text-[11.5px] text-slate-500 dark:text-slate-400'>
+          <CalendarClock className='h-3.5 w-3.5' />
+          Jump to
+          <input
+            type='date'
+            value={jump}
+            onChange={(e) => onJump(e.target.value)}
+            className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] text-slate-700 dark:border-border dark:bg-card dark:text-slate-200'
+            aria-label='Jump to the record as it was on a date'
+            data-as-of
+          />
+        </label>
       </div>
-      {cur && (
-        <p className='mt-1 text-[11.5px] text-slate-600 dark:text-slate-300'>
-          <span className='font-medium capitalize'>{cur.action ?? 'change'}</span>
-          {cur.timestamp ? ` · ${formatDateTime(cur.timestamp)}` : ''}
-          {cur.user_name ? ` · ${cur.user_name}` : ''}
-          {deltaLabels.length > 0 && (
-            <span className='ml-1 text-[10.5px] text-slate-400'>
-              changed: {deltaLabels.join(', ')}
-            </span>
+
+      <div className='px-3 py-3'>
+        <div className='flex items-center gap-2'>
+          <RevisionAvatar userId={cur.user_id} name={who} />
+          <p className='min-w-0 flex-1 text-[12.5px] text-slate-700 dark:text-slate-200'>
+            <span className='font-medium'>{who}</span>{' '}
+            <span className='text-slate-500 dark:text-slate-400'>{what}</span>
+          </p>
+          <span className='shrink-0 tabular-nums text-[11.5px] text-slate-400'>
+            {cur.timestamp ? formatDateTime(cur.timestamp) : ''}
+          </span>
+        </div>
+        {jumpTooEarly && (
+          <p className='mt-2 text-[12px] text-slate-500 dark:text-slate-400'>
+            The record did not exist yet on that date — showing its first save.
+          </p>
+        )}
+
+        {changed.length > 0 && (
+          <div className='mt-3 overflow-hidden rounded-md border border-amber-200/80 dark:border-amber-900/50'>
+            {changed.map((r) => (
+              <div
+                key={r.field}
+                className='grid grid-cols-[minmax(120px,180px)_1fr] gap-3 border-b border-amber-100 bg-amber-50/60 px-2.5 py-1.5 last:border-0 dark:border-amber-900/30 dark:bg-amber-950/20'
+                data-replay-changed={r.field}
+              >
+                <span className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                  {metaFor(meta, r.field).label}
+                  {!own.has(r.field) && cur.action === 'update' && (
+                    <span className='ml-1.5 inline-flex items-center gap-0.5 text-[10.5px] font-normal text-slate-500 dark:text-slate-400'>
+                      <Sigma className='h-3 w-3' />
+                      recalculated
+                    </span>
+                  )}
+                </span>
+                <span className='flex flex-wrap items-baseline gap-x-2 text-[12px]'>
+                  <span className='text-slate-400 line-through decoration-slate-300 dark:decoration-slate-600'>
+                    <RevValue value={r.before} meta={metaFor(meta, r.field)} tone='before' />
+                  </span>
+                  <ArrowRight className='h-3 w-3 shrink-0 self-center text-slate-400' />
+                  <span className='font-medium text-slate-900 dark:text-slate-100'>
+                    <RevValue value={r.after} meta={metaFor(meta, r.field)} tone='after' />
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button
+          type='button'
+          onClick={() => setShowAll((v) => !v)}
+          className='mt-3 inline-flex items-center gap-1 text-[12px] font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100'
+          aria-expanded={showAll}
+        >
+          {showAll ? (
+            <ChevronDown className='h-3.5 w-3.5' />
+          ) : (
+            <ChevronRight className='h-3.5 w-3.5' />
           )}
-        </p>
-      )}
+          The whole record at this save
+          <span className='font-normal text-slate-400'>({record.length} fields)</span>
+        </button>
+        {showAll && (
+          <div className='mt-2 max-h-80 overflow-y-auto rounded-md border border-slate-200 dark:border-border'>
+            {record.map(([k, v]) => (
+              <div
+                key={k}
+                className='grid grid-cols-[minmax(120px,180px)_1fr] gap-3 border-b border-slate-100 px-2.5 py-1.5 last:border-0 dark:border-border/60'
+              >
+                <span className='text-[12px] text-slate-500 dark:text-slate-400' title={k}>
+                  {metaFor(meta, k).label}
+                </span>
+                <span className='break-words text-[12px] text-slate-800 dark:text-slate-200'>
+                  <RevValue value={v} meta={metaFor(meta, k)} tone='after' />
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

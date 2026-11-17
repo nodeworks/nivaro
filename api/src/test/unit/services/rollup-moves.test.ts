@@ -23,15 +23,15 @@ describe('rollupMoves', () => {
   it('a line amount edit moves the requisition amount by the difference', () => {
     expect(
       rollupMoves([sum('requisition_amount', 'amount')], { amount: 1 }, { amount: 2060 })
-    ).toEqual([{ field: 'requisition_amount', delta: 2059 }])
+    ).toEqual([{ field: 'requisition_amount', delta: 2059, source_field: 'amount' }])
   })
 
   it('an added line adds its amount, a removed one takes it away', () => {
     expect(rollupMoves([sum('requisition_amount', 'amount')], null, { amount: 50 })).toEqual([
-      { field: 'requisition_amount', delta: 50 }
+      { field: 'requisition_amount', delta: 50, source_field: 'amount' }
     ])
     expect(rollupMoves([sum('requisition_amount', 'amount')], { amount: 50 }, null)).toEqual([
-      { field: 'requisition_amount', delta: -50 }
+      { field: 'requisition_amount', delta: -50, source_field: 'amount' }
     ])
   })
 
@@ -50,7 +50,7 @@ describe('rollupMoves', () => {
         { amount: 10, line_type: 'Expense' },
         { amount: 10, line_type: 'Capital' }
       )
-    ).toEqual([{ field: 'capital_total', delta: 10 }])
+    ).toEqual([{ field: 'capital_total', delta: 10, source_field: 'amount' }])
     expect(rollupMoves(sources, null, { amount: 1, line_type: 'Expense' })).toEqual([
       { field: 'line_count', delta: 1 }
     ])

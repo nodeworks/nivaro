@@ -116,7 +116,13 @@ export interface ActivityO2m {
   row_label?: string | null
   changes?: Array<{ field: string; label: string; from: string | null; to: string | null }> | null
   /** Stored totals on the parent this write moved ("Requisition Amount +2,059"). */
-  totals?: Array<{ field: string; label: string; delta: number }> | null
+  totals?: Array<{
+    field: string
+    label: string
+    delta: number
+    /** The child column whose change moved the total. */
+    source_field?: string
+  }> | null
   /** Written on the row itself (its own page, an import, a sync), not from the parent's page. */
   elsewhere?: boolean | null
 }

@@ -20,6 +20,8 @@ export interface RollupMove {
   field: string
   /** How much this write moved it (after − before). */
   delta: number
+  /** The child column whose change moved it (the summed column); absent for a count. */
+  source_field?: string
 }
 
 export interface ParentRollupSource {
@@ -67,6 +69,7 @@ export function rollupMoves(
   after: Record<string, unknown> | null
 ): RollupMove[] {
   const byField = new Map<string, number>()
+  const sourceOf = new Map<string, string>()
   for (const { rollupField, source } of sources) {
     if (source.recursive || source.value_formula) continue
     if (source.aggregate !== 'sum' && source.aggregate !== 'count') continue
@@ -74,11 +77,14 @@ export function rollupMoves(
     const b = contribution(after, source)
     if (a == null || b == null) continue
     byField.set(rollupField, (byField.get(rollupField) ?? 0) + (b - a))
+    if (source.aggregate === 'sum' && b !== a) sourceOf.set(rollupField, source.value_field)
   }
   const out: RollupMove[] = []
   for (const [field, delta] of byField) {
     const rounded = Math.round(delta * 10_000) / 10_000
-    if (rounded !== 0) out.push({ field, delta: rounded })
+    if (rounded === 0) continue
+    const src = sourceOf.get(field)
+    out.push(src ? { field, delta: rounded, source_field: src } : { field, delta: rounded })
   }
   return out
 }

@@ -508,6 +508,8 @@ interface UserCardData {
   manager_name?: string | null
   manager_id?: string | null
   timezone?: string | null
+  /** null / absent = a person; 'integration' | 'bot' | 'service' | 'placeholder' = not one. */
+  account_kind?: string | null
 }
 
 function UserCardPopover({
@@ -536,6 +538,9 @@ function UserCardPopover({
 }) {
   const { isAdmin, userId: viewerId } = useItemEditAuth()
   const isSelf = !!viewerId && viewerId.toUpperCase() === userId.toUpperCase()
+  // Message and Email are for people: an integration, bot, service or placeholder account has
+  // no one to read them.
+  const isPerson = !user?.account_kind
   // #1982 — active, idle or away and the page they are on, under the Online list's rules.
   const live = useCardPresence(userId, open)
   // #2851 — only when the viewer can see that room (the server filters the list).
@@ -729,7 +734,7 @@ function UserCardPopover({
             <User className='h-3.5 w-3.5' /> View profile
           </button>
         )}
-        {canOpenDm() && (
+        {isPerson && canOpenDm() && (
           <button
             type='button'
             onClick={() => {
@@ -746,7 +751,7 @@ function UserCardPopover({
             <MessageCircle className='h-3.5 w-3.5' /> Message
           </button>
         )}
-        {user?.email && (
+        {isPerson && user?.email && (
           <button
             type='button'
             onClick={() => {

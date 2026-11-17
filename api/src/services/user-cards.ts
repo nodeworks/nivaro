@@ -55,6 +55,9 @@ export async function readUserCards(ids: readonly string[]): Promise<UserCardRow
       'r.name as role_name',
       db.raw(`CONCAT(m.first_name, ' ', m.last_name) as manager_name`),
       'u.manager_id',
+      // null = a person; integration / bot / service / placeholder are not people, and the card
+      // offers Message and Email only to people (2026-11-17).
+      'u.account_kind',
       'u.is_redacted'
     )) as Array<Record<string, unknown>>
   return rows.map((row) => {
