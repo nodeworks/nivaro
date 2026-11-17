@@ -454,6 +454,7 @@ import { useEntryMode } from './item-edit/entry/useEntryMode'
 import { FieldPointerHost } from './item-edit/FieldPointer'
 import { type FindableField, FindInRecordButton } from './item-edit/FindInRecord'
 import { RecordViewersChip } from './item-edit/RecordViewersChip'
+import { planReimportM2m, type StoredLink } from './item-edit/reimport-m2m'
 import { StepsBar } from './item-edit/StepsBar'
 import { M2OSummaryValue, SummaryPanel } from './item-edit/SummaryPanel'
 import type {
@@ -3986,10 +3987,12 @@ function ItemEditFormView({
         if (m2mRel) {
           const stagingKey =
             m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
-          // Existing record: only stage values not already linked, or the save
-          // flush would insert duplicate junction rows (e.g. a second 2026
-          // funding-year link on every re-import).
-          let existing = new Set<string>()
+          // Existing record: to-many header fields follow the same header_fields
+          // policy as plain ones (planReimportM2m) — overwrite replaces the
+          // stored set, so a re-imported bid with a new funding year no longer
+          // keeps the old one beside it (CM26-81488, 2026-11-17).
+          if (cfg.header_fields === 'skip') continue
+          let stored: StoredLink[] | null = null
           try {
             const junctionRows = await client
               .request<{ data: Record<string, unknown>[] }>(
@@ -4000,18 +4003,27 @@ function ItemEditFormView({
                 })
               )
               .then((r) => r.data ?? [])
-            existing = new Set(
-              junctionRows.map((jr) => String(jr[m2mRel.junction_field as string]))
-            )
+            stored = junctionRows.map((jr) => ({
+              junctionId: jr.id as string | number,
+              target: String(jr[m2mRel.junction_field as string])
+            }))
           } catch {
-            // fetch failure: fall through and stage everything (worst case a
-            // duplicate link, same as the pre-fix behavior)
+            issues.push({
+              severity: 'error',
+              rule: 'reimport-apply',
+              message: `Could not read the current "${field}" — it was left as it is.`
+            })
           }
+          if (!stored) continue
+          const plan = planReimportM2m(
+            stored,
+            Array.isArray(ids) ? ids : [ids],
+            cfg.header_fields
+          )
           notPersonStageRef.current += 1
           try {
-            for (const id of ids) {
-              if (!existing.has(String(id))) m2mStagingCtx.stageLink(stagingKey, id)
-            }
+            for (const jId of plan.unlink) m2mStagingCtx.stageUnlink(stagingKey, jId)
+            for (const id of plan.link) m2mStagingCtx.stageLink(stagingKey, id)
           } finally {
             notPersonStageRef.current -= 1
           }
