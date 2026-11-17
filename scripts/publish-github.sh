@@ -29,6 +29,8 @@ STRIP_PATHS=(
   docs/superpowers
   # Internal security planning (SOC 2 readiness gaps) — never public.
   docs/security
+  # Dependabot runs on nivaro-dev; on the force-pushed public mirror its PRs would be wiped.
+  .github/dependabot.yml
   tests/e2e/reports
   test-results
   scripts/demo-seeds/seed-wh-demo.mts

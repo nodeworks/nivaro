@@ -79,16 +79,9 @@ jobs:
       - name: Build workspace packages
         run: pnpm --filter './packages/*' build
 
-      # Excluded (pre-existing failure on main, 2026-11-16; drop the
-      # --exclude once fixed): integration-import-stale.test.ts — two cases
-      # fail with "Cannot read properties of undefined (reading 'first')"
-      # because the test's db mock has no nivaro_settings answer for
-      # business-hours.ts loadSchedule().
       - name: vitest
         working-directory: api
-        run: >-
-          npx vitest run
-          --exclude src/test/unit/services/integration-import-stale.test.ts
+        run: npx vitest run
 
   test-packages:
     name: Admin + package unit tests
@@ -113,10 +106,6 @@ jobs:
       - name: admin
         run: pnpm --filter @nivaro/admin test
 
-      # Excluded (pre-existing failure on main, 2026-11-16; drop the
-      # --exclude once the snapshot is refreshed): ItemEditForm.design.test.tsx
-      # "normal mode output unchanged" — the stored snapshot predates the
-      # record-header copy-title button change (f2877a9dc).
       # Excluded (flaky under full-suite load, passes alone):
       # CollectionBrowserView.totals-views.test.tsx — "a view's totals never
       # replace the person's own choices" hits the 5 s test timeout when the
@@ -129,7 +118,6 @@ jobs:
         working-directory: packages/shared
         run: >-
           npx vitest run --retry=2
-          --exclude src/components/ItemEditForm.design.test.tsx
           --exclude src/components/CollectionBrowserView.totals-views.test.tsx
 
       - name: packages/react
