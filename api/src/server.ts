@@ -72,8 +72,10 @@ import { enrichErrorPayload, noteDbRefusal } from './services/error-enrich.js'
 import { logRouteError } from './services/error-log-level.js'
 import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
+import { importerServes } from './services/import-handoff.js'
 import { maintenanceFreezeHook } from './services/maintenance-freeze.js'
 import { markMcpInnerRequest } from './services/mcp-config.js'
+import { processRole } from './services/process-role.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
 import { maskUrlQuery } from './services/secret-mask.js'
 import { noteAccessDenied } from './services/security-alerts.js'
@@ -177,6 +179,19 @@ export async function buildServer() {
     applySecurityHeaders(req, reply)
     return payload
   })
+
+  // An importer (NIVARO_ROLE=importer) runs staged imports and nothing else: it answers health,
+  // readiness, version and metrics, and 404s every other path with a sentence (a misrouted
+  // proxy should be obvious). services/import-handoff.ts.
+  if (processRole() === 'importer') {
+    app.addHook('onRequest', async (req, reply) => {
+      if (importerServes(req.url)) return
+      return reply.code(404).send({
+        error: 'Not found',
+        message: `${req.method} ${req.url.split('?')[0]} is not served by an importer process (NIVARO_ROLE=importer): route it to the web processes.`
+      })
+    })
+  }
 
   // ─── Cloud multi-tenant: resolve tenant DB per request ────────────────────
   // Only active when CLOUD_META_DB_URL is set. Self-hosted: this hook is never
@@ -350,6 +365,14 @@ export async function buildServer() {
         version: NIVARO_VERSION
       }).catch((err) => app.log.warn({ err }, '[media-worker] did not start'))
       app.addHook('onClose', async () => stopMediaWorker())
+    }
+    // Staged imports run on the importer (NIVARO_ROLE=importer); the cron worker drains only
+    // while no importer beats; a single process drains itself (services/import-handoff.ts).
+    if (!process.env.CLOUD_META_DB_URL) {
+      const { startImportDrainer } = await import('./services/staged-import-worker.js')
+      void startImportDrainer(app).catch((err) =>
+        app.log.warn({ err }, '[import-worker] did not start')
+      )
     }
     // Realtime event pipeline: journaled events cross replicas on a Redis
     // stream (#1737); the durable journal (#1673) keeps the sequence ahead of

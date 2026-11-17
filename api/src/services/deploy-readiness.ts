@@ -182,6 +182,20 @@ export function registerDeployReadinessChecks(): void {
     }
   })
   registerReadinessCheck({
+    id: 'import-worker',
+    label: 'Queued imports have a process to run them',
+    group: 'Deploy',
+    description:
+      'Staged imports run on the importer (NIVARO_ROLE=importer); the cron worker runs them while no importer beats, and a single process runs its own. Warns when imports have been queued over 2 minutes and neither an importer nor a worker has checked in for 90 s. Reads the queued runs and two Redis heartbeats.',
+    ttlMs: 120_000,
+    run: async () => {
+      const { getApp } = await import('./io-holder.js')
+      const { importWorkerJudgement } = await import('./staged-import-worker.js')
+      const v = await importWorkerJudgement(getApp()?.redis)
+      return { status: v.status === 'ok' ? 'pass' : v.status, detail: v.summary }
+    }
+  })
+  registerReadinessCheck({
     id: 'realtime-delivery-acks',
     label: 'The live-update delivery check hears from clients',
     group: 'Deploy',

@@ -41,7 +41,7 @@ import {
 import { startDevExtensionWatch } from './services/dev-extension-watch.js'
 import { setInactivePeopleNoticeApp } from './services/inactive-people-notice.js'
 import { installProcessGuards } from './services/process-guards.js'
-import { isRealtimeRole } from './services/process-role.js'
+import { isRealtimeRole, processRole } from './services/process-role.js'
 import { NIVARO_VERSION } from './version.js'
 
 async function main() {
@@ -107,6 +107,11 @@ async function main() {
   } else if (realtime) {
     console.log(
       'Migrations: skipped (NIVARO_ROLE=realtime — the web and worker processes run them)'
+    )
+  } else if (processRole() === 'importer') {
+    // An importer only runs imports (services/import-handoff.ts): the schema is theirs.
+    console.log(
+      'Migrations: skipped (NIVARO_ROLE=importer — the web and worker processes run them)'
     )
   } else if (!process.env.CLOUD_META_DB_URL) {
     // #2803 — a config restore point first when anything is pending (time-boxed, never fails boot).

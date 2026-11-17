@@ -109,6 +109,12 @@ export function ownRuns(
   }
 }
 
+/** Queue entry + kick for the importer (services/import-handoff.ts). Never fails a request. */
+async function handOffRun(app: FastifyInstance, id: number | string): Promise<void> {
+  const { asImportRedis, enqueueImportRun } = await import('../services/import-handoff.js')
+  await enqueueImportRun(asImportRedis(app.redis), id).catch(() => false)
+}
+
 export async function stagedImportRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
 
@@ -1663,6 +1669,9 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       comment: `${key} (${multipart.filename})`,
       req
     })
+    // Hand the run to the importer (NIVARO_ROLE=importer): list entry + kick. The row is the
+    // truth; a drainer also reads queued rows, so a Redis hiccup only delays the start.
+    await handOffRun(app, id)
     void import('../services/staged-import-worker.js')
       .then((m) => m.publishStanding())
       .catch(() => {})
@@ -1695,6 +1704,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         item: String(row.id),
         req
       })
+      await handOffRun(app, row.id)
       void import('../services/staged-import-worker.js')
         .then((m) => m.publishStanding())
         .catch(() => {})
@@ -1715,6 +1725,8 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       await db('nivaro_import_queue')
         .where('id', row.id)
         .update({ status: 'canceled', finished_at: new Date(), updated_at: new Date() })
+      const { asImportRedis, forgetRun } = await import('../services/import-handoff.js')
+      await forgetRun(asImportRedis(app.redis), row.id).catch(() => {})
       await logActivity({
         action: 'import-cancel',
         user: req.user?.id,

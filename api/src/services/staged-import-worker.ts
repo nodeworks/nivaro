@@ -1,11 +1,38 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
+import { NIVARO_VERSION } from '../version.js'
 import { activityGroupKey, withActivityScope } from './activity-scope.js'
 import { newChainId, startChain } from './chain.js'
 import { getFile, readFileBuffer } from './files.js'
 import { announceCollectionImportRun } from './import-collection-runs.js'
+import {
+  asImportRedis,
+  beatImportWorker,
+  enqueueImportRun,
+  forgetRun,
+  type ImportDrainMode,
+  type ImportJudgement,
+  type ImportRedis,
+  type ImportWorkerBeat,
+  importAttemptsKey,
+  importDrainMode,
+  importKickChannel,
+  importLeaseMs,
+  judgeImportWorker,
+  judgeLeases,
+  LEASE_FAIL_NOTE,
+  LEASE_RENEW_MS,
+  LEASE_RETRY_NOTE,
+  pruneFinishedEntries,
+  type RunningRow,
+  readImportBeat,
+  STUCK_QUEUED_MS,
+  shouldDrainNow
+} from './import-handoff.js'
 import { loadQueueStanding, publishQueueStanding } from './import-queue-standing.js'
 import { rememberRunRows } from './import-run-rows.js'
+import { INSTANCE_ID } from './instance-roster.js'
 import { emitImportProgress, emitJobProgress } from './live-progress.js'
 import { notifyUser } from './notification-channels.js'
 import { validateStagedRows } from './staged-import-validation.js'
@@ -110,20 +137,195 @@ function afterImportCompleted(
 
 let ticking = false
 
-export function registerStagedImportWorker(app: FastifyInstance): void {
-  app.cron.schedule('staged-imports', '*/10 * * * * *', async () => {
-    // Guards overlapping ticks in this process; the status check below covers
-    // other replicas.
-    if (ticking) return
-    ticking = true
-    try {
-      await drainOnce(app)
-      await publishStanding().catch(() => {})
-    } catch (err) {
-      app.log.error({ err }, 'staged-import worker tick failed')
-    } finally {
-      ticking = false
+const importRedis = (app: FastifyInstance): ImportRedis | null =>
+  asImportRedis((app as unknown as { redis?: unknown }).redis)
+
+/**
+ * One drain pass, single-flight per process: only where importDrainMode() allows it (an
+ * importer; IMPORT_WORKER=on; the worker while no importer beats; a single process), never
+ * on a web process. Beats, recovers runs whose process died, drops finished hand-off entries,
+ * then claims queued rows (services/import-handoff.ts).
+ */
+export async function drainImportsTick(app: FastifyInstance): Promise<void> {
+  // Guards overlapping ticks in this process; the row's own claim covers other replicas.
+  if (ticking) return
+  ticking = true
+  try {
+    const mode = importDrainMode()
+    const r = importRedis(app)
+    if (!(await shouldDrainNow(mode, r))) return
+    if (r) await beatImportWorker(r, beatOf(mode))
+    await recoverLostRuns(app, r).catch((err) =>
+      app.log.warn({ err }, 'staged-import worker: lease recovery failed')
+    )
+    if (r) await pruneFinishedEntries(r, statusesOf).catch(() => 0)
+    await drainOnce(app)
+    await publishStanding().catch(() => {})
+  } catch (err) {
+    app.log.error({ err }, 'staged-import worker tick failed')
+  } finally {
+    ticking = false
+  }
+}
+
+function beatOf(mode: ImportDrainMode): ImportWorkerBeat {
+  return {
+    role: mode === 'importer' ? 'importer' : 'fallback',
+    instance: INSTANCE_ID,
+    name: process.env.NIVARO_INSTANCE?.trim() || null,
+    version: NIVARO_VERSION,
+    at: new Date().toISOString()
+  }
+}
+
+async function statusesOf(ids: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>()
+  for (let i = 0; i < ids.length; i += 500) {
+    const rows = (await db('nivaro_import_queue')
+      .whereIn('id', ids.slice(i, i + 500))
+      .select('id', 'status')) as Array<{ id: number; status: string }>
+    for (const row of rows) out.set(Number(row.id), String(row.status))
+  }
+  return out
+}
+
+/**
+ * Runs left `running` by a process that died: their lease (`updated_at`, renewed every
+ * LEASE_RENEW_MS while a run is driven) ran out. Back in the queue once (a recent run), then
+ * failed with a sentence. The update matches the lease it read, so two drainers never both act.
+ */
+export async function recoverLostRuns(
+  app: FastifyInstance,
+  r: ImportRedis | null = importRedis(app),
+  now = Date.now()
+): Promise<Array<{ id: number; action: 'retry' | 'fail' }>> {
+  const rows = (await db('nivaro_import_queue')
+    .where('status', 'running')
+    .select('id', 'started_at', 'updated_at', 'import_key', 'created_by')) as Array<
+    RunningRow & { import_key?: string; created_by?: string | null }
+  >
+  const candidates = rows.filter((row) => !driving.has(String(row.id)))
+  if (candidates.length === 0) return []
+  const attempts = new Map<number, number>()
+  if (r) {
+    for (const row of candidates) {
+      const n = Number(
+        await (r as unknown as { hget?: (k: string, f: string) => Promise<string | null> })
+          .hget?.(importAttemptsKey(), String(row.id))
+          .catch(() => null)
+      )
+      if (Number.isFinite(n) && n > 0) attempts.set(Number(row.id), n)
     }
+  }
+  const acted: Array<{ id: number; action: 'retry' | 'fail' }> = []
+  for (const verdict of judgeLeases(candidates, attempts, now, importLeaseMs())) {
+    const row = candidates.find((c) => Number(c.id) === verdict.id)
+    if (!row) continue
+    const lease = row.updated_at ?? row.started_at ?? null
+    const q = db('nivaro_import_queue').where({ id: verdict.id, status: 'running' })
+    if (lease) q.where('updated_at', lease as Date)
+    else q.whereNull('updated_at')
+    const n = Number(
+      verdict.action === 'retry'
+        ? await q.update({
+            status: 'queued',
+            started_at: null,
+            updated_at: new Date(),
+            logs: LEASE_RETRY_NOTE
+          })
+        : await q.update({
+            status: 'error',
+            finished_at: new Date(),
+            updated_at: new Date(),
+            logs: LEASE_FAIL_NOTE
+          })
+    )
+    if (n !== 1) continue
+    acted.push(verdict)
+    noteImportRun('error', { run_id: verdict.id, key: String(row.import_key ?? '') })
+    if (verdict.action === 'retry') {
+      if (r) await r.hincrby(importAttemptsKey(), String(verdict.id), 1).catch(() => 0)
+      await enqueueImportRun(r, verdict.id)
+    } else {
+      await forgetRun(r, verdict.id)
+      await notifyCreator(app, row, `${label(row)} import failed`, LEASE_FAIL_NOTE)
+      emitJobProgress(row.created_by ? String(row.created_by) : null, {
+        key: `import:${verdict.id}`,
+        kind: 'import',
+        label: `${label(row)} import`,
+        status: 'error',
+        error: LEASE_FAIL_NOTE,
+        href: `/imports?run=${verdict.id}`
+      })
+    }
+    app.log.warn({ queueId: verdict.id, action: verdict.action }, 'staged import lost its worker')
+  }
+  return acted
+}
+
+interface KickSubscriber {
+  subscribe: (c: string) => Promise<unknown>
+  on: (e: string, fn: (...a: unknown[]) => void) => unknown
+  quit?: () => Promise<unknown>
+  disconnect?: () => void
+}
+
+/** The upload's kick, heard on a duplicated connection; null without one (the loop drains). */
+async function subscribeImportKicks(
+  app: FastifyInstance,
+  onKick: () => void
+): Promise<KickSubscriber | null> {
+  try {
+    const dup = (app as unknown as { redis?: { duplicate?: () => unknown } }).redis?.duplicate?.()
+    if (!dup) return null
+    const conn = dup as KickSubscriber
+    conn.on('error', () => {})
+    await conn.subscribe(importKickChannel())
+    conn.on('message', () => onKick())
+    return conn
+  } catch {
+    return null
+  }
+}
+
+let drainer: { stop: () => Promise<void> } | null = null
+
+/**
+ * Start draining on this process when it may: an importer or IMPORT_WORKER=on process runs its
+ * own 10 s loop (it may tick no crons); every drainer also hears the upload's kick, so a run
+ * starts at once instead of at the next tick. Returns the mode it runs in.
+ */
+export async function startImportDrainer(app: FastifyInstance): Promise<ImportDrainMode> {
+  const mode = importDrainMode()
+  if (mode === 'off' || drainer) return mode
+  const r = importRedis(app)
+  const tick = () => void runInBackgroundPool(() => drainImportsTick(app))
+  const sub = await subscribeImportKicks(app, tick)
+  const own = mode === 'importer' || mode === 'enabled'
+  const timer = own ? setInterval(tick, 10_000) : null
+  timer?.unref?.()
+  if (own) tick()
+  if (r && mode === 'importer') await beatImportWorker(r, beatOf(mode))
+  app.log.info({ mode }, '[import-worker] draining staged imports')
+  drainer = {
+    stop: async () => {
+      if (timer) clearInterval(timer)
+      const conn = sub
+      if (conn) await (conn.quit?.() ?? Promise.resolve()).catch(() => conn.disconnect?.())
+      drainer = null
+    }
+  }
+  app.addHook('onClose', async () => drainer?.stop())
+  return mode
+}
+
+export function registerStagedImportWorker(app: FastifyInstance): void {
+  // Registered everywhere (the roster, run-now); a tick drains only where importDrainMode()
+  // allows it, and an importer, which ticks no crons, runs the same pass on its own loop.
+  app.cron.schedule('staged-imports', '*/10 * * * * *', async () => {
+    const mode = importDrainMode()
+    if (mode === 'importer' || mode === 'enabled') return // its own loop drains
+    await drainImportsTick(app)
   })
   // #846 — empty staging tables a set number of days after their last run.
   app.cron.schedule(
@@ -275,6 +477,15 @@ async function runOne(
   const began = Date.now()
   // #1826 — a procedure-mode run is announced on its collections' pages (start + end).
   let announced: ImportDefinition | null = null
+  // The run's lease: while this process drives it, updated_at keeps moving. A run whose
+  // updated_at stops moving lost its process and is recovered by a drainer (recoverLostRuns).
+  const lease = setInterval(() => {
+    void db('nivaro_import_queue')
+      .where({ id: next.id, status: 'running' })
+      .update({ updated_at: new Date() })
+      .catch(() => 0)
+  }, LEASE_RENEW_MS)
+  lease.unref?.()
   try {
     const definition = await getImportDefinition(String(next.import_key))
     if (!definition) throw new Error(`No import definition for "${next.import_key}"`)
@@ -474,6 +685,10 @@ async function runOne(
     // Log the scrubbed message, not `err`: a serialised exec rejection carries
     // argv and stderr into the log stream.
     app.log.error({ queueId: next.id, error: message }, 'staged import failed')
+  } finally {
+    clearInterval(lease)
+    // The row is final either way now: its hand-off entry goes (services/import-handoff.ts).
+    await forgetRun(importRedis(app), String(next.id)).catch(() => {})
   }
 }
 
@@ -507,4 +722,31 @@ async function notifyCreator(
   } catch {
     // Never let a notification failure mark a finished import as broken.
   }
+}
+
+/**
+ * Readiness / preflight: is something draining the import queue? Reads the queued rows (count,
+ * oldest, how many waited past STUCK_QUEUED_MS) and both heartbeats (judgeImportWorker).
+ */
+export async function importWorkerJudgement(redis: unknown): Promise<ImportJudgement> {
+  const r = asImportRedis(redis)
+  const rows = (await db('nivaro_import_queue')
+    .where('status', 'queued')
+    .select('created_at')
+    .limit(500)
+    .catch(() => [])) as Array<{ created_at: Date | string | null }>
+  const now = Date.now()
+  const ages = rows
+    .map((row) => now - new Date(row.created_at ?? now).getTime())
+    .filter((n) => Number.isFinite(n))
+  return judgeImportWorker({
+    cloud: !!process.env.CLOUD_META_DB_URL,
+    redis: !!r,
+    importer: await readImportBeat(r, 'importer'),
+    fallback: await readImportBeat(r, 'fallback'),
+    self: importDrainMode(),
+    queued: rows.length,
+    stuck: ages.filter((a) => a > STUCK_QUEUED_MS).length,
+    oldestQueuedMs: ages.length ? Math.max(...ages) : null
+  })
 }
