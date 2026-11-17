@@ -168,6 +168,23 @@ export function parseAttachments(raw: string | null | undefined): string[] {
   }
 }
 
+/** Did this person opt in to email for their own requests' replies and changes?
+ *  `preferences.support_email_updates` — off by default (Profile → Notifications, or the
+ *  switch on Support → My requests; PATCH /users/me/preferences). Fails closed (no email). */
+export async function supportEmailUpdatesOn(userId: string | null | undefined): Promise<boolean> {
+  if (!userId) return false
+  try {
+    const row = (await db('nivaro_users').where('id', userId).first('preferences')) as
+      | { preferences?: unknown }
+      | undefined
+    const raw = row?.preferences
+    const prefs = typeof raw === 'string' ? (JSON.parse(raw) as unknown) : raw
+    return (prefs as { support_email_updates?: unknown } | null)?.support_email_updates === true
+  } catch {
+    return false
+  }
+}
+
 /** Tell people about a ticket, each through their own notification rules. */
 export async function notifyTicket(
   app: FastifyInstance,
@@ -179,10 +196,22 @@ export async function notifyTicket(
     actorId: string | null
     category: 'system' | 'workflow'
     /** Also ask for email (their per-category email setting — instant, daily summary or off —
-     *  decides). Used for "Assigned to you"; every other ticket notice stays in-app/push. */
+     *  decides) for EVERY recipient. Used for "Assigned to you"; every other ticket notice
+     *  stays in-app/push unless `emailRequester` applies. */
     email?: boolean
+    /** This notice is news for the requester (a reply from the desk, picked up, a status
+     *  change): THEIR copy also asks for email when they opted in
+     *  (`supportEmailUpdatesOn`, read once per notice). Desk/assignee copies are untouched. */
+    emailRequester?: boolean
   }
 ): Promise<void> {
+  const requester = t.created_by ? String(t.created_by).toUpperCase() : null
+  const requesterEmail =
+    !!opts.emailRequester &&
+    !!requester &&
+    !same(requester, opts.actorId) &&
+    recipients.some((r) => same(r, requester)) &&
+    (await supportEmailUpdatesOn(requester))
   const seen = new Set<string>()
   for (const r of recipients) {
     if (!r) continue
@@ -195,7 +224,9 @@ export async function notifyTicket(
       sender: opts.actorId,
       category: opts.category,
       target: { kind: 'support', id: t.id },
-      ...(opts.email ? { channels: { email: true } } : {}),
+      ...(opts.email || (requesterEmail && same(id, requester))
+        ? { channels: { email: true } }
+        : {}),
       source: { kind: 'support', label: 'Support ticket', id: t.id },
       why: same(id, t.created_by)
         ? 'you raised this support request'

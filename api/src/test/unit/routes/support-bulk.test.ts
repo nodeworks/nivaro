@@ -43,7 +43,14 @@ vi.mock('../../../services/workflow-transitions.js', () => ({
   resolveFriendlyIds: vi.fn(async () => new Map())
 }))
 const sent = vi.hoisted(
-  () => [] as Array<{ to: string[]; subject: string; email?: boolean; ticket: number }>
+  () =>
+    [] as Array<{
+      to: string[]
+      subject: string
+      email?: boolean
+      emailRequester?: boolean
+      ticket: number
+    }>
 )
 vi.mock('../../../services/support-tickets.js', () => ({
   // WORKER works team 1; REQ raised every ticket and works none.
@@ -59,12 +66,13 @@ vi.mock('../../../services/support-tickets.js', () => ({
       _app: unknown,
       t: { id: number },
       to: Array<string | null>,
-      o: { subject: string; email?: boolean }
+      o: { subject: string; email?: boolean; emailRequester?: boolean }
     ) => {
       sent.push({
         to: to.filter(Boolean) as string[],
         subject: o.subject,
         email: o.email,
+        emailRequester: o.emailRequester,
         ticket: t.id
       })
     }
@@ -242,6 +250,56 @@ describe('PATCH /support/tickets/:id shares the path', () => {
     })
     expect(res.statusCode).toBe(403)
     expect(res.json().code).toBe('FORBIDDEN')
+    await app.close()
+  })
+})
+
+// The requester's email opt-in (preferences.support_email_updates): notices that are news for
+// the requester are marked `emailRequester` (notifyTicket reads the pref and asks for email on
+// the requester's copy only — support-email-optin.test.ts); the desk's notices are not.
+describe('support notices marked for the requester email opt-in', () => {
+  it('a status change marks the notice to the requester', async () => {
+    const app = await buildApp()
+    await bulk(app, { ids: [1], status: 'done' })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ to: ['REQ'], emailRequester: true, ticket: 1 })
+    expect(sent[0].email).toBeUndefined()
+    await app.close()
+  })
+
+  it('picking it up marks "Your request is in progress"', async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/support/tickets/1/claim',
+      headers: { 'x-test-user': 'WORKER' }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(sent).toEqual([
+      {
+        to: ['REQ'],
+        subject: 'Your request is in progress: Ticket 1',
+        emailRequester: true,
+        ticket: 1
+      }
+    ])
+    await app.close()
+  })
+
+  it('a desk reply is marked; the requester’s own reply to the desk is not', async () => {
+    const app = await buildApp()
+    const reply = (who: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/support/tickets/1/comments',
+        headers: { 'x-test-user': who },
+        payload: { text: 'Any news?' }
+      })
+    expect((await reply('WORKER')).statusCode).toBe(201)
+    expect(sent.at(-1)).toMatchObject({ to: ['REQ'], emailRequester: true })
+    expect((await reply('REQ')).statusCode).toBe(201)
+    expect(sent.at(-1)?.emailRequester).toBe(false)
+    expect(sent.at(-1)?.email).toBeUndefined()
     await app.close()
   })
 })

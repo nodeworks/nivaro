@@ -73,6 +73,7 @@ import { UserScopesCard } from './profile/PersonAccess'
 import { PersonProfile } from './profile/PersonProfile'
 import { ConfirmButton, Field, SectionCard, Toggle } from './profile/primitives'
 import { SignedInDevices } from './profile/SignedInDevices'
+import { SupportEmailSwitch } from './support/SupportEmailSwitch'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 
 /**
@@ -532,6 +533,7 @@ export function NotificationRulesCard() {
             toasts and sounds wait while you talk; you get one summary when you leave
           </span>
         </div>
+        <SupportEmailSwitch />
         <UrgentSoundRow
           on={prefs?.urgent_sound === true}
           onChange={(next) => {

@@ -719,6 +719,7 @@ export {
   type ScreenShareHostProps,
   ScreenSharePanel
 } from './components/support/ScreenShare'
+export { SupportEmailSwitch } from './components/support/SupportEmailSwitch'
 export { SupportRequestDialog } from './components/support/SupportRequestDialog'
 export { SupportView } from './components/support/SupportView'
 export {
@@ -1301,7 +1302,6 @@ export {
   type SharedQueryKey
 } from './lib/query-keys'
 export * from './lib/query-stats'
-export { useQueryEntryState } from './lib/use-query-entry'
 export * from './lib/queue-grouping'
 export {
   type CollectionUpdateEvent,
@@ -1608,6 +1608,7 @@ export {
   usePresenceStates
 } from './lib/use-online-users'
 export { pageAtPayload, usePageAt } from './lib/use-page-at'
+export { useQueryEntryState } from './lib/use-query-entry'
 export {
   announceLocalPrefs,
   configureUserSync,

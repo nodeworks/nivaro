@@ -676,7 +676,9 @@ export async function applyTicketChange(
       : `Support request updated: ${t.title}`,
     message: `${me}: ${events.join(' · ')}`,
     actorId: req.user!.id,
-    category: 'workflow'
+    category: 'workflow',
+    // The requester's copy asks for email when they opted in (never the assignee's).
+    emailRequester: true
   })
   if (newlyAssigned)
     await notifyAssigned(
@@ -1358,7 +1360,9 @@ export async function supportRoutes(app: FastifyInstance) {
         subject: `${me} replied: ${t.title}`,
         message: text.slice(0, 400),
         actorId: req.user!.id,
-        category: isRequester ? 'system' : 'workflow'
+        category: isRequester ? 'system' : 'workflow',
+        // A reply from the desk: the requester's copy asks for email when they opted in.
+        emailRequester: !isRequester
       })
       return reply.code(201).send({ data: { ok: true } })
     }
@@ -1435,7 +1439,8 @@ export async function supportRoutes(app: FastifyInstance) {
       subject: `Your request is in progress: ${t.title}`,
       message: `${me} picked it up.`,
       actorId: req.user!.id,
-      category: 'workflow'
+      category: 'workflow',
+      emailRequester: true
     })
     const [s] = await serializeTickets([updated])
     return reply.send({ data: s })
