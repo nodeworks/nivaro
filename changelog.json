@@ -1,10 +1,123 @@
 {
-  "generated_at": "2026-11-16T22:18:30.867Z",
+  "generated_at": "2026-11-17T01:30:54.493Z",
   "releases": [
+    {
+      "version": "0.3.166",
+      "tag": "v0.3.166",
+      "date": "2026-11-16T20:30:35-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "support",
+              "text": "requesters can opt in to email for their requests",
+              "hash": "056393269"
+            },
+            {
+              "section": "Added",
+              "scope": "replay",
+              "text": "live session viewing shows how long the person has been idle",
+              "hash": "f01e82776"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "profile",
+              "text": "off switches readable in dark; support switch lines up",
+              "hash": "69d202852"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "\"+N more\" lists money first and empty fields last",
+              "hash": "75b8202c9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "a narrow changed-by tag drops its date before cutting the name",
+              "hash": "302e94a65"
+            },
+            {
+              "section": "Fixed",
+              "scope": "people",
+              "text": "a photo avatar no longer makes its list row taller",
+              "hash": "c1f918169"
+            },
+            {
+              "section": "Fixed",
+              "scope": "profile",
+              "text": "copying an API token says it was copied",
+              "hash": "c3d851868"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "header copy always shows, info marks off the values, nothing clipped",
+              "hash": "f2877a9dc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "changed-by tags stay on the label line; presence names open the user card",
+              "hash": "d6098adf1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "close the shared worker once its last page is gone",
+              "hash": "acc54eb84"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "one shared link-follow gate for hierarchy children and ancestors",
+              "hash": "11afb427c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "hierarchy viewer hides unreadable parent links + guards node lookups",
+              "hash": "9e995969e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "scope hierarchy data routes to the caller (audit H-1)",
+              "hash": "09a30bda4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dormant Worker-origin edge check + payload SSTI guard",
+              "hash": "b37825e4c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "apply user-transparent hardening fixes from pentest",
+              "hash": "949df6854"
+            }
+          ]
+        }
+      ],
+      "count": 15
+    },
     {
       "version": "0.3.165",
       "tag": "v0.3.165",
-      "date": "2026-11-16T17:18:09-05:00",
+      "date": "2026-11-16T17:18:30-05:00",
       "sections": [
         {
           "label": "Fixed",
