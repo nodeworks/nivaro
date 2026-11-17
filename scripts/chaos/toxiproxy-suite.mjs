@@ -124,7 +124,9 @@ IF NOT EXISTS (SELECT 1 FROM nivaro_roles WHERE name = 'Chaos CI Admin')
 IF NOT EXISTS (SELECT 1 FROM nivaro_users WHERE email = 'chaos-ci@example.test')
   INSERT INTO nivaro_users (email, first_name, last_name, status, static_token, role)
   SELECT 'chaos-ci@example.test', 'Chaos', 'CI', 'active', '${TOKEN}', id FROM nivaro_roles WHERE name = 'Chaos CI Admin';`
-  const r = dc('exec', '-T', 'mssql', '/opt/mssql-tools18/bin/sqlcmd', '-C', '-S', 'localhost', '-U', 'sa',
+  // -I: sqlcmd runs with QUOTED_IDENTIFIER OFF, and SQL Server refuses writes to a table with a
+  // filtered index under it (nivaro_users has one since migration 505: Msg 1934).
+  const r = dc('exec', '-T', 'mssql', '/opt/mssql-tools18/bin/sqlcmd', '-C', '-I', '-S', 'localhost', '-U', 'sa',
     '-P', 'Chaos_Ci_Passw0rd!', '-d', 'nivaro_chaos', '-b', '-Q', sql)
   if (r.status !== 0) throw new Error(`seed failed: ${r.stdout}${r.stderr}`)
 }
