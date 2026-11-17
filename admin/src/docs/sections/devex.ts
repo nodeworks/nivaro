@@ -1241,7 +1241,7 @@ export const devexMarketplace: DocSection = {
     {
       type: 'pre',
       code: `# .env
-EXTENSION_REGISTRY_URL=https://registry.nivaro.io/extensions.json`
+EXTENSION_REGISTRY_URL=https://registry.example.com/extensions.json`
     },
     {
       type: 'h3',

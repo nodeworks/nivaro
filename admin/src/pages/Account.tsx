@@ -259,7 +259,7 @@ function SelfHostedView() {
             variant='outline'
             size='sm'
             className='gap-1.5'
-            onClick={() => window.open('https://nivaro.io/cloud', '_blank')}
+            onClick={() => window.open('https://nivaro.dev/pricing', '_blank')}
           >
             <ExternalLink className='h-3.5 w-3.5' />
             Learn about Nivaro Cloud
