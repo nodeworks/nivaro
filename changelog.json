@@ -1,10 +1,122 @@
 {
-  "generated_at": "2026-11-17T04:43:16.017Z",
+  "generated_at": "2026-11-17T14:31:47.526Z",
   "releases": [
+    {
+      "version": "0.3.168",
+      "tag": "v0.3.168",
+      "date": "2026-11-17T09:31:30-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "NIVARO_ROLE=importer runs staged imports off the web processes",
+              "hash": "f3a71a95b"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "www",
+              "text": "drop nivaro.io (another company's domain)",
+              "hash": "06c4e483a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "raw-write drain gives up a held lock instead of timing out",
+              "hash": "ec689eca5"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "owners",
+              "text": "owner-group refresh on the background pool, 10 min TTL",
+              "hash": "80d4dd5cd"
+            },
+            {
+              "section": "Performance",
+              "scope": "imports",
+              "text": "upload answers 202; big files read off the event loop",
+              "hash": "af0e1d883"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "chaos",
+              "text": "seed with QUOTED_IDENTIFIER on (sqlcmd -I)",
+              "hash": "e505434dd"
+            },
+            {
+              "section": "Other",
+              "scope": "deps",
+              "text": "lift esbuild 0.27 (tsup) and minimatch 10 (api-extractor)",
+              "hash": "a0379a9e3"
+            },
+            {
+              "section": "Other",
+              "scope": "deps",
+              "text": "bump pnpm/action-setup from 4 to 6 (#7)",
+              "hash": "04a088a75"
+            },
+            {
+              "section": "Other",
+              "scope": "deps",
+              "text": "bump docker/login-action from 3 to 4 (#8)",
+              "hash": "c36d73f6f"
+            },
+            {
+              "section": "Other",
+              "scope": "shared",
+              "text": "use-query-entry bug case waits for the error too",
+              "hash": "971e85170"
+            },
+            {
+              "section": "Other",
+              "scope": "shared",
+              "text": "use-query-entry waits for the second run instead of five ticks",
+              "hash": "221af3462"
+            },
+            {
+              "section": "Other",
+              "scope": "deps",
+              "text": "clear the open Dependabot alerts",
+              "hash": "e588f6b96"
+            },
+            {
+              "section": "Other",
+              "scope": "items",
+              "text": "a searched SUM aggregate binds no OPENJSON list",
+              "hash": "b570f19c5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "give tsc a bigger heap and build workspace packages one at a time",
+              "hash": "20b9eea31"
+            }
+          ]
+        }
+      ],
+      "count": 14
+    },
     {
       "version": "0.3.167",
       "tag": "v0.3.167",
-      "date": "2026-11-16T23:42:59-05:00",
+      "date": "2026-11-16T23:43:16-05:00",
       "sections": [
         {
           "label": "Added",
