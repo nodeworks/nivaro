@@ -339,6 +339,7 @@ import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
 import { traceRoutes } from './traces.js'
+import { trackerHookRoutes } from './tracker-hooks.js'
 import { trackerFeaturePublicRoutes, trackerRoutes } from './trackers.js'
 import { trafficMapRoutes } from './traffic-map.js'
 import { trashRoutes } from './trash.js'
@@ -733,6 +734,8 @@ export async function registerRoutes(app: FastifyInstance) {
   if (!process.env.CLOUD_META_DB_URL) {
     await app.register(trackerFeaturePublicRoutes, { prefix: '/trackers' })
     await app.register(trackerRoutes, { prefix: '/trackers' })
+    // GitLab webhook: no session, secret header checked by the route; 1 MB body.
+    await app.register(trackerHookRoutes, { prefix: '/tracker-hooks' })
   }
   await app.register(backupsRoutes, { prefix: '/backups' })
   await app.register(promotionRoutes, { prefix: '/promotion' })

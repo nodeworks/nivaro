@@ -151,7 +151,8 @@ export function gitlabProvider(
     body: raw.body,
     author: { username: raw.author?.username ?? '', name: raw.author?.name ?? '' },
     created_at: raw.created_at,
-    system: !!raw.system
+    system: !!raw.system,
+    internal: !!(raw.internal || raw.confidential)
   })
 
   return {
@@ -290,16 +291,19 @@ export function gitlabProvider(
     },
 
     async notes(projectId, iid, since) {
+      // The newest 100 (a long thread's recent notes are the ones a reconcile needs), oldest first.
       const rows = await json<any[]>(
         `/projects/${projectId}/issues/${iid}/notes?${q({
-          sort: 'asc',
+          sort: 'desc',
           order_by: 'created_at',
           per_page: 100
         })}`
       )
       const cut = since?.getTime()
+      const time = (r: any) => new Date(r.created_at).getTime()
       return rows
-        .filter((r) => cut === undefined || new Date(r.created_at).getTime() > cut)
+        .filter((r) => cut === undefined || time(r) > cut)
+        .sort((a, b) => time(a) - time(b))
         .map(note)
     },
 

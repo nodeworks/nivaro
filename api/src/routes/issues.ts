@@ -8,6 +8,13 @@ import { CLIENT_HEADER, parseClientHeader } from '../services/client-version.js'
 import { crashKind, fromBrowserExtension } from '../services/crash-signature.js'
 import { listCrashes, recordCrash } from '../services/crash-tracking.js'
 import { noteIssueWrite } from '../services/issue-raise.js'
+import {
+  ISSUE_SEVERITIES,
+  ISSUE_STATUSES,
+  type IssueStatus,
+  setIssuesStatus,
+  writeIssuePatch
+} from '../services/issue-status.js'
 import { readOne } from '../services/items.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
@@ -42,8 +49,8 @@ export async function crashReportsOverLimit(
   )
 }
 
-const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const
-const STATUSES = ['open', 'in_progress', 'resolved', 'closed'] as const
+const SEVERITIES = ISSUE_SEVERITIES
+const STATUSES = ISSUE_STATUSES
 
 /**
  * Non-admins see the issues they raised or are assigned, plus manual issues
@@ -609,18 +616,12 @@ export async function issuesRoutes(app: FastifyInstance) {
     if (ids.length === 0) return reply.code(400).send({ error: 'ids[] is required' })
     // The single PATCH's rule, row by row: assignee, raiser, or an admin.
     const q = db('nivaro_issues').whereIn('id', ids)
-    const updated = await (req.isAdmin ? q : ownIssues(q, req.user!.id)).update({
-      status,
-      updated_at: new Date()
-    })
-    for (const id of ids) noteIssueWrite(id, 'changed')
-    await logActivity({
-      action: 'issue-bulk-status',
-      user: req.user?.id,
-      collection: 'nivaro_issues',
-      comment: `${updated} issue(s) -> ${status}`,
-      req
-    })
+    const updated = await setIssuesStatus(
+      req.isAdmin ? q : ownIssues(q, req.user!.id),
+      ids,
+      status as IssueStatus,
+      { userId: req.user!.id, via: 'user', req }
+    )
     return { data: { updated } }
   })
 
@@ -706,7 +707,7 @@ export async function issuesRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: `status must be one of ${STATUSES.join(', ')}` })
     }
 
-    const patch: Record<string, unknown> = { updated_at: new Date() }
+    const patch: Record<string, unknown> = {}
     if (body.title !== undefined) patch.title = body.title.trim().slice(0, 500)
     if (body.severity !== undefined) patch.severity = body.severity
     if (body.status !== undefined) patch.status = body.status
@@ -715,21 +716,11 @@ export async function issuesRoutes(app: FastifyInstance) {
     if ('collection' in body) patch.collection = body.collection ?? null
     if ('item' in body) patch.item = body.item ?? null
 
-    await db('nivaro_issues')
-      .where({ id: Number(id) })
-      .update(patch)
+    // The shared issue write (services/issue-status.ts): row, issue-write funnel, activity row.
+    await writeIssuePatch(Number(id), patch, { userId, via: 'user', req })
     const updated = await db<Issue>('nivaro_issues')
       .where({ id: Number(id) })
       .first()
-    noteIssueWrite(Number(id), 'changed')
-
-    await logActivity({
-      action: 'update',
-      user: req.user?.id,
-      collection: 'nivaro_issues',
-      item: id,
-      req
-    })
 
     // Notify newly assigned user
     if (

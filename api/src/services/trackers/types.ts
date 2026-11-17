@@ -18,6 +18,8 @@ export interface RemoteNote {
   author: { username: string; name: string }
   created_at: string
   system: boolean
+  /** An internal (confidential) note: project members only in GitLab — never mirrored. */
+  internal?: boolean
 }
 
 export interface CreateIssueInput {

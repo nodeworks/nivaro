@@ -2,8 +2,10 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { runInBackgroundPool } from '../../db/pool-context.js'
 import { onIssueWrite, pruneHits } from '../issue-raise.js'
+import { listConnections } from './connections.js'
 import { evaluateQueued, sweep, trimAllDecisions } from './engine.js'
 import { trackersEnabled } from './feature.js'
+import { reconcileConnection } from './inbound.js'
 import { processOutbox } from './outbox.js'
 
 /**
@@ -35,11 +37,23 @@ export function unsubscribeEngine(): void {
 }
 
 /**
- * Pull changes from GitLab for links touched lately (missed or never-configured webhooks).
- * TODO(Task 8): the reconcile pass — this stub does nothing until Task 8 fills it in.
+ * Pull changes from GitLab for links touched lately (missed or never-configured webhooks): every
+ * active connection in good health, one at a time; one failing never stops the others.
  */
-export async function reconcileAll(): Promise<{ checked: number }> {
-  return { checked: 0 }
+export async function reconcileAll(): Promise<{ checked: number; applied: number }> {
+  const tally = { checked: 0, applied: 0 }
+  if (!(await trackersEnabled())) return tally
+  for (const conn of await listConnections()) {
+    if (!conn.is_active || conn.status !== 'ok') continue
+    try {
+      const r = await reconcileConnection(conn.id)
+      tally.checked += r.checked
+      tally.applied += r.applied
+    } catch {
+      // read again next pass (last_reconcile_at did not move)
+    }
+  }
+  return tally
 }
 
 /**
