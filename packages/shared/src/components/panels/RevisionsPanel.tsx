@@ -96,6 +96,7 @@ import {
   type ChildColumnsData,
   type DeriveInfo,
   deriveOf,
+  type LinkLabelsData,
   type MatrixColumn,
   type MatrixRow,
   matrixColumns,
@@ -108,7 +109,8 @@ import {
   sameValue,
   saveActionLabel,
   signedAmount,
-  valueAt
+  valueAt,
+  withLinkLabels
 } from './revision-changes'
 import {
   ColumnSetsMenu,
@@ -1615,6 +1617,20 @@ function dayKey(ts: string | null): string {
   })
 }
 
+/** What a record's link ids point at (Zone 3, 2026), as the reader may see them. */
+function useLinkLabels(collection: string, item: string): LinkLabelsData | undefined {
+  const client = useNivaroClient()
+  const { data } = useQuery({
+    queryKey: ['revision-link-labels', collection, item],
+    queryFn: () =>
+      client
+        .request<{ data: LinkLabelsData }>(get('/revisions/link-labels', { collection, item }))
+        .then((r) => r.data),
+    staleTime: 30_000
+  })
+  return data
+}
+
 function RevisionsList({
   collection,
   item,
@@ -1631,7 +1647,7 @@ function RevisionsList({
 }) {
   const client = useNivaroClient()
   const meta = useFieldMeta(collection, true)
-  const { data, isLoading } = useQuery({
+  const { data: rawData, isLoading } = useQuery({
     queryKey: ['revisions', collection, item],
     queryFn: () =>
       client
@@ -1642,6 +1658,9 @@ function RevisionsList({
   // #1881 — an open history takes new changes at the top as they land
   // (someone else's write; the record form refreshes after its own save),
   // and marks the rows that arrived while it was open.
+  // Link fields as what they point at, never the link rows' own ids.
+  const links = useLinkLabels(collection, item)
+  const data = useMemo(() => (rawData ? withLinkLabels(rawData, links) : rawData), [rawData, links])
   const qc = useQueryClient()
   useLiveRecordQueries(collection, item, [['revisions', collection, item]], { client: qc })
   const seenRef = useRef<Set<string> | null>(null)
@@ -2515,14 +2534,15 @@ function RevisionChangesView({
     [data]
   )
   const labels = useActivityLabels(actorRows, { enabled: actorRows.length > 0 })
+  const links = useLinkLabels(collection, item)
   const rows = useMemo(
     () =>
-      buildSaveRows((data ?? []) as ChangeSourceRevision[], {
+      buildSaveRows(withLinkLabels((data ?? []) as ChangeSourceRevision[], links), {
         name: (r) => revisionUserName(r as Revision, labels),
         // Pipeline moves are rows of their own while the Pipeline step column is shown.
         withMoves: true
       }),
-    [data, labels]
+    [data, labels, links]
   )
   // Line columns: the rows behind the record's totals and their values over time (the server
   // cuts them to what this reader may see). Offered in Fields; never picked by default.

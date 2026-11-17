@@ -10,7 +10,8 @@ import {
   rowsChanging,
   STEP_FIELD,
   signedAmount,
-  viaText
+  viaText,
+  withLinkLabels
 } from './revision-changes'
 
 const LABELS: Record<string, string> = {
@@ -275,5 +276,65 @@ describe('an automatic move', () => {
     expect(rows[0].values[STEP_FIELD]).toBe('Completed')
     expect(rows[0].changed.has(STEP_FIELD)).toBe(true)
     expect(rows[0].autoMove).toEqual({ from: 'Waiting on PO', to: 'Completed' })
+  })
+})
+
+describe('link fields read as what they point at', () => {
+  const links = {
+    fields: {
+      divisions: {
+        '484714': { target: '3', label: 'Zone 3' },
+        '484826': { target: '3', label: 'Zone 3' },
+        '480971': { target: '4', label: 'Zone 4' }
+      }
+    }
+  }
+  it('a rewrite of the links to the same Zone is no change, a new Zone is', () => {
+    const revs = withLinkLabels(
+      [
+        rev({
+          id: '3',
+          action: 'update',
+          timestamp: '2026-12-05T15:53:00Z',
+          data: { id: 1, divisions: [484826, 480971] },
+          delta: {}
+        }),
+        rev({
+          id: '2',
+          action: 'update',
+          timestamp: '2026-12-04T16:57:00Z',
+          data: { id: 1, divisions: [484714] },
+          delta: {}
+        }),
+        rev({
+          id: '1',
+          action: 'create',
+          timestamp: '2026-12-03T17:00:00Z',
+          data: { id: 1, divisions: [484714] }
+        })
+      ],
+      links
+    )
+    expect(revs.map((r) => r.data?.divisions)).toEqual(['Zone 3, Zone 4', 'Zone 3', 'Zone 3'])
+    const rows = buildSaveRows(revs)
+    expect(rows[1].recalculated.has('divisions')).toBe(false)
+    expect(rows[0].recalculated.has('divisions')).toBe(true)
+  })
+
+  it('ids the reader cannot see read as a count, never as ids', () => {
+    const [r] = withLinkLabels(
+      [rev({ id: '1', action: 'create', data: { divisions: [484714, 999] } })],
+      links
+    )
+    expect(r.data?.divisions).toBe('Zone 3, +1 more')
+  })
+
+  it('reads expanded keys and names an all-unknown set by its count', () => {
+    const [r] = withLinkLabels(
+      [rev({ id: '1', action: 'create', data: { divisions: [{ id: 484714 }], files: [5, 6] } })],
+      { fields: { ...links.fields, files: {} } }
+    )
+    expect(r.data?.divisions).toBe('Zone 3')
+    expect(r.data?.files).toBe('2 linked')
   })
 })

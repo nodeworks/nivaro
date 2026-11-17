@@ -502,3 +502,49 @@ export interface ChildColumnsData {
   }>
   series: Record<string, Array<{ t: string; v: unknown }>>
 }
+
+/** GET /revisions/link-labels: field → id a snapshot holds → what it points at. */
+export interface LinkLabelsData {
+  fields: Record<string, Record<string, { target: string; label: string }>>
+}
+
+/**
+ * The history with every to-many field's link ids read as what they point at ("Zone 3, Zone 4",
+ * sorted), so a rewrite of the links that kept the same Zones is no change at all. Ids the reader
+ * may not see read as a count ("2 linked"), never as ids. Fields the server named only; other
+ * arrays are left alone. Pure; exported for tests.
+ */
+export function withLinkLabels<T extends { data?: Record<string, unknown> | null }>(
+  revisions: T[],
+  links: LinkLabelsData | null | undefined
+): T[] {
+  const fields = links?.fields ?? {}
+  const names = Object.keys(fields)
+  if (names.length === 0) return revisions
+  return revisions.map((r) => {
+    if (!r.data) return r
+    let next: Record<string, unknown> | null = null
+    for (const f of names) {
+      const v = r.data[f]
+      if (!Array.isArray(v)) continue
+      const map = fields[f]
+      const labels: string[] = []
+      let unknown = 0
+      for (const raw of v) {
+        const id =
+          raw && typeof raw === 'object' ? (raw as Record<string, unknown>).id : (raw as unknown)
+        const hit = id == null ? undefined : map[String(id)]
+        if (hit) labels.push(hit.label)
+        else unknown++
+      }
+      labels.sort((a, b) => a.localeCompare(b))
+      // Links the reader can't name (no access, a file, gone) read as a count, never as ids.
+      const rest =
+        unknown === 0 ? [] : labels.length === 0 ? [`${unknown} linked`] : [`+${unknown} more`]
+      const text = [...new Set(labels), ...rest].join(', ')
+      next = next ?? { ...r.data }
+      next[f] = v.length === 0 ? null : text
+    }
+    return next ? { ...r, data: next } : r
+  })
+}
