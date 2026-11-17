@@ -1351,7 +1351,16 @@ GET   /api/tasks/requested               // tasks I asked others to do`
     { type: 'h3', id: 'support-assigned-email', text: 'Assigned to you' },
     {
       type: 'p',
-      text: 'When a request is newly given to someone else — by hand, in bulk, by its type’s default assignee or by an assignment rule — they get “Assigned to you: <summary>” in the app and, by email, according to their own email setting for workflow notifications (instant, daily summary or off). Taking a request yourself sends nothing. Every other request notice (replies, status changes) stays in the app and on push, as before.'
+      text: 'When a request is newly given to someone else — by hand, in bulk, by its type’s default assignee or by an assignment rule — they get “Assigned to you: <summary>” in the app and, by email, according to their own email setting for workflow notifications (instant, daily summary or off). Taking a request yourself sends nothing. Every other request notice (replies, status changes) stays in the app and on push unless the requester opted in to email (below).'
+    },
+    { type: 'h3', id: 'support-requester-email', text: 'Email me about my requests' },
+    {
+      type: 'p',
+      text: 'The person who raised a request gets no email by default when it changes: replies, “Your request is in progress” and status changes reach them in the app and on push. They can opt in with “Email me when my requests get a reply or change” — a switch on Support → My requests and in Profile → Notification rules (their own setting only; preferences.support_email_updates). With it on, the requester’s copy of a reply from someone who works the request, of a pick-up and of a status or detail change also asks for email, still following their own email setting for Workflow & approvals (instant, daily summary or off). It never emails them about their own action, and the desk’s and assignee’s copies are unchanged.'
+    },
+    {
+      type: 'pre',
+      code: `PATCH /api/users/me/preferences { "support_email_updates": true }   // null = off (the default)`
     },
     { type: 'h3', id: 'support-assign-rules', text: 'Assignment rules' },
     {

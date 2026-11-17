@@ -11,6 +11,7 @@ import { SimpleSelect } from '../ui/SimpleSelect'
 import { AssignRulesView } from './AssignRules'
 import { RequestList } from './RequestList'
 import { SupportAnalytics } from './SupportAnalytics'
+import { SupportEmailSwitch } from './SupportEmailSwitch'
 import { SupportRequestDialog } from './SupportRequestDialog'
 import { TicketDetailSheet } from './TicketDetailSheet'
 import type { SupportCategory, SupportSummary } from './types'
@@ -178,7 +179,16 @@ export function SupportView({
       ) : tab === 'analytics' ? (
         <SupportAnalytics />
       ) : (
-        <RequestList key={tab} tab={tab} openId={openId} onOpen={(id) => openTicket(id)} />
+        <>
+          {tab === 'mine' && (
+            // The requester's own email opt-in (off by default): replies and changes on
+            // their requests reach them in the app unless they turn this on.
+            <div className='mt-4 rounded-md border border-slate-200 bg-slate-50/60 px-3 py-2 dark:border-border dark:bg-background/40'>
+              <SupportEmailSwitch compact />
+            </div>
+          )}
+          <RequestList key={tab} tab={tab} openId={openId} onOpen={(id) => openTicket(id)} />
+        </>
       )}
 
       <SupportRequestDialog

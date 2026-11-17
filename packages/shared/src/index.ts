@@ -719,6 +719,7 @@ export {
   type ScreenShareHostProps,
   ScreenSharePanel
 } from './components/support/ScreenShare'
+export { SupportEmailSwitch } from './components/support/SupportEmailSwitch'
 export { SupportRequestDialog } from './components/support/SupportRequestDialog'
 export { SupportView } from './components/support/SupportView'
 export {

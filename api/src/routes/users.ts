@@ -1572,6 +1572,15 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.ops_report_email = v === true ? true : null
     }
+    if ('support_email_updates' in body) {
+      // Email me when my support requests get a reply or change (the person's own requests;
+      // opt-in, off by default). The email still follows their per-category email mode.
+      const v = body.support_email_updates
+      if (v !== null && typeof v !== 'boolean') {
+        return reply.code(400).send({ error: 'support_email_updates must be true, false or null' })
+      }
+      patch.support_email_updates = v === true ? true : null
+    }
     if ('traffic_pins' in body) {
       // #1125 — the Traffic Map watch list: entity keys (`<lane>/<entity>`), at most 40.
       const v = body.traffic_pins
