@@ -235,7 +235,7 @@ describe('the pipeline step column', () => {
 })
 
 describe('an automatic move', () => {
-  it('reads as Automatic, credited to the save that set it off', () => {
+  it('is folded into the save that set it off', () => {
     const rows = buildSaveRows(
       [
         rev({
@@ -269,11 +269,11 @@ describe('an automatic move', () => {
       ],
       { withMoves: true }
     )
-    const move = rows.find((r) => r.action === 'moved')
-    expect(move?.who).toBe('Automatic')
-    expect(move?.trigger).toEqual({ name: 'Timothy Desrosiers', userId: 'U1' })
-    // Sits directly above the save that set it off, linked to it.
-    expect(rows.map((r) => r.action)).toEqual(['moved', 'changed', 'created'])
-    expect(move?.linkedTo).toBe(rows[1].key)
+    // Folded into the save that set it off: one row, Tim's, with the step changed.
+    expect(rows.map((r) => r.action)).toEqual(['changed', 'created'])
+    expect(rows[0].who).toBe('Timothy Desrosiers')
+    expect(rows[0].values[STEP_FIELD]).toBe('Completed')
+    expect(rows[0].changed.has(STEP_FIELD)).toBe(true)
+    expect(rows[0].autoMove).toEqual({ from: 'Waiting on PO', to: 'Completed' })
   })
 })

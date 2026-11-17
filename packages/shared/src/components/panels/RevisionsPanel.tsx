@@ -3004,23 +3004,12 @@ function RevisionChangesView({
                 </tr>
               </thead>
               <tbody>
-                {shownRows.map((r, ri) => {
-                  // An automatic move and the save that set it off read as one: no rule between
-                  // them and a violet bar down both.
-                  const linkedDown = !!r.linkedTo && shownRows[ri + 1]?.key === r.linkedTo
-                  const linkedUp = ri > 0 && shownRows[ri - 1].linkedTo === r.key
+                {shownRows.map((r) => {
                   return (
-                    <tr
-                      key={r.key}
-                      className={cn('group align-top', linkedDown && '[&>td]:border-b-transparent')}
-                      data-save-action={r.action}
-                      data-linked={linkedDown ? 'down' : linkedUp ? 'up' : undefined}
-                    >
+                    <tr key={r.key} className='group align-top' data-save-action={r.action}>
                       <td
                         className={cn(
-                          'sticky left-0 z-[1] border-b border-r border-slate-100 bg-white px-2 py-2 group-hover:bg-slate-50 dark:border-border/50 dark:bg-card dark:group-hover:bg-muted',
-                          (linkedDown || linkedUp) &&
-                            'shadow-[inset_3px_0_0_0_rgba(139,92,246,0.55)]'
+                          'sticky left-0 z-[1] border-b border-r border-slate-100 bg-white px-2 py-2 group-hover:bg-slate-50 dark:border-border/50 dark:bg-card dark:group-hover:bg-muted'
                         )}
                       >
                         {r.timestamp && (
@@ -3077,9 +3066,7 @@ function RevisionChangesView({
                                 data-tip='The pipeline moved it by itself when a step’s condition was met'
                               >
                                 {r.trigger
-                                  ? linkedDown
-                                    ? `set off by ${r.trigger.name}’s save below`
-                                    : `after ${r.trigger.name}’s save`
+                                  ? `after ${r.trigger.name}’s save`
                                   : 'a step’s condition was met'}
                               </span>
                             )}
@@ -3091,6 +3078,18 @@ function RevisionChangesView({
                                 )}
                               >
                                 {saveActionLabel(r.action)}
+                              </span>
+                            )}
+                            {r.autoMove && (
+                              <span
+                                className={cn(
+                                  'mt-0.5 ml-1 inline-flex items-center gap-0.5 rounded px-1.5 py-px text-[10.5px] font-medium first:ml-0',
+                                  ACTION_CHIP.moved
+                                )}
+                                data-tip={`This save moved it to ${r.autoMove.to ?? 'the next step'} automatically (a step’s condition was met)`}
+                              >
+                                <Zap className='h-2.5 w-2.5' />
+                                Moved
                               </span>
                             )}
                           </span>
@@ -3106,7 +3105,9 @@ function RevisionChangesView({
                         // What moved it first (the audit question), then what it is worked out from.
                         const tip = reason
                           ? `Recalculated: ${reason.because ? `${reason.because}. ` : ''}${reason.why}`
-                          : undefined
+                          : c.field === STEP_FIELD && r.autoMove
+                            ? `Moved automatically by this save: ${r.autoMove.from ?? '—'} → ${r.autoMove.to ?? '—'} (a step’s condition was met)`
+                            : undefined
                         const empty = v === null || v === undefined || v === ''
                         return (
                           <td
@@ -3129,6 +3130,12 @@ function RevisionChangesView({
                                   : 'text-slate-500 dark:text-slate-400'
                               )}
                             >
+                              {c.field === STEP_FIELD && r.autoMove && (
+                                <Zap
+                                  className='mt-[3px] h-3 w-3 shrink-0 text-violet-600 dark:text-violet-300'
+                                  aria-label='Moved automatically by this save'
+                                />
+                              )}
                               {recalc && (
                                 <Sigma
                                   className='mt-[3px] h-3 w-3 shrink-0 text-amber-700 dark:text-amber-300'

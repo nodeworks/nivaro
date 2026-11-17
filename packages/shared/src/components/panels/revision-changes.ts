@@ -65,9 +65,11 @@ export interface MatrixRow {
   via: Map<string, ChangeVia[]>
   /** An automatic move: the person whose write set it off, when one is that close in time. */
   trigger?: { name: string; userId: string | null } | null
-  /** An automatic move set off by a save: that save's row key. The move sits directly above it
-   *  (newest first: the effect above its cause) and the two read as one. */
+  /** An automatic move set off by a save: that save's row key (the move is folded into it). */
   linkedTo?: string | null
+  /** A save that set off an automatic pipeline move: the step it moved to. The save's row
+   *  carries the move — one row, the person who saved, the step changed. */
+  autoMove?: { from: string | null; to: string | null } | null
 }
 
 /** How close a person's write must be for an automatic move to be credited to it. */
@@ -129,7 +131,7 @@ export function buildSaveRows(
     }
     return step
   }
-  const saveRows = saves.map((r, i) => {
+  const saveRows: MatrixRow[] = saves.map((r, i) => {
     const prev = saves[i + 1]
     const values = r.data ?? {}
     const action: SaveAction =
@@ -215,20 +217,28 @@ export function buildSaveRows(
       via: new Map()
     }
   })
-  const sorted: MatrixRow[] = [...saveRows, ...moveRows].sort(
+  // An automatic move set off by a save is part of that save: fold it into the save's row (the
+  // step it moved to, marked changed) instead of a row of its own credited to nobody.
+  const byKey = new Map(saveRows.map((r) => [r.key, r]))
+  const standalone: MatrixRow[] = []
+  for (const [i, mv] of moveRows.entries()) {
+    const cause = mv.linkedTo ? byKey.get(mv.linkedTo) : undefined
+    if (!cause) {
+      standalone.push(mv)
+      continue
+    }
+    cause.values = { ...cause.values, [STEP_FIELD]: mv.values[STEP_FIELD] ?? null }
+    cause.changed = new Set([...cause.changed, STEP_FIELD])
+    cause.autoMove = {
+      from: moves[i].event?.from_label ?? null,
+      to: moves[i].event?.to_label ?? null
+    }
+  }
+  return [...saveRows, ...standalone].sort(
     (a, b) =>
       (b.timestamp ? new Date(b.timestamp).getTime() : 0) -
       (a.timestamp ? new Date(a.timestamp).getTime() : 0)
   )
-  // A save's own snapshot is written a moment after the automatic move it set off, so by time
-  // the move lands below its cause. Put each such move directly above the save that caused it.
-  for (const move of sorted.filter((r) => r.linkedTo)) {
-    const from = sorted.indexOf(move)
-    sorted.splice(from, 1)
-    const at = sorted.findIndex((r) => r.key === move.linkedTo)
-    sorted.splice(at < 0 ? from : at, 0, move)
-  }
-  return sorted
 }
 
 /**
