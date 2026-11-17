@@ -19,7 +19,7 @@ const facts = (o: Partial<IssueFacts> = {}): IssueFacts => ({
   id: 1,
   title: 'Boom in checkout',
   details: 'TypeError: x',
-  severity: 'error',
+  severity: 'high',
   status: 'open',
   source: 'server',
   route: '/items/workflows',
@@ -55,14 +55,22 @@ const run = (r: TrackerRule, f = facts(), c = counts(), g = guard(), now = NOW) 
 
 describe('match', () => {
   it('matches source and severity_min', () => {
-    const r = rule({ match: { sources: ['server'], severity_min: 'error' } })
+    const r = rule({ match: { sources: ['server'], severity_min: 'high' } })
     expect(run(r)).toEqual({ act: 'fire' })
-    expect(run(r, facts({ severity: 'warning' }))).toMatchObject({ outcome: 'no_match' })
+    expect(run(r, facts({ severity: 'low' }))).toMatchObject({ outcome: 'no_match' })
     expect(run(r, facts({ source: 'client' }))).toMatchObject({ outcome: 'no_match' })
   })
   it('unknown severity ranks as medium', () => {
     const r = rule({ match: { severity_min: 'medium' } })
     expect(run(r, facts({ severity: 'weird' }))).toEqual({ act: 'fire' })
+  })
+  it('severity aliases map to the real names', () => {
+    const r = rule({ match: { severity_min: 'error' } })
+    expect(r.match.severity_min).toBe('high')
+    expect(run(r, facts({ severity: 'error' }))).toEqual({ act: 'fire' })
+    expect(run(r, facts({ severity: 'medium' }))).toMatchObject({ outcome: 'no_match' })
+    const s = rule({ match: { severities: ['warning', 'critical'] } })
+    expect(s.match.severities).toEqual(['medium', 'critical'])
   })
   it('text none excludes', () => {
     const r = rule({ match: { text: { op: 'none', terms: ['checkout'], in: ['title'] } } })
@@ -98,6 +106,28 @@ describe('match', () => {
     const r = rule({ match: { release: { new_in_current: true } } })
     expect(run(r)).toEqual({ act: 'fire' })
     expect(run(r, facts({ first_build: '0.9' }))).toMatchObject({ outcome: 'no_match' })
+  })
+})
+
+describe('regex safety', () => {
+  const v = (term: string) =>
+    validateRule({
+      name: 'x',
+      action: { connection: 1 },
+      match: { text: { op: 'any', terms: [term], regex: true, in: ['title'] } }
+    })
+  it('rejects nested quantifier regex', () => {
+    for (const p of ['(a+)+$', '(.*)*x', '(a+)*', '(a{2,})+', '.*.*x', '((a+)b)+'])
+      expect(v(p).ok, p).toBe(false)
+    const r = v('(a+)+$')
+    if (!r.ok) expect(r.errors[0].message).toContain('simplify it')
+  })
+  it('rejects backreference', () => {
+    expect(v('(a)\\1').ok).toBe(false)
+  })
+  it('accepts simple regex like timeout|ECONNRESET', () => {
+    for (const p of ['timeout|ECONNRESET', '^boom\\b', '(foo|bar)+', 'error \\d+', 'a.*b'])
+      expect(v(p).ok, p).toBe(true)
   })
 })
 

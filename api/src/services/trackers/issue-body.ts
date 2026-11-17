@@ -3,7 +3,12 @@ import { appEnvironment } from '../app-info-environment.js'
 import { linkTo } from '../app-links.js'
 import { hitCounts, hitKey } from '../issue-raise.js'
 import type { RuleAction } from './rules.js'
-import { defaultBodyTemplate, defaultTitleTemplate, renderIssueTemplate } from './templates.js'
+import {
+  defaultBodyTemplate,
+  defaultTitleTemplate,
+  renderIssueTemplate,
+  renderIssueTitle
+} from './templates.js'
 import type { CreateIssueInput } from './types.js'
 
 /**
@@ -152,7 +157,7 @@ export async function buildIssueInput(
   const vars = await issueVars(issue, action ? action.include_details !== false : true)
 
   const title = (
-    await renderIssueTemplate(action?.title_template || defaultTitleTemplate(), vars)
+    await renderIssueTitle(action?.title_template || defaultTitleTemplate(), vars)
   ).trim()
   let body = await renderIssueTemplate(action?.body_template || defaultBodyTemplate(), vars)
   if (action?.attach_replay_link) {
@@ -162,7 +167,7 @@ export async function buildIssueInput(
 
   const labels: string[] = []
   for (const l of action?.labels ?? []) {
-    const v = (await renderIssueTemplate(l, vars)).trim()
+    const v = (await renderIssueTitle(l, vars)).trim()
     if (v && !labels.includes(v)) labels.push(v)
   }
 

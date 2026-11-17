@@ -1,5 +1,5 @@
 // Pure rule evaluation: no database, no network.
-import { type RuleGuards, SEVERITIES, type TrackerRule } from './rules.js'
+import { normalizeSeverity, type RuleGuards, SEVERITIES, type TrackerRule } from './rules.js'
 
 export interface IssueFacts {
   id: number
@@ -49,11 +49,9 @@ export type Outcome =
     }
 
 const TEXT_CAP = 5000
+const REGEX_INPUT_CAP = 2000
 
-function severityRank(s: string): number {
-  const i = SEVERITIES.indexOf(s.toLowerCase() as (typeof SEVERITIES)[number])
-  return i === -1 ? SEVERITIES.indexOf('medium') : i
-}
+const severityRank = (s: string) => SEVERITIES.indexOf(normalizeSeverity(s))
 
 function globToRegExp(glob: string): RegExp {
   const body = glob
@@ -73,7 +71,10 @@ function matchReason(rule: TrackerRule, f: IssueFacts, now: Date): string | null
     return `Source "${f.source}" is not one of the chosen sources`
   if (m.severity_min && severityRank(f.severity) < severityRank(m.severity_min))
     return `Severity ${f.severity} is below ${m.severity_min}`
-  if (m.severities?.length && !ci(f.severity, m.severities))
+  if (
+    m.severities?.length &&
+    !m.severities.some((s) => normalizeSeverity(s) === normalizeSeverity(f.severity))
+  )
     return `Severity ${f.severity} is not one of the chosen severities`
   if (m.statuses?.length && !ci(f.status, m.statuses))
     return `Status "${f.status}" is not one of the chosen statuses`
@@ -81,22 +82,23 @@ function matchReason(rule: TrackerRule, f: IssueFacts, now: Date): string | null
     const t = m.text
     const hay: string[] = []
     const where = t.in?.length ? t.in : ['title', 'details']
-    if (where.includes('title')) hay.push((f.title ?? '').slice(0, TEXT_CAP))
-    if (where.includes('details')) hay.push((f.details ?? '').slice(0, TEXT_CAP))
-    const test = (term: string): boolean => {
-      if (t.regex) {
-        let re: RegExp
-        try {
-          re = new RegExp(term, 'i')
-        } catch {
-          return false
-        }
-        return hay.some((h) => re.test(h))
+    const cap = t.regex ? REGEX_INPUT_CAP : TEXT_CAP
+    if (where.includes('title')) hay.push((f.title ?? '').slice(0, cap))
+    if (where.includes('details')) hay.push((f.details ?? '').slice(0, cap))
+    // Compile once per evaluation, not once per haystack.
+    const tests: Array<(h: string) => boolean> = t.terms.map((term) => {
+      if (!t.regex) {
+        const needle = term.toLowerCase()
+        return (h) => h.toLowerCase().includes(needle)
       }
-      const needle = term.toLowerCase()
-      return hay.some((h) => h.toLowerCase().includes(needle))
-    }
-    const hits = t.terms.map(test)
+      try {
+        const re = new RegExp(term, 'i')
+        return (h) => re.test(h)
+      } catch {
+        return () => false
+      }
+    })
+    const hits = tests.map((fn) => hay.some(fn))
     if (t.op === 'any' && !hits.some(Boolean)) return 'None of the text terms were found'
     if (t.op === 'all' && !hits.every(Boolean)) return 'Not all of the text terms were found'
     if (t.op === 'none' && hits.some(Boolean)) return 'An excluded text term was found'

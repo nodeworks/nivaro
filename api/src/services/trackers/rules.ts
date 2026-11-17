@@ -1,8 +1,73 @@
 import { defaultBodyTemplate, defaultTitleTemplate } from './templates.js'
 
 export type ListOp = 'any' | 'all' | 'none'
-export type SeverityName = 'info' | 'warning' | 'medium' | 'error' | 'critical'
-export const SEVERITIES: SeverityName[] = ['info', 'warning', 'medium', 'error', 'critical']
+export type SeverityName = 'low' | 'medium' | 'high' | 'critical'
+export const SEVERITIES: SeverityName[] = ['low', 'medium', 'high', 'critical']
+const SEVERITY_ALIASES: Record<string, SeverityName> = {
+  info: 'low',
+  warning: 'medium',
+  error: 'high'
+}
+
+/** Real severity name for an issue or rule value; aliases map over, unknown ranks as medium. */
+export function normalizeSeverity(s: string | null | undefined): SeverityName {
+  const v = String(s ?? '')
+    .trim()
+    .toLowerCase()
+  if ((SEVERITIES as string[]).includes(v)) return v as SeverityName
+  return SEVERITY_ALIASES[v] ?? 'medium'
+}
+const knownSeverity = (s: string) =>
+  (SEVERITIES as string[]).includes(s.toLowerCase()) || s.toLowerCase() in SEVERITY_ALIASES
+const SEVERITY_HELP = `${SEVERITIES.join(', ')} (info, warning and error also work)`
+
+/** True for patterns that can backtrack catastrophically (nested quantifiers, backreferences). */
+export function isRiskyRegex(src: string): boolean {
+  const stack: Array<{ q: boolean }> = []
+  const quantAt = (i: number): { len: number; unbounded: boolean; ranged: boolean } | null => {
+    const c = src[i]
+    if (c === '*' || c === '+') return { len: 1, unbounded: true, ranged: true }
+    if (c === '{') {
+      const m = /^\{(\d+)(,(\d*))?\}/.exec(src.slice(i))
+      if (!m) return null
+      const unbounded = m[2] !== undefined && m[3] === ''
+      const max = m[2] === undefined ? Number(m[1]) : m[3] === '' ? Infinity : Number(m[3])
+      return { len: m[0].length, unbounded, ranged: max > 1 }
+    }
+    return null
+  }
+  // Two unbounded repeats of overlapping atoms in a row, such as .*.* or \w+\w*
+  const ATOM = String.raw`(?:\.|\\[wWsSdD.]|\[[^\]]*\])`
+  if (new RegExp(`${ATOM}[*+]\\??${ATOM}[*+]`).test(src)) return true
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]
+    if (c === '\\') {
+      const n = src[i + 1]
+      if (n !== undefined && (/[1-9]/.test(n) || n === 'k')) return true
+      i++
+    } else if (c === '[') {
+      i++
+      if (src[i] === '^') i++
+      if (src[i] === ']') i++
+      while (i < src.length && src[i] !== ']') i += src[i] === '\\' ? 2 : 1
+    } else if (c === '(') stack.push({ q: false })
+    else if (c === ')') {
+      const g = stack.pop()
+      const q = quantAt(i + 1)
+      if (g?.q && q?.ranged) return true
+      if (g?.q || q?.unbounded) if (stack.length) stack[stack.length - 1].q = true
+    } else {
+      const q = quantAt(i)
+      if (q) {
+        if (q.unbounded && stack.length) stack[stack.length - 1].q = true
+        i += q.len - 1
+      }
+    }
+  }
+  return false
+}
+const RISKY_MESSAGE =
+  'This pattern can take too long to check — simplify it (no repeated groups like (a+)+)'
 
 export interface RuleMatch {
   sources?: string[]
@@ -158,20 +223,17 @@ export function validateRule(raw: unknown): ValidateResult {
   const sources = strList(m.sources, 'match.sources')
   if (sources) match.sources = sources
   if (m.severity_min !== undefined && m.severity_min !== null) {
-    if (SEVERITIES.includes(m.severity_min as SeverityName))
-      match.severity_min = m.severity_min as SeverityName
-    else err('match.severity_min', `Unknown severity. Use one of: ${SEVERITIES.join(', ')}.`)
+    if (typeof m.severity_min === 'string' && knownSeverity(m.severity_min))
+      match.severity_min = normalizeSeverity(m.severity_min)
+    else err('match.severity_min', `Unknown severity. Use one of: ${SEVERITY_HELP}.`)
   }
   const severities = strList(m.severities, 'match.severities')
   if (severities) {
     severities.forEach((s, i) => {
-      if (!SEVERITIES.includes(s.toLowerCase() as SeverityName))
-        err(
-          `match.severities[${i}]`,
-          `"${s}" is not a severity. Use one of: ${SEVERITIES.join(', ')}.`
-        )
+      if (!knownSeverity(s))
+        err(`match.severities[${i}]`, `"${s}" is not a severity. Use one of: ${SEVERITY_HELP}.`)
     })
-    match.severities = severities.map((s) => s.toLowerCase())
+    match.severities = [...new Set(severities.filter(knownSeverity).map(normalizeSeverity))]
   }
   const statuses = strList(m.statuses, 'match.statuses')
   if (statuses) match.statuses = statuses
@@ -201,6 +263,7 @@ export function validateRule(raw: unknown): ValidateResult {
           else {
             try {
               new RegExp(term, 'i')
+              if (isRiskyRegex(term)) err(`match.text.terms[${i}]`, RISKY_MESSAGE)
             } catch (e) {
               err(
                 `match.text.terms[${i}]`,
@@ -409,6 +472,12 @@ export function validateRule(raw: unknown): ValidateResult {
   }
   if (typeof a.assign_nivaro_to === 'string' && a.assign_nivaro_to.trim())
     action.assign_nivaro_to = a.assign_nivaro_to.trim()
+
+  const FORBIDDEN_TAG = /\{%-?\s*(include|render|layout)\b/
+  for (const k of ['title_template', 'body_template'] as const) {
+    if (typeof a[k] === 'string' && FORBIDDEN_TAG.test(a[k] as string))
+      err(`action.${k}`, 'include, render and layout are not available in issue templates.')
+  }
 
   if (errors.length) return { ok: false, errors }
   return {
