@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  HEADER_COPY_BESIDE_MARK,
   HEADER_MARK,
   HEADER_VALUE_AFTER_MARK,
   headerEstimateDenseWidth
@@ -16,10 +17,10 @@ const src = (f: string) => readFileSync(new URL(f, import.meta.url), 'utf8')
 const classes = (s: string) => s.split(/\s+/)
 
 describe('header tile "changed by" mark', () => {
-  it('is pinned top-right only on stacked tiles', () => {
+  it('is pinned in the top-right corner only on stacked tiles', () => {
     const c = classes(HEADER_MARK)
     expect(c).toContain('absolute')
-    expect(c).toContain('right-6')
+    expect(c).toContain('right-2')
     // Nothing to show = no box and no gap.
     expect(c).toContain('empty:hidden')
   })
@@ -50,6 +51,23 @@ describe('header tile "changed by" mark', () => {
       expect(label).toContain(
         `[[${fmt}]_[data-header-field]:has(>[data-header-freshness]>*)>&]:pr-0`
       )
+  })
+
+  // 2026-11-16 (Rob): the ⓘ owns the corner; Copy moves one slot left of it on stacked tiles
+  // only, and keeps the corner in dense / list where the mark rides in flow.
+  it('Copy sits left of a shown mark on stacked tiles, in the corner elsewhere', () => {
+    const c = classes(HEADER_COPY_BESIDE_MARK)
+    expect(c).toContain('right-2')
+    expect(c).toContain('[[data-header-field]:has(>[data-header-freshness]>*)>&]:right-6')
+    for (const fmt of ['data-header-dense', 'data-header-list'])
+      expect(c).toContain(
+        `[[${fmt}]_[data-header-field]:has(>[data-header-freshness]>*)>&]:right-2`
+      )
+    const form = src('../ItemEditForm.tsx')
+    const at = form.indexOf('data-header-freshness\n')
+    const after = form.slice(at, at + 3000)
+    expect(after).toMatch(/<Check\s+className=\{cn\(\s*HEADER_COPY_BESIDE_MARK/)
+    expect(after).toMatch(/aria-label='Copy value'\s+className=\{cn\(\s+HEADER_COPY_BESIDE_MARK/)
   })
 
   it('the dense width estimate counts a shown mark', () => {

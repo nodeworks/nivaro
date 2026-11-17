@@ -111,13 +111,20 @@ export const HEADER_DOCK_INLINE =
 export const HEADER_DOCK_CELL = 'flex min-h-[40px] items-center gap-3 py-2 pr-4 pl-5'
 
 /** A field tile's "changed by" mark (HeaderFreshness ⓘ). Stacked: pinned
- *  top-right beside Copy, over the room the label reserves (`pr-6`). Dense
+ *  in the top-right corner, Copy one slot to its left (HEADER_COPY_BESIDE_MARK),
+ *  both over the room the label reserves (`pr-6`). Dense
  *  and list: back in flow, ordered right after the label — pinned there it
  *  sat on the value's letters ("LINX ID NUVCPJ00057ⓘ21"), since those
  *  formats put label and value on the mark's line. Empty (no touch) = gone,
  *  so it never costs a gap. Pair with HEADER_VALUE_AFTER_MARK on the value. */
 export const HEADER_MARK =
-  'absolute top-2 right-6 flex empty:hidden [[data-header-dense]_&]:static [[data-header-dense]_&]:order-1 [[data-header-dense]_&]:shrink-0 [[data-header-list]_&]:static [[data-header-list]_&]:order-1 [[data-header-list]_&]:shrink-0 [[data-header-list]_&]:mr-auto [[data-header-list]_&]:-ml-4'
+  'absolute top-2 right-2 flex empty:hidden [[data-header-dense]_&]:static [[data-header-dense]_&]:order-1 [[data-header-dense]_&]:shrink-0 [[data-header-list]_&]:static [[data-header-list]_&]:order-1 [[data-header-list]_&]:shrink-0 [[data-header-list]_&]:mr-auto [[data-header-list]_&]:-ml-4'
+
+/** A field tile's Copy button (and its ✓): top-right corner, but one slot left of a shown
+ *  HEADER_MARK on stacked tiles so the ⓘ owns the corner. Dense / list carry the mark in
+ *  flow, so Copy keeps the corner there. */
+export const HEADER_COPY_BESIDE_MARK =
+  'absolute top-2 right-2 [[data-header-field]:has(>[data-header-freshness]>*)>&]:right-6 [[data-header-dense]_[data-header-field]:has(>[data-header-freshness]>*)>&]:right-2 [[data-header-list]_[data-header-field]:has(>[data-header-freshness]>*)>&]:right-2'
 
 /** The value of a tile with a HEADER_MARK: follows the mark in dense / list. */
 export const HEADER_VALUE_AFTER_MARK =

@@ -99,6 +99,7 @@ import {
 } from '../lib/form-structure'
 import {
   HEADER_BAND,
+  HEADER_COPY_BESIDE_MARK,
   HEADER_DOCK,
   HEADER_DOCK_CELL,
   HEADER_DOCK_INLINE,
@@ -16783,8 +16784,8 @@ function ItemEditFormView({
                                                           )
                                                         })()}
                                                       </span>
-                                                      {/* Who last changed it, as an info icon beside the
-                                                      copy button: a line under the value was cut off
+                                                      {/* Who last changed it, as an info icon in the tile's
+                                                      top-right corner (Copy sits just left of it): a line under the value was cut off
                                                       in short tiles and sat inside the value's link.
                                                       Dense / list: in flow after the label (HEADER_MARK). */}
                                                       {f.cmsField &&
@@ -16804,12 +16805,20 @@ function ItemEditFormView({
                                                           </span>
                                                         )}
                                                       {copiedHeaderField === f.field ? (
-                                                        <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
+                                                        <Check
+                                                          className={cn(
+                                                            HEADER_COPY_BESIDE_MARK,
+                                                            'h-3 w-3 text-green-500'
+                                                          )}
+                                                        />
                                                       ) : (
                                                         <button
                                                           type='button'
                                                           aria-label='Copy value'
-                                                          className='absolute top-2 right-2 flex h-3 w-3 cursor-pointer items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity'
+                                                          className={cn(
+                                                            HEADER_COPY_BESIDE_MARK,
+                                                            'flex h-3 w-3 cursor-pointer items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity'
+                                                          )}
                                                           onClick={(e) => {
                                                             const cell =
                                                               e.currentTarget.closest<HTMLElement>(
