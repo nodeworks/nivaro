@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { fetchGuardedInCloud } from '../lib/ssrf.js'
 
 // ---------------------------------------------------------------------------
 // Embeddings service
@@ -79,7 +80,7 @@ async function gatewayEmbed(text: string, model: string): Promise<number[]> {
   const api = gatewayFromSettings(s)
   if (!api.base_url || !api.token_url) throw new Error('AI gateway is not configured')
   const bearer = await gatewayBearer(api)
-  const res = await fetch(`${api.base_url}/openai/v1/embeddings`, {
+  const res = await fetchGuardedInCloud(`${api.base_url}/openai/v1/embeddings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bearer}` },
     body: JSON.stringify({ input: [text.slice(0, 8000)], model })

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { requireAuth } from '../middleware/authenticate.js'
+import { requireAdmin } from '../middleware/authenticate.js'
 
 /** A beacon string trimmed to what is stored (never refuse the beacon for a long value). */
 function clip(v: string | null | undefined, max: number): string | null {
@@ -122,7 +122,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
   // ── GET /pageviews/stats ────────────────────────────────────────────────────
   app.get<{ Querystring: { period?: string } }>(
     '/pageviews/stats',
-    { preHandler: requireAuth },
+    { preHandler: requireAdmin },
     async (req, reply) => {
       const since = periodStart(req.query.period ?? '7d')
 
@@ -164,7 +164,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
       search?: string
       session_id?: string
     }
-  }>('/pageviews', { preHandler: requireAuth }, async (req, reply) => {
+  }>('/pageviews', { preHandler: requireAdmin }, async (req, reply) => {
     const since = periodStart(req.query.period ?? '7d')
     const page = Math.max(1, parseInt(req.query.page ?? '1', 10))
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit ?? '50', 10)))

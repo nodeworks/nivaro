@@ -15,6 +15,7 @@
  * comes from probes when the API has any in the window, else from calls.
  */
 import { db } from '../db/index.js'
+import { fetchGuardedInCloud } from '../lib/ssrf.js'
 import { responseLogScrubber } from './body-secrets.js'
 import { mockConfigFor, resolveAuth, resolveInstanceRow } from './external-apis.js'
 import { recordSideCall } from './outbound-recorder.js'
@@ -131,7 +132,7 @@ export async function probeApi(apiId: number, triggeredBy = 'probe'): Promise<Pr
       let text: string | null = null
       const resHeaders: Record<string, string> = {}
       try {
-        const res = await fetch(url.toString(), { method, headers, signal: ctl.signal })
+        const res = await fetchGuardedInCloud(url.toString(), { method, headers, signal: ctl.signal })
         status = res.status
         res.headers.forEach((v, k) => {
           resHeaders[k] = v

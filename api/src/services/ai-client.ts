@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { fetchGuardedInCloud } from '../lib/ssrf.js'
 import { checkAiAllowance } from './ai-allowance.js'
 import { loggedCreate, loggedStream } from './ai-log.js'
 import {
@@ -424,7 +425,7 @@ export async function gatewayBearer(api: GatewayApi): Promise<string> {
   const key = cacheKey(api)
   const hit = bearerCache.get(key)
   if (hit && hit.exp > Date.now()) return hit.token
-  const res = await fetch(api.token_url, {
+  const res = await fetchGuardedInCloud(api.token_url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -745,7 +746,7 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
     const params = caching ? withPromptCaching(raw) : withoutCacheMarkers(raw)
     const attempt = async (retryOn401: boolean, images: boolean): Promise<Anthropic.Message> => {
       const bearer = await gatewayBearer(api)
-      const res = await fetch(url, {
+      const res = await fetchGuardedInCloud(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -795,7 +796,7 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
       startTimer.unref?.()
       let res: Response
       try {
-        res = await fetch(url, {
+        res = await fetchGuardedInCloud(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
