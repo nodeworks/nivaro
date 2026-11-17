@@ -1,134 +1,110 @@
 import {
-  queryKeys,
-  signalSentence,
+  ErrorNotice,
+  toastError,
   useFreshIds,
   useLiveOps,
-  useLiveRefetchInterval,
-  useTopicPresence
+  useLiveRefetchInterval
 } from '@nivaro/shared'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertOctagon, ChevronDown, ChevronRight, PlayCircle, Plus, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertOctagon, Plus, Search, X } from 'lucide-react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { CollectionSelect } from '@/components/collection-select'
 import { CrashesView } from '@/components/crashes-view'
-import { ExplainButton } from '@/components/explain-button'
 import { MonCombobox } from '@/components/filter-combobox'
-import { IssueComments } from '@/components/issue-comments'
 import { IssueGroupsView } from '@/components/issue-groups-view'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
+import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
+import { SeverityDot, SeverityLabel, SourceTag, StatusBadge } from './issues/badges'
+import { IssueDetailPanel } from './issues/IssueDetailPanel'
+import { parseIssueTitle } from './issues/issue-title'
+import {
+  type CmsUser,
+  type Issue,
+  type IssueSummary,
+  lastSeen,
+  personName,
+  SEVERITIES,
+  SOURCE_LABEL,
+  STATUSES,
+  statusLabel,
+  userLabel
+} from './issues/types'
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+const PAGE = 100
+const MAX_ROWS = 500
 
-interface Issue {
-  id: number
-  collection: string | null
-  item: string | null
-  title: string
-  severity: string
-  status: string
-  assigned_to: string | null
-  assigned_to_name?: string | null
-  assigned_to_email?: string | null
-  raised_by: string
-  raised_by_name?: string | null
-  raised_by_email?: string | null
-  resolution_notes: string | null
-  occurrence_count?: number | null
-  last_seen_at?: string | null
-  recording_id?: string | null
-  recording_offset_ms?: number | null
-  created_at: string
-  updated_at: string
-}
+const SORTS = [
+  { value: 'last_seen', label: 'Last seen' },
+  { value: 'newest', label: 'Newest first' },
+  { value: 'count', label: 'Most frequent' },
+  { value: 'severity', label: 'Most severe' },
+  { value: 'updated', label: 'Recently changed' }
+]
 
-interface LiveOccurrence {
-  route: string
-  source: string
-  user_id: string | null
-  build: string | null
-  count: number
-  at: number
-}
+const STATUS_TABS = ['open', 'in_progress', 'resolved', 'closed', ''] as const
 
-interface CmsUser {
-  id: string
-  first_name: string | null
-  last_name: string | null
-  email: string
-}
+// ─── Small pieces ─────────────────────────────────────────────────────────────
 
-const SEVERITIES = ['low', 'medium', 'high', 'critical']
-const STATUSES = ['open', 'in_progress', 'resolved', 'closed']
-
-const SEVERITY_BADGE: Record<string, string> = {
-  low: 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20',
-  medium: 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20',
-  high: 'bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/20',
-  critical: 'bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20'
-}
-
-const STATUS_BADGE: Record<string, string> = {
-  open: 'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan border-nvr-cyan/20',
-  in_progress: 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20',
-  resolved: 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20',
-  closed: 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20'
-}
-
-function statusLabel(status: string): string {
-  return status.replace('_', ' ')
-}
-
-function userLabel(u: CmsUser): string {
-  const name = [u.first_name, u.last_name].filter(Boolean).join(' ')
-  return name || u.email
-}
-
-function SeverityBadge({ severity }: { severity: string }) {
+function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+  label
+}: {
+  value: T
+  onChange: (v: T) => void
+  options: Array<{ value: T; label: ReactNode; data?: string }>
+  label: string
+}) {
   return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium capitalize',
-        SEVERITY_BADGE[severity] ?? SEVERITY_BADGE.medium
-      )}
+    // biome-ignore lint/a11y/useSemanticElements: a segmented control, not a form fieldset
+    <div
+      role='group'
+      aria-label={label}
+      className='flex shrink-0 rounded-md border border-slate-200 bg-white p-0.5 dark:border-border dark:bg-card'
     >
-      {severity}
-    </span>
+      {options.map((o) => (
+        <button
+          key={o.value || 'all'}
+          type='button'
+          aria-pressed={value === o.value}
+          data-issues-view={o.data}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            'rounded px-2 py-0.5 text-[11.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+            value === o.value
+              ? 'bg-nvr-cyan/15 text-slate-900 dark:text-foreground'
+              : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
   )
 }
 
-function StatusBadge({ status }: { status: string }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium capitalize',
-        STATUS_BADGE[status] ?? STATUS_BADGE.open
-      )}
-    >
-      {statusLabel(status)}
-    </span>
-  )
+function Count({ n }: { n?: number }) {
+  if (n == null) return null
+  return <span className='ml-1 tabular-nums text-muted-foreground'>{n}</span>
 }
-
-// ─── Combobox (shadcn Popover + Command) ─────────────────────────────────────
 
 // ─── Create panel ────────────────────────────────────────────────────────────
 
 function CreateIssuePanel({
   users,
-  collections,
   onCreated,
   onCancel
 }: {
   users: CmsUser[]
-  collections: { collection: string }[]
-  onCreated: () => void
+  onCreated: (id: number | null) => void
   onCancel: () => void
 }) {
   const [title, setTitle] = useState('')
@@ -139,429 +115,220 @@ function CreateIssuePanel({
 
   const createMut = useMutation({
     mutationFn: () =>
-      api.post('/issues', {
-        title,
+      api.post<{ data?: { id?: number } }>('/issues', {
+        title: title.trim(),
         severity,
         collection: collection || null,
-        item: item || null,
+        item: item.trim() || null,
         assigned_to: assignedTo || null
       }),
-    onSuccess: () => {
-      toast.success('Issue created')
-      onCreated()
+    onSuccess: (r) => {
+      toast.success('Issue raised')
+      onCreated(r.data?.data?.id ?? null)
     },
-    onError: () => toast.error('Failed to create issue')
+    onError: (err) => toastError(err, 'Could not raise the issue')
   })
 
   return (
-    <div className='border-b border-slate-200 bg-slate-50 px-6 py-4 dark:border-border dark:bg-muted/30'>
-      <div className='grid gap-3 lg:grid-cols-2'>
-        <div className='space-y-1 lg:col-span-2'>
-          <Label className='text-[11px] text-slate-500'>Title</Label>
+    <form
+      className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (title.trim() && !createMut.isPending) createMut.mutate()
+      }}
+    >
+      <div className='grid gap-3 lg:grid-cols-4'>
+        <div className='space-y-1 lg:col-span-4'>
+          <Label
+            htmlFor='new-issue-title'
+            className='text-[11.5px] text-slate-600 dark:text-muted-foreground'
+          >
+            What is wrong?
+          </Label>
           <Input
+            id='new-issue-title'
+            autoFocus
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder='Describe the issue…'
-            className='h-8 text-[12px]'
+            placeholder='e.g. Forecast totals on PO 155260 do not match the lines'
+            className='h-8 text-[12.5px]'
+            maxLength={500}
           />
         </div>
         <div className='space-y-1'>
-          <Label className='text-[11px] text-slate-500'>Severity</Label>
+          <Label className='text-[11.5px] text-slate-600 dark:text-muted-foreground'>
+            Severity
+          </Label>
           <MonCombobox
             value={severity}
             onChange={(v) => v && setSeverity(v)}
-            options={SEVERITIES.map((s) => ({ value: s, label: s }))}
-            className='w-full capitalize'
-          />
-        </div>
-        <div className='space-y-1'>
-          <Label className='text-[11px] text-slate-500'>Assignee (optional)</Label>
-          <MonCombobox
-            value={assignedTo}
-            onChange={setAssignedTo}
-            options={users.map((u) => ({ value: u.id, label: userLabel(u) }))}
-            placeholder='Unassigned'
+            options={SEVERITIES.map((s) => ({
+              value: s,
+              label: s.charAt(0).toUpperCase() + s.slice(1)
+            }))}
             className='w-full'
           />
         </div>
         <div className='space-y-1'>
-          <Label className='text-[11px] text-slate-500'>Collection (optional)</Label>
+          <Label className='text-[11.5px] text-slate-600 dark:text-muted-foreground'>
+            Assign to
+          </Label>
           <MonCombobox
-            value={collection}
-            onChange={setCollection}
-            options={collections.map((c) => ({ value: c.collection, label: c.collection }))}
-            placeholder='None'
-            className='w-full font-mono'
+            value={assignedTo}
+            onChange={setAssignedTo}
+            options={users.map((u) => ({ value: u.id, label: userLabel(u) }))}
+            placeholder='No one yet'
+            className='w-full'
           />
         </div>
         <div className='space-y-1'>
-          <Label className='text-[11px] text-slate-500'>Item ID (optional)</Label>
+          <Label className='text-[11.5px] text-slate-600 dark:text-muted-foreground'>
+            Collection
+          </Label>
+          <CollectionSelect
+            value={collection}
+            onChange={setCollection}
+            placeholder='None'
+            className='w-full'
+          />
+        </div>
+        <div className='space-y-1'>
+          <Label
+            htmlFor='new-issue-item'
+            className='text-[11.5px] text-slate-600 dark:text-muted-foreground'
+          >
+            Record id
+          </Label>
           <Input
+            id='new-issue-item'
             value={item}
             onChange={(e) => setItem(e.target.value)}
-            placeholder='Record ID'
+            placeholder={collection ? 'The record this is about' : 'Pick a collection first'}
+            disabled={!collection}
             className='h-8 font-mono text-[12px]'
           />
         </div>
       </div>
       <div className='mt-3 flex justify-end gap-2'>
-        <Button variant='outline' size='sm' className='h-7 text-[11px]' onClick={onCancel}>
+        <Button
+          type='button'
+          variant='ghost'
+          size='sm'
+          className='h-7 text-[12px]'
+          onClick={onCancel}
+        >
           Cancel
         </Button>
         <Button
+          type='submit'
           size='sm'
-          className='h-7 text-[11px]'
+          className='h-7 text-[12px]'
           disabled={createMut.isPending || !title.trim()}
-          onClick={() => createMut.mutate()}
         >
-          {createMut.isPending ? 'Creating…' : 'Create issue'}
+          {createMut.isPending ? 'Raising…' : 'Raise issue'}
         </Button>
       </div>
-    </div>
+    </form>
   )
 }
 
-// ─── Row detail ──────────────────────────────────────────────────────────────
+// ─── List row ────────────────────────────────────────────────────────────────
 
-function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
-  const qc = useQueryClient()
-  const [notes, setNotes] = useState(issue.resolution_notes ?? '')
-  const [assignee, setAssignee] = useState(issue.assigned_to ?? '')
-  // #1882 — "Kim is looking at this": the others who have this issue's row open right now.
-  const { user: me } = useAuth()
-  const presence = useTopicPresence(`issue-view:${issue.id}`, me?.id)
-
-  // Full row (list omits the screenshot blob + may lack details)
-  const { data: full } = useQuery({
-    queryKey: ['issue-full', issue.id],
-    queryFn: () =>
-      api
-        .get<{ data: Issue & { details?: string | null; screenshot?: string | null } }>(
-          `/issues/${issue.id}`
-        )
-        .then((r) => r.data.data),
-    staleTime: 60_000
-  })
-
-  const patchMut = useMutation({
-    mutationFn: (body: object) => api.patch(`/issues/${issue.id}`, body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['issues'] })
-      qc.invalidateQueries({ queryKey: ['issues-summary'] })
-      qc.invalidateQueries({ queryKey: ['issue-full'] })
-      toast.success('Issue updated')
-    },
-    onError: (err: { response?: { data?: { error?: string } } }) =>
-      toast.error(err.response?.data?.error ?? 'Failed to update issue')
-  })
-
-  // Live occurrences of THIS issue (admin room): who hit it, on which route and build, as it
-  // happens. Held in this open row only — the log itself keeps a count, not each hit.
-  const [live, setLive] = useState<LiveOccurrence[]>([])
-  // The stored tail (last 50 hits, 30 days) — what a reload would otherwise lose.
-  const { data: stored = [] } = useQuery<LiveOccurrence[]>({
-    queryKey: ['issue-occurrences', issue.id],
-    queryFn: () =>
-      api
-        .get<{
-          data: Array<{
-            occurred_at: string
-            user_id: string | null
-            route: string | null
-            build: string | null
-            source: string | null
-          }>
-        }>(`/issues/${issue.id}/occurrences`)
-        .then((r) =>
-          r.data.data.map((o) => ({
-            route: o.route ?? '',
-            source: o.source ?? '',
-            user_id: o.user_id,
-            build: o.build,
-            count: 0,
-            at: new Date(o.occurred_at).getTime()
-          }))
-        ),
-    staleTime: 30_000,
-    retry: false
-  })
-  useLiveOps(
-    `issue:${issue.id}`,
-    (d) => {
-      const o = d.occurrence as Omit<LiveOccurrence, 'at'> | undefined
-      if (!o) return
-      setLive((cur) => [{ ...o, at: Number(d.at) || Date.now() }, ...cur].slice(0, 25))
-    },
-    { debounceMs: 0 }
-  )
-  const shownRows = [
-    ...live,
-    ...stored.filter(
-      (o) => !live.some((l) => l.at >= o.at - 1000 && l.at <= o.at + 1000 && l.route === o.route)
-    )
-  ].slice(0, 50)
-  const shownCount = live[0]?.count ?? full?.occurrence_count ?? issue.occurrence_count ?? null
-
-  const replayId = issue.recording_id ?? full?.recording_id
-  const replayOffset = issue.recording_offset_ms ?? full?.recording_offset_ms
-
-  return (
-    <div className='space-y-4 bg-slate-50 px-6 py-4 dark:bg-muted/30'>
-      {replayId && (
-        <Link
-          to={`/analytics/replays?recording=${replayId}${replayOffset != null ? `&t=${replayOffset}` : ''}`}
-          className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-2.5 py-1.5 text-[12px] font-medium text-slate-800 hover:bg-nvr-cyan/20 dark:text-slate-100'
-        >
-          <PlayCircle className='h-3.5 w-3.5' />
-          Watch replay of this error
-          <span className='text-[11px] text-muted-foreground'>
-            {replayOffset != null ? 'opens at the error moment' : 'last ~60s before the error'}
-          </span>
-        </Link>
-      )}
-      <ExplainButton kind='issue' params={{ id: issue.id }} label='Explain this issue' />
-      {presence.viewers.length > 0 && (
-        <p
-          className='flex items-center gap-1.5 text-[12px] text-sky-700 dark:text-sky-300'
-          data-issue-viewing
-        >
-          <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400' />
-          {signalSentence(
-            presence.viewers.map((v) => v.name),
-            'looking at this'
-          )}
-        </p>
-      )}
-      {shownCount != null && shownCount > 1 && (
-        <p className='text-[12px] text-muted-foreground' data-issue-occurrences={shownCount}>
-          Seen <span className='font-medium text-foreground'>{shownCount}</span> times
-          {shownRows.length > 0 ? ' — newest first' : ''}
-        </p>
-      )}
-      {shownRows.length > 0 && (
-        <ul
-          className='divide-y divide-slate-100 rounded-md border border-slate-200 bg-white text-[11.5px] dark:divide-border/60 dark:border-border dark:bg-card'
-          data-issue-live-occurrences
-        >
-          {shownRows.map((o) => {
-            const who = o.user_id
-              ? users.find((u) => u.id.toLowerCase() === o.user_id?.toLowerCase())
-              : null
-            return (
-              <li
-                key={`${o.at}-${o.count}`}
-                className='flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1.5'
-              >
-                <span className='text-muted-foreground'>{new Date(o.at).toLocaleTimeString()}</span>
-                <span className='font-medium'>
-                  {who ? userLabel(who) : o.user_id ? 'Another user' : 'No signed-in user'}
-                </span>
-                <span className='min-w-0 truncate font-mono text-muted-foreground'>{o.route}</span>
-                {o.build && (
-                  <span className='rounded bg-slate-100 px-1.5 font-mono text-[10.5px] dark:bg-muted'>
-                    {o.build}
-                  </span>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      )}
-      {full?.details && (
-        <pre className='max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-slate-200 bg-white p-3 font-mono text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'>
-          {full.details}
-        </pre>
-      )}
-      {full?.screenshot && (
-        <a href={full.screenshot} target='_blank' rel='noreferrer'>
-          <img
-            src={full.screenshot}
-            alt='Reported page screenshot'
-            className='max-h-64 rounded-md border border-slate-200 dark:border-border'
-          />
-        </a>
-      )}
-      <div className='flex flex-wrap items-center gap-4 text-[12px]'>
-        <span className='text-muted-foreground'>
-          Raised by{' '}
-          <span className='font-medium text-foreground'>
-            {issue.raised_by_name || issue.raised_by_email || 'an unknown user'}
-          </span>{' '}
-          {formatRelative(issue.created_at)}
-        </span>
-        {issue.collection && (
-          <span className='text-muted-foreground'>
-            Record:{' '}
-            {issue.item ? (
-              <Link
-                to={`/collections/${issue.collection}/${issue.item}`}
-                className='font-mono text-nvr-navy hover:underline dark:text-nvr-cyan'
-              >
-                {issue.collection}/{issue.item}
-              </Link>
-            ) : (
-              <span className='font-mono'>{issue.collection}</span>
-            )}
-          </span>
-        )}
-      </div>
-
-      {/* Status transitions */}
-      <div className='flex flex-wrap items-center gap-2'>
-        <span className='text-[11px] uppercase tracking-wide text-muted-foreground'>
-          Transition:
-        </span>
-        {STATUSES.filter((s) => s !== issue.status).map((s) => (
-          <Button
-            key={s}
-            variant='outline'
-            size='sm'
-            className='h-7 text-[11px] capitalize'
-            disabled={patchMut.isPending}
-            onClick={() => patchMut.mutate({ status: s })}
-          >
-            {statusLabel(s)}
-          </Button>
-        ))}
-      </div>
-
-      {/* Assignee */}
-      <div className='flex items-end gap-2'>
-        <div className='w-64 space-y-1'>
-          <Label className='text-[11px] text-slate-500'>Assignee</Label>
-          <MonCombobox
-            value={assignee}
-            onChange={setAssignee}
-            options={users.map((u) => ({ value: u.id, label: userLabel(u) }))}
-            placeholder='Unassigned'
-            className='w-full'
-          />
-        </div>
-        <Button
-          variant='outline'
-          size='sm'
-          className='h-8 text-[11px]'
-          disabled={patchMut.isPending || (assignee || null) === issue.assigned_to}
-          onClick={() => patchMut.mutate({ assigned_to: assignee || null })}
-        >
-          Save assignee
-        </Button>
-      </div>
-
-      {/* Comments — replay notes copied onto this issue land here (#1363) */}
-      <IssueComments issueId={issue.id} />
-
-      {/* Resolution notes */}
-      <div className='space-y-1'>
-        <Label className='text-[11px] text-slate-500'>Resolution notes</Label>
-        <Textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder='How was this resolved?'
-          className='min-h-[72px] text-[12px]'
-        />
-        <div className='flex justify-end'>
-          <Button
-            variant='outline'
-            size='sm'
-            className='h-7 text-[11px]'
-            disabled={patchMut.isPending || notes === (issue.resolution_notes ?? '')}
-            onClick={() => patchMut.mutate({ resolution_notes: notes || null })}
-          >
-            Save notes
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── Table rows ──────────────────────────────────────────────────────────────
-
-function IssueRows({
+function IssueRow({
   issue,
-  users,
-  isOpen,
-  onToggle,
+  active,
   selected,
-  onSelect,
-  fresh
+  fresh,
+  showStatus,
+  onOpen,
+  onSelect
 }: {
   issue: Issue
-  users: CmsUser[]
-  isOpen: boolean
-  onToggle: () => void
+  active: boolean
   selected: boolean
+  fresh: boolean
+  showStatus: boolean
+  onOpen: () => void
   onSelect: (v: boolean) => void
-  fresh?: boolean
 }) {
+  const t = parseIssueTitle(issue.title)
+  const count = issue.occurrence_count ?? 0
+  const assignee = personName(issue.assigned_to_name, issue.assigned_to_email)
   return (
-    <>
-      <tr
-        id={`issue-row-${issue.id}`}
-        className={cn(
-          'cursor-pointer border-b border-slate-100 text-[12px] transition-colors duration-700 hover:bg-slate-50 dark:border-border/50 dark:hover:bg-muted/40',
-          fresh && 'bg-nvr-cyan/10'
-        )}
-        data-issue-fresh={fresh ? 'true' : undefined}
-        onClick={onToggle}
-      >
-        <td className='px-3 py-2.5 text-center' onClick={(e) => e.stopPropagation()}>
-          <input
-            type='checkbox'
-            checked={selected}
-            onChange={(e) => onSelect(e.target.checked)}
-            className='h-3.5 w-3.5'
-          />
-        </td>
-        <td className='px-1 py-2.5 text-center'>
-          {isOpen ? (
-            <ChevronDown className='inline h-3.5 w-3.5 text-muted-foreground' />
-          ) : (
-            <ChevronRight className='inline h-3.5 w-3.5 text-muted-foreground' />
-          )}
-        </td>
-        <td className='max-w-0 truncate px-2 py-2.5 font-medium'>
-          {issue.title}
-          {(issue.occurrence_count ?? 0) > 1 && (
-            <span
-              className='ml-2 rounded-full bg-slate-100 px-1.5 py-px text-[10.5px] font-medium tabular-nums text-slate-600 dark:bg-muted dark:text-muted-foreground'
-              data-issue-count={issue.occurrence_count}
-            >
-              ×{issue.occurrence_count}
-            </span>
-          )}
-        </td>
-        <td className='px-2 py-2.5'>
-          <SeverityBadge severity={issue.severity} />
-        </td>
-        <td className='px-2 py-2.5'>
-          <StatusBadge status={issue.status} />
-        </td>
-        <td className='truncate px-2 py-2.5 text-muted-foreground'>
-          {issue.assigned_to_name || issue.assigned_to_email || '—'}
-        </td>
-        <td className='truncate px-2 py-2.5 text-muted-foreground'>
-          {issue.raised_by_name || issue.raised_by_email || '—'}
-        </td>
-        <td className='truncate px-2 py-2.5 font-mono text-[11px] text-muted-foreground'>
-          {issue.collection ?? '—'}
-        </td>
-        <td className='px-2 py-2.5 text-right text-muted-foreground'>
-          {formatRelative(issue.created_at)}
-        </td>
-        <td className='px-4 py-2.5 text-right text-muted-foreground'>
-          {formatRelative(issue.updated_at)}
-        </td>
-      </tr>
-      {isOpen && (
-        <tr className='border-b border-slate-100 dark:border-border/50'>
-          <td colSpan={10} className='p-0'>
-            <IssueDetail issue={issue} users={users} />
-          </td>
-        </tr>
+    <li
+      id={`issue-row-${issue.id}`}
+      data-issue-fresh={fresh ? 'true' : undefined}
+      data-active={active ? 'true' : undefined}
+      className={cn(
+        'group relative flex items-start gap-3 border-b border-slate-100 px-4 py-2.5 transition-colors duration-500 dark:border-white/[0.06]',
+        active ? 'bg-nvr-cyan/[0.12]' : 'hover:bg-slate-50 dark:hover:bg-muted/40',
+        fresh && !active && 'bg-nvr-cyan/10'
       )}
-    </>
+    >
+      <label className='-m-1.5 flex h-8 w-8 shrink-0 cursor-pointer items-start justify-center pt-2.5 sm:h-6 sm:w-6 sm:pt-2'>
+        <input
+          type='checkbox'
+          checked={selected}
+          onChange={(e) => onSelect(e.target.checked)}
+          aria-label={`Select issue ${issue.id}`}
+          className='h-3.5 w-3.5 cursor-pointer accent-nvr-cyan'
+        />
+      </label>
+      <button
+        type='button'
+        onClick={onOpen}
+        aria-current={active ? 'true' : undefined}
+        className='-my-1 flex min-w-0 flex-1 items-start gap-3 rounded py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan'
+      >
+        <span className='mt-[5px] flex' data-tip={issue.severity}>
+          <SeverityDot severity={issue.severity} />
+          <span className='sr-only'>{issue.severity} severity</span>
+        </span>
+        <span className='min-w-0 flex-1'>
+          <span className='flex min-w-0 items-baseline gap-2'>
+            <span
+              className={cn(
+                'truncate text-[13px] text-slate-900 dark:text-foreground',
+                active ? 'font-semibold' : 'font-medium'
+              )}
+            >
+              {t.headline}
+            </span>
+            {count > 1 && (
+              <span
+                className='shrink-0 rounded-full bg-slate-100 px-1.5 text-[10.5px] font-semibold tabular-nums text-slate-600 dark:bg-muted dark:text-muted-foreground'
+                data-issue-count={count}
+                data-tip={`Happened ${count} times`}
+              >
+                ×{count}
+              </span>
+            )}
+          </span>
+          <span className='mt-0.5 flex min-w-0 items-center gap-2 text-[11.5px] text-muted-foreground'>
+            {(issue.severity === 'critical' || issue.severity === 'high') && (
+              <SeverityLabel severity={issue.severity} />
+            )}
+            <SourceTag source={issue.source ?? t.source} />
+            {showStatus && <StatusBadge status={issue.status} />}
+            {t.where && <span className='min-w-0 truncate font-mono text-[11px]'>{t.where}</span>}
+            {issue.collection && !t.where && (
+              <span className='min-w-0 truncate font-mono text-[11px]'>
+                {issue.collection}
+                {issue.item ? `/${issue.item}` : ''}
+              </span>
+            )}
+          </span>
+        </span>
+        <span className='hidden shrink-0 flex-col items-end gap-0.5 text-right text-[11.5px] sm:flex'>
+          <span className='tabular-nums text-slate-700 dark:text-foreground' data-tip='Last seen'>
+            {formatRelative(lastSeen(issue))}
+          </span>
+          {assignee && (
+            <span className='max-w-[140px] truncate text-muted-foreground'>{assignee}</span>
+          )}
+        </span>
+      </button>
+    </li>
   )
 }
 
@@ -569,56 +336,103 @@ function IssueRows({
 
 export function IssuesPage() {
   const qc = useQueryClient()
-  // Open by default — the page is a triage list; resolved history is a filter away.
-  const [statusFilter, setStatusFilter] = useState('open')
-  const [severityFilter, setSeverityFilter] = useState('')
-  const [collectionFilter, setCollectionFilter] = useState('')
-  const [sourceFilter, setSourceFilter] = useState('')
-  const [creating, setCreating] = useState(false)
-  const [expandedId, setExpandedId] = useState<number | null>(null)
-  // ?view=crashes opens the Crashes tab (the crash alert's and the Telemetry strip's link).
-  const [view, setView] = useState<'list' | 'grouped' | 'crashes'>(() =>
-    new URLSearchParams(window.location.search).get('view') === 'crashes' ? 'crashes' : 'list'
-  )
+  const navigate = useNavigate()
   const { user: me } = useAuth()
+  const isAdmin = !!me?.is_admin
+  const [search, setSearch] = useSearchParams()
+
+  // Filters live in the URL so a filtered list can be shared and survives a reload.
+  const status = search.get('status') ?? 'open'
+  const severity = search.get('severity') ?? ''
+  const source = search.get('source') ?? ''
+  const assignee = search.get('assignee') ?? ''
+  const collection = search.get('collection') ?? ''
+  const sort = search.get('sort') ?? 'last_seen'
+  const q = search.get('q') ?? ''
+  const view = (isAdmin && (search.get('view') as 'grouped' | 'crashes' | null)) || 'list'
+
+  const setParam = useCallback(
+    (patch: Record<string, string | null>) => {
+      setSearch(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          for (const [k, v] of Object.entries(patch)) {
+            if (v == null || v === '') next.delete(k)
+            else next.set(k, v)
+          }
+          return next
+        },
+        { replace: true }
+      )
+    },
+    [setSearch]
+  )
+
+  const [draftQ, setDraftQ] = useState(q)
+  useEffect(() => setDraftQ(q), [q])
+  useEffect(() => {
+    if (draftQ === q) return
+    const t = setTimeout(() => setParam({ q: draftQ.trim() || null }), 250)
+    return () => clearTimeout(t)
+  }, [draftQ, q, setParam])
+
+  const [limit, setLimit] = useState(PAGE)
+  useEffect(() => setLimit(PAGE), [status, severity, source, assignee, collection, sort, q])
+
+  const [creating, setCreating] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
-  // Deep link /issues/:id (Traffic Map's open issues): expand that row once the list has it.
-  const { id: linkedId } = useParams()
-  const linkedDone = useRef<string | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
 
-  const params = new URLSearchParams()
-  if (statusFilter) params.set('status', statusFilter)
-  if (severityFilter) params.set('severity', severityFilter)
-  if (collectionFilter) params.set('collection', collectionFilter)
-  if (sourceFilter) params.set('source', sourceFilter)
-  const qs = params.toString()
+  // Deep link /issues/:id opens that issue; picking one keeps the URL in step.
+  const { id: routeId } = useParams()
+  const routeNum = routeId && /^\d+$/.test(routeId) ? Number(routeId) : null
+  const [openId, setOpenId] = useState<number | null>(routeNum)
+  useEffect(() => {
+    if (routeNum != null) setOpenId(routeNum)
+  }, [routeNum])
+  const qsNow = search.toString()
+  const openIssue = useCallback(
+    (id: number | null) => {
+      setOpenId(id)
+      navigate(`/issues${id != null ? `/${id}` : ''}${qsNow ? `?${qsNow}` : ''}`, {
+        replace: true
+      })
+    },
+    [navigate, qsNow]
+  )
 
-  // #2450 — the `issues` topic below refreshes the list; the poll is a 5-minute safety net while
-  // the socket is live.
+  const listParams = new URLSearchParams()
+  if (status) listParams.set('status', status)
+  if (severity) listParams.set('severity', severity)
+  if (source) listParams.set('source', source)
+  if (assignee) listParams.set('assigned_to', assignee)
+  if (collection) listParams.set('collection', collection)
+  if (q) listParams.set('q', q)
+  listParams.set('sort', sort)
+  listParams.set('limit', String(limit))
+  const qs = listParams.toString()
+
+  // #2450 — the `issues` topic refreshes the list; the poll is a safety net while the socket is live.
   const issuesPoll = useLiveRefetchInterval(60_000)
-  const { data: issues = [], isLoading } = useQuery<Issue[]>({
+  const listQuery = useQuery<{ rows: Issue[]; total: number }>({
     queryKey: ['issues', qs],
     queryFn: () =>
-      api.get<{ data: Issue[] }>(`/issues${qs ? `?${qs}` : ''}`).then((r) => r.data.data),
-    refetchInterval: issuesPoll
-  })
-
-  const { data: summary } = useQuery<{
-    by_status: Record<string, number>
-    by_severity: Record<string, number>
-  }>({
-    queryKey: ['issues-summary'],
-    queryFn: () =>
       api
-        .get<{ data: { by_status: Record<string, number>; by_severity: Record<string, number> } }>(
-          '/issues/summary'
-        )
-        .then((r) => r.data.data)
+        .get<{ data: Issue[]; meta?: { total?: number } }>(`/issues?${qs}`)
+        .then((r) => ({ rows: r.data.data, total: r.data.meta?.total ?? r.data.data.length })),
+    refetchInterval: issuesPoll,
+    placeholderData: keepPreviousData
+  })
+  const issues = listQuery.data?.rows ?? []
+  const total = listQuery.data?.total ?? 0
+  const isLoading = listQuery.isLoading
+
+  const { data: summary } = useQuery<IssueSummary>({
+    queryKey: ['issues-summary'],
+    queryFn: () => api.get<{ data: IssueSummary }>('/issues/summary').then((r) => r.data.data)
   })
 
-  // Live: new issues land at the top, counts tick, status changes move rows. The refetch goes
-  // through the same permission-checked route; the safety poll covers a missed event.
   useLiveOps('issues', () => {
     void qc.invalidateQueries({ queryKey: ['issues'] })
     void qc.invalidateQueries({ queryKey: ['issues-summary'] })
@@ -632,314 +446,588 @@ export function IssuesPage() {
     staleTime: 60_000
   })
 
-  // A linked issue older than the newest 200 is not in the list: fetch it and pin it on top.
-  // Keyed under ['issues'] so every invalidation after an edit refreshes the pinned row too.
-  const linkedNum = linkedId && /^\d+$/.test(linkedId) ? Number(linkedId) : null
-  const linkedInList = linkedNum != null && issues.some((i) => i.id === linkedNum)
+  // An opened issue the current list does not hold (deep link, older than the page, another
+  // filter): fetched on its own and pinned on top. Keyed under ['issues'] so every invalidation
+  // after an edit refreshes it too.
+  const openInList = openId != null && issues.some((i) => i.id === openId)
   const { data: linkedRaw, isError: linkedMissing } = useQuery({
-    queryKey: ['issues', 'linked', linkedNum],
-    queryFn: () => api.get<{ data: Issue }>(`/issues/${linkedNum}`).then((r) => r.data.data),
-    enabled: linkedNum != null && !isLoading && !linkedInList,
+    queryKey: ['issues', 'linked', openId],
+    queryFn: () => api.get<{ data: Issue }>(`/issues/${openId}`).then((r) => r.data.data),
+    enabled: openId != null && !isLoading && !openInList,
     retry: false,
     staleTime: 60_000
   })
-  // The single-issue route returns the raw row: resolve names from the directory list.
   const linkedIssue = useMemo(() => {
-    if (!linkedRaw) return null
+    if (!linkedRaw || openInList) return null
+    // The single-issue route returns the raw row: names come from the directory.
     const find = (id: string | null) =>
       id ? users.find((u) => u.id.toLowerCase() === id.toLowerCase()) : undefined
     const raiser = find(linkedRaw.raised_by)
-    const assignee = find(linkedRaw.assigned_to)
+    const owner = find(linkedRaw.assigned_to)
     return {
       ...linkedRaw,
       raised_by_name: linkedRaw.raised_by_name ?? (raiser ? userLabel(raiser) : null),
       raised_by_email: linkedRaw.raised_by_email ?? raiser?.email ?? null,
-      assigned_to_name: linkedRaw.assigned_to_name ?? (assignee ? userLabel(assignee) : null),
-      assigned_to_email: linkedRaw.assigned_to_email ?? assignee?.email ?? null
+      assigned_to_name: linkedRaw.assigned_to_name ?? (owner ? userLabel(owner) : null),
+      assigned_to_email: linkedRaw.assigned_to_email ?? owner?.email ?? null
     }
-  }, [linkedRaw, users])
+  }, [linkedRaw, openInList, users])
   const rows = useMemo(
-    () => (!linkedInList && linkedIssue ? [linkedIssue, ...issues] : issues),
-    [linkedInList, linkedIssue, issues]
+    () => (linkedIssue ? [linkedIssue, ...issues] : issues),
+    [linkedIssue, issues]
   )
+  const current = rows.find((i) => i.id === openId) ?? null
+  const index = current ? rows.indexOf(current) : -1
 
   useEffect(() => {
-    if (linkedNum == null || linkedDone.current === linkedId) return
-    if (!rows.some((i) => i.id === linkedNum)) return
-    linkedDone.current = linkedId ?? null
-    setExpandedId(linkedNum)
+    if (openId == null) return
     requestAnimationFrame(() =>
-      document.getElementById(`issue-row-${linkedNum}`)?.scrollIntoView({ block: 'center' })
+      document.getElementById(`issue-row-${openId}`)?.scrollIntoView({ block: 'nearest' })
     )
-  }, [linkedId, linkedNum, rows])
+  }, [openId])
 
-  const { data: collections = [] } = useQuery({
-    queryKey: queryKeys.collections(),
-    queryFn: () =>
-      api.get<{ data: { collection: string }[] }>('/collections').then((r) => r.data.data),
-    staleTime: 60_000
-  })
+  // Keyboard: j/k (or ↓/↑) move, Esc closes, / searches, x selects the open issue.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (
+        el?.closest(
+          'input, textarea, select, [contenteditable="true"], [role="dialog"], [cmdk-root]'
+        )
+      ) {
+        if (e.key === 'Escape' && el === searchRef.current) searchRef.current?.blur()
+        return
+      }
+      if (view !== 'list') return
+      if (e.key === '/') {
+        e.preventDefault()
+        searchRef.current?.focus()
+      } else if (e.key === 'Escape' && openId != null) {
+        openIssue(null)
+      } else if (e.key === 'j' || (e.key === 'ArrowDown' && openId != null)) {
+        const next = rows[index + 1] ?? (index < 0 ? rows[0] : null)
+        if (next) {
+          e.preventDefault()
+          openIssue(next.id)
+        }
+      } else if (e.key === 'k' || (e.key === 'ArrowUp' && openId != null)) {
+        const prev = index > 0 ? rows[index - 1] : null
+        if (prev) {
+          e.preventDefault()
+          openIssue(prev.id)
+        }
+      } else if (e.key === 'x' && current) {
+        setSelected((s) => {
+          const n = new Set(s)
+          if (n.has(current.id)) n.delete(current.id)
+          else n.add(current.id)
+          return n
+        })
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [rows, index, current, openId, openIssue, view])
+
+  const refreshAll = () => {
+    void qc.invalidateQueries({ queryKey: ['issues'] })
+    void qc.invalidateQueries({ queryKey: ['issues-summary'] })
+    void qc.invalidateQueries({ queryKey: ['issue-full'] })
+  }
+
+  const bulk = async (path: string, body: Record<string, unknown>, done: string) => {
+    setBulkBusy(true)
+    try {
+      const r = await api.post<{ data?: { updated?: number } }>(path, {
+        ids: [...selected],
+        ...body
+      })
+      const n = r.data?.data?.updated ?? selected.size
+      toast.success(`${n} issue${n === 1 ? '' : 's'} ${done}`)
+      setSelected(new Set())
+      refreshAll()
+    } catch (err) {
+      toastError(err, 'Could not update the selected issues')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  const filtersOn = !!(severity || source || assignee || collection || q)
+  const clearFilters = () =>
+    setParam({ severity: null, source: null, assignee: null, collection: null, q: null })
+  const severityList = severity ? severity.split(',') : []
+  const toggleSeverity = (s: string) => {
+    const next = severityList.includes(s)
+      ? severityList.filter((x) => x !== s)
+      : [...severityList, s]
+    setParam({
+      severity: next.length ? SEVERITIES.filter((x) => next.includes(x)).join(',') : null
+    })
+  }
+
+  const by = summary?.by_status ?? {}
+  const active = (by.open ?? 0) + (by.in_progress ?? 0)
+  const activeSev = summary?.active_by_severity ?? {}
+  const urgent = (activeSev.critical ?? 0) + (activeSev.high ?? 0)
+  const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id))
+  const openFromView = (id: number) => {
+    setSearch(new URLSearchParams({ status: '' }), { replace: true })
+    openIssue(id)
+  }
 
   return (
-    <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-border'>
-        <div className='flex items-center gap-2.5'>
-          <AlertOctagon className='h-5 w-5 text-muted-foreground' />
-          <h1 className='text-lg font-semibold'>Issue Log</h1>
-          {summary && (
-            <span className='ml-2 text-[11px] text-muted-foreground'>
-              {summary.by_status.open ?? 0} open · {summary.by_status.in_progress ?? 0} in progress
-              · {summary.by_status.resolved ?? 0} resolved
-            </span>
-          )}
+    <div className='flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-background'>
+      {/* Header */}
+      <header className='flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 bg-white px-6 py-3.5 dark:border-border dark:bg-card'>
+        <div className='flex min-w-0 items-center gap-2.5'>
+          <AlertOctagon className='h-5 w-5 shrink-0 text-muted-foreground' aria-hidden />
+          <h1 className='text-[18px] font-semibold tracking-[-0.01em]'>Issue log</h1>
         </div>
-        <Button size='sm' onClick={() => setCreating((v) => !v)}>
-          {creating ? <X className='mr-1.5 h-4 w-4' /> : <Plus className='mr-1.5 h-4 w-4' />}
-          {creating ? 'Close' : 'New Issue'}
-        </Button>
+        {summary && (
+          <p
+            className='min-w-0 max-w-full truncate text-[12.5px] text-muted-foreground sm:whitespace-normal'
+            data-issues-summary
+          >
+            <span className='font-medium text-slate-800 dark:text-foreground'>{active}</span> need
+            attention
+            {urgent > 0 && (
+              <>
+                {' · '}
+                <button
+                  type='button'
+                  className='font-medium text-orange-700 underline-offset-2 hover:underline dark:text-orange-400'
+                  onClick={() => setParam({ status: 'active', severity: 'critical,high' })}
+                >
+                  {urgent} high or critical
+                </button>
+              </>
+            )}
+            {(summary.unassigned_active ?? 0) > 0 && (
+              <>
+                {' · '}
+                <button
+                  type='button'
+                  className='underline-offset-2 hover:text-foreground hover:underline'
+                  onClick={() => setParam({ status: 'active', assignee: 'unassigned' })}
+                >
+                  {summary.unassigned_active} unassigned
+                </button>
+              </>
+            )}
+            {(summary.new_24h ?? 0) > 0 && <> · {summary.new_24h} new today</>}
+          </p>
+        )}
+        <div className='ml-auto flex items-center gap-2'>
+          {isAdmin && (
+            <Segmented
+              label='View'
+              value={view}
+              onChange={(v) => setParam({ view: v === 'list' ? null : v })}
+              options={[
+                { value: 'list', label: 'List', data: 'list' },
+                { value: 'grouped', label: 'Grouped', data: 'grouped' },
+                { value: 'crashes', label: 'Crashes', data: 'crashes' }
+              ]}
+            />
+          )}
+          <Button size='sm' className='h-8 gap-1.5' onClick={() => setCreating((v) => !v)}>
+            {creating ? <X className='h-4 w-4' /> : <Plus className='h-4 w-4' />}
+            {creating ? 'Close' : 'Raise issue'}
+          </Button>
+        </div>
       </header>
 
       {creating && (
         <CreateIssuePanel
           users={users}
-          collections={collections.filter((c) => !c.collection.startsWith('nivaro_'))}
-          onCreated={() => {
+          onCreated={(id) => {
             setCreating(false)
-            qc.invalidateQueries({ queryKey: ['issues'] })
-            qc.invalidateQueries({ queryKey: ['issues-summary'] })
-            qc.invalidateQueries({ queryKey: ['issue-full'] })
+            refreshAll()
+            if (id != null) openIssue(id)
           }}
           onCancel={() => setCreating(false)}
         />
       )}
 
-      {/* Filter bar */}
-      <div className='flex shrink-0 items-center gap-2 border-b border-slate-200 px-6 py-2.5 dark:border-border'>
-        <MonCombobox
-          value={statusFilter}
-          onChange={setStatusFilter}
-          options={STATUSES.map((s) => ({ value: s, label: statusLabel(s) }))}
-          placeholder='All statuses'
-          className='w-36 capitalize'
-        />
-        <MonCombobox
-          value={severityFilter}
-          onChange={setSeverityFilter}
-          options={SEVERITIES.map((s) => ({ value: s, label: s }))}
-          placeholder='All severities'
-          className='w-36 capitalize'
-        />
-        <MonCombobox
-          value={collectionFilter}
-          onChange={setCollectionFilter}
-          options={collections.map((c) => ({ value: c.collection, label: c.collection }))}
-          placeholder='All collections'
-          className='w-44 font-mono'
-        />
-        {(statusFilter || severityFilter || collectionFilter) && (
-          <Button
-            variant='ghost'
-            size='sm'
-            className='h-8 text-[11px]'
-            onClick={() => {
-              setStatusFilter('')
-              setSeverityFilter('')
-              setCollectionFilter('')
-              setSourceFilter('')
-            }}
-          >
-            Clear
-          </Button>
-        )}
-        {me?.is_admin && (
-          <span className='ml-auto flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
-            {(['list', 'grouped', 'crashes'] as const).map((v) => (
-              <button
-                key={v}
-                type='button'
-                data-issues-view={v}
-                onClick={() => setView(v)}
-                className={
-                  view === v
-                    ? 'rounded bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-foreground'
-                    : 'rounded px-2 py-0.5 text-[11px] font-medium text-slate-400 hover:text-slate-600 dark:hover:text-muted-foreground'
-                }
-              >
-                {v === 'list' ? 'List' : v === 'grouped' ? 'Grouped' : 'Crashes'}
-              </button>
-            ))}
-          </span>
-        )}
-        <span
-          className={`${me?.is_admin ? '' : 'ml-auto '}flex rounded-md border border-slate-200 p-0.5 dark:border-border`}
-        >
-          {[
-            { value: '', label: 'All sources' },
-            { value: 'client', label: 'Client' },
-            { value: 'server', label: 'Server' },
-            { value: 'manual', label: 'Manual' }
-          ].map((opt) => (
-            <button
-              key={opt.value || 'all'}
-              type='button'
-              onClick={() => setSourceFilter(opt.value)}
-              className={
-                sourceFilter === opt.value
-                  ? 'rounded bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-foreground'
-                  : 'rounded px-2 py-0.5 text-[11px] font-medium text-slate-400 hover:text-slate-600 dark:hover:text-muted-foreground'
-              }
-            >
-              {opt.label}
-            </button>
-          ))}
-        </span>
-      </div>
-
-      {/* Bulk status bar */}
-      {selected.size > 0 && (
-        <div className='flex shrink-0 items-center gap-3 border-b border-slate-200 bg-slate-50 px-6 py-2 dark:border-border dark:bg-background/60'>
-          <span className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
-            {selected.size} selected
-          </span>
-          {['acknowledged', 'resolved', 'open'].map((st) => (
-            <Button
-              key={st}
-              size='sm'
-              variant='outline'
-              className='h-7 text-[12px] capitalize'
-              disabled={bulkBusy}
-              onClick={async () => {
-                setBulkBusy(true)
-                try {
-                  await api.post('/issues/bulk-status', { ids: [...selected], status: st })
-                  toast.success(`${selected.size} issue(s) marked ${st}`)
-                  setSelected(new Set())
-                  qc.invalidateQueries({ queryKey: ['issues'] })
-                  qc.invalidateQueries({ queryKey: ['issues-summary'] })
-                  qc.invalidateQueries({ queryKey: ['issue-full'] })
-                } catch {
-                  toast.error('Bulk update failed')
-                } finally {
-                  setBulkBusy(false)
-                }
-              }}
-            >
-              Mark {st}
-            </Button>
-          ))}
-          <Button
-            size='sm'
-            variant='ghost'
-            className='h-7 text-[12px] text-slate-400'
-            onClick={() => setSelected(new Set())}
-          >
-            Clear selection
-          </Button>
+      {view === 'crashes' ? (
+        <div className='min-h-0 flex-1 overflow-y-auto'>
+          <CrashesView onOpen={openFromView} />
         </div>
-      )}
+      ) : view === 'grouped' ? (
+        <div className='min-h-0 flex-1 overflow-y-auto'>
+          <IssueGroupsView onOpen={openFromView} />
+        </div>
+      ) : (
+        <>
+          {/* Status tabs */}
+          <nav
+            aria-label='Status'
+            className='flex shrink-0 items-end gap-1 overflow-x-auto border-b [scrollbar-width:none] [&::-webkit-scrollbar]:hidden border-slate-200 bg-white px-4 dark:border-border dark:bg-card'
+          >
+            {STATUS_TABS.map((s) => {
+              const n = s === '' ? Object.values(by).reduce((a, b) => a + b, 0) : by[s]
+              const on = status === s
+              return (
+                <button
+                  key={s || 'all'}
+                  type='button'
+                  aria-current={on ? 'page' : undefined}
+                  onClick={() => setParam({ status: s === 'open' ? null : s || '' })}
+                  className={cn(
+                    'relative whitespace-nowrap px-2.5 pb-2 pt-2 text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
+                    on
+                      ? 'text-slate-900 after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-nvr-cyan dark:text-foreground'
+                      : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+                  )}
+                >
+                  {statusLabel(s)}
+                  {summary && <Count n={n ?? 0} />}
+                </button>
+              )
+            })}
+            {status === 'active' && (
+              <span className='relative whitespace-nowrap px-2.5 pb-2 pt-2 text-[12.5px] font-medium text-slate-900 after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-nvr-cyan dark:text-foreground'>
+                Open + in progress
+                <Count n={active} />
+              </span>
+            )}
+          </nav>
 
-      {linkedMissing && (
-        <p
-          id='issue-linked-missing'
-          className='shrink-0 border-b border-slate-200 bg-amber-50 px-6 py-2 text-[12px] text-amber-900 dark:border-border dark:bg-amber-500/10 dark:text-amber-200'
-        >
-          Issue #{linkedId} was not found. It may have been deleted.
-        </p>
+          {/* Filters */}
+          <div className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2 dark:border-border dark:bg-card'>
+            <div className='relative w-full sm:w-72'>
+              <Search
+                className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground'
+                aria-hidden
+              />
+              <Input
+                ref={searchRef}
+                type='search'
+                value={draftQ}
+                onChange={(e) => setDraftQ(e.target.value)}
+                placeholder={isAdmin ? 'Search titles, details or #id' : 'Search titles or #id'}
+                aria-label='Search issues'
+                className='h-8 pl-8 pr-8 text-[12.5px]'
+              />
+              {!draftQ && (
+                <kbd className='pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-slate-200 px-1 font-mono text-[10px] text-muted-foreground dark:border-border'>
+                  /
+                </kbd>
+              )}
+            </div>
+            <div className='-mx-4 flex w-[calc(100%+2rem)] items-center gap-2 overflow-x-auto px-4 [mask-image:linear-gradient(to_right,black_88%,transparent)] [scrollbar-width:none] sm:mx-0 sm:w-auto sm:flex-wrap sm:overflow-visible sm:px-0 sm:[mask-image:none] [&::-webkit-scrollbar]:hidden'>
+              {/* biome-ignore lint/a11y/useSemanticElements: chip group, not a fieldset */}
+              <div role='group' aria-label='Severity' className='flex shrink-0 items-center gap-1'>
+                {SEVERITIES.map((s) => {
+                  const on = severityList.includes(s)
+                  return (
+                    <button
+                      key={s}
+                      type='button'
+                      aria-pressed={on}
+                      onClick={() => toggleSeverity(s)}
+                      className={cn(
+                        'inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-[11.5px] font-medium capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+                        on
+                          ? 'border-nvr-cyan/50 bg-nvr-cyan/10 text-slate-900 dark:text-foreground'
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-border dark:bg-card dark:text-muted-foreground dark:hover:text-foreground'
+                      )}
+                    >
+                      <SeverityDot severity={s} />
+                      {s}
+                      {summary?.active_by_severity && (
+                        <span className='tabular-nums text-muted-foreground'>
+                          {summary.active_by_severity[s] ?? 0}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+              <Segmented
+                label='Assigned to'
+                value={assignee}
+                onChange={(v) => setParam({ assignee: v || null })}
+                options={[
+                  { value: '', label: 'Anyone' },
+                  {
+                    value: 'me',
+                    label: (
+                      <>
+                        Mine
+                        <Count n={summary?.mine_active} />
+                      </>
+                    )
+                  },
+                  {
+                    value: 'unassigned',
+                    label: (
+                      <>
+                        Unassigned
+                        <Count n={summary?.unassigned_active} />
+                      </>
+                    )
+                  }
+                ]}
+              />
+              <Segmented
+                label='Source'
+                value={source}
+                onChange={(v) => setParam({ source: v || null })}
+                options={[
+                  { value: '', label: 'All sources' },
+                  ...(['server', 'client', 'manual'] as const).map((s) => ({
+                    value: s,
+                    label: SOURCE_LABEL[s]
+                  }))
+                ]}
+              />
+              <CollectionSelect
+                value={collection}
+                onChange={(v) => setParam({ collection: v || null })}
+                className='w-52 shrink-0'
+              />
+              <MonCombobox
+                value={sort}
+                onChange={(v) => setParam({ sort: v && v !== 'last_seen' ? v : null })}
+                options={SORTS}
+                className='w-36 shrink-0 sm:hidden'
+              />
+            </div>
+            <div className='ml-auto flex items-center gap-2'>
+              {filtersOn && (
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='h-7 text-[12px]'
+                  onClick={clearFilters}
+                >
+                  Clear filters
+                </Button>
+              )}
+              <MonCombobox
+                value={sort}
+                onChange={(v) => setParam({ sort: v && v !== 'last_seen' ? v : null })}
+                options={SORTS}
+                className='hidden w-40 sm:flex'
+              />
+            </div>
+          </div>
+
+          {/* Bulk bar */}
+          {selected.size > 0 && (
+            <div className='flex shrink-0 flex-wrap items-center gap-2 border-b border-nvr-cyan/30 bg-nvr-cyan/[0.06] px-4 py-2'>
+              <span className='mr-1 text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
+                {selected.size} selected
+              </span>
+              {STATUSES.map((s) => (
+                <Button
+                  key={s}
+                  size='sm'
+                  variant='outline'
+                  className='h-7 text-[12px]'
+                  disabled={bulkBusy}
+                  onClick={() =>
+                    bulk(
+                      '/issues/bulk-status',
+                      { status: s },
+                      `marked ${statusLabel(s).toLowerCase()}`
+                    )
+                  }
+                >
+                  {s === 'open' ? 'Reopen' : `Mark ${statusLabel(s).toLowerCase()}`}
+                </Button>
+              ))}
+              {me?.id && (
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className='h-7 text-[12px]'
+                  disabled={bulkBusy}
+                  onClick={() =>
+                    bulk('/issues/bulk-assign', { assigned_to: 'me' }, 'assigned to you')
+                  }
+                >
+                  Assign to me
+                </Button>
+              )}
+              <Button
+                size='sm'
+                variant='ghost'
+                className='ml-auto h-7 text-[12px]'
+                onClick={() => setSelected(new Set())}
+              >
+                Clear selection
+              </Button>
+            </div>
+          )}
+
+          {linkedMissing && openId != null && (
+            <p
+              id='issue-linked-missing'
+              className='shrink-0 border-b border-amber-200 bg-amber-50 px-6 py-2 text-[12.5px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+            >
+              Issue #{openId} was not found. It may have been deleted, or you may not have access to
+              it.
+            </p>
+          )}
+
+          <div className='flex min-h-0 flex-1'>
+            {/* List */}
+            <section
+              aria-label='Issues'
+              className={cn(
+                'flex min-h-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card',
+                current ? 'hidden w-[44%] min-w-[380px] max-w-[620px] lg:flex' : 'min-w-0 flex-1'
+              )}
+            >
+              <div className='flex shrink-0 items-center gap-3 border-b border-slate-100 px-4 py-1.5 text-[11.5px] text-muted-foreground dark:border-border/60'>
+                <input
+                  type='checkbox'
+                  checked={allSelected}
+                  onChange={(e) =>
+                    setSelected(e.target.checked ? new Set(rows.map((i) => i.id)) : new Set())
+                  }
+                  aria-label='Select every issue shown'
+                  className='h-3.5 w-3.5 cursor-pointer accent-nvr-cyan'
+                  disabled={rows.length === 0}
+                  data-issues-select-all
+                />
+                <span aria-live='polite'>
+                  {isLoading
+                    ? 'Loading…'
+                    : total > rows.length
+                      ? `${rows.length} of ${total}`
+                      : `${rows.length} ${rows.length === 1 ? 'issue' : 'issues'}`}
+                </span>
+                {listQuery.isFetching && !isLoading && <span>· updating</span>}
+                {!current && (
+                  <span className='ml-auto hidden md:inline'>
+                    <kbd className='font-mono'>j</kbd>/<kbd className='font-mono'>k</kbd> to move ·{' '}
+                    <kbd className='font-mono'>/</kbd> to search
+                  </span>
+                )}
+              </div>
+              <div className='min-h-0 flex-1 overflow-y-auto'>
+                {listQuery.isError && !listQuery.data ? (
+                  <div className='p-6'>
+                    <ErrorNotice
+                      error={listQuery.error}
+                      what='the issue log'
+                      onRetry={() => void listQuery.refetch()}
+                    />
+                  </div>
+                ) : isLoading ? (
+                  <ul aria-hidden className='divide-y divide-slate-100 dark:divide-border/50'>
+                    {[0, 1, 2, 3, 4, 5].map((i) => (
+                      <li key={i} className='flex gap-3 px-4 py-3'>
+                        <Skeleton className='h-3.5 w-3.5' />
+                        <div className='flex-1 space-y-1.5'>
+                          <Skeleton className='h-3.5 w-3/5' />
+                          <Skeleton className='h-3 w-2/5' />
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : rows.length === 0 ? (
+                  <div className='flex flex-col items-center px-6 py-20 text-center'>
+                    <AlertOctagon className='mb-3 h-8 w-8 text-muted-foreground/40' aria-hidden />
+                    <p className='text-[13.5px] font-medium'>
+                      {filtersOn
+                        ? 'Nothing matches these filters'
+                        : status === 'open'
+                          ? 'Nothing open right now'
+                          : `No ${statusLabel(status).toLowerCase()} issues`}
+                    </p>
+                    <p className='mt-1 max-w-sm text-[12.5px] text-muted-foreground'>
+                      {filtersOn
+                        ? 'Try fewer filters, or clear them to see the whole log.'
+                        : 'Server and browser errors are logged here as they happen. Raise one yourself for a data or process problem.'}
+                    </p>
+                    {filtersOn && (
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        className='mt-4 h-7 text-[12px]'
+                        onClick={clearFilters}
+                      >
+                        Clear filters
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <ul>
+                      {rows.map((issue) => (
+                        <IssueRow
+                          key={issue.id}
+                          issue={issue}
+                          active={issue.id === openId}
+                          selected={selected.has(issue.id)}
+                          fresh={freshIds.has(String(issue.id))}
+                          showStatus={
+                            status === '' || status === 'active' || issue.id === linkedIssue?.id
+                          }
+                          onOpen={() => openIssue(issue.id === openId ? null : issue.id)}
+                          onSelect={(v) =>
+                            setSelected((prev) => {
+                              const next = new Set(prev)
+                              if (v) next.add(issue.id)
+                              else next.delete(issue.id)
+                              return next
+                            })
+                          }
+                        />
+                      ))}
+                    </ul>
+                    {total > issues.length && limit < MAX_ROWS && (
+                      <div className='flex justify-center p-4'>
+                        <Button
+                          variant='outline'
+                          size='sm'
+                          className='h-7 text-[12px]'
+                          disabled={listQuery.isFetching}
+                          onClick={() => setLimit((l) => Math.min(MAX_ROWS, l + PAGE))}
+                        >
+                          Show more
+                        </Button>
+                      </div>
+                    )}
+                    {total > issues.length && limit >= MAX_ROWS && (
+                      <p className='p-4 text-center text-[12px] text-muted-foreground'>
+                        Showing the first {MAX_ROWS}. Narrow the filters or search to find the rest.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            </section>
+
+            {/* Detail */}
+            {current && (
+              <IssueDetailPanel
+                key={current.id}
+                issue={current}
+                users={users}
+                onClose={() => openIssue(null)}
+                onPrev={index > 0 ? () => openIssue(rows[index - 1].id) : undefined}
+                onNext={
+                  index >= 0 && index < rows.length - 1
+                    ? () => openIssue(rows[index + 1].id)
+                    : undefined
+                }
+                position={
+                  index >= 0
+                    ? `${index + 1} of ${total > rows.length ? total : rows.length}`
+                    : undefined
+                }
+              />
+            )}
+          </div>
+        </>
       )}
-      {/* Table */}
-      <div className='flex-1 overflow-y-auto'>
-        {view === 'crashes' && me?.is_admin ? (
-          <CrashesView
-            onOpen={(id) => {
-              setStatusFilter('')
-              setSeverityFilter('')
-              setCollectionFilter('')
-              setSourceFilter('')
-              setExpandedId(id)
-              setView('list')
-            }}
-          />
-        ) : view === 'grouped' && me?.is_admin ? (
-          <IssueGroupsView
-            onOpen={(id) => {
-              setStatusFilter('')
-              setSeverityFilter('')
-              setCollectionFilter('')
-              setSourceFilter('')
-              setExpandedId(id)
-              setView('list')
-            }}
-          />
-        ) : isLoading ? (
-          <div className='space-y-2 p-6'>
-            {[1, 2, 3].map((i) => (
-              <div key={i} className='h-10 animate-pulse rounded-lg bg-muted' />
-            ))}
-          </div>
-        ) : rows.length === 0 ? (
-          <div className='flex flex-col items-center justify-center py-24 text-center'>
-            <AlertOctagon className='mb-3 h-10 w-10 text-muted-foreground/40' />
-            <p className='mb-1 text-sm font-medium'>
-              {statusFilter ? `No ${statusLabel(statusFilter)} issues` : 'No issues found'}
-            </p>
-            <p className='text-xs text-muted-foreground'>
-              {statusFilter || severityFilter || collectionFilter || sourceFilter
-                ? 'Clear the filters to see everything that was logged.'
-                : 'Raise an issue to track data or process problems.'}
-            </p>
-          </div>
-        ) : (
-          <table className='w-full'>
-            <thead className='sticky top-0 bg-white dark:bg-card'>
-              <tr className='border-b border-slate-200 text-left text-[11px] text-muted-foreground dark:border-border'>
-                <th className='w-9 px-3 py-2'>
-                  <input
-                    type='checkbox'
-                    checked={rows.length > 0 && selected.size === rows.length}
-                    onChange={(e) =>
-                      setSelected(e.target.checked ? new Set(rows.map((i) => i.id)) : new Set())
-                    }
-                    className='h-3.5 w-3.5'
-                  />
-                </th>
-                <th className='w-8 px-1 py-2' />
-                <th className='px-2 py-2 font-medium'>Title</th>
-                <th className='w-24 px-2 py-2 font-medium'>Severity</th>
-                <th className='w-28 px-2 py-2 font-medium'>Status</th>
-                <th className='w-40 px-2 py-2 font-medium'>Assignee</th>
-                <th className='w-36 px-2 py-2 font-medium'>Raised By</th>
-                <th className='w-36 px-2 py-2 font-medium'>Collection</th>
-                <th className='w-28 px-2 py-2 text-right font-medium'>Created</th>
-                <th className='w-28 px-4 py-2 text-right font-medium'>Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((issue) => {
-                const isOpen = expandedId === issue.id
-                return (
-                  <IssueRows
-                    key={issue.id}
-                    issue={issue}
-                    users={users}
-                    isOpen={isOpen}
-                    onToggle={() => setExpandedId(isOpen ? null : issue.id)}
-                    selected={selected.has(issue.id)}
-                    fresh={freshIds.has(String(issue.id))}
-                    onSelect={(v) =>
-                      setSelected((prev) => {
-                        const next = new Set(prev)
-                        if (v) next.add(issue.id)
-                        else next.delete(issue.id)
-                        return next
-                      })
-                    }
-                  />
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
     </div>
   )
 }

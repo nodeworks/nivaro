@@ -27,6 +27,7 @@ const issue = (id: number, status = 'open') => ({
   collection: null,
   item: null,
   title: `[server] GET /api/items/:collection: failure ${id}`,
+  source: 'server',
   severity: 'high',
   status,
   assigned_to: null,
@@ -74,16 +75,17 @@ describe('Issues deep link', () => {
     })
   })
 
-  it('pins an issue missing from the list, expands it, names the raiser and selects it in all', async () => {
+  it('pins an issue missing from the list, opens it, names the raiser and selects it in all', async () => {
     renderPage()
     await waitFor(() => expect(document.getElementById('issue-row-292')).not.toBeNull())
     // the empty list does not hide the pinned row, and the raiser is a name, never a uuid
-    expect(screen.queryByText('No issues found')).toBeNull()
+    expect(screen.queryByText('Nothing open right now')).toBeNull()
     expect(screen.getAllByText('Beth Ray').length).toBeGreaterThan(0)
     expect(document.body.textContent).not.toContain(RAISER)
-    // expanded: the detail panel is open under the row
-    await waitFor(() => expect(screen.getByText('Transition:', { exact: false })).toBeTruthy())
-    const all = document.querySelector('thead input[type=checkbox]') as HTMLInputElement
+    // opened: the detail panel shows the readable headline, not the stored title
+    await waitFor(() => expect(document.querySelector('[data-issue-detail="292"]')).not.toBeNull())
+    expect(screen.getAllByText('Failure 292').length).toBeGreaterThan(0)
+    const all = document.querySelector('[data-issues-select-all]') as HTMLInputElement
     act(() => {
       fireEvent.click(all)
     })
@@ -95,11 +97,18 @@ describe('Issues deep link', () => {
     await waitFor(() => expect(document.getElementById('issue-row-292')).not.toBeNull())
     const linkedCalls = () => getMock.mock.calls.filter((c) => c[0] === '/issues/292').length
     const before = linkedCalls()
-    const resolve = await screen.findByRole('button', { name: 'resolved' })
+    const resolve = await waitFor(() => {
+      const b = document.querySelector('[data-issue-step="resolved"]') as HTMLButtonElement | null
+      expect(b).not.toBeNull()
+      return b as HTMLButtonElement
+    })
     linkedStatus = 'resolved'
     act(() => {
       fireEvent.click(resolve)
     })
+    await waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith('/issues/292', { status: 'resolved' })
+    )
     await waitFor(() => expect(linkedCalls()).toBeGreaterThan(before))
     await waitFor(() =>
       expect(document.getElementById('issue-row-292')?.textContent).toMatch(/resolved/i)
@@ -112,5 +121,20 @@ describe('Issues deep link', () => {
     await waitFor(() => expect(document.getElementById('issue-linked-missing')).not.toBeNull())
     expect(screen.getByText(/Issue #999 was not found/)).toBeInTheDocument()
     expect(getMock.mock.calls.filter((c) => c[0] === '/issues/999')).toHaveLength(1)
+  })
+
+  it('asks for open issues by last seen, then sends the search as q', async () => {
+    routeId = undefined
+    renderPage()
+    const listCalls = () =>
+      getMock.mock.calls.map((c) => String(c[0])).filter((u) => u.startsWith('/issues?'))
+    await waitFor(() => expect(listCalls().length).toBeGreaterThan(0))
+    expect(listCalls()[0]).toContain('status=open')
+    expect(listCalls()[0]).toContain('sort=last_seen')
+    const box = screen.getByLabelText('Search issues')
+    act(() => {
+      fireEvent.change(box, { target: { value: 'deadlock' } })
+    })
+    await waitFor(() => expect(listCalls().some((u) => u.includes('q=deadlock'))).toBe(true))
   })
 })

@@ -185,6 +185,86 @@ describe('POST /issues/bulk-status', () => {
   })
 })
 
+describe('issue log search, sort, paging and bulk', () => {
+  it('maps the old acknowledged to in progress and refuses an unknown status', async () => {
+    const app = await buildApp()
+    await app.inject({
+      method: 'POST',
+      url: '/issues/bulk-status',
+      headers: { 'x-test-user': 'admin' },
+      payload: { ids: [1], status: 'acknowledged' }
+    })
+    expect(sql.ran.find((q) => q.method === 'update')!.bindings).toContain('in_progress')
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/issues/bulk-status',
+      headers: { 'x-test-user': 'admin' },
+      payload: { ids: [1], status: 'nonsense' }
+    })
+    expect(bad.statusCode).toBe(400)
+    await app.close()
+  })
+
+  it("never lets a non-admin search a server issue's stored title or details", async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      url: '/issues?q=workflows_divisions',
+      headers: { 'x-test-user': 'paul' }
+    })
+    expect(res.statusCode).toBe(200)
+    const list = sql.ran.find(
+      (q) => q.sql.includes('from [nivaro_issues]') && q.sql.includes('like')
+    )!
+    expect(list.sql).not.toContain('[i].[details] like')
+    expect(list.sql).toMatch(/not \[i\]\.\[source\] = @p\d+/)
+    expect(list.bindings).toContain('%workflows[_]divisions%')
+    await app.close()
+  })
+
+  it('lets an admin search details and find an issue by #id, and answers a total', async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      url: '/issues?q=%2342&limit=10&offset=20',
+      headers: { 'x-test-user': 'admin' }
+    })
+    const list = sql.ran.find((q) => q.sql.includes('[i].[details] like'))!
+    expect(list.sql).toContain('or [i].[id] = @p')
+    expect(list.bindings).toContain(42)
+    expect(res.json().meta).toMatchObject({ limit: 10, offset: 20 })
+    expect(typeof res.json().meta.total).toBe('number')
+    await app.close()
+  })
+
+  it('orders only by fixed fragments, whatever sort says', async () => {
+    const { issueOrder, likeEscape } = await import('../../../routes/issues.js')
+    expect(issueOrder('severity')[0][0]).toContain('CASE i.severity')
+    expect(issueOrder('id; drop table x')).toEqual(issueOrder(undefined))
+    expect(likeEscape('50%_[x]')).toBe('50[%][_][[]x]')
+  })
+
+  it('bulk-assign keeps the assignee/raiser rule and refuses an unknown person', async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/issues/bulk-assign',
+      headers: { 'x-test-user': 'paul' },
+      payload: { ids: [1, 2], assigned_to: 'me' }
+    })
+    expect(res.statusCode).toBe(200)
+    const upd = sql.ran.find((q) => q.method === 'update')!
+    expect(upd.sql).toMatch(/\(\[raised_by\] = @p\d+ or \[assigned_to\] = @p\d+\)/)
+    expect(upd.bindings).toContain('PAUL')
+    const none = await app.inject({
+      method: 'POST',
+      url: '/issues/bulk-assign',
+      headers: { 'x-test-user': 'admin' },
+      payload: { ids: [1] }
+    })
+    expect(none.statusCode).toBe(400)
+    await app.close()
+  })
+})
+
 describe('serverIssueTitleForViewer', () => {
   it('keeps the method and route, never the message', async () => {
     const { serverIssueTitleForViewer } = await import('../../../routes/issues.js')

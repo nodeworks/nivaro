@@ -101,6 +101,65 @@ function issueId(raw: unknown): number | null {
   return Number.isSafeInteger(n) && n > 0 ? n : null
 }
 
+const ISSUE_LIST_MAX = 500
+
+/** A whole number from the query string inside [min, max], else the fallback. */
+function clampInt(raw: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(raw)
+  return Number.isInteger(n) && n >= min && n <= max ? n : fallback
+}
+
+/** `high,critical` → the listed values that are allowed (unknown ones dropped). */
+function listParam<T extends string>(raw: string, allowed: readonly T[]): T[] {
+  const picked = raw
+    .split(',')
+    .map((v) => v.trim())
+    .filter((v): v is T => (allowed as readonly string[]).includes(v))
+  return picked.length ? picked : (['__none__'] as unknown as T[])
+}
+
+/** LIKE wildcards in a person's search text match themselves (SQL Server bracket escape). */
+export function likeEscape(text: string): string {
+  return text.replace(/[[%_]/g, (c) => `[${c}]`)
+}
+
+/** ORDER BY for ?sort= — fixed SQL fragments only, never the caller's text. */
+export function issueOrder(sort: unknown): Array<[string, 'asc' | 'desc']> {
+  switch (sort) {
+    case 'newest':
+      return [
+        ['i.created_at', 'desc'],
+        ['i.id', 'desc']
+      ]
+    case 'updated':
+      return [
+        ['i.updated_at', 'desc'],
+        ['i.id', 'desc']
+      ]
+    case 'count':
+      return [
+        ['COALESCE(i.occurrence_count, 1)', 'desc'],
+        ['COALESCE(i.last_seen_at, i.created_at)', 'desc'],
+        ['i.id', 'desc']
+      ]
+    case 'severity':
+      return [
+        [
+          "CASE i.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END",
+          'asc'
+        ],
+        ['COALESCE(i.last_seen_at, i.created_at)', 'desc'],
+        ['i.id', 'desc']
+      ]
+    default:
+      // last_seen: what is happening now first — a repeat bumps its issue back up.
+      return [
+        ['COALESCE(i.last_seen_at, i.created_at)', 'desc'],
+        ['i.id', 'desc']
+      ]
+  }
+}
+
 interface Issue {
   id: number
   collection: string | null
@@ -261,88 +320,167 @@ export async function issuesRoutes(app: FastifyInstance) {
     return reply.send({ data })
   })
 
-  // GET /issues?collection=&item=&status=&severity=&assigned_to=me
+  // GET /issues?collection=&item=&status=&severity=&source=&assigned_to=me|unassigned|<id>
+  //   &q=<text or #id>&sort=last_seen|newest|count|severity|updated&limit=&offset=
+  // Answers { data, meta: { total, limit, offset } } — total counts every match, not the page.
   app.get('/', { preHandler: requireAuth }, async (req, reply) => {
-    const { collection, item, status, severity, assigned_to, source } = req.query as {
+    const query = req.query as {
       collection?: string
       item?: string
       status?: string
       severity?: string
       assigned_to?: string
       source?: string
+      q?: string
+      sort?: string
+      limit?: string
+      offset?: string
+    }
+    const { collection, item, status, severity, assigned_to, source } = query
+    const limit = clampInt(query.limit, 1, ISSUE_LIST_MAX, 200)
+    const offset = clampInt(query.offset, 0, 1_000_000, 0)
+    const term = String(query.q ?? '')
+      .trim()
+      .slice(0, 200)
+    const onRecord =
+      !req.isAdmin && collection && item ? await recordVisible(req, collection, item) : false
+
+    // One filter, applied to the page AND the total.
+    const filtered = <Q extends Knex.QueryBuilder>(q: Q): Q => {
+      if (collection) q.where('i.collection', collection)
+      if (item) q.where('i.item', item)
+      if (status === 'active') q.whereIn('i.status', ['open', 'in_progress'])
+      else if (status) q.where('i.status', status)
+      if (severity) q.whereIn('i.severity', listParam(severity, SEVERITIES))
+      if (source) q.where('i.source', source)
+      if (assigned_to === 'unassigned') q.whereNull('i.assigned_to')
+      else if (assigned_to)
+        q.where('i.assigned_to', assigned_to === 'me' ? req.user!.id : assigned_to)
+      if (term) {
+        const like = `%${likeEscape(term)}%`
+        const idMatch = /^#?(\d{1,15})$/.exec(term)
+        q.where((w) => {
+          if (req.isAdmin) w.where('i.title', 'like', like).orWhere('i.details', 'like', like)
+          // A non-admin never searches a server issue's stored title or details: both hold
+          // the driver message (SQL), which they are not shown (army 11 o2).
+          else w.where((x) => x.whereNot('i.source', 'server').where('i.title', 'like', like))
+          if (idMatch) w.orWhere('i.id', Number(idMatch[1]))
+        })
+      }
+      if (!req.isAdmin) {
+        const userId = req.user!.id
+        q.where((w) => {
+          ownIssues(w as Knex.QueryBuilder, userId, 'i.')
+          if (onRecord) w.orWhere('i.source', 'manual')
+        })
+      }
+      return q
     }
 
-    let query = db<Issue>('nivaro_issues as i')
-      .leftJoin('nivaro_users as a', 'i.assigned_to', 'a.id')
-      .leftJoin('nivaro_users as r', 'i.raised_by', 'r.id')
-      .select(
-        // everything except the (potentially large) screenshot blob
-        'i.id',
-        'i.collection',
-        'i.item',
-        'i.title',
-        'i.severity',
-        'i.status',
-        'i.assigned_to',
-        'i.raised_by',
-        'i.resolution_notes',
-        'i.source',
-        'i.details',
-        'i.fingerprint',
-        'i.occurrence_count',
-        'i.last_seen_at',
-        'i.recording_id',
-        'i.recording_offset_ms',
-        'i.created_at',
-        'i.updated_at',
-        db.raw(
-          "LTRIM(RTRIM(CONCAT(COALESCE(a.first_name, ''), ' ', COALESCE(a.last_name, '')))) as assigned_to_name"
-        ),
-        'a.email as assigned_to_email',
-        db.raw(
-          "LTRIM(RTRIM(CONCAT(COALESCE(r.first_name, ''), ' ', COALESCE(r.last_name, '')))) as raised_by_name"
-        ),
-        'r.email as raised_by_email'
-      )
-      .orderBy('i.created_at', 'desc')
-      .limit(200)
+    const list = filtered(
+      db<Issue>('nivaro_issues as i')
+        .leftJoin('nivaro_users as a', 'i.assigned_to', 'a.id')
+        .leftJoin('nivaro_users as r', 'i.raised_by', 'r.id')
+        .select(
+          // everything except the (potentially large) screenshot blob
+          'i.id',
+          'i.collection',
+          'i.item',
+          'i.title',
+          'i.severity',
+          'i.status',
+          'i.assigned_to',
+          'i.raised_by',
+          'i.resolution_notes',
+          'i.source',
+          'i.details',
+          'i.fingerprint',
+          'i.occurrence_count',
+          'i.last_seen_at',
+          'i.recording_id',
+          'i.recording_offset_ms',
+          'i.created_at',
+          'i.updated_at',
+          db.raw(
+            "LTRIM(RTRIM(CONCAT(COALESCE(a.first_name, ''), ' ', COALESCE(a.last_name, '')))) as assigned_to_name"
+          ),
+          'a.email as assigned_to_email',
+          db.raw(
+            "LTRIM(RTRIM(CONCAT(COALESCE(r.first_name, ''), ' ', COALESCE(r.last_name, '')))) as raised_by_name"
+          ),
+          'r.email as raised_by_email'
+        ) as unknown as Knex.QueryBuilder
+    )
+    for (const [col, dir] of issueOrder(query.sort)) list.orderByRaw(`${col} ${dir}`)
+    list.offset(offset).limit(limit)
 
-    if (collection) query = query.where('i.collection', collection)
-    if (item) query = query.where('i.item', item)
-    if (status) query = query.where('i.status', status)
-    if (severity) query = query.where('i.severity', severity)
-    if (source) query = query.where('i.source', source)
-    if (assigned_to) {
-      query = query.where('i.assigned_to', assigned_to === 'me' ? req.user!.id : assigned_to)
-    }
-    if (!req.isAdmin) {
-      const userId = req.user!.id
-      const onRecord = collection && item ? await recordVisible(req, collection, item) : false
-      query = query.where((w) => {
-        ownIssues(w as Knex.QueryBuilder, userId, 'i.')
-        if (onRecord) w.orWhere('i.source', 'manual')
-      })
-    }
-
-    const rows = (await query) as Array<Record<string, unknown>>
-    return reply.send({ data: rows.map((r) => forViewer(r, !!req.isAdmin)) })
+    const [rows, countRows] = await Promise.all([
+      list as unknown as Promise<Array<Record<string, unknown>>>,
+      filtered(db('nivaro_issues as i') as unknown as Knex.QueryBuilder).count(
+        '* as total'
+      ) as unknown as Promise<Array<{ total?: unknown }>>
+    ])
+    const counted = Number(Array.isArray(countRows) ? countRows[0]?.total : NaN)
+    const total = Number.isFinite(counted) ? counted : offset + rows.length
+    return reply.send({
+      data: rows.map((r) => forViewer(r, !!req.isAdmin)),
+      meta: { total, limit, offset }
+    })
   })
 
-  // GET /issues/summary — counts by status + severity
+  // GET /issues/summary — counts by status + severity, and the triage numbers the page heads with
   app.get('/summary', { preHandler: requireAuth }, async (req, reply) => {
     const base = () =>
       req.isAdmin ? db('nivaro_issues') : ownIssues(db('nivaro_issues'), req.user!.id)
-    const [byStatus, bySeverity] = await Promise.all([
+    const dayAgo = new Date(Date.now() - 86_400_000)
+    const [byStatus, bySeverity, activeBySeverity, triage] = await Promise.all([
       base().select('status').count('* as count').groupBy('status'),
-      base().select('severity').count('* as count').whereNot('status', 'closed').groupBy('severity')
+      base()
+        .select('severity')
+        .count('* as count')
+        .whereNot('status', 'closed')
+        .groupBy('severity'),
+      base()
+        .select('severity')
+        .count('* as count')
+        .whereIn('status', ['open', 'in_progress'])
+        .groupBy('severity'),
+      base()
+        .select(
+          db.raw('SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) as new_24h', [dayAgo]),
+          db.raw(
+            "SUM(CASE WHEN status IN ('open','in_progress') AND assigned_to IS NULL THEN 1 ELSE 0 END) as unassigned_active"
+          ),
+          db.raw(
+            "SUM(CASE WHEN status IN ('open','in_progress') AND assigned_to = ? THEN 1 ELSE 0 END) as mine_active",
+            [req.user!.id]
+          ),
+          db.raw(
+            "SUM(CASE WHEN status IN ('open','in_progress') AND COALESCE(last_seen_at, created_at) >= ? THEN 1 ELSE 0 END) as seen_24h",
+            [dayAgo]
+          )
+        )
+        .first()
     ])
 
-    const statusCounts: Record<string, number> = {}
-    for (const row of byStatus) statusCounts[row.status as string] = Number(row.count)
-    const severityCounts: Record<string, number> = {}
-    for (const row of bySeverity) severityCounts[row.severity as string] = Number(row.count)
-
-    return reply.send({ data: { by_status: statusCounts, by_severity: severityCounts } })
+    const tally = (rows: unknown, key: string) => {
+      const out: Record<string, number> = {}
+      for (const row of (Array.isArray(rows) ? rows : []) as Array<Record<string, unknown>>)
+        out[String(row[key])] = Number(row.count) || 0
+      return out
+    }
+    const t = (triage ?? {}) as Record<string, unknown>
+    return reply.send({
+      data: {
+        by_status: tally(byStatus, 'status'),
+        by_severity: tally(bySeverity, 'severity'),
+        active_by_severity: tally(activeBySeverity, 'severity'),
+        new_24h: Number(t.new_24h) || 0,
+        seen_24h: Number(t.seen_24h) || 0,
+        unassigned_active: Number(t.unassigned_active) || 0,
+        mine_active: Number(t.mine_active) || 0
+      }
+    })
   })
 
   // GET /issues/:id
@@ -454,9 +592,11 @@ export async function issuesRoutes(app: FastifyInstance) {
    *  one activity row per issue. */
   app.post('/bulk-status', { preHandler: requireAuth }, async (req, reply) => {
     const b = req.body as { ids?: Array<number | string>; status?: string }
-    const status = String(b.status ?? '')
-    if (!['open', 'acknowledged', 'resolved'].includes(status)) {
-      return reply.code(400).send({ error: 'status must be open, acknowledged or resolved' })
+    // 'acknowledged' was never a status the rest of the log knows: it is in progress.
+    const asked = String(b.status ?? '')
+    const status = asked === 'acknowledged' ? 'in_progress' : asked
+    if (!STATUSES.includes(status as never)) {
+      return reply.code(400).send({ error: `status must be one of ${STATUSES.join(', ')}` })
     }
     const ids = (Array.isArray(b.ids) ? b.ids : [])
       .map(issueId)
@@ -476,6 +616,54 @@ export async function issuesRoutes(app: FastifyInstance) {
       comment: `${updated} issue(s) -> ${status}`,
       req
     })
+    return { data: { updated } }
+  })
+
+  // POST /issues/bulk-assign { ids, assigned_to: <user id> | 'me' | null } — the single PATCH's
+  // rule row by row (assignee, raiser, or an admin); each newly assigned person is told once
+  // per issue, never about their own assignment.
+  app.post('/bulk-assign', { preHandler: requireAuth }, async (req, reply) => {
+    const b = req.body as { ids?: Array<number | string>; assigned_to?: string | null }
+    const me = req.user!.id
+    const raw = b.assigned_to === undefined ? undefined : b.assigned_to
+    if (raw === undefined) return reply.code(400).send({ error: 'assigned_to is required' })
+    const target = raw === 'me' ? me : raw ? String(raw).slice(0, 64) : null
+    const ids = (Array.isArray(b.ids) ? b.ids : [])
+      .map(issueId)
+      .filter((n): n is number => n != null)
+      .slice(0, 200)
+    if (ids.length === 0) return reply.code(400).send({ error: 'ids[] is required' })
+    if (target && raw !== 'me') {
+      const person = await db('nivaro_users').where('id', target).first('id')
+      if (!person) return reply.code(400).send({ error: 'That person was not found' })
+    }
+    const scope = () => {
+      const q = db('nivaro_issues').whereIn('id', ids)
+      return req.isAdmin ? q : ownIssues(q, me)
+    }
+    const before = (await scope().select(
+      'id',
+      'assigned_to',
+      'title',
+      'severity',
+      'source',
+      'collection',
+      'item'
+    )) as Array<Issue & { source?: string }>
+    const updated = await scope().update({ assigned_to: target, updated_at: new Date() })
+    await logActivity({
+      action: 'issue-bulk-assign',
+      user: me,
+      collection: 'nivaro_issues',
+      comment: `${updated} issue(s) -> ${target ? 'assigned' : 'unassigned'}`,
+      req
+    })
+    if (target && target.toUpperCase() !== me.toUpperCase()) {
+      for (const row of Array.isArray(before) ? before : []) {
+        if (String(row.assigned_to ?? '').toUpperCase() === target.toUpperCase()) continue
+        await notifyAssignment(app, { ...row, assigned_to: target }, target, me)
+      }
+    }
     return { data: { updated } }
   })
 

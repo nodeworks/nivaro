@@ -413,15 +413,20 @@ export const obsIssueLog: DocSection = {
       type: 'table',
       head: ['Field', 'Values'],
       rows: [
-        ['severity', 'info | warning | error | critical'],
-        ['status', 'open | acknowledged | resolved']
+        ['severity', 'low | medium | high | critical'],
+        ['status', 'open | in_progress | resolved | closed'],
+        ['source', 'server | client (browser) | manual (raised by a person)']
       ]
     },
     {
       type: 'ul',
       items: [
-        'Issues link back to their source (sync job, DQ run, webhook, record) where applicable.',
-        'Filter by severity, status, and source; resolve with an optional note.',
+        'The page lists issues by when they last happened. Each row shows what went wrong in plain words, where it happened (route, job or screen) and its source; SQL and stack text live in the detail panel under Technical details.',
+        'Status tabs with counts; severity chips; Mine / Unassigned; source; collection; sort by last seen, newest, most frequent, most severe or recently changed. Filters live in the URL, so a filtered list can be shared. Search matches titles (admins: details too) or #id.',
+        'Keyboard: j / k move between issues, / searches, Esc closes the detail, x selects the open issue.',
+        'The detail panel: Resolve / Start work / Close issue / Reopen, owner and severity, times seen, replay, Explain, recent occurrences, comments and resolution notes.',
+        'Select several issues to change their status or assign them to yourself in one step.',
+        'API: GET /api/issues?status=&severity=high,critical&source=&assigned_to=me|unassigned|<id>&collection=&q=&sort=last_seen|newest|count|severity|updated&limit=&offset= answers { data, meta: { total, limit, offset } }; GET /api/issues/summary adds new_24h, seen_24h, unassigned_active, mine_active and active_by_severity; POST /api/issues/bulk-status { ids, status } and POST /api/issues/bulk-assign { ids, assigned_to: <id> | me | null } (assignee, raiser or admin).',
         'Subsystems raise issues automatically; users and extensions can create them via POST /api/issues.'
       ]
     }

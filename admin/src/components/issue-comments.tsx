@@ -40,7 +40,14 @@ export function splitReplayLink(text: string): {
   return { body, link: { href: m[0], at: Number(m[2]) } }
 }
 
-export function IssueComments({ issueId }: { issueId: number }) {
+export function IssueComments({
+  issueId,
+  emptyText
+}: {
+  issueId: number
+  /** Shown when there are none (else nothing renders). */
+  emptyText?: string
+}) {
   const { data } = useQuery({
     queryKey: ['issue-comments', issueId],
     queryFn: () =>
@@ -51,7 +58,8 @@ export function IssueComments({ issueId }: { issueId: number }) {
         .then((r) => r.data.data),
     staleTime: 30_000
   })
-  if (!data || data.length === 0) return null
+  if (!data || data.length === 0)
+    return emptyText ? <p className='text-[12.5px] text-muted-foreground'>{emptyText}</p> : null
   return (
     <div className='space-y-1.5'>
       <p className='text-[11px] uppercase tracking-wide text-muted-foreground'>Comments</p>
