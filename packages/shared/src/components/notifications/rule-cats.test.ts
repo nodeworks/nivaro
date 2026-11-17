@@ -9,11 +9,13 @@ describe('ruleCatsFor', () => {
   it('leaves admin-only categories out of a business user’s rules', () => {
     expect(keys('person', false)).not.toContain('chaos')
     expect(keys('person', false)).not.toContain('audit')
+    expect(keys('person', false)).not.toContain('security')
     expect(keys('person', false)).toContain('workflow')
     expect(keys('person', false)).toContain('anomaly')
   })
   it('lists every category for administrators and role defaults', () => {
     expect(keys('person', true)).toContain('chaos')
+    expect(keys('person', true)).toContain('security')
     expect(keys('role', false)).toContain('audit')
   })
 })

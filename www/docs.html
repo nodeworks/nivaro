@@ -423,6 +423,7 @@
           <a class="docs-nav-item" data-section="saml-sso" href="#saml-sso">SAML SSO</a>
           <a class="docs-nav-item" data-section="api-keys" href="#api-keys">Named API Keys</a>
           <a class="docs-nav-item" data-section="masquerade" href="#masquerade">Masquerade</a>
+          <a class="docs-nav-item" data-section="security-alerts" href="#security-alerts">Security Alerts</a>
           <a class="docs-nav-item" data-section="user-scopes" href="#user-scopes">User Scopes</a>
           <a class="docs-nav-item" data-section="scim" href="#scim">SCIM 2.0 Provisioning</a>
           <a class="docs-nav-item" data-section="field-encryption" href="#field-encryption">Field Encryption at Rest</a>
@@ -15068,6 +15069,43 @@ Authorization: Bearer &lt;nvm_-token&gt;
           </ul>
           <div class="doc-note doc-warn">A masquerade token carries the target user’s full permissions — including admin, if the target is an admin. Tokens live in Redis under <code class="doc-code">masq:&lt;token&gt;</code>; restarting Redis revokes all active masquerades.</div>
           <!-- /SYNC:masquerade -->
+        </div>
+        <div class="doc-section" id="s-security-alerts" data-toc='[{"id":"security-alerts","label":"Security alerts to administrators"},{"id":"security-alerts-events","label":"What raises an alert"},{"id":"security-alerts-coalescing","label":"One alert per burst"},{"id":"security-alerts-settings","label":"Settings and history"}]'>
+          <!-- SYNC:security-alerts -->
+          <h1 class="doc-h1" id="security-alerts">Security alerts to administrators</h1>
+          <p class="doc-p">Nivaro tells every administrator when something security-relevant happens (SOC 2 CC7, security event detection). Alerts arrive through the normal notification stack — the bell, push, and email or Teams when a person turned those on — in their own category, **Security alerts**, which each administrator can mute or route in Profile → Notification rules. Only administrators ever receive them.</p>
+          <h2 class="doc-h2" id="security-alerts-events">What raises an alert</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Switch</th><th>Raised when</th></tr></thead>
+            <tbody><tr><tr><td>Administrator rights</td><td>Someone gains or loses administrator rights: their role changed to or from an admin role, or a new account (created by an administrator, or a first sign-in through directory group mapping) starts as an administrator.</td></tr>
+              <tr><td>Role changes</td><td>Any person’s role changes — on their profile, by a bulk action, Copy access, authorizing an access request, directory group mapping at sign-in, or SCIM.</td></tr>
+              <tr><td>Role permissions</td><td>A role is created, cloned or deleted; it gains or loses administrator rights or app sign-in; a permission is added, removed, or its fields / record filter change; its admin screens change.</td></tr>
+              <tr><td>API keys</td><td>An API key is created, or edited so it reaches further: more collections or actions, record limits removed or loosened, more network addresses, rehearsal mode turned off, switched back on, or a later (or no) expiry. A narrower key raises nothing.</td></tr>
+              <tr><td>Repeated refusals</td><td>One caller is refused access (HTTP 403) at least 25 times within 5 minutes (both adjustable). The caller is the API key when one was used, else the signed-in person, else the network address. One alert per caller per hour.</td></tr>
+              <tr><td>Administrator sign-in from a new location</td><td>An administrator signs in from a network address not seen for them in the last 90 days. The other administrators are told (the person gets their own “New sign-in” notice as before).</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">Every alert says in plain words who did what to whom — “Alex Kim changed Jordan Lee’s role from Editor to Administrator” — and opens the person, role or API key it is about. The administrator who made a change is not told about it, unless they are the only administrator.</p>
+          <h2 class="doc-h2" id="security-alerts-coalescing">One alert per burst</h2>
+          <ul class="doc-ul">
+            <li>Changes are gathered for about 8 seconds per kind and per person making them, then sent as one alert: a bulk role change of 40 people, or a role edited permission by permission, is one notification listing what changed.</li>
+            <li>The gathering happens in Redis, so it holds across API replicas: whichever replica saw the first change sends the alert for all of them. Without Redis (a single process) it happens in memory.</li>
+            <li>The refusal counter is a Redis key per caller that lives for the window, shared by every replica. Keys and in-memory state carry the tenant in cloud mode.</li>
+            <li>At most 30 alerts per hour are delivered per instance (tenant); past that they are still recorded, not sent.</li>
+            <li>An administrator viewing as someone else (View as) does not count towards that person’s refusals — exploring as them is deliberate.</li>
+          </ul>
+          <h2 class="doc-h2" id="security-alerts-settings">Settings and history</h2>
+          <p class="doc-p">Security &amp; privacy (<code class="doc-code">/security-center</code>) has a **Security alerts** card: one switch per kind (all on by default), the refusal threshold and window, and the alerts sent in the last 90 days. The settings are per instance, stored under the <code class="doc-code">security_alerts</code> key of this instance’s <code class="doc-code">nivaro_settings_overrides</code> row (no migration). Every alert sent is also an activity row with action <code class="doc-code">security-alert</code>.</p>
+          <pre class="doc-pre"><code>GET   /api/security/alert-settings      (admin)
+PATCH /api/security/alert-settings      (admin)
+{ "role_changes": true, "admin_rights": true, "role_permissions": true,
+  "api_keys": true, "access_denied": true, "access_denied_threshold": 25,
+  "access_denied_minutes": 5, "admin_signin": true }
+→ 400 { "error": "...", "fields": { "access_denied_threshold": "A whole number from 5 to 10,000" } }
+
+GET   /api/security/alerts              (admin) — the last 90 days, newest first
+→ { "data": [{ "id", "kind", "subject", "message", "path", "delivered", "at" }] }</code></pre>
+          <div class="doc-note">Changes made by raw SQL or outside the API routes named above (for example a config promotion that copies roles) do not raise alerts — the activity log and Config review remain the record for those.</div>
+          <!-- /SYNC:security-alerts -->
         </div>
 
         <div class="doc-section" id="s-user-scopes" data-toc='[{"id":"user-scopes","label":"User Scopes"},{"id":"user-scopes-bulk","label":"Bulk restricted zones"},{"id":"security-suspended-why","label":"Why an account is suspended"}]'>

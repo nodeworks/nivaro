@@ -189,6 +189,15 @@ export async function applyAccessCopy(
   if (plan.role) {
     await db('nivaro_users').where({ id: target }).update({ role: plan.role.proposed.id })
     void joinDefaultChannelsSoon([target], 'access copied')
+    const move = plan.role
+    void import('./security-alerts.js').then((m) =>
+      m.noteUserRoleChange({
+        actor: actorId,
+        userId: target,
+        fromRole: move.current.id,
+        toRole: move.proposed.id
+      })
+    )
   }
   for (const c of plan.scopes) {
     const where = { user: target, dimension: c.dimension, mode: c.mode }
@@ -328,6 +337,16 @@ export async function runBulkUserAction(
         }
         await db('nivaro_users').where({ id: u.id }).update({ role: a.role_id })
         comment = `Bulk: role → ${roleName}`
+        // One alert for the whole bulk run: events coalesce per actor (services/security-alerts.ts).
+        const fromRole = (u.role as string | null) ?? null
+        void import('./security-alerts.js').then((m) =>
+          m.noteUserRoleChange({
+            actor: actorId,
+            userId: String(u.id),
+            fromRole,
+            toRole: a.role_id
+          })
+        )
       } else if (a.action === 'suspend' || a.action === 'activate') {
         const next = a.action === 'suspend' ? 'suspended' : 'active'
         if (self && next === 'suspended') {

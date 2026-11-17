@@ -11,6 +11,13 @@ import {
   parsePolicyFields,
   parseRowFilter
 } from '../services/permissions.js'
+import {
+  noteRolePermissionChange,
+  policyAddedSentence,
+  policyChangedSentence,
+  policyRemovedSentence,
+  roleEditSentences
+} from '../services/security-alerts.js'
 import type { Role, User } from '../types.js'
 
 /**
@@ -78,6 +85,16 @@ export async function rolesRoutes(app: FastifyInstance) {
       item: id,
       req
     })
+    if (role) {
+      const admin = !!role.admin_access
+      noteRolePermissionChange({
+        actor: req.user?.id ?? null,
+        roleId: id,
+        roleName: role.name,
+        change: `Created the role${admin ? ' with administrator rights' : ''}.`,
+        adminChange: admin ? 'granted' : undefined
+      })
+    }
     return reply.code(201).send({ data: role })
   })
 
@@ -122,12 +139,23 @@ export async function rolesRoutes(app: FastifyInstance) {
         req
       })
       const role = await db('nivaro_roles').where({ id }).first()
+      const admin = source.admin_access === true || source.admin_access === 1
+      noteRolePermissionChange({
+        actor: req.user?.id ?? null,
+        roleId: id,
+        roleName: name,
+        change: `Created as a copy of the ${source.name} role, with its ${policies.length} ${policies.length === 1 ? 'permission' : 'permissions'}${admin ? ' and administrator rights' : ''}.`,
+        adminChange: admin ? 'granted' : undefined
+      })
       return reply.code(201).send({ data: role })
     }
   )
 
   app.patch('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
+    const before = (await db('nivaro_roles').where({ id }).first()) as
+      | Record<string, unknown>
+      | undefined
     await db('nivaro_roles')
       .where({ id })
       .update({ ...(req.body as object), updated_at: new Date() })
@@ -139,6 +167,17 @@ export async function rolesRoutes(app: FastifyInstance) {
       item: id,
       req
     })
+    if (before && role) {
+      const edit = roleEditSentences(before, role as unknown as Record<string, unknown>)
+      for (const change of edit.changes)
+        noteRolePermissionChange({
+          actor: req.user?.id ?? null,
+          roleId: id,
+          roleName: role.name,
+          change,
+          adminChange: change === edit.adminSentence ? edit.adminChange : undefined
+        })
+    }
     return reply.send({ data: role })
   })
 
@@ -224,6 +263,9 @@ export async function rolesRoutes(app: FastifyInstance) {
       '../services/notification-role-defaults.js'
     )
     await forgetRoleNotificationDefaults(id)
+    const gone = (await db('nivaro_roles').where({ id }).first('name', 'admin_access')) as
+      | { name: string | null; admin_access: boolean | number | null }
+      | undefined
     await db('nivaro_policies').where({ role: id }).delete()
     await db('nivaro_roles').where({ id }).delete()
     await logActivity({
@@ -233,6 +275,13 @@ export async function rolesRoutes(app: FastifyInstance) {
       item: id,
       req
     })
+    if (gone)
+      noteRolePermissionChange({
+        actor: req.user?.id ?? null,
+        roleId: id,
+        roleName: gone.name,
+        change: 'Deleted the role.'
+      })
     return reply.code(204).send()
   })
 
@@ -242,6 +291,16 @@ export async function rolesRoutes(app: FastifyInstance) {
     const body = req.body as { disabled: string[] }
     if (!Array.isArray(body.disabled))
       return reply.code(400).send({ error: 'disabled must be an array' })
+    const prevUi = (await db('nivaro_roles').where({ id }).first('ui_permissions')) as
+      | { ui_permissions?: string | null }
+      | undefined
+    let wasHidden = 0
+    try {
+      const parsed = JSON.parse(String(prevUi?.ui_permissions ?? '[]'))
+      wasHidden = Array.isArray(parsed) ? parsed.length : 0
+    } catch {
+      wasHidden = 0
+    }
     await db('nivaro_roles')
       .where({ id })
       .update({
@@ -257,6 +316,13 @@ export async function rolesRoutes(app: FastifyInstance) {
       comment: `ui-permissions: ${body.disabled.length} route(s) disabled`,
       req
     })
+    if (role && wasHidden !== body.disabled.length)
+      noteRolePermissionChange({
+        actor: req.user?.id ?? null,
+        roleId: id,
+        roleName: role.name,
+        change: `Changed which admin screens it can open: ${body.disabled.length} hidden now, ${wasHidden} before.`
+      })
     return reply.send({ data: formatRole(role!) })
   })
 
@@ -506,6 +572,11 @@ export async function rolesRoutes(app: FastifyInstance) {
       item: String(row.id),
       req
     })
+    noteRolePermissionChange({
+      actor: req.user?.id ?? null,
+      roleId: id,
+      change: policyAddedSentence(body.collection, body.action)
+    })
     return reply.code(201).send({ data: { id: row.id, ...body, role: id } })
   })
 
@@ -590,6 +661,19 @@ export async function rolesRoutes(app: FastifyInstance) {
         item: policyId,
         req
       })
+      const sentence = policyChangedSentence(String(existing.collection), String(existing.action), {
+        fields: 'fields' in updates && (updates.fields ?? null) !== (existing.fields ?? null),
+        rowFilter:
+          'row_filter' in updates && (updates.row_filter ?? null) !== (existing.row_filter ?? null),
+        rowFilterRemoved:
+          'row_filter' in updates && updates.row_filter == null && existing.row_filter != null
+      })
+      if (sentence)
+        noteRolePermissionChange({
+          actor: req.user?.id ?? null,
+          roleId: String(existing.role),
+          change: sentence
+        })
     }
 
     const updated = await db('nivaro_policies').where({ id: policyId }).first()
@@ -604,6 +688,11 @@ export async function rolesRoutes(app: FastifyInstance) {
 
   app.delete('/policies/:policyId', async (req, reply) => {
     const { policyId } = req.params as { policyId: string }
+    const was = (await db('nivaro_policies')
+      .where({ id: policyId })
+      .first('role', 'collection', 'action')) as
+      | { role: string; collection: string; action: string }
+      | undefined
     await db('nivaro_policies').where({ id: policyId }).delete()
     await logActivity({
       action: 'delete',
@@ -612,6 +701,12 @@ export async function rolesRoutes(app: FastifyInstance) {
       item: policyId,
       req
     })
+    if (was)
+      noteRolePermissionChange({
+        actor: req.user?.id ?? null,
+        roleId: String(was.role),
+        change: policyRemovedSentence(was.collection, was.action)
+      })
     return reply.code(204).send()
   })
 }

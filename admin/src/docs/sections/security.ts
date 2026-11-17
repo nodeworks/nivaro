@@ -279,6 +279,85 @@ PATCH /api/api-keys/:id  { "usage_statement": true, "usage_contact": "team@partn
   ]
 }
 
+export const securityAlerts: DocSection = {
+  id: 'security-alerts',
+  label: 'Security Alerts',
+  content: [
+    { type: 'h1', id: 'security-alerts', text: 'Security alerts to administrators' },
+    {
+      type: 'p',
+      text: 'Nivaro tells every administrator when something security-relevant happens (SOC 2 CC7, security event detection). Alerts arrive through the normal notification stack — the bell, push, and email or Teams when a person turned those on — in their own category, **Security alerts**, which each administrator can mute or route in Profile → Notification rules. Only administrators ever receive them.'
+    },
+    { type: 'h2', id: 'security-alerts-events', text: 'What raises an alert' },
+    {
+      type: 'table',
+      head: ['Switch', 'Raised when'],
+      rows: [
+        [
+          'Administrator rights',
+          'Someone gains or loses administrator rights: their role changed to or from an admin role, or a new account (created by an administrator, or a first sign-in through directory group mapping) starts as an administrator.'
+        ],
+        [
+          'Role changes',
+          'Any person’s role changes — on their profile, by a bulk action, Copy access, authorizing an access request, directory group mapping at sign-in, or SCIM.'
+        ],
+        [
+          'Role permissions',
+          'A role is created, cloned or deleted; it gains or loses administrator rights or app sign-in; a permission is added, removed, or its fields / record filter change; its admin screens change.'
+        ],
+        [
+          'API keys',
+          'An API key is created, or edited so it reaches further: more collections or actions, record limits removed or loosened, more network addresses, rehearsal mode turned off, switched back on, or a later (or no) expiry. A narrower key raises nothing.'
+        ],
+        [
+          'Repeated refusals',
+          'One caller is refused access (HTTP 403) at least 25 times within 5 minutes (both adjustable). The caller is the API key when one was used, else the signed-in person, else the network address. One alert per caller per hour.'
+        ],
+        [
+          'Administrator sign-in from a new location',
+          'An administrator signs in from a network address not seen for them in the last 90 days. The other administrators are told (the person gets their own “New sign-in” notice as before).'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Every alert says in plain words who did what to whom — “Alex Kim changed Jordan Lee’s role from Editor to Administrator” — and opens the person, role or API key it is about. The administrator who made a change is not told about it, unless they are the only administrator.'
+    },
+    { type: 'h2', id: 'security-alerts-coalescing', text: 'One alert per burst' },
+    {
+      type: 'ul',
+      items: [
+        'Changes are gathered for about 8 seconds per kind and per person making them, then sent as one alert: a bulk role change of 40 people, or a role edited permission by permission, is one notification listing what changed.',
+        'The gathering happens in Redis, so it holds across API replicas: whichever replica saw the first change sends the alert for all of them. Without Redis (a single process) it happens in memory.',
+        'The refusal counter is a Redis key per caller that lives for the window, shared by every replica. Keys and in-memory state carry the tenant in cloud mode.',
+        'At most 30 alerts per hour are delivered per instance (tenant); past that they are still recorded, not sent.',
+        'An administrator viewing as someone else (View as) does not count towards that person’s refusals — exploring as them is deliberate.'
+      ]
+    },
+    { type: 'h2', id: 'security-alerts-settings', text: 'Settings and history' },
+    {
+      type: 'p',
+      text: 'Security & privacy (`/security-center`) has a **Security alerts** card: one switch per kind (all on by default), the refusal threshold and window, and the alerts sent in the last 90 days. The settings are per instance, stored under the `security_alerts` key of this instance’s `nivaro_settings_overrides` row (no migration). Every alert sent is also an activity row with action `security-alert`.'
+    },
+    {
+      type: 'pre',
+      code: `GET   /api/security/alert-settings      (admin)
+PATCH /api/security/alert-settings      (admin)
+{ "role_changes": true, "admin_rights": true, "role_permissions": true,
+  "api_keys": true, "access_denied": true, "access_denied_threshold": 25,
+  "access_denied_minutes": 5, "admin_signin": true }
+→ 400 { "error": "...", "fields": { "access_denied_threshold": "A whole number from 5 to 10,000" } }
+
+GET   /api/security/alerts              (admin) — the last 90 days, newest first
+→ { "data": [{ "id", "kind", "subject", "message", "path", "delivered", "at" }] }`
+    },
+    {
+      type: 'note',
+      text: 'Changes made by raw SQL or outside the API routes named above (for example a config promotion that copies roles) do not raise alerts — the activity log and Config review remain the record for those.'
+    }
+  ]
+}
+
 export const securityMasquerade: DocSection = {
   id: 'masquerade',
   label: 'Masquerade',

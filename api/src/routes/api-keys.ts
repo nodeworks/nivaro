@@ -6,6 +6,12 @@ import type { ApiKeyScope } from '../middleware/authenticate.js'
 import { credentialMintRefusal, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { bumpUserAccessVersion, permissionCacheEnabled } from '../services/permission-cache.js'
+import {
+  apiKeyWidening,
+  describeKeyScopes,
+  type KeyShape,
+  noteApiKeyEvent
+} from '../services/security-alerts.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 
 interface ApiKeyBody {
@@ -55,6 +61,30 @@ function sanitize(row: Record<string, unknown>) {
     usage_statement: rest.usage_statement === true || rest.usage_statement === 1,
     usage_contact: (rest.usage_contact as string | null | undefined) ?? null
   }
+}
+
+/** A stored key row → the shape the security-alert widening check compares. */
+function keyShape(row: Record<string, unknown>): KeyShape {
+  const s = sanitize(row)
+  return {
+    scopes: s.scopes as KeyShape['scopes'],
+    scope_restrictions: s.scope_restrictions,
+    ip_allowlist: s.ip_allowlist,
+    sandbox: s.sandbox,
+    is_active: row.is_active === true || row.is_active === 1,
+    expires_at: (row.expires_at as Date | string | null | undefined) ?? null
+  }
+}
+
+/** What a new key may do, in sentences (the security alert's body). */
+function createdKeySentences(row: Record<string, unknown>): string[] {
+  const k = keyShape(row)
+  const out = [describeKeyScopes(k.scopes)]
+  if (k.scope_restrictions?.length) out.push('It is limited to a slice of the records.')
+  if (k.ip_allowlist.length === 0) out.push('It can be used from any network address.')
+  if (k.expires_at == null) out.push('It never expires.')
+  if (k.sandbox) out.push('It is rehearsal-only: its writes are not saved.')
+  return out
 }
 
 function validScopeRestrictions(
@@ -163,6 +193,16 @@ export async function apiKeysRoutes(app: FastifyInstance) {
       comment: row?.name ? `${row.name} (${row.prefix ?? ''}…)` : undefined,
       req
     })
+    // Security alert (SOC 2 CC7): every new key reaches the administrators.
+    if (row)
+      noteApiKeyEvent({
+        actor: req.user?.id ?? null,
+        keyId: row.id,
+        keyName: row.name,
+        ownerId: row.user,
+        change: 'created',
+        reasons: createdKeySentences(row)
+      })
 
     return reply.code(201).send({ data: { ...sanitize(row), key } })
   })
@@ -231,6 +271,16 @@ export async function apiKeysRoutes(app: FastifyInstance) {
     }
 
     const row = await db('nivaro_api_keys').where({ id }).first()
+    // A key that now reaches further than it did is a security alert (a narrower one is not).
+    if (row && Object.keys(updates).length > 0)
+      noteApiKeyEvent({
+        actor: req.user?.id ?? null,
+        keyId: row.id,
+        keyName: row.name,
+        ownerId: row.user,
+        change: 'widened',
+        reasons: apiKeyWidening(keyShape(existing), keyShape(row))
+      })
     return reply.send({ data: sanitize(row) })
   })
 
