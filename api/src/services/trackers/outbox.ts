@@ -1,5 +1,6 @@
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
+import { runInBackgroundPool } from '../../db/pool-context.js'
 import { noteIssueWrite } from '../issue-raise.js'
 import { getConnection, markBroken, markOk, providerFor } from './connections.js'
 import { decodeDataUri, insertBeforeMarker, issueMarker } from './issue-body.js'
@@ -123,7 +124,8 @@ export async function enqueue(
 /** Attempt one row now, in the background; never throws to the caller. */
 export function kick(id: number): void {
   if (!autoSend) return
-  void sendOne(id).catch(() => {})
+  // Started from a request (bulk fires up to 50): run on the background pool, not the request one.
+  void runInBackgroundPool(() => sendOne(id)).catch(() => {})
 }
 
 /** Claim one pending row by id and send it. */
@@ -208,6 +210,8 @@ async function sendRow(row: Row): Promise<'sent' | 'failed' | 'dead'> {
     if (op === 'create') link = await sendCreate(row, payload as unknown as CreatePayload, provider)
     else if (op === 'comment' || op === 'note_seen') {
       const { project_id, iid } = await target(payload, link)
+      // Sent exactly as stored: whoever enqueues a comment / note_seen body must sanitise it
+      // first (sanitizeMarkdown in templates.ts — quick actions, mentions, forged markers).
       await provider.addNote(project_id, iid, String(payload.body ?? ''))
       if (op === 'note_seen' && link != null)
         await db(LINKS).where({ id: link }).update({ last_seen_note_at: new Date() })

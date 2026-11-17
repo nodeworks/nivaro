@@ -7,7 +7,8 @@ import {
   defaultBodyTemplate,
   defaultTitleTemplate,
   renderIssueTemplate,
-  renderIssueTitle
+  renderIssueTitle,
+  sanitizeMarkdown
 } from './templates.js'
 import type { CreateIssueInput } from './types.js'
 
@@ -143,6 +144,32 @@ export async function issueVars(
 
 const utcDate = (d: Date) => d.toISOString().slice(0, 10)
 
+const LABEL_MAX = 255
+
+/**
+ * One GitLab label from any source (template, rule, override). GitLab splits the labels field on
+ * commas, so a comma would smuggle in an extra label; line breaks and comment openers go too.
+ * Returns '' when nothing is left.
+ */
+export function safeLabel(raw: unknown): string {
+  return String(raw ?? '')
+    .replace(/<!--/g, '')
+    .replace(/[\r\n,]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, LABEL_MAX)
+    .trim()
+}
+
+function safeLabels(list: unknown[]): string[] {
+  const out: string[] = []
+  for (const l of list) {
+    const v = safeLabel(l)
+    if (v && !out.includes(v)) out.push(v)
+  }
+  return out
+}
+
 /**
  * The final CreateIssueInput for one issue. `action` null = a manual create: default templates,
  * no labels (the caller picks the connection's default project). `overrides` win over the rule.
@@ -167,12 +194,14 @@ export async function buildIssueInput(
 
   const labels: string[] = []
   for (const l of action?.labels ?? []) {
-    const v = (await renderIssueTitle(l, vars)).trim()
-    if (v && !labels.includes(v)) labels.push(v)
+    labels.push(await renderIssueTitle(l, vars))
   }
 
   const input: CreateIssueInput = {
-    title: title || String(issue.title ?? `Nivaro issue ${issueId}`),
+    title:
+      title ||
+      sanitizeMarkdown(String(issue.title ?? ''), { singleLine: true }) ||
+      `Nivaro issue ${issueId}`,
     description: body,
     labels
   }
@@ -190,9 +219,17 @@ export async function buildIssueInput(
       if (v !== undefined) (input as unknown as Record<string, unknown>)[k] = v
     }
   }
-  input.title = input.title.slice(0, TITLE_MAX)
+  // Overrides are admin-typed but land in the same places: one safe line, label-safe labels.
+  input.title = sanitizeMarkdown(String(input.title ?? ''), { singleLine: true }).slice(
+    0,
+    TITLE_MAX
+  )
+  if (!input.title) input.title = `Nivaro issue ${issueId}`
+  input.labels = safeLabels(Array.isArray(input.labels) ? input.labels : [])
 
   // The Nivaro link and the marker always ride last, whatever the template or override said.
+  // A retry trusts the marker only as the description's LAST line (gitlab.ts findIssueByMarker),
+  // and issue-derived text has every `<!--` broken by the template sanitiser.
   const url = String(vars.nivaro_url)
   let description = input.description ?? ''
   if (!description.includes(url)) description += `\n\n[Open in Nivaro](${url})`

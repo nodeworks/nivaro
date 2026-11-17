@@ -31,6 +31,14 @@ function errorText(raw: string): string {
   return text.slice(0, 300)
 }
 
+/** True when `marker` is the last non-empty line (trimmed) of `description`. */
+export function markerIsLastLine(description: unknown, marker: string): boolean {
+  if (typeof description !== 'string') return false
+  const lines = description.split(/\r?\n/).map((l) => l.trim())
+  const last = lines.filter((l) => l !== '').pop()
+  return last === marker.trim()
+}
+
 const pid = (id: string | number) => (typeof id === 'number' ? String(id) : encodeURIComponent(id))
 
 export function gitlabProvider(
@@ -196,10 +204,9 @@ export function gitlabProvider(
       const rows = await json<any[]>(
         `/projects/${projectId}/issues?${q({ search: marker, in: 'description', per_page: 5 })}`
       )
-      // GitLab search is fuzzy: require the exact marker text.
-      const hit = rows.find(
-        (r) => typeof r.description === 'string' && r.description.includes(marker)
-      )
+      // GitLab search is fuzzy: require the exact marker as the description's LAST non-empty
+      // line. A marker anywhere else (pasted or forged in user text) never counts.
+      const hit = rows.find((r) => markerIsLastLine(r.description, marker))
       return hit ? issue(hit) : null
     },
 

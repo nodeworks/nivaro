@@ -83,13 +83,25 @@ describe('gitlabProvider', () => {
   it('findIssueByMarker searches with search=<marker>&in=description and returns null on none', async () => {
     const f = vi.fn<(...args: any[]) => any>()
     f.mockResolvedValueOnce(reply([issueRow(1, { description: 'fuzzy other' })]))
-    f.mockResolvedValueOnce(reply([issueRow(2, { description: 'x <!-- nivaro:1 --> y' })]))
+    f.mockResolvedValueOnce(reply([issueRow(2, { description: 'x\n\n<!-- nivaro:1 -->\n' })]))
     const p = mk(f)
     expect(await p.findIssueByMarker(7, '<!-- nivaro:1 -->')).toBeNull()
     const url = new URL(f.mock.calls[0][0])
     expect(url.searchParams.get('search')).toBe('<!-- nivaro:1 -->')
     expect(url.searchParams.get('in')).toBe('description')
     expect((await p.findIssueByMarker(7, '<!-- nivaro:1 -->'))?.iid).toBe(2)
+  })
+
+  it('marker mid-description does not match', async () => {
+    const f = vi.fn<(...args: any[]) => any>()
+    f.mockImplementation(async () =>
+      reply([
+        issueRow(3, { description: 'x <!-- nivaro:1 --> y' }),
+        issueRow(4, { description: '<!-- nivaro:1 -->\nreal text after it\n<!-- nivaro:2 -->' })
+      ])
+    )
+    expect(await mk(f).findIssueByMarker(7, '<!-- nivaro:1 -->')).toBeNull()
+    expect((await mk(f).findIssueByMarker(7, '<!-- nivaro:2 -->'))?.iid).toBe(4)
   })
 
   it('updatedIssues follows x-next-page up to 500', async () => {

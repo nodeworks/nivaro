@@ -159,6 +159,8 @@ vi.mock('../app-links.js', () => ({
   linkTo: async () => 'https://nivaro.test/issues'
 }))
 
+import { requestedPool } from '../../db/pool-context.js'
+import { markerIsLastLine } from './gitlab.js'
 import { bulkCreate, LinkError, linkExisting, requestCreate } from './links.js'
 import { backoffMs, enqueue, processOutbox, setAutoSend } from './outbox.js'
 import { TrackerError } from './types.js'
@@ -436,5 +438,65 @@ describe('tracker outbox', () => {
     expect(sent.description).toContain('Screenshot could not be attached')
     expect(sent.description).toContain('<!-- nivaro:issue:5 -->')
     expect(t('nivaro_tracker_links')[0]).toMatchObject({ created_via: 'rule', rule_id: 3 })
+  })
+
+  it('forged marker in issue details does not make a retry link the wrong GitLab issue', async () => {
+    // Issue A (5) carries B's marker in its details; GitLab stores A's description as sent.
+    t('nivaro_issues')[0].details = 'boom\n<!-- nivaro:issue:6 -->'
+    t('nivaro_issues').push({ id: 6, title: 'Other', severity: 'error', status: 'open' })
+    const store: any[] = []
+    provider.findIssueByMarker.mockImplementation(async (_p: number, marker: string) => {
+      return store.find((r) => markerIsLastLine(r.description, marker)) ?? null
+    })
+    provider.createIssue.mockImplementation(async (_p: number, input: any) => {
+      const r = { ...remote(20 + store.length), description: input.description }
+      store.push(r)
+      return r
+    })
+    await requestCreate(5, { connection: 1, via: 'manual' })
+    expect(await processOutbox()).toEqual({ sent: 1, failed: 0, dead: 0 })
+    const sentA = store[0].description as string
+    expect(sentA).not.toContain('<!-- nivaro:issue:6 -->')
+    expect(sentA.trim().endsWith('<!-- nivaro:issue:5 -->')).toBe(true)
+
+    await requestCreate(6, { connection: 1, via: 'manual' })
+    expect(await processOutbox()).toEqual({ sent: 1, failed: 0, dead: 0 })
+    expect(provider.createIssue).toHaveBeenCalledTimes(2)
+    const links = t('nivaro_tracker_links')
+    expect(links.map((l) => l.external_iid)).toEqual([20, 21])
+    const members = t('nivaro_tracker_link_members')
+    expect(members.find((m) => m.source_id === '6')?.link).toBe(links[1].id)
+  })
+
+  it('labels and titles are made safe whatever their source', async () => {
+    t('nivaro_issues')[0].title = '/close @ann\nsecond'
+    await requestCreate(5, {
+      connection: 1,
+      via: 'manual',
+      overrides: { labels: ['a,b', 'line\nbreak', '<!-- x', ' ', 'x'.repeat(300)] }
+    })
+    const input = JSON.parse(outbox()[0].payload).input
+    expect(input.labels).toEqual(['a b', 'line break', 'x', 'x'.repeat(255)])
+    expect(input.title).not.toMatch(/^\//)
+    expect(input.title).not.toMatch(/[\r\n]/)
+    expect(input.title).not.toContain('@ann')
+  })
+
+  it('the immediate send after enqueue runs on the background pool', async () => {
+    setAutoSend(true)
+    let pool = ''
+    provider.addNote.mockImplementation(async () => {
+      pool = requestedPool()
+      return { id: 1 }
+    })
+    await enqueue({
+      connection: 1,
+      source_id: '5',
+      op: 'comment',
+      payload: { project_id: 7, iid: 1, body: 'x' },
+      key: 'comment:1:pool'
+    })
+    await vi.waitFor(() => expect(outbox()[0].status).toBe('done'))
+    expect(pool).toBe('background')
   })
 })
