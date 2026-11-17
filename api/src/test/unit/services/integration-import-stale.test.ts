@@ -29,7 +29,14 @@ describe('core:import-stale', () => {
     ])
     const s = getIntegrationSignal('core:import-stale')
     const out = await s!.evaluate({
-      thresholds: { default_hours: 48, 'cadence_hours:excluded': 0, 'cadence_hours:fast': 6 },
+      // Calendar hours: these cases are about cadence and dormancy, not weekends
+      // (weekend/holiday counting is tested in integration-signal-settings.test.ts).
+      thresholds: {
+        default_hours: 48,
+        business_days: 0,
+        'cadence_hours:excluded': 0,
+        'cadence_hours:fast': 6
+      },
       businessDaysAgo: async () => new Date()
     })
     expect(out.rows.map((r) => r.key)).toEqual(['import:fast', 'import:plain'])
@@ -52,7 +59,7 @@ describe('core:import-stale', () => {
     ])
     const s = getIntegrationSignal('core:import-stale')
     const out = await s!.evaluate({
-      thresholds: { default_hours: 48 },
+      thresholds: { default_hours: 48, business_days: 0 },
       businessDaysAgo: async () => new Date()
     })
     expect(out.rows.map((r) => r.key)).toEqual(['import:plain'])
