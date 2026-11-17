@@ -1485,11 +1485,23 @@ export async function applyTransition(opts: ApplyTransitionOpts): Promise<ApplyT
   // finishes) hands it in. A transition without the mark takes none.
   let run = opts.run ?? null
   if (!run && runsInBackground(opts.transition.actions)) {
+    // An automatic move a person's move set off and that finishes after their
+    // answer (record-transition.ts) is THEIR background run: their Jobs tray
+    // shows it and they are told if it does not go through.
+    const starter = opts.runStarter ?? null
     run = await takeTransitionRun({
       instance: opts.instance,
       transition: opts.transition,
-      userId: opts.userId ?? null,
-      mode: opts.source === 'auto' ? 'auto' : 'inline'
+      userId: starter ?? opts.userId ?? null,
+      mode: starter ? 'background' : opts.source === 'auto' ? 'auto' : 'inline',
+      ...(starter
+        ? {
+            recordLabel: await resolveFriendlyId(
+              opts.instance.collection,
+              opts.instance.item
+            ).catch(() => null)
+          }
+        : {})
     })
   }
   const key = flightKey(opts.instance.collection, opts.instance.item)
@@ -1520,6 +1532,10 @@ interface ApplyTransitionOpts {
   /** The record's run, already held by the caller (a background move that
    *  answered before it finished). Closed here with how the move ended. */
   run?: TransitionRunHandle | null
+  /** The person whose move set this automatic one off, when they were answered
+   *  before it ran: a run this move takes (it is marked to run in the
+   *  background) is theirs, `background`, and they are told how it ended. */
+  runStarter?: string | null
 }
 
 export interface DeferredTransitionEvent {
@@ -1945,6 +1961,38 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
   return { updatedInstance, newStateObj, previousState, history_id: historyId }
 }
 
+/** The automatic transitions that may leave the instance's current state, in
+ *  the template's priority order — what runAutoTransitions picks from. */
+async function autoCandidatesFor(
+  instance: Pick<WorkflowInstance, 'template' | 'current_state'>
+): Promise<WorkflowTransition[]> {
+  return (await db<WorkflowTransition>('nivaro_workflow_transitions')
+    .where({ template: instance.template, auto_trigger: true })
+    .where((qb) => qb.where({ from_state: instance.current_state }).orWhereNull('from_state'))
+    .whereNot({ to_state: instance.current_state ?? '' })
+    .orderBy('sort')) as WorkflowTransition[]
+}
+
+/**
+ * Whether the automatic moves that may follow from the instance's current
+ * state include one marked to run in the background (transition-runs.ts) — a
+ * move that calls another system and may take as long as it answers. A
+ * person's move that lands here is answered before that chain runs
+ * (record-transition.ts): production 2026-11-16, every inventory request
+ * Approve that set off "Auto-submit (MDSi)" held the click 8–26 s, all but
+ * ~1 s of it MDSi answering. Never throws: unknown = no.
+ */
+export async function autoChainRunsInBackground(
+  instance: Pick<WorkflowInstance, 'template' | 'current_state' | 'completed_at'> | undefined
+): Promise<boolean> {
+  if (!instance || instance.completed_at || !instance.current_state) return false
+  try {
+    return (await autoCandidatesFor(instance)).some((t) => runsInBackground(t.actions))
+  } catch {
+    return false
+  }
+}
+
 /**
  * Fire eligible auto transitions for an item: transitions flagged auto_trigger
  * whose from_state matches the instance's current state (or null = any) and
@@ -1961,6 +2009,10 @@ export async function runAutoTransitions(
      *  Given, the hops join it and the CALLER flushes; the person's move is
      *  then not the chain's last hop, so people hear only where it ended. */
     deferred?: DeferredTransitionEvent[]
+    /** The person whose move set this chain off and who was answered before
+     *  it ran (record-transition.ts): a hop marked to run in the background
+     *  holds the record's run in their name (applyTransition `runStarter`). */
+    startedBy?: string | null
   } = {}
 ): Promise<void> {
   const ownsChain = !opts.deferred
@@ -1979,11 +2031,7 @@ export async function runAutoTransitions(
         .first()) as WorkflowInstance | undefined
       if (!instance || instance.completed_at) return
 
-      const candidates = (await db<WorkflowTransition>('nivaro_workflow_transitions')
-        .where({ template: instance.template, auto_trigger: true })
-        .where((qb) => qb.where({ from_state: instance.current_state }).orWhereNull('from_state'))
-        .whereNot({ to_state: instance.current_state ?? '' })
-        .orderBy('sort')) as WorkflowTransition[]
+      const candidates = await autoCandidatesFor(instance)
       if (candidates.length === 0) return
 
       const record = await fetchRecordForConditions(
@@ -2016,7 +2064,8 @@ export async function runAutoTransitions(
               userId: null,
               comment: `auto: ${fired.label}`,
               source: 'auto',
-              deferEvents: deferred
+              deferEvents: deferred,
+              ...(opts.startedBy ? { runStarter: opts.startedBy } : {})
             })
         )
       } catch (err) {

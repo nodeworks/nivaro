@@ -224,8 +224,9 @@ function transition(overrides: Record<string, unknown> = {}) {
 
 interface Fixture {
   transition?: Record<string, unknown>
-  /** What the automatic-move engine finds leaving the record's state. */
-  autoCandidates?: Array<Record<string, unknown>>
+  /** What the automatic-move engine finds leaving the record's state (a
+   *  function answers each read in turn). */
+  autoCandidates?: Array<Record<string, unknown>> | (() => Array<Record<string, unknown>>)
 }
 const writes = {
   instanceUpdate: vi.fn(() => Promise.resolve(1)),
@@ -251,7 +252,13 @@ function installDb(fx: Fixture = {}) {
             first: vi.fn(() => Promise.resolve(tx)),
             where: vi.fn(() => ({
               whereNot: vi.fn(() => ({
-                orderBy: vi.fn(() => Promise.resolve(fx.autoCandidates ?? []))
+                orderBy: vi.fn(() =>
+                  Promise.resolve(
+                    typeof fx.autoCandidates === 'function'
+                      ? fx.autoCandidates()
+                      : (fx.autoCandidates ?? [])
+                  )
+                )
               }))
             }))
           }))
@@ -651,5 +658,107 @@ describe('an automatic move that is marked', () => {
     expect(partner.calls).toHaveLength(0)
     expect(writes.instanceUpdate).not.toHaveBeenCalled()
     expect(autoMemory.failures).toBe(0)
+  })
+})
+
+// Production 2026-11-16: an inventory request Approve set off the automatic
+// "Auto-submit (MDSi)", whose blocking push held the person's click 8–26 s.
+// A person's move whose automatic follow-up is marked to run in the background
+// is answered once THEIR move has landed; the follow-up finishes after it.
+describe('a person’s move that sets off a marked automatic move', () => {
+  /** The automatic move leaves the record's step until it has moved the record once. */
+  const followedBy = (actions: string | null) => {
+    const auto = transition({
+      id: 'tx-auto',
+      label: 'Auto-send',
+      auto_trigger: true,
+      required_roles: null,
+      actions
+    })
+    return () => (writes.history.some((h) => h.transition === 'tx-auto') ? [] : [auto])
+  }
+  const autoCalls = () => partner.calls.filter((c) => c.userId === null)
+
+  it('answers once the person’s move landed, while the partner is still being asked', async () => {
+    installDb({ transition: transition({ actions: null }), autoCandidates: followedBy(MARKED) })
+    let answer: (v: { blockedError: string | null }) => void = () => {}
+    let blocking = 0
+    // The person's own move sends nothing; the automatic move's push hangs.
+    partner.answer = () =>
+      ++blocking === 1 ? { blockedError: null } : new Promise((r) => (answer = r))
+
+    const res = await post(pipelinesApp(), {})
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data).toMatchObject({
+      new_state: expect.objectContaining({ id: 'st-approved' }),
+      chain_background: true
+    })
+    // The person's move is in: one state change, one history row, its activity row.
+    expect(writes.history).toHaveLength(1)
+    expect(writes.history[0]).toMatchObject({ user: CALLER, transition: 'tx-approve' })
+    expect(moveActivity()).toHaveLength(1)
+
+    // The automatic move holds the record's run in the person's name.
+    await until(() => autoCalls().length === 1, 'the automatic push')
+    expect(runs.takes).toHaveLength(1)
+    expect(runs.takes[0]).toMatchObject({
+      mode: 'background',
+      userId: CALLER,
+      transition: expect.objectContaining({ id: 'tx-auto' })
+    })
+    expect(autoCalls()[0]).toEqual({ phase: 'blocking', userId: null, background: true })
+    expect(runs.moved).toHaveLength(0)
+
+    answer({ blockedError: null })
+    await until(() => runs.moved.length === 1, 'the automatic move')
+    expect(writes.history).toHaveLength(2)
+    expect(writes.history[1]).toMatchObject({ user: null, transition: 'tx-auto' })
+    expect(runs.refused).toHaveLength(0)
+  })
+
+  it('a refusal by the partner leaves the record where the person moved it and tells them', async () => {
+    installDb({ transition: transition({ actions: null }), autoCandidates: followedBy(MARKED) })
+    let blocking = 0
+    partner.answer = () => (++blocking === 1 ? { blockedError: null } : refuse())
+
+    const res = await post(pipelinesApp(), {})
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.chain_background).toBe(true)
+
+    await until(() => runs.refused.length === 1, 'the refusal')
+    expect((runs.refused[0] as Error).message).toBe(INLINE_REFUSAL)
+    // The run is the person's (mode background): transition-runs tells them.
+    expect(runs.takes[0]).toMatchObject({ mode: 'background', userId: CALLER })
+    await until(() => autoMemory.failures === 1, 'the refusal remembered')
+    expect(writes.history).toHaveLength(1)
+    expect(runs.moved).toHaveLength(0)
+  })
+
+  it('an unmarked automatic move still runs before the answer, as before', async () => {
+    installDb({
+      transition: transition({ actions: null }),
+      autoCandidates: followedBy(UNMARKED)
+    })
+    const res = await post(pipelinesApp(), {})
+
+    expect(res.statusCode).toBe(200)
+    expect('chain_background' in res.json().data).toBe(false)
+    expect(writes.history).toHaveLength(2)
+    expect(autoCalls().map((c) => c.background)).toEqual([false, false])
+    expect(runs.takes).toHaveLength(0)
+  })
+
+  it('a move with no automatic follow-up answers exactly as before', async () => {
+    installDb({ transition: transition({ actions: null }) })
+    const res = await post(pipelinesApp(), {})
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({
+      data: {
+        instance: baseInstance,
+        new_state: expect.objectContaining({ id: 'st-approved' })
+      }
+    })
+    expect(runs.takes).toHaveLength(0)
   })
 })

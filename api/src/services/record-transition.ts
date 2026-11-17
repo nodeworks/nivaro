@@ -1,6 +1,6 @@
 import type { FastifyBaseLogger, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
-import { runInBackgroundPool } from '../db/pool-context.js'
+import { inBackgroundPool, runInBackgroundPool } from '../db/pool-context.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { clearAutoFailures } from './auto-transition-memory.js'
@@ -22,6 +22,7 @@ import {
 import { TransitionBlockedError } from './workflow-actions.js'
 import {
   applyTransition,
+  autoChainRunsInBackground,
   type DeferredTransitionEvent,
   flushChainEvents,
   resolveFriendlyId,
@@ -343,12 +344,43 @@ async function finishRecordTransition(a: {
 
   // Chained automation: fire any auto transitions now valid from the new state.
   // They hang under this transition's history row in the event chain.
-  try {
-    await withChainStep(applied.history_id ? `history:${applied.history_id}` : 'auto', () =>
-      runAutoTransitions(collection, item, { deferred: chainEvents })
+  const chainStep = applied.history_id ? `history:${applied.history_id}` : 'auto'
+  // A move that may follow is marked to run in the background (it calls
+  // another system): this person's move has landed, so they are answered now
+  // and the chain finishes on the background pool. Its marked hop holds the
+  // record's run in their name — every open copy shows it running, a second
+  // run is refused, and they are told if it does not go through. Past the cap
+  // of moves finishing at once, the chain runs while they wait, as before.
+  // Already on the background pool (a marked move answered 202): nobody waits.
+  const chainInBackground =
+    !inBackgroundPool() &&
+    backgroundMoves < BACKGROUND_MOVES_MAX &&
+    (await autoChainRunsInBackground(updatedInstance))
+  if (chainInBackground) {
+    backgroundMoves++
+    void runInBackgroundPool(() =>
+      withChainStep(chainStep, () =>
+        runAutoTransitions(collection, item, {
+          deferred: chainEvents,
+          startedBy: user?.id ?? null
+        })
+      )
+        .catch((err) => {
+          opts.log.error({ err, collection, item }, 'background automatic moves failed')
+        })
+        .finally(() => {
+          flushChainEvents(chainEvents)
+          backgroundMoves--
+        })
     )
-  } finally {
-    flushChainEvents(chainEvents)
+  } else {
+    try {
+      await withChainStep(chainStep, () =>
+        runAutoTransitions(collection, item, { deferred: chainEvents })
+      )
+    } finally {
+      flushChainEvents(chainEvents)
+    }
   }
 
   const prevStateObj = previousState
@@ -373,7 +405,11 @@ async function finishRecordTransition(a: {
     body: {
       data: {
         instance: updatedInstance,
-        new_state: newStateObj ? formatWorkflowState(newStateObj as unknown as WorkflowState) : null
+        new_state: newStateObj
+          ? formatWorkflowState(newStateObj as unknown as WorkflowState)
+          : null,
+        // The automatic moves that follow are still running (see above).
+        ...(chainInBackground ? { chain_background: true } : {})
       }
     }
   }

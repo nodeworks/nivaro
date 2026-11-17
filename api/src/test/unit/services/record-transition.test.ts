@@ -58,7 +58,9 @@ vi.mock('../../../services/workflow-actions.js', () => ({
 vi.mock('../../../services/workflow-transitions.js', () => ({
   applyTransition: m.apply,
   runAutoTransitions: m.runAuto,
-  flushChainEvents: m.flush
+  flushChainEvents: m.flush,
+  // No automatic follow-up here is marked to run in the background.
+  autoChainRunsInBackground: async () => false
 }))
 
 import { runRecordTransition } from '../../../services/record-transition.js'
