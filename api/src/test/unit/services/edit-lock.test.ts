@@ -768,6 +768,44 @@ describe('admin-only tier', () => {
     ).toMatchObject({ status: 403, body: { code: 'EDIT_LOCKED' } })
   })
 
+  it('pdf-attach passes the post-approval lock by name; a field edit and the approval tier still refuse', async () => {
+    // A Workflow Approver (neither creator nor step owner) on a completed, admin-locked workflow.
+    t.tables.nivaro_workflow_instances = [
+      {
+        id: 'i3',
+        current_state: 's10',
+        key: 'completed',
+        label: 'Completed',
+        completed_at: '2026-11-01T00:00:00Z'
+      }
+    ]
+    const attach = () =>
+      assertNotEditLocked(userOf('U-RODNEY'), 'workflows', { ids: [100] }, reqAs('U-RODNEY'), {
+        allowWhenLocked: 'pdf-attach'
+      })
+    await expect(attach()).resolves.toBeUndefined()
+    // The same person writing a locked field on the same record is still refused.
+    await expect(
+      assertNotEditLocked(
+        userOf('U-RODNEY'),
+        'workflows',
+        { ids: [100], payload: { project: 5 } },
+        reqAs('U-RODNEY')
+      )
+    ).rejects.toThrow(/at Completed — only administrators can change it/)
+    // An unknown reason is no exemption (a typo or a request-supplied value never opens it).
+    await expect(
+      assertNotEditLocked(userOf('U-RODNEY'), 'workflows', { ids: [100] }, reqAs('U-RODNEY'), {
+        allowWhenLocked: 'anything' as never
+      })
+    ).rejects.toBeInstanceOf(EditLockedError)
+    // A run still waiting on approval: the approval tier judges the attach as before.
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i1', current_state: 's1', key: 'waiting_l1', label: 'Level 1 Approval' }
+    ]
+    await expect(attach()).rejects.toThrow(/only the person who created it/)
+  })
+
   it('an ERP push retry passes the admin-only tier; the approval tier still refuses a non-owner', async () => {
     const retry = () =>
       recordRefusal(reqAs('U-RODNEY'), 'workflows', '100', 'update', { adminOnlyTier: false })

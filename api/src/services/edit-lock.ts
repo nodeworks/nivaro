@@ -600,6 +600,24 @@ function fkOf(value: unknown): string | null {
 }
 
 /**
+ * Named writes the post-approval (admin-only) tier lets through for anyone who
+ * passes every other gate (read the record, may update it, approval tier,
+ * person-held lock). Each one is a single route that adds a document to the
+ * record without changing any of its values — never a field write.
+ *
+ *   pdf-attach  POST /collection-layouts/:id/generate-and-attach: render a PDF
+ *               of the record and link it in the record's files (2026-11-17,
+ *               Rob: approvers attach the approved form after approval; the L-5
+ *               fix had locked them out).
+ */
+export const EDIT_LOCK_EXEMPTIONS = ['pdf-attach'] as const
+export type EditLockExemption = (typeof EDIT_LOCK_EXEMPTIONS)[number]
+
+function skipsAdminOnlyTier(reason: EditLockExemption | undefined): boolean {
+  return reason != null && (EDIT_LOCK_EXEMPTIONS as readonly string[]).includes(reason)
+}
+
+/**
  * The gate the items service runs on a request write. `ids` = the rows being
  * changed or deleted; `payload` = the values being written (a child row's FK
  * to its parent may be among them). Judges, for a record's own rows (a
@@ -609,7 +627,8 @@ function fkOf(value: unknown): string | null {
  * approval edit lock (403 EDIT_LOCKED, admins pass). Throws on a refusal.
  * In an admin-only state, an update writing only the lock's open fields and
  * a row of one of its open children still pass; `adminOnlyTier: false` (item
- * actions, outbound pushes) skips that tier altogether. In either tier, an
+ * actions, outbound pushes) skips that tier altogether, and so does a named
+ * `allowWhenLocked` exemption (EDIT_LOCK_EXEMPTIONS). In either tier, an
  * update of values a move's requirements dialog asks for passes for whoever
  * may run that move (requirement-writes.ts).
  */
@@ -618,7 +637,7 @@ export async function assertNotEditLocked(
   collection: string,
   opts: { ids?: Array<string | number>; payload?: Record<string, unknown> | null },
   req?: FastifyRequest,
-  tiers: { adminOnlyTier?: boolean } = {}
+  tiers: { adminOnlyTier?: boolean; allowWhenLocked?: EditLockExemption } = {}
 ): Promise<void> {
   if (!req || !user) return
   const plan = await lockPlan()
@@ -711,7 +730,7 @@ export async function assertNotEditLocked(
     seen.add(k)
     const planned = plan.locks.get(t.parent)
     const lock =
-      planned && tiers.adminOnlyTier === false
+      planned && (tiers.adminOnlyTier === false || skipsAdminOnlyTier(tiers.allowWhenLocked))
         ? { states: planned.states, children: planned.children }
         : planned
     let verdict: EditLockVerdict

@@ -2120,6 +2120,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       if (err instanceof ItemNotFoundError) return reply.code(404).send({ error: 'Item not found' })
       throw err
     }
+    // A row the caller cannot see reads as null (User Scopes, read row filter): 404, never a render.
+    if (!item) return reply.code(404).send({ error: 'Item not found' })
 
     // L-5: attaching a generated PDF writes onto the record, so it must clear the same gates as
     // any update — the per-record update row-rule / User Scope (canUpdateItem) and the approval /
@@ -2131,7 +2133,12 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     ) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
-    await assertNotEditLocked(req.user!, collection, { ids: [String(item_id)] }, req)
+    // The post-approval (admin-only) lock is the one tier this route passes, by name: approvers
+    // attach the approved form after approval (2026-11-17). It writes only a files link row on
+    // the record, never a field; the approval tier still judges it.
+    await assertNotEditLocked(req.user!, collection, { ids: [String(item_id)] }, req, {
+      allowWhenLocked: 'pdf-attach'
+    })
 
     let childRowsOverride: Record<string, Record<string, unknown>[]> | undefined
     let addendumTitle: string | null = null
