@@ -8,12 +8,14 @@ import { loadQueueStanding, publishQueueStanding } from './import-queue-standing
 import { rememberRunRows } from './import-run-rows.js'
 import { emitImportProgress, emitJobProgress } from './live-progress.js'
 import { notifyUser } from './notification-channels.js'
+import { validateStagedRows } from './staged-import-validation.js'
 import type { ImportDefinition } from './staged-imports.js'
 import {
   describeSqlError,
   getImportDefinition,
   listImportDefinitions,
   lockGroupOf,
+  parseImportFileAsync,
   parsePostRunFlows,
   runStagedImport,
   scrubSecrets
@@ -297,6 +299,16 @@ async function runOne(
     // One integration event chain per run: the load, and the post-run flows
     // it fans out to (PO completion sweep, partner pushes), share it.
     const fileBuffer = buffer
+    // The upload answers at once (202), so the file is checked here: read off the event loop
+    // once, validated (the same file-derived hard errors the upload used to answer 422 with),
+    // and the same rows handed to the run. A validator that itself fails never blocks a run.
+    const fileRows = await parseImportFileAsync(fileBuffer)
+    const validation = await validateStagedRows(definition, fileRows).catch(() => null)
+    if (validation && validation.errors.length > 0) {
+      throw new Error(
+        `That file fails validation: ${validation.errors.map((e) => e.message).join(' · ')}`
+      )
+    }
     const chainId = newChainId()
     const chainRoot = `import_run:${next.id}`
     // #1143: the run is the Traffic Map's import-worker source (its writes, partner calls).
@@ -324,6 +336,7 @@ async function runOne(
             runStagedImport({
               definition,
               buffer: fileBuffer,
+              rows: fileRows,
               createdBy: next.created_by ? String(next.created_by) : null,
               runId: Number(next.id),
               onProgress: async (stage, data) => {

@@ -40,7 +40,7 @@ import {
   getImportDefinition,
   listImportDefinitions,
   mapRowsToDeclared,
-  parseImportFile,
+  parseImportFileAsync,
   parsePostRunFlows
 } from '../services/staged-imports.js'
 import type { User } from '../types.js'
@@ -1427,7 +1427,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
   /**
    * Parse a file the way the worker will, without queueing anything.
    *
-   * Uses the same `parseImportFile` (so the row cleaning and the derive-columns-
+   * Uses the same `parseImportFileAsync` (so the row cleaning and the derive-columns-
    * from-all-rows behaviour are the ones that will actually apply) and diffs the
    * result against the staging table's current shape. A file with the wrong
    * columns otherwise only surfaces minutes later, inside the procedure.
@@ -1449,7 +1449,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     }
     let rows: Array<Record<string, string>>
     try {
-      rows = parseImportFile(await multipart.toBuffer())
+      rows = await parseImportFileAsync(await multipart.toBuffer())
     } catch (err) {
       return reply
         .code(400)
@@ -1494,7 +1494,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
 
     let rows: Array<Record<string, string>>
     try {
-      rows = parseImportFile(await multipart.toBuffer())
+      rows = await parseImportFileAsync(await multipart.toBuffer())
     } catch (err) {
       return reply
         .code(400)
@@ -1613,7 +1613,13 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     }
   })
 
-  /** Upload a file and queue it. The worker picks it up within 10s. */
+  /**
+   * Upload a file and queue it: 202 as soon as the file is stored and the run queued. The
+   * worker picks it up within 10 s, reads it off the event loop, validates it and reports
+   * through the run (status, log, job progress, notification). Reading and validating a big
+   * file here held a web process for 17 s (EFP prod 2026-11-16, a 30 MB invoices CSV); the
+   * dialog already refuses to queue a file whose preview fails validation.
+   */
   app.post('/', { preHandler: requireAdmin }, async (req, reply) => {
     const multipart = await req.file()
     if (!multipart) return reply.code(400).send({ error: 'A file upload is required' })
@@ -1629,21 +1635,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     if (!definition.is_active) return reply.code(400).send({ error: `"${key}" is inactive` })
 
     const buffer = await multipart.toBuffer()
-
-    // The preview's report is UX; THIS is the boundary. Hard errors are all
-    // file-derived (missing declared columns, duplicate keys, bad values), so
-    // blocking here can't strand an import on stale table state.
-    try {
-      const validation = await validateStagedRows(definition, parseImportFile(buffer))
-      if (validation.errors.length > 0) {
-        return reply.code(422).send({
-          error: `That file fails validation: ${validation.errors.map((e) => e.message).join(' · ')}`,
-          validation
-        })
-      }
-    } catch {
-      // The validator itself failing must never block the pipeline.
-    }
+    if (buffer.length === 0) return reply.code(400).send({ error: 'That file is empty' })
 
     const stored = await uploadFileBuffer(req.user!, buffer, multipart.filename, multipart.mimetype)
 
@@ -1674,7 +1666,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     void import('../services/staged-import-worker.js')
       .then((m) => m.publishStanding())
       .catch(() => {})
-    return reply.code(201).send({ data: { id, import_key: key, status: 'queued' } })
+    return reply.code(202).send({ data: { id, import_key: key, status: 'queued' } })
   })
 
   /** Re-queue a finished or failed run without re-uploading its file. */
