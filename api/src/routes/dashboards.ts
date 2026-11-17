@@ -705,7 +705,13 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
       | DashboardRow
       | undefined
     if (!dashboard) return reply.code(404).send({ error: 'Dashboard not found' })
-    if (!req.isAdmin && dashboard.user !== userId && !dashboard.is_shared) {
+    // L-4: a shared dashboard that is role-scoped is visible only to a matching role (mirrors
+    // GET /:id) — being shared does not open its widgets to every signed-in user.
+    if (
+      !req.isAdmin &&
+      dashboard.user !== userId &&
+      !(dashboard.is_shared && (!dashboard.role_id || dashboard.role_id === (req.user!.role ?? '')))
+    ) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
     let built: Awaited<ReturnType<typeof dashboardDrillFilter>>
@@ -772,7 +778,13 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
       | DashboardRow
       | undefined
     if (!dashboard) return reply.code(404).send({ error: 'Dashboard not found' })
-    if (!req.isAdmin && dashboard.user !== userId && !dashboard.is_shared) {
+    // L-4: a shared dashboard that is role-scoped is visible only to a matching role (mirrors
+    // GET /:id) — being shared does not open its widgets to every signed-in user.
+    if (
+      !req.isAdmin &&
+      dashboard.user !== userId &&
+      !(dashboard.is_shared && (!dashboard.role_id || dashboard.role_id === (req.user!.role ?? '')))
+    ) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
     try {
