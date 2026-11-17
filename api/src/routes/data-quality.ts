@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { likeContains } from '../lib/filter-like.js'
-import { boundRegexInput, compileConfigRegex } from '../lib/safe-regex.js'
+import { compileConfigRegex, MAX_CONFIG_REGEX_INPUT } from '../lib/safe-regex.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 
@@ -159,21 +159,23 @@ async function runRule(collection: string, rule: DqRule): Promise<RuleResult> {
         if (typeof pattern !== 'string' || !pattern) {
           throw new Error('Regex rule requires config.pattern')
         }
-        // L-1: refuse a catastrophic-backtracking pattern (it would stall the event loop over
-        // ROW_CAP rows) and bound each value's length before testing.
+        // L-1: refuse a catastrophic-backtracking (or broken) pattern — it would stall the event
+        // loop over ROW_CAP rows — and count an over-long value as a failure rather than testing a
+        // prefix (a tested prefix could hide a tail that violates the rule).
         const re = compileConfigRegex(pattern)
         if (!re) {
           throw new Error(
-            'Regex pattern was rejected as unsafe (too long or catastrophic backtracking)'
+            'Regex pattern was rejected as unsafe or invalid (too long, catastrophic backtracking, or malformed)'
           )
         }
         const rows = await db(collection)
           .select('id', rule.field)
           .whereNotNull(rule.field)
           .limit(ROW_CAP)
-        const failures = rows.filter(
-          (r) => !re.test(boundRegexInput(String(r[rule.field as string])))
-        )
+        const failures = rows.filter((r) => {
+          const v = String(r[rule.field as string])
+          return v.length > MAX_CONFIG_REGEX_INPUT || !re.test(v)
+        })
         base.failed_count = failures.length
         base.sample_ids = failures.slice(0, SAMPLE_CAP).map((r) => r.id)
         break
