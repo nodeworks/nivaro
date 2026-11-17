@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-11-17T20:35:14.605Z",
+  "generated_at": "2026-11-17T21:34:23.960Z",
   "releases": [
+    {
+      "version": "0.3.173",
+      "tag": "v0.3.173",
+      "date": "2026-11-17T16:34:07-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "history",
+              "text": "link labels read the link table as the reader, hide unseen deleted links",
+              "hash": "43ac03977"
+            },
+            {
+              "section": "Fixed",
+              "scope": "history",
+              "text": "link fields show what they point at, not link-row ids",
+              "hash": "555e75215"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.172",
       "tag": "v0.3.172",
-      "date": "2026-11-17T15:34:58-05:00",
+      "date": "2026-11-17T15:35:14-05:00",
       "sections": [
         {
           "label": "Fixed",
