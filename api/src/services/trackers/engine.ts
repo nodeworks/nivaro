@@ -398,7 +398,7 @@ export const CLAIM_DETAIL = 'firing'
  * rule is under its hourly and daily caps and the rule's connection under its hourly cap
  * ('fired' decisions of every rule on that connection). Every value is bound. On SQL Server the
  * counts take UPDLOCK + HOLDLOCK range locks, so two claimers cannot both read "under the cap";
- * the caller also holds a per-connection app lock (no lock-order deadlocks between rules).
+ * the caller also holds the one global claim app lock (no lock-order deadlocks between rules).
  */
 export function claimStatement(
   p: ClaimParams,
@@ -446,11 +446,16 @@ WHERE (SELECT COUNT(*) FROM ${q(DECISIONS)}${hint} WHERE ${rule} = ? AND ${outco
 }
 
 const CLAIM_LOCK_TIMEOUT_MS = 15_000
+/**
+ * ONE app lock for every claim (claims are rare): rules on different connections can then never
+ * deadlock on the (rule, at) index ranges the counts lock.
+ */
+export const CLAIM_LOCK = 'nivaro-tracker-claim'
 
 /**
  * Claim one fire of `rule` for `issue` before anything is sent. `ok` → the claimed decision row
  * (outcome 'fired', detail 'firing' until the fire fills it in). Not ok → which cap held. One
- * short transaction: per-connection app lock, then the conditional INSERT.
+ * short transaction: the global claim app lock, then the conditional INSERT.
  */
 export async function claimFire(
   rule: TrackerRule,
@@ -473,7 +478,7 @@ export async function claimFire(
         `DECLARE @r int;
 EXEC @r = sp_getapplock @Resource = ?, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = ?;
 SELECT @r AS r`,
-        [`nivaro-tracker-claim:${p.connection}`, CLAIM_LOCK_TIMEOUT_MS]
+        [CLAIM_LOCK, CLAIM_LOCK_TIMEOUT_MS]
       )) as Row[]
       if (Number(lock?.[0]?.r ?? -1) < 0)
         throw new Error('Another rule on this connection is busy firing — try again shortly')
@@ -605,12 +610,15 @@ async function record(
     await db(RULES)
       .where({ id: ruleId })
       .update({ fired_count: db.raw('fired_count + 1'), last_fired_at: now })
-  else if (outcome !== 'error')
+  else if (HELD_OUTCOMES.has(outcome))
     await db(RULES)
       .where({ id: ruleId })
       .update({ suppressed_count: db.raw('suppressed_count + 1') })
   await trimDecisions(ruleId)
 }
+
+/** Outcomes that count as suppressed (matched, but a threshold or guard held it). */
+const HELD_OUTCOMES = new Set(['threshold', 'cap', 'quiet', 'linked', 'status'])
 
 // ── Acting ────────────────────────────────────────────────────────────────────
 
@@ -635,71 +643,95 @@ function withEarlierIssue(rule: TrackerRule, link: Row): TrackerRule {
   }
 }
 
+type FirePlan =
+  | {
+      kind: 'join'
+      target: { link_id: number } | { project_id: number; iid: number }
+      via: 'fingerprint' | 'group' | 'similar'
+      score?: number
+      iid: number
+      /** The home link when it is CLOSED on GitLab and should be reopened after the join. */
+      reopen: Row | null
+    }
+  | { kind: 'create'; rule: TrackerRule; detail: string }
+
 /**
- * Act on a firing rule: a home first (fingerprint always; group only when the rule's group
- * guard is on; similar only when the connection's similar matching is on), else a new GitLab
- * issue. A home that is CLOSED on GitLab follows the connection's `recur_when_closed`: 'new'
- * opens a new GitLab issue naming the old one; 'reopen' joins it and (when `reopen_on_recur` is
- * on) queues a reopen. Returns the decision detail. Throws when nothing could be queued.
+ * What a firing rule would do: join a home (fingerprint always; group only when the rule's group
+ * guard is on; similar only when the connection's similar matching is on), else open a new GitLab
+ * issue. A home that is CLOSED on GitLab follows the connection's `recur_when_closed`: 'new' opens
+ * a new GitLab issue naming the old one (a create); 'reopen' joins it and, when `reopen_on_recur`
+ * is on, reopens it. Only creates use cap slots — a join opens nothing on GitLab.
  */
-async function fire(rule: TrackerRule, issueId: number, conn: TrackerConnection): Promise<string> {
+async function planFire(
+  rule: TrackerRule,
+  issueId: number,
+  conn: TrackerConnection
+): Promise<FirePlan> {
   const projectId = rule.action.project_id ?? conn.default_project_id ?? 0
   let home = await findHome(issueId, conn.id, projectId)
   if (home?.via === 'group' && !rule.guards.group) home = null
   if (home?.via === 'similar' && !conn.sync.similar.enabled) home = null
   if (home && home.link_id == null && !home.candidate) home = null
+  if (!home) return { kind: 'create', rule, detail: 'queued a new GitLab issue' }
 
-  if (home) {
-    const link =
-      home.link_id != null
-        ? ((await db(LINKS)
-            .where({ id: home.link_id })
-            .first('id', 'project_id', 'external_iid', 'web_url', 'remote_state')) as
-            | Row
-            | undefined)
-        : undefined
-    const closed = link?.remote_state === 'closed'
-    if (link && closed && conn.sync.recur_when_closed === 'new') {
-      await requestCreate(issueId, {
-        connection: conn.id,
-        rule: withEarlierIssue(rule, link),
-        via: 'rule'
-      })
-      return `queued a new GitLab issue (#${Number(link.external_iid)} is closed)`
+  const link =
+    home.link_id != null
+      ? ((await db(LINKS)
+          .where({ id: home.link_id })
+          .first('id', 'project_id', 'external_iid', 'web_url', 'remote_state')) as Row | undefined)
+      : undefined
+  const closed = link?.remote_state === 'closed'
+  if (link && closed && conn.sync.recur_when_closed === 'new')
+    return {
+      kind: 'create',
+      rule: withEarlierIssue(rule, link),
+      detail: `queued a new GitLab issue (#${Number(link.external_iid)} is closed)`
     }
-    const target =
+  const candidate = home.candidate
+  return {
+    kind: 'join',
+    target:
       home.link_id != null
         ? { link_id: home.link_id }
         : {
-            project_id: (home.candidate as { project_id: number }).project_id,
-            iid: (home.candidate as { iid: number }).iid
-          }
-    const score = home.candidate?.score
-    const linkId = await joinAsExample(issueId, conn.id, target, home.via, score)
-    const iid = link ? Number(link.external_iid) : Number(home.candidate?.iid)
-    let detail = `joined #${iid} via ${home.via}${
-      typeof score === 'number' && Number.isFinite(score) ? ` (${score.toFixed(2)})` : ''
-    }`
-    if (link && closed && conn.sync.reopen_on_recur) {
-      await enqueue({
-        connection: conn.id,
-        link: linkId,
-        source_id: String(issueId),
-        op: 'state',
-        payload: {
-          project_id: Number(link.project_id),
-          iid: Number(link.external_iid),
-          state: 'reopen'
-        },
-        key: `rule-reopen:${linkId}:${issueId}`
-      })
-      detail += ', reopening it'
-    }
-    return detail
+            project_id: (candidate as { project_id: number }).project_id,
+            iid: (candidate as { iid: number }).iid
+          },
+    via: home.via,
+    score: candidate?.score,
+    iid: link ? Number(link.external_iid) : Number(candidate?.iid),
+    reopen: link && closed && conn.sync.reopen_on_recur ? link : null
   }
+}
 
-  await requestCreate(issueId, { connection: conn.id, rule, via: 'rule' })
-  return 'queued a new GitLab issue'
+/** Join the issue to its home as an example (and reopen a closed home). Returns the detail. */
+async function joinHome(
+  plan: Extract<FirePlan, { kind: 'join' }>,
+  issueId: number,
+  conn: TrackerConnection
+): Promise<string> {
+  const linkId = await joinAsExample(issueId, conn.id, plan.target, plan.via, plan.score)
+  let detail = `joined #${plan.iid} via ${plan.via}${
+    typeof plan.score === 'number' && Number.isFinite(plan.score)
+      ? ` (${plan.score.toFixed(2)})`
+      : ''
+  }`
+  if (plan.reopen) {
+    await enqueue({
+      connection: conn.id,
+      link: linkId,
+      source_id: String(issueId),
+      op: 'state',
+      payload: {
+        project_id: Number(plan.reopen.project_id),
+        iid: Number(plan.reopen.external_iid),
+        state: 'reopen'
+      },
+      key: `rule-reopen:${linkId}:${issueId}`
+    })
+    detail += ', reopening it'
+  }
+  return detail
 }
 
 // ── Evaluate ──────────────────────────────────────────────────────────────────
@@ -726,7 +758,10 @@ export async function evaluateIssue(issueId: number, now = new Date()): Promise<
 
   for (const rule of rules) {
     const res = await assess(rule, ctx, counts, now)
-    if (res.act === 'skip') {
+    // A create rule held only by a cap may still JOIN an existing GitLab issue (caps limit
+    // issues opened, so a storm of similar issues keeps joining).
+    const capped = res.act === 'skip' && res.outcome === 'cap' && rule.mode === 'create'
+    if (res.act === 'skip' && !capped) {
       out.push({ rule: rule.id, outcome: res.outcome })
       if (res.outcome === 'no_match') continue
       let detail = res.detail
@@ -747,7 +782,7 @@ export async function evaluateIssue(issueId: number, now = new Date()): Promise<
       continue
     }
 
-    // fire: claim the cap slot in SQL first, then act
+    // fire: a join needs no cap slot; a create claims its slot in SQL first, then acts
     const conn = await getConnection(rule.action.connection)
     if (!conn?.is_active) {
       const why = conn
@@ -757,14 +792,61 @@ export async function evaluateIssue(issueId: number, now = new Date()): Promise<
       out.push({ rule: rule.id, outcome: 'error' })
       continue
     }
-    const claim = await claimFire(rule, issueId, now)
+    let plan: FirePlan
+    try {
+      plan = await planFire(rule, issueId, conn)
+    } catch (err) {
+      await record(rule.id, issueId, 'error', `Could not act: ${errText(err)}`, latest, now)
+      out.push({ rule: rule.id, outcome: 'error' })
+      continue
+    }
+
+    if (plan.kind === 'join') {
+      try {
+        const detail = await joinHome(plan, issueId, conn)
+        ctx.linkedOn.add(rule.action.connection)
+        await record(rule.id, issueId, 'joined', detail, latest, now)
+        out.push({ rule: rule.id, outcome: 'joined' })
+      } catch (err) {
+        await record(rule.id, issueId, 'error', `Could not act: ${errText(err)}`, latest, now)
+        out.push({ rule: rule.id, outcome: 'error' })
+        continue
+      }
+      if (!rule.continue_after) break
+      continue
+    }
+
+    if (res.act === 'skip') {
+      // capped, and nothing to join: held
+      await record(rule.id, issueId, res.outcome, res.detail, latest, now)
+      out.push({ rule: rule.id, outcome: res.outcome })
+      continue
+    }
+
+    let claim: Awaited<ReturnType<typeof claimFire>>
+    try {
+      claim = await claimFire(rule, issueId, now)
+    } catch (err) {
+      // app-lock timeout, deadlock victim, …: nothing was claimed or sent
+      await record(
+        rule.id,
+        issueId,
+        'error',
+        `Could not claim a slot to open a GitLab issue: ${errText(err)}`,
+        latest,
+        now
+      )
+      out.push({ rule: rule.id, outcome: 'error' })
+      continue
+    }
     if (!claim.ok) {
       await record(rule.id, issueId, 'cap', claim.detail, latest, now)
       out.push({ rule: rule.id, outcome: 'cap' })
       continue
     }
     try {
-      const detail = (await fire(rule, issueId, conn)).slice(0, DETAIL_MAX)
+      await requestCreate(issueId, { connection: conn.id, rule: plan.rule, via: 'rule' })
+      const detail = plan.detail.slice(0, DETAIL_MAX)
       ctx.linkedOn.add(rule.action.connection)
       await db(DECISIONS).where({ id: claim.id }).update({ detail })
       await db(RULES)
@@ -1030,6 +1112,7 @@ export interface Explanation {
   live?: boolean
 }
 
+/** Stored detail as shown to a person. 'joined' rows already read "joined #<iid> via <kind>". */
 function describe(outcome: string, detail: string): string {
   if (outcome === 'quiet') {
     const end = toDate(detail)
@@ -1070,7 +1153,9 @@ export async function explainIssue(issueId: number, now = new Date()): Promise<E
         detail =
           res.outcome === 'quiet' && rule.guards.quiet
             ? describe('quiet', (nextQuietEnd(rule.guards.quiet, now) ?? now).toISOString())
-            : res.detail
+            : res.outcome === 'cap' && rule.mode === 'create'
+              ? `${res.detail} — it can still join an existing GitLab issue (joins use no slot)`
+              : res.detail
       } else if (res.act === 'fire') {
         outcome = 'would_fire'
         detail = 'Would act now'
@@ -1140,8 +1225,9 @@ const dayString = (t: number) => new Date(t).toISOString().slice(0, 10)
  * Approximations (the log keeps no history of these): status is today's, except a resolved /
  * closed issue counts as open before its last update; linked = a member row on the rule's
  * connection that joined before that moment; route / build / first build are today's; homes
- * (joining an existing GitLab issue instead of opening one) are not modelled. At most 2000
- * issues are read; nothing is written.
+ * (joining an existing GitLab issue instead of opening one) are not modelled — every replayed fire
+ * is counted as an opened issue, so with homes in play the real engine opens fewer (joins use no
+ * cap slot). At most 2000 issues are read; nothing is written.
  */
 export async function previewRule(
   rule: Omit<TrackerRule, 'id'>,

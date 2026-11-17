@@ -159,8 +159,16 @@ const failTables = new Set<string>()
  * app lock + UPDLOCK/HOLDLOCK in SQL Server), so count-then-insert is atomic here as it is there.
  * Bindings in claimStatement's order.
  */
+const claimHook = vi.hoisted(() => ({
+  fail: null as string | null,
+  locks: [] as unknown[]
+}))
 function claimRaw(sql: string, b: any[]): Row[] {
-  if (/sp_getapplock/.test(sql)) return [{ r: 0 }]
+  if (/sp_getapplock/.test(sql)) {
+    claimHook.locks.push(b[0])
+    if (claimHook.fail) throw new Error(claimHook.fail)
+    return [{ r: 0 }]
+  }
   if (!/^INSERT INTO \[nivaro_tracker_decisions\]/.test(sql))
     throw new Error(`unexpected raw: ${sql}`)
   const [rule, issue, at, detail, , hourAgo, perHour, , dayAgo, perDay, connection, , cap] = b
@@ -246,6 +254,7 @@ vi.mock('./outbox.js', () => ({
 
 import {
   CLAIM_DETAIL,
+  CLAIM_LOCK,
   claimStatement,
   DECISIONS,
   evaluateIssue,
@@ -333,6 +342,8 @@ beforeEach(() => {
   failTables.clear()
   resetFailureLog()
   resetSweepFailures()
+  claimHook.fail = null
+  claimHook.locks = []
   for (const k of Object.keys(tables)) delete tables[k]
   for (const k of Object.keys(ids)) delete ids[k]
   nextRule = 0
@@ -414,7 +425,7 @@ describe('evaluateIssue', () => {
     })
     findHome.mockResolvedValue({ via: 'group', link_id: 9 })
     const id = addIssue()
-    expect(await evaluateIssue(id)).toEqual([{ rule: r, outcome: 'fired' }])
+    expect(await evaluateIssue(id)).toEqual([{ rule: r, outcome: 'joined' }])
     expect(findHome).toHaveBeenCalledWith(id, 1, 7)
     expect(joinAsExample).toHaveBeenCalledWith(id, 1, { link_id: 9 }, 'group', undefined)
     expect(requestCreate).not.toHaveBeenCalled()
@@ -892,5 +903,82 @@ describe('fix round 2', () => {
     expect(mine.filter((d) => d.at.getTime() === ago(30).getTime())).toHaveLength(0)
     // the newest 200 rows are kept, plus the 20 fired rows the caps still count
     expect(mine).toHaveLength(220)
+  })
+})
+
+describe('fix round 3', () => {
+  const openLink = () =>
+    t('nivaro_tracker_links').push({
+      id: 9,
+      project_id: 7,
+      external_iid: 42,
+      web_url: 'https://git.x/g/p/-/issues/42',
+      remote_state: 'opened'
+    })
+
+  it('a join does not use a cap slot', async () => {
+    const r = addRule({ guards: { per_hour: 1 } })
+    openLink()
+    findHome.mockResolvedValueOnce({ via: 'group', link_id: 9 })
+    expect(await evaluateIssue(addIssue())).toEqual([{ rule: r, outcome: 'joined' }])
+    expect(t(RULES)[0].fired_count).toBe(0)
+    // the one hourly slot is still free for a new GitLab issue
+    expect(await evaluateIssue(addIssue())).toEqual([{ rule: r, outcome: 'fired' }])
+    expect(t(RULES)[0].fired_count).toBe(1)
+    // the cap is now used: a similar issue still joins, one with no home is held
+    findHome.mockResolvedValueOnce({ via: 'fingerprint', link_id: 9 })
+    expect(await evaluateIssue(addIssue())).toEqual([{ rule: r, outcome: 'joined' }])
+    expect(await evaluateIssue(addIssue())).toEqual([{ rule: r, outcome: 'cap' }])
+    expect(requestCreate).toHaveBeenCalledTimes(1)
+    expect(joinAsExample).toHaveBeenCalledTimes(2)
+    expect(decisions(r).map((d) => d.outcome)).toEqual(['joined', 'fired', 'joined', 'cap'])
+    expect(decisions(r)[0].detail).toBe('joined #42 via group')
+    expect(t(RULES)[0].suppressed_count).toBe(1)
+  })
+
+  it('connection cap ignores joins', async () => {
+    const a = addRule()
+    const b = addRule({ match: { sources: ['client'] } })
+    for (let i = 1; i <= 40; i++)
+      t(DECISIONS).push({ id: i, rule: b, issue: 500 + i, at: new Date(), outcome: 'joined' })
+    ids[DECISIONS] = 40
+    expect(await evaluateIssue(addIssue())).toEqual([{ rule: a, outcome: 'fired' }])
+    // at the connection cap (30 opened), joins still go through
+    for (let i = 41; i <= 70; i++)
+      t(DECISIONS).push({ id: i, rule: b, issue: 500 + i, at: new Date(), outcome: 'fired' })
+    ids[DECISIONS] = 70
+    openLink()
+    findHome.mockResolvedValueOnce({ via: 'group', link_id: 9 })
+    expect(await evaluateIssue(addIssue())).toEqual([{ rule: a, outcome: 'joined' }])
+    expect(await evaluateIssue(addIssue())).toEqual([
+      { rule: a, outcome: 'cap' },
+      { rule: b, outcome: 'no_match' }
+    ])
+  })
+
+  it('a claim that throws records an error decision and evaluation continues', async () => {
+    const a = addRule({ continue_after: true })
+    const b = addRule({ mode: 'suggest', action: { connection: 2 } })
+    claimHook.fail = 'Transaction was deadlocked and has been chosen as the deadlock victim'
+    const id = addIssue()
+    expect(await evaluateIssue(id)).toEqual([
+      { rule: a, outcome: 'error' },
+      { rule: b, outcome: 'suggested' }
+    ])
+    expect(decisions(a)[0]).toMatchObject({
+      outcome: 'error',
+      detail:
+        'Could not claim a slot to open a GitLab issue: Transaction was deadlocked and has been chosen as the deadlock victim'
+    })
+    expect(requestCreate).not.toHaveBeenCalled()
+    expect(t(RULES)[0].fired_count).toBe(0)
+  })
+
+  it('every claim takes the one global app lock', async () => {
+    addRule({ continue_after: true })
+    addRule({ action: { connection: 2 } })
+    await evaluateIssue(addIssue())
+    expect(claimHook.locks).toEqual([CLAIM_LOCK, CLAIM_LOCK])
+    expect(CLAIM_LOCK).toBe('nivaro-tracker-claim')
   })
 })
