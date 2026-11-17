@@ -150,11 +150,55 @@ function builder(name: string) {
   return b
 }
 
+/** Tables whose next read throws (a failing evaluation). */
+const failTables = new Set<string>()
+
+/**
+ * The claim statement, emulated: the fake's transactions run one at a time (the per-connection
+ * app lock + UPDLOCK/HOLDLOCK in SQL Server), so count-then-insert is atomic here as it is there.
+ * Bindings in claimStatement's order.
+ */
+function claimRaw(sql: string, b: any[]): Row[] {
+  if (/sp_getapplock/.test(sql)) return [{ r: 0 }]
+  if (!/^INSERT INTO \[nivaro_tracker_decisions\]/.test(sql))
+    throw new Error(`unexpected raw: ${sql}`)
+  const [rule, issue, at, detail, , hourAgo, perHour, , dayAgo, perDay, connection, , cap] = b
+  const fired = t('nivaro_tracker_decisions').filter((d) => d.outcome === 'fired')
+  const after = (d: Row, since: Date) => cmp(d.at, since) > 0
+  const onConn = new Set(
+    t('nivaro_tracker_rules')
+      .filter((r) => r.connection === connection)
+      .map((r) => r.id)
+  )
+  const ok =
+    fired.filter((d) => d.rule === rule && after(d, hourAgo)).length < perHour &&
+    fired.filter((d) => d.rule === rule && after(d, dayAgo)).length < perDay &&
+    fired.filter((d) => onConn.has(d.rule) && after(d, hourAgo)).length < cap
+  if (!ok) return []
+  ids.nivaro_tracker_decisions = (ids.nivaro_tracker_decisions ?? 0) + 1
+  const id = ids.nivaro_tracker_decisions
+  t('nivaro_tracker_decisions').push({ id, rule, issue, at, outcome: 'fired', detail })
+  return [{ id }]
+}
+
 vi.mock('../../db/index.js', () => {
-  const db: any = (name: string) => builder(name)
+  const make = (name: string) => {
+    if (failTables.has(name)) throw new Error(`${name} is unreadable`)
+    return builder(name)
+  }
+  const db: any = make
   db.raw = (sql: string) => ({ __raw: sql })
+  let chain: Promise<unknown> = Promise.resolve()
+  db.transaction = (fn: (trx: any) => Promise<unknown>) => {
+    const trx: any = (name: string) => make(name)
+    trx.raw = async (sql: string, b: any[]) => claimRaw(sql, b)
+    const run = chain.then(() => fn(trx))
+    chain = run.catch(() => {})
+    return run
+  }
   return { db }
 })
+vi.mock('../../db/dialect.js', () => ({ isMssql: () => true }))
 vi.mock('../../version.js', () => ({ NIVARO_VERSION: '1.2.3' }))
 const feature = vi.hoisted(() => ({ on: true }))
 vi.mock('./feature.js', () => ({ trackersEnabled: async () => feature.on }))
@@ -194,15 +238,23 @@ vi.mock('./links.js', () => ({
   requestCreate: (...a: any[]) => requestCreate(...a)
 }))
 const enqueue = vi.fn<(...args: any[]) => any>()
-vi.mock('./outbox.js', () => ({ enqueue: (...a: any[]) => enqueue(...a) }))
+vi.mock('./outbox.js', () => ({
+  OUTBOX: 'nivaro_tracker_outbox',
+  enqueue: (...a: any[]) => enqueue(...a)
+}))
 
 import {
+  CLAIM_DETAIL,
+  claimStatement,
   DECISIONS,
   evaluateIssue,
   explainIssue,
+  FAILURE_LOG_EVERY_MS,
   KEEP_DECISIONS,
+  noteEvaluationFailure,
   previewRule,
   RULES,
+  resetFailureLog,
   SWEEP_EXT,
   SWEEP_KEY,
   sweep
@@ -275,6 +327,8 @@ const decisions = (rule?: number) =>
   t(DECISIONS).filter((d) => rule === undefined || d.rule === rule)
 
 beforeEach(() => {
+  failTables.clear()
+  resetFailureLog()
   for (const k of Object.keys(tables)) delete tables[k]
   for (const k of Object.keys(ids)) delete ids[k]
   nextRule = 0
@@ -292,6 +346,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 describe('evaluateIssue', () => {
@@ -604,5 +659,144 @@ describe('explainIssue', () => {
     })
     expect(decisions()).toHaveLength(1) // nothing stored
     expect(requestCreate).not.toHaveBeenCalled()
+  })
+})
+
+describe('fire claims (caps under concurrency)', () => {
+  it('concurrent evaluations of N issues against per_hour 1 fire exactly once', async () => {
+    const r = addRule({ guards: { per_hour: 1 } })
+    requestCreate.mockImplementation(async () => {
+      await new Promise((res) => setTimeout(res, 5))
+      return { outboxId: 1 }
+    })
+    const issues = Array.from({ length: 10 }, () => addIssue())
+    const results = await Promise.all(issues.map((id) => evaluateIssue(id)))
+    const outcomes = results.map((x) => x[0]?.outcome)
+    expect(outcomes.filter((o) => o === 'fired')).toHaveLength(1)
+    expect(outcomes.filter((o) => o === 'cap')).toHaveLength(9)
+    expect(requestCreate).toHaveBeenCalledTimes(1)
+    expect(decisions(r).filter((d) => d.outcome === 'fired')).toHaveLength(1)
+    expect(t(RULES)[0].fired_count).toBe(1)
+    const cap = decisions(r).find((d) => d.outcome === 'cap')
+    expect(cap?.detail).toBe('Rule already opened 1 in the last hour (limit 1)')
+  })
+
+  it('the connection cap counts fired decisions of every rule on the connection', async () => {
+    const a = addRule({ continue_after: true })
+    const b = addRule({ match: { sources: ['client'] } })
+    for (let i = 1; i <= 30; i++)
+      t(DECISIONS).push({ id: i, rule: b, issue: 500 + i, at: new Date(), outcome: 'fired' })
+    ids[DECISIONS] = 30
+    const id = addIssue()
+    expect(await evaluateIssue(id)).toEqual([
+      { rule: a, outcome: 'cap' },
+      { rule: b, outcome: 'no_match' }
+    ])
+    expect(decisions(a)[0].detail).toBe('Connection already sent 30 in the last hour (limit 30)')
+    expect(requestCreate).not.toHaveBeenCalled()
+  })
+
+  it('a fire that throws turns its claimed row into an error', async () => {
+    const r = addRule()
+    requestCreate.mockRejectedValue(new Error('Choose a GitLab project'))
+    const id = addIssue()
+    expect(await evaluateIssue(id)).toEqual([{ rule: r, outcome: 'error' }])
+    expect(decisions(r)).toEqual([
+      expect.objectContaining({
+        outcome: 'error',
+        detail: 'Could not act: Choose a GitLab project'
+      })
+    ])
+    expect(t(RULES)[0].fired_count).toBe(0)
+  })
+
+  it('claimStatement binds every value and locks the counted ranges on SQL Server', () => {
+    const at = new Date('2026-11-17T12:00:00Z')
+    const p = { rule: 3, issue: 9, connection: 1, at, perHour: 5, perDay: 20, connectionCap: 30 }
+    const { sql, bindings } = claimStatement(p, true)
+    expect(sql.match(/WITH \(UPDLOCK, HOLDLOCK\)/g)).toHaveLength(3)
+    expect(sql).toContain('OUTPUT inserted.[id]')
+    expect(sql).toContain('[rule] = ?')
+    expect(sql).not.toMatch(/\b(3|9|5|20|30)\b/)
+    expect(sql.match(/\?/g)).toHaveLength(bindings.length)
+    const hourAgo = new Date(at.getTime() - 3_600_000)
+    const dayAgo = new Date(at.getTime() - 86_400_000)
+    expect(bindings).toEqual([3, 9, at, CLAIM_DETAIL, 3, hourAgo, 5, 3, dayAgo, 20, 1, hourAgo, 30])
+    expect(claimStatement(p, false).sql).not.toContain('UPDLOCK')
+  })
+})
+
+describe('queued creates', () => {
+  it('evaluating twice before the create is sent records one fired decision', async () => {
+    const r = addRule()
+    requestCreate.mockImplementation(async (issue: number, o: { connection: number }) => {
+      t('nivaro_tracker_outbox').push({
+        id: 1,
+        connection: o.connection,
+        op: 'create',
+        source_kind: 'issue',
+        source_id: String(issue),
+        status: 'pending'
+      })
+      return { outboxId: 1 }
+    })
+    const id = addIssue()
+    expect(await evaluateIssue(id)).toEqual([{ rule: r, outcome: 'fired' }])
+    expect(await evaluateIssue(id)).toEqual([{ rule: r, outcome: 'linked' }])
+    expect(decisions(r).filter((d) => d.outcome === 'fired')).toHaveLength(1)
+    expect(requestCreate).toHaveBeenCalledTimes(1)
+    expect(t(RULES)[0].fired_count).toBe(1)
+    // dead stays linked until an admin retries or discards it; done does not
+    t('nivaro_tracker_outbox')[0].status = 'dead'
+    expect(await evaluateIssue(id)).toEqual([{ rule: r, outcome: 'linked' }])
+    t('nivaro_tracker_outbox')[0].status = 'done'
+    expect(await evaluateIssue(id)).toEqual([{ rule: r, outcome: 'fired' }])
+  })
+})
+
+describe('evaluation failures', () => {
+  it('sweep does not advance past a failed issue', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-17T12:00:00Z'))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    addRule({ mode: 'suggest' })
+    t('nivaro_extension_settings').push({
+      id: 1,
+      extension_id: SWEEP_EXT,
+      key: SWEEP_KEY,
+      value: '2026-11-17T10:00:00.000Z'
+    })
+    const a = addIssue({ updated_at: new Date('2026-11-17T10:10:00Z') })
+    const b = addIssue({ updated_at: new Date('2026-11-17T10:20:00Z'), raised_by: 'u1' })
+    const c = addIssue({ updated_at: new Date('2026-11-17T10:30:00Z') })
+    failTables.add('nivaro_users') // b's facts cannot be read
+    expect(await sweep()).toEqual({ evaluated: 3 })
+    const suggested = () =>
+      t('nivaro_issues')
+        .filter((i) => i.tracker_suggested_rule)
+        .map((i) => i.id)
+    expect(suggested()).toEqual([a, c])
+    expect(t('nivaro_extension_settings')[0].value).toBe('2026-11-17T10:19:59.999Z')
+
+    failTables.clear()
+    vi.setSystemTime(new Date('2026-11-17T12:05:00Z'))
+    expect(await sweep()).toEqual({ evaluated: 2 }) // b again (and c, still after the mark)
+    expect(suggested()).toEqual([a, b, c])
+    expect(t('nivaro_extension_settings')[0].value).toBe('2026-11-17T12:05:00.000Z')
+  })
+
+  it('failure logging is rate limited not silenced', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t0 = Date.UTC(2026, 10, 17, 12)
+    noteEvaluationFailure(1, new Error('boom'), t0)
+    noteEvaluationFailure(2, new Error('boom'), t0 + 60_000)
+    noteEvaluationFailure(3, new Error('boom'), t0 + 120_000)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('1 failure since')
+    noteEvaluationFailure(4, new Error('later'), t0 + FAILURE_LOG_EVERY_MS)
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn.mock.calls[1][0]).toContain('issue 4 (3 failures since the last report): later')
+    noteEvaluationFailure(5, new Error('x'), t0 + FAILURE_LOG_EVERY_MS + 1000)
+    expect(warn).toHaveBeenCalledTimes(2)
   })
 })

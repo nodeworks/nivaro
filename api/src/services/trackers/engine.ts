@@ -1,3 +1,5 @@
+import type { Knex } from 'knex'
+import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { appEnvironment } from '../app-info-environment.js'
@@ -8,7 +10,7 @@ import { getConnection, type TrackerConnection } from './connections.js'
 import { trackersEnabled } from './feature.js'
 import { LINKS, MEMBERS, SOURCE_ISSUE } from './link-store.js'
 import { CONNECTION_CAP_PER_HOUR, requestCreate } from './links.js'
-import { enqueue } from './outbox.js'
+import { enqueue, OUTBOX } from './outbox.js'
 import {
   type Counts,
   evaluateRule,
@@ -259,6 +261,13 @@ async function loadContext(
     .where({ source_kind: SOURCE_ISSUE, source_id: String(issueId) })
     .select('connection')) as Row[]
   const linkedOn = new Set(members.map((m) => Number(m.connection)))
+  // A create still waiting in the outbox (or dead until an admin retries / discards it) counts as
+  // linked: re-evaluating before GitLab answers must not fire again.
+  const queued = (await db(OUTBOX)
+    .where({ op: 'create', source_kind: SOURCE_ISSUE, source_id: String(issueId) })
+    .whereIn('status', ['pending', 'sending', 'dead'])
+    .select('connection')) as Row[]
+  for (const q of queued) linkedOn.add(Number(q.connection))
 
   const facts: IssueFacts = {
     id: issueId,
@@ -339,17 +348,178 @@ async function guardState(rule: TrackerRule, now: Date): Promise<GuardState> {
     .where({ rule: rule.id, outcome: 'fired' })
     .where('at', '>=', new Date(now.getTime() - DAY_MS))
     .select('at')) as Row[]
-  const links = (await db(LINKS)
-    .where({ connection: rule.action.connection, created_via: 'rule' })
-    .where('created_at', '>=', new Date(hourAgo))
-    .count({ n: '*' })
-    .first()) as { n?: number | string } | undefined
   return {
     firedLastHour: fired.filter((r) => (toDate(r.at)?.getTime() ?? 0) >= hourAgo).length,
     firedLastDay: fired.length,
-    connectionLastHour: Number(links?.n ?? 0) || 0,
+    connectionLastHour: await connectionFiredSince(db, rule.action.connection, new Date(hourAgo)),
     connectionCap: CONNECTION_CAP_PER_HOUR
   }
+}
+
+/** 'fired' decisions of every rule on this connection since `since`. */
+async function connectionFiredSince(
+  q: typeof db | Knex.Transaction,
+  connection: number,
+  since: Date
+): Promise<number> {
+  const rules = ((await q(RULES).where({ connection }).select('id')) as Row[]).map((r) =>
+    Number(r.id)
+  )
+  if (!rules.length) return 0
+  const n = (await whereInList(q(DECISIONS), 'rule', rules)
+    .where({ outcome: 'fired' })
+    .where('at', '>', since)
+    .count({ n: '*' })
+    .first()) as { n?: number | string } | undefined
+  return Number(n?.n ?? 0) || 0
+}
+
+// ── Claiming a fire (the caps, atomically) ────────────────────────────────────
+
+export interface ClaimParams {
+  rule: number
+  issue: number
+  connection: number
+  at: Date
+  perHour: number
+  perDay: number
+  connectionCap: number
+}
+
+/** The placeholder detail of a claimed slot until the fire says what it did. */
+export const CLAIM_DETAIL = 'firing'
+
+/**
+ * The conditional INSERT that claims a fire: the 'fired' decision row is written only while the
+ * rule is under its hourly and daily caps and the rule's connection under its hourly cap
+ * ('fired' decisions of every rule on that connection). Every value is bound. On SQL Server the
+ * counts take UPDLOCK + HOLDLOCK range locks, so two claimers cannot both read "under the cap";
+ * the caller also holds a per-connection app lock (no lock-order deadlocks between rules).
+ */
+export function claimStatement(
+  p: ClaimParams,
+  mssql: boolean
+): { sql: string; bindings: unknown[] } {
+  const hourAgo = new Date(p.at.getTime() - HOUR_MS)
+  const dayAgo = new Date(p.at.getTime() - DAY_MS)
+  const hint = mssql ? ' WITH (UPDLOCK, HOLDLOCK)' : ''
+  const output = mssql ? ' OUTPUT inserted.[id]' : ''
+  // RULE is a reserved word in T-SQL: every identifier is quoted.
+  const q = (id: string) => (mssql ? `[${id}]` : `"${id}"`)
+  const [rule, issue, at, outcome, detail, connection, id] = [
+    'rule',
+    'issue',
+    'at',
+    'outcome',
+    'detail',
+    'connection',
+    'id'
+  ].map(q)
+  const sql = `INSERT INTO ${q(DECISIONS)} (${rule}, ${issue}, ${at}, ${outcome}, ${detail})${output}
+SELECT ?, ?, ?, 'fired', ?
+WHERE (SELECT COUNT(*) FROM ${q(DECISIONS)}${hint} WHERE ${rule} = ? AND ${outcome} = 'fired' AND ${at} > ?) < ?
+  AND (SELECT COUNT(*) FROM ${q(DECISIONS)}${hint} WHERE ${rule} = ? AND ${outcome} = 'fired' AND ${at} > ?) < ?
+  AND (SELECT COUNT(*) FROM ${q(DECISIONS)} d${hint} JOIN ${q(RULES)} r ON r.${id} = d.${rule}
+       WHERE r.${connection} = ? AND d.${outcome} = 'fired' AND d.${at} > ?) < ?`
+  return {
+    sql,
+    bindings: [
+      p.rule,
+      p.issue,
+      p.at,
+      CLAIM_DETAIL,
+      p.rule,
+      hourAgo,
+      p.perHour,
+      p.rule,
+      dayAgo,
+      p.perDay,
+      p.connection,
+      hourAgo,
+      p.connectionCap
+    ]
+  }
+}
+
+const CLAIM_LOCK_TIMEOUT_MS = 15_000
+
+/**
+ * Claim one fire of `rule` for `issue` before anything is sent. `ok` → the claimed decision row
+ * (outcome 'fired', detail 'firing' until the fire fills it in). Not ok → which cap held. One
+ * short transaction: per-connection app lock, then the conditional INSERT.
+ */
+export async function claimFire(
+  rule: TrackerRule,
+  issueId: number,
+  now: Date
+): Promise<{ ok: true; id: number } | { ok: false; detail: string }> {
+  const mssql = isMssql(db)
+  const p: ClaimParams = {
+    rule: rule.id,
+    issue: issueId,
+    connection: rule.action.connection,
+    at: now,
+    perHour: rule.guards.per_hour,
+    perDay: rule.guards.per_day,
+    connectionCap: CONNECTION_CAP_PER_HOUR
+  }
+  return db.transaction(async (trx) => {
+    if (mssql) {
+      const lock = (await trx.raw(
+        `DECLARE @r int;
+EXEC @r = sp_getapplock @Resource = ?, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = ?;
+SELECT @r AS r`,
+        [`nivaro-tracker-claim:${p.connection}`, CLAIM_LOCK_TIMEOUT_MS]
+      )) as Row[]
+      if (Number(lock?.[0]?.r ?? -1) < 0)
+        throw new Error('Another rule on this connection is busy firing — try again shortly')
+    }
+    const { sql, bindings } = claimStatement(p, mssql)
+    const res = (await trx.raw(sql, bindings as never[])) as unknown
+    let id: number | null = null
+    if (mssql) {
+      const rows = Array.isArray(res) ? (res as Row[]) : []
+      if (rows[0]?.id != null) id = Number(rows[0].id)
+    } else {
+      const got = (await trx(DECISIONS)
+        .where({ rule: p.rule, issue: p.issue, outcome: 'fired', detail: CLAIM_DETAIL })
+        .where('at', '=', now)
+        .orderBy('id', 'desc')
+        .first('id')) as Row | undefined
+      if (got) id = Number(got.id)
+    }
+    if (id !== null) return { ok: true as const, id }
+
+    // Held: say which cap.
+    const hourAgo = new Date(now.getTime() - HOUR_MS)
+    const count = async (since: Date) =>
+      Number(
+        (
+          (await trx(DECISIONS)
+            .where({ rule: p.rule, outcome: 'fired' })
+            .where('at', '>', since)
+            .count({ n: '*' })
+            .first()) as { n?: number | string } | undefined
+        )?.n ?? 0
+      ) || 0
+    const hour = await count(hourAgo)
+    if (hour >= p.perHour)
+      return {
+        ok: false as const,
+        detail: `Rule already opened ${hour} in the last hour (limit ${p.perHour})`
+      }
+    const day = await count(new Date(now.getTime() - DAY_MS))
+    if (day >= p.perDay)
+      return {
+        ok: false as const,
+        detail: `Rule already opened ${day} in the last day (limit ${p.perDay})`
+      }
+    const conn = await connectionFiredSince(trx, p.connection, hourAgo)
+    return {
+      ok: false as const,
+      detail: `Connection already sent ${conn} in the last hour (limit ${p.connectionCap})`
+    }
+  })
 }
 
 /**
@@ -566,20 +736,40 @@ export async function evaluateIssue(issueId: number, now = new Date()): Promise<
       continue
     }
 
-    // fire
-    try {
-      const conn = await getConnection(rule.action.connection)
-      if (!conn) throw new Error('The GitLab connection of this rule no longer exists')
-      if (!conn.is_active) throw new Error('The GitLab connection of this rule is turned off')
-      const detail = await fire(rule, issueId, conn)
-      ctx.linkedOn.add(rule.action.connection)
-      await record(rule.id, issueId, 'fired', detail, latest, now)
-      out.push({ rule: rule.id, outcome: 'fired' })
-    } catch (err) {
-      await record(rule.id, issueId, 'error', `Could not act: ${errText(err)}`, latest, now)
+    // fire: claim the cap slot in SQL first, then act
+    const conn = await getConnection(rule.action.connection)
+    if (!conn?.is_active) {
+      const why = conn
+        ? 'The GitLab connection of this rule is turned off'
+        : 'The GitLab connection of this rule no longer exists'
+      await record(rule.id, issueId, 'error', `Could not act: ${why}`, latest, now)
       out.push({ rule: rule.id, outcome: 'error' })
       continue
     }
+    const claim = await claimFire(rule, issueId, now)
+    if (!claim.ok) {
+      await record(rule.id, issueId, 'cap', claim.detail, latest, now)
+      out.push({ rule: rule.id, outcome: 'cap' })
+      continue
+    }
+    try {
+      const detail = (await fire(rule, issueId, conn)).slice(0, DETAIL_MAX)
+      ctx.linkedOn.add(rule.action.connection)
+      await db(DECISIONS).where({ id: claim.id }).update({ detail })
+      await db(RULES)
+        .where({ id: rule.id })
+        .update({ fired_count: db.raw('fired_count + 1'), last_fired_at: now })
+      latest.set(rule.id, { outcome: 'fired', detail })
+      out.push({ rule: rule.id, outcome: 'fired' })
+    } catch (err) {
+      const detail = `Could not act: ${errText(err)}`.slice(0, DETAIL_MAX)
+      await db(DECISIONS).where({ id: claim.id }).update({ outcome: 'error', detail })
+      latest.set(rule.id, { outcome: 'error', detail })
+      out.push({ rule: rule.id, outcome: 'error' })
+      await trimDecisions(rule.id)
+      continue
+    }
+    await trimDecisions(rule.id)
     if (!rule.continue_after) break
   }
   return out
@@ -587,7 +777,61 @@ export async function evaluateIssue(issueId: number, now = new Date()): Promise<
 
 const inFlight = new Set<number>()
 const again = new Set<number>()
-let loggedFailure = false
+
+/** At most one failure line per this long per process; the line carries the count since. */
+export const FAILURE_LOG_EVERY_MS = 10 * 60_000
+const failureLog = { lastAt: 0, since: 0 }
+
+/**
+ * Log an evaluation failure, rate limited (never silenced): the first failure logs at once, later
+ * ones at most once per 10 minutes with how many failed since the last line. Console only —
+ * never the issue log, which would feed the engine its own failures.
+ */
+export function noteEvaluationFailure(issueId: number, err: unknown, now = Date.now()): void {
+  failureLog.since++
+  if (failureLog.lastAt && now - failureLog.lastAt < FAILURE_LOG_EVERY_MS) return
+  const n = failureLog.since
+  failureLog.lastAt = now
+  failureLog.since = 0
+  // biome-ignore lint/suspicious/noConsole: a broken rule engine must show in the log
+  console.warn(
+    `[trackers] rule evaluation failed for issue ${issueId} (${n} failure${n === 1 ? '' : 's'} since the last report): ${errText(err)}`.slice(
+      0,
+      600
+    )
+  )
+}
+
+/** Tests: start the failure log afresh. */
+export function resetFailureLog(): void {
+  failureLog.lastAt = 0
+  failureLog.since = 0
+}
+
+/** One guarded run; false when an evaluation of this issue threw. */
+async function runQueued(issueId: number): Promise<boolean> {
+  if (inFlight.has(issueId)) {
+    again.add(issueId)
+    return true
+  }
+  inFlight.add(issueId)
+  let ok = true
+  try {
+    do {
+      again.delete(issueId)
+      try {
+        await evaluateIssue(issueId)
+      } catch (err) {
+        ok = false
+        noteEvaluationFailure(issueId, err)
+      }
+    } while (again.has(issueId))
+  } finally {
+    inFlight.delete(issueId)
+    again.delete(issueId)
+  }
+  return ok
+}
 
 /**
  * evaluateIssue with a per-issue in-flight guard: a burst of writes for one issue runs one
@@ -595,28 +839,7 @@ let loggedFailure = false
  * never fires a rule twice. Never throws.
  */
 export async function evaluateQueued(issueId: number): Promise<void> {
-  if (inFlight.has(issueId)) {
-    again.add(issueId)
-    return
-  }
-  inFlight.add(issueId)
-  try {
-    do {
-      again.delete(issueId)
-      try {
-        await evaluateIssue(issueId)
-      } catch (err) {
-        if (!loggedFailure) {
-          loggedFailure = true
-          // biome-ignore lint/suspicious/noConsole: a broken rule engine must show in the log
-          console.warn(`[trackers] rule evaluation failed: ${errText(err)}`.slice(0, 500))
-        }
-      }
-    } while (again.has(issueId))
-  } finally {
-    inFlight.delete(issueId)
-    again.delete(issueId)
-  }
+  await runQueued(issueId)
 }
 
 // ── Sweep ─────────────────────────────────────────────────────────────────────
@@ -656,7 +879,7 @@ async function writeMark(mark: Date): Promise<void> {
 }
 
 /** Issues whose latest decision for some rule is 'quiet' and whose quiet end is in (mark, now]. */
-async function quietDue(mark: Date, now: Date): Promise<number[]> {
+async function quietDue(mark: Date, now: Date): Promise<Array<{ issue: number; end: number }>> {
   const since = new Date(now.getTime() - QUIET_LOOKBACK_MS)
   const rows = (await db(DECISIONS)
     .where({ outcome: 'quiet' })
@@ -681,13 +904,14 @@ async function quietDue(mark: Date, now: Date): Promise<number[]> {
     const k = `${r.rule}:${r.issue}`
     newest.set(k, Math.max(newest.get(k) ?? -1, Number(r.id)))
   }
-  return [
-    ...new Set(
-      due
-        .filter((r) => newest.get(`${r.rule}:${r.issue}`) === Number(r.id))
-        .map((r) => Number(r.issue))
-    )
-  ]
+  const out = new Map<number, number>()
+  for (const r of due) {
+    if (newest.get(`${r.rule}:${r.issue}`) !== Number(r.id)) continue
+    const end = (toDate(r.detail) as Date).getTime()
+    const issue = Number(r.issue)
+    out.set(issue, Math.min(out.get(issue) ?? end, end))
+  }
+  return [...out].map(([issue, end]) => ({ issue, end }))
 }
 
 /**
@@ -705,21 +929,32 @@ export async function sweep(now = new Date()): Promise<{ evaluated: number }> {
     .orderBy('id', 'asc')
     .limit(SWEEP_CAP)
     .select('id', 'updated_at', 'last_seen_at')) as Row[]
-  const ids = rows.map((r) => Number(r.id))
-  for (const id of await quietDue(mark, now)) if (!ids.includes(id)) ids.push(id)
+  const touchedOf = (r: Row): Date | null => {
+    const a = toDate(r.updated_at)
+    const b = toDate(r.last_seen_at)
+    return a && b ? (a > b ? a : b) : (a ?? b)
+  }
+  // Each issue with the time the mark must stay below for it to be picked up again.
+  const due = new Map<number, number>()
+  for (const r of rows) due.set(Number(r.id), touchedOf(r)?.getTime() ?? mark.getTime() + 1)
+  for (const q of await quietDue(mark, now)) if (!due.has(q.issue)) due.set(q.issue, q.end)
 
-  for (const id of ids) await evaluateQueued(id)
+  let failedAt: number | null = null
+  for (const [id, at] of due) {
+    if (await runQueued(id)) continue
+    failedAt = failedAt === null ? at : Math.min(failedAt, at)
+  }
 
   let next = now
   if (rows.length >= SWEEP_CAP) {
-    const last = rows[rows.length - 1]
-    const a = toDate(last.updated_at)
-    const b = toDate(last.last_seen_at)
-    const touched = a && b ? (a > b ? a : b) : (a ?? b)
+    const touched = touchedOf(rows[rows.length - 1])
     if (touched && touched > mark) next = touched
   }
+  // A failed issue is picked up again next run: the mark stays just before it.
+  if (failedAt !== null)
+    next = new Date(Math.max(mark.getTime(), Math.min(next.getTime(), failedAt - 1)))
   await writeMark(next)
-  return { evaluated: ids.length }
+  return { evaluated: due.size }
 }
 
 // ── Explain ───────────────────────────────────────────────────────────────────
