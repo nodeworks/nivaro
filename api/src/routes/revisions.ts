@@ -210,8 +210,14 @@ export async function revisionsRoutes(app: FastifyInstance) {
     if (!(await recordVisibleTo(req, q.collection, q.item))) {
       return reply.code(404).send({ error: 'Not found' })
     }
-    const { linkLabels } = await import('../services/revision-link-labels.js')
-    return reply.send({ data: await linkLabels(req.user!, q.collection, String(q.item)) })
+    const [{ linkLabels }, { seesAllRecords }] = await Promise.all([
+      import('../services/revision-link-labels.js'),
+      import('../services/user-scopes.js')
+    ])
+    const seesAll = await seesAllRecords(req.isAdmin, req.user).catch(() => false)
+    return reply.send({
+      data: await linkLabels(req.user!, q.collection, String(q.item), undefined, { seesAll })
+    })
   })
 
   // GET /revisions/child-columns?collection=&item= — the rows behind the record's stored totals

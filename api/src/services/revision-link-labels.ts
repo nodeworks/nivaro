@@ -15,8 +15,11 @@ import { readableFieldSet } from './revision-fields.js'
  *     own revisions when it has since been removed) → that record's label;
  *   - one-to-many: child row id → the child's label.
  *
- * A field the reader may not read on the record, or a related collection they may not read, is
- * left out (the client then shows a count, never ids). Bounded: at most IDS_MAX ids per field.
+ * A field the reader may not read on the record, a link table or its key they may not read, or a
+ * related collection they may not read, is left out (the client then shows a count, never ids).
+ * A related record the reader cannot see reads as a count whether or not it still exists; only a
+ * reader who sees every record (`seesAll`) is told "#5 (deleted)". Bounded: at most IDS_MAX ids
+ * per field.
  */
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -90,7 +93,8 @@ export async function linkLabels(
   user: User,
   collection: string,
   item: string,
-  deps: LinkLabelDeps = defaultDeps
+  deps: LinkLabelDeps = defaultDeps,
+  opts: { seesAll?: boolean } = {}
 ): Promise<LinkLabels> {
   const out: LinkLabels = { fields: {} }
   const rels = await getRelations(collection)
@@ -144,6 +148,10 @@ export async function linkLabels(
       if (!other?.one_collection || !IDENT.test(other.one_collection)) continue
       targetCollection = other.one_collection
       const fk = r.junction_field
+      // The link table and its key are read as the reader may read them.
+      if (!(await can(user, 'read', junction))) continue
+      const junctionFields = await readableFieldSet(user, junction)
+      if (junctionFields && !junctionFields.has(fk)) continue
       const live = (await db(junction)
         .whereIn('id', ids)
         .select('id', fk)
@@ -178,21 +186,27 @@ export async function linkLabels(
     const bare = [...new Set(target.values())].filter(
       (to) => (labels as Record<string, string>)[`${targetCollection}:${to}`]?.trim() === fallback
     )
-    // Of those, which the reader may see and which no longer exist (a removed Zone): a removed
-    // one reads "#5 (deleted)", an unseen one only counts.
+    // Of those, which the reader may see. One they cannot see only counts, whether or not it
+    // still exists — only a reader who sees every record is told a removed Zone is gone.
     const [seen, live] = bare.length
       ? await Promise.all([
           deps.visibleIds(user, targetCollection, bare).catch(() => new Set<string>()),
-          deps.existingIds(targetCollection, bare).catch(() => new Set(bare))
+          opts.seesAll
+            ? deps
+                .existingIds(targetCollection, bare)
+                .catch(() => new Set(bare.map((b) => b.toLowerCase())))
+            : Promise.resolve(new Set<string>())
         ])
       : [new Set<string>(), new Set<string>()]
     const map: Record<string, { target: string; label: string }> = {}
     for (const [heldId, to] of target) {
       let label = (labels as Record<string, string>)[`${targetCollection}:${to}`]?.trim()
       if (label && fallback && label === fallback) {
-        if (!live.has(to.toLowerCase())) label = `#${to} (deleted)`
-        else if (!seen.has(to.toLowerCase()) || UUID.test(to))
-          label = '' // unseen, or a uuid key (a file) that says nothing — reads as a count
+        const key = to.toLowerCase()
+        if (!seen.has(key))
+          label = opts.seesAll && !live.has(key) ? `#${to} (deleted)` : '' // unseen: a count
+        else if (UUID.test(to))
+          label = '' // a uuid key (a file) says nothing — reads as a count
         else label = r.junction_field ? to : `#${to}`
       }
       // An unreadable or missing record has no label to show — it reads as a count client-side.
