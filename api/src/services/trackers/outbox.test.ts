@@ -1,0 +1,440 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// ── In-memory stand-in for the few tables this module reads and writes ─────────
+type Row = Record<string, any>
+const tables: Record<string, Row[]> = {}
+const ids: Record<string, number> = {}
+const UNIQUE: Record<string, string[]> = {
+  nivaro_tracker_outbox: ['idempotency_key'],
+  nivaro_tracker_links: ['connection', 'project_id', 'external_iid'],
+  nivaro_tracker_link_members: ['connection', 'source_kind', 'source_id']
+}
+const t = (name: string) => {
+  tables[name] ??= []
+  return tables[name]
+}
+const cmp = (a: any, b: any) => {
+  const x = a instanceof Date ? a.getTime() : a
+  const y = b instanceof Date ? b.getTime() : b
+  return x < y ? -1 : x > y ? 1 : 0
+}
+const OPS: Record<string, (a: any, b: any) => boolean> = {
+  '=': (a, b) => cmp(a, b) === 0,
+  '<': (a, b) => a != null && cmp(a, b) < 0,
+  '<=': (a, b) => a != null && cmp(a, b) <= 0,
+  '>': (a, b) => a != null && cmp(a, b) > 0,
+  '>=': (a, b) => a != null && cmp(a, b) >= 0
+}
+
+function builder(name: string) {
+  const preds: Array<(r: Row) => boolean> = []
+  let order: [string, string] | null = null
+  let lim: number | null = null
+  let counting = false
+  const rows = () => {
+    let out = t(name).filter((r) => preds.every((p) => p(r)))
+    if (order) {
+      const [col, dir] = order
+      out = [...out].sort((a, b) => cmp(a[col], b[col]) * (dir === 'desc' ? -1 : 1))
+    }
+    if (lim != null) out = out.slice(0, lim)
+    return out
+  }
+  const b: any = {}
+  b.where = (a: any, op?: any, v?: any) => {
+    if (typeof a === 'object') {
+      for (const [k, val] of Object.entries(a)) preds.push((r) => cmp(r[k], val) === 0)
+    } else if (v === undefined) preds.push((r) => cmp(r[a], op) === 0)
+    else preds.push((r) => OPS[op](r[a], v))
+    return b
+  }
+  b.whereIn = (col: string, list: any[]) => {
+    preds.push((r) => list.some((x) => cmp(r[col], x) === 0))
+    return b
+  }
+  b.whereNot = (a: Row) => {
+    for (const [k, val] of Object.entries(a)) preds.push((r) => cmp(r[k], val) !== 0)
+    return b
+  }
+  b.orderBy = (col: string, dir = 'asc') => {
+    order = [col, dir]
+    return b
+  }
+  b.limit = (n: number) => {
+    lim = n
+    return b
+  }
+  b.select = () => b
+  b.count = () => {
+    counting = true
+    return b
+  }
+  b.first = async () => (counting ? { n: rows().length } : rows()[0] ? { ...rows()[0] } : undefined)
+  b.update = async (patch: Row) => {
+    const hit = rows()
+    for (const r of hit) Object.assign(r, patch)
+    return hit.length
+  }
+  b.delete = async () => {
+    const hit = new Set(rows())
+    tables[name] = t(name).filter((r) => !hit.has(r))
+    return hit.size
+  }
+  b.del = b.delete
+  b.insert = (row: Row) => {
+    const doIt = () => {
+      const keys = UNIQUE[name]
+      if (keys && t(name).some((r) => keys.every((k) => cmp(r[k], row[k]) === 0)))
+        throw new Error('Violation of UNIQUE KEY constraint')
+      ids[name] = (ids[name] ?? 0) + 1
+      const id = ids[name]
+      t(name).push({ id, ...row })
+      return [{ id }]
+    }
+    return {
+      returning: async () => doIt(),
+      // biome-ignore lint/suspicious/noThenProperty: awaitable like a knex insert
+      then: (res: any, rej: any) => Promise.resolve().then(doIt).then(res, rej)
+    }
+  }
+  // biome-ignore lint/suspicious/noThenProperty: awaitable like a knex builder
+  b.then = (res: any, rej: any) => Promise.resolve(rows().map((r) => ({ ...r }))).then(res, rej)
+  return b
+}
+
+vi.mock('../../db/index.js', () => {
+  const db: any = (name: string) => builder(name)
+  // The claim statement: UPDATE TOP (n) … SET status='sending', next_attempt_at=<lease> OUTPUT
+  // inserted.* WHERE status='pending' AND next_attempt_at <= <now>
+  db.raw = async (sql: string, bindings: any[]) => {
+    if (!/UPDATE TOP/.test(sql)) throw new Error(`unexpected raw: ${sql}`)
+    const n = Number(/TOP \((\d+)\)/.exec(sql)?.[1])
+    const [lease, now] = bindings
+    const hit = t('nivaro_tracker_outbox')
+      .filter((r) => r.status === 'pending' && cmp(r.next_attempt_at, now) <= 0)
+      .sort((a, b) => a.id - b.id)
+      .slice(0, n)
+    for (const r of hit) Object.assign(r, { status: 'sending', next_attempt_at: lease })
+    return hit.map((r) => ({ ...r }))
+  }
+  return { db }
+})
+vi.mock('../../db/dialect.js', () => ({ isMssql: () => true }))
+
+const provider = {
+  createIssue: vi.fn<(...args: any[]) => any>(),
+  findIssueByMarker: vi.fn<(...args: any[]) => any>(),
+  getIssue: vi.fn<(...args: any[]) => any>(),
+  project: vi.fn<(...args: any[]) => any>(),
+  upload: vi.fn<(...args: any[]) => any>(),
+  addNote: vi.fn<(...args: any[]) => any>(),
+  setState: vi.fn<(...args: any[]) => any>(),
+  searchUsers: vi.fn<(...args: any[]) => any>()
+}
+const markBroken = vi.fn<(...args: any[]) => any>(async () => {})
+const markOk = vi.fn<(...args: any[]) => any>(async () => {})
+vi.mock('./connections.js', () => ({
+  providerFor: async () => provider,
+  getConnection: async (id: number) =>
+    id === 1
+      ? {
+          id: 1,
+          name: 'GL',
+          base_url: 'https://git.x',
+          default_project_id: 7,
+          default_project_path: 'g/p',
+          status: 'ok'
+        }
+      : null,
+  markBroken: (...a: any[]) => markBroken(...a),
+  markOk: (...a: any[]) => markOk(...a)
+}))
+const noteIssueWrite = vi.fn<(...args: any[]) => any>()
+vi.mock('../issue-raise.js', () => ({
+  noteIssueWrite: (...a: any[]) => noteIssueWrite(...a),
+  hitCounts: async () => ({ hits: 4, people: 2 }),
+  hitKey: (i: { id: number; fingerprint?: string | null }) => i.fingerprint ?? `issue:${i.id}`
+}))
+vi.mock('../app-links.js', () => ({
+  linkTo: async () => 'https://nivaro.test/issues'
+}))
+
+import { bulkCreate, LinkError, linkExisting, requestCreate } from './links.js'
+import { backoffMs, enqueue, processOutbox, setAutoSend } from './outbox.js'
+import { TrackerError } from './types.js'
+
+const remote = (iid = 12) => ({
+  id: 900 + iid,
+  iid,
+  project_id: 7,
+  web_url: `https://git.x/g/p/-/issues/${iid}`,
+  title: '[error] Boom',
+  state: 'opened',
+  labels: ['bug'],
+  assignees: [{ id: 3, username: 'ann', name: 'Ann' }],
+  milestone: null,
+  updated_at: '2026-11-17T12:00:00Z',
+  description: '... <!-- nivaro:issue:5 -->'
+})
+
+const outbox = () => t('nivaro_tracker_outbox')
+const past = () => new Date(Date.now() - 1000)
+
+beforeEach(() => {
+  for (const k of Object.keys(tables)) delete tables[k]
+  for (const k of Object.keys(ids)) delete ids[k]
+  vi.resetAllMocks()
+  setAutoSend(false)
+  t('nivaro_issues').push({
+    id: 5,
+    title: 'Boom',
+    severity: 'error',
+    status: 'open',
+    source: 'server',
+    details: 'Error: boom\n  at x',
+    fingerprint: 'fp5',
+    occurrence_count: 3,
+    created_at: new Date('2026-11-16T10:00:00Z'),
+    last_seen_at: new Date('2026-11-17T10:00:00Z'),
+    screenshot: null
+  })
+  ids.nivaro_issues = 5
+})
+
+describe('tracker outbox', () => {
+  it('retries a timed-out create without a duplicate', async () => {
+    const { outboxId } = await requestCreate(5, { connection: 1, via: 'manual', userId: 'u1' })
+    const row = outbox().find((r) => r.id === outboxId)
+    expect(row?.idempotency_key).toBe('create:1:5')
+    expect(JSON.parse(row?.payload).input.description).toContain('<!-- nivaro:issue:5 -->')
+
+    // GitLab created the issue, but the answer never arrived.
+    provider.findIssueByMarker.mockResolvedValueOnce(null)
+    provider.createIssue.mockRejectedValueOnce(new TrackerError('timed out', null, 'network'))
+    expect(await processOutbox()).toEqual({ sent: 0, failed: 1, dead: 0 })
+    expect(row?.status).toBe('pending')
+    expect(row?.attempts).toBe(1)
+    expect(row?.next_attempt_at.getTime()).toBeGreaterThan(Date.now() + 25_000)
+
+    // The retry finds it by its marker and links it — no second create.
+    provider.findIssueByMarker.mockResolvedValueOnce(remote())
+    row!.next_attempt_at = past()
+    expect(await processOutbox()).toEqual({ sent: 1, failed: 0, dead: 0 })
+    expect(provider.createIssue).toHaveBeenCalledTimes(1)
+    expect(provider.findIssueByMarker).toHaveBeenLastCalledWith(7, '<!-- nivaro:issue:5 -->')
+    const links = t('nivaro_tracker_links')
+    expect(links).toHaveLength(1)
+    expect(links[0]).toMatchObject({
+      connection: 1,
+      project_id: 7,
+      project_path: 'g/p',
+      external_iid: 12,
+      created_via: 'manual',
+      fingerprint: 'fp5',
+      remote_state: 'opened'
+    })
+    expect(t('nivaro_tracker_link_members')).toEqual([
+      expect.objectContaining({ link: links[0].id, source_id: '5', joined_via: 'lead' })
+    ])
+    expect(row).toMatchObject({ status: 'done', link: links[0].id })
+  })
+
+  it('401 marks connection broken and holds outbox', async () => {
+    await requestCreate(5, { connection: 1, via: 'manual' })
+    provider.findIssueByMarker.mockRejectedValueOnce(
+      new TrackerError('401 Unauthorized', 401, 'auth')
+    )
+    expect(await processOutbox()).toEqual({ sent: 0, failed: 1, dead: 0 })
+    expect(markBroken).toHaveBeenCalledWith(1, '401 Unauthorized')
+    const row = outbox()[0]
+    expect(row.status).toBe('pending')
+    expect(row.attempts).toBe(0)
+    expect(row.next_attempt_at.getTime()).toBeGreaterThan(Date.now() + 59 * 60_000)
+    expect(provider.createIssue).not.toHaveBeenCalled()
+  })
+
+  it('422 goes dead immediately with reason', async () => {
+    await requestCreate(5, { connection: 1, via: 'manual' })
+    provider.findIssueByMarker.mockResolvedValue(null)
+    provider.createIssue.mockRejectedValueOnce(
+      new TrackerError('title is too long', 422, 'invalid')
+    )
+    expect(await processOutbox()).toEqual({ sent: 0, failed: 0, dead: 1 })
+    const row = outbox()[0]
+    expect(row.status).toBe('dead')
+    expect(row.last_error).toContain('title is too long')
+    // one warning issue per connection per day, through the funnel
+    const day = new Date().toISOString().slice(0, 10)
+    const warn = t('nivaro_issues').filter((r) => r.fingerprint === `tracker-dead:1:${day}`)
+    expect(warn).toHaveLength(1)
+    expect(warn[0]).toMatchObject({
+      title: 'GitLab sync: a change could not be sent',
+      severity: 'warning',
+      status: 'open',
+      source: 'tracker'
+    })
+    expect(noteIssueWrite).toHaveBeenCalledWith(warn[0].id, 'raised', {
+      fingerprint: `tracker-dead:1:${day}`
+    })
+    // a second dead row the same day raises nothing new
+    await enqueue({
+      connection: 1,
+      source_id: '5',
+      op: 'comment',
+      payload: { project_id: 7, iid: 1, body: 'x' },
+      key: 'comment:1:9'
+    })
+    provider.addNote.mockRejectedValueOnce(new TrackerError('gone', 404, 'not_found'))
+    expect(await processOutbox()).toEqual({ sent: 0, failed: 0, dead: 1 })
+    expect(t('nivaro_issues').filter((r) => r.source === 'tracker')).toHaveLength(1)
+  })
+
+  it('10th failure goes dead', async () => {
+    const id = await enqueue({
+      connection: 1,
+      source_id: '5',
+      op: 'state',
+      payload: { project_id: 7, iid: 3, state: 'close' },
+      key: 'state:1:3:close'
+    })
+    const row = outbox().find((r) => r.id === id)!
+    row.attempts = 9
+    provider.setState.mockRejectedValueOnce(new TrackerError('502 Bad Gateway', 502, 'server'))
+    expect(await processOutbox()).toEqual({ sent: 0, failed: 0, dead: 1 })
+    expect(row).toMatchObject({ status: 'dead', attempts: 10 })
+  })
+
+  it('backoffMs(0)=30000, (7)=3600000', () => {
+    expect(backoffMs(0)).toBe(30_000)
+    expect(backoffMs(1)).toBe(60_000)
+    expect(backoffMs(7)).toBe(3_600_000)
+    expect(backoffMs(20)).toBe(3_600_000)
+  })
+
+  it('bulk over 50 refused', async () => {
+    const many = Array.from({ length: 51 }, (_, i) => i + 1)
+    await expect(bulkCreate(many, { connection: 1 })).rejects.toMatchObject({
+      status: 400,
+      code: 'TOO_MANY'
+    })
+    expect(outbox()).toHaveLength(0)
+  })
+
+  it('bulk answers per issue and whether it would pass the connection cap', async () => {
+    const res = await bulkCreate([5, 404], { connection: 1, userId: 'u1' })
+    expect(res.would_pass_cap).toBe(false)
+    expect(res.results).toEqual([
+      expect.objectContaining({ issue: 5, ok: true }),
+      expect.objectContaining({ issue: 404, ok: false, code: 'NOT_FOUND' })
+    ])
+    for (let i = 0; i < 29; i++)
+      t('nivaro_tracker_links').push({ id: 100 + i, connection: 1, created_at: new Date() })
+    expect((await bulkCreate([5], { connection: 1, dry_run: true })).would_pass_cap).toBe(false)
+    expect((await bulkCreate([5, 6], { connection: 1, dry_run: true })).would_pass_cap).toBe(true)
+  })
+
+  it('enqueue twice with same key returns same id', async () => {
+    const row = {
+      connection: 1,
+      source_id: '5',
+      op: 'comment' as const,
+      payload: { project_id: 7, iid: 1, body: 'hi' },
+      key: 'comment:1:42'
+    }
+    const a = await enqueue(row)
+    const b = await enqueue(row)
+    expect(a).toBe(b)
+    expect(outbox()).toHaveLength(1)
+  })
+
+  it('requestCreate refuses an issue already linked on that connection', async () => {
+    t('nivaro_tracker_link_members').push({
+      id: 1,
+      link: 1,
+      connection: 1,
+      source_kind: 'issue',
+      source_id: '5',
+      joined_via: 'lead'
+    })
+    await expect(requestCreate(5, { connection: 1, via: 'manual' })).rejects.toMatchObject({
+      status: 409,
+      code: 'ALREADY_LINKED'
+    })
+  })
+
+  it('linkExisting refuses a link that is not a GitLab issue URL', async () => {
+    const err = await linkExisting(5, 1, 'https://git.x/g/p/-/merge_requests/3', 'u1').catch(
+      (e) => e
+    )
+    expect(err).toBeInstanceOf(LinkError)
+    expect(err).toMatchObject({ status: 400, code: 'BAD_ISSUE_URL' })
+  })
+
+  it('linkExisting links the GitLab issue, and joins an existing link', async () => {
+    provider.project.mockResolvedValue({ id: 7, path_with_namespace: 'g/p', access_level: 30 })
+    provider.getIssue.mockResolvedValue(remote(12))
+    const view = await linkExisting(5, 1, 'https://git.x/g/p/-/issues/12', 'u1')
+    expect(view).toMatchObject({
+      iid: 12,
+      project_path: 'g/p',
+      created_via: 'linked',
+      labels: ['bug'],
+      assignees: ['ann'],
+      members: [5]
+    })
+    t('nivaro_issues').push({ id: 6, title: 'Boom again', fingerprint: 'fp5' })
+    const joined = await linkExisting(6, 1, 'https://git.x/g/p/-/issues/12', 'u1')
+    expect(joined.id).toBe(view.id)
+    expect(joined.members.sort()).toEqual([5, 6])
+    expect(t('nivaro_tracker_links')).toHaveLength(1)
+  })
+
+  it('returns a stale sending row to pending and sends it', async () => {
+    const id = await enqueue({
+      connection: 1,
+      source_id: '5',
+      op: 'comment',
+      payload: { project_id: 7, iid: 1, body: 'hello' },
+      key: 'comment:1:7'
+    })
+    const row = outbox().find((r) => r.id === id)!
+    row.status = 'sending'
+    row.next_attempt_at = past() // its lease ran out: the sender crashed
+    provider.addNote.mockResolvedValueOnce({ id: 1 })
+    expect(await processOutbox()).toEqual({ sent: 1, failed: 0, dead: 0 })
+    expect(provider.addNote).toHaveBeenCalledWith(7, 1, 'hello')
+    expect(row.status).toBe('done')
+  })
+
+  it('attaches the screenshot when the rule asks, and creates without it when upload fails', async () => {
+    t('nivaro_issues')[0].screenshot =
+      `data:image/jpeg;base64,${Buffer.from('jpg').toString('base64')}`
+    const rule: any = {
+      id: 3,
+      action: {
+        connection: 1,
+        issue_type: 'issue',
+        labels: ['sev::{{ severity }}'],
+        assignee_ids: [],
+        map_assignee_by_email: false,
+        confidential: false,
+        title_template: '{{ title }} ({{ hits_24h }})',
+        body_template: 'Body for {{ issue_id }}',
+        attach_screenshot: true,
+        attach_replay_link: false,
+        include_details: true
+      }
+    }
+    await requestCreate(5, { connection: 1, via: 'rule', rule })
+    const payload = JSON.parse(outbox()[0].payload)
+    expect(payload.input).toMatchObject({ title: 'Boom (4)', labels: ['sev::error'] })
+    provider.findIssueByMarker.mockResolvedValue(null)
+    provider.upload.mockRejectedValueOnce(new TrackerError('too big', 413, 'invalid'))
+    provider.createIssue.mockResolvedValueOnce(remote(12))
+    expect(await processOutbox()).toEqual({ sent: 1, failed: 0, dead: 0 })
+    const sent = provider.createIssue.mock.calls[0][1]
+    expect(sent.description).toContain('Screenshot could not be attached')
+    expect(sent.description).toContain('<!-- nivaro:issue:5 -->')
+    expect(t('nivaro_tracker_links')[0]).toMatchObject({ created_via: 'rule', rule_id: 3 })
+  })
+})

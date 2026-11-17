@@ -12,7 +12,17 @@ import {
   rotateWebhookSecret,
   saveConnection
 } from '../services/trackers/connections.js'
-import { TrackerError } from '../services/trackers/types.js'
+import {
+  BULK_MAX,
+  bulkCreate,
+  LinkError,
+  linkExisting,
+  requestCreate,
+  resyncLink,
+  unlink
+} from '../services/trackers/links.js'
+import { discardOutbox, listOutbox, retryOutbox } from '../services/trackers/outbox.js'
+import { type CreateIssueInput, TrackerError } from '../services/trackers/types.js'
 
 const webhookUrl = (id: number) => `${adminBaseUrl() ?? ''}/api/tracker-hooks/gitlab/${id}`
 
@@ -26,6 +36,30 @@ function hintFor(err: unknown, host: string): string {
     if (err.kind === 'network') return `Nivaro could not reach ${host}.`
   }
   return 'GitLab did not answer as expected.'
+}
+
+/** Only the CreateIssueInput keys an admin may override, with the right types. */
+function cleanOverrides(raw: unknown): Partial<CreateIssueInput> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const o = raw as Record<string, unknown>
+  const out: Partial<CreateIssueInput> = {}
+  if (typeof o.title === 'string' && o.title.trim()) out.title = o.title.trim()
+  if (typeof o.description === 'string') out.description = o.description
+  if (Array.isArray(o.labels)) out.labels = o.labels.filter((l) => typeof l === 'string')
+  if (Array.isArray(o.assignee_ids))
+    out.assignee_ids = o.assignee_ids.filter((n): n is number => Number.isInteger(n))
+  if (Number.isInteger(o.milestone_id)) out.milestone_id = o.milestone_id as number
+  if (typeof o.due_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.due_date))
+    out.due_date = o.due_date
+  if (Number.isInteger(o.weight)) out.weight = o.weight as number
+  if (typeof o.confidential === 'boolean') out.confidential = o.confidential
+  if (o.issue_type === 'issue' || o.issue_type === 'incident') out.issue_type = o.issue_type
+  return Object.keys(out).length ? out : undefined
+}
+
+const posInt = (v: unknown): number | undefined => {
+  const n = Number(v)
+  return Number.isInteger(n) && n > 0 ? n : undefined
 }
 
 function hostOf(url: string): string {
@@ -176,5 +210,130 @@ export async function trackerRoutes(app: FastifyInstance) {
         status: conn.status
       }
     }
+  })
+
+  // ── Links + outbox ──────────────────────────────────────────────────────────
+  type Reply = { code: (n: number) => { send: (b: unknown) => unknown } }
+  const linkFailure = (reply: Reply, err: unknown) => {
+    if (err instanceof LinkError)
+      return reply.code(err.status).send({ error: err.message, code: err.code })
+    if (err instanceof TrackerError) {
+      if (err.kind === 'not_found')
+        return reply
+          .code(404)
+          .send({ error: 'GitLab issue not found, or the token cannot see it', code: 'NOT_FOUND' })
+      return reply.code(502).send({ error: err.message, code: 'TRACKER_ERROR', kind: err.kind })
+    }
+    throw err
+  }
+
+  app.post('/links', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const issue = posInt(b.issue)
+    const connection = posInt(b.connection)
+    if (!issue || !connection)
+      return reply
+        .code(400)
+        .send({ error: 'issue and connection are required', code: 'INVALID_BODY' })
+    try {
+      const { outboxId } = await requestCreate(issue, {
+        connection,
+        project_id: posInt(b.project_id),
+        overrides: cleanOverrides(b.overrides),
+        via: 'manual',
+        userId: req.user?.id
+      })
+      return reply.code(202).send({ data: { outbox_id: outboxId } })
+    } catch (err) {
+      return linkFailure(reply, err)
+    }
+  })
+
+  app.post('/links/existing', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const issue = posInt(b.issue)
+    const connection = posInt(b.connection)
+    if (!issue || !connection)
+      return reply
+        .code(400)
+        .send({ error: 'issue and connection are required', code: 'INVALID_BODY' })
+    try {
+      const view = await linkExisting(
+        issue,
+        connection,
+        typeof b.url === 'string' ? b.url : '',
+        req.user?.id ?? ''
+      )
+      return { data: view }
+    } catch (err) {
+      return linkFailure(reply, err)
+    }
+  })
+
+  app.post('/links/bulk', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const connection = posInt(b.connection)
+    if (!connection || !Array.isArray(b.issues))
+      return reply
+        .code(400)
+        .send({ error: 'issues and connection are required', code: 'INVALID_BODY' })
+    if (b.issues.length > BULK_MAX)
+      return reply
+        .code(400)
+        .send({ error: `At most ${BULK_MAX} issues can be sent at once`, code: 'TOO_MANY' })
+    try {
+      const data = await bulkCreate(b.issues as number[], {
+        connection,
+        project_id: posInt(b.project_id),
+        userId: req.user?.id,
+        dry_run: b.dry_run === true
+      })
+      return { data }
+    } catch (err) {
+      return linkFailure(reply, err)
+    }
+  })
+
+  app.delete('/links/issue/:issueId', async (req, reply) => {
+    const issue = posInt((req.params as { issueId: string }).issueId)
+    if (!issue) return reply.code(400).send({ error: 'Bad issue id', code: 'INVALID_PARAMS' })
+    await unlink(issue)
+    return reply.code(204).send()
+  })
+
+  app.post('/links/:id/resync', async (req, reply) => {
+    const id = posInt((req.params as { id: string }).id)
+    if (!id) return reply.code(400).send({ error: 'Bad link id', code: 'INVALID_PARAMS' })
+    try {
+      return { data: await resyncLink(id) }
+    } catch (err) {
+      return linkFailure(reply, err)
+    }
+  })
+
+  app.get('/outbox', async (req) => {
+    const { status, connection } = req.query as { status?: string; connection?: string }
+    const s = ['pending', 'sending', 'done', 'dead'].includes(String(status)) ? status : undefined
+    return { data: await listOutbox({ status: s, connection: posInt(connection) }) }
+  })
+
+  app.post('/outbox/:id/retry', async (req, reply) => {
+    const id = posInt((req.params as { id: string }).id)
+    if (!id) return reply.code(400).send({ error: 'Bad id', code: 'INVALID_PARAMS' })
+    const r = await retryOutbox(id)
+    if (r === 'missing') return reply.code(404).send({ error: 'Not found', code: 'NOT_FOUND' })
+    if (r === 'busy')
+      return reply.code(409).send({ error: 'This change is not waiting', code: 'NOT_RETRYABLE' })
+    return { ok: true }
+  })
+
+  app.post('/outbox/:id/discard', async (req, reply) => {
+    const id = posInt((req.params as { id: string }).id)
+    if (!id) return reply.code(400).send({ error: 'Bad id', code: 'INVALID_PARAMS' })
+    const r = await discardOutbox(id)
+    if (r === 'missing') return reply.code(404).send({ error: 'Not found', code: 'NOT_FOUND' })
+    if (r === 'busy')
+      return reply.code(409).send({ error: 'This change is being sent right now', code: 'SENDING' })
+    return reply.code(204).send()
   })
 }
