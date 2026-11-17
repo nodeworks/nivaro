@@ -76,6 +76,7 @@ import { maintenanceFreezeHook } from './services/maintenance-freeze.js'
 import { markMcpInnerRequest } from './services/mcp-config.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
 import { maskUrlQuery } from './services/secret-mask.js'
+import { noteAccessDenied } from './services/security-alerts.js'
 import { registerStagedImportWorker } from './services/staged-import-worker.js'
 import { purgeExpiredTrash } from './services/trash.js'
 import { NIVARO_VERSION } from './version.js'
@@ -249,6 +250,13 @@ export async function buildServer() {
     if (body === null) return payload
     void reply.header('content-length', Buffer.byteLength(body))
     return body
+  })
+  // SOC 2 CC7 — a refused request (403) counts against its caller; a burst alerts the
+  // administrators once (services/security-alerts.ts: Redis counter shared by every replica).
+  // onSend, not onResponse: it still runs inside the tenant's context in cloud mode.
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (reply.statusCode === 403) noteAccessDenied(req)
+    return payload
   })
   // #2439 — per-viewer ETag + 304 on record / metadata / layout reads; ahead of the request log.
   registerEtags(app)

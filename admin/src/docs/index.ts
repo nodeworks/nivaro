@@ -534,6 +534,7 @@ import {
   sdkWebhooks
 } from './sections/sdk-extended.js'
 import {
+  securityAlerts,
   securityApiKeys,
   securityFieldEncryption,
   securityMasquerade,
@@ -896,6 +897,7 @@ export const navSections: NavGroup[] = [
       securitySaml,
       securityApiKeys,
       securityMasquerade,
+      securityAlerts,
       securityUserScopes,
       securityScim,
       securityFieldEncryption,

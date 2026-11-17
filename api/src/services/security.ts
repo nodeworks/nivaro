@@ -61,6 +61,19 @@ export async function recordLogin(
           message: `A sign-in from a new location (${ip || 'unknown IP'}) just occurred. If this was you, no action is needed — otherwise contact an administrator.`,
           ...(built ? { template: built.template, template_data: built.data } : {})
         }).catch(() => {})
+        // An ADMINISTRATOR from a new address also tells the other administrators
+        // (services/security-alerts.ts, switch `admin_signin`).
+        const admin = (await db('nivaro_users as u')
+          .join('nivaro_roles as r', 'r.id', 'u.role')
+          .where('u.id', userId)
+          .where('r.admin_access', true)
+          .first('u.id')
+          .catch(() => null)) as { id?: string } | null | undefined
+        if (admin) {
+          const { describeUserAgent } = await import('./mail-builders.js')
+          const { noteAdminNewSignin } = await import('./security-alerts.js')
+          noteAdminNewSignin(userId, describeUserAgent(agent))
+        }
       }
     }
   } catch {

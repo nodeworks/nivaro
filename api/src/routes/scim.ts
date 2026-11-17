@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { joinDefaultChannelsSoon } from '../services/chat-default-joins.js'
+import { noteUserRoleChange } from '../services/security-alerts.js'
 import type { Role, User } from '../types.js'
 
 /**
@@ -233,6 +234,14 @@ export async function scimRoutes(app: FastifyInstance) {
       await db('nivaro_users').where({ id }).update(updates)
       if (updates.role || updates.status === 'active')
         void joinDefaultChannelsSoon([id], 'scim update')
+      if (updates.role)
+        noteUserRoleChange({
+          actor: null,
+          source: 'scim',
+          userId: String(id),
+          fromRole: (user.role as string | null) ?? null,
+          toRole: String(updates.role)
+        })
     }
 
     const updated = (await db<User>('nivaro_users').where({ id }).first()) as User

@@ -253,8 +253,22 @@ export async function findOrCreateFromOIDC(profile: {
     // Every sign-in rewrites the row; pickers and avatars hear only a real change (rt2 #19).
     if (signInChangedDirectory(existing as unknown as Record<string, unknown>, updates))
       notePeopleChanged([String(existing.id)])
-    if (adRole && String(adRole).toUpperCase() !== String(existing.role ?? '').toUpperCase())
+    if (adRole && String(adRole).toUpperCase() !== String(existing.role ?? '').toUpperCase()) {
       void joinDefaultChannelsSoon([existing.id], 'role from directory groups')
+      // Directory groups moved this person's role at sign-in: a security alert, like any role change.
+      const fromRole = (existing.role as string | null) ?? null
+      void import('./security-alerts.js')
+        .then((m) =>
+          m.noteUserRoleChange({
+            actor: null,
+            source: 'directory',
+            userId: String(existing.id),
+            fromRole,
+            toRole: String(adRole)
+          })
+        )
+        .catch(() => {})
+    }
     if (profile.office_location) queueOfficeGeocode(existing.id)
     await captureEntraIdentity(existing.id, profile)
     return {
@@ -313,6 +327,20 @@ export async function findOrCreateFromOIDC(profile: {
   if (newId) await captureEntraIdentity(newId, profile)
   if (newId && profile.office_location) queueOfficeGeocode(newId)
   if (newId && assignedRole) void joinDefaultChannelsSoon([newId], 'new account')
+  // A first sign-in that lands in an administrator role (directory group mapping) is an alert.
+  if (newId && adRole)
+    void import('./security-alerts.js')
+      .then((m) =>
+        m.noteUserRoleChange({
+          actor: null,
+          source: 'directory',
+          userId: String(newId),
+          fromRole: null,
+          toRole: String(adRole),
+          created: true
+        })
+      )
+      .catch(() => {})
   if (newId) {
     void db('nivaro_settings')
       .first('welcome_message')

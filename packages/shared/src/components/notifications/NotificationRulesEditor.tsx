@@ -113,6 +113,11 @@ export const NOTIFY_RULE_CATS: Array<{ key: string; label: string; help: string 
     help: 'A crash that is new in the current release reached several times or more than one person within 15 minutes. Only administrators get these.'
   },
   {
+    key: 'security',
+    label: 'Security alerts',
+    help: 'Someone changed a person’s role or a role’s permissions, created or widened an API key, was refused access over and over, or an administrator signed in from a new location. Only administrators get these.'
+  },
+  {
     key: 'views',
     label: 'Views sent to you',
     help: 'A colleague used Send my view to hand you a record, list or queue they were looking at. When you have the app open it arrives as a small card instead.'
@@ -132,7 +137,12 @@ export const NOTIFY_RULE_CATS: Array<{ key: string; label: string; help: string 
 /** Categories only administrators can ever receive (army 8 b16): chaos drills
  *  reach admins and chaos operators, audit-log pattern alerts are defined and
  *  subscribed to on admin-only screens. A business user's rules leave them out. */
-export const ADMIN_ONLY_RULE_CATS: ReadonlySet<string> = new Set(['chaos', 'audit', 'crashes'])
+export const ADMIN_ONLY_RULE_CATS: ReadonlySet<string> = new Set([
+  'chaos',
+  'audit',
+  'crashes',
+  'security'
+])
 
 /** The categories a person's rules list (pure). Roles always list every one. */
 export function ruleCatsFor(subject: 'person' | 'role', isAdmin: boolean) {

@@ -1,8 +1,11 @@
+import { toastError } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { ActivityTrailStrip } from '@/components/activity-trail-strip'
 import { HubToolbar } from '@/components/hub-page'
+import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -339,6 +342,7 @@ export default function SecurityCenter() {
         {/* #16 — tamper-evident activity trail; details + evidence export on Log retention. */}
         <ActivityTrailStrip />
         <MaintenanceCard />
+        <SecurityAlertsCard />
 
         <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
           <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
@@ -497,6 +501,202 @@ export default function SecurityCenter() {
         <EditLocksCard />
         <MasqueradeHistoryCard />
         <LoginAnomaliesCard />
+      </div>
+    </div>
+  )
+}
+
+// ─── Security alerts (SOC 2 CC7, services/security-alerts.ts) ────────────────
+
+interface SecurityAlertSettings {
+  role_changes: boolean
+  admin_rights: boolean
+  role_permissions: boolean
+  api_keys: boolean
+  access_denied: boolean
+  access_denied_threshold: number
+  access_denied_minutes: number
+  admin_signin: boolean
+}
+
+interface SecurityAlertRow {
+  id: number
+  kind: string | null
+  subject: string
+  message: string
+  path: string | null
+  delivered: number
+  at: string
+}
+
+const ALERT_SWITCHES: Array<{
+  key: keyof SecurityAlertSettings
+  label: string
+  help: string
+}> = [
+  {
+    key: 'admin_rights',
+    label: 'Administrator rights',
+    help: 'Someone gains or loses administrator rights, through their role or a new account.'
+  },
+  {
+    key: 'role_changes',
+    label: 'Role changes',
+    help: 'Any person’s role changes — by an administrator, a bulk action, directory groups or SCIM.'
+  },
+  {
+    key: 'role_permissions',
+    label: 'Role permissions',
+    help: 'A role’s permissions, administrator flag or screens change; roles are created or deleted.'
+  },
+  {
+    key: 'api_keys',
+    label: 'API keys',
+    help: 'An API key is created, or given more access (scopes, record limits, addresses, expiry).'
+  },
+  {
+    key: 'access_denied',
+    label: 'Repeated refusals',
+    help: 'One person, API key or address is refused access over and over in a short time.'
+  },
+  {
+    key: 'admin_signin',
+    label: 'Administrator sign-in from a new location',
+    help: 'An administrator signs in from a network address not seen for them in 90 days.'
+  }
+]
+
+function SecurityAlertsCard() {
+  const qc = useQueryClient()
+  const settings = useQuery<SecurityAlertSettings>({
+    queryKey: ['security-alert-settings'],
+    queryFn: () => api.get('/security/alert-settings').then((r) => r.data.data)
+  })
+  const recent = useQuery<SecurityAlertRow[]>({
+    queryKey: ['security-alerts-recent'],
+    queryFn: () => api.get('/security/alerts').then((r) => r.data.data),
+    refetchInterval: 60_000
+  })
+  const [threshold, setThreshold] = useState<string | null>(null)
+  const [minutes, setMinutes] = useState<string | null>(null)
+  const save = useMutation({
+    mutationFn: (patch: Partial<SecurityAlertSettings>) =>
+      api.patch('/security/alert-settings', patch).then((r) => r.data.data),
+    onSuccess: (data: SecurityAlertSettings) => {
+      qc.setQueryData(['security-alert-settings'], data)
+      setThreshold(null)
+      setMinutes(null)
+      toast.success('Security alert settings saved')
+    },
+    onError: (err) => toastError(err, 'Could not save the security alert settings')
+  })
+  const s = settings.data
+  const thresholdValue = threshold ?? String(s?.access_denied_threshold ?? '')
+  const minutesValue = minutes ?? String(s?.access_denied_minutes ?? '')
+  const burstDirty = threshold !== null || minutes !== null
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <div className='border-b border-slate-200 px-4 py-3 dark:border-border'>
+        <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+          Security alerts
+        </p>
+        <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          Every administrator is notified when one of these happens. A burst (a bulk change, a role
+          edited step by step) arrives as one alert. Each administrator can also mute Security
+          alerts in Profile → Notification rules.
+        </p>
+      </div>
+      <div className='divide-y divide-slate-100 dark:divide-border/40'>
+        {ALERT_SWITCHES.map((sw) => (
+          <div key={sw.key} className='flex items-start gap-3 px-4 py-2.5'>
+            <div className='min-w-0 flex-1'>
+              <p className='text-[12.5px] font-medium text-slate-700 dark:text-foreground'>
+                {sw.label}
+              </p>
+              <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>{sw.help}</p>
+              {sw.key === 'access_denied' && s?.access_denied && (
+                <div className='mt-1.5 flex flex-wrap items-center gap-1.5 text-[11.5px] text-slate-600 dark:text-muted-foreground'>
+                  <span>Alert after</span>
+                  <input
+                    type='number'
+                    min={5}
+                    max={10000}
+                    aria-label='Refusals before an alert'
+                    value={thresholdValue}
+                    onChange={(e) => setThreshold(e.target.value)}
+                    className='h-7 w-16 rounded-md border border-slate-200 bg-white px-2 text-[12px] tabular-nums dark:border-border dark:bg-background'
+                  />
+                  <span>refusals within</span>
+                  <input
+                    type='number'
+                    min={1}
+                    max={60}
+                    aria-label='Minutes the refusals are counted over'
+                    value={minutesValue}
+                    onChange={(e) => setMinutes(e.target.value)}
+                    className='h-7 w-14 rounded-md border border-slate-200 bg-white px-2 text-[12px] tabular-nums dark:border-border dark:bg-background'
+                  />
+                  <span>minutes.</span>
+                  {burstDirty && (
+                    <button
+                      type='button'
+                      disabled={save.isPending}
+                      onClick={() =>
+                        save.mutate({
+                          access_denied_threshold: Number(thresholdValue),
+                          access_denied_minutes: Number(minutesValue)
+                        })
+                      }
+                      className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-medium text-white disabled:opacity-50'
+                    >
+                      Save
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+            <Switch
+              aria-label={sw.label}
+              checked={!!s?.[sw.key]}
+              disabled={!s || save.isPending}
+              onCheckedChange={(v) => save.mutate({ [sw.key]: v })}
+            />
+          </div>
+        ))}
+      </div>
+      <div className='border-t border-slate-200 px-4 py-2.5 dark:border-border'>
+        <p className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
+          Sent in the last 90 days
+        </p>
+      </div>
+      <div className='max-h-72 divide-y divide-slate-50 overflow-y-auto dark:divide-border/40'>
+        {(recent.data ?? []).length === 0 && (
+          <p className='px-4 pb-3 text-[12px] text-slate-400'>No security alerts yet.</p>
+        )}
+        {(recent.data ?? []).map((r) => (
+          <div key={r.id} className='px-4 py-2 text-[12.5px]'>
+            <div className='flex items-center gap-2'>
+              {r.path ? (
+                <Link
+                  to={r.path}
+                  className='min-w-0 flex-1 truncate font-medium text-slate-700 hover:underline dark:text-foreground'
+                >
+                  {r.subject.replace(/^Security: /, '')}
+                </Link>
+              ) : (
+                <span className='min-w-0 flex-1 truncate font-medium text-slate-700 dark:text-foreground'>
+                  {r.subject.replace(/^Security: /, '')}
+                </span>
+              )}
+              <span className='shrink-0 text-[11px] tabular-nums text-slate-400'>
+                {new Date(r.at).toLocaleString()}
+              </span>
+            </div>
+            <p className='mt-0.5 line-clamp-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              {r.message}
+            </p>
+          </div>
+        ))}
       </div>
     </div>
   )

@@ -75,7 +75,9 @@ export const INSTANCE_RESERVED_KEYS = [
   // "This is staging" sign-in notice (services/environment-notice.ts).
   'environment_notice',
   // Config changed here, not from promotion (services/config-drift/store.ts): refuse, baseline.
-  'config_drift'
+  'config_drift',
+  // Security alerts to administrators: one switch per kind + burst threshold (services/security-alerts.ts).
+  'security_alerts'
 ] as const
 
 export function withoutReservedKeys(map: Record<string, unknown>): Record<string, unknown> {

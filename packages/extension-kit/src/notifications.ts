@@ -22,6 +22,9 @@ export type NotifyCategory =
   | 'chaos'
   /** Front-end crashes new in a release (Issue Log → Crashes). Administrators only. */
   | 'crashes'
+  /** Security alerts: role / permission / API-key changes, access-denied bursts, new admin
+   *  sign-ins (services/security-alerts.ts). Administrators only. */
+  | 'security'
   /** A colleague used "Send my view" (a record, list or queue they were looking at). */
   | 'views'
   | 'other'

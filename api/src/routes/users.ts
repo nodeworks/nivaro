@@ -37,6 +37,7 @@ import {
   vendorOf
 } from '../services/portal-access-request.js'
 import { writeRevision } from '../services/revisions.js'
+import { noteUserRoleChange } from '../services/security-alerts.js'
 import { ownTeamsFacts } from '../services/teams-bot/profile.js'
 import { avatarEtag, readUserCards, USER_CARD_BATCH_MAX } from '../services/user-cards.js'
 import {
@@ -422,6 +423,15 @@ export async function usersRoutes(app: FastifyInstance) {
       String(previousUser?.status ?? 'active') !== 'suspended'
     )
       noteUsersDeactivated([id], { reason: 'admin', actor: req.user!.id, app })
+    // Security alert (SOC 2 CC7): a role change, administrator rights especially, reaches the
+    // administrators (coalesced per actor, services/security-alerts.ts).
+    if ('role' in filtered)
+      noteUserRoleChange({
+        actor: req.user!.id,
+        userId: id,
+        fromRole: previousUser?.role ?? null,
+        toRole: (filtered.role as string | null) ?? null
+      })
     const activityId = await logActivity({
       action: 'update',
       user: req.user!.id,
@@ -821,6 +831,12 @@ export async function usersRoutes(app: FastifyInstance) {
       })
       bustUserScopeCache(id)
       void joinDefaultChannelsSoon([id], 'authorized')
+      noteUserRoleChange({
+        actor: req.user!.id,
+        userId: id,
+        fromRole: previousUser.role ?? null,
+        toRole: role.id
+      })
       pokeOps('access-requests')
 
       const user = safeUser(await getUser(id))
@@ -1810,7 +1826,17 @@ export async function usersRoutes(app: FastifyInstance) {
       created_at: new Date(),
       updated_at: new Date()
     })
-    if (body.role) void joinDefaultChannelsSoon([userId], 'account created')
+    if (body.role) {
+      void joinDefaultChannelsSoon([userId], 'account created')
+      // A new account that starts as an administrator is a security alert.
+      noteUserRoleChange({
+        actor: req.user!.id,
+        userId,
+        fromRole: null,
+        toRole: body.role,
+        created: true
+      })
+    }
     const user = safeUser(await getUser(userId))
     const activityId = await logActivity({
       action: 'create',

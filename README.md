@@ -130,6 +130,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **AI Duplicate Detection** — embedding-based similarity check with pre-create warning panel and tunable threshold
 - **Anomaly Detection Alerts** — statistical (stddev) detection mode on alert definitions; notifications carry z-scores and optional Claude explanations
 - **Digest Emails** — per-subscription Instant/Daily/Weekly delivery; daily 08:00 and Monday weekly digest crons
+- **Security alerts** — administrators are notified (category Security alerts, mutable per person) when someone's role or administrator rights change, a role's permissions change, an API key is created or widened, one caller is refused access over and over, or an administrator signs in from a new location; bursts arrive as one alert, each kind can be switched off on Security & privacy
 - **Row-Level Security** — per-policy row filters with `$CURRENT_USER` / `$CURRENT_ROLE` tokens; enforced for read/update/delete everywhere the items service runs
 - **Zero-Downtime Migrations** — advisory-locked startup migrations for multi-replica deploys plus graceful SIGTERM drain
 - **Headless E-Commerce Primitives** — `ecommerce` preset with products, orders, inventory ledger, and a pre-wired low-stock alert

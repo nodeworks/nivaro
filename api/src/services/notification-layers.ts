@@ -34,6 +34,7 @@ export const NOTIFY_CATEGORIES: NotifyCategory[] = [
   'huddle',
   'chaos',
   'crashes',
+  'security',
   'views',
   'other'
 ]

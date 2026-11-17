@@ -307,7 +307,11 @@ function MetaCell({ label, value }: { label: string; value: React.ReactNode }) {
 
 export function ApiKeysPage() {
   const qc = useQueryClient()
-  const [selectedId, setSelectedId] = useState<string | number | null>(null)
+  // `?key=<id>` (a security alert's link) opens that key.
+  const [selectedId, setSelectedId] = useState<string | number | null>(() => {
+    const v = new URLSearchParams(window.location.search).get('key')
+    return v && /^\d+$/.test(v) ? Number(v) : null
+  })
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState<FormState>(FORM_DEFAULTS)
   const [createdKey, setCreatedKey] = useState<string | null>(null)

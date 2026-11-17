@@ -5,6 +5,11 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { describeUserAgent } from '../services/mail-builders.js'
 import {
+  getSecurityAlertSettings,
+  SecurityAlertSettingsError,
+  saveSecurityAlertSettings
+} from '../services/security-alerts.js'
+import {
   clearSignOutNote,
   leaveSignOutNote,
   parseSignOutMessage,
@@ -224,6 +229,62 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
       }
     }
   )
+
+  // Security alerts (SOC 2 CC7, services/security-alerts.ts): this instance's switches, and
+  // the alerts sent in the last 90 days (each one is a `security-alert` activity row).
+  app.get('/alert-settings', async () => ({ data: await getSecurityAlertSettings() }))
+
+  app.patch('/alert-settings', async (req, reply) => {
+    try {
+      const next = await saveSecurityAlertSettings(req.body ?? {})
+      await logActivity({
+        action: 'update',
+        user: req.user?.id,
+        collection: 'nivaro_settings',
+        item: 'security_alerts',
+        comment: `Security alerts: ${Object.keys((req.body as object) ?? {}).join(', ')}`,
+        req
+      })
+      return reply.send({ data: next })
+    } catch (err) {
+      if (err instanceof SecurityAlertSettingsError)
+        return reply.code(400).send({ error: err.message, fields: err.fields })
+      throw err
+    }
+  })
+
+  app.get('/alerts', async () => {
+    const rows = (await db('nivaro_activity')
+      .where('timestamp', '>=', new Date(Date.now() - 90 * 86_400_000))
+      .where('action', 'security-alert')
+      .orderBy('timestamp', 'desc')
+      .orderBy('id', 'desc')
+      .limit(50)
+      .select('id', 'comment', 'timestamp')) as Array<{
+      id: number
+      comment: string | null
+      timestamp: Date | string
+    }>
+    return {
+      data: rows.map((r) => {
+        let c: Record<string, unknown> = {}
+        try {
+          c = JSON.parse(String(r.comment ?? '{}')) as Record<string, unknown>
+        } catch {
+          c = {}
+        }
+        return {
+          id: r.id,
+          kind: typeof c.kind === 'string' ? c.kind : null,
+          subject: typeof c.subject === 'string' ? c.subject : '',
+          message: typeof c.message === 'string' ? c.message : '',
+          path: typeof c.path === 'string' && c.path.startsWith('/') ? c.path : null,
+          delivered: Number(c.delivered ?? 0),
+          at: r.timestamp
+        }
+      })
+    }
+  })
 
   // Masquerade history (#233): who impersonated whom, when — mined from the
   // masquerade-start/stop activity rows.
