@@ -38,45 +38,10 @@ import { useCoedit } from './coedit/useCoedit'
 
 // ─── EditorJS JSON → HTML ──────────────────────────────────────────────────────
 
-type EditorJsBlock = { type: string; data: Record<string, unknown> }
+import { editorJsToHtml } from '../../lib/editorjs'
 
-function esc(s: string) {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-export function editorJsToHtml(raw: string): string {
-  try {
-    const doc = JSON.parse(raw || '{}') as { blocks?: EditorJsBlock[] }
-    return (doc.blocks ?? [])
-      .map((b) => {
-        const text = esc(String(b.data.text ?? ''))
-        const level = Math.max(1, Math.min(6, Number(b.data.level ?? 2)))
-        switch (b.type) {
-          case 'paragraph':
-            return `<p>${text}</p>`
-          case 'header':
-            return `<h${level}>${text}</h${level}>`
-          case 'list': {
-            const items = ((b.data.items ?? []) as string[])
-              .map((i) => `<li>${esc(i)}</li>`)
-              .join('')
-            return b.data.style === 'ordered' ? `<ol>${items}</ol>` : `<ul>${items}</ul>`
-          }
-          case 'quote':
-            return `<blockquote><p>${text}</p></blockquote>`
-          default:
-            return text ? `<p>${text}</p>` : ''
-        }
-      })
-      .join('')
-  } catch {
-    return `<p>${esc(raw)}</p>`
-  }
-}
+// The converter lives in lib/editorjs.ts (light: history and tables read these values too).
+export { editorJsToHtml } from '../../lib/editorjs'
 
 /** How long a value this editor sent the form counts as its own echo when it comes back. */
 const ECHO_WINDOW_MS = 2_000

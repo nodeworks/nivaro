@@ -1,3 +1,20 @@
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
@@ -11,6 +28,7 @@ import {
   Columns3,
   Download,
   GitCompareArrows,
+  GripVertical,
   History,
   List,
   MessageSquare,
@@ -37,8 +55,10 @@ import {
 } from '../../lib/activity-sentence'
 import { get, post } from '../../lib/commands'
 import { type CompareFieldMeta, compareValueText } from '../../lib/compare-value'
+import { editorJsToHtml, editorJsToText, isEditorJsValue } from '../../lib/editorjs'
 import { useLiveRecordQueries } from '../../lib/live'
 import { restoreSkippedNote } from '../../lib/restore-skipped'
+import { useRevisionPrefs } from '../../lib/revision-prefs'
 import { cn, formatDateTime, titleCase, toLocalDateString } from '../../lib/utils'
 import { useActivityLabels } from '../ActivityEntry'
 import { AgentBadge } from '../AgentBadge'
@@ -162,6 +182,8 @@ interface FieldMeta {
   cmp?: CompareFieldMeta
   /** How the field is worked out (rollup / formula / lookup); null = a plain field. */
   derive?: DeriveInfo | null
+  /** The form section it sits in. */
+  section?: { key: string; label: string; sort: number } | null
 }
 
 const AUDIT_FIELDS = new Set([
@@ -193,7 +215,9 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
       display_options?: unknown
       computed_type?: string | null
       computed_formula?: unknown
+      group_key?: string | null
     }>
+    groups: Array<{ key: string; label: string | null; sort?: number | null }>
     relations: Array<{
       many_collection: string | null
       many_field: string | null
@@ -205,7 +229,7 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
     enabled,
     staleTime: 300_000,
     queryFn: async () => {
-      const [fields, col] = await Promise.all([
+      const [fields, col, groups] = await Promise.all([
         client
           .request<{
             data: Array<{
@@ -219,6 +243,7 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
               display_options?: unknown
               computed_type?: string | null
               computed_formula?: unknown
+              group_key?: string | null
             }>
           }>(get(`/field-config/${collection}`))
           .then((r) => r.data ?? [])
@@ -228,9 +253,15 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
             get(`/collections/${collection}`)
           )
           .then((r) => (r.data?.relations ?? []) as never[])
+          .catch(() => []),
+        client
+          .request<{ data: Array<{ key: string; label: string | null; sort?: number | null }> }>(
+            get(`/field-groups/${collection}`)
+          )
+          .then((r) => r.data ?? [])
           .catch(() => [])
       ])
-      return { fields, relations: col }
+      return { fields, relations: col, groups }
     }
   })
   return useMemo(() => {
@@ -245,10 +276,18 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
       // space, resolved through the live users collection.
       return rel.one_collection === 'directus_users' ? 'nivaro_users' : rel.one_collection
     }
+    const sections = new Map<string, { key: string; label: string; sort: number }>()
+    for (const [gi, g] of (data?.groups ?? []).entries())
+      sections.set(g.key, {
+        key: g.key,
+        label: g.label?.trim() || titleCase(g.key.replace(/_/g, ' ')),
+        sort: g.sort ?? gi
+      })
     for (const [i, f] of (data?.fields ?? []).entries()) {
       if (f.field.startsWith('__')) continue
       map.set(f.field, {
         order: i,
+        section: f.group_key ? (sections.get(f.group_key) ?? null) : null,
         derive: deriveOf(f.computed_type, f.computed_formula),
         cmp: {
           field: f.field,
@@ -352,6 +391,8 @@ function RelationValue({ collection, id }: { collection: string; id: unknown }) 
 
 /** Plain readable text for a rich-text value — never raw HTML markup. */
 function richTextToText(v: unknown): string {
+  // An Editor.js document keeps its shape: one line per paragraph, list items bulleted.
+  if (isEditorJsValue(v)) return editorJsToText(v)
   return stripToWords(v).join(' ')
 }
 
@@ -492,12 +533,13 @@ function RevertFieldButton({ field, ctl }: { field: string; ctl: FieldRevertCtl 
 }
 
 // ─── Rich-text word diff (#45) ──────────────────────────────────────────────
+/** HTML, or an Editor.js document (the legacy WYSIWYG store) — shown as words, never JSON. */
 function isRichText(v: unknown): boolean {
-  return typeof v === 'string' && /<[a-z][^>]*>/i.test(v)
+  return (typeof v === 'string' && /<[a-z][^>]*>/i.test(v)) || isEditorJsValue(v)
 }
 
 function stripToWords(v: unknown): string[] {
-  return String(v ?? '')
+  return String(isEditorJsValue(v) ? editorJsToHtml(v) : (v ?? ''))
     .replace(/<[^>]*>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -1721,13 +1763,24 @@ export function RevisionsPanel({
   onOpenChange?: (open: boolean) => void
 }) {
   const controlled = open !== undefined
+  const prefs = useRevisionPrefs(collection)
+  // The browser's last choice paints first; the person's saved choice (their account, every
+  // device) takes over once read.
   const [view, setView] = useState<HistoryView>(readHistoryView)
+  const adopted = useRef(false)
+  useEffect(() => {
+    if (adopted.current || !prefs.view) return
+    adopted.current = true
+    setView(prefs.view)
+  }, [prefs.view])
   const changeView = (v: HistoryView) => {
+    adopted.current = true
     setView(v)
+    prefs.setView(v)
     try {
       localStorage.setItem(VIEW_KEY, v)
     } catch {
-      /* private window: the choice lasts this visit */
+      /* private window: the account keeps it */
     }
   }
   return (
@@ -2082,18 +2135,6 @@ function reasonFor(field: string, row: MatrixRow, meta: FieldMetaMap): RecalcRea
   )
 }
 
-function ReasonLines({ reason }: { reason: RecalcReason }) {
-  return (
-    // What moved it first (the audit question), then what the value is worked out from.
-    <span className='mt-0.5 block text-[10.5px] font-normal leading-snug' data-recalc-reason>
-      {reason.because && (
-        <span className='block text-amber-800/90 dark:text-amber-200/80'>{reason.because}</span>
-      )}
-      <span className='block text-slate-500 dark:text-slate-400'>{reason.why}</span>
-    </span>
-  )
-}
-
 const isBlank = (v: unknown) => v === null || v === undefined || v === ''
 /** Rich text or a long string: shown as a word diff, not two struck paragraphs. */
 const isLongText = (v: unknown) => isRichText(v) || (typeof v === 'string' && v.length > 60)
@@ -2105,23 +2146,153 @@ function signedCell(delta: number, m: FieldMeta): string {
   return `${delta > 0 ? '+' : delta < 0 ? '−' : ''}${text}`
 }
 
+/** One shown column in the Fields menu: drag by the handle (or focus it and use Space + arrows),
+ *  click the box to take it out of the table. */
+function ShownFieldRow({
+  field,
+  label,
+  tag,
+  onRemove
+}: {
+  field: string
+  label: string
+  tag: React.ReactNode
+  onRemove: () => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: field
+  })
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      data-shown-field={field}
+      className={cn(
+        'flex items-center gap-2 rounded-sm px-2 py-1.5 text-[12px] hover:bg-slate-50 dark:hover:bg-muted/60',
+        isDragging &&
+          'relative z-10 bg-white shadow-md ring-1 ring-slate-200 dark:bg-card dark:ring-border'
+      )}
+    >
+      <button
+        type='button'
+        aria-label={`Drag to move ${label}`}
+        className='cursor-grab touch-none rounded p-0.5 text-slate-400 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan active:cursor-grabbing dark:hover:text-slate-200'
+        {...attributes}
+        {...listeners}
+        onKeyDown={(e) => {
+          // The menu's own list navigation must not take the keys a keyboard drag uses.
+          e.stopPropagation()
+          listeners?.onKeyDown?.(e)
+        }}
+      >
+        <GripVertical className='h-3.5 w-3.5' />
+      </button>
+      <Checkbox
+        checked
+        onCheckedChange={() => onRemove()}
+        aria-label={`Hide ${label}`}
+        className='h-3.5 w-3.5'
+      />
+      <span className='min-w-0 flex-1 truncate'>{label}</span>
+      {tag}
+    </div>
+  )
+}
+
+/** The Fields menu: what the table shows, in order (move up / down, remove), then everything
+ *  else to add — fields changed on this record first, computed totals, then each form section.
+ *  Every change is saved on the person's account for this collection. */
 function ColumnPicker({
   columns,
+  meta,
+  order,
   shown,
-  onChange
+  defaultOrder,
+  saved,
+  onChange,
+  onReset
 }: {
   columns: MatrixColumn[]
+  meta: FieldMetaMap
+  order: string[]
   shown: Set<string>
-  onChange: (next: Set<string>) => void
+  defaultOrder: string[]
+  saved: boolean
+  onChange: (next: string[]) => void
+  onReset: () => void
 }) {
   const [open, setOpen] = useState(false)
-  const changedOnly = columns.filter((c) => c.changes > 0).map((c) => c.field)
-  const toggle = (f: string) => {
-    const next = new Set(shown)
-    if (next.has(f)) next.delete(f)
-    else next.add(f)
-    onChange(next)
+  const [search, setSearch] = useState('')
+  const byField = useMemo(() => new Map(columns.map((c) => [c.field, c])), [columns])
+  const shownHere = order.filter((f) => byField.has(f))
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  )
+  const onDragEnd = (e: DragEndEvent) => {
+    const from = shownHere.indexOf(String(e.active.id))
+    const to = e.over ? shownHere.indexOf(String(e.over.id)) : -1
+    if (from < 0 || to < 0 || from === to) return
+    const moved = arrayMove(shownHere, from, to)
+    // Put the new sequence back into the saved list's own slots, so fields this record does
+    // not have (saved from another record) keep their places.
+    let k = 0
+    onChange(order.map((f) => (byField.has(f) ? moved[k++] : f)))
   }
+  const toggle = (field: string) =>
+    onChange(shown.has(field) ? order.filter((f) => f !== field) : [...order, field])
+
+  // Fields to add, grouped the way a person thinks about the record.
+  const groups = useMemo(() => {
+    const hidden = columns.filter((c) => !shown.has(c.field))
+    const out: Array<{ key: string; label: string; items: MatrixColumn[] }> = []
+    const taken = new Set<string>()
+    const take = (key: string, label: string, items: MatrixColumn[]) => {
+      const list = items.filter((c) => !taken.has(c.field))
+      for (const c of list) taken.add(c.field)
+      if (list.length) out.push({ key, label, items: list })
+    }
+    take(
+      'changed',
+      'Changed on this record',
+      hidden.filter((c) => c.changes > 0).sort((x, y) => y.changes - x.changes)
+    )
+    take(
+      'computed',
+      'Totals and calculated fields',
+      hidden.filter((c) => metaFor(meta, c.field).derive)
+    )
+    const sections = new Map<string, { label: string; sort: number; items: MatrixColumn[] }>()
+    for (const c of hidden) {
+      const sec = metaFor(meta, c.field).section
+      if (!sec) continue
+      const entry = sections.get(sec.key) ?? { label: sec.label, sort: sec.sort, items: [] }
+      entry.items.push(c)
+      sections.set(sec.key, entry)
+    }
+    for (const [key, sec] of [...sections].sort((x, y) => x[1].sort - y[1].sort))
+      take(`section:${key}`, sec.label, sec.items)
+    take('other', 'Other fields', hidden)
+    return out
+  }, [columns, shown, meta])
+
+  const box = (on: boolean) => (
+    <span
+      className={cn(
+        'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border',
+        on ? 'border-nvr-cyan bg-nvr-cyan text-white' : 'border-slate-300 dark:border-slate-600'
+      )}
+    >
+      {on && <Check className='h-3 w-3' />}
+    </span>
+  )
+  const tag = (c: MatrixColumn) => (
+    <span className='ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-slate-400'>
+      {metaFor(meta, c.field).derive && <Sigma className='h-3 w-3' aria-label='Calculated' />}
+      {c.changes > 0 && <span className='tabular-nums'>{c.changes}×</span>}
+    </span>
+  )
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -2132,61 +2303,122 @@ function ColumnPicker({
         >
           <Columns3 className='h-3.5 w-3.5 text-slate-400' />
           <span>
-            Fields <span className='tabular-nums text-slate-400'>{shown.size}</span>
+            Fields <span className='tabular-nums text-slate-400'>{shownHere.length}</span>
             <span className='text-slate-400'> of {columns.length}</span>
           </span>
           <ChevronsUpDown className='h-3.5 w-3.5 text-slate-400' />
         </button>
       </PopoverTrigger>
-      <PopoverContent align='start' className='w-[300px] p-0'>
+      <PopoverContent align='start' className='w-[380px] p-0'>
         <Command>
-          <CommandInput placeholder='Find a field…' className='text-[12px]' />
-          <div className='flex items-center gap-1 border-b border-slate-100 px-2 py-1.5 dark:border-border/60'>
-            {(
-              [
-                ['Changed', changedOnly],
-                ['All', columns.map((c) => c.field)],
-                ['None', []]
-              ] as const
-            ).map(([label, list]) => (
+          <CommandInput
+            placeholder='Find a field…'
+            className='text-[12px]'
+            value={search}
+            onValueChange={setSearch}
+          />
+          <div className='flex items-center gap-1 border-b border-slate-100 px-2 py-1.5 text-[11.5px] dark:border-border/60'>
+            <button
+              type='button'
+              onClick={() => onChange(defaultOrder)}
+              className='rounded px-2 py-0.5 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted'
+            >
+              Changed fields
+            </button>
+            <button
+              type='button'
+              onClick={() => onChange(columns.map((c) => c.field))}
+              className='rounded px-2 py-0.5 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted'
+            >
+              All
+            </button>
+            <button
+              type='button'
+              onClick={() => onChange([])}
+              className='rounded px-2 py-0.5 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted'
+            >
+              None
+            </button>
+            {saved && (
               <button
-                key={label}
                 type='button'
-                onClick={() => onChange(new Set(list))}
-                className='rounded px-2 py-0.5 text-[11.5px] text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted'
+                onClick={onReset}
+                className='ml-auto rounded px-2 py-0.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-muted'
+                data-tip='Forget your columns for this collection and go back to the fields that changed'
               >
-                {label}
+                Reset
               </button>
-            ))}
+            )}
           </div>
-          <CommandList className='max-h-[340px]'>
+          <CommandList className='max-h-[420px]'>
             <CommandEmpty>No field by that name.</CommandEmpty>
-            <CommandGroup>
-              {columns.map((c) => (
-                <CommandItem
-                  key={c.field}
-                  value={`${c.label} ${c.field}`}
-                  onSelect={() => toggle(c.field)}
-                  className='text-[12px]'
+            {shownHere.length > 0 && !search.trim() && (
+              <div className='px-1 pb-1' data-shown-columns>
+                <p className='px-2 pb-1 pt-2 text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+                  Shown, in this order — drag to move
+                </p>
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={onDragEnd}
                 >
-                  <span
-                    className={cn(
-                      'flex h-3.5 w-3.5 items-center justify-center rounded-sm border',
-                      shown.has(c.field)
-                        ? 'border-nvr-cyan bg-nvr-cyan text-white'
-                        : 'border-slate-300 dark:border-slate-600'
-                    )}
+                  <SortableContext items={shownHere} strategy={verticalListSortingStrategy}>
+                    {shownHere.map((f) => {
+                      const c = byField.get(f) as MatrixColumn
+                      return (
+                        <ShownFieldRow
+                          key={f}
+                          field={f}
+                          label={c.label}
+                          tag={tag(c)}
+                          onRemove={() => toggle(f)}
+                        />
+                      )
+                    })}
+                  </SortableContext>
+                </DndContext>
+              </div>
+            )}
+            {shownHere.length > 0 && search.trim() !== '' && (
+              <CommandGroup heading='Shown'>
+                {shownHere.map((f) => {
+                  const c = byField.get(f) as MatrixColumn
+                  return (
+                    <CommandItem
+                      key={`shown-${f}`}
+                      value={`${c.label} ${f} shown`}
+                      onSelect={() => toggle(f)}
+                      className='text-[12px]'
+                    >
+                      {box(true)}
+                      <span className='min-w-0 flex-1 truncate'>{c.label}</span>
+                      {tag(c)}
+                    </CommandItem>
+                  )
+                })}
+              </CommandGroup>
+            )}
+            {groups.map((g) => (
+              <CommandGroup key={g.key} heading={g.label}>
+                {g.items.map((c) => (
+                  <CommandItem
+                    key={`${g.key}-${c.field}`}
+                    value={`${c.label} ${c.field} ${g.label}`}
+                    onSelect={() => toggle(c.field)}
+                    className='text-[12px]'
                   >
-                    {shown.has(c.field) && <Check className='h-3 w-3' />}
-                  </span>
-                  <span className='flex-1 truncate'>{c.label}</span>
-                  {c.changes > 0 && (
-                    <span className='tabular-nums text-[11px] text-slate-400'>{c.changes}×</span>
-                  )}
-                </CommandItem>
-              ))}
-            </CommandGroup>
+                    {box(false)}
+                    <span className='min-w-0 flex-1 truncate'>{c.label}</span>
+                    {tag(c)}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
           </CommandList>
+          <p className='border-t border-slate-100 px-3 py-1.5 text-[11px] text-slate-500 dark:border-border/60 dark:text-slate-400'>
+            Saved to your account for every record of this kind. Drag here or drag a column header
+            to move it.
+          </p>
         </Command>
       </PopoverContent>
     </Popover>
@@ -2229,16 +2461,29 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
     [data, labels]
   )
   const columns = useMemo(() => matrixColumns(rows, (f) => metaFor(meta, f)), [rows, meta])
-  // Default: every field that ever changed (written or recalculated). The person's own picks win.
-  const [picked, setPicked] = useState<Set<string> | null>(null)
-  const shownFields = useMemo(
-    () => picked ?? new Set(columns.filter((c) => c.changes > 0).map((c) => c.field)),
-    [picked, columns]
+  // The person's own columns for this collection, in their order, saved on their account; until
+  // they pick, every field that ever changed on this record (written or recalculated).
+  const prefs = useRevisionPrefs(collection)
+  const defaultOrder = useMemo(
+    () => columns.filter((c) => c.changes > 0).map((c) => c.field),
+    [columns]
   )
-  const shownColumns = useMemo(
-    () => columns.filter((c) => shownFields.has(c.field)),
-    [columns, shownFields]
-  )
+  /** The whole saved list (it may name fields another record has and this one does not). */
+  const order = prefs.columns ?? defaultOrder
+  const shownFields = useMemo(() => new Set(order), [order])
+  const shownColumns = useMemo(() => {
+    const byField = new Map(columns.map((c) => [c.field, c]))
+    return order.map((f) => byField.get(f)).filter((c): c is MatrixColumn => !!c)
+  }, [order, columns])
+  const setOrder = (next: string[]) => prefs.setColumns([...new Set(next)])
+  const [dragField, setDragField] = useState<string | null>(null)
+  const [dropField, setDropField] = useState<string | null>(null)
+  const moveBefore = (field: string, target: string) => {
+    if (field === target) return
+    const rest = order.filter((f) => f !== field)
+    const at = rest.indexOf(target)
+    setOrder(at < 0 ? [...rest, field] : [...rest.slice(0, at), field, ...rest.slice(at)])
+  }
   const [onlyMoving, setOnlyMoving] = useState(true)
   const onlyMovingId = useId()
   const shownRows = useMemo(
@@ -2282,7 +2527,16 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
   return (
     <div className='pt-4' data-revision-table-view>
       <div className='mb-3 flex flex-wrap items-center gap-2'>
-        <ColumnPicker columns={columns} shown={shownFields} onChange={setPicked} />
+        <ColumnPicker
+          columns={columns}
+          meta={meta}
+          order={order}
+          shown={shownFields}
+          defaultOrder={defaultOrder}
+          saved={prefs.columns != null}
+          onChange={setOrder}
+          onReset={() => prefs.setColumns(null)}
+        />
         <span className='inline-flex items-center gap-1.5'>
           <Checkbox
             id={onlyMovingId}
@@ -2340,7 +2594,19 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
         </div>
       ) : (
         <div className='overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
-          <div className='max-h-[calc(100vh-230px)] overflow-auto'>
+          {/* Styling the WebKit scrollbar makes it a classic one that is always drawn (macOS
+              overlay scrollbars hide until hover), so a wide grid always shows it scrolls. */}
+          <div
+            className={cn(
+              'max-h-[calc(100vh-230px)] overflow-auto',
+              '[&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar]:w-2.5',
+              '[&::-webkit-scrollbar-track]:bg-slate-100 dark:[&::-webkit-scrollbar-track]:bg-white/[0.04]',
+              '[&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:border-2 [&::-webkit-scrollbar-thumb]:border-solid [&::-webkit-scrollbar-thumb]:border-slate-100 [&::-webkit-scrollbar-thumb]:bg-slate-300 hover:[&::-webkit-scrollbar-thumb]:bg-slate-400',
+              'dark:[&::-webkit-scrollbar-thumb]:border-transparent dark:[&::-webkit-scrollbar-thumb]:bg-slate-600 dark:hover:[&::-webkit-scrollbar-thumb]:bg-slate-500',
+              '[&::-webkit-scrollbar-corner]:bg-transparent'
+            )}
+            data-revision-table-scroll
+          >
             <table className='border-separate border-spacing-0 text-left text-[12px]'>
               <thead>
                 <tr className='text-[11px] text-slate-500 dark:text-slate-400'>
@@ -2353,10 +2619,41 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
                   {shownColumns.map((c) => (
                     <th
                       key={c.field}
-                      title={c.field}
-                      className='sticky top-0 z-[2] min-w-[132px] max-w-[260px] border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium dark:border-border dark:bg-muted'
+                      draggable
+                      onDragStart={(e) => {
+                        setDragField(c.field)
+                        e.dataTransfer.effectAllowed = 'move'
+                        e.dataTransfer.setData('text/plain', c.field)
+                      }}
+                      onDragOver={(e) => {
+                        if (!dragField) return
+                        e.preventDefault()
+                        if (dropField !== c.field) setDropField(c.field)
+                      }}
+                      onDragLeave={() => setDropField((d) => (d === c.field ? null : d))}
+                      onDrop={(e) => {
+                        e.preventDefault()
+                        if (dragField) moveBefore(dragField, c.field)
+                        setDragField(null)
+                        setDropField(null)
+                      }}
+                      onDragEnd={() => {
+                        setDragField(null)
+                        setDropField(null)
+                      }}
+                      data-tip={`${c.label} — drag to move`}
+                      className={cn(
+                        'group/th sticky top-0 z-[2] min-w-[132px] max-w-[260px] cursor-grab border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium active:cursor-grabbing dark:border-border dark:bg-muted',
+                        dragField === c.field && 'opacity-40',
+                        dropField === c.field &&
+                          dragField !== c.field &&
+                          'shadow-[inset_2px_0_0_0_rgb(var(--nvr-cyan-rgb,0_206_255))]'
+                      )}
                     >
-                      {c.label}
+                      <span className='flex items-center gap-1'>
+                        <GripVertical className='h-3 w-3 shrink-0 text-slate-300 opacity-0 transition-opacity group-hover/th:opacity-100 dark:text-slate-600' />
+                        {c.label}
+                      </span>
                     </th>
                   ))}
                 </tr>
@@ -2409,8 +2706,9 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
                       const recalc = r.recalculated.has(c.field)
                       const moved = own || recalc
                       const reason = recalc ? reasonFor(c.field, r, meta) : null
+                      // What moved it first (the audit question), then what it is worked out from.
                       const tip = reason
-                        ? `${reason.why}${reason.because ? ` — ${reason.because}` : ''}`
+                        ? `Recalculated: ${reason.because ? `${reason.because}. ` : ''}${reason.why}`
                         : undefined
                       const empty = v === null || v === undefined || v === ''
                       return (
@@ -2439,7 +2737,7 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
                               />
                             )}
                             <span
-                              className='line-clamp-3 break-words'
+                              className='line-clamp-3 whitespace-pre-line break-words'
                               data-tip={tip ?? (empty ? undefined : cellText(v, m))}
                             >
                               {empty ? (
@@ -2454,11 +2752,6 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
                               )}
                             </span>
                           </span>
-                          {reason ? (
-                            <span className='line-clamp-4' data-tip={tip}>
-                              <ReasonLines reason={reason} />
-                            </span>
-                          ) : null}
                         </td>
                       )
                     })}
@@ -2738,7 +3031,17 @@ function HistoryReplay({
                 <span className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>
                   {metaFor(meta, r.field).label}
                   {!own.has(r.field) && cur.action === 'update' && (
-                    <span className='mt-0.5 flex items-center gap-0.5 text-[10.5px] font-normal text-slate-500 dark:text-slate-400'>
+                    <span
+                      className='mt-0.5 flex w-fit cursor-help items-center gap-0.5 text-[10.5px] font-normal text-slate-500 dark:text-slate-400'
+                      data-tip={
+                        curRow
+                          ? (() => {
+                              const why = reasonFor(r.field, curRow, meta)
+                              return `${why.because ? `${why.because} — ` : ''}${why.why}`
+                            })()
+                          : undefined
+                      }
+                    >
                       <Sigma className='h-3 w-3 text-amber-700 dark:text-amber-300' />
                       recalculated
                     </span>
@@ -2771,9 +3074,6 @@ function HistoryReplay({
                       </span>
                     </span>
                   )}
-                  {curRow && !own.has(r.field) && cur.action === 'update' ? (
-                    <ReasonLines reason={reasonFor(r.field, curRow, meta)} />
-                  ) : null}
                 </span>
               </div>
             ))}

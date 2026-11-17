@@ -1664,6 +1664,41 @@ export async function usersRoutes(app: FastifyInstance) {
         patch.one_on_one = Object.keys(clean).length ? clean : null
       }
     }
+    if ('revision_view' in body) {
+      // Revision history opens on the view the person last chose.
+      const v = String(body.revision_view ?? '')
+      if (!['timeline', 'table'].includes(v)) {
+        return reply.code(400).send({ error: "revision_view must be 'timeline' or 'table'" })
+      }
+      patch.revision_view = v
+    }
+    // Revision history table (2026-11-17): the columns a person picked, in their order, per
+    // collection — {collection, fields: string[] | null}; null forgets that collection's choice.
+    let revisionColumns: { collection: string; fields: string[] | null } | null = null
+    if ('revision_table_columns' in body) {
+      const raw = body.revision_table_columns as { collection?: unknown; fields?: unknown } | null
+      const ident = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
+      const collection = String(raw?.collection ?? '')
+      if (!ident.test(collection)) {
+        return reply
+          .code(400)
+          .send({ error: 'revision_table_columns.collection is not a collection' })
+      }
+      if (raw?.fields === null) {
+        revisionColumns = { collection, fields: null }
+      } else if (
+        !Array.isArray(raw?.fields) ||
+        raw.fields.length > 200 ||
+        raw.fields.some((f) => typeof f !== 'string' || !ident.test(f))
+      ) {
+        return reply
+          .code(400)
+          .send({ error: 'revision_table_columns.fields must be up to 200 field names or null' })
+      } else {
+        revisionColumns = { collection, fields: [...new Set(raw.fields as string[])] }
+      }
+      patch.revision_table_columns = true
+    }
     if (Object.keys(patch).length === 0) {
       return reply.code(400).send({ error: 'No supported preference keys in body' })
     }
@@ -1678,6 +1713,19 @@ export async function usersRoutes(app: FastifyInstance) {
       current = {}
     }
     const merged = { ...current, ...patch }
+    if (revisionColumns) {
+      const prev = current.revision_table_columns
+      const map: Record<string, string[]> =
+        prev && typeof prev === 'object' && !Array.isArray(prev)
+          ? { ...(prev as Record<string, string[]>) }
+          : {}
+      if (revisionColumns.fields === null) delete map[revisionColumns.collection]
+      else map[revisionColumns.collection] = revisionColumns.fields
+      // One person keeps choices for at most 100 collections (newest last wins).
+      const keys = Object.keys(map)
+      for (const k of keys.slice(0, Math.max(0, keys.length - 100))) delete map[k]
+      merged.revision_table_columns = map
+    }
     await db('nivaro_users')
       .where({ id: req.user!.id })
       .update({ preferences: JSON.stringify(merged) })
