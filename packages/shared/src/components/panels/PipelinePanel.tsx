@@ -3937,11 +3937,11 @@ function PipelinePanelInner({
       <div
         className={`overflow-hidden rounded-xl border bg-white dark:bg-card ${addendumView ? 'border-amber-300 dark:border-amber-600/50' : 'border-slate-200 dark:border-border'}`}
       >
+        {/* The whole row still folds on a click; the keyboard / screen-reader toggle is the
+            chevron button below, since a role="button" row cannot hold the move buttons
+            (nested-interactive, a11y A11Y-09). */}
         <div
-          role='button'
-          tabIndex={0}
           onClick={() => setExpanded((v) => !v)}
-          onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setExpanded((v) => !v)}
           className='flex w-full cursor-pointer items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 max-sm:flex-wrap max-sm:gap-y-2 dark:hover:bg-white/[0.02]'
         >
           <GitBranch className='h-3.5 w-3.5 shrink-0 text-slate-400' />
@@ -4044,12 +4044,23 @@ function PipelinePanelInner({
               />
             )}
           </div>
-          <ChevronDown
-            className={cn(
-              'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150 max-sm:ml-auto',
-              expanded && 'rotate-180'
-            )}
-          />
+          <button
+            type='button'
+            aria-expanded={expanded}
+            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${title || 'Pipeline'}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              setExpanded((v) => !v)
+            }}
+            className='shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan max-sm:ml-auto'
+          >
+            <ChevronDown
+              className={cn(
+                'block h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150',
+                expanded && 'rotate-180'
+              )}
+            />
+          </button>
         </div>
         {/* What stands in a move's way says so before it is pressed. Folded (or open with
             the buttons hosted elsewhere) that is here, under the header; open, it sits

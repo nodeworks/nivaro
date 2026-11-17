@@ -26,7 +26,7 @@ import {
   Video,
   X
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { cloneElement, isValidElement, useEffect, useId, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { AudienceConfirmSettingsCard } from '@/components/audience-confirm-settings'
@@ -1740,6 +1740,10 @@ function FileStorageSection() {
 
 // ─── Field row helper ─────────────────────────────────────────────────────────
 
+// Controls a <Label htmlFor> can name directly; anything else (a Select, a row of
+// buttons) is named as a group by the label instead (a11y scan A11Y-04).
+const LABELLABLE = new Set<unknown>([Input, Textarea, Switch, 'input', 'textarea'])
+
 function Field({
   label,
   hint,
@@ -1749,11 +1753,41 @@ function Field({
   hint?: string
   children: React.ReactNode
 }) {
+  const id = useId()
+  const labelId = `${id}-label`
+  const hintId = hint ? `${id}-hint` : undefined
+  const control =
+    isValidElement<{ id?: string; 'aria-describedby'?: string }>(children) &&
+    LABELLABLE.has(children.type)
+      ? children
+      : null
+  const controlId = control?.props.id ?? `${id}-control`
   return (
-    <div className='space-y-1.5'>
-      <Label className='text-[12px] font-medium text-slate-700 dark:text-foreground'>{label}</Label>
-      {children}
-      {hint && <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>{hint}</p>}
+    <div
+      className='space-y-1.5'
+      role={control ? undefined : 'group'}
+      aria-labelledby={control ? undefined : labelId}
+      aria-describedby={control ? undefined : hintId}
+    >
+      <Label
+        id={labelId}
+        htmlFor={control ? controlId : undefined}
+        className='text-[12px] font-medium text-slate-700 dark:text-foreground'
+      >
+        {label}
+      </Label>
+      {control
+        ? cloneElement(control, {
+            id: controlId,
+            'aria-describedby':
+              [control.props['aria-describedby'], hintId].filter(Boolean).join(' ') || undefined
+          })
+        : children}
+      {hint && (
+        <p id={hintId} className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+          {hint}
+        </p>
+      )}
     </div>
   )
 }
@@ -2332,7 +2366,10 @@ export function SettingsPage() {
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         {/* Left nav */}
-        <aside className='flex w-[200px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
+        <aside
+          aria-label='Settings sections'
+          className='flex w-[200px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'
+        >
           <nav className='flex-1 overflow-y-auto py-3'>
             {NAV.map((item) => (
               <button
@@ -2465,6 +2502,7 @@ export function SettingsPage() {
                           onChange={(e) => setProjectColor(e.target.value)}
                           className='h-7 w-7 cursor-pointer rounded-md border border-slate-200 p-0.5 dark:border-border'
                           title='Custom color'
+                          aria-label='Custom color'
                         />
                         <input
                           type='text'
@@ -2474,6 +2512,7 @@ export function SettingsPage() {
                             if (/^#[0-9a-fA-F]{0,6}$/.test(v)) setProjectColor(v)
                           }}
                           className='h-7 w-28 rounded-md border border-slate-200 bg-transparent px-2 font-mono text-[12px] text-slate-600 dark:border-border dark:text-muted-foreground'
+                          aria-label='Custom color hex code'
                           spellCheck={false}
                         />
                       </div>

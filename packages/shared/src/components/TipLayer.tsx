@@ -33,6 +33,40 @@ interface Tip {
   above?: { top: number; bottom: number }
 }
 
+/**
+ * A tip is drawn in a portal, so assistive tech never reads it (a11y A11Y-15). On focus,
+ * hand the tip's text to the element itself — nothing visible changes: a control with no
+ * name of its own (an icon button named only by its tip) gets it as aria-label; one that
+ * has a name gets it as aria-description. A tip that only repeats the element's own text
+ * (a truncated value) is skipped. Never overwrites what the element already says.
+ */
+export function describeTipTarget(el: Element): void {
+  const text = el.getAttribute('data-tip')?.trim()
+  if (!text) return
+  // Set by an earlier focus: keep it in step with a tip that changed since.
+  const mine = el.getAttribute('data-tip-a11y')
+  if (mine === 'label' || mine === 'desc') {
+    el.setAttribute(mine === 'label' ? 'aria-label' : 'aria-description', text)
+    return
+  }
+  const own = (el.textContent ?? '').replace(/\s+/g, ' ').trim()
+  if (own === text.replace(/\s+/g, ' ')) return
+  const named =
+    !!own ||
+    el.hasAttribute('aria-label') ||
+    el.hasAttribute('aria-labelledby') ||
+    !!el.querySelector('img[alt]:not([alt=""])')
+  if (!named) {
+    el.setAttribute('aria-label', text)
+    el.setAttribute('data-tip-a11y', 'label')
+    return
+  }
+  if (!el.hasAttribute('aria-description') && !el.hasAttribute('aria-describedby')) {
+    el.setAttribute('aria-description', text)
+    el.setAttribute('data-tip-a11y', 'desc')
+  }
+}
+
 export function TipLayer() {
   const [tip, setTip] = useState<Tip | null>(null)
   const [owns, setOwns] = useState(false)
@@ -93,8 +127,14 @@ export function TipLayer() {
     // `data-tip-focus` (a held-back pipeline move says why it cannot be made,
     // BlockedMove.tsx) — opt-in so tabbing through a form does not trail tips.
     const focusIn = (e: FocusEvent) => {
+      const tipped = (e.target as HTMLElement)?.closest?.('[data-tip]')
+      if (tipped) describeTipTarget(tipped)
       const el = (e.target as HTMLElement)?.closest?.('[data-tip-focus]')
       if (el) show(el)
+    }
+    // Escape dismisses a showing tip (WCAG 1.4.13).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setTip((t) => (t ? null : t))
     }
     const focusOut = (e: FocusEvent) => {
       if ((e.target as HTMLElement)?.closest?.('[data-tip-focus]')) setTip(null)
@@ -104,12 +144,14 @@ export function TipLayer() {
     window.addEventListener('mouseover', over)
     window.addEventListener('focusin', focusIn)
     window.addEventListener('focusout', focusOut)
+    window.addEventListener('keydown', onKey)
     window.addEventListener('pointerdown', clear, true)
     window.addEventListener('scroll', clear, true)
     return () => {
       window.removeEventListener('mouseover', over)
       window.removeEventListener('focusin', focusIn)
       window.removeEventListener('focusout', focusOut)
+      window.removeEventListener('keydown', onKey)
       window.removeEventListener('pointerdown', clear, true)
       window.removeEventListener('scroll', clear, true)
     }
@@ -150,6 +192,7 @@ export function TipLayer() {
   return createPortal(
     <div
       ref={tipRef}
+      role='tooltip'
       // z-[120] is the documented tooltip layer — above popovers (110) so a
       // tip triggered from inside an open sheet/popover still paints on top.
       style={{ position: 'fixed', left: tip.x, top: tip.y, zIndex: 120 }}

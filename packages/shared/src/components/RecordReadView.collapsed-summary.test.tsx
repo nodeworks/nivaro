@@ -147,7 +147,7 @@ describe('RecordReadView collapsed summary (#3195)', () => {
     expect(s?.textContent).toContain('42')
     expect(s?.querySelectorAll(':scope > span').length).toBe(COLLAPSED_SUMMARY_MAX)
     expect(s?.textContent).not.toContain('Note')
-    const toggle = host.querySelector('[data-read-section="money"] h3 button') as HTMLElement
+    const toggle = host.querySelector('[data-read-section="money"] h2 button') as HTMLElement
     await act(async () => toggle.click())
     expect(summary()).toBeNull()
   })

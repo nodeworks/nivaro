@@ -571,3 +571,27 @@ export function iconForPath(path: string): React.ElementType | null {
   }
   return best?.icon ?? null
 }
+
+/**
+ * What a page is called in the browser tab (a11y A11Y-10): a collection's name for
+ * /collections/:c/…, else the label of the most specific nav entry the path sits under.
+ */
+export function pageLabelForPath(pathname: string): string | null {
+  const col = /^\/collections\/([^/]+)/.exec(pathname)
+  if (col) {
+    const key = decodeURIComponent(col[1])
+    return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  }
+  let best: { len: number; label: string } | null = null
+  for (const cat of navCategories) {
+    for (const item of cat.items) {
+      const hit =
+        item.to === '/'
+          ? pathname === '/'
+          : pathname === item.to || pathname.startsWith(`${item.to}/`)
+      if (hit && (!best || item.to.length > best.len))
+        best = { len: item.to.length, label: item.label }
+    }
+  }
+  return best?.label ?? null
+}

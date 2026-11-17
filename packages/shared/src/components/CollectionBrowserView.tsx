@@ -10792,6 +10792,9 @@ export function CollectionBrowserView({
                             className={`${baseTh} text-left ${col.kind === 'actions' ? 'w-20 px-2' : ''} ${pinPart}`}
                           >
                             {label}
+                            {/* The actions column has no visible header; name it for a
+                                screen reader (a11y A11Y-17). */}
+                            {!label && <span className='sr-only'>Actions</span>}
                             {pinButton(key)}
                           </th>
                         )
@@ -10901,7 +10904,9 @@ export function CollectionBrowserView({
                   {(anyColFilterable || hasPipeline) && (
                     <tr className='border-b border-slate-200 dark:border-slate-700'>
                       {enableCheckboxes && (
-                        <th className='sticky left-0 top-8 z-[4] w-11 bg-slate-50 py-1 pl-1.5 pr-3 dark:bg-slate-800' />
+                        <th className='sticky left-0 top-8 z-[4] w-11 bg-slate-50 py-1 pl-1.5 pr-3 dark:bg-slate-800'>
+                          <span className='sr-only'>Filters</span>
+                        </th>
                       )}
                       {orderedCols.map((col) => {
                         const key = col.key
@@ -11058,7 +11063,9 @@ export function CollectionBrowserView({
                               key={key}
                               style={pinStyle(key)}
                               className={`${baseTh} ${col.kind === 'actions' ? 'w-20' : ''}`}
-                            />
+                            >
+                              <span className='sr-only'>No filter</span>
+                            </th>
                           )
                         }
                         return (

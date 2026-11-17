@@ -44,6 +44,8 @@ export function IntegrationDots({ rows, className }: IntegrationDotsProps) {
   return (
     <span
       data-integration-dots
+      // role="img": an aria-label on a role-less span is ignored by screen readers (A11Y-08).
+      role='img'
       aria-label={dots.map((d) => `${d.api}: ${TONE_WORD[d.tone]}`).join(', ')}
       className={`inline-flex items-center gap-1 ${className ?? ''}`.trim()}
     >

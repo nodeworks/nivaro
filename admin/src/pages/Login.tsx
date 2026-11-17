@@ -336,7 +336,8 @@ export function LoginPage() {
   const ThemeIcon = THEME_ICONS[theme as keyof typeof THEME_ICONS] ?? Monitor
 
   return (
-    <div className='flex min-h-screen flex-col'>
+    // <main>: the sign-in page's content sits in a landmark (a11y A11Y-12).
+    <main className='flex min-h-screen flex-col'>
       {/* Not production: says so above everything (the server decides; nothing on production). */}
       <EnvironmentLoginBanner />
       <div className='flex flex-1 overflow-hidden'>
@@ -538,7 +539,8 @@ export function LoginPage() {
             >
               <NivaroMark size={24} color='#1e96d2' />
             </div>
-            <p className='mt-3 text-[18px] font-bold text-slate-900'>Nivaro</p>
+            {/* The page heading on a phone (the desktop hero's <h1> is hidden there). */}
+            <h1 className='mt-3 text-[18px] font-bold text-slate-900'>Nivaro</h1>
           </div>
 
           <div
@@ -684,7 +686,7 @@ export function LoginPage() {
           </div>
         </div>
       </div>
-    </div>
+    </main>
   )
 }
 

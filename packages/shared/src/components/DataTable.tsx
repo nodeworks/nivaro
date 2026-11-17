@@ -818,7 +818,10 @@ export function FilterControl({
     const selectVal = currentVal === '' ? '__all__' : currentVal
     control = (
       <Select value={selectVal} onValueChange={(v) => onChange(v === '__all__' ? '' : v)}>
-        <SelectTrigger className={cn('h-8 border-slate-200 bg-slate-50', heightCls, widthCls)}>
+        <SelectTrigger
+          aria-label={filterDefLabel(def)}
+          className={cn('h-8 border-slate-200 bg-slate-50', heightCls, widthCls)}
+        >
           <SelectValue placeholder={def.placeholder} />
         </SelectTrigger>
         <SelectContent>
@@ -1437,6 +1440,11 @@ export function DataTable<T = Record<string, unknown>>({
                           ) : (
                             <>
                               {col.header}
+                              {/* A header with no text (an actions column) still names
+                                  its column for a screen reader (a11y A11Y-17). */}
+                              {!nodeText(col.header).trim() && (
+                                <span className='sr-only'>{pinColumnName(col)}</span>
+                              )}
                               {col.sortable && onSortChange && (
                                 <SortIcon field={col.key} sort={sort} />
                               )}
@@ -1485,7 +1493,9 @@ export function DataTable<T = Record<string, unknown>>({
                             'h-9 w-9 bg-slate-50 px-3 py-1',
                             (pinFirstColumn || pinsActive) && 'sticky left-0 z-[2] min-w-[40px]'
                           )}
-                        />
+                        >
+                          <span className='sr-only'>Filters</span>
+                        </TableHead>
                       )}
                       {orderedColumns.map((col) => {
                         const def = filterDefByKey.get(col.key)
@@ -1499,6 +1509,11 @@ export function DataTable<T = Record<string, unknown>>({
                               pinCls(col.key, true)
                             )}
                           >
+                            <span className='sr-only'>
+                              {def && onFilterChange
+                                ? `Filter ${pinColumnName(col)}`
+                                : `${pinColumnName(col)}: no filter`}
+                            </span>
                             {def && onFilterChange ? (
                               <FilterControl
                                 def={def}

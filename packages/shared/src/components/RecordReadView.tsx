@@ -1979,7 +1979,7 @@ function RecordReadViewBody({
         {shell(
           { kind: 'group', key: g.key },
           <>
-            <h3
+            <h2
               data-read-head=''
               className={`group/rs relative flex items-center justify-between gap-2 px-5 py-2.5 text-[12.5px] font-semibold text-slate-700 dark:text-slate-200 ${
                 isOpen(g) ? 'border-b border-slate-100 dark:border-slate-800' : ''
@@ -2053,7 +2053,7 @@ function RecordReadViewBody({
                   className={`pointer-events-none h-3.5 w-3.5 shrink-0 transition-transform group-hover/rs:text-slate-700 dark:group-hover/rs:text-slate-200 ${isOpen(g) ? '' : '-rotate-90'}`}
                 />
               )}
-            </h3>
+            </h2>
             {/* The body stays MOUNTED while collapsed (hidden, not unrendered): a
             collapsed section's widgets, grids and links must still fetch and
             report, or an "Invoice Approvals" card holding only a review

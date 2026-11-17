@@ -365,7 +365,9 @@ export const InlineGridField = memo(function InlineGridField({
                 {c.label ?? titleCase(c.field)}
               </th>
             ))}
-            <th className='w-16' />
+            <th className='w-16'>
+              <span className='sr-only'>Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>

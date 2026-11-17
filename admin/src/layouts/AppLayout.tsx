@@ -156,7 +156,8 @@ import {
   isActiveRoute,
   type NavCategory,
   type NavItem,
-  navCategories
+  navCategories,
+  pageLabelForPath
 } from './nav-config'
 import { applyNavLayout, applyRail, permittedCategories } from './nav-layout'
 import { RecentNav } from './RecentNav'
@@ -248,6 +249,9 @@ function NivaroMark({ size = 24, color = 'currentColor' }: { size?: number; colo
 function WorkspaceSwitcher() {
   const { user } = useAuth()
   const [open, setOpen] = useState(false)
+  // The trigger's tooltip never stays up while the menu is open: as the top layer it
+  // took Escape, so the menu stayed open (a11y A11Y-16).
+  const [tipOpen, setTipOpen] = useState(false)
 
   const { data: workspaces = [] } = useQuery({
     queryKey: ['workspaces'],
@@ -266,7 +270,7 @@ function WorkspaceSwitcher() {
   const dotColor = current?.color ?? '#00ceff'
 
   return (
-    <Tooltip>
+    <Tooltip open={tipOpen && !open} onOpenChange={setTipOpen}>
       <Popover open={open} onOpenChange={setOpen}>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
@@ -471,12 +475,6 @@ export function AppLayout() {
     if (saved && navCategories.some((c) => c.id === saved)) return saved
     return findCategoryForPath(location.pathname) ?? 'home'
   })
-
-  useEffect(() => {
-    if (settings?.project_name) {
-      document.title = `${settings.project_name} | Nivaro`
-    }
-  }, [settings?.project_name])
 
   // Workspace theming (#463): the ACTIVE workspace's color (a column that
   // existed unused) wins over the instance project_color, so switching
@@ -769,7 +767,7 @@ export function AppLayout() {
               ref={asideRef}
               id='app-nav-drawer'
               data-nav-drawer={isPhone ? (drawerOpen ? 'open' : 'closed') : undefined}
-              aria-label={isPhone ? 'Navigation' : undefined}
+              aria-label='Navigation'
               role={isPhone ? 'dialog' : undefined}
               tabIndex={isPhone ? -1 : undefined}
               inert={isPhone && !drawerOpen ? true : undefined}
@@ -936,7 +934,11 @@ export function AppLayout() {
                 <div className='flex w-full shrink-0 justify-center border-t border-white/[0.07] px-1.5 py-2.5'>
                   <Popover>
                     <PopoverTrigger asChild>
-                      <span className='relative inline-flex cursor-pointer'>
+                      <button
+                        type='button'
+                        aria-label={`Account menu: ${displayName}`}
+                        className='relative inline-flex cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                      >
                         {dndOn && <DndMark className='absolute -right-1 -top-1 z-10' />}
                         <UserAvatar
                           userId={user?.id}
@@ -950,7 +952,7 @@ export function AppLayout() {
                             </Avatar>
                           }
                         />
-                      </span>
+                      </button>
                     </PopoverTrigger>
                     <PopoverContent side='right' sideOffset={12} className='w-52 p-3'>
                       <div className='flex items-center gap-2.5'>
@@ -1151,6 +1153,8 @@ export function AppLayout() {
                 </div>
               )}
               <HelpVideoHost>
+                {/* Before the page outlet on purpose: see RouteTitle. */}
+                <RouteTitle pathname={location.pathname} projectName={settings?.project_name} />
                 {/* #18: the screen's best help video ("Watch: … (2:10)") when a
                     strong match is unwatched; renders nothing otherwise. */}
                 <HelpVideoMatchChip
@@ -1393,6 +1397,27 @@ function RecorderBadge() {
 
 /** One help-video recorder for the whole app, above the page outlet, so a
  *  recording survives navigating between pages. */
+/**
+ * Per-page browser title, "Users — <project> | Nivaro" (a11y A11Y-10). Rendered as an
+ * earlier sibling of the page outlet so its effect runs BEFORE the page's own: pages that
+ * title themselves (hub tabs, records) read the " — <app>" / " · " tail and build on it.
+ */
+function RouteTitle({
+  pathname,
+  projectName
+}: {
+  pathname: string
+  projectName: string | null | undefined
+}) {
+  useEffect(() => {
+    if (!projectName) return
+    const app = `${projectName} | Nivaro`
+    const label = pageLabelForPath(pathname)
+    document.title = label ? `${label} — ${app}` : app
+  }, [pathname, projectName])
+  return null
+}
+
 function HelpVideoHost({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   return (

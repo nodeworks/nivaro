@@ -890,7 +890,7 @@ export function ItemEditPage() {
               <div className='sticky top-0 z-20 shrink-0 border-b border-slate-200 bg-white px-8 py-4 max-sm:px-4 dark:border-border dark:bg-background'>
                 {/* A phone wraps the tool group onto its own row instead of clipping it. */}
                 <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
-                  <Button variant='ghost' size='icon' onClick={goBack}>
+                  <Button variant='ghost' size='icon' onClick={goBack} aria-label='Back'>
                     <ArrowLeft className='h-4 w-4' />
                   </Button>
                   <div className='min-w-0 flex-1'>

@@ -169,7 +169,9 @@ export function FavoritePinButton({
       // Name it what the page calls itself; a route is a poor label. It can be
       // renamed afterwards from Organize.
       const heading = document.querySelector('main h1')?.textContent?.trim()
-      const label = (heading || document.title.split('|')[0].trim() || here).slice(0, 60)
+      // The tab title is "<page> — <project> | Nivaro" (AppLayout RouteTitle).
+      const titled = document.title.split(' — ')[0].split('|')[0].trim()
+      const label = (heading || titled || here).slice(0, 60)
       await save({ ...favorites, items: [...favorites.items, { label, path: here, group: null }] })
       toast.success('Added to favorites', {
         action: { label: 'Organize', onClick: onOrganize }

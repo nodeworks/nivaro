@@ -930,7 +930,12 @@ export function UserChip({
           // align-middle: a photo has no text baseline, so an inline-flex chip whose first item
           // is an <img> sat on the photo's bottom edge — raised, and the row grew a few px
           // (list cells with a photo were taller than ones with initials).
-          <span className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 py-px pl-px pr-1.5 align-middle transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700'>
+          // A real <button> (not a span) so the card opens from the keyboard and the
+          // trigger's aria-expanded/aria-haspopup are allowed (a11y scan A11Y-01/02).
+          <button
+            type='button'
+            className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 py-px pl-px pr-1.5 text-left align-middle transition-colors hover:bg-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:bg-slate-800 dark:hover:bg-slate-700'
+          >
             <UserAvatar
               userId={userId}
               className='h-4 w-4'
@@ -947,9 +952,12 @@ export function UserChip({
             <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
               {name}
             </span>
-          </span>
+          </button>
         ) : (
-          <div className='inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5 align-middle transition-colors hover:bg-slate-100 dark:border-border dark:bg-card dark:hover:bg-accent'>
+          <button
+            type='button'
+            className='inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5 text-left align-middle transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:hover:bg-accent'
+          >
             <UserAvatar
               userId={userId}
               className='h-6 w-6'
@@ -964,7 +972,7 @@ export function UserChip({
               }
             />
             <span className='text-[12px] text-slate-700 dark:text-slate-300'>{name}</span>
-          </div>
+          </button>
         )}
       </PopoverTrigger>
       <UserCardPopover
