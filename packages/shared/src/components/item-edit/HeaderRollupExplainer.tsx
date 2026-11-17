@@ -4,7 +4,8 @@ import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
-import { cn } from '../../lib/utils'
+import { queryKeys } from '../../lib/query-keys'
+import { cn, titleCase } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { lineageSummary, useFieldLineage } from './FieldRow'
 
@@ -209,6 +210,32 @@ export function HeaderRollupExplainer({
   const settled = useAfterIdle(1500)
   const { data, isLoading } = useFieldLineage(collection, itemId, field, settled)
   const summary = lineageSummary(data, noun)
+  // Field labels for the formula and its inputs ("Requisition Amount", never
+  // "item.requisition_amount"): the collection's field config, read once the popover opens.
+  const nivaro = useNivaroClient()
+  const { data: fieldRows } = useQuery({
+    queryKey: queryKeys.fieldConfig(collection),
+    queryFn: () =>
+      nivaro
+        .request<{ data: Array<{ field: string; label?: string | null }> }>(
+          get(`/field-config/${collection}`)
+        )
+        .then((r) => r.data ?? []),
+    enabled: open && !!collection,
+    staleTime: 120_000
+  })
+  const labelOf = (f: string): string =>
+    fieldRows?.find((r) => r.field === f)?.label?.trim() || titleCase(f.replace(/_/g, ' '))
+  /** The formula with each field reference (`item.x`, `{{x}}`, `x`) read as its label. */
+  const friendlyFormula = (formula: string): string => {
+    const known = new Set([
+      ...(fieldRows ?? []).map((r) => r.field),
+      ...Object.keys(data?.inputs ?? {})
+    ])
+    return formula
+      .replace(/\{\{\s*([A-Za-z_]\w*)\s*\}\}/g, (_m, f: string) => labelOf(f))
+      .replace(/\b(?:item\.)?([A-Za-z_]\w*)\b/g, (m, f: string) => (known.has(f) ? labelOf(f) : m))
+  }
   const num = (v: unknown): string =>
     v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })
   if (!summary && !isLoading) return null
@@ -242,8 +269,11 @@ export function HeaderRollupExplainer({
         </p>
         {data && (data.kind === 'read' || data.kind === 'write') && (
           <div className='mb-1.5 px-1' data-lineage-formula>
-            <p className='font-mono text-[11px] text-slate-700 dark:text-foreground'>
-              {data.formula}
+            <p
+              className='text-[11.5px] font-medium text-slate-700 dark:text-foreground'
+              data-tip={data.formula}
+            >
+              {friendlyFormula(String(data.formula ?? ''))}
             </p>
             <p className='mt-0.5 text-[10.5px] text-slate-400'>
               {data.kind === 'read' ? 'Computed on read from' : 'Stored on save from'}
@@ -251,7 +281,9 @@ export function HeaderRollupExplainer({
             <dl className='mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5'>
               {Object.entries(data.inputs ?? {}).map(([k, v]) => (
                 <div key={k} className='contents'>
-                  <dt className='font-mono text-[10.5px] text-slate-500'>{k}</dt>
+                  <dt className='text-[11px] text-slate-500' data-tip={k}>
+                    {labelOf(k)}
+                  </dt>
                   <dd className='text-right tabular-nums text-slate-800 dark:text-foreground'>
                     {num(v)}
                   </dd>
