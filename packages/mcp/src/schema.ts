@@ -9,7 +9,7 @@ import { z } from 'zod'
 export const MAX_LIMIT = 200
 export const DEFAULT_LIMIT = 25
 
-export const jsonObject = z.union([z.record(z.unknown()), z.string()])
+export const jsonObject = z.union([z.record(z.string(), z.unknown()), z.string()])
 
 export function toObject(
   value: Record<string, unknown> | string | undefined

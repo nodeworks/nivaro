@@ -40,7 +40,7 @@ const base: VideoEdits = {
 
 let root: Root
 let host: HTMLDivElement
-let onChange: ReturnType<typeof vi.fn>
+let onChange: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 function mount(edits: VideoEdits) {
   onChange = vi.fn()

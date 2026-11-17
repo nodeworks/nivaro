@@ -14,7 +14,7 @@ import type { Selection } from '../../types'
 import { shadedRects, simulation, startSimulation, stopSimulation } from './index'
 import { overlayFrom, type SimResult } from './overlay'
 
-const getMock = api.get as unknown as ReturnType<typeof vi.fn>
+const getMock = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 const d = { name: 'Redis', routes: [], callers: [] } as unknown as InspectorData
 
 const answer: SimResult = {

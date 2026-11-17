@@ -154,7 +154,9 @@ describe('GET /pipelines/instances/:collection', () => {
     const { db } = await import('../../../db/index.js')
     const whereIn = vi
       .mocked(db)
-      .mock.results.map((r) => (r.value as { whereIn: ReturnType<typeof vi.fn> }).whereIn)
+      .mock.results.map(
+        (r) => (r.value as { whereIn: ReturnType<typeof vi.fn<(...args: any[]) => any>> }).whereIn
+      )
       .flatMap((f) => f.mock.calls)
       .find((args) => args[0] === 'i.item')
     expect(whereIn?.[1]).toEqual(['1'])

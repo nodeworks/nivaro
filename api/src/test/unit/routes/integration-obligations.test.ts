@@ -92,7 +92,7 @@ describe('the integration-obligations readiness check', () => {
       groupBy: vi.fn().mockResolvedValue(groups)
     }
     for (const k of ['select', 'count', 'min', 'whereIn']) {
-      ;(grouped[k] as ReturnType<typeof vi.fn>).mockReturnValue(grouped)
+      ;(grouped[k] as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mockReturnValue(grouped)
     }
     const gaveUpChain: Record<string, unknown> = {
       where: vi.fn(),
@@ -100,7 +100,9 @@ describe('the integration-obligations readiness check', () => {
       first: vi.fn().mockResolvedValue({ c: gaveUp })
     }
     for (const k of ['where', 'count']) {
-      ;(gaveUpChain[k] as ReturnType<typeof vi.fn>).mockReturnValue(gaveUpChain)
+      ;(gaveUpChain[k] as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mockReturnValue(
+        gaveUpChain
+      )
     }
     const queue: unknown[] = [grouped, gaveUpChain]
     mockedDb().mockImplementation(((table: string) => {

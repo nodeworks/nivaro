@@ -70,8 +70,8 @@ function chain(table: string) {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(db).mockImplementation(((t: string) => chain(t)) as never)
-  ;(db as unknown as { raw: ReturnType<typeof vi.fn> }).raw = vi.fn(async () =>
-    ['id', 'title', 'zone', 'amount', 'created_at'].map((name) => ({ name }))
+  ;(db as unknown as { raw: ReturnType<typeof vi.fn<(...args: any[]) => any>> }).raw = vi.fn(
+    async () => ['id', 'title', 'zone', 'amount', 'created_at'].map((name) => ({ name }))
   )
 })
 

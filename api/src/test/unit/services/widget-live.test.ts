@@ -35,7 +35,7 @@ const kpi: ReportWidgetRow = {
 }
 
 function makeDeps(over: Partial<WidgetLiveDeps> = {}): WidgetLiveDeps & {
-  computeReport: ReturnType<typeof vi.fn>
+  computeReport: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 } {
   const computeReport = vi.fn(async (user: User) => ({
     // Each viewer's own figure — what their row filters let them count.

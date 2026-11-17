@@ -102,7 +102,7 @@ function renderView(client: NivaroClient, onNotice = vi.fn()) {
   return onNotice
 }
 
-const postsTo = (request: ReturnType<typeof vi.fn>, path: string) =>
+const postsTo = (request: ReturnType<typeof vi.fn<(...args: any[]) => any>>, path: string) =>
   request.mock.calls.map(([c]) => c as Cmd).filter((c) => c._method === 'POST' && c._path === path)
 
 async function openRow(title: string) {

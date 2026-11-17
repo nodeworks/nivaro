@@ -97,7 +97,7 @@ const handoffKeys = () =>
 let host: HTMLDivElement
 let root: Root
 let opened: Array<{ url: string; name: string; features: string }>
-let fakeWin: { closed: boolean; focus: ReturnType<typeof vi.fn> } | null
+let fakeWin: { closed: boolean; focus: ReturnType<typeof vi.fn<(...args: any[]) => any>> } | null
 const onDone = vi.fn()
 const onClose = vi.fn()
 

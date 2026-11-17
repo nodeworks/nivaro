@@ -40,7 +40,8 @@ type Cmd = { _method: string; _path: string; _params?: unknown; _body?: unknown 
 type Fn = (...args: never[]) => Cmd
 
 async function load(file: string): Promise<Record<string, Fn>> {
-  const path = `../../../sdk/src/commands/${file}`
+  // vitest 4 resolves a computed relative import against the root, not this file
+  const path = `${import.meta.dirname}/../../../sdk/src/commands/${file}.ts`
   return (await import(/* @vite-ignore */ path)) as Record<string, Fn>
 }
 const run = (fn: unknown, ...args: unknown[]): Cmd => (fn as (...a: unknown[]) => Cmd)(...args)

@@ -50,7 +50,9 @@ const parentBundle: LayoutBundle = {
   rev: '1'
 }
 
-async function mount(node: (apply: ReturnType<typeof vi.fn>) => React.ReactNode) {
+async function mount(
+  node: (apply: ReturnType<typeof vi.fn<(...args: any[]) => any>>) => React.ReactNode
+) {
   const calls: Cmd[] = []
   const client = {
     request: vi.fn(async (cmd: Cmd) => {

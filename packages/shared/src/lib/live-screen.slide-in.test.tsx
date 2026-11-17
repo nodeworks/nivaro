@@ -7,11 +7,11 @@ import { NEW_ROW_FADE_MS, NEW_ROW_HOLD_MS, slideIn } from './live-screen'
 // holds ~2 s then fades, and a row nobody saw arrive gets a dot until it is in view.
 
 type Kf = Array<Record<string, unknown>>
-let animate: ReturnType<typeof vi.fn>
+let animate: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 let io: {
   cb: (e: unknown[]) => void
-  observe: ReturnType<typeof vi.fn>
-  disconnect: ReturnType<typeof vi.fn>
+  observe: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+  disconnect: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 }
 
 function list() {

@@ -23,7 +23,7 @@ const { _resetRefusalLabelCache, importRowErrorText, labelDbRefusal } = await im
 )
 const { enrichErrorPayload, noteDbRefusal } = await import('../../../services/error-enrich.js')
 
-const raw = (db as unknown as { raw: ReturnType<typeof vi.fn> }).raw
+const raw = (db as unknown as { raw: ReturnType<typeof vi.fn<(...args: any[]) => any>> }).raw
 
 const DUP = new Error(
   "insert into [purchase_orders] ([po_number]) values (@p0) - Cannot insert duplicate key row in object 'dbo.purchase_orders' with unique index 'UX_po_number'. The duplicate key value is (4471)."

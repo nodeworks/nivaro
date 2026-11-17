@@ -109,7 +109,7 @@ function makeDbChain(overrides: Record<string, unknown> = {}) {
   ]) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
-  ;(chain.insert as ReturnType<typeof vi.fn>).mockReturnValue(chain)
+  ;(chain.insert as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mockReturnValue(chain)
   return Object.assign(chain, overrides)
 }
 

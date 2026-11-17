@@ -15,7 +15,7 @@ const lookupSpy = () =>
     mockResolvedValue: (v: LookupResult) => void
     mockResolvedValueOnce: (v: LookupResult) => { mockResolvedValueOnce: (v: LookupResult) => void }
     mockRejectedValue: (e: Error) => void
-  } & ReturnType<typeof vi.fn>
+  } & ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 afterEach(() => {
   vi.restoreAllMocks()

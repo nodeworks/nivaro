@@ -273,7 +273,7 @@ describe('entry points', () => {
 
   it('the hover peek opens after a pause, fetches only then, and Open pushes', async () => {
     const { api } = await import('@/lib/api')
-    const get = api.get as unknown as ReturnType<typeof vi.fn>
+    const get = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
     get.mockClear()
     render(wrap(<InspectLink inspectRef={{ kind: 'request', id: RID }} />))
     const btn = document.querySelector(`[data-tm-inspect-link="request:${RID}"]`) as HTMLElement

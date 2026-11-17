@@ -13,8 +13,8 @@ vi.mock('@/components/replay-player', () => ({
 
 import { ReplayLibrary } from './ReplayLibrary'
 
-const getMock = api.get as unknown as ReturnType<typeof vi.fn>
-const deleteMock = api.delete as unknown as ReturnType<typeof vi.fn>
+const getMock = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
+const deleteMock = api.delete as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 const clips = [
   {

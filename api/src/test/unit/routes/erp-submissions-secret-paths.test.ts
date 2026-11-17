@@ -27,7 +27,7 @@ import { restrictPlaceholders, secretPathsOf } from '../../../services/body-secr
 const REAL = '⟦nvr-secret:token⟧'
 const NEUTRAL = '⟦nvr-secret​:token⟧'
 
-let fetchMock: ReturnType<typeof vi.fn>
+let fetchMock: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 beforeEach(() => {
   vi.mocked(db).mockImplementation(((table: string) => {

@@ -65,7 +65,7 @@
     "@biomejs/biome": "^2.4.16",
     "@playwright/test": "^1.49.0",
     "concurrently": "^9.1.2",
-    "fallow": "^2.88.3",
+    "fallow": "^3.43.2",
     "wait-on": "^9.0.10"
   },
   "license": "MIT",

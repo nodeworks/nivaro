@@ -210,8 +210,8 @@ interface Fx {
   currentState: string
   transition: Record<string, unknown>
   completed?: boolean
-  instanceUpdate?: ReturnType<typeof vi.fn>
-  historyInsert?: ReturnType<typeof vi.fn>
+  instanceUpdate?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+  historyInsert?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 }
 
 function installDb(fx: Fx) {

@@ -10,7 +10,7 @@ import { db } from '../../../db/index.js'
 import { resetRequesterColumnProbe } from '../../../services/erp-requester-columns.js'
 import { recordSubmission } from '../../../services/workflow-actions.js'
 
-type SchemaDb = { schema: { hasColumn: ReturnType<typeof vi.fn> } }
+type SchemaDb = { schema: { hasColumn: ReturnType<typeof vi.fn<(...args: any[]) => any>> } }
 
 function fakeSubmissionsTable() {
   const insert = vi.fn((row: Record<string, unknown>) => ({

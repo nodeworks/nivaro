@@ -53,7 +53,7 @@ function chainFor(table: string, ops: unknown[]) {
   return chain
 }
 
-let fetchMock: ReturnType<typeof vi.fn>
+let fetchMock: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 beforeEach(() => {
   fetchMock = vi.fn(

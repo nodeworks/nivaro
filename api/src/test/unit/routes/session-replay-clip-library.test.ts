@@ -54,9 +54,9 @@ function setup(over: FakeTables = {}) {
     inserted: over.inserted
   })
   vi.mocked(db).mockImplementation(fake.dbFn as never)
-  ;(db as unknown as { transaction: ReturnType<typeof vi.fn> }).transaction.mockImplementation(
-    fake.transaction as never
-  )
+  ;(
+    db as unknown as { transaction: ReturnType<typeof vi.fn<(...args: any[]) => any>> }
+  ).transaction.mockImplementation(fake.transaction as never)
   return fake
 }
 

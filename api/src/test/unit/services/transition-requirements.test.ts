@@ -156,7 +156,7 @@ describe('evaluateTransitionRequirements — child-query failure fails open loud
 // A minimal chainable knex stand-in: every builder method returns the builder,
 // `select`/`first`/await resolve that table's rows. Filters are ignored — each
 // test controls the rows per table, which is all these assertions need.
-type FakeBuilder = Record<string, ReturnType<typeof vi.fn>>
+type FakeBuilder = Record<string, ReturnType<typeof vi.fn<(...args: any[]) => any>>>
 function fakeDb(tables: Record<string, Array<Record<string, unknown>>>) {
   const builders: Record<string, FakeBuilder[]> = {}
   const fn = vi.fn((table: string) => {

@@ -83,7 +83,7 @@ interface Fx {
   steps?: Array<Record<string, unknown>>
   /** A pending instance already on this item => duplicate guard trips. */
   existing?: Record<string, unknown> | undefined
-  instanceInsert?: ReturnType<typeof vi.fn>
+  instanceInsert?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 }
 
 function makeDbMock(fx: Fx) {

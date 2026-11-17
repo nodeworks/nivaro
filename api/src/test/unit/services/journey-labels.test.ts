@@ -103,7 +103,8 @@ describe('resolveJourneyLabels', () => {
     expect(a?.key).not.toContain('365984')
     // One label read for the collection, as the viewer.
     expect(d.recordLabels).toHaveBeenCalledTimes(1)
-    const [viewer, byTarget] = (d.recordLabels as ReturnType<typeof vi.fn>).mock.calls[0]
+    const [viewer, byTarget] = (d.recordLabels as ReturnType<typeof vi.fn<(...args: any[]) => any>>)
+      .mock.calls[0]
     expect(viewer).toBe(VIEWER)
     expect([...byTarget.get('workflows')]).toEqual(['365984'])
   })
@@ -173,7 +174,8 @@ describe('resolveJourneyLabels', () => {
     const paths = Array.from({ length: 260 }, (_, i) => `/records/workflows/${i + 1}`)
     const d = deps({ recordLabels: vi.fn(async () => ({})) })
     const out = await resolveJourneyLabels(paths, VIEWER, true, { deps: d, cache: null })
-    const [, byTarget] = (d.recordLabels as ReturnType<typeof vi.fn>).mock.calls[0]
+    const [, byTarget] = (d.recordLabels as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mock
+      .calls[0]
     expect(byTarget.get('workflows').size).toBe(200)
     expect(out.get('/records/workflows/260')?.title).toBe('A workflow record')
   })

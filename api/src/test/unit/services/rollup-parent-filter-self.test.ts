@@ -63,7 +63,11 @@ function aggregateChain(value: number | null) {
 }
 
 /** The project row: first read = the filter columns, second = the stored amount. */
-function projectChain(flag: unknown, current: number | null, update: ReturnType<typeof vi.fn>) {
+function projectChain(
+  flag: unknown,
+  current: number | null,
+  update: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+) {
   const first = vi
     .fn()
     .mockResolvedValueOnce({ pub_amount_follows_cars: flag })

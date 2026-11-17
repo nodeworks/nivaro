@@ -23,7 +23,7 @@ vi.mock('../../../services/integration-obligations.js', async () => {
 // "the columns are here" so the existing requested_by/requested_via
 // assertions below keep meaning what they say. The dedicated "columns
 // missing" describe block below overrides this per test.
-type SchemaDb = { schema: { hasColumn: ReturnType<typeof vi.fn> } }
+type SchemaDb = { schema: { hasColumn: ReturnType<typeof vi.fn<(...args: any[]) => any>> } }
 beforeEach(() => {
   ;(db as unknown as SchemaDb).schema = { hasColumn: vi.fn().mockResolvedValue(true) }
 })
@@ -329,9 +329,9 @@ describe('applySendOutcome — the requester columns are missing on this databas
   afterEach(() => vi.clearAllMocks())
 
   it('drops requested_by/requested_via — the SELECT and both inserts still happen', async () => {
-    ;(db as unknown as { schema: { hasColumn: ReturnType<typeof vi.fn> } }).schema.hasColumn = vi
-      .fn()
-      .mockResolvedValue(false)
+    ;(
+      db as unknown as { schema: { hasColumn: ReturnType<typeof vi.fn<(...args: any[]) => any>> } }
+    ).schema.hasColumn = vi.fn().mockResolvedValue(false)
 
     const sub = {
       where: vi.fn(),

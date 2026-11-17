@@ -51,7 +51,7 @@ const RAW_LOG_ROW = {
   created_at: new Date('2026-09-23T00:00:00.000Z')
 }
 
-type Chain = Record<string, ReturnType<typeof vi.fn>>
+type Chain = Record<string, ReturnType<typeof vi.fn<(...args: any[]) => any>>>
 
 function makeSingleRowChain(overrides: Partial<{ first: unknown }> = {}): Chain {
   const chain: Chain = {}

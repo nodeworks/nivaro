@@ -57,11 +57,11 @@ const schema = z.object({
   DB_ENCRYPT: z
     .string()
     .transform((v) => v === 'true')
-    .default('false'),
+    .prefault('false'),
   DB_TRUST_SERVER_CERT: z
     .string()
     .transform((v) => v === 'true')
-    .default('true'),
+    .prefault('true'),
 
   // Read replica (optional) — when DB_READ_HOST is set, GET-heavy queries can
   // use the dbRead knex instance exported from db/index.ts.
@@ -73,7 +73,7 @@ const schema = z.object({
   MIGRATION_SAFE_MODE: z
     .string()
     .transform((v) => v === 'true')
-    .default('false'),
+    .prefault('false'),
   MIGRATION_LOCK_TIMEOUT_MS: z.coerce.number().default(60_000),
   // knex's own migration-table lock outlives a process killed mid-migration
   // (SIGTERM skips the finally). A boot that finds it locked waits this long
@@ -104,7 +104,7 @@ const schema = z.object({
   TRUST_PROXY: z
     .string()
     .transform((v) => v === 'true')
-    .default('false'),
+    .prefault('false'),
 
   // OIDC is optional: leave these blank (or set OIDC_ENABLED=false) to run
   // without an identity provider — sign-in falls back to email/password and
@@ -116,7 +116,7 @@ const schema = z.object({
   OIDC_ENABLED: z
     .string()
     .transform((v) => v !== 'false')
-    .default('true'),
+    .prefault('true'),
 
   // Microsoft Graph directory lookups (User.Read.All as an APPLICATION
   // permission with admin consent): the server reads any tenant user with its
@@ -139,7 +139,7 @@ const schema = z.object({
   SMTP_SECURE: z
     .string()
     .transform((v) => v === 'true')
-    .default('false'),
+    .prefault('false'),
 
   STORAGE_DRIVER: z.enum(['local']).default('local'),
   STORAGE_LOCAL_ROOT: z.string().default('./uploads'),

@@ -42,7 +42,7 @@ function zodOf(prop: JsonSchema): z.ZodTypeAny {
     const items =
       prop.items && typeof prop.items === 'object' ? zodOf(prop.items as JsonSchema) : z.unknown()
     t = z.array(items)
-  } else if (type === 'object') t = z.record(z.unknown())
+  } else if (type === 'object') t = z.record(z.string(), z.unknown())
   else t = z.unknown()
   return typeof prop.description === 'string' ? t.describe(prop.description) : t
 }

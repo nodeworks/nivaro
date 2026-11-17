@@ -164,7 +164,7 @@ describe('realtime shared worker source (#2475)', () => {
     const a = attach()
     a.send({ t: 'hello', app: 'admin' })
     socket.connect()
-    const setTimeoutMock = scope.setTimeout as ReturnType<typeof vi.fn>
+    const setTimeoutMock = scope.setTimeout as ReturnType<typeof vi.fn<(...args: any[]) => any>>
     const lastAsk = () => a.received.filter((m) => m.t === 'need-token').at(-1)?.req
     const asks = () => a.received.filter((m) => m.t === 'need-token').length
     const answerEmpty = () => {
@@ -203,9 +203,9 @@ describe('realtime shared worker source (#2475)', () => {
     expect(socket.connected).toBe(false)
     // nothing revives it: not focus, not the stall watchdog, not the token timer
     a.send({ t: 'active' })
-    const intervals = (scope.setInterval as ReturnType<typeof vi.fn>).mock.calls.map(
-      (c) => c[0] as () => void
-    )
+    const intervals = (
+      scope.setInterval as ReturnType<typeof vi.fn<(...args: any[]) => any>>
+    ).mock.calls.map((c) => c[0] as () => void)
     vi.setSystemTime(Date.now() + 120_000)
     a.send({ t: 'pong' }) // the tab is alive (it answers pings)
     for (const tick of intervals) tick()
@@ -238,7 +238,7 @@ describe('realtime shared worker source (#2475)', () => {
     const a = attach()
     a.send({ t: 'hello', app: 'admin' })
     socket.connect()
-    const setTimeoutMock = scope.setTimeout as ReturnType<typeof vi.fn>
+    const setTimeoutMock = scope.setTimeout as ReturnType<typeof vi.fn<(...args: any[]) => any>>
     const asks = () => a.received.filter((m) => m.t === 'need-token')
     // an older tab: a bare null (no signedOut flag) — the worker backs off
     a.send({ t: 'token', req: asks().at(-1)?.req, token: null })
@@ -246,9 +246,9 @@ describe('realtime shared worker source (#2475)', () => {
     expect(wait).toBe(1000)
     // the zombie reaper drops the socket; the stall watchdog must not reconnect it
     socket.serverDrop()
-    const intervals = (scope.setInterval as ReturnType<typeof vi.fn>).mock.calls.map(
-      (c) => c[0] as () => void
-    )
+    const intervals = (
+      scope.setInterval as ReturnType<typeof vi.fn<(...args: any[]) => any>>
+    ).mock.calls.map((c) => c[0] as () => void)
     vi.setSystemTime(Date.now() + 120_000)
     a.send({ t: 'pong' }) // the tab is alive (it answers pings)
     for (const tick of intervals) tick()
@@ -405,9 +405,9 @@ describe('realtime shared worker source (#2475)', () => {
     expect(last.build).toBeUndefined()
     expect(last.tab).toBeUndefined()
     // Then, 30 s later and still empty: the socket and the worker close.
-    const timers = (scope.setTimeout as ReturnType<typeof vi.fn>).mock.calls.filter(
-      (c) => c[1] === 30000
-    )
+    const timers = (
+      scope.setTimeout as ReturnType<typeof vi.fn<(...args: any[]) => any>>
+    ).mock.calls.filter((c) => c[1] === 30000)
     expect(timers.length).toBe(1)
     ;(timers[0][0] as () => void)()
     expect(socket.connected).toBe(false)
@@ -421,9 +421,9 @@ describe('realtime shared worker source (#2475)', () => {
     a.send({ t: 'hello', app: 'efp-new', version: { build: 'b1', tab: 't1', loaded: 1000 } })
     socket.connect()
     a.send({ t: 'bye' })
-    const timer = (scope.setTimeout as ReturnType<typeof vi.fn>).mock.calls.find(
-      (c) => c[1] === 30000
-    )
+    const timer = (
+      scope.setTimeout as ReturnType<typeof vi.fn<(...args: any[]) => any>>
+    ).mock.calls.find((c) => c[1] === 30000)
     attach() // the reloaded page, same build
     expect(scope.clearTimeout).toHaveBeenCalled()
     ;(timer?.[0] as () => void)() // even if the cancelled timer fired, a page is there

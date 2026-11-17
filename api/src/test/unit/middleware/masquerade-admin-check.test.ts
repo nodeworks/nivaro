@@ -30,7 +30,7 @@ function wireDb(users: Row[], roles: Row[]) {
   })
 }
 
-function buildApp(del: ReturnType<typeof vi.fn>) {
+function buildApp(del: ReturnType<typeof vi.fn<(...args: any[]) => any>>) {
   const app = Fastify({ logger: false })
   // @ts-expect-error — test shim
   app.decorateRequest('session', null)

@@ -5,7 +5,7 @@ import { describe, expect, it, type vi } from 'vitest'
 import { api } from '@/lib/api'
 import { type NoOwnerReport, NoOwnerStepsPage } from './NoOwnerSteps'
 
-const get = api.get as unknown as ReturnType<typeof vi.fn>
+const get = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 const REPORT: NoOwnerReport = {
   computed_at: new Date().toISOString(),

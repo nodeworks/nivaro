@@ -3,7 +3,7 @@ import { type PinnedSession, underSessionAppLock } from '../../../db/migration-l
 
 function fakeSession(lockResult: number, releaseFails = false) {
   const calls: Array<{ sql: string; timeoutMs?: number }> = []
-  const session: PinnedSession & { discard: ReturnType<typeof vi.fn> } = {
+  const session: PinnedSession & { discard: ReturnType<typeof vi.fn<(...args: any[]) => any>> } = {
     run: vi.fn(async (sql: string, timeoutMs?: number) => {
       calls.push({ sql, timeoutMs })
       if (sql.includes('sp_getapplock')) return [{ result: lockResult }]

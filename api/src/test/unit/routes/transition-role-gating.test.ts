@@ -176,8 +176,8 @@ function approvalTransition(overrides: Record<string, unknown> = {}) {
 interface DbFixture {
   instance?: Record<string, unknown> | undefined
   transition?: Record<string, unknown> | undefined
-  instanceUpdate?: ReturnType<typeof vi.fn>
-  historyInsert?: ReturnType<typeof vi.fn>
+  instanceUpdate?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+  historyInsert?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 }
 
 function makeDbMock(fx: DbFixture) {

@@ -837,7 +837,7 @@ describe('Inspector', () => {
   })
 
   describe('placement behaviour (#2703 #2704 #2705 #2706 #2709 #2712)', () => {
-    const lastOverrides = (apply: ReturnType<typeof vi.fn>) => {
+    const lastOverrides = (apply: ReturnType<typeof vi.fn<(...args: any[]) => any>>) => {
       const [ops] = apply.mock.calls.at(-1) ?? []
       return (ops as Array<{ patch: { overrides: Record<string, unknown> } }>)[0].patch.overrides
     }

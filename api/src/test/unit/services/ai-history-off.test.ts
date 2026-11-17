@@ -14,34 +14,36 @@ const app = {} as never
 /** db mock: records every table touched and every where(); prefs come from `prefs`. */
 function track(prefs: Record<string, unknown>) {
   const calls: Array<{ table: string; where: unknown[]; op?: string }> = []
-  ;(db as unknown as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
-    const call: { table: string; where: unknown[]; op?: string } = { table, where: [] }
-    calls.push(call)
-    const chain: Record<string, unknown> = {}
-    const self = () => chain
-    for (const m of ['whereIn', 'whereNotNull', 'orderBy', 'select', 'returning']) chain[m] = self
-    chain.where = (...a: unknown[]) => {
-      call.where.push(a.length === 1 ? a[0] : a)
+  ;(db as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mockImplementation(
+    (table: string) => {
+      const call: { table: string; where: unknown[]; op?: string } = { table, where: [] }
+      calls.push(call)
+      const chain: Record<string, unknown> = {}
+      const self = () => chain
+      for (const m of ['whereIn', 'whereNotNull', 'orderBy', 'select', 'returning']) chain[m] = self
+      chain.where = (...a: unknown[]) => {
+        call.where.push(a.length === 1 ? a[0] : a)
+        return chain
+      }
+      chain.first = async () =>
+        table === 'nivaro_users' ? { preferences: JSON.stringify(prefs) } : null
+      chain.insert = () => {
+        call.op = 'insert'
+        // appendMessage chains .returning('id') onto the insert.
+        return Object.assign(Promise.resolve([{ id: 1 }]), { returning: async () => [{ id: 1 }] })
+      }
+      chain.update = async () => {
+        call.op = 'update'
+        return 1
+      }
+      chain.del = async () => {
+        call.op = 'del'
+        return 3
+      }
+      chain.pluck = async () => []
       return chain
     }
-    chain.first = async () =>
-      table === 'nivaro_users' ? { preferences: JSON.stringify(prefs) } : null
-    chain.insert = () => {
-      call.op = 'insert'
-      // appendMessage chains .returning('id') onto the insert.
-      return Object.assign(Promise.resolve([{ id: 1 }]), { returning: async () => [{ id: 1 }] })
-    }
-    chain.update = async () => {
-      call.op = 'update'
-      return 1
-    }
-    chain.del = async () => {
-      call.op = 'del'
-      return 3
-    }
-    chain.pluck = async () => []
-    return chain
-  })
+  )
   return calls
 }
 

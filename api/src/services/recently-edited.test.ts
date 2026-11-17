@@ -183,7 +183,9 @@ describe('recentlyEditedBy', () => {
     ])
     // One labels read as the caller, with every record + the link row + the comment target.
     expect(deps.labels).toHaveBeenCalledTimes(1)
-    expect((deps.labels as ReturnType<typeof vi.fn>).mock.calls[0][1]).toEqual([
+    expect(
+      (deps.labels as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mock.calls[0][1]
+    ).toEqual([
       { collection: 'workflows', id: '7' },
       { collection: 'workflows', id: '8' },
       { collection: 'workflows_divisions', id: '11' },
@@ -257,7 +259,8 @@ describe('recentlyEditedBy', () => {
     expect(out[0].did).toBe('Edited 1 field')
     expect(out[0].last_edited_at).toBe('2026-11-13T10:30:00Z')
     // chat, system and unregistered tables are never even judged
-    const asked = (deps.labels as ReturnType<typeof vi.fn>).mock.calls[0][1] as Array<{
+    const asked = (deps.labels as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mock
+      .calls[0][1] as Array<{
       collection: string
     }>
     expect([...new Set(asked.map((r) => r.collection))].sort()).toEqual([
@@ -266,7 +269,10 @@ describe('recentlyEditedBy', () => {
       'workflows_divisions'
     ])
     expect(
-      ((deps.registered as ReturnType<typeof vi.fn>).mock.calls[0][0] as string[]).sort()
+      (
+        (deps.registered as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mock
+          .calls[0][0] as string[]
+      ).sort()
     ).toEqual(['notes', 'raw_table', 'workflows'])
   })
 

@@ -54,7 +54,7 @@ function aggregateChain(value: number | null) {
 function parentChain(
   currentValue: number | null,
   rollupField: string,
-  update: ReturnType<typeof vi.fn>,
+  update: ReturnType<typeof vi.fn<(...args: any[]) => any>>,
   whereIds: unknown[]
 ) {
   const chain = {

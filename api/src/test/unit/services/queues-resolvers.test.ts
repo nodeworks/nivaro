@@ -201,7 +201,7 @@ describe('resolveCollectionSource — pushed-down state filter', () => {
     expect(articlesChain.whereNotExists).toHaveBeenCalledTimes(1)
     expect(articlesChain.whereExists).toHaveBeenCalledTimes(1)
     const sub = makeDbChain([]) as ReturnType<typeof makeDbChain> & {
-      from: ReturnType<typeof vi.fn>
+      from: ReturnType<typeof vi.fn<(...args: any[]) => any>>
     }
     sub.from = vi.fn().mockReturnThis()
     ;(db as unknown as { raw: unknown }).raw = vi.fn()

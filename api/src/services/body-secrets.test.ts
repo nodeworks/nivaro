@@ -215,7 +215,7 @@ describe('scrubbing', () => {
 type Row = Record<string, unknown>
 let apiRow: Row
 let logInserts: Row[]
-let fetchMock: ReturnType<typeof vi.fn>
+let fetchMock: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 function wireDb() {
   logInserts = []

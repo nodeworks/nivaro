@@ -318,7 +318,7 @@ describe('mergeCallHistory — Task 15e list merge', () => {
 
 // ─── GET /integration-partners/:id/calls/:callId ───────────────────────────
 
-type Chain = Record<string, ReturnType<typeof vi.fn>>
+type Chain = Record<string, ReturnType<typeof vi.fn<(...args: any[]) => any>>>
 
 function makeChain(overrides: Partial<{ first: unknown; select: unknown[] }> = {}): Chain {
   const chain: Chain = {}

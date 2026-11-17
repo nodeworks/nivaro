@@ -365,7 +365,7 @@ describe('system tables', () => {
   })
 
   it('getRowFilter never falls back to the wildcard on a system table', async () => {
-    const chains: Array<{ orWhere: ReturnType<typeof vi.fn> }> = []
+    const chains: Array<{ orWhere: ReturnType<typeof vi.fn<(...args: any[]) => any>> }> = []
     let n = 0
     vi.mocked(db as unknown as (t: string) => unknown).mockImplementation(() => {
       const result = [regularRole, null][n++] ?? null

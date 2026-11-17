@@ -153,7 +153,7 @@ describe('record mentions in chat', () => {
       }
       chain.select = async () => rows
       gate.labels = []
-      ;(db as unknown as ReturnType<typeof vi.fn>).mockReturnValue(chain)
+      ;(db as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mockReturnValue(chain)
       const canSee = async (_u: unknown, room: string) => room === 'ch:open'
       for (const viewer of [{ id: 'C' }, { id: 'ADMIN', role: 'admin' }]) {
         const out = await recordMentionMessages(viewer as never, 'workflows', '1', { canSee })

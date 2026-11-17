@@ -14,7 +14,7 @@ vi.mock('@/components/replay-player', () => ({
 
 import { SharedReplay, shareRefusal } from './SharedReplay'
 
-const getMock = api.get as unknown as ReturnType<typeof vi.fn>
+const getMock = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 function renderShare(token = 'tok/1') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })

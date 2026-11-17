@@ -43,7 +43,7 @@ import { createOne, updateOne } from '../../../services/items.js'
 import { recalcAffectedRollups } from '../../../services/rollups.js'
 import { runTransitionActions } from '../../../services/workflow-actions.js'
 
-type Builder = Record<string, ReturnType<typeof vi.fn>>
+type Builder = Record<string, ReturnType<typeof vi.fn<(...args: any[]) => any>>>
 const builders: Array<{ table: string; b: Builder }> = []
 
 function fakeDb(tables: Record<string, Array<Record<string, unknown>>>) {

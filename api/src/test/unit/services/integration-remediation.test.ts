@@ -227,7 +227,8 @@ function chain(overrides: Record<string, unknown> = {}) {
     'leftJoin',
     'limit'
   ]) {
-    if (!(k in overrides)) (c[k] as ReturnType<typeof vi.fn>).mockReturnValue(c)
+    if (!(k in overrides))
+      (c[k] as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mockReturnValue(c)
   }
   return c
 }

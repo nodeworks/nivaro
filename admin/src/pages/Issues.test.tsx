@@ -18,8 +18,8 @@ vi.mock('react-router', async (importOriginal) => {
 
 import { IssuesPage } from './Issues'
 
-const getMock = api.get as unknown as ReturnType<typeof vi.fn>
-const patchMock = api.patch as unknown as ReturnType<typeof vi.fn>
+const getMock = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
+const patchMock = api.patch as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 const RAISER = '7A0411F3-C687-40E5-ADF5-614157CF88EC'
 
 const issue = (id: number, status = 'open') => ({

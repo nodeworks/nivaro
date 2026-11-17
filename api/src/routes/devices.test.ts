@@ -346,7 +346,7 @@ describe('Signed-in phones', () => {
     const b = await phone(PAT, 'Tablet', [4])
     const { db } = await import('../db/index.js')
     const spy = vi
-      .spyOn(db.client as never, '_query' as never)
+      .spyOn(db.client as unknown as { _query: (...a: unknown[]) => Promise<unknown> }, '_query')
       .mockRejectedValueOnce(new Error('down') as never)
     const res = await app.inject({
       method: 'DELETE',
@@ -370,7 +370,7 @@ describe('Signed-in phones', () => {
     const old = await phone(PAT, 'Phone', [50])
     const { db } = await import('../db/index.js')
     const spy = vi
-      .spyOn(db.client as never, '_query' as never)
+      .spyOn(db.client as unknown as { _query: (...a: unknown[]) => Promise<unknown> }, '_query')
       .mockRejectedValueOnce(new Error('down') as never)
     await endDeviceGrant(redis as never, old.grant.id, 'removed') // outage → leftover [50]
     spy.mockRestore()
@@ -394,7 +394,7 @@ describe('Signed-in phones', () => {
     const old = await phone(PAT, 'Phone', [52])
     const { db } = await import('../db/index.js')
     const spy = vi
-      .spyOn(db.client as never, '_query' as never)
+      .spyOn(db.client as unknown as { _query: (...a: unknown[]) => Promise<unknown> }, '_query')
       .mockRejectedValueOnce(new Error('down') as never)
     await endDeviceGrant(redis as never, old.grant.id, 'removed')
     spy.mockRestore()

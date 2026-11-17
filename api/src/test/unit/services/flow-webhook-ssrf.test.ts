@@ -43,7 +43,7 @@ const op = (type: string, options: Record<string, unknown>) => ({
   reject: null
 })
 
-let fetchMock: ReturnType<typeof vi.fn>
+let fetchMock: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 const savedCloud = process.env.CLOUD_META_DB_URL
 
 beforeEach(() => {

@@ -7,8 +7,8 @@ import { api } from '@/lib/api'
 import type { CatalogFault } from '../api'
 import { ExperimentBuilder } from './ExperimentBuilder'
 
-const getMock = api.get as unknown as ReturnType<typeof vi.fn>
-const postMock = api.post as unknown as ReturnType<typeof vi.fn>
+const getMock = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
+const postMock = api.post as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 const slow: CatalogFault = {
   key: 'slow_requests',

@@ -50,21 +50,23 @@ const thread = [
 
 function mockDb(listRows: unknown[]) {
   const inserted: Array<Record<string, unknown>> = []
-  ;(db as unknown as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
-    const chain: Record<string, unknown> = {}
-    const self = () => chain
-    for (const m of ['where', 'whereIn', 'orderBy', 'select', 'whereNotNull']) chain[m] = self
-    chain.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
-      Promise.resolve(table === 'nivaro_ai_conversation_messages' ? listRows : []).then(res, rej)
-    chain.catch = async () => []
-    chain.insert = async (row: Record<string, unknown>) => {
-      if (table === 'nivaro_ai_conversation_messages') inserted.push(row)
-      return [1]
+  ;(db as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mockImplementation(
+    (table: string) => {
+      const chain: Record<string, unknown> = {}
+      const self = () => chain
+      for (const m of ['where', 'whereIn', 'orderBy', 'select', 'whereNotNull']) chain[m] = self
+      chain.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+        Promise.resolve(table === 'nivaro_ai_conversation_messages' ? listRows : []).then(res, rej)
+      chain.catch = async () => []
+      chain.insert = async (row: Record<string, unknown>) => {
+        if (table === 'nivaro_ai_conversation_messages') inserted.push(row)
+        return [1]
+      }
+      chain.update = async () => 1
+      chain.first = async () => null
+      return chain
     }
-    chain.update = async () => 1
-    chain.first = async () => null
-    return chain
-  })
+  )
   return inserted
 }
 

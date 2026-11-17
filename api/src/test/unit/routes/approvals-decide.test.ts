@@ -99,8 +99,8 @@ interface Fx {
   steps?: Array<Record<string, unknown>>
   /** An existing decision row => the double-decide guard trips. */
   priorDecision?: Record<string, unknown> | undefined
-  decisionInsert?: ReturnType<typeof vi.fn>
-  instanceUpdate?: ReturnType<typeof vi.fn>
+  decisionInsert?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+  instanceUpdate?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
   roleUsers?: Array<{ id: string }>
 }
 

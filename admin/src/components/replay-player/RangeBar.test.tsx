@@ -12,9 +12,9 @@ vi.mock('react-router', async (importOriginal) => {
 
 import { RangeActions, RangeTrack } from './RangeBar'
 
-const postMock = api.post as unknown as ReturnType<typeof vi.fn>
-const getMock = api.get as unknown as ReturnType<typeof vi.fn>
-const deleteMock = api.delete as unknown as ReturnType<typeof vi.fn>
+const postMock = api.post as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
+const getMock = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
+const deleteMock = api.delete as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 // The person picker fetches /users; the test picks through a plain stand-in.
 vi.mock('@/components/user-combobox', () => ({

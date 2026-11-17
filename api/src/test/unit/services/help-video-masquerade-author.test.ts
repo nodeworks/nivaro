@@ -20,26 +20,28 @@ function fakeDb(rows: {
   roles: Record<string, unknown>
   authorRoles?: string[]
 }) {
-  ;(db as unknown as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
-    let where: Record<string, unknown> = {}
-    const q = {
-      where(w: Record<string, unknown>) {
-        where = w
-        return q
-      },
-      async first() {
-        if (table === 'nivaro_users')
-          return (rows.users as Array<Record<string, unknown>>).find(
-            (u) => u.id === where.id && u.status === where.status
-          )
-        if (table === 'nivaro_roles') return rows.roles[String(where.id)]
-        if (table === 'nivaro_settings')
-          return { help_video_author_roles: JSON.stringify(rows.authorRoles ?? []) }
-        return undefined
+  ;(db as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mockImplementation(
+    (table: string) => {
+      let where: Record<string, unknown> = {}
+      const q = {
+        where(w: Record<string, unknown>) {
+          where = w
+          return q
+        },
+        async first() {
+          if (table === 'nivaro_users')
+            return (rows.users as Array<Record<string, unknown>>).find(
+              (u) => u.id === where.id && u.status === where.status
+            )
+          if (table === 'nivaro_roles') return rows.roles[String(where.id)]
+          if (table === 'nivaro_settings')
+            return { help_video_author_roles: JSON.stringify(rows.authorRoles ?? []) }
+          return undefined
+        }
       }
+      return q
     }
-    return q
-  })
+  )
 }
 
 function req(extra: Partial<FastifyRequest>): FastifyRequest {

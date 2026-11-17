@@ -47,7 +47,7 @@ const notified: Array<{ to: string; subject: string }> = []
 let redisMock: {
   counters: Map<string, number>
   incr: (k: string) => Promise<number>
-  expireat: ReturnType<typeof vi.fn>
+  expireat: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 } | null = null
 vi.mock('../../../services/io-holder.js', () => ({
   getApp: () => ({
@@ -521,7 +521,9 @@ describe('drafting', () => {
   /** nivaro_ai_proposals that remembers the one row proposePlan inserts. */
   async function planStore() {
     let planRow: Row | undefined
-    const dbMock = (await import('../../../db/index.js')).db as unknown as ReturnType<typeof vi.fn>
+    const dbMock = (await import('../../../db/index.js')).db as unknown as ReturnType<
+      typeof vi.fn<(...args: any[]) => any>
+    >
     dbMock.mockImplementation((table: string) => {
       const c = chain(table)
       if (table === 'nivaro_ai_proposals') {

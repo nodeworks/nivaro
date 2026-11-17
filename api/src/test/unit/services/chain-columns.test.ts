@@ -12,7 +12,7 @@ import {
   resetChainColumnProbe
 } from '../../../services/chain-columns.js'
 
-type SchemaDb = { schema: { hasColumn: ReturnType<typeof vi.fn> } }
+type SchemaDb = { schema: { hasColumn: ReturnType<typeof vi.fn<(...args: any[]) => any>> } }
 const hasColumn = () => (db as unknown as SchemaDb).schema.hasColumn
 
 afterEach(() => {

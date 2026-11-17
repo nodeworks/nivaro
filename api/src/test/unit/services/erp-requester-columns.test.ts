@@ -13,8 +13,9 @@ import {
   resetRequesterColumnProbe
 } from '../../../services/erp-requester-columns.js'
 
-type SchemaDb = { schema: { hasColumn: ReturnType<typeof vi.fn> } }
-const hasColumn = () => (db as unknown as SchemaDb).schema.hasColumn as ReturnType<typeof vi.fn>
+type SchemaDb = { schema: { hasColumn: ReturnType<typeof vi.fn<(...args: any[]) => any>> } }
+const hasColumn = () =>
+  (db as unknown as SchemaDb).schema.hasColumn as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 afterEach(() => {
   tenant.id = undefined

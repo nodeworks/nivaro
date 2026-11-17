@@ -114,7 +114,7 @@ interface DbFixture {
   instance: Record<string, unknown> | undefined
   fieldRows?: Array<{ field: string; label: string | null }>
   childRows?: Array<Record<string, unknown>>
-  instanceUpdate?: ReturnType<typeof vi.fn>
+  instanceUpdate?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 }
 
 function makeDbMock(fx: DbFixture) {

@@ -148,7 +148,7 @@ function renderPage() {
 }
 
 // R21: the setup file mocks `api.get`; cast so admin tsc (which includes tests) accepts the shape.
-const getMock = api.get as unknown as ReturnType<typeof vi.fn>
+const getMock = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 function mockApi() {
   getMock.mockImplementation(async (url: string) => {
     if (url.includes('/traffic-map/snapshot')) return { data: { data: snapshot } }

@@ -267,7 +267,10 @@ describe('the linked section card', () => {
     expect(document.body.textContent).toContain('also on 2 forms')
     expect(document.querySelector('[data-linked-differs]')).not.toBeNull()
     await click('[data-linked-update]')
-    await settle(() => (value.rawApply as ReturnType<typeof vi.fn>).mock.calls.length > 0)
+    await settle(
+      () =>
+        (value.rawApply as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mock.calls.length > 0
+    )
     expect(value.rawApply).toHaveBeenCalledWith(
       [{ op: 'group_remove', key: ROOT, placements: 'delete' }],
       { label: 'Update Address block from the library' }
@@ -307,7 +310,11 @@ describe('the linked section card', () => {
       _path: '/collection-layouts/templates/8/content',
       _body: { layout_id: 3, group_key: ROOT }
     })
-    await settle(() => (value.setEditing as ReturnType<typeof vi.fn>).mock.calls.length > 0)
+    await settle(
+      () =>
+        (value.setEditing as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mock.calls.length >
+        0
+    )
     expect(value.setEditing).toHaveBeenCalledWith(null)
   })
 

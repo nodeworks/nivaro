@@ -345,7 +345,7 @@ describe('follow scope (one form instance, while new)', () => {
     { field: 'project', from: '$parent.project' },
     { field: 'region', from: '$parent.region' }
   ]
-  function start(request: ReturnType<typeof vi.fn>) {
+  function start(request: ReturnType<typeof vi.fn<(...args: any[]) => any>>) {
     return startQuickCreateFollow({
       id: 77,
       targetCollection: 'units',

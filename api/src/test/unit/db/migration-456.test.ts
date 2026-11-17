@@ -16,7 +16,7 @@ function fakeKnex(opts: { client: string; hasTable: boolean; fks: string[] }) {
   return { knex: knex as never, raw }
 }
 
-const drops = (raw: ReturnType<typeof vi.fn>) =>
+const drops = (raw: ReturnType<typeof vi.fn<(...args: any[]) => any>>) =>
   raw.mock.calls.filter(([sql]) => /DROP CONSTRAINT/.test(String(sql))).map(([, b]) => b)
 
 describe('migration 456 — layout versions keep history', () => {

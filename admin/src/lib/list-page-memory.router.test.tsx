@@ -11,16 +11,18 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 // The shared SOURCE (not the built package admin resolves): loaded by a computed path so
 // admin's tsc (ES2020 lib) does not type-check the whole shared tree; packages/shared's
 // own tsc covers it.
-const SHARED = '../../../packages/shared/src'
+// vitest 4 resolves a computed relative import against the project root, not this file:
+// hand it an absolute path built from this file's own folder (with the file extension).
+const SHARED = `${(import.meta as unknown as { dirname: string }).dirname}/../../../packages/shared/src`
 type Comp = (props: Record<string, unknown>) => ReactElement
 let CollectionBrowserView: Comp
 let ItemEditAuthContext: { Provider: Comp }
 let NivaroProvider: Comp
 let LIST_RETURN_STATE: Record<string, unknown>
 beforeAll(async () => {
-  const cbv = await import(/* @vite-ignore */ `${SHARED}/components/CollectionBrowserView`)
-  const ctx = await import(/* @vite-ignore */ `${SHARED}/context`)
-  const mem = await import(/* @vite-ignore */ `${SHARED}/lib/list-page-memory`)
+  const cbv = await import(/* @vite-ignore */ `${SHARED}/components/CollectionBrowserView.tsx`)
+  const ctx = await import(/* @vite-ignore */ `${SHARED}/context.tsx`)
+  const mem = await import(/* @vite-ignore */ `${SHARED}/lib/list-page-memory.ts`)
   CollectionBrowserView = cbv.CollectionBrowserView
   ItemEditAuthContext = ctx.ItemEditAuthContext
   NivaroProvider = ctx.NivaroProvider

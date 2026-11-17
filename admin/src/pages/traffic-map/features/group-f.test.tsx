@@ -83,9 +83,9 @@ const catalog = {
   down: {}
 }
 
-const getMock = api.get as unknown as ReturnType<typeof vi.fn>
-const postMock = api.post as unknown as ReturnType<typeof vi.fn>
-const patchMock = api.patch as unknown as ReturnType<typeof vi.fn>
+const getMock = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
+const postMock = api.post as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
+const patchMock = api.patch as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 function renderAt(url: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })

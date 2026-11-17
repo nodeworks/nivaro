@@ -94,11 +94,11 @@ interface Fx {
   claim?: Record<string, unknown> | undefined
   instance?: Record<string, unknown> | undefined
   owner?: Record<string, unknown> | undefined
-  claimInsert?: ReturnType<typeof vi.fn>
-  claimDelete?: ReturnType<typeof vi.fn>
-  ownerInsert?: ReturnType<typeof vi.fn>
-  ownerDelete?: ReturnType<typeof vi.fn>
-  ownerWhereSpy?: ReturnType<typeof vi.fn>
+  claimInsert?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+  claimDelete?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+  ownerInsert?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+  ownerDelete?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+  ownerWhereSpy?: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 }
 
 function makeDbMock(fx: Fx) {

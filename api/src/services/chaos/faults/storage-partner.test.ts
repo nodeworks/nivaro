@@ -176,7 +176,7 @@ describe('partner_faults', () => {
       headers: null,
       mock_config: null
     }
-    const dbm = vi.mocked(db) as unknown as ReturnType<typeof vi.fn>
+    const dbm = vi.mocked(db) as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
     const original = dbm.getMockImplementation()
     dbm.mockImplementation(() => {
       // A real promise (awaited by fire-and-forget log writes) carrying the builder methods.

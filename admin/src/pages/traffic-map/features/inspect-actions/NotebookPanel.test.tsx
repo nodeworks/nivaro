@@ -88,7 +88,7 @@ describe('notebook notes', () => {
     // close the level (unmount) and open it again from the cache, within staleTime
     first.unmount()
     const { api } = await import('@/lib/api')
-    const get = api.get as unknown as ReturnType<typeof vi.fn>
+    const get = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
     get.mockClear()
     render(panel(qc))
     expect(textarea().value).toBe('old notes, then the trace')

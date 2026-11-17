@@ -128,7 +128,10 @@ describe('kind registry', () => {
 const mockedDb = () => vi.mocked(db as unknown as (table: string) => unknown)
 
 function mockUpdateChain() {
-  const chain: { where: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> } = {
+  const chain: {
+    where: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+    update: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+  } = {
     where: vi.fn(),
     update: vi.fn().mockResolvedValue(1)
   }
@@ -582,9 +585,9 @@ describe('never throws — warnOnce', () => {
   it('recordObligation and resolveObligation both swallow a db failure without throwing, and warn only once across both failures', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const failingChain: {
-      insert: ReturnType<typeof vi.fn>
-      where: ReturnType<typeof vi.fn>
-      update: ReturnType<typeof vi.fn>
+      insert: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+      where: ReturnType<typeof vi.fn<(...args: any[]) => any>>
+      update: ReturnType<typeof vi.fn<(...args: any[]) => any>>
     } = {
       insert: vi.fn().mockReturnValue({
         returning: vi.fn().mockRejectedValue(new Error('connection lost'))

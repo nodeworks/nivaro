@@ -71,7 +71,7 @@ vi.mock('../../../db/dialect.js', () => ({ isMssql: () => true }))
 const mp: {
   owner: Record<string, unknown> | null
   row: Record<string, unknown> | null
-  save: ReturnType<typeof vi.fn>
+  save: ReturnType<typeof vi.fn<(...args: any[]) => any>>
 } = { owner: null, row: null, save: vi.fn() }
 vi.mock('../../../services/managed-procedures/owners.js', () => ({
   procedureOwner: vi.fn(async () => mp.owner)

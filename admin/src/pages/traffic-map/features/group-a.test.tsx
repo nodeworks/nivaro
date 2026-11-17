@@ -95,7 +95,7 @@ function wrap(children: ReactNode) {
     </QueryClientProvider>
   )
 }
-const getMock = api.get as unknown as ReturnType<typeof vi.fn>
+const getMock = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 beforeEach(() => {
   getMock.mockReset()

@@ -84,7 +84,7 @@ function linxKind(overrides: Partial<Kind> = {}): Kind {
 
 /** db wiring: settings on, the obligation row, the LinX api row, the submissions insert. */
 function wire(opts: { remediation?: boolean } = {}) {
-  const submissions: Record<string, ReturnType<typeof vi.fn>> = {
+  const submissions: Record<string, ReturnType<typeof vi.fn<(...args: any[]) => any>>> = {
     insert: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 901 }]) }))
   }
   mockedDb().mockImplementation(((table: string) => {
@@ -299,7 +299,7 @@ describe('MWF state push — current data from the transition into the current s
   it('offers it, renders through core’s erp_submit builder, and sends through the normal path', async () => {
     registerObligationKind(mwfKind())
     expect(sendOptionsFor(mwfKind(), { submission_id: null }).can_send_current).toBe(true)
-    const submissions: Record<string, ReturnType<typeof vi.fn>> = {
+    const submissions: Record<string, ReturnType<typeof vi.fn<(...args: any[]) => any>>> = {
       insert: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 902 }]) }))
     }
     mockedDb().mockImplementation(((table: string) => {

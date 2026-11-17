@@ -42,6 +42,8 @@ beforeEach(() => {
   state.calls = []
   state.rows = new Map()
   state.fail = null
+  // vitest 4: spyOn on an already-spied method reuses the spy, calls included
+  vi.restoreAllMocks()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 

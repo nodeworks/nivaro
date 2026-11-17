@@ -8,7 +8,7 @@ import type { CatalogFault } from './api'
 import { FaultsTab } from './FaultsTab'
 import { linkedTarget } from './StartForm'
 
-const getMock = api.get as unknown as ReturnType<typeof vi.fn>
+const getMock = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 const fault: CatalogFault = {
   key: 'slow_requests',
   label: 'Slow requests',

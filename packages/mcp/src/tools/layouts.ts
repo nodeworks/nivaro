@@ -199,7 +199,7 @@ export function registerLayoutTools(server: McpServer, client: NivaroClient) {
       description: `Propose changes to a form for an administrator to review. NOTHING changes: the proposal waits in the layout editor (Proposals) until an administrator applies it to their draft or rejects it. Read the form with describe_layout first and use its field and section keys. Unknown fields and settings are left out (listed in "dropped"); changes that would not apply are refused with the reason. ${OPS_HELP}`,
       inputSchema: {
         layout_id: layoutId,
-        ops: z.array(z.record(z.unknown())).min(1).max(200),
+        ops: z.array(z.record(z.string(), z.unknown())).min(1).max(200),
         note: z
           .string()
           .max(500)

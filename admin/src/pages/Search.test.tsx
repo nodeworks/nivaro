@@ -18,7 +18,7 @@ beforeAll(() => {
   }
 })
 
-const get = api.get as unknown as ReturnType<typeof vi.fn>
+const get = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 
 function answer(data: Partial<GlobalSearchResponse>, tabRows: unknown[] = []) {
   get.mockImplementation((url: string) => {

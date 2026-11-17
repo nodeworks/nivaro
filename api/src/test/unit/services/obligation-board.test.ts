@@ -65,8 +65,8 @@ describe('summariseObligations', () => {
 // test below replaces it with a fresh mock so its calls can be inspected,
 // same idiom as test/unit/routes/health.test.ts.
 
-function mockRaw(fn: ReturnType<typeof vi.fn>): void {
-  vi.mocked(db as unknown as { raw: typeof fn }).raw = fn
+function mockRaw(fn: ReturnType<typeof vi.fn<(...args: any[]) => any>>): void {
+  ;(db as unknown as { raw: typeof fn }).raw = fn
 }
 
 describe('pruneObligations', () => {

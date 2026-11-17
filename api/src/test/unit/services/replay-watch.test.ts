@@ -128,7 +128,9 @@ describe('replay:join', () => {
     await ann.fire('replay:join', { key: KEY, recording: '00000000-0000-0000-0000-000000000000' })
     await ann.fire('replay:join', { key: KEY, recording: REC, lead: true })
     const bob = hub.connect('s2', user('U2', 'Bob'), deps)
-    ;(deps.recordingExists as ReturnType<typeof vi.fn>).mockResolvedValue(true)
+    ;(deps.recordingExists as ReturnType<typeof vi.fn<(...args: any[]) => any>>).mockResolvedValue(
+      true
+    )
     await bob.fire('replay:join', { key: KEY, recording: '11111111-2222-3333-4444-555555555555' })
     expect(
       hub.events('replay:denied').map((e) => (e.payload as { reason: string }).reason)

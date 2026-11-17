@@ -5,7 +5,7 @@ vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 import { db } from '../../../db/index.js'
 import { gatherSubmissionFacts } from '../../../services/submission-detail.js'
 
-type Chain = Record<string, ReturnType<typeof vi.fn>>
+type Chain = Record<string, ReturnType<typeof vi.fn<(...args: any[]) => any>>>
 
 /** A knex-shaped chain: every method is chainable EXCEPT `first`/`select`,
  *  which resolve like the real query builder's terminal calls do — real
@@ -113,7 +113,9 @@ describe('gatherSubmissionFacts — history + record-edit query construction (Ta
       if (table === 'nivaro_users') return usersChain
       throw new Error(`unexpected table: ${table}`)
     }) as never)
-    ;(db as unknown as { raw: ReturnType<typeof vi.fn> }).raw = vi.fn().mockResolvedValue([])
+    ;(db as unknown as { raw: ReturnType<typeof vi.fn<(...args: any[]) => any>> }).raw = vi
+      .fn()
+      .mockResolvedValue([])
 
     const facts = await gatherSubmissionFacts(82)
 
@@ -149,7 +151,9 @@ describe('gatherSubmissionFacts — history + record-edit query construction (Ta
       if (table === 'nivaro_users') return usersChain
       throw new Error(`unexpected table: ${table}`)
     }) as never)
-    ;(db as unknown as { raw: ReturnType<typeof vi.fn> }).raw = vi.fn().mockResolvedValue([])
+    ;(db as unknown as { raw: ReturnType<typeof vi.fn<(...args: any[]) => any>> }).raw = vi
+      .fn()
+      .mockResolvedValue([])
 
     await gatherSubmissionFacts(82)
 
@@ -179,7 +183,9 @@ describe('gatherSubmissionFacts — history + record-edit query construction (Ta
       if (table === 'nivaro_users') return usersChain
       throw new Error(`unexpected table: ${table}`)
     }) as never)
-    ;(db as unknown as { raw: ReturnType<typeof vi.fn> }).raw = vi.fn().mockResolvedValue([])
+    ;(db as unknown as { raw: ReturnType<typeof vi.fn<(...args: any[]) => any>> }).raw = vi
+      .fn()
+      .mockResolvedValue([])
 
     await gatherSubmissionFacts(82)
 
