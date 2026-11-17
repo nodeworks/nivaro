@@ -7,6 +7,7 @@ import { ACCESS_PREFIX, DEVICE_ACCESS_PREFIX, scopeTokens } from '../lib/oauth.j
 import {
   ACCESS_PENDING_MESSAGE,
   accessPendingFor,
+  accessPendingRefusals,
   accessPendingRouteAllowed
 } from '../services/access-pending.js'
 import { withAuthDeadline } from '../services/auth-deadline.js'
@@ -690,6 +691,7 @@ async function accessPendingGate(req: FastifyRequest): Promise<void> {
   const pending = await accessPendingFor(user, false)
   if (!pending) return
   if (accessPendingRouteAllowed(req.method, req.url)) return
+  accessPendingRefusals.add(req)
   req.user = undefined
   req.userRole = null
   req.isAdmin = false

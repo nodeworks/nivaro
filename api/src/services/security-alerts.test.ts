@@ -1,5 +1,7 @@
+import type { FastifyRequest } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runWithTenantDb } from '../db/tenant-context.js'
+import { accessPendingRefusals } from './access-pending.js'
 import {
   type AccessDeniedEvent,
   apiKeyWidening,
@@ -15,6 +17,7 @@ import {
   memoryCounterStore,
   mergeSecurityAlertPatch,
   normalizeSecurityAlertSettings,
+  noteAccessDenied,
   raiseSecurityEvent,
   redisCoalesceStore,
   redisCounterStore,
@@ -435,6 +438,20 @@ describe('access-denied bursts', () => {
     let again = false
     for (let i = 0; i < 25; i++) again = (await countAccessDenied(caller)) || again
     expect(again).toBe(true)
+  })
+
+  it('never counts a person still waiting for access (their tab polls by design)', async () => {
+    const h = harness()
+    const pending = { ip: '10.166.243.233', headers: {} } as unknown as FastifyRequest
+    accessPendingRefusals.add(pending)
+    for (let i = 0; i < 40; i++) noteAccessDenied(pending)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(h.scheduled).toHaveLength(0)
+    // The same address without the pending mark still alerts at the threshold.
+    const other = { ip: '10.166.243.234', headers: {} } as unknown as FastifyRequest
+    for (let i = 0; i < 25; i++) noteAccessDenied(other)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(h.scheduled).toHaveLength(1)
   })
 
   it('is quiet below the threshold and when switched off', async () => {

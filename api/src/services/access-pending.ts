@@ -127,6 +127,14 @@ export function accessPendingRouteAllowed(method: string, url: string): boolean 
 }
 
 /** The refusal an access-pending person gets everywhere outside the list above. */
+/**
+ * Requests refused because their person is still waiting for access (403 ACCESS_PENDING). The
+ * refusal clears req.user, so the security alert's 403 counter (services/security-alerts.ts)
+ * would count a waiting person's normal background polling against their address and alert;
+ * it skips these. Staging 2026-11-17: a new account's open tab tripped it in 2 minutes.
+ */
+export const accessPendingRefusals = new WeakSet<object>()
+
 export const ACCESS_PENDING_MESSAGE =
   'Your access request is waiting for an administrator. You can use the portal once it is approved.'
 

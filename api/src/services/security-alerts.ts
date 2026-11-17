@@ -27,6 +27,7 @@
  */
 import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { accessPendingRefusals } from './access-pending.js'
 import { logActivity } from './activity.js'
 import { tenantState } from './ai-tenant-state.js'
 import { instanceKey } from './instance-key.js'
@@ -697,6 +698,8 @@ export function noteAccessDenied(req: FastifyRequest): void {
   try {
     // An administrator viewing as someone is exploring on purpose: not that person probing.
     if (viewAsAdminOf(req)) return
+    // A person waiting for access: their open tab's polling is refused by design, not probing.
+    if (accessPendingRefusals.has(req)) return
     const caller = deniedCaller(req as unknown as DeniedReq)
     if (!caller) return
     void countAccessDenied(caller).catch(() => {})
