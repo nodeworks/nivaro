@@ -113,7 +113,10 @@ vi.mock('../../../db/index.js', async (orig) => {
         return Object.entries(t).map(([c, ty]) => ({
           COLUMN_NAME: c,
           column_name: c,
-          DATA_TYPE: ty
+          DATA_TYPE: ty,
+          // item-aggregates' columnTypes reads the same view under short aliases
+          c,
+          t: ty
         }))
       }
       // resolveRelationSearch: the far side's ids, then the junction's root ids
@@ -171,6 +174,7 @@ vi.mock('../../../services/permissions.js', async (orig) => ({
 }))
 
 import {
+  aggregateItems,
   fitRelationIdBudget,
   RELATION_SEARCH_ID_BUDGET,
   RELATION_SEARCH_RESOLVE_MAX,
@@ -381,6 +385,33 @@ describe('list search through search_relations', () => {
       )
       expect(s).toMatch(/exists \(select 1 from \[nivaro_users\]/i)
     }
+  })
+
+  // Prod 2026-11-16 (issues #91–98, build 0.3.161): the workflows totals row's SUM()s hit the
+  // 15 s timeout twelve times: same search, same OR'd OPENJSON lists. The aggregate route reads
+  // through readItems, so it must get the same plain-param / EXISTS search and keep a
+  // filter-only junction (divisions) as an EXISTS: a JOIN would multiply every SUM.
+  it('a searched SUM aggregate binds no OPENJSON list and never joins a filter-only junction', async () => {
+    state.config = { search_relations: ['program.title', 'owner.last_name'] }
+    // 50 matches: the size at which whereInList switches to one OPENJSON parameter
+    state.farRows = 50
+    const seen: string[] = []
+    ;(globalThis as { __searchSql?: string[] }).__searchSql = seen
+    const filter = { divisions: { id: { _in: [1, 2] } } }
+    await aggregateItems(
+      USER,
+      'projects',
+      { search: 'Central', filter, aggregate: { sum: ['program'] } } as never,
+      { query: { search: 'Central', sum: 'program' }, headers: {} } as never
+    ).catch(() => undefined)
+    delete (globalThis as { __searchSql?: string[] }).__searchSql
+    const sums = seen.filter((s) => /^select sum\(/i.test(s))
+    expect(sums).toHaveLength(1)
+    const [sql] = sums
+    expect(sql).not.toMatch(/openjson/i)
+    expect(sql).not.toMatch(/\bjoin\b/i)
+    expect(sql).toMatch(/exists \(select 1 from \[projects_divisions\]/i)
+    expect(sql).toMatch(/exists \(select 1 from \[programs\]/i)
   })
 
   it('up to the cap the ids ride as plain parameters', async () => {
