@@ -55,7 +55,8 @@ const objects = vi.hoisted(
       ['syn_wf', { type: 'SN', definition: null }],
       ['clr_rows', { type: 'FT', definition: null }],
       ['pk_workflows', { type: 'PK', definition: null }],
-      ['nivaro_users', { type: 'U', definition: null }]
+      ['nivaro_users', { type: 'U', definition: null }],
+      ['zoné_rows', { type: 'U', definition: null }]
     ])
 )
 
@@ -63,7 +64,8 @@ vi.mock('../../../db/index.js', () => ({
   db: {
     raw: vi.fn(async (sql: string, binds?: string[]) => {
       if (/DB_NAME\(\)/.test(sql)) return [{ d: 'EFP' }]
-      if (/sys\.schemas/.test(sql)) return [{ name: 'dbo' }, { name: 'sys' }]
+      if (/sys\.schemas/.test(sql)) return [{ name: 'dbo' }, { name: 'sys' }, { name: 'rpt' }]
+      if (/sys\.databases/.test(sql)) return [{ name: 'EFP' }, { name: 'master' }, { name: 'rpt' }]
       const names = JSON.parse(binds?.[0] ?? '[]') as string[]
       return names
         .map((n) => [n, objects.get(n.toLowerCase())] as const)
@@ -115,7 +117,10 @@ describe('readSetOf', () => {
   })
 
   it('names dynamic SQL, even inside a procedure it executes', async () => {
-    expect((await readSetOf('EXEC dbo.p_dyn')).opaque).toEqual(['dynamic SQL (sp_executesql)'])
+    expect((await readSetOf('EXEC dbo.p_dyn')).opaque).toEqual([
+      'dynamic SQL (sp_executesql)',
+      'a procedure that cannot be followed (sp_executesql)'
+    ])
     expect((await readSetOf("DECLARE @s nvarchar(max) = 'x'; EXEC(@s)")).opaque).toEqual([
       'dynamic SQL (EXEC of a string)'
     ])
@@ -164,6 +169,47 @@ describe('readSetOf', () => {
   it('leaves system tables out of the table list', async () => {
     expect((await readSetOf('SELECT * FROM nivaro_users JOIN vendors v ON 1 = 1')).tables).toEqual([
       'vendors'
+    ])
+  })
+})
+
+describe('readSetOf — security review rounds 2 + 3 (2026-11-16)', () => {
+  it('a procedure that is not an object here (system, extended, another DB) is opaque', async () => {
+    expect(
+      (await readSetOf("EXEC sp_cursoropen @c OUTPUT, N'SELECT * FROM workflows'")).opaque
+    ).toEqual([
+      'dynamic SQL (a system procedure that runs a string)',
+      'a procedure that cannot be followed (sp_cursoropen)'
+    ])
+    expect((await readSetOf('EXEC xp_anything 1')).opaque).toEqual([
+      'a procedure that cannot be followed (xp_anything)'
+    ])
+    expect((await readSetOf('p_nowhere @x = 1')).opaque).toEqual([
+      'a procedure that cannot be followed (p_nowhere)'
+    ])
+    expect((await readSetOf('EXEC p_plain')).opaque).toEqual([])
+  })
+
+  it('EXEC of a variable, also after a return-code assignment', async () => {
+    expect((await readSetOf('DECLARE @rc int, @p sysname; EXEC @rc = @p')).opaque).toContain(
+      'a procedure named by a variable'
+    )
+  })
+
+  it('names inside string literals count toward the read set', async () => {
+    expect((await readSetOf("SELECT 'workflows' AS t, 1 FROM vendors")).tables.sort()).toEqual([
+      'vendors',
+      'workflows'
+    ])
+  })
+
+  it('reads Unicode identifiers whole', async () => {
+    expect((await readSetOf('SELECT * FROM zoné_rows')).tables).toEqual(['zoné_rows'])
+  })
+
+  it('a three-part name naming another database is opaque even when a schema shares its name', async () => {
+    expect((await readSetOf('SELECT * FROM rpt.dbo.workflows')).opaque).toEqual([
+      'another database (rpt.dbo.workflows)'
     ])
   })
 })
