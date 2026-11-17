@@ -927,7 +927,10 @@ export function UserChip({
         {children ? (
           children
         ) : size === 'compact' ? (
-          <span className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 py-px pl-px pr-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors'>
+          // align-middle: a photo has no text baseline, so an inline-flex chip whose first item
+          // is an <img> sat on the photo's bottom edge — raised, and the row grew a few px
+          // (list cells with a photo were taller than ones with initials).
+          <span className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 py-px pl-px pr-1.5 align-middle transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700'>
             <UserAvatar
               userId={userId}
               className='h-4 w-4'
@@ -946,7 +949,7 @@ export function UserChip({
             </span>
           </span>
         ) : (
-          <div className='inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5 hover:bg-slate-100 dark:border-border dark:bg-card dark:hover:bg-accent transition-colors'>
+          <div className='inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5 align-middle transition-colors hover:bg-slate-100 dark:border-border dark:bg-card dark:hover:bg-accent'>
             <UserAvatar
               userId={userId}
               className='h-6 w-6'

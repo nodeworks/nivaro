@@ -90,7 +90,9 @@ export function UserAvatar({
       <img
         src={avatar}
         alt={alt ?? ''}
-        className={`shrink-0 rounded-full object-cover ${className ?? ''}`}
+        // align-middle: an inline <img> sits on the text baseline and leaves a descender gap
+        // under it; initials (a span) don't, so rows with a photo grew taller.
+        className={`shrink-0 rounded-full object-cover align-middle ${className ?? ''}`}
         style={style}
         draggable={false}
       />
