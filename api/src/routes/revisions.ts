@@ -142,12 +142,10 @@ export async function revisionsRoutes(app: FastifyInstance) {
     ]
     if (asked.length === 0) return reply.code(400).send({ error: 'items is required' })
     if (asked.length > LATEST_REVISIONS_MAX)
-      return reply
-        .code(400)
-        .send({
-          error: `At most ${LATEST_REVISIONS_MAX} items per request`,
-          code: 'TOO_MANY_ITEMS'
-        })
+      return reply.code(400).send({
+        error: `At most ${LATEST_REVISIONS_MAX} items per request`,
+        code: 'TOO_MANY_ITEMS'
+      })
     if (!(await can(req.user, 'read', collection)))
       return reply.code(404).send({ error: 'Not found' })
     const gates = await compileAccessGates(req.user, collection, { actingAdmin: !!req.isAdmin })
@@ -200,6 +198,21 @@ export async function revisionsRoutes(app: FastifyInstance) {
       await listRevisions(q.collection, q.item, { isAdmin: !!req.isAdmin })
     )
     return reply.send({ data })
+  })
+
+  // GET /revisions/child-columns?collection=&item= — the rows behind the record's stored totals
+  // (Line 1 · Amount …) and their values over time, for the history table's line columns. Same
+  // gate as the history; each row and column is cut to what the reader may see.
+  app.get('/child-columns', async (req, reply) => {
+    const q = req.query as { collection?: string; item?: string }
+    if (!q.collection || !q.item) {
+      return reply.code(400).send({ error: 'collection and item are required' })
+    }
+    if (!(await recordVisibleTo(req, q.collection, q.item))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    const { childColumns } = await import('../services/revision-child-columns.js')
+    return reply.send({ data: await childColumns(req.user!, q.collection, String(q.item)) })
   })
 
   /**
@@ -695,7 +708,10 @@ export async function revisionsRoutes(app: FastifyInstance) {
           if (!row) return null
           const ts = row.timestamp instanceof Date ? row.timestamp : new Date(String(row.timestamp))
           const email = String(row.email ?? '').toLowerCase()
-          const machine = isMachineAccount({ account_kind: row.account_kind as string | null, email })
+          const machine = isMachineAccount({
+            account_kind: row.account_kind as string | null,
+            email
+          })
           return {
             at: Number.isNaN(ts.getTime()) ? String(row.timestamp) : ts.toISOString(),
             who: [row.first_name, row.last_name].filter(Boolean).join(' ') || email || 'the system',

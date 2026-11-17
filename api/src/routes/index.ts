@@ -287,6 +287,7 @@ import { remindersRoutes } from './reminders.js'
 import { reportStudioRoutes } from './report-studio.js'
 import { reportsRoutes } from './reports.js'
 import { retentionRoutes } from './retention.js'
+import { revisionColumnSetRoutes } from './revision-column-sets.js'
 import { revisionsRoutes } from './revisions.js'
 import { roleChecklistRoutes } from './role-checklists.js'
 import { rolesRoutes } from './roles.js'
@@ -531,6 +532,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(livePreferenceRoutes, { prefix: '/live-preference' })
   // Collections page: collections an admin pins to the top for everyone
   await app.register(collectionPinRoutes, { prefix: '/collection-pins' })
+  await app.register(revisionColumnSetRoutes, { prefix: '/revision-column-sets' })
   await app.register(meNotificationRoutes)
   await app.register(recordLinkRoutes)
   await app.register(fieldHistoryRoutes)

@@ -60,6 +60,10 @@ import {
 // and the density toggle a person leaves the canvas in. Both are per-page UI
 // state, not layout data, so they live in preferences beside `dashboard`
 // rather than inside the layout blob itself.
+
+/** A Revision history table column: a field, `$step`, or `child:<collection>:<id>:<field>`. */
+const REVISION_COLUMN_RE = /^\$?[A-Za-z_][A-Za-z0-9_:-]{0,190}$/
+
 export function normalizeDashboardScope(
   v: unknown
 ): { zone: string | number | null; year: number | null } | null {
@@ -1689,8 +1693,8 @@ export async function usersRoutes(app: FastifyInstance) {
       } else if (
         !Array.isArray(raw?.fields) ||
         raw.fields.length > 200 ||
-        // `$step` = the pipeline step column (a `$` aspect, not a table column).
-        raw.fields.some((f) => typeof f !== 'string' || !/^\$?[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(f))
+        // `$step` = the pipeline step column; `child:<collection>:<id>:<field>` = a line column.
+        raw.fields.some((f) => typeof f !== 'string' || !REVISION_COLUMN_RE.test(f))
       ) {
         return reply
           .code(400)
@@ -1699,6 +1703,47 @@ export async function usersRoutes(app: FastifyInstance) {
         revisionColumns = { collection, fields: [...new Set(raw.fields as string[])] }
       }
       patch.revision_table_columns = true
+    }
+    // The person's own named column sets for that table, per collection:
+    // {collection, sets: [{name, fields}] | null}.
+    let personalSets: {
+      collection: string
+      sets: Array<{ name: string; fields: string[] }> | null
+    } | null = null
+    if ('revision_personal_sets' in body) {
+      const raw = body.revision_personal_sets as { collection?: unknown; sets?: unknown } | null
+      const collection = String(raw?.collection ?? '')
+      if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(collection)) {
+        return reply
+          .code(400)
+          .send({ error: 'revision_personal_sets.collection is not a collection' })
+      }
+      if (raw?.sets === null) personalSets = { collection, sets: null }
+      else if (!Array.isArray(raw?.sets) || raw.sets.length > 30) {
+        return reply
+          .code(400)
+          .send({ error: 'revision_personal_sets.sets must be up to 30 sets or null' })
+      } else {
+        const sets: Array<{ name: string; fields: string[] }> = []
+        for (const s of raw.sets as Array<Record<string, unknown>>) {
+          const name = String(s?.name ?? '')
+            .trim()
+            .slice(0, 60)
+          const fields = Array.isArray(s?.fields) ? s.fields : []
+          if (
+            !name ||
+            fields.length > 200 ||
+            fields.some((f) => typeof f !== 'string' || !REVISION_COLUMN_RE.test(f))
+          ) {
+            return reply
+              .code(400)
+              .send({ error: 'Each set needs a name and up to 200 field names' })
+          }
+          sets.push({ name, fields: [...new Set(fields as string[])] })
+        }
+        personalSets = { collection, sets }
+      }
+      patch.revision_personal_sets = true
     }
     if (Object.keys(patch).length === 0) {
       return reply.code(400).send({ error: 'No supported preference keys in body' })
@@ -1726,6 +1771,16 @@ export async function usersRoutes(app: FastifyInstance) {
       const keys = Object.keys(map)
       for (const k of keys.slice(0, Math.max(0, keys.length - 100))) delete map[k]
       merged.revision_table_columns = map
+    }
+    if (personalSets) {
+      const prev = current.revision_personal_sets
+      const map: Record<string, unknown> =
+        prev && typeof prev === 'object' && !Array.isArray(prev)
+          ? { ...(prev as Record<string, unknown>) }
+          : {}
+      if (personalSets.sets === null) delete map[personalSets.collection]
+      else map[personalSets.collection] = personalSets.sets
+      merged.revision_personal_sets = map
     }
     await db('nivaro_users')
       .where({ id: req.user!.id })

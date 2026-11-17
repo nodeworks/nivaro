@@ -233,3 +233,44 @@ describe('the pipeline step column', () => {
     expect(rowsChanging(rows, [STEP_FIELD]).filter((r) => r.action === 'moved')).toHaveLength(2)
   })
 })
+
+describe('an automatic move', () => {
+  it('reads as Automatic, credited to the save that set it off', () => {
+    const rows = buildSaveRows(
+      [
+        rev({
+          action: 'transition',
+          timestamp: '2026-08-20T02:21:01Z',
+          user_id: null,
+          first_name: null,
+          last_name: null,
+          event: {
+            kind: 'transition',
+            from_label: 'Waiting on PO',
+            to_label: 'Completed',
+            source: 'auto'
+          }
+        }),
+        rev({
+          id: '2',
+          action: 'update',
+          timestamp: '2026-08-20T02:21:00Z',
+          first_name: 'Timothy',
+          last_name: 'Desrosiers',
+          data: { id: 1, name: 'B' },
+          delta: { name: 'B' }
+        }),
+        rev({
+          id: '1',
+          action: 'create',
+          timestamp: '2026-08-19T17:00:00Z',
+          data: { id: 1, name: 'A' }
+        })
+      ],
+      { withMoves: true }
+    )
+    const move = rows.find((r) => r.action === 'moved')
+    expect(move?.who).toBe('Automatic')
+    expect(move?.trigger).toEqual({ name: 'Timothy Desrosiers', userId: 'U1' })
+  })
+})

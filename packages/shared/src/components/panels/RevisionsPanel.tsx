@@ -27,6 +27,7 @@ import {
   Clock,
   Columns3,
   Download,
+  FileSpreadsheet,
   GitCompareArrows,
   GripVertical,
   History,
@@ -38,11 +39,12 @@ import {
   Search,
   Sigma,
   Table2,
-  X
+  X,
+  Zap
 } from 'lucide-react'
 import { createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useNivaroClient } from '../../context'
+import { useItemEditAuth, useNivaroClient } from '../../context'
 import {
   type ActivityActor,
   type ActivityLabels,
@@ -56,10 +58,12 @@ import {
 import { get, post } from '../../lib/commands'
 import { type CompareFieldMeta, compareValueText } from '../../lib/compare-value'
 import { editorJsToHtml, editorJsToText, isEditorJsValue } from '../../lib/editorjs'
+import { toastError } from '../../lib/error-toast'
 import { useLiveRecordQueries } from '../../lib/live'
 import { restoreSkippedNote } from '../../lib/restore-skipped'
-import { useRevisionPrefs } from '../../lib/revision-prefs'
+import { useRevisionPrefs, useSharedColumnSets } from '../../lib/revision-prefs'
 import { cn, formatDateTime, titleCase, toLocalDateString } from '../../lib/utils'
+import { type XlsxCell, type XlsxStyle, xlsxBlob } from '../../lib/xlsx-lite'
 import { useActivityLabels } from '../ActivityEntry'
 import { AgentBadge } from '../AgentBadge'
 import { HScrollProxy } from '../HScrollProxy'
@@ -76,6 +80,12 @@ import {
   CommandItem,
   CommandList
 } from '../ui/command'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '../ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
@@ -83,6 +93,7 @@ import { IntegrationActivitySection } from './IntegrationActivitySection'
 import {
   buildSaveRows,
   type ChangeSourceRevision,
+  type ChildColumnsData,
   type DeriveInfo,
   deriveOf,
   type MatrixColumn,
@@ -94,9 +105,18 @@ import {
   rowsChanging,
   type SaveAction,
   STEP_FIELD,
+  sameValue,
   saveActionLabel,
-  signedAmount
+  signedAmount,
+  valueAt
 } from './revision-changes'
+import {
+  ColumnSetsMenu,
+  DateRangeFilter,
+  FieldTrend,
+  inDateRange,
+  PeopleFilter
+} from './revision-table-parts'
 
 export interface O2MFieldInfo {
   field: string
@@ -1386,15 +1406,17 @@ function TimeTravelTools({
   data,
   history,
   meta,
-  labels
+  labels,
+  focusSave
 }: {
   data: Revision[]
   /** Every history row, events included. */
   history: Revision[]
   meta: FieldMetaMap
   labels?: ActivityLabels
+  focusSave?: string | null
 }) {
-  const [openTool, setOpenTool] = useState<'replay' | 'compare' | null>(null)
+  const [openTool, setOpenTool] = useState<'replay' | 'compare' | null>(focusSave ? 'replay' : null)
   const [diffFrom, setDiffFrom] = useState('')
   const [diffTo, setDiffTo] = useState('')
 
@@ -1474,7 +1496,13 @@ function TimeTravelTools({
       </div>
 
       {openTool === 'replay' && (
-        <HistoryReplay snapshots={data} history={history} meta={meta} labels={labels} />
+        <HistoryReplay
+          snapshots={data}
+          history={history}
+          meta={meta}
+          labels={labels}
+          startKey={focusSave ?? null}
+        />
       )}
 
       {openTool === 'compare' && (
@@ -1591,12 +1619,15 @@ function RevisionsList({
   collection,
   item,
   onRollback,
-  inlineTableFields
+  inlineTableFields,
+  focusSave
 }: {
   collection: string
   item: string
   onRollback?: () => void
   inlineTableFields?: O2MFieldInfo[]
+  /** A save to open in Replay (from the table). */
+  focusSave?: string | null
 }) {
   const client = useNivaroClient()
   const meta = useFieldMeta(collection, true)
@@ -1670,7 +1701,13 @@ function RevisionsList({
   return (
     <RevisionLabelsContext.Provider value={actorLabels}>
       <div className='space-y-3 pt-3'>
-        <TimeTravelTools data={snapshots} history={data ?? []} meta={meta} labels={actorLabels} />
+        <TimeTravelTools
+          data={snapshots}
+          history={data ?? []}
+          meta={meta}
+          labels={actorLabels}
+          focusSave={focusSave ?? null}
+        />
         <div>
           {groups.map((g) => (
             <div key={g.day}>
@@ -1770,6 +1807,7 @@ export function RevisionsPanel({
   // device) takes over once read.
   const [view, setView] = useState<HistoryView>(readHistoryView)
   const adopted = useRef(false)
+  const [focusSave, setFocusSave] = useState<string | null>(null)
   useEffect(() => {
     if (adopted.current || !prefs.view) return
     adopted.current = true
@@ -1777,6 +1815,7 @@ export function RevisionsPanel({
   }, [prefs.view])
   const changeView = (v: HistoryView) => {
     adopted.current = true
+    setFocusSave(null)
     setView(v)
     prefs.setView(v)
     try {
@@ -1827,7 +1866,15 @@ export function RevisionsPanel({
             </p>
           </SheetHeader>
           {view === 'table' ? (
-            <RevisionChangesView collection={collection} item={item} />
+            <RevisionChangesView
+              collection={collection}
+              item={item}
+              onOpenSave={(key) => {
+                // Not a saved choice: the Timeline opens on that save's Replay stop.
+                setFocusSave(key.startsWith('move|') ? null : key)
+                setView('timeline')
+              }}
+            />
           ) : (
             <>
               <RevisionValueSearch collection={collection} item={item} />
@@ -1837,6 +1884,7 @@ export function RevisionsPanel({
                 item={item}
                 onRollback={onRollback}
                 inlineTableFields={inlineTableFields}
+                focusSave={focusSave}
               />
             </>
           )}
@@ -2257,7 +2305,9 @@ function ColumnPicker({
     take(
       'changed',
       'Changed on this record',
-      hidden.filter((c) => c.changes > 0).sort((x, y) => y.changes - x.changes)
+      hidden
+        .filter((c) => c.changes > 0 && !c.field.startsWith('child:'))
+        .sort((x, y) => y.changes - x.changes)
     )
     take(
       'computed',
@@ -2301,7 +2351,7 @@ function ColumnPicker({
         <button
           type='button'
           data-revision-columns
-          className='inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-700 transition-colors hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-slate-200'
+          className='inline-flex h-8 shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-700 transition-colors hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-slate-200'
         >
           <Columns3 className='h-3.5 w-3.5 text-slate-400' />
           <span>
@@ -2435,7 +2485,16 @@ const ACTION_CHIP: Record<SaveAction, string> = {
   moved: 'bg-violet-50 text-violet-700 dark:bg-violet-500/10 dark:text-violet-300'
 }
 
-function RevisionChangesView({ collection, item }: { collection: string; item: string }) {
+function RevisionChangesView({
+  collection,
+  item,
+  onOpenSave
+}: {
+  collection: string
+  item: string
+  /** Open a save in the Timeline (its Replay stop); a move key opens the Timeline. */
+  onOpenSave?: (key: string) => void
+}) {
   const client = useNivaroClient()
   const meta = useFieldMeta(collection, true)
   const { data, isLoading } = useQuery({
@@ -2465,16 +2524,56 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
       }),
     [data, labels]
   )
-  const columns = useMemo(() => matrixColumns(rows, (f) => metaFor(meta, f)), [rows, meta])
+  // Line columns: the rows behind the record's totals and their values over time (the server
+  // cuts them to what this reader may see). Offered in Fields; never picked by default.
+  const { data: childData } = useQuery({
+    queryKey: ['revision-child-columns', collection, item],
+    queryFn: () =>
+      client
+        .request<{ data: ChildColumnsData }>(get('/revisions/child-columns', { collection, item }))
+        .then((r) => r.data),
+    staleTime: 30_000
+  })
+  const allMeta = useMemo(() => {
+    const m: FieldMetaMap = new Map(meta)
+    for (const c of childData?.columns ?? [])
+      m.set(c.key, {
+        label: `${c.row_label} · ${c.field_label}`,
+        system: false,
+        onLayout: false,
+        cmp: c.cmp,
+        section: { key: `child:${c.collection}`, label: c.collection_label, sort: 100_000 }
+      })
+    return m
+  }, [meta, childData])
+  const rowsAll = useMemo(() => {
+    const cols = childData?.columns ?? []
+    if (!cols.length) return rows
+    const out = rows.map((r) => ({ ...r, values: { ...r.values }, changed: new Set(r.changed) }))
+    for (const c of cols) {
+      const series = childData?.series[c.key] ?? []
+      for (const r of out) r.values[c.key] = valueAt(series, r.timestamp)
+      for (let i = 0; i < out.length - 1; i++)
+        if (!sameValue(out[i].values[c.key], out[i + 1].values[c.key])) out[i].changed.add(c.key)
+    }
+    return out
+  }, [rows, childData])
+  const columns = useMemo(
+    () => matrixColumns(rowsAll, (f) => metaFor(allMeta, f)),
+    [rowsAll, allMeta]
+  )
   // The person's own columns for this collection, in their order, saved on their account; until
   // they pick, every field that ever changed on this record (written or recalculated).
   const prefs = useRevisionPrefs(collection)
+  const shared = useSharedColumnSets(collection)
+  const { isAdmin } = useItemEditAuth()
   const defaultOrder = useMemo(
-    () => columns.filter((c) => c.changes > 0).map((c) => c.field),
+    () => columns.filter((c) => c.changes > 0 && !c.field.startsWith('child:')).map((c) => c.field),
     [columns]
   )
-  /** The whole saved list (it may name fields another record has and this one does not). */
-  const order = prefs.columns ?? defaultOrder
+  /** The whole saved list (it may name fields another record has and this one does not):
+   *  the person's own picks, else their role's shared set, else the fields that changed. */
+  const order = prefs.columns ?? shared.roleDefault?.fields ?? defaultOrder
   const shownFields = useMemo(() => new Set(order), [order])
   const shownColumns = useMemo(() => {
     const byField = new Map(columns.map((c) => [c.field, c]))
@@ -2492,23 +2591,134 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
   const tableScrollRef = useRef<HTMLDivElement>(null)
   const [onlyMoving, setOnlyMoving] = useState(true)
   const onlyMovingId = useId()
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [people, setPeople] = useState<Set<string>>(new Set())
+  const peopleList = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const r of rowsAll) counts.set(r.who, (counts.get(r.who) ?? 0) + 1)
+    return [...counts].map(([name, count]) => ({ name, count })).sort((x, y) => y.count - x.count)
+  }, [rowsAll])
   const shownRows = useMemo(() => {
     // A move changes only the step: without that column it has nothing to show.
-    const base = shownFields.has(STEP_FIELD) ? rows : rows.filter((r) => r.action !== 'moved')
+    let base = shownFields.has(STEP_FIELD) ? rowsAll : rowsAll.filter((r) => r.action !== 'moved')
+    base = base.filter(
+      (r) => inDateRange(r.timestamp, from, to) && (people.size === 0 || people.has(r.who))
+    )
     return onlyMoving
       ? rowsChanging(
           base,
           shownColumns.map((c) => c.field)
         )
       : base
-  }, [rows, shownColumns, shownFields, onlyMoving])
+  }, [rowsAll, shownColumns, shownFields, onlyMoving, from, to, people])
+  // Compare: tick two saves; Field focus: click a column header.
+  const [compare, setCompare] = useState<string[]>([])
+  const toggleCompare = (key: string) =>
+    setCompare((c) => (c.includes(key) ? c.filter((k) => k !== key) : [...c, key].slice(-2)))
+  const compared = useMemo(() => {
+    if (compare.length !== 2) return null
+    const pair = compare
+      .map((k) => rowsAll.find((r) => r.key === k))
+      .filter((r): r is MatrixRow => !!r)
+    if (pair.length !== 2) return null
+    const time = (r: MatrixRow) => (r.timestamp ? new Date(r.timestamp).getTime() : 0)
+    return pair.sort((x, y) => time(x) - time(y)) as [MatrixRow, MatrixRow]
+  }, [compare, rowsAll])
+  const [focusField, setFocusField] = useState<string | null>(null)
+  const trend = useMemo(() => {
+    if (!focusField) return null
+    const m = metaFor(allMeta, focusField)
+    const list = [...rowsAll]
+      .filter((r) => (focusField === STEP_FIELD ? true : r.action !== 'moved'))
+      .reverse()
+    return {
+      label: shownColumns.find((c) => c.field === focusField)?.label ?? m.label,
+      points: list.map((r) => ({
+        t: r.timestamp,
+        v: r.values[focusField],
+        text: cellText(r.values[focusField], m)
+      }))
+    }
+  }, [focusField, rowsAll, allMeta, shownColumns])
+  const { data: roleRows } = useQuery({
+    queryKey: ['revision-sets-roles'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: string; name: string }> }>(get('/roles'))
+        .then((r) => (r.data ?? []).map((x) => ({ id: String(x.id), name: String(x.name) }))),
+    enabled: isAdmin,
+    staleTime: 300_000
+  })
+  const autoLabel = (r: MatrixRow) =>
+    r.action === 'moved' && !r.userId
+      ? `Automatic${r.trigger ? ` (after ${r.trigger.name})` : ''}`
+      : r.who
+
+  const downloadExcel = () => {
+    const header = ['When', 'Changed by', 'Action', ...shownColumns.map((c) => c.label)]
+    const sheet: XlsxCell[][] = [header.map((v) => ({ v, style: 'header' as const }))]
+    const why: XlsxCell[][] = [
+      ['When', 'Field', 'Value', 'Moved by', 'Why'].map((v) => ({ v, style: 'header' as const }))
+    ]
+    for (const r of shownRows) {
+      const when = r.timestamp ? formatDateTime(r.timestamp) : ''
+      sheet.push([
+        { v: when },
+        { v: autoLabel(r) },
+        { v: saveActionLabel(r.action), style: 'muted' },
+        ...shownColumns.map((c) => {
+          const text = cellText(r.values[c.field], metaFor(allMeta, c.field))
+          const style: XlsxStyle = r.recalculated.has(c.field)
+            ? 'recalculated'
+            : r.changed.has(c.field)
+              ? 'changed'
+              : 'plain'
+          return { v: text, style }
+        })
+      ])
+      for (const c of shownColumns) {
+        if (!r.recalculated.has(c.field)) continue
+        const reason = reasonFor(c.field, r, allMeta)
+        why.push([
+          { v: when },
+          { v: c.label },
+          { v: cellText(r.values[c.field], metaFor(allMeta, c.field)) },
+          { v: reason.because ?? '' },
+          { v: reason.why }
+        ])
+      }
+    }
+    const blob = xlsxBlob([
+      {
+        name: 'History',
+        rows: sheet,
+        widths: [
+          20,
+          26,
+          10,
+          ...shownColumns.map((c) => Math.min(40, Math.max(14, c.label.length + 4)))
+        ],
+        freezeColumns: 3
+      },
+      { name: 'Recalculations', rows: why, widths: [20, 24, 18, 40, 50] }
+    ])
+    const url = URL.createObjectURL(blob)
+    const el = document.createElement('a')
+    el.href = url
+    el.download = `history-${collection}-${item}.xlsx`
+    document.body.appendChild(el)
+    el.click()
+    el.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
 
   const download = () => {
     const csv = matrixCsv(
       shownRows,
       shownColumns,
-      (f, v) => cellText(v, metaFor(meta, f)),
-      (f, row) => reasonFor(f, row, meta)
+      (f, v) => cellText(v, metaFor(allMeta, f)),
+      (f, row) => reasonFor(f, row, allMeta)
     )
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
@@ -2532,10 +2742,10 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
 
   return (
     <div className='pt-4' data-revision-table-view>
-      <div className='mb-3 flex flex-wrap items-center gap-2'>
+      <div className='mb-3 flex items-center gap-2 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
         <ColumnPicker
           columns={columns}
-          meta={meta}
+          meta={allMeta}
           order={order}
           shown={shownFields}
           defaultOrder={defaultOrder}
@@ -2543,7 +2753,54 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
           onChange={setOrder}
           onReset={() => prefs.setColumns(null)}
         />
-        <span className='inline-flex items-center gap-1.5'>
+        <ColumnSetsMenu
+          personal={prefs.personalSets}
+          shared={shared.sets}
+          roleDefaultName={shared.roleDefault?.name ?? null}
+          isAdmin={isAdmin}
+          roles={roleRows ?? []}
+          onApply={(fields) => setOrder(fields)}
+          onSavePersonal={(name) =>
+            prefs.setPersonalSets([
+              ...prefs.personalSets.filter((s) => s.name.toLowerCase() !== name.toLowerCase()),
+              { name, fields: order }
+            ])
+          }
+          onDeletePersonal={(name) =>
+            prefs.setPersonalSets(prefs.personalSets.filter((s) => s.name !== name))
+          }
+          onShare={(name, roleIds, forEveryone) =>
+            void shared
+              .save([
+                ...shared.sets
+                  .filter((s) => s.name.toLowerCase() !== name.toLowerCase())
+                  .map((s) => (forEveryone ? { ...s, is_default: false } : s)),
+                { name, fields: order, default_roles: roleIds, is_default: forEveryone }
+              ])
+              .catch((err) => toastError(err, 'The column set was not shared'))
+          }
+          onSetDefault={(id) =>
+            void shared
+              .save(shared.sets.map((s) => ({ ...s, is_default: id != null && s.id === id })))
+              .catch((err) => toastError(err, 'The default column set was not changed'))
+          }
+          onDeleteShared={(id) =>
+            void shared
+              .save(shared.sets.filter((s) => s.id !== id))
+              .catch((err) => toastError(err, 'The column set was not deleted'))
+          }
+        />
+        <PeopleFilter people={peopleList} value={people} onChange={setPeople} />
+        <DateRangeFilter
+          from={from}
+          to={to}
+          onChange={(f, t) => {
+            setFrom(f)
+            setTo(t)
+          }}
+        />
+
+        <span className='inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap'>
           <Checkbox
             id={onlyMovingId}
             checked={onlyMoving}
@@ -2553,11 +2810,12 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
           <label
             htmlFor={onlyMovingId}
             className='cursor-pointer select-none text-[12px] text-slate-600 dark:text-slate-300'
+            data-tip='Only saves that changed at least one of the shown fields'
           >
-            Only saves that changed these fields
+            Changed saves only
           </label>
         </span>
-        <span className='ml-auto inline-flex items-center gap-3 text-[11.5px] text-slate-500 dark:text-slate-400'>
+        <span className='ml-auto inline-flex shrink-0 items-center gap-3 whitespace-nowrap text-[11.5px] text-slate-500 dark:text-slate-400'>
           <span className='inline-flex items-center gap-1.5'>
             <span className='h-2.5 w-2.5 rounded-sm bg-amber-200 dark:bg-amber-500/40' />
             Changed
@@ -2566,21 +2824,89 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
             <Sigma className='h-3 w-3' />
             Recalculated
           </span>
-          <span className='tabular-nums'>
-            {shownRows.length} save{shownRows.length === 1 ? '' : 's'}
+          <span
+            className='tabular-nums'
+            aria-live='polite'
+            data-tip='Tick two saves to compare them · click a column title to see it over time'
+          >
+            {compare.length === 1
+              ? 'Tick one more to compare'
+              : `${shownRows.length} save${shownRows.length === 1 ? '' : 's'}`}
           </span>
         </span>
-        <Button
-          variant='outline'
-          size='sm'
-          className='h-8 gap-1.5 text-[12px]'
-          onClick={download}
-          disabled={shownRows.length === 0 || shownColumns.length === 0}
-        >
-          <Download className='h-3.5 w-3.5' />
-          CSV
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant='outline'
+              size='sm'
+              className='h-8 shrink-0 gap-1.5 text-[12px]'
+              disabled={shownRows.length === 0 || shownColumns.length === 0}
+              data-revision-download
+            >
+              <Download className='h-3.5 w-3.5' />
+              Download
+              <ChevronDown className='h-3 w-3 text-slate-400' />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='end' className='w-[240px]'>
+            <DropdownMenuItem onSelect={downloadExcel} className='gap-2 text-[12px]'>
+              <FileSpreadsheet className='h-3.5 w-3.5' />
+              <span className='flex flex-col'>
+                Excel
+                <span className='text-[11px] text-slate-500'>
+                  Changed cells shaded, a sheet of why values moved
+                </span>
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={download} className='gap-2 text-[12px]'>
+              <Download className='h-3.5 w-3.5' />
+              <span className='flex flex-col'>
+                CSV
+                <span className='text-[11px] text-slate-500'>Plain values, any spreadsheet</span>
+              </span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
+
+      {compared && (
+        <div
+          className='mb-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'
+          data-revision-compare
+        >
+          <div className='mb-2 flex items-center gap-2 text-[12.5px]'>
+            <GitCompareArrows className='h-3.5 w-3.5 text-slate-400' />
+            <span className='font-medium text-slate-800 dark:text-slate-100'>
+              {compared[0].timestamp ? formatDateTime(compared[0].timestamp) : ''} ·{' '}
+              {autoLabel(compared[0])}
+            </span>
+            <ArrowRight className='h-3 w-3 text-slate-400' />
+            <span className='font-medium text-slate-800 dark:text-slate-100'>
+              {compared[1].timestamp ? formatDateTime(compared[1].timestamp) : ''} ·{' '}
+              {autoLabel(compared[1])}
+            </span>
+            <button
+              type='button'
+              onClick={() => setCompare([])}
+              aria-label='Close the comparison'
+              className='ml-auto rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
+            >
+              <X className='h-3.5 w-3.5' />
+            </button>
+          </div>
+          <div className='max-h-[320px] overflow-y-auto'>
+            <FieldChangeList
+              before={compared[0].values}
+              after={compared[1].values}
+              meta={allMeta}
+              mode='changes'
+            />
+          </div>
+        </div>
+      )}
+      {trend && (
+        <FieldTrend label={trend.label} points={trend.points} onClose={() => setFocusField(null)} />
+      )}
 
       {rows.length === 0 ? (
         <div className='rounded-lg border border-dashed border-slate-200 py-12 text-center dark:border-border'>
@@ -2656,9 +2982,13 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
                         setDragField(null)
                         setDropField(null)
                       }}
-                      data-tip={`${c.label} — drag to move`}
+                      onClick={() => setFocusField((f) => (f === c.field ? null : c.field))}
+                      aria-sort='none'
+                      data-tip={`${c.label} — click to see it over time, drag to move`}
                       className={cn(
                         'group/th sticky top-0 z-[2] min-w-[132px] max-w-[260px] cursor-grab border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium active:cursor-grabbing dark:border-border dark:bg-muted',
+                        focusField === c.field &&
+                          'bg-[#e6faff] text-slate-800 dark:bg-[#0b2a33] dark:text-slate-100',
                         dragField === c.field && 'opacity-40',
                         dropField === c.field &&
                           dragField !== c.field &&
@@ -2676,31 +3006,65 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
               <tbody>
                 {shownRows.map((r) => (
                   <tr key={r.key} className='group align-top' data-save-action={r.action}>
-                    <td className='sticky left-0 z-[1] border-b border-r border-slate-100 bg-white px-3 py-2 group-hover:bg-slate-50 dark:border-border/50 dark:bg-card dark:group-hover:bg-muted'>
+                    <td className='sticky left-0 z-[1] border-b border-r border-slate-100 bg-white px-2 py-2 group-hover:bg-slate-50 dark:border-border/50 dark:bg-card dark:group-hover:bg-muted'>
                       {r.timestamp && (
-                        <span
-                          className='block tabular-nums leading-tight'
-                          title={formatDateTime(r.timestamp)}
-                        >
-                          <span className='block text-slate-700 dark:text-slate-200'>
-                            {toLocalDateString(r.timestamp)}
-                          </span>
-                          <span className='block text-[11px] text-slate-400'>
-                            {new Date(r.timestamp).toLocaleTimeString([], {
-                              hour: 'numeric',
-                              minute: '2-digit'
-                            })}
-                          </span>
+                        <span className='flex items-start gap-1.5'>
+                          <Checkbox
+                            checked={compare.includes(r.key)}
+                            onCheckedChange={() => toggleCompare(r.key)}
+                            aria-label='Compare this save'
+                            className='mt-0.5 h-3.5 w-3.5'
+                          />
+                          <button
+                            type='button'
+                            onClick={() => onOpenSave?.(r.key)}
+                            disabled={!onOpenSave}
+                            data-tip={
+                              r.action === 'moved'
+                                ? 'Open the Timeline'
+                                : 'Open this save in Replay'
+                            }
+                            className='block rounded text-left tabular-nums leading-tight hover:text-nvr-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-default dark:hover:text-nvr-cyan'
+                          >
+                            <span className='block text-slate-700 dark:text-slate-200'>
+                              {toLocalDateString(r.timestamp)}
+                            </span>
+                            <span className='block text-[11px] text-slate-400'>
+                              {new Date(r.timestamp).toLocaleTimeString([], {
+                                hour: 'numeric',
+                                minute: '2-digit'
+                              })}
+                            </span>
+                          </button>
                         </span>
                       )}
                     </td>
                     <td className='sticky left-[112px] z-[1] border-b border-r border-slate-100 bg-white px-3 py-2 group-hover:bg-slate-50 dark:border-border/50 dark:bg-card dark:group-hover:bg-muted'>
                       <span className='flex items-center gap-2'>
-                        <RevisionAvatar userId={r.userId} name={r.who} size='sm' />
+                        {r.action === 'moved' && !r.userId ? (
+                          <span
+                            className='flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-violet-700 dark:text-violet-300'
+                            aria-hidden
+                          >
+                            <Zap className='h-3 w-3' />
+                          </span>
+                        ) : (
+                          <RevisionAvatar userId={r.userId} name={r.who} size='sm' />
+                        )}
                         <span className='min-w-0'>
                           <span className='block truncate text-slate-700 dark:text-slate-200'>
                             {r.who}
                           </span>
+                          {r.action === 'moved' && !r.userId && (
+                            <span
+                              className='block truncate text-[10.5px] text-slate-500 dark:text-slate-400'
+                              data-tip='The pipeline moved it by itself when a step’s condition was met'
+                            >
+                              {r.trigger
+                                ? `after ${r.trigger.name}’s save`
+                                : 'a step’s condition was met'}
+                            </span>
+                          )}
                           {r.action !== 'changed' && (
                             <span
                               className={cn(
@@ -2715,12 +3079,12 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
                       </span>
                     </td>
                     {shownColumns.map((c) => {
-                      const m = metaFor(meta, c.field)
+                      const m = metaFor(allMeta, c.field)
                       const v = r.values[c.field]
                       const own = r.changed.has(c.field)
                       const recalc = r.recalculated.has(c.field)
                       const moved = own || recalc
-                      const reason = recalc ? reasonFor(c.field, r, meta) : null
+                      const reason = recalc ? reasonFor(c.field, r, allMeta) : null
                       // What moved it first (the audit question), then what it is worked out from.
                       const tip = reason
                         ? `Recalculated: ${reason.because ? `${reason.because}. ` : ''}${reason.why}`
@@ -2732,6 +3096,8 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
                           data-cell-changed={moved || undefined}
                           className={cn(
                             'max-w-[260px] border-b border-slate-100 px-3 py-2 dark:border-border/50',
+                            focusField === c.field &&
+                              'shadow-[inset_1px_0_0_0_rgba(0,206,255,0.35),inset_-1px_0_0_0_rgba(0,206,255,0.35)]',
                             moved
                               ? 'bg-amber-50 group-hover:bg-amber-100/70 dark:bg-amber-500/10 dark:group-hover:bg-amber-500/15'
                               : 'group-hover:bg-slate-50 dark:group-hover:bg-muted/40'
@@ -2795,13 +3161,16 @@ function HistoryReplay({
   snapshots,
   history,
   meta,
-  labels
+  labels,
+  startKey
 }: {
   snapshots: Revision[]
   /** Every history row (line writes included) — names who moved a recalculated total. */
   history: Revision[]
   meta: FieldMetaMap
   labels?: ActivityLabels
+  /** Open on this save (`id|timestamp`), e.g. clicked in the table. */
+  startKey?: string | null
 }) {
   const ordered = useMemo(() => [...snapshots].reverse(), [snapshots]) // oldest → newest
   const saveRows = useMemo(
@@ -2811,7 +3180,10 @@ function HistoryReplay({
       }),
     [history, labels]
   )
-  const [idx, setIdx] = useState(Math.max(0, ordered.length - 1))
+  const [idx, setIdx] = useState(() => {
+    const at = startKey ? ordered.findIndex((r) => `${r.id}|${r.timestamp ?? ''}` === startKey) : -1
+    return at >= 0 ? at : Math.max(0, ordered.length - 1)
+  })
   const [playing, setPlaying] = useState(false)
   const [showAll, setShowAll] = useState(false)
   const [jump, setJump] = useState('')

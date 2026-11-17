@@ -3,6 +3,7 @@ import { Sigma } from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { compareValueText } from '../../lib/compare-value'
 import { useAfterIdle } from '../../lib/defer'
 import { queryKeys } from '../../lib/query-keys'
 import { cn, titleCase } from '../../lib/utils'
@@ -189,6 +190,17 @@ function NumberTrailSection({
   )
 }
 
+const AGG_LABEL: Record<string, string> = {
+  sum: 'Sum',
+  count: 'Count',
+  avg: 'Average',
+  min: 'Lowest',
+  max: 'Highest',
+  median: 'Median',
+  distinct_count: 'Distinct count',
+  weighted_avg: 'Weighted average'
+}
+
 /**
  * "= 5 lines · 1 excluded (line type is not 4)" under a rollup header chip.
  * The summary is fetched once the chip is on screen (cheap: one lineage
@@ -217,9 +229,16 @@ export function HeaderRollupExplainer({
     queryKey: queryKeys.fieldConfig(collection),
     queryFn: () =>
       nivaro
-        .request<{ data: Array<{ field: string; label?: string | null }> }>(
-          get(`/field-config/${collection}`)
-        )
+        .request<{
+          data: Array<{
+            field: string
+            label?: string | null
+            type?: string | null
+            interface?: string | null
+            options?: unknown
+            display_options?: unknown
+          }>
+        }>(get(`/field-config/${collection}`))
         .then((r) => r.data ?? []),
     enabled: open && !!collection,
     staleTime: 120_000
@@ -236,8 +255,16 @@ export function HeaderRollupExplainer({
       .replace(/\{\{\s*([A-Za-z_]\w*)\s*\}\}/g, (_m, f: string) => labelOf(f))
       .replace(/\b(?:item\.)?([A-Za-z_]\w*)\b/g, (m, f: string) => (known.has(f) ? labelOf(f) : m))
   }
-  const num = (v: unknown): string =>
+  const plainNum = (v: unknown): string =>
     v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })
+  /** A value in a field's own format — currency as money — else a plain number. */
+  const fmt = (v: unknown, f?: string): string => {
+    if (v == null || v === '') return '—'
+    const row = f ? fieldRows?.find((r) => r.field === f) : undefined
+    return row ? compareValueText(v, row) : plainNum(v)
+  }
+  /** The total's own amounts (its contributors, subtotals, stored value) read like the total. */
+  const num = (v: unknown): string => fmt(v, field)
   if (!summary && !isLoading) return null
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -285,7 +312,7 @@ export function HeaderRollupExplainer({
                     {labelOf(k)}
                   </dt>
                   <dd className='text-right tabular-nums text-slate-800 dark:text-foreground'>
-                    {num(v)}
+                    {fmt(v, k)}
                   </dd>
                 </div>
               ))}
@@ -295,9 +322,9 @@ export function HeaderRollupExplainer({
         {(data?.sources ?? []).map((src, i) => (
           <div key={i} className='mb-1.5'>
             <p className='px-1 text-[10.5px] text-slate-400'>
-              {(src.aggregate ?? 'sum').toUpperCase()}
-              {src.value_field ? ` of ${src.value_field.replace(/_/g, ' ')}` : ''} across{' '}
-              {src.collection.replace(/_/g, ' ')}
+              {AGG_LABEL[src.aggregate ?? 'sum'] ?? titleCase(src.aggregate ?? 'sum')}
+              {src.value_field ? ` of ${titleCase(src.value_field.replace(/_/g, ' '))}` : ''} across{' '}
+              {titleCase(src.collection.replace(/_/g, ' '))}
             </p>
             {src.note && <p className='px-1 py-1 text-slate-400'>{src.note}</p>}
             {src.error && <p className='px-1 py-1 text-amber-600'>{src.error}</p>}
@@ -311,7 +338,7 @@ export function HeaderRollupExplainer({
                     {r.label}
                   </span>
                   <span className='shrink-0 font-mono tabular-nums text-slate-800 dark:text-slate-100'>
-                    {num(r.value)}
+                    {src.aggregate === 'count' ? plainNum(r.value) : num(r.value)}
                   </span>
                 </div>
               ))}

@@ -23,6 +23,8 @@ export interface ChangeSourceRevision {
     to_label: string | null
     /** Set when the move was on an addendum (its own pipeline), not the record. */
     addendum?: unknown
+    /** 'auto' = the pipeline moved it itself (a condition met), no person pressed anything. */
+    source?: string | null
   } | null
 }
 
@@ -61,7 +63,12 @@ export interface MatrixRow {
   recalculated: Set<string>
   /** For a recalculated total: the child writes between the two saves that moved it. */
   via: Map<string, ChangeVia[]>
+  /** An automatic move: the person whose write set it off, when one is that close in time. */
+  trigger?: { name: string; userId: string | null } | null
 }
+
+/** How close a person's write must be for an automatic move to be credited to it. */
+const TRIGGER_WINDOW_MS = 15_000
 
 export interface MatrixColumn {
   field: string
@@ -178,14 +185,25 @@ export function buildSaveRows(
   })
   if (!opts.withMoves || moves.length === 0) return saveRows
   // Each move is a row of its own: the step changed, every other field as the last save left it.
+  // A person's writes (saves, line edits, moves) — what an automatic move is credited to.
+  const personWrites = ordered.filter((r) => r.user_id && (isSnapshot(r) || r.event || r.o2m))
   const moveRows: MatrixRow[] = moves.map((m) => {
     const t = time(m)
     const last = saveRows.find((r) => (r.timestamp ? new Date(r.timestamp).getTime() : 0) <= t)
+    const automatic = !m.user_id
+    // The pipeline moved the record itself because a write met a step's condition: the write
+    // just before it (within a few seconds) is what set it off — usually the same instant.
+    const cause = automatic
+      ? personWrites
+          .filter((w) => w !== m && time(w) <= t + 2000 && t - time(w) <= TRIGGER_WINDOW_MS)
+          .sort((a, b) => Math.abs(t - time(a)) - Math.abs(t - time(b)))[0]
+      : undefined
     return {
       key: `move|${m.timestamp ?? ''}|${m.event?.to_label ?? ''}`,
       timestamp: m.timestamp,
-      who: name(m),
+      who: automatic ? 'Automatic' : name(m),
       userId: m.user_id ?? null,
+      trigger: cause ? { name: name(cause), userId: cause.user_id ?? null } : null,
       action: 'moved' as const,
       values: { ...(last?.values ?? {}), [STEP_FIELD]: m.event?.to_label ?? null },
       changed: new Set([STEP_FIELD]),
@@ -427,4 +445,37 @@ export function recalcReason(
     why: 'Set automatically (rule, job or integration)',
     because: movedBy
   }
+}
+
+/** A line column's value at a moment: the last point at or before it. */
+export function valueAt(series: Array<{ t: string; v: unknown }>, at: string | null): unknown {
+  if (!at) return null
+  const t = new Date(at).getTime()
+  let v: unknown = null
+  for (const p of series) {
+    if (new Date(p.t).getTime() > t) break
+    v = p.v
+  }
+  return v
+}
+
+/** GET /revisions/child-columns — the rows behind the record's totals, value over time. */
+export interface ChildColumnsData {
+  columns: Array<{
+    key: string
+    collection: string
+    collection_label: string
+    id: string
+    row_label: string
+    field: string
+    field_label: string
+    cmp: {
+      field: string
+      type: string | null
+      interface: string | null
+      options: unknown
+      display_options: unknown
+    }
+  }>
+  series: Record<string, Array<{ t: string; v: unknown }>>
 }

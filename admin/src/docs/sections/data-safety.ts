@@ -40,6 +40,10 @@ export const timeTravelDocs: DocSection = {
     },
     {
       type: 'p',
+      text: 'In the Table: Pipeline step is a column (each move is a row, an automatic move names the save that set it off); the rows behind a total (Line 1 · Amount) can be added as columns beside it; filter by people and dates; tick two saves to compare them field by field; click a date to open that save in Replay; click a column title to see the field over time (a chart for numbers). Download gives CSV or Excel — the Excel shades changed cells and adds a sheet of why each recalculated value moved. Column sets: save the columns you have as your own named set, or (administrators) share a set with everyone, make it the default for some roles, or the default for everyone. You start with your own columns, else your role\'s default, else the default for everyone, else the fields that changed.'
+    },
+    {
+      type: 'p',
       text: 'Replay the record steps through the saves on a rail (Previous, Play, Next, or jump to a date): each stop shows what that save changed, the person\'s own fields first and recalculated ones marked, and the whole record as it stood then. Any person\'s avatar in the history opens their card.'
     },
     {
