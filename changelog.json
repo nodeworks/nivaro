@@ -1,10 +1,206 @@
 {
-  "generated_at": "2026-11-17T01:30:54.493Z",
+  "generated_at": "2026-11-17T04:43:16.017Z",
   "releases": [
+    {
+      "version": "0.3.167",
+      "tag": "v0.3.167",
+      "date": "2026-11-16T23:42:59-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "security",
+              "text": "alert administrators on security-relevant events",
+              "hash": "e16af0776"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "stale-import cadence skips weekends and holidays",
+              "hash": "37db8e129"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "record",
+              "text": "header tile's \"changed by\" icon takes the corner, Copy sits left of it",
+              "hash": "166566074"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "security",
+              "text": "automated accessibility scan and draft VPAT 2.5",
+              "hash": "6cad1ade1"
+            },
+            {
+              "section": "Documentation",
+              "scope": "security",
+              "text": "HIPAA plan and roadmap entry",
+              "hash": "1cdb62401"
+            },
+            {
+              "section": "Documentation",
+              "scope": "security",
+              "text": "security and compliance vendor landscape",
+              "hash": "775e304ff"
+            },
+            {
+              "section": "Documentation",
+              "scope": "security",
+              "text": "PCI DSS SAQ A for Nivaro Cloud",
+              "hash": "0665c1d62"
+            },
+            {
+              "section": "Documentation",
+              "scope": "security",
+              "text": "compliance roadmap, CAIQ answers, GDPR drafts, Microsoft verification",
+              "hash": "c07685d48"
+            },
+            {
+              "section": "Documentation",
+              "scope": "security",
+              "text": "cloud restore test finding — restore is a stub",
+              "hash": "c565bb5c1"
+            },
+            {
+              "section": "Documentation",
+              "scope": "security",
+              "text": "incident response and disaster recovery plan drafts",
+              "hash": "78f67447c"
+            },
+            {
+              "section": "Documentation",
+              "scope": "security",
+              "text": "SOC 2 readiness checklist and a public Security page",
+              "hash": "bd3f59cd8"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "run the two fixed suites again; keep dependabot.yml off the public mirror",
+              "hash": "e5af4916f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "pin import-stale cases to calendar days; refresh record header snapshot",
+              "hash": "ce12db102"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "run type checks and unit tests on every PR and push to main",
+              "hash": "5ff0f2146"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "alerts never capped for role/key changes; cover more permission writes",
+              "hash": "ea62e60a5"
+            },
+            {
+              "section": "Other",
+              "scope": "publish",
+              "text": "keep docs/security out of the public mirror",
+              "hash": "d4edc1c69"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "names keep inner @ and #, and such a name is opaque",
+              "hash": "399dd84e4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "EXEC@proc with no space is an EXEC of a variable",
+              "hash": "a6165a76e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "read set fails closed on unresolved EXEC targets, reads literal names",
+              "hash": "91a23f504"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "read set resolves every identifier, not regex-parsed FROM/JOIN",
+              "hash": "8116a6c73"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "raw-SQL scope gate follows views and fails closed on unreadable SQL",
+              "hash": "6b4c83e86"
+            },
+            {
+              "section": "Other",
+              "scope": "validation",
+              "text": "fix truncation bypass + fail-closed screen (L-1)",
+              "hash": "14c66ba8d"
+            },
+            {
+              "section": "Other",
+              "scope": "validation",
+              "text": "refuse catastrophic regex in config rules (L-1)",
+              "hash": "1d03e286f"
+            },
+            {
+              "section": "Other",
+              "scope": "layouts",
+              "text": "gate generate-and-attach like an update (L-5)",
+              "hash": "8c90eaf1d"
+            },
+            {
+              "section": "Other",
+              "scope": "dashboards",
+              "text": "role check on widget data/drill/rows (L-4)",
+              "hash": "07f9ab814"
+            },
+            {
+              "section": "Other",
+              "scope": "graphql",
+              "text": "record-level gate on itemMutated subscription (L-8)",
+              "hash": "5818e69d8"
+            },
+            {
+              "section": "Other",
+              "scope": "oauth",
+              "text": "unverified-app banner on the consent screen (L-2)",
+              "hash": "4d4fa9bbe"
+            },
+            {
+              "section": "Other",
+              "scope": "graphql",
+              "text": "generous default query-depth cap (I-1)",
+              "hash": "7e70eb1b4"
+            }
+          ]
+        }
+      ],
+      "count": 28
+    },
     {
       "version": "0.3.166",
       "tag": "v0.3.166",
-      "date": "2026-11-16T20:30:35-05:00",
+      "date": "2026-11-16T20:30:54-05:00",
       "sections": [
         {
           "label": "Added",
