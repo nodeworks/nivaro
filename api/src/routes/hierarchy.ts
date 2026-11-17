@@ -81,9 +81,25 @@ async function checkLevelReadAccess(
   return true
 }
 
+/** Can the caller follow a level's link to its parent — read the parent_fk field (M2O) or the
+ *  junction table (M2M)? If not, the parent link is hidden so it can't leak the relation. */
+async function canFollowParentLink(
+  user: NonNullable<FastifyRequest['user']>,
+  level: HierarchyLevel | undefined,
+  allowed: string[] | null
+): Promise<boolean> {
+  if (!level) return false
+  if (level.junction_table && level.junction_child_fk && level.junction_parent_fk) {
+    return can(user, 'read', level.junction_table)
+  }
+  if (!level.parent_fk) return true
+  return allowed === null || allowed.includes(level.parent_fk)
+}
+
 /** Filter hierarchy nodes to what the caller may actually see: drop rows hidden by User Scopes /
- *  row filter and narrow each node's `raw` to the caller's field policy, per level collection.
- *  Mirrors tree.ts asViewer; admins (seesAllRecords) get everything (security audit H-1). */
+ *  row filter, narrow each node's `raw` to the caller's field policy, and hide the parent link
+ *  (parent_id / parent_collection) when the parent record isn't visible or its link field isn't
+ *  readable — per level collection. Mirrors tree.ts asViewer; admins get everything (audit H-1). */
 async function asHierarchyViewer(
   req: FastifyRequest,
   config: HierarchyConfig,
@@ -92,10 +108,15 @@ async function asHierarchyViewer(
   if (nodes.length === 0 || (await seesAllRecords(req.isAdmin, req.user))) return nodes
   const user = req.user!
   const idsByCol = new Map<string, Set<string>>()
+  const addId = (col: string | null, id: number | string | null) => {
+    if (!col || id == null) return
+    const set = idsByCol.get(col) ?? new Set<string>()
+    set.add(String(id))
+    idsByCol.set(col, set)
+  }
   for (const n of nodes) {
-    const set = idsByCol.get(n.collection) ?? new Set<string>()
-    set.add(String(n.id))
-    idsByCol.set(n.collection, set)
+    addId(n.collection, n.id)
+    addId(n.parent_collection, n.parent_id) // so parent visibility can be checked too
   }
   const seen = new Map<string, Set<string>>()
   const allowedByCol = new Map<string, string[] | null>()
@@ -109,8 +130,16 @@ async function asHierarchyViewer(
       allowedByCol.set(col, allowed)
     })
   )
-  const labelFieldOf = (col: string) =>
-    config.levels.find((l) => l.collection === col)?.label_field ?? ''
+  const levelOf = (col: string) => config.levels.find((l) => l.collection === col)
+  const canFollow = new Map<string, boolean>()
+  await Promise.all(
+    [...idsByCol.keys()].map(async (col) =>
+      canFollow.set(
+        col,
+        await canFollowParentLink(user, levelOf(col), allowedByCol.get(col) ?? null)
+      )
+    )
+  )
   return nodes
     .filter((n) => seen.get(n.collection)?.has(String(n.id)) ?? false)
     .map((n) => {
@@ -118,9 +147,30 @@ async function asHierarchyViewer(
       const readable = (f: string) => allowed === null || f === 'id' || allowed.includes(f)
       const raw: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(n.raw)) if (readable(k)) raw[k] = v
-      const lf = labelFieldOf(n.collection)
-      return { ...n, raw, label: readable(lf) ? n.label : '' }
+      const lf = levelOf(n.collection)?.label_field ?? ''
+      const parentVisible =
+        n.parent_collection != null &&
+        n.parent_id != null &&
+        (seen.get(n.parent_collection)?.has(String(n.parent_id)) ?? false)
+      const keepParent = (canFollow.get(n.collection) ?? false) && parentVisible
+      return {
+        ...n,
+        raw,
+        label: readable(lf) ? n.label : '',
+        parent_id: keepParent ? n.parent_id : null,
+        parent_collection: keepParent ? n.parent_collection : null
+      }
     })
+}
+
+/** May the caller see this record (null id = always, e.g. a root)? */
+async function seesHierarchyNode(
+  req: FastifyRequest,
+  collection: string,
+  id: unknown
+): Promise<boolean> {
+  if (id == null || (await seesAllRecords(req.isAdmin, req.user))) return true
+  return (await visibleRecordIds(req.user!, collection, [String(id)])).has(String(id))
 }
 
 export async function hierarchyRoutes(app: FastifyInstance) {
@@ -283,6 +333,8 @@ export async function hierarchyRoutes(app: FastifyInstance) {
       if (!config) return reply.code(404).send({ error: 'Not found' })
       if (!(await checkLevelReadAccess(req, config, reply))) return reply
 
+      if (!(await seesHierarchyNode(req, req.params.collection, req.params.nodeId)))
+        return reply.code(404).send({ error: 'Not found' })
       const children = await asHierarchyViewer(
         req,
         config,
@@ -300,11 +352,20 @@ export async function hierarchyRoutes(app: FastifyInstance) {
       if (!config) return reply.code(404).send({ error: 'Not found' })
       if (!(await checkLevelReadAccess(req, config, reply))) return reply
 
-      const ancestors = await asHierarchyViewer(
-        req,
-        config,
-        await getNodeAncestors(config, req.params.collection, req.params.nodeId)
-      )
+      if (!(await seesHierarchyNode(req, req.params.collection, req.params.nodeId)))
+        return reply.code(404).send({ error: 'Not found' })
+      const chain = await getNodeAncestors(config, req.params.collection, req.params.nodeId)
+      const viewed = await asHierarchyViewer(req, config, chain)
+      const visKey = new Set(viewed.map((v) => `${v.collection}:${v.id}`))
+      // Keep the contiguous visible run nearest the node; stop at the first hidden ancestor going
+      // up, so a hidden ancestor is never skipped over (which would leak that it exists).
+      const ancestors: FlatHierarchyNode[] = []
+      for (let i = chain.length - 1; i >= 0; i--) {
+        const key = `${chain[i].collection}:${chain[i].id}`
+        if (!visKey.has(key)) break
+        const v = viewed.find((x) => `${x.collection}:${x.id}` === key)
+        if (v) ancestors.unshift(v)
+      }
       return reply.send({ data: ancestors })
     }
   )
