@@ -191,6 +191,58 @@ const FACT_LABEL = 'text-[11.5px] font-medium text-slate-500 dark:text-slate-400
  *  (and cuts with …) before the label does, so it never wraps and pushes the value down. */
 const FACT_LABEL_ROW = `${FACT_LABEL} flex min-w-0 items-center whitespace-nowrap`
 
+/**
+ * The words of a field's "changed by" tag. With room: "Nuvolo (legacy LinX) · Oct 3, 2025…".
+ * Without: the date goes first, so the source reads whole ("Nuvolo (legacy LinX)"); only a
+ * column too narrow even for that cuts the name with …. The tip and popover keep the whole
+ * line. Measured (not CSS) so the amber pill hugs its words instead of stretching to the
+ * column edge.
+ */
+function TouchTagText({ name, at }: { name: string; at: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [short, setShort] = useState(false)
+  const fullRef = useRef(0)
+  useEffect(() => {
+    const el = ref.current
+    const tag = el?.parentElement
+    const row = tag?.parentElement
+    if (!el || !tag || !row || typeof ResizeObserver === 'undefined') return
+    const check = () => {
+      if (!short) {
+        // The words truncate inside the tag (the tag itself never overflows): compare the
+        // words' own box. The width the full line needs = the tag now + what is cut off.
+        const cut = el.scrollWidth - el.clientWidth
+        if (cut > 0.5) {
+          fullRef.current = tag.getBoundingClientRect().width + cut
+          setShort(true)
+        }
+        return
+      }
+      const room = row.getBoundingClientRect().right - tag.getBoundingClientRect().left
+      if (fullRef.current && room >= fullRef.current + 1) setShort(false)
+    }
+    check()
+    const ro = new ResizeObserver(check)
+    ro.observe(row)
+    return () => ro.disconnect()
+  }, [short])
+  return (
+    <span
+      ref={ref}
+      data-field-touch-text
+      data-short={short || undefined}
+      className='min-w-0 truncate'
+    >
+      {name}
+      {!short && (
+        <>
+          {' · '}
+          <RelativeTime value={at} />
+        </>
+      )}
+    </span>
+  )
+}
 const Empty = () => <span className='text-slate-300 dark:text-slate-600'>—</span>
 
 /**
@@ -1183,10 +1235,7 @@ function RecordReadViewBody({
             className='ml-1 inline-flex min-w-0 items-center gap-1 overflow-hidden rounded-full bg-amber-50 px-1.5 align-middle text-[9.5px] font-medium leading-4 text-amber-800 hover:bg-amber-100 dark:bg-amber-400/10 dark:text-amber-300 dark:hover:bg-amber-400/20'
           >
             <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400' aria-hidden />
-            {/* Cut with … on a narrow column — the tip and the popover carry the whole line. */}
-            <span className='min-w-0 truncate'>
-              {t.caller.name} · <RelativeTime value={t.at} />
-            </span>
+            <TouchTagText name={t.caller.name} at={t.at} />
           </button>
         </InboundRequestPopover>
       )
