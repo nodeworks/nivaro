@@ -61,6 +61,7 @@ export function gitlabProvider(
         method: init.method ?? 'GET',
         headers,
         body: body as RequestInit['body'],
+        redirect: 'manual',
         timeoutMs: TIMEOUT_MS
       })
     } catch (err) {
@@ -71,6 +72,20 @@ export function gitlabProvider(
         ),
         null,
         'network'
+      )
+    }
+    if (res.status >= 300 && res.status < 400) {
+      let host = 'another address'
+      try {
+        const loc = res.headers.get('location')
+        if (loc) host = new URL(loc, api).host
+      } catch {
+        // keep the generic wording
+      }
+      throw new TrackerError(
+        `GitLab answered with a redirect to ${host} — set the connection URL to the address GitLab serves its API on`,
+        res.status,
+        'invalid'
       )
     }
     if (!res.ok) {

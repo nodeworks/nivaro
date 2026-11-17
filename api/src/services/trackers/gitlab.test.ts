@@ -51,6 +51,22 @@ describe('gitlabProvider', () => {
     expect(err.message).not.toContain('tok')
   })
 
+  it('a 3xx is an invalid TrackerError and is not followed', async () => {
+    const f = vi
+      .fn<(...args: any[]) => any>()
+      .mockResolvedValue(reply('', 302, { location: 'https://other.example/api/v4/user' }))
+    const err = await mk(f)
+      .whoami()
+      .catch((e) => e)
+    expect(err).toBeInstanceOf(TrackerError)
+    expect(err.kind).toBe('invalid')
+    expect(err.status).toBe(302)
+    expect(err.message).toContain('other.example')
+    expect(err.message).not.toContain('tok')
+    expect(f).toHaveBeenCalledTimes(1)
+    expect(f.mock.calls[0][1].redirect).toBe('manual')
+  })
+
   it('maps other statuses and network failures', async () => {
     const f = vi.fn<(...args: any[]) => any>()
     f.mockResolvedValueOnce(reply('', 404))

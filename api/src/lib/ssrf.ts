@@ -393,7 +393,7 @@ function requestOnce(
 }
 
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308])
-const CROSS_ORIGIN_DROP = ['authorization', 'cookie', 'proxy-authorization']
+const CROSS_ORIGIN_DROP = ['authorization', 'cookie', 'proxy-authorization', 'private-token']
 
 /**
  * `fetch` with the SSRF guard applied to the URL and to every redirect hop, and the connection
