@@ -16,6 +16,7 @@ const cmp = (a: any, b: any) => {
 }
 const OPS: Record<string, (a: any, b: any) => boolean> = {
   '=': (a, b) => cmp(a, b) === 0,
+  '<>': (a, b) => cmp(a, b) !== 0,
   '<': (a, b) => a != null && cmp(a, b) < 0,
   '<=': (a, b) => a != null && cmp(a, b) <= 0,
   '>': (a, b) => a != null && cmp(a, b) > 0,
@@ -255,8 +256,10 @@ import {
   previewRule,
   RULES,
   resetFailureLog,
+  resetSweepFailures,
   SWEEP_EXT,
   SWEEP_KEY,
+  SWEEP_RULE,
   sweep
 } from './engine.js'
 import { type TrackerRule, validateRule } from './rules.js'
@@ -329,6 +332,7 @@ const decisions = (rule?: number) =>
 beforeEach(() => {
   failTables.clear()
   resetFailureLog()
+  resetSweepFailures()
   for (const k of Object.keys(tables)) delete tables[k]
   for (const k of Object.keys(ids)) delete ids[k]
   nextRule = 0
@@ -798,5 +802,95 @@ describe('evaluation failures', () => {
     expect(warn.mock.calls[1][0]).toContain('issue 4 (3 failures since the last report): later')
     noteEvaluationFailure(5, new Error('x'), t0 + FAILURE_LOG_EVERY_MS + 1000)
     expect(warn).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('fix round 2', () => {
+  it('a persistently failing issue stops holding the sweep mark after 3 tries', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    addRule({ mode: 'suggest' })
+    t('nivaro_extension_settings').push({
+      id: 1,
+      extension_id: SWEEP_EXT,
+      key: SWEEP_KEY,
+      value: '2026-11-17T10:00:00.000Z'
+    })
+    const poison = addIssue({ updated_at: new Date('2026-11-17T10:20:00Z'), raised_by: 'u1' })
+    const later = addIssue({ updated_at: new Date('2026-11-17T10:30:00Z') })
+    failTables.add('nivaro_users')
+    const mark = () => t('nivaro_extension_settings')[0].value
+    const sweepErrors = () => decisions(SWEEP_RULE)
+
+    for (const at of ['12:00', '12:05']) {
+      vi.setSystemTime(new Date(`2026-11-17T${at}:00Z`))
+      await sweep()
+      expect(mark()).toBe('2026-11-17T10:19:59.999Z')
+    }
+    expect(sweepErrors()).toHaveLength(0)
+
+    vi.setSystemTime(new Date('2026-11-17T12:10:00Z'))
+    await sweep() // third failed try: the sweep moves on
+    expect(mark()).toBe('2026-11-17T12:10:00.000Z')
+    expect(sweepErrors()).toEqual([
+      expect.objectContaining({
+        issue: poison,
+        outcome: 'error',
+        detail: 'evaluation keeps failing — skipped by the sweep: nivaro_users is unreadable'
+      })
+    ])
+    expect(t('nivaro_issues').find((i) => i.id === later)?.tracker_suggested_rule).toBe(1)
+
+    // a new write of the poison issue is tried again, without holding the mark or another row
+    const row = t('nivaro_issues').find((i) => i.id === poison) as Row
+    row.updated_at = new Date('2026-11-17T12:12:00Z')
+    vi.setSystemTime(new Date('2026-11-17T12:15:00Z'))
+    expect(await sweep()).toEqual({ evaluated: 1 })
+    expect(mark()).toBe('2026-11-17T12:15:00.000Z')
+    expect(sweepErrors()).toHaveLength(1)
+  })
+
+  it('a failing issue stops holding the mark an hour after its first failure', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    addRule({ mode: 'suggest' })
+    t('nivaro_extension_settings').push({
+      id: 1,
+      extension_id: SWEEP_EXT,
+      key: SWEEP_KEY,
+      value: '2026-11-17T10:00:00.000Z'
+    })
+    addIssue({ updated_at: new Date('2026-11-17T10:20:00Z'), raised_by: 'u1' })
+    failTables.add('nivaro_users')
+    vi.setSystemTime(new Date('2026-11-17T12:00:00Z'))
+    await sweep()
+    expect(t('nivaro_extension_settings')[0].value).toBe('2026-11-17T10:19:59.999Z')
+    vi.setSystemTime(new Date('2026-11-17T13:00:00Z'))
+    await sweep() // second try, but an hour after the first
+    expect(t('nivaro_extension_settings')[0].value).toBe('2026-11-17T13:00:00.000Z')
+    expect(decisions(SWEEP_RULE)).toHaveLength(1)
+  })
+
+  it('trim never removes fired rows inside the cap window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const now = new Date('2026-11-17T12:00:00Z')
+    vi.setSystemTime(now)
+    const r = addRule({ threshold: { hits: { n: 5, window_minutes: 60 } } })
+    const ago = (h: number) => new Date(now.getTime() - h * 3_600_000)
+    let id = 0
+    const push = (outcome: string, at: Date) =>
+      t(DECISIONS).push({ id: ++id, rule: r, issue: 1000 + id, at, outcome, detail: '' })
+    for (let i = 0; i < 5; i++) push('fired', ago(30)) // past the cap window
+    for (let i = 0; i < 20; i++) push('fired', ago(2)) // inside it
+    for (let i = 0; i < 250; i++) push('threshold', ago(1))
+    ids[DECISIONS] = id
+    await evaluateIssue(addIssue())
+    const mine = decisions(r)
+    expect(
+      mine.filter((d) => d.outcome === 'fired' && d.at.getTime() === ago(2).getTime())
+    ).toHaveLength(20)
+    expect(mine.filter((d) => d.at.getTime() === ago(30).getTime())).toHaveLength(0)
+    // the newest 200 rows are kept, plus the 20 fired rows the caps still count
+    expect(mine).toHaveLength(220)
   })
 })

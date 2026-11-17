@@ -37,6 +37,10 @@ export const RULES = 'nivaro_tracker_rules'
 export const DECISIONS = 'nivaro_tracker_decisions'
 /** Decision rows kept per rule. */
 export const KEEP_DECISIONS = 200
+/** 'fired' rows younger than this are never trimmed (the caps count the last 24 h). */
+export const FIRED_KEEP_MS = 25 * 3_600_000
+/** Decision rows about the sweep itself (no rule). */
+export const SWEEP_RULE = 0
 const HOUR_MS = 3_600_000
 const DAY_MS = 86_400_000
 const DETAIL_MAX = 500
@@ -561,15 +565,22 @@ async function latestDecisions(issueId: number): Promise<Latest> {
 }
 
 /** Keep the newest KEEP_DECISIONS rows of one rule. */
-export async function trimDecisions(ruleId: number): Promise<void> {
+export async function trimDecisions(ruleId: number, now = new Date()): Promise<void> {
   const cut = (await db(DECISIONS)
     .where({ rule: ruleId })
     .orderBy('id', 'desc')
     .offset(KEEP_DECISIONS)
     .limit(1)
     .select('id')) as Row[]
-  if (cut[0])
-    await db(DECISIONS).where({ rule: ruleId }).where('id', '<=', Number(cut[0].id)).delete()
+  if (!cut[0]) return
+  // The caps count 'fired' rows of the last day: those are never trimmed (a busy rule's log may
+  // run past 200 by at most its daily cap).
+  const keepFiredSince = new Date(now.getTime() - FIRED_KEEP_MS)
+  await db(DECISIONS)
+    .where({ rule: ruleId })
+    .where('id', '<=', Number(cut[0].id))
+    .where((q) => q.where('outcome', '<>', 'fired').orWhere('at', '<=', keepFiredSince))
+    .delete()
 }
 
 /**
@@ -809,20 +820,21 @@ export function resetFailureLog(): void {
 }
 
 /** One guarded run; false when an evaluation of this issue threw. */
-async function runQueued(issueId: number): Promise<boolean> {
+async function runQueued(issueId: number): Promise<{ ok: true } | { ok: false; err: unknown }> {
   if (inFlight.has(issueId)) {
     again.add(issueId)
-    return true
+    return { ok: true }
   }
   inFlight.add(issueId)
-  let ok = true
+  let failure: { ok: false; err: unknown } | null = null
   try {
     do {
       again.delete(issueId)
       try {
         await evaluateIssue(issueId)
+        failure = null
       } catch (err) {
-        ok = false
+        failure = { ok: false, err }
         noteEvaluationFailure(issueId, err)
       }
     } while (again.has(issueId))
@@ -830,7 +842,7 @@ async function runQueued(issueId: number): Promise<boolean> {
     inFlight.delete(issueId)
     again.delete(issueId)
   }
-  return ok
+  return failure ?? { ok: true }
 }
 
 /**
@@ -914,6 +926,50 @@ async function quietDue(mark: Date, now: Date): Promise<Array<{ issue: number; e
   return [...out].map(([issue, end]) => ({ issue, end }))
 }
 
+/** A failing issue holds the sweep mark for at most this many tries or this long. */
+export const SWEEP_MAX_TRIES = 3
+export const SWEEP_MAX_HOLD_MS = 60 * 60_000
+const SWEEP_FAILURES_MAX = 1000
+const sweepFailures = new Map<number, { count: number; firstAt: number; skipped: boolean }>()
+
+/** Tests: forget the sweep's failure tally. */
+export function resetSweepFailures(): void {
+  sweepFailures.clear()
+}
+
+/**
+ * Whether a failed issue still holds the sweep mark back: yes for its first 3 failed tries within
+ * an hour of the first; after that the sweep moves on (one 'error' decision says so — the live
+ * listener still re-evaluates the issue on its next write). Per process.
+ */
+async function stillHoldsMark(issueId: number, err: unknown, now: Date): Promise<boolean> {
+  const f = sweepFailures.get(issueId) ?? { count: 0, firstAt: now.getTime(), skipped: false }
+  f.count++
+  sweepFailures.delete(issueId)
+  sweepFailures.set(issueId, f)
+  if (sweepFailures.size > SWEEP_FAILURES_MAX) {
+    const oldest = sweepFailures.keys().next().value
+    if (oldest !== undefined) sweepFailures.delete(oldest)
+  }
+  if (f.count < SWEEP_MAX_TRIES && now.getTime() - f.firstAt < SWEEP_MAX_HOLD_MS) return true
+  if (!f.skipped) {
+    f.skipped = true
+    try {
+      await db(DECISIONS).insert({
+        rule: SWEEP_RULE,
+        issue: issueId,
+        at: now,
+        outcome: 'error',
+        detail: `evaluation keeps failing — skipped by the sweep: ${errText(err).slice(0, 200)}`
+      })
+      await trimDecisions(SWEEP_RULE, now)
+    } catch {
+      // the log line from noteEvaluationFailure still says it
+    }
+  }
+  return false
+}
+
 /**
  * Re-evaluate what changed since the stored mark (`updated_at` or `last_seen_at` later than it,
  * oldest first, at most 500 per run) plus issues held by quiet hours whose window has ended. A
@@ -941,8 +997,13 @@ export async function sweep(now = new Date()): Promise<{ evaluated: number }> {
 
   let failedAt: number | null = null
   for (const [id, at] of due) {
-    if (await runQueued(id)) continue
-    failedAt = failedAt === null ? at : Math.min(failedAt, at)
+    const res = await runQueued(id)
+    if (res.ok) {
+      sweepFailures.delete(id)
+      continue
+    }
+    if (await stillHoldsMark(id, res.err, now))
+      failedAt = failedAt === null ? at : Math.min(failedAt, at)
   }
 
   let next = now
@@ -1043,7 +1104,7 @@ export async function explainIssue(issueId: number, now = new Date()): Promise<E
     const rule = Number(r.rule)
     out.push({
       rule,
-      name: names.get(rule) ?? '(deleted rule)',
+      name: rule === SWEEP_RULE ? 'Sweep' : (names.get(rule) ?? '(deleted rule)'),
       outcome: String(r.outcome),
       detail: describe(String(r.outcome), String(r.detail ?? '')),
       at: iso(r.at)
@@ -1553,7 +1614,7 @@ export async function trimAllDecisions(): Promise<void> {
     ((await whereInList(db(RULES), 'id', ruleIds).select('id')) as Row[]).map((r) => Number(r.id))
   )
   for (const id of ruleIds) {
-    if (!existing.has(id)) await db(DECISIONS).where({ rule: id }).delete()
+    if (!existing.has(id) && id !== SWEEP_RULE) await db(DECISIONS).where({ rule: id }).delete()
     else await trimDecisions(id)
   }
 }
