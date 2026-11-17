@@ -181,15 +181,17 @@ vi.mock('./connections.js', async () => {
 })
 
 import { trackerHookRoutes } from '../../routes/tracker-hooks.js'
-import { normalizeSync } from './connections.js'
+import { markBroken, normalizeSync } from './connections.js'
 import {
   applyIssueEvent,
   applyNoteEvent,
   isOwnNote,
+  noteReconcileFailure,
   OWN_COMMENT_MARKER,
-  reconcileConnection
+  reconcileConnection,
+  resetReconcileState
 } from './inbound.js'
-import type { RemoteIssue, RemoteNote } from './types.js'
+import { type RemoteIssue, type RemoteNote, TrackerError } from './types.js'
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -270,6 +272,9 @@ const severityOf = (id: number) => t('nivaro_issues').find((r) => r.id === id)?.
 const issueUpdates = () => activity.rows.filter((r) => r.collection === 'nivaro_issues')
 
 beforeEach(() => {
+  vi.restoreAllMocks()
+  resetReconcileState()
+  vi.mocked(markBroken).mockClear()
   for (const k of Object.keys(tables)) delete tables[k]
   for (const k of Object.keys(ids)) delete ids[k]
   activity.rows.length = 0
@@ -795,5 +800,93 @@ describe('reconcileConnection', () => {
     t('nivaro_issues')[0].status = 'open'
     await reconcileConnection(1)
     expect(provider.updatedIssues).toHaveBeenCalledTimes(1)
+  })
+
+  it('a deleted project does not freeze the cursor and sets last_error', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    t('nivaro_tracker_connections').push({ id: 1 })
+    setConnection({}, { last_reconcile_at: '2026-11-17T09:00:00.000Z', last_error: null })
+    seed()
+    t('nivaro_tracker_links').push({
+      id: 12,
+      connection: 1,
+      project_id: 8,
+      project_path: 'g/gone',
+      external_iid: 1,
+      remote_state: 'opened',
+      remote_labels: '[]',
+      last_synced_at: new Date(),
+      created_at: new Date()
+    })
+    provider.updatedIssues.mockImplementation(async (project: number) => {
+      if (project === 8) throw new TrackerError('404 Project Not Found', 404, 'not_found')
+      return [remote({ iid: 5, updated_at: '2026-11-17T09:30:00Z' })]
+    })
+    await reconcileConnection(1)
+    const row = t('nivaro_tracker_connections')[0]
+    expect(row.last_reconcile_at).toEqual(new Date('2026-11-17T09:30:00Z'))
+    expect(row.last_error).toBe('GitLab project g/gone could not be read: 404 Project Not Found')
+    expect(markBroken).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledTimes(1)
+    // the same refusal next run: still skipped, not logged again
+    setConnection({}, { last_reconcile_at: row.last_reconcile_at, last_error: row.last_error })
+    await reconcileConnection(1)
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    // a passing failure (GitLab 502) still holds the cursor
+    provider.updatedIssues.mockImplementation(async (project: number) => {
+      if (project === 8) throw new TrackerError('Bad gateway', 502, 'server')
+      return [remote({ iid: 5, updated_at: '2026-11-17T10:30:00Z' })]
+    })
+    await reconcileConnection(1)
+    expect(row.last_reconcile_at).toEqual(new Date('2026-11-17T09:30:00Z'))
+  })
+
+  it('an issue that keeps failing stops holding the cursor after 3 runs', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    t('nivaro_tracker_connections').push({ id: 1 })
+    seed({ statuses: ['open'], link: { project_path: 'g/p' } })
+    Object.defineProperty(t('nivaro_issues')[0], 'status', {
+      configurable: true,
+      get: () => 'open',
+      set: () => {
+        throw new Error('deadlock')
+      }
+    })
+    provider.updatedIssues.mockResolvedValue([
+      remote({ state: 'closed', updated_at: '2026-11-17T11:00:00Z' }), // fails every time
+      remote({ iid: 77, updated_at: '2026-11-17T11:10:00Z' })
+    ])
+    const row = t('nivaro_tracker_connections')[0]
+    const run = async () => {
+      setConnection(
+        {},
+        { last_reconcile_at: row.last_reconcile_at ?? '2026-11-17T10:30:00.000Z', last_error: null }
+      )
+      await reconcileConnection(1)
+    }
+    const justBefore = new Date(Date.parse('2026-11-17T11:00:00Z') - 1)
+    for (let i = 0; i < 3; i++) {
+      await run()
+      expect(row.last_reconcile_at).toEqual(justBefore)
+    }
+    expect(row.last_error).toBeUndefined()
+    await run()
+    expect(row.last_reconcile_at).toEqual(new Date('2026-11-17T11:10:00Z'))
+    expect(row.last_error).toMatch(/GitLab issue #42 in project g\/p could not be applied 4 times/)
+    expect(row.last_error).toMatch(/deadlock/)
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('logs reconcile failures at most once per 10 minutes', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t0 = 1_000_000
+    noteReconcileFailure(1, new Error('boom'), t0)
+    noteReconcileFailure(1, new Error('boom'), t0 + 60_000)
+    noteReconcileFailure(2, new Error('boom'), t0 + 9 * 60_000)
+    expect(warn).toHaveBeenCalledTimes(1)
+    noteReconcileFailure(1, new Error('again'), t0 + 11 * 60_000)
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(String(warn.mock.calls[1][0])).toMatch(/3 failures since the last report.*again/)
   })
 })

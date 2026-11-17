@@ -5,7 +5,7 @@ import { onIssueWrite, pruneHits } from '../issue-raise.js'
 import { listConnections } from './connections.js'
 import { evaluateQueued, sweep, trimAllDecisions } from './engine.js'
 import { trackersEnabled } from './feature.js'
-import { reconcileConnection } from './inbound.js'
+import { noteReconcileFailure, reconcileConnection } from './inbound.js'
 import { processOutbox } from './outbox.js'
 
 /**
@@ -49,8 +49,9 @@ export async function reconcileAll(): Promise<{ checked: number; applied: number
       const r = await reconcileConnection(conn.id)
       tally.checked += r.checked
       tally.applied += r.applied
-    } catch {
-      // read again next pass (last_reconcile_at did not move)
+    } catch (err) {
+      // read again next pass (last_reconcile_at did not move); logged ≤ 1 per 10 min
+      noteReconcileFailure(conn.id, err)
     }
   }
   return tally

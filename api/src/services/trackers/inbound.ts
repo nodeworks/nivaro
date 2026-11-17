@@ -592,11 +592,67 @@ async function projectsToReconcile(connection: number, now: Date): Promise<numbe
   return [...projects]
 }
 
+/** Reconcile runs an issue that keeps failing may hold the cursor back before it is skipped. */
+export const RECONCILE_HOLD_RUNS = 3
+/** At most one reconcile failure line per this long per process (reconcileAll). */
+export const RECONCILE_LOG_EVERY_MS = 10 * 60_000
+
+/** connection:project:iid → consecutive reconcile runs in which applying that issue failed. */
+const issueFailures = new Map<string, number>()
+const reconcileLog = { lastAt: 0, since: 0 }
+
+/** Tests: forget held issues and the log limiter. */
+export function resetReconcileState(): void {
+  issueFailures.clear()
+  reconcileLog.lastAt = 0
+  reconcileLog.since = 0
+}
+
+function warn(line: string): void {
+  // biome-ignore lint/suspicious/noConsole: a sync that stopped moving must show in the log
+  console.warn(`[trackers] ${line}`.slice(0, 600))
+}
+
+/** A failed reconcile of one connection (reconcileAll): logged at most once per 10 minutes. */
+export function noteReconcileFailure(connection: number, err: unknown, now = Date.now()): void {
+  reconcileLog.since++
+  if (reconcileLog.lastAt && now - reconcileLog.lastAt < RECONCILE_LOG_EVERY_MS) return
+  const n = reconcileLog.since
+  reconcileLog.lastAt = now
+  reconcileLog.since = 0
+  warn(
+    `GitLab reconcile failed for connection ${connection} (${n} failure${n === 1 ? '' : 's'} since the last report): ${short(err)}`
+  )
+}
+
+/** A problem reconcile cannot fix by retrying: shown on the connection (not marked broken). */
+async function noteConnectionError(conn: TrackerConnection, message: string): Promise<void> {
+  const text = message.slice(0, 1000)
+  if (conn.last_error === text) return // already shown and logged
+  conn.last_error = text
+  warn(`connection ${conn.id}: ${text}`)
+  await db(CONNECTIONS)
+    .where({ id: conn.id })
+    .update({ last_error: text, updated_at: new Date() })
+    .catch(() => {})
+}
+
+async function projectLabel(connection: number, project: number): Promise<string> {
+  const row = (await db(LINKS)
+    .where({ connection, project_id: project })
+    .first('project_path')
+    .catch(() => undefined)) as Row | undefined
+  const path = typeof row?.project_path === 'string' ? row.project_path.trim() : ''
+  return path || String(project)
+}
+
 /**
  * Read what changed in GitLab since the last reconcile and apply it like the webhook does
  * (actor null: activity says "GitLab (sync)"). last_reconcile_at moves to the newest GitLab
- * `updated_at` seen, never to now — and never past a project whose answer hit the 500 cap or that
- * failed — so nothing is skipped.
+ * `updated_at` seen, never to now, and never past: a project that failed for a reason a retry may
+ * fix, a project whose answer hit the 500 cap (its newest), an issue that failed (just before it,
+ * for at most 3 runs). A project GitLab will not answer (deleted, no access, refused) and an issue
+ * that keeps failing are skipped past, logged and shown as the connection's last_error.
  */
 export async function reconcileConnection(
   id: number,
@@ -613,8 +669,6 @@ export async function reconcileConnection(
   const provider = await providerFor(id)
 
   let newest = since.getTime()
-  // Never move past: a project that failed (since), a project cut at the cap (its newest), an
-  // issue that failed (just before it) — they are read again next pass.
   let ceiling = Number.POSITIVE_INFINITY
   for (const project of projects) {
     let issues: RemoteIssue[]
@@ -625,6 +679,14 @@ export async function reconcileConnection(
         await markBroken(id, short(err)).catch(() => {})
         return tally
       }
+      if (err instanceof TrackerError && (err.kind === 'not_found' || err.kind === 'invalid')) {
+        // A retry will not help: skip it without holding the others back.
+        await noteConnectionError(
+          conn,
+          `GitLab project ${await projectLabel(id, project)} could not be read: ${short(err)}`
+        )
+        continue
+      }
       ceiling = since.getTime()
       continue
     }
@@ -633,6 +695,7 @@ export async function reconcileConnection(
       tally.checked++
       const at = asDate(issue.updated_at)?.getTime()
       if (at != null && at > projectNewest) projectNewest = at
+      const key = `${id}:${project}:${issue.iid}`
       try {
         const out = await applyIssueEventDetailed(id, issue, null, { source: 'reconcile' })
         if (out.result === 'applied') tally.applied++
@@ -642,13 +705,25 @@ export async function reconcileConnection(
             if ((await applyNoteEvent(id, project, issue.iid, note)) === 'applied') tally.applied++
           }
         }
+        issueFailures.delete(key)
       } catch (err) {
         if (err instanceof TrackerError && err.kind === 'auth') {
           await markBroken(id, short(err)).catch(() => {})
           return tally
         }
-        // one issue failing must not hide the others; it is read again next pass
-        ceiling = Math.min(ceiling, at != null ? at - 1 : since.getTime())
+        // One issue failing must not hide the others; it is read again next pass — for at most
+        // 3 runs, then it stops holding the cursor (a write that always fails would freeze it).
+        const runs = (issueFailures.get(key) ?? 0) + 1
+        if (runs <= RECONCILE_HOLD_RUNS) {
+          issueFailures.set(key, runs)
+          ceiling = Math.min(ceiling, at != null ? at - 1 : since.getTime())
+        } else {
+          issueFailures.delete(key)
+          await noteConnectionError(
+            conn,
+            `GitLab issue #${issue.iid} in project ${await projectLabel(id, project)} could not be applied ${RECONCILE_HOLD_RUNS + 1} times and was skipped: ${short(err)}`
+          )
+        }
       }
     }
     if (issues.length >= UPDATED_CAP) ceiling = Math.min(ceiling, projectNewest)
