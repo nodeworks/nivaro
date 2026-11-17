@@ -443,16 +443,20 @@ export async function graphqlPlugin(
       return reply.send({ errors: validationErrors })
     }
 
-    // GraphQL cost limits (#162): a selection-count cap plus an OPTIONAL depth
-    // cap. Depth is unlimited unless a named API key carries its own
-    // `graphql_max_depth` or the instance sets GRAPHQL_MAX_DEPTH (0 = off) —
-    // legitimate integration reads routinely nest 13–15 levels, since every
-    // M2M hop costs two, so a low fixed default only ever blocked real callers.
-    // Selections still bound the fan-out of a runaway query.
+    // GraphQL cost limits (#162): a selection-count cap plus a depth cap. The
+    // depth cap defaults to the generous GRAPHQL_DEFAULT_MAX_DEPTH (well above
+    // the 13–15 levels real integration reads nest); a named API key's
+    // `graphql_max_depth` or GRAPHQL_MAX_DEPTH overrides it, and
+    // GRAPHQL_MAX_DEPTH=0 turns it off. Selections bound the fan-out.
     {
       const cost = queryCostVerdict(document, req.user)
       gqlStamp.depth = cost.depth
       gqlStamp.selections = cost.selections
+      if (!cost.depthRefused && cost.depth > GRAPHQL_DEPTH_WATCH)
+        req.log.warn(
+          { depth: cost.depth, selections: cost.selections },
+          'graphql: query deeper than the watch line but under the depth cap — review before lowering GRAPHQL_MAX_DEPTH'
+        )
       if (cost.refusal) {
         if (cost.depthRefused) gqlStamp.errors = 1
         return reply.code(400).send({ errors: [{ message: cost.refusal }] })
@@ -597,12 +601,21 @@ export interface WsContext {
   liveIdentity?: () => Promise<LiveIdentity | null>
 }
 
+// Security audit I-1: a GENEROUS default depth cap (defense-in-depth). It sits well above the
+// 13–15 levels real integration reads nest (every M2M hop costs two), so it is invisible to
+// legitimate callers and only refuses absurdly deep / aliased queries. Operators lower it with
+// GRAPHQL_MAX_DEPTH, or set GRAPHQL_MAX_DEPTH=0 to turn it off. Queries deeper than the watch
+// line are logged (under the cap, still allowed) so any later tightening is driven by real
+// traffic rather than a guess.
+const GRAPHQL_DEFAULT_MAX_DEPTH = 50
+const GRAPHQL_DEPTH_WATCH = 30
+
 /**
- * The cost limits (#162) for a document: a selection-count cap plus an OPTIONAL depth cap.
- * Depth is unlimited unless a named API key carries its own `graphql_max_depth` or the instance
- * sets GRAPHQL_MAX_DEPTH (0 = off) — legitimate integration reads routinely nest 13–15 levels,
- * since every M2M hop costs two, so a low fixed default only ever blocked real callers.
- * Selections still bound the fan-out of a runaway query.
+ * The cost limits (#162) for a document: a selection-count cap plus a depth cap.
+ * The depth cap defaults to the generous GRAPHQL_DEFAULT_MAX_DEPTH (well above the 13–15 levels
+ * real integration reads nest) so it never blocks a legitimate caller; a named API key's
+ * `graphql_max_depth` or the instance's GRAPHQL_MAX_DEPTH overrides it, and GRAPHQL_MAX_DEPTH=0
+ * turns it off. Selections still bound the fan-out of a runaway query.
  */
 function queryCostVerdict(
   document: DocumentNode,
@@ -610,8 +623,17 @@ function queryCostVerdict(
 ): { depth: number; selections: number; refusal: string | null; depthRefused: boolean } {
   const keyDepth = (user as { api_key_graphql_max_depth?: number | null } | undefined)
     ?.api_key_graphql_max_depth
-  const envDepth = Number(process.env.GRAPHQL_MAX_DEPTH ?? 0)
-  const maxDepth = keyDepth ?? (Number.isFinite(envDepth) && envDepth > 0 ? envDepth : null)
+  // Distinguish an UNSET GRAPHQL_MAX_DEPTH (apply the generous default cap) from an explicit
+  // GRAPHQL_MAX_DEPTH=0, which stays the operator's escape hatch to turn the depth cap off.
+  const rawEnvDepth = process.env.GRAPHQL_MAX_DEPTH
+  const envSet = rawEnvDepth != null && rawEnvDepth.trim() !== ''
+  const envDepth = Number(rawEnvDepth ?? 0)
+  const envCap = envSet
+    ? Number.isFinite(envDepth) && envDepth > 0
+      ? envDepth
+      : null
+    : GRAPHQL_DEFAULT_MAX_DEPTH
+  const maxDepth = keyDepth ?? envCap
   const maxSelections = Number(process.env.GRAPHQL_MAX_SELECTIONS ?? 2500)
   const cost = measureQueryCost(document)
   if (maxDepth != null && cost.depth > maxDepth) {
