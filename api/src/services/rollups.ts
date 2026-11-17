@@ -727,6 +727,14 @@ async function buildContributorCache(): Promise<Map<string, RollupContributorEnt
   return map
 }
 
+/** Every contributor entry, keyed by child collection (read-only view of the cache). */
+export async function getAllRollupContributors(): Promise<
+  ReadonlyMap<string, RollupContributorEntry[]>
+> {
+  if (!contributorCache) contributorCache = await buildContributorCache()
+  return contributorCache
+}
+
 /** Contributor entries for rollup fields affected by a write to `childCollection`. */
 export async function getRollupContributors(
   childCollection: string

@@ -281,3 +281,57 @@ describe('o2m pointer rows are never notes (H1 / L6)', () => {
     expect(parseO2mComment('not json {child_collection')).toBeNull()
   })
 })
+
+describe('revisionsForReader — totals a child write moved (audit 2026-11-17)', () => {
+  const deps = {
+    collectionTitle: vi.fn(async () => 'Workflow Line Items'),
+    fieldMeta: vi.fn(async (c: string) => ({
+      labels: new Map(
+        c === 'orders' ? [['requisition_amount', 'Requisition Amount']] : [['amount', 'Amount']]
+      ),
+      hidden: new Set<string>(),
+      m2o: new Map<string, string>()
+    })),
+    recordLabels: vi.fn(async () => ({})),
+    snapshotLabel: vi.fn(async () => 'Line 1'),
+    userNames: vi.fn(async () => new Map<string, string>()),
+    rollupSources: vi.fn(async () => [
+      {
+        rollupField: 'requisition_amount',
+        source: {
+          related_collection: 'order_lines',
+          fk_field: 'order',
+          aggregate: 'sum' as const,
+          value_field: 'amount'
+        }
+      }
+    ])
+  }
+  const row = {
+    action: 'o2m-update',
+    data: null,
+    delta: null,
+    comment: JSON.stringify({
+      child_collection: 'order_lines',
+      child_id: 7,
+      snapshot: { id: 7, order: 1, amount: 2060 },
+      changes: { amount: [1, 2060] },
+      elsewhere: true
+    })
+  }
+
+  it('names the total and how far it moved, and that the line was written elsewhere', async () => {
+    const [out] = await revisionsForReader(user, 'orders', [row], deps as never)
+    expect(out.o2m?.totals).toEqual([
+      { field: 'requisition_amount', label: 'Requisition Amount', delta: 2059 }
+    ])
+    expect(out.o2m?.elsewhere).toBe(true)
+    expect(out.o2m?.changes[0]).toMatchObject({ label: 'Amount', from: '1', to: '2060' })
+  })
+
+  it('never names a total the reader may not read on the parent', async () => {
+    perms.fields.orders = ['status']
+    const [out] = await revisionsForReader(user, 'orders', [row], deps as never)
+    expect(out.o2m?.totals).toBeUndefined()
+  })
+})

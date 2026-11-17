@@ -13446,11 +13446,14 @@ DELETE /api/trash/:id          # purge immediately</code></pre>
           <!-- /SYNC:trash -->
         </div>
 
-        <div class="doc-section" id="s-time-travel" data-toc='[{"id":"time-travel","label":"Time-Travel Restore"}]'>
+        <div class="doc-section" id="s-time-travel" data-toc='[{"id":"time-travel","label":"Time-Travel Restore"},{"id":"time-travel-totals","label":"Who changed a total"}]'>
           <!-- SYNC:time-travel -->
           <h1 class="doc-h1" id="time-travel">Time-Travel Restore</h1>
           <p class="doc-p">The revision history panel has a Time travel mode: scrub a slider through every snapshot of a record, watch fields change (differences from the current state highlight amber), and restore to any point with one confirm-gated click.</p>
           <div class="doc-note">Restore applies the snapshot through POST /revisions/:id/rollback and is itself logged, so you can always travel back again.</div>
+          <h2 class="doc-h2" id="time-travel-totals">Who changed a total</h2>
+          <p class="doc-p">A stored total (a rollup such as a workflow's Requisition Amount) is never typed by anyone: it moves when the rows behind it change. So a record's history lists every write to those rows next to its own saves, wherever the row was written: from the record's page, on the row's own page, by an import or by a sync. Each entry names the person, the row and its changed fields, and how far each total moved ("changed Lines · Line 1: Amount 1 → 2060 · Requisition Amount +2,059"). Writes made away from the record carry an "outside this record" tag. Totals the reader may not read on the record are never named.</p>
+          <div class="doc-note">Only plain sum and count totals show how far they moved; totals worked out from a formula, an average or min/max depend on the other rows and are left out rather than guessed. A row deleted away from the record does not appear (its link to the record went with it); a row removed from the record's page does.</div>
           <!-- /SYNC:time-travel -->
         </div>
 

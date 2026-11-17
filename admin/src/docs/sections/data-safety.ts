@@ -41,6 +41,15 @@ export const timeTravelDocs: DocSection = {
     {
       type: 'note',
       text: 'Restore applies the snapshot through POST /revisions/:id/rollback and is itself logged, so you can always travel back again.'
+    },
+    { type: 'h2', id: 'time-travel-totals', text: 'Who changed a total' },
+    {
+      type: 'p',
+      text: 'A stored total (a rollup such as a workflow\'s Requisition Amount) is never typed by anyone: it moves when the rows behind it change. So a record\'s history lists every write to those rows next to its own saves, wherever the row was written: from the record\'s page, on the row\'s own page, by an import or by a sync. Each entry names the person, the row and its changed fields, and how far each total moved ("changed Lines · Line 1: Amount 1 → 2060 · Requisition Amount +2,059"). Writes made away from the record carry an "outside this record" tag. Totals the reader may not read on the record are never named.'
+    },
+    {
+      type: 'note',
+      text: 'Only plain sum and count totals show how far they moved; totals worked out from a formula, an average or min/max depend on the other rows and are left out rather than guessed. A row deleted away from the record does not appear (its link to the record went with it); a row removed from the record\'s page does.'
     }
   ]
 }

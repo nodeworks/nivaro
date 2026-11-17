@@ -65,6 +65,11 @@ export interface O2mSummary {
   /** The row's label ("110140", "2026 · Goods"); null when it has none the reader may see. */
   row_label: string | null
   changes: O2mChange[]
+  /** What this row's write moved on the parent's stored totals ("Requisition Amount +2,059"),
+   *  only totals the reader may read on the parent. Absent when nothing moved. */
+  totals?: Array<{ field: string; label: string; delta: number }>
+  /** Written on the row itself (its own page, an import, a sync), not from the parent's page. */
+  elsewhere?: boolean
 }
 
 /** The stored shape of an o2m activity comment (routes/items.ts writes it). */
@@ -74,6 +79,8 @@ export interface O2mPayload {
   snapshot?: unknown
   /** field → [before, after] (written since army 6 for o2m-update). */
   changes?: unknown
+  /** Set by the history read for a child write made away from the parent's page. */
+  elsewhere?: unknown
 }
 
 /** The parsed payload of an o2m activity comment, or null when it is not one. */
@@ -117,6 +124,12 @@ export interface O2mLabelDeps {
    *  ("{{inventory_request.inventory_request_id}} - {{cifa.cifa_number}}" →
    *  inventory_request, cifa). Optional: absent = none. */
   templateRelations?(collection: string): Promise<string[]>
+  /** The stored rollups on `parent` fed by `child` rows (services/rollup-moves.ts).
+   *  Optional: absent = no totals. */
+  rollupSources?(
+    parent: string,
+    child: string
+  ): Promise<import('./rollup-moves.js').ParentRollupSource[]>
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -172,6 +185,10 @@ const defaultDeps: O2mLabelDeps = {
   async snapshotLabel(collection, row) {
     const { labelFromSnapshot } = await import('./record-headline.js')
     return labelFromSnapshot(collection, row)
+  },
+  async rollupSources(parent, child) {
+    const { rollupSourcesFrom } = await import('./rollup-moves.js')
+    return rollupSourcesFrom(parent, child)
   },
   async templateRelations(collection) {
     const { getCollection } = await import('./collections.js')
@@ -242,7 +259,7 @@ export async function revisionsForReader<T extends RevisionLike>(
     out.push(next)
   }
   if (pending.length > 0) {
-    const summaries = await o2mSummaries(user, pending, childFields, deps, collection).catch(
+    const summaries = await o2mSummaries(user, pending, childFields, deps, collection, own).catch(
       () => null
     )
     if (summaries) for (const [i, s] of summaries) out[i].o2m = s
@@ -265,7 +282,9 @@ async function o2mSummaries(
   rows: Array<{ index: number; payload: O2mPayload; action: string }>,
   childFields: (child: string) => Promise<Set<string> | null | false>,
   deps: O2mLabelDeps,
-  parentCollection?: string
+  parentCollection?: string,
+  /** The parent fields the reader may read (null = all) — totals are named only from these. */
+  parentFields: Set<string> | null = null
 ): Promise<Map<number, O2mSummary>> {
   type Work = {
     index: number
@@ -274,6 +293,8 @@ async function o2mSummaries(
     childId: string | null
     snapshot: Record<string, unknown> | null
     pairs: Array<[string, unknown, unknown]>
+    totals: Array<{ field: string; delta: number }>
+    elsewhere: boolean
   }
   const work: Work[] = []
   const metaFor = new Map<string, ReturnType<O2mLabelDeps['fieldMeta']>>()
@@ -302,7 +323,16 @@ async function o2mSummaries(
     const fields = await childFields(child)
     const childId = r.payload.child_id == null ? null : String(r.payload.child_id)
     if (fields === false) {
-      work.push({ index: r.index, verb, child, childId: null, snapshot: null, pairs: [] })
+      work.push({
+        index: r.index,
+        verb,
+        child,
+        childId: null,
+        snapshot: null,
+        pairs: [],
+        totals: [],
+        elsewhere: r.payload.elsewhere === true
+      })
       continue
     }
     const snap =
@@ -322,7 +352,50 @@ async function o2mSummaries(
         pairs.push([field, pair[0], pair[1]])
       }
     }
-    work.push({ index: r.index, verb, child, childId, snapshot: snap, pairs })
+    // The totals this write moved, worked out from the FULL stored row (a total the reader may
+    // read is shown even when the column behind it is not theirs to read: the parent's own
+    // figure already tells them as much).
+    let totals: Array<{ field: string; delta: number }> = []
+    if (parentCollection && deps.rollupSources) {
+      const sources = await deps.rollupSources(parentCollection, child).catch(() => [])
+      if (sources.length > 0) {
+        const full =
+          r.payload.snapshot &&
+          typeof r.payload.snapshot === 'object' &&
+          !Array.isArray(r.payload.snapshot)
+            ? (r.payload.snapshot as Record<string, unknown>)
+            : null
+        let before: Record<string, unknown> | null = null
+        let after: Record<string, unknown> | null = null
+        if (verb === 'added') after = full
+        else if (verb === 'removed') before = full
+        else if (full && changes && typeof changes === 'object' && !Array.isArray(changes)) {
+          before = { ...full }
+          after = { ...full }
+          for (const [field, pair] of Object.entries(changes as Record<string, unknown>)) {
+            if (!Array.isArray(pair) || pair.length !== 2) continue
+            before[field] = pair[0]
+            after[field] = pair[1]
+          }
+        }
+        if (before || after) {
+          const { rollupMoves } = await import('./rollup-moves.js')
+          totals = rollupMoves(sources, before, after).filter(
+            (m) => !parentFields || parentFields.has(m.field)
+          )
+        }
+      }
+    }
+    work.push({
+      index: r.index,
+      verb,
+      child,
+      childId,
+      snapshot: snap,
+      pairs,
+      totals,
+      elsewhere: r.payload.elsewhere === true
+    })
   }
 
   // Link values and row labels, as the reader, in one batch.
@@ -408,12 +481,23 @@ async function o2mSummaries(
         if (changes.length >= MAX_CHANGES) break
       }
     }
+    let totals: O2mSummary['totals']
+    if (w.totals.length > 0 && parentCollection) {
+      const { labels: parentLabels } = await meta(parentCollection)
+      totals = w.totals.map((m) => ({
+        field: m.field,
+        label: parentLabels.get(m.field) ?? titleCase(m.field),
+        delta: m.delta
+      }))
+    }
     out.set(w.index, {
       verb: w.verb,
       collection: w.child,
       collection_label: collectionLabel,
       row_label: rowLabel,
-      changes
+      changes,
+      ...(totals ? { totals } : {}),
+      ...(w.elsewhere ? { elsewhere: true } : {})
     })
   }
   return out

@@ -21,7 +21,8 @@ import {
   activityPredicate,
   activityWhy,
   actorName,
-  o2mSentence
+  o2mSentence,
+  o2mTotalsText
 } from '../../lib/activity-sentence'
 import { get, post } from '../../lib/commands'
 import { useLiveRecordQueries } from '../../lib/live'
@@ -880,15 +881,37 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
     // stored comment is machine JSON (row ids, user uuids) and is never shown (army 6 H1).
     sentence = (
       <span data-revision-o2m>
-        {revision.o2m
-          ? o2mSentence(revision.o2m)
-          : `${
-              revision.action === 'o2m-create'
-                ? 'added'
-                : revision.action === 'o2m-delete'
-                  ? 'removed'
-                  : 'changed'
-            } related rows`}
+        {revision.o2m ? (
+          <>
+            {o2mSentence(revision.o2m)}
+            {o2mTotalsText(revision.o2m) ? (
+              // Which totals on this record the row's write moved (audit: who changed the
+              // requisition amount — the person who wrote the line).
+              <span
+                data-revision-o2m-totals
+                className='ml-1 font-medium text-slate-700 dark:text-slate-200'
+              >
+                · {o2mTotalsText(revision.o2m)}
+              </span>
+            ) : null}
+            {revision.o2m.elsewhere ? (
+              <span
+                data-revision-o2m-elsewhere
+                className='ml-1.5 rounded bg-slate-100 px-1 py-px text-[10.5px] text-slate-600 dark:bg-muted dark:text-muted-foreground'
+              >
+                outside this record
+              </span>
+            ) : null}
+          </>
+        ) : (
+          `${
+            revision.action === 'o2m-create'
+              ? 'added'
+              : revision.action === 'o2m-delete'
+                ? 'removed'
+                : 'changed'
+          } related rows`
+        )}
       </span>
     )
   } else {

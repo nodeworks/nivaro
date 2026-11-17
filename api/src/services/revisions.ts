@@ -2,9 +2,11 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { optionalActivityColumns } from './activity-readable.js'
 import { type ActivityActor, actorOf } from './activity-sentence.js'
+import { whereInList } from './db-batch.js'
 import { agentBadgesForActivity } from './mcp-attribution.js'
 import { agentDisplayName, peekMcpSettings } from './mcp-calls.js'
 import { noteDerivedWrite } from './request-trace.js'
+import { rollupChildrenOf } from './rollup-moves.js'
 import { hideViewAsActor, viewAsMovesFor } from './view-as-attribution.js'
 
 export interface Revision {
@@ -237,6 +239,180 @@ function settleActor(row: Record<string, unknown>): Record<string, unknown> {
   return out
 }
 
+/** Columns a child revision changes on every save that say nothing about the row. */
+const CHILD_NOISE = new Set([
+  'id',
+  'changed',
+  'date_updated',
+  'user_updated',
+  'updated_at',
+  'updated_by',
+  'modified',
+  'modified_by'
+])
+/** Child rows read per feeding collection, and child revisions per history read. */
+const CHILD_ROWS_MAX = 500
+const CHILD_REVISIONS_MAX = 300
+/** An o2m entry from the parent's page and the child's own revision of that save. */
+const SAME_SAVE_MS = 5000
+
+/**
+ * Writes to the child rows that feed this record's stored totals (lines → Requisition Amount,
+ * forecasts → Forecast Total) made AWAY from this record's page, shaped like the `o2m-*` rows a
+ * save from the page writes: the per-reader summary (revision-fields.ts) names the row, the
+ * changed fields the reader may read and the totals it moved. Saves already folded in from the
+ * page (an `o2m-*` row for the same child within a few seconds) are not repeated. Removed rows
+ * are not found here (the link to this record is gone with them) — a removal from the page
+ * is already an `o2m-delete` row. Exported for tests.
+ */
+export async function childWritesElsewhere(
+  collection: string,
+  item: string,
+  onPageRows: Record<string, unknown>[],
+  actCols: Set<string>,
+  /** The record's own saves: a child row written in the same request (lines created with the
+   *  workflow) is part of that save, not a write made elsewhere. */
+  ownSaves: Record<string, unknown>[] = []
+): Promise<Record<string, unknown>[]> {
+  const children = await rollupChildrenOf(collection)
+  if (children.length === 0) return []
+  const onPage = new Map<string, number[]>()
+  for (const r of onPageRows) {
+    if (!/^o2m-/.test(String(r.action ?? ''))) continue
+    try {
+      const p = JSON.parse(String(r.comment ?? '')) as {
+        child_collection?: unknown
+        child_id?: unknown
+      }
+      const key = `${String(p.child_collection)}:${String(p.child_id)}`
+      const t = r.timestamp ? new Date(r.timestamp as string).getTime() : 0
+      onPage.set(key, [...(onPage.get(key) ?? []), t])
+    } catch {
+      /* not an o2m pointer */
+    }
+  }
+  const ownSaveTimes = ownSaves.map((r) => ({
+    t: r.timestamp ? new Date(r.timestamp as string).getTime() : 0,
+    user: String(r.user_id ?? '').toLowerCase()
+  }))
+  const out: Record<string, unknown>[] = []
+  for (const { child, fk } of children) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(child) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(fk)) continue
+    const ids = (
+      (await db(child)
+        .where(fk, item)
+        .select('id')
+        .limit(CHILD_ROWS_MAX)
+        .catch(() => [])) as Array<{ id: unknown }>
+    ).map((r) => String(r.id))
+    if (ids.length === 0) continue
+    const revs = (await db('nivaro_revisions as r')
+      .join('nivaro_activity as a', 'r.activity', 'a.id')
+      .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+      .select(
+        'r.id as rev_id',
+        'r.item as child_id',
+        'r.data',
+        'r.delta',
+        'a.id as activity',
+        'a.timestamp',
+        'a.action as child_action',
+        'a.user as user_id',
+        'u.first_name',
+        'u.last_name',
+        'u.email as user_email'
+      )
+      .modify((q) => withActorInputs(q, actCols))
+      .where('r.collection', child)
+      .modify((q) => whereInList(q, 'r.item', ids))
+      .whereIn('a.action', ['create', 'update'])
+      .orderBy('r.id', 'desc')
+      .limit(CHILD_REVISIONS_MAX)) as Record<string, unknown>[]
+    if (revs.length === 0) continue
+    revs.reverse()
+    // The row as it stood before the oldest write read here, so its change says "from".
+    const before = new Map<string, Record<string, unknown> | null>()
+    const firstUpdate = new Map<string, number>()
+    for (const r of revs) {
+      const cid = String(r.child_id)
+      if (before.has(cid) || firstUpdate.has(cid)) continue
+      if (r.child_action === 'create') before.set(cid, null)
+      else firstUpdate.set(cid, Number(r.rev_id))
+    }
+    if (firstUpdate.size > 0) {
+      // One read for every row's previous revision (one seek each) instead of a read per row:
+      // a workflow with 142 lines took 0.76 s the other way.
+      const pairs = [...firstUpdate].map(([i, r]) => ({ i, r }))
+      const prevRows = (await db
+        .raw(
+          `SELECT j.i AS item, p.data FROM OPENJSON(?) WITH (i nvarchar(255) '$.i', r int '$.r') AS j
+           OUTER APPLY (SELECT TOP 1 r.data FROM nivaro_revisions AS r
+                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC) AS p`,
+          [JSON.stringify(pairs), child]
+        )
+        .catch(() => [])) as Array<{ item: unknown; data: unknown }>
+      for (const p of prevRows) before.set(String(p.item), parseRow(p.data))
+    }
+    for (const r of revs) {
+      const cid = String(r.child_id)
+      const data = parseRow(r.data)
+      const was = before.get(cid) ?? null
+      before.set(cid, data ?? was)
+      const t = r.timestamp ? new Date(r.timestamp as string).getTime() : 0
+      if ((onPage.get(`${child}:${cid}`) ?? []).some((pt) => Math.abs(pt - t) <= SAME_SAVE_MS))
+        continue
+      const isCreate = r.child_action === 'create'
+      const writer = String(r.user_id ?? '').toLowerCase()
+      const withOwnSave = ownSaveTimes.some(
+        (o) => o.user === writer && Math.abs(o.t - t) <= SAME_SAVE_MS
+      )
+      const changes: Record<string, [unknown, unknown]> = {}
+      if (!isCreate) {
+        const delta = parseRow(r.delta) ?? {}
+        for (const k of Object.keys(delta)) {
+          if (CHILD_NOISE.has(k)) continue
+          const from = was ? (was[k] ?? null) : null
+          const to = data ? (data[k] ?? null) : (delta[k] ?? null)
+          if (from !== null && typeof from === 'object') continue
+          if (to !== null && typeof to === 'object') continue
+          if (JSON.stringify(from) !== JSON.stringify(to)) changes[k] = [from, to]
+        }
+        if (Object.keys(changes).length === 0) continue
+      }
+      const { rev_id: _r, child_id: _c, child_action: _a, data: _d, delta: _dl, ...rest } = r
+      out.push({
+        ...rest,
+        id: null,
+        collection,
+        item,
+        data: null,
+        delta: null,
+        parent: null,
+        action: isCreate ? 'o2m-create' : 'o2m-update',
+        comment: JSON.stringify({
+          child_collection: child,
+          child_id: cid,
+          snapshot: data,
+          ...(isCreate ? {} : { changes }),
+          ...(withOwnSave ? {} : { elsewhere: true })
+        })
+      })
+    }
+  }
+  return out
+}
+
+function parseRow(v: unknown): Record<string, unknown> | null {
+  if (v == null) return null
+  if (typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>
+  try {
+    const p = JSON.parse(String(v)) as unknown
+    return p && typeof p === 'object' && !Array.isArray(p) ? (p as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * A record's history. `isAdmin` = the READER is an administrator: only then does a View-as
  * write name the administrator behind it (activity actor + the move's view-as-move row); every
@@ -318,6 +494,16 @@ export async function listRevisions(
 
     addendumTransitionRows(collection, item, behalfCol)
   ])
+  // Audit (2026-11-17): a line written away from the workflow page (its own page, an import,
+  // a sync) moves the workflow's totals but was only in the line's own history. Writes to the
+  // child rows that feed this record's stored totals join this history as their own entries.
+  const elsewhereRows = await childWritesElsewhere(
+    collection,
+    item,
+    activityRows as Record<string, unknown>[],
+    actCols,
+    revRows as Record<string, unknown>[]
+  ).catch(() => [] as Record<string, unknown>[])
   // View-as: the administrator behind a move (its own view-as-move activity row), for an
   // ADMINISTRATOR reader only; everyone else reads the person's own move.
   const viewAsMoves = isAdmin
@@ -395,6 +581,7 @@ export async function listRevisions(
             }
           : r
       ),
+    ...elsewhereRows,
     ...(transitionRows as Record<string, unknown>[]).map((r) => toTransitionEvent(r, null)),
     ...addendumHistory.rows.map((r) => {
       const id = String(r.instance_item ?? '')

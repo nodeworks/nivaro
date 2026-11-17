@@ -115,6 +115,10 @@ export interface ActivityO2m {
   collection_label: string
   row_label?: string | null
   changes?: Array<{ field: string; label: string; from: string | null; to: string | null }> | null
+  /** Stored totals on the parent this write moved ("Requisition Amount +2,059"). */
+  totals?: Array<{ field: string; label: string; delta: number }> | null
+  /** Written on the row itself (its own page, an import, a sync), not from the parent's page. */
+  elsewhere?: boolean | null
 }
 
 /**
@@ -131,6 +135,17 @@ export function o2mSentence(o2m: ActivityO2m): string {
     .filter((c) => c && text(c.label))
     .map((c) => `${text(c.label)} ${text(c.from) || '—'} → ${text(c.to) || '—'}`)
   return changes.length ? `changed ${subject}: ${changes.join(', ')}` : `changed ${subject}`
+}
+
+/** "Requisition Amount +2,059", one per total a child-row write moved; empty when none. */
+export function o2mTotalsText(o2m: ActivityO2m): string {
+  return (o2m.totals ?? [])
+    .filter((t) => t && text(t.label) && Number.isFinite(t.delta) && t.delta !== 0)
+    .map(
+      (t) =>
+        `${text(t.label)} ${t.delta > 0 ? '+' : '−'}${Math.abs(t.delta).toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+    )
+    .join(', ')
 }
 
 export interface CollectionNames {
