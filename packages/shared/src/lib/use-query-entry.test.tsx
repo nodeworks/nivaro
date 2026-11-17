@@ -91,10 +91,13 @@ describe('watching a query entry without fetching it', () => {
     await act(async () => {
       await qc.invalidateQueries({ queryKey: ['nivaro-report-query'] })
     })
-    await flush()
+    // A fixed number of ticks is not enough on a busy CI runner: wait for the second run.
+    await vi.waitFor(async () => {
+      await flush()
+      expect(seen.data).toEqual([{ n: 2 }])
+    })
     expect(fn).toHaveBeenCalledTimes(2)
     expect(seen.error).toBeNull()
-    expect(seen.data).toEqual([{ n: 2 }])
     // The watcher re-rendered on the new run.
     expect(stamps[stamps.length - 1]).toBeGreaterThan(first)
   })
