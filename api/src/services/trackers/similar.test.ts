@@ -309,6 +309,55 @@ describe('findSimilar', () => {
     warn.mockRestore()
   })
 
+  it('findSimilar returns [] and never searches when similar is disabled', async () => {
+    conn.sync = { similar: { enabled: false } }
+    addLink(30, { remote_title: 'Similar checkout failure' })
+    scores.map = [[/^similar checkout|^link 30/, 0.99]]
+    provider.searchOpenIssues.mockResolvedValue([remote(40, { title: 'Checkout fails' })])
+    expect(await findSimilar(5, 1, 7)).toEqual([])
+    expect(provider.searchOpenIssues).not.toHaveBeenCalled()
+  })
+
+  it('falls back to fewer key words when the full search finds nothing', async () => {
+    t('nivaro_issues')[0].title = 'Checkout payment failure during invoice reconciliation export'
+    provider.searchOpenIssues.mockImplementation(async (_p: number, q: string) =>
+      q.split(' ').length === 3 ? [remote(40, { title: 'Payment reconciliation broke' })] : []
+    )
+    scores.map = [
+      [/^checkout payment/, 1],
+      [/^payment reconciliation/, 0.9]
+    ]
+    const out = await findSimilar(5, 1, 7)
+    expect(provider.searchOpenIssues.mock.calls.map((c) => c[1])).toEqual([
+      'reconciliation checkout payment failure invoice during',
+      'reconciliation checkout payment'
+    ])
+    expect(out.map((c) => c.iid)).toEqual([40])
+
+    // nothing for 6 or 3 words: the single longest word (6+ chars) is the last try
+    provider.searchOpenIssues.mockReset()
+    provider.searchOpenIssues.mockResolvedValue([])
+    await findSimilar(5, 1, 7)
+    expect(provider.searchOpenIssues.mock.calls.map((c) => c[1])).toEqual([
+      'reconciliation checkout payment failure invoice during',
+      'reconciliation checkout payment',
+      'reconciliation'
+    ])
+  })
+
+  it('stops after the first search with results', async () => {
+    t('nivaro_issues')[0].title = 'Checkout payment failure during invoice reconciliation export'
+    provider.searchOpenIssues.mockResolvedValue([remote(40, { title: 'Payment broke' })])
+    await findSimilar(5, 1, 7)
+    expect(provider.searchOpenIssues).toHaveBeenCalledTimes(1)
+    // two short words: no single-word try (needs 6+ chars), and 3 words = the same query once
+    t('nivaro_issues')[0].title = 'Cart fails'
+    provider.searchOpenIssues.mockReset()
+    provider.searchOpenIssues.mockResolvedValue([])
+    await findSimilar(5, 1, 7)
+    expect(provider.searchOpenIssues.mock.calls.map((c) => c[1])).toEqual(['fails cart'])
+  })
+
   it('only open links on the connection from the last 90 days are candidates, 50 at most', async () => {
     const old = new Date(Date.now() - 91 * 86_400_000)
     addLink(30, { remote_title: 'Checkout fails closed', remote_state: 'closed' })

@@ -69,8 +69,8 @@ export function normalizeForSimilarity(title: string, body: string | null): stri
     .toLowerCase()
 }
 
-/** The GitLab title-search words: the 6 longest distinct words of 4+ characters. */
-export function keyWords(normalizedTitle: string): string {
+/** Distinct words of 4+ characters, longest first (equal lengths keep their order in the title). */
+function rankedWords(normalizedTitle: string): string[] {
   const seen = new Set<string>()
   const words: string[] = []
   for (const w of normalizedTitle.split(/[^\p{L}\p{N}]+/u)) {
@@ -78,13 +78,31 @@ export function keyWords(normalizedTitle: string): string {
     seen.add(w)
     words.push(w)
   }
-  // stable: equal lengths keep their order in the title
   return words
     .map((w, i) => ({ w, i }))
     .sort((a, b) => b.w.length - a.w.length || a.i - b.i)
-    .slice(0, KEY_WORDS)
     .map((x) => x.w)
-    .join(' ')
+}
+
+/** The GitLab title-search words: the 6 longest distinct words of 4+ characters. */
+export function keyWords(normalizedTitle: string): string {
+  return rankedWords(normalizedTitle).slice(0, KEY_WORDS).join(' ')
+}
+
+const FALLBACK_WORDS = 3
+const SINGLE_WORD_MIN = 6
+
+/**
+ * The title searches to try, in order. GitLab's title search needs EVERY term to appear, so a
+ * search that finds nothing is retried with fewer words: the 6 longest, then the 3 longest, then
+ * (when the title has 2+ words) the single longest word of 6+ characters. At most 3, no repeats.
+ */
+export function searchQueries(normalizedTitle: string): string[] {
+  const words = rankedWords(normalizedTitle)
+  if (!words.length) return []
+  const out = [words.slice(0, KEY_WORDS).join(' '), words.slice(0, FALLBACK_WORDS).join(' ')]
+  if (words.length >= 2 && words[0].length >= SINGLE_WORD_MIN) out.push(words[0])
+  return [...new Set(out)]
 }
 
 function onceLogger(): (what: string, err: unknown) => void {
@@ -202,14 +220,16 @@ async function scoreCandidates(
     const pending = await linkCandidates(conn.id, ownLink)
     const seen = new Set(pending.map((p) => `${p.project_id}:${p.iid}`))
 
-    const words = keyWords(normalizeForSimilarity(title, null))
+    // Fewer words until a search finds something (at most 3 GitLab calls).
+    const queries = projectId ? searchQueries(normalizeForSimilarity(title, null)) : []
     let found: RemoteIssue[] = []
-    if (words && projectId) {
+    if (queries.length) {
       try {
-        found = (await (await providerFor(conn.id)).searchOpenIssues(projectId, words)).slice(
-          0,
-          MAX_SEARCH_CANDIDATES
-        )
+        const provider = await providerFor(conn.id)
+        for (const q of queries) {
+          found = (await provider.searchOpenIssues(projectId, q)).slice(0, MAX_SEARCH_CANDIDATES)
+          if (found.length) break
+        }
       } catch (err) {
         log('the GitLab title search', err)
         found = []
@@ -279,6 +299,8 @@ export async function findSimilar(
   try {
     if (!(await trackersEnabled())) return []
     const conn = await getConnection(connection)
+    // Similar matching off for this connection: no GitLab search, no embeddings.
+    if (!conn?.sync?.similar?.enabled) return []
     const issue = await loadIssue(issueId)
     if (!conn || !issue) return []
     const limit = Math.max(1, Math.min(100, Math.floor(Number(opts.limit) || 10)))
